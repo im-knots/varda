@@ -49,6 +49,16 @@ fn not_found(err: &UnknownEntity) -> CommandResult {
     }
 }
 
+/// Wire result for a transport operation the current source disallows, so a
+/// caller learns why rather than watching nothing happen.
+/// See /spec/transport.md § Legibility.
+fn transport_rejected(err: crate::transport::TransportError) -> CommandResult {
+    CommandResult::Err {
+        code: ErrorCode::InvalidInput,
+        message: err.to_string(),
+    }
+}
+
 impl VardaApp {
     /// Execute a command on behalf of the windowed GUI, returning a typed,
     /// in-process [`CommandOutcome`] instead of the serializable wire
@@ -250,7 +260,14 @@ impl VardaApp {
                 to_idx,
             } => wire(self.reorder_deck(&channel_uuid, from_idx, to_idx)),
             EngineCommand::SetDeckOpacity { deck_uuid, opacity } => {
-                wire(self.set_deck_opacity(&deck_uuid, opacity))
+                let result = wire(self.set_deck_opacity(&deck_uuid, opacity));
+                // Grabbing a deck's fader takes that lane back from the show,
+                // immediately and without confirmation.
+                self.note_live_param_write(
+                    &crate::arrangement::opacity_param_key(&deck_uuid),
+                    opacity,
+                );
+                result
             }
             EngineCommand::SetDeckBlendMode { deck_uuid, mode } => {
                 wire(self.set_deck_blend_mode(&deck_uuid, mode))
@@ -300,6 +317,14 @@ impl VardaApp {
                 from_idx,
                 to_idx,
             } => wire(self.move_effect(target, from_idx, to_idx)),
+
+            // ── Clipboard ────────────────────────────────────
+            EngineCommand::Copy {
+                source,
+                include_arrangement,
+            } => self.cmd_copy(&source, include_arrangement),
+            EngineCommand::Paste { target } => self.cmd_paste(&target),
+            EngineCommand::Duplicate { source } => self.cmd_duplicate(&source),
             EngineCommand::SetTransition { shader_name } => {
                 match self.set_transition(shader_name.as_deref()) {
                     Ok(()) => CommandResult::Ok,
@@ -363,6 +388,23 @@ impl VardaApp {
             EngineCommand::AddStepSequencer { num_steps, rate } => {
                 self.add_step_sequencer(num_steps, rate);
                 CommandResult::Ok
+            }
+            EngineCommand::AddAutomationLane { target, timebase } => {
+                // Returns the UUID because the caller needs it to reveal the
+                // new lane and to push breakpoints into it.
+                CommandResult::OkWithId {
+                    uuid: self.add_automation_lane(&target, timebase),
+                }
+            }
+            EngineCommand::SetEnvelopeBreakpoints { uuid, breakpoints } => {
+                if self.set_envelope_breakpoints(&uuid, breakpoints) {
+                    CommandResult::Ok
+                } else {
+                    CommandResult::Err {
+                        code: ErrorCode::NotFound,
+                        message: format!("no automation envelope with uuid '{uuid}'"),
+                    }
+                }
             }
             EngineCommand::RemoveModulationSource { uuid } => {
                 self.remove_modulation_source(&uuid);
@@ -942,6 +984,84 @@ impl VardaApp {
                     }
                 })
             }
+            EngineCommand::TransportPlay => match self.transport.play() {
+                Ok(()) => CommandResult::Ok,
+                Err(e) => transport_rejected(e),
+            },
+            EngineCommand::TransportStop => {
+                self.transport.stop();
+                // A second stop returns to zero, which is a move the cue walk
+                // did not make and must not keep stepping from.
+                self.forget_cue_walk();
+                CommandResult::Ok
+            }
+            EngineCommand::TransportLocate { position } => match self.transport.locate(position) {
+                Ok(()) => {
+                    self.forget_cue_walk();
+                    CommandResult::Ok
+                }
+                Err(e) => transport_rejected(e),
+            },
+            EngineCommand::SetTransportSource { source } => {
+                self.transport.set_source(source);
+                self.forget_cue_walk();
+                CommandResult::Ok
+            }
+            EngineCommand::SetTransportLoop { region } => {
+                // Re-checked here rather than trusted: the command arrives from
+                // the API as plain JSON, which cannot enforce the invariant.
+                let checked = match region {
+                    Some(r) => match crate::transport::LoopRegion::new(r.start, r.end) {
+                        Ok(r) => Some(r),
+                        Err(e) => return transport_rejected(e),
+                    },
+                    None => None,
+                };
+                self.transport.set_loop_region(checked);
+                CommandResult::Ok
+            }
+            EngineCommand::SetTimecodeRate { rate } => {
+                self.transport.set_timecode_rate(rate);
+                CommandResult::Ok
+            }
+            EngineCommand::TransportPrevCue => self.cmd_locate_cue(false),
+            EngineCommand::TransportNextCue => self.cmd_locate_cue(true),
+            EngineCommand::TriggerCue { uuid } => self.cmd_trigger_cue(&uuid),
+            EngineCommand::AddLane { deck_uuid } => self.cmd_add_lane(&deck_uuid),
+            EngineCommand::RemoveLane { deck_uuid } => self.cmd_remove_lane(&deck_uuid),
+            EngineCommand::AddRegion { deck_uuid, region } => {
+                self.cmd_add_region(&deck_uuid, region)
+            }
+            EngineCommand::UpdateRegion {
+                deck_uuid,
+                index,
+                region,
+            } => self.cmd_update_region(&deck_uuid, index, region),
+            EngineCommand::RemoveRegion { deck_uuid, index } => {
+                self.cmd_remove_region(&deck_uuid, index)
+            }
+            EngineCommand::SetLaneCollapsed {
+                deck_uuid,
+                collapsed,
+            } => self.cmd_set_lane_collapsed(&deck_uuid, collapsed),
+            EngineCommand::SetIdleBehaviour { idle } => self.cmd_set_idle_behaviour(idle),
+            EngineCommand::RearmParam { param_key, seconds } => {
+                self.cmd_rearm_param(&param_key, seconds)
+            }
+            EngineCommand::RearmAll { seconds } => self.cmd_rearm_all(seconds),
+            EngineCommand::AddCue { at, name } => self.cmd_add_cue(at, &name),
+            EngineCommand::UpdateCue { uuid, at, name } => self.cmd_update_cue(&uuid, at, name),
+            EngineCommand::RemoveCue { uuid } => self.cmd_remove_cue(&uuid),
+            EngineCommand::UpdateModulationTimebase { uuid, timebase } => {
+                if self.mixer.modulation_mut().set_timebase(&uuid, timebase) {
+                    CommandResult::Ok
+                } else {
+                    CommandResult::Err {
+                        code: ErrorCode::NotFound,
+                        message: format!("Modulation source {uuid} not found"),
+                    }
+                }
+            }
             EngineCommand::UpdateLfoWaveform { uuid, waveform } => {
                 self.exec_modulation_update(&uuid, |s| {
                     if let ModulationSource::LFO {
@@ -1436,8 +1556,14 @@ impl VardaApp {
                 value,
             } => match self.resolve_deck(&deck_uuid) {
                 Ok((ch_idx, dk_idx)) => {
+                    let mut taken = None;
                     if let Some(ch) = self.mixer.channel_mut(ch_idx) {
-                        ch.decks[dk_idx].deck.generator_params.set(&name, value);
+                        let params = &mut ch.decks[dk_idx].deck.generator_params;
+                        taken = params.normalize(&name, &value);
+                        params.set(&name, value);
+                    }
+                    if let Some(held) = taken {
+                        self.note_live_param_write(&format!("deck_{deck_uuid}:{name}"), held);
                     }
                     CommandResult::Ok
                 }
@@ -1449,8 +1575,13 @@ impl VardaApp {
                 value,
             } => match self.resolve_effect(&effect_uuid) {
                 Ok(loc) => {
+                    let mut taken = None;
                     if let Some(effect) = self.mixer.effect_at_mut(loc) {
+                        taken = effect.params.normalize(&name, &value);
                         effect.params.set(&name, value);
+                    }
+                    if let Some(held) = taken {
+                        self.note_live_param_write(&format!("fx_{effect_uuid}:{name}"), held);
                     }
                     CommandResult::Ok
                 }
@@ -1597,6 +1728,8 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
             | C::PlaySequence { .. }
             | C::StopSequence { .. }
             | C::ToggleSequence { .. }
+            // Copying reads the scene; paste and duplicate are undoable.
+            | C::Copy { .. }
             // HTML transient window / reload.
             | C::OpenHtmlInteractive { .. }
             | C::CloseHtmlInteractive
@@ -1649,6 +1782,20 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
             // Clock preference / manual BPM (live sync config).
             | C::SetClockPreference { .. }
             | C::SetManualBpm { .. }
+            // Show position and re-arm are session state. Lane and region edits
+            // are ordinary scene data and stay undoable; undoing one of them
+            // must not also rewind the show or revive a released fader.
+            | C::TransportPlay
+            | C::TransportStop
+            | C::TransportLocate { .. }
+            | C::TransportPrevCue
+            | C::TransportNextCue
+            | C::TriggerCue { .. }
+            | C::SetTransportSource { .. }
+            | C::RearmParam { .. }
+            | C::RearmAll { .. }
+            // Folding a lane away rearranges the view, not the show.
+            | C::SetLaneCollapsed { .. }
             // Global engine settings / profiling.
             | C::SetRenderResolution { .. }
             | C::SetDomemasterResolution { .. }

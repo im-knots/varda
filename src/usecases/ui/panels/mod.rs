@@ -3,7 +3,10 @@
 //! Each sub-module renders a specific panel or UI section.
 //! The `render_ui` function orchestrates the top-level layout.
 
+mod arrangement;
 mod bottom_bar;
+mod clipboard_menu;
+mod cue_bank;
 mod deck_detail;
 mod dnd;
 mod effects;
@@ -12,12 +15,14 @@ mod macros;
 mod midi;
 mod mixer;
 mod modulation;
+mod monitoring;
 mod notifications_overlay;
 mod outputs;
 mod popovers;
 mod right_panel;
 mod sequence;
 mod stage;
+mod tonemap;
 pub(crate) mod utils;
 
 use super::{UIActions, UIData};
@@ -26,11 +31,12 @@ use bottom_bar::render_bottom_panel;
 use dnd::{handle_effect_dnd, handle_library_dnd, handle_sequence_step_dnd};
 use library::render_library_panel;
 use mixer::render_central_panel;
+use monitoring::render_monitoring_strip;
 use notifications_overlay::render_notifications;
 use popovers::{
-    handle_midi_learn_popup, render_clock_popover, render_fps_popover, render_gpu_popover,
-    render_resolution_popover, render_target_fps_popover, render_tonemap_popover,
-    tonemap_short_name,
+    clock_is_live, followers_hint, handle_midi_learn_popup, render_clock_popover,
+    render_resolution_popover, render_target_fps_popover, render_transport_popover,
+    transport_color,
 };
 use right_panel::render_right_panel;
 
@@ -93,6 +99,13 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                     {
                         actions.session.toggle_right_panel = true;
                     }
+                });
+                // Telemetry stays readable when the panel is reclaimed for
+                // screen space: losing the frame rate is worst exactly when
+                // someone is fighting for performance.
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
+                    ui.add_space(6.0);
+                    render_monitoring_strip(ui, data);
                 });
             });
     }
@@ -217,6 +230,27 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                     }
                 }
 
+                ui.separator();
+
+                // Performance and Arrangement are two views of one scene, so the
+                // switch is a toggle rather than a mode people enter and leave.
+                // See /spec/arrangement.md § UI.
+                {
+                    let label = if data.arrangement_mode_open {
+                        "🎛 Perform"
+                    } else {
+                        "▤ Arrange"
+                    };
+                    let hover = if data.arrangement_mode_open {
+                        "Back to the mixer. The arrangement keeps driving decks either way."
+                    } else {
+                        "Lay decks out against show time"
+                    };
+                    if ui.button(label).on_hover_text(hover).clicked() {
+                        actions.session.toggle_arrangement_mode = true;
+                    }
+                }
+
                 // Learn mode indicators
                 if data.midi_learn_active {
                     let text = egui::RichText::new("🎹 MIDI LEARN")
@@ -254,12 +288,22 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                         ui.label(egui::RichText::new(format!("({dev})")).weak().small());
                     }
                     // Clickable BPM label → opens clock source popover
+                    let bpm_rich = if clock_is_live(data) {
+                        egui::RichText::new(&bpm_text).monospace()
+                    } else {
+                        egui::RichText::new(&bpm_text).monospace().weak()
+                    };
                     let bpm_response = ui
-                        .add(
-                            egui::Label::new(egui::RichText::new(&bpm_text).monospace())
-                                .sense(egui::Sense::click()),
-                        )
-                        .on_hover_text("Click to select clock source");
+                        .add(egui::Label::new(bpm_rich).sense(egui::Sense::click()))
+                        .on_hover_text(format!(
+                            "{} — {}. Click to select clock source",
+                            if data.clock_active {
+                                data.clock_source.as_str()
+                            } else {
+                                "No clock source"
+                            },
+                            followers_hint(data.clock_beat_followers, "the beat")
+                        ));
                     egui::Popup::from_toggle_button_response(&bpm_response)
                         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                         .show(|ui| {
@@ -268,94 +312,28 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
 
                     ui.separator();
 
-                    let fps = data.fps;
-                    let fps_color = if fps > 55.0 {
-                        egui::Color32::from_rgb(100, 220, 100)
-                    } else if fps > 30.0 {
-                        egui::Color32::from_rgb(220, 200, 60)
-                    } else {
-                        egui::Color32::from_rgb(220, 60, 60)
-                    };
-                    let fps_response = ui
+                    // Show position sits beside the tempo it will eventually be
+                    // able to drive: both answer "where are we?", one in bars
+                    // and one in absolute time.
+                    let transport_response = ui
                         .add(
                             egui::Label::new(
-                                egui::RichText::new(format!("{fps:.0} FPS"))
-                                    .color(fps_color)
-                                    .monospace(),
+                                egui::RichText::new(&data.transport.timecode)
+                                    .monospace()
+                                    .color(transport_color(data)),
                             )
                             .sense(egui::Sense::click()),
                         )
-                        .on_hover_text("Click for render timing details");
-                    egui::Popup::from_toggle_button_response(&fps_response)
+                        .on_hover_text(format!(
+                            "{} — {}. Click for transport controls",
+                            data.transport.status_label,
+                            followers_hint(data.transport.followers, "the transport")
+                        ));
+                    egui::Popup::from_toggle_button_response(&transport_response)
                         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                         .show(|ui| {
-                            render_fps_popover(ui, data);
+                            render_transport_popover(ui, data, &mut actions);
                         });
-
-                    ui.separator();
-
-                    // GPU utilization % from GPU timestamp data
-                    let gpu_load_pct = data.gpu_utilization;
-                    let gpu_color = if gpu_load_pct < 50.0 {
-                        egui::Color32::from_rgb(100, 220, 100)
-                    } else if gpu_load_pct < 80.0 {
-                        egui::Color32::from_rgb(220, 200, 60)
-                    } else {
-                        egui::Color32::from_rgb(220, 60, 60)
-                    };
-                    let gpu_response = ui
-                        .add(
-                            egui::Label::new(
-                                egui::RichText::new(format!("🖥 {gpu_load_pct:.0}%"))
-                                    .color(gpu_color)
-                                    .monospace(),
-                            )
-                            .sense(egui::Sense::click()),
-                        )
-                        .on_hover_text("GPU utilization — click for details");
-                    egui::Popup::from_toggle_button_response(&gpu_response)
-                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                        .show(|ui| {
-                            render_gpu_popover(ui, data);
-                        });
-
-                    ui.separator();
-
-                    // CPU & RAM usage
-                    let cpu_color = if data.cpu_usage < 50.0 {
-                        egui::Color32::from_rgb(100, 220, 100)
-                    } else if data.cpu_usage < 80.0 {
-                        egui::Color32::from_rgb(220, 200, 60)
-                    } else {
-                        egui::Color32::from_rgb(220, 60, 60)
-                    };
-                    ui.label(
-                        egui::RichText::new(format!("CPU {:.0}%", data.cpu_usage))
-                            .color(cpu_color)
-                            .monospace()
-                            .small(),
-                    );
-
-                    let ram_gb = data.ram_used as f64 / (1024.0 * 1024.0 * 1024.0);
-                    let ram_total_gb = data.ram_total as f64 / (1024.0 * 1024.0 * 1024.0);
-                    let ram_pct = if data.ram_total > 0 {
-                        data.ram_used as f32 / data.ram_total as f32 * 100.0
-                    } else {
-                        0.0
-                    };
-                    let ram_color = if ram_pct < 50.0 {
-                        egui::Color32::from_rgb(100, 220, 100)
-                    } else if ram_pct < 80.0 {
-                        egui::Color32::from_rgb(220, 200, 60)
-                    } else {
-                        egui::Color32::from_rgb(220, 60, 60)
-                    };
-                    ui.label(
-                        egui::RichText::new(format!("RAM {ram_gb:.1}/{ram_total_gb:.0}G"))
-                            .color(ram_color)
-                            .monospace()
-                            .small(),
-                    );
 
                     ui.separator();
 
@@ -391,24 +369,6 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                         .show(|ui| {
                             render_target_fps_popover(ui, data, &mut actions);
-                        });
-
-                    ui.separator();
-
-                    // Tonemap mode selector
-                    let tonemap_label = tonemap_short_name(data.tonemap_mode);
-                    let tonemap_response = ui
-                        .add(
-                            egui::Label::new(
-                                egui::RichText::new(tonemap_label).monospace().small(),
-                            )
-                            .sense(egui::Sense::click()),
-                        )
-                        .on_hover_text("Tonemap mode — click to change");
-                    egui::Popup::from_toggle_button_response(&tonemap_response)
-                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                        .show(|ui| {
-                            render_tonemap_popover(ui, data, &mut actions);
                         });
                 });
             });
@@ -468,6 +428,18 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                         }
                         KeyTarget::Action(ActionId::ToggleKeyboardLearn) => {
                             actions.session.keyboard_learn_toggle = true;
+                        }
+                        KeyTarget::Action(
+                            id @ (ActionId::Copy | ActionId::Paste | ActionId::Duplicate),
+                        ) => {
+                            // Never into a text field, and never over an
+                            // automation lane, which has its own clipboard for
+                            // breakpoints.
+                            if !ui.egui_wants_keyboard_input()
+                                && !arrangement::a_lane_is_selected(ui.ctx())
+                            {
+                                clipboard_menu::shortcut(*id, data, &mut actions);
+                            }
                         }
                         KeyTarget::ParamPath(path) => {
                             actions

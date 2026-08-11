@@ -65,6 +65,18 @@ pub struct UISession {
     pub remove_channel: Option<usize>,
     /// Toggle stage editor open/closed
     pub toggle_stage_editor: bool,
+    /// Swap the central area between Performance and Arrangement. Purely a view
+    /// change: the arrangement drives decks whenever the transport runs, in
+    /// either mode. See /spec/arrangement.md § UI.
+    pub toggle_arrangement_mode: bool,
+    /// Timeline horizontal zoom, in pixels per second of show time.
+    pub set_arrangement_zoom: Option<f32>,
+    /// Timeline horizontal scroll, as the show position at the left edge.
+    pub set_arrangement_scroll: Option<f64>,
+    /// Round timeline edits to whole frames. A property of the gesture, never of
+    /// the stored position. See /spec/arrangement.md § Does the ruler own a
+    /// frame rate?
+    pub toggle_arrangement_snap: bool,
     /// Toggle 3D dome preview in stage editor
     pub toggle_dome_preview: bool,
     /// Dome mode actions (camera, config, mode toggle). UI-local layout state
@@ -123,6 +135,10 @@ impl UISession {
             deselect_macro: false,
             remove_channel: None,
             toggle_stage_editor: false,
+            toggle_arrangement_mode: false,
+            set_arrangement_zoom: None,
+            set_arrangement_scroll: None,
+            toggle_arrangement_snap: false,
             toggle_dome_preview: false,
             dome_actions: Vec::new(),
             camera_detect_actions: Vec::new(),

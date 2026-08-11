@@ -4,8 +4,10 @@
 //! Route handlers are thin: validate input, read state or send commands,
 //! map results to HTTP responses.
 
+pub mod arrangement;
 pub mod audio;
 pub mod channels;
+pub mod clipboard;
 pub mod decks;
 pub mod effects;
 pub mod library;
@@ -21,3 +23,4 @@ pub mod surfaces;
 pub mod system;
 #[cfg(test)]
 mod tests;
+pub mod transport;

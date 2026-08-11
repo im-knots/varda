@@ -119,13 +119,13 @@ Compresses HDR values into displayable [0, 1] range. Nine algorithmic presets ar
 | **AgX** | Neutral, minimal hue shift |
 | **PBR Neutral** | Color-accurate, minimal look modification |
 
-Select via the **TM:** label in the top bar or `PUT /api/mixer/tonemap`.
+Select via the **🎨 Tonemap** section in the right panel, under the main output preview, or `PUT /api/mixer/tonemap`.
 
 ### 3D LUT
 
 An optional 3D Look-Up Table applied after tonemapping for color grading, gamut transforms, or creative looks. Supports industry-standard `.cube` and `.3dl` files (including 1D shaper LUTs for shadow precision).
 
-Place LUT files in `.varda/luts/` and they will appear in the tonemap popover for one-click selection. The active LUT persists across sessions.
+Place LUT files in `.varda/luts/` and they will appear in the **🎨 Tonemap** section for one-click selection. The active LUT persists across sessions.
 
 LUTs are the universal mechanism for importing color transforms from DaVinci Resolve, Photoshop, or any color grading tool. A single `.cube` file can encode tonemapping + color grading + gamut mapping in one pass.
 
@@ -146,6 +146,25 @@ Any numeric parameter in the hierarchy can be automated by modulation sources:
 Sources are created in the modulation panel and assigned to any parameter with its **〰** button. Multiple sources can target the same parameter (summed). Modulator-on-modulator chaining is supported up to 4 levels deep — for example, an LFO modulating the frequency of another LFO. See [Modulation & Audio Reactivity](05-modulation.md) for the assignment workflow.
 
 Parameter paths use the format `deck/<uuid>/param/<name>`, `crossfader`, `ch/<uuid>/opacity`, etc.
+
+---
+
+## Copy and Paste
+
+Right-click a deck, an effect card, or a channel (its header, or the empty space under its decks) for **Copy**, **Duplicate**, and **Paste**. `Cmd+C`, `Cmd+V`, and `Cmd+D` do the same thing to whatever is currently selected.
+
+A copy is rebuilt from scratch rather than shared, so the two objects are independent: renaming, remapping, or deleting one leaves the other alone.
+
+| What travels | What does not |
+|---|---|
+| Every parameter value, the effect chain, and its settings | MIDI, keyboard, and OSC mappings, so one knob never silently drives two decks |
+| Modulation assignments, still driven by the *same* LFO, envelope, or sequencer, so the copy moves with the original | Macro targets, for the same reason |
+| Automation curves, cloned so each lane can be edited on its own | |
+| Arrangement regions, but only when the copy is made in Arrangement mode | |
+
+That last row is the one worth remembering: in the mixer a deck is a source, so a copy is a bare deck. On the timeline it is a source *and* a placement, so a copy plays at the same times as the original.
+
+A paste lands directly after whatever you right-clicked, or at the end when you use the container's own menu. A channel is pasted as a new channel at the end of the mixer. Copy and paste is the lightweight version of a preset: same result, no naming and no file. Reach for a [preset](04-performance.md#presets) when something should outlive the session.
 
 ---
 

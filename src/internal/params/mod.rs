@@ -219,6 +219,24 @@ impl ShaderParams {
         }
     }
 
+    /// Express a value as a 0.0–1.0 fraction of its declared range.
+    ///
+    /// Used by the arrangement's live override, whose re-arm ramp starts from
+    /// the value a performer left behind and has to meet an envelope's output
+    /// in the same normalized space. Returns `None` for parameters with no
+    /// meaningful range to measure against.
+    pub fn normalize(&self, name: &str, value: &ParamValue) -> Option<f32> {
+        let ParamValue::Float(v) = value else {
+            return None;
+        };
+        let definition = self.definitions.get(name)?;
+        let (min, max) = (definition.min?, definition.max?);
+        if (max - min).abs() < f32::EPSILON {
+            return None;
+        }
+        Some(((v - min) / (max - min)).clamp(0.0, 1.0))
+    }
+
     /// Set a float value
     pub fn set_float(&mut self, name: &str, value: f32) {
         if let Some(ParamValue::Float(v)) = self.values.get_mut(name) {
@@ -467,8 +485,8 @@ impl ShaderParams {
     ) -> ParamValue {
         match value {
             ParamValue::Float(base) => {
-                let offset = modulation.get_modulation(mod_key);
-                if offset == 0.0 {
+                let resolved = modulation.resolve(mod_key, None);
+                if resolved.additive == 0.0 && resolved.absolute.is_none() {
                     return *value;
                 }
                 let (min_val, max_val) = definition.map_or((0.0, 1.0), |d| {
@@ -477,26 +495,37 @@ impl ShaderParams {
                     (min, max)
                 });
                 let range = max_val - min_val;
-                let modulated = (base + offset * range).clamp(min_val, max_val);
+                // An absolute source replaces the base before additive sources
+                // are summed, so an automated curve produces the value it was
+                // drawn at rather than depending on where the fader was saved.
+                // See /spec/automation.md § Absolute vs Additive.
+                let effective_base = resolved.absolute.map_or(*base, |v| min_val + v * range);
+                let modulated =
+                    (effective_base + resolved.additive * range).clamp(min_val, max_val);
                 ParamValue::Float(modulated)
             }
             ParamValue::Color(base) => {
                 let mut result = *base;
                 for (i, comp) in result.iter_mut().enumerate() {
-                    let offset = modulation.get_modulation_for_component(mod_key, Some(i));
-                    if offset != 0.0 {
-                        *comp = (*comp + offset).clamp(0.0, 1.0);
+                    let resolved = modulation.resolve(mod_key, Some(i));
+                    if let Some(absolute) = resolved.absolute {
+                        *comp = absolute;
                     }
+                    if resolved.additive != 0.0 {
+                        *comp += resolved.additive;
+                    }
+                    *comp = comp.clamp(0.0, 1.0);
                 }
                 ParamValue::Color(result)
             }
             ParamValue::Point2D(base) => {
                 let mut result = *base;
                 for (i, comp) in result.iter_mut().enumerate() {
-                    let offset = modulation.get_modulation_for_component(mod_key, Some(i));
-                    if offset != 0.0 {
-                        *comp += offset;
+                    let resolved = modulation.resolve(mod_key, Some(i));
+                    if let Some(absolute) = resolved.absolute {
+                        *comp = absolute;
                     }
+                    *comp += resolved.additive;
                 }
                 ParamValue::Point2D(result)
             }
@@ -856,7 +885,7 @@ mod tests {
             amplitude: 1.0,
             bipolar: true,
         });
-        engine.update(
+        engine.update_free_running(
             0.25,
             &crate::modulation::AudioValues::default(),
             &crate::modulation::AnalyzerValues::default(),
@@ -876,7 +905,7 @@ mod tests {
         let mut engine = ModulationEngine::new();
         let uuid = engine.add_source(pinned_source(1.0));
         engine.assign("deck0:speed", &uuid, 0.5, None);
-        engine.update(
+        engine.update_free_running(
             0.0,
             &crate::modulation::AudioValues::default(),
             &crate::modulation::AnalyzerValues::default(),
@@ -927,7 +956,7 @@ mod tests {
             let mut engine = ModulationEngine::new();
             let uuid = engine.add_source(pinned_source(ramp));
             engine.assign("deck0:speed", &uuid, amount, None);
-            engine.update(
+            engine.update_free_running(
                 0.0,
                 &crate::modulation::AudioValues::default(),
                 &crate::modulation::AnalyzerValues::default(),
@@ -982,7 +1011,7 @@ mod tests {
         for i in 0..SAMPLES {
             // frequency = 1 Hz, so t over 0..1 is exactly one cycle.
             let t = i as f32 / SAMPLES as f32;
-            engine.update(
+            engine.update_free_running(
                 t,
                 &crate::modulation::AudioValues::default(),
                 &crate::modulation::AnalyzerValues::default(),
@@ -1087,7 +1116,7 @@ mod tests {
             // Long enough for the ramp to cross the full 0..1 span at the
             // default step of raw * dt * 4.
             for frame in 0..200 {
-                engine.update(
+                engine.update_free_running(
                     frame as f32 * 0.016,
                     &loud(),
                     &crate::modulation::AnalyzerValues::default(),
@@ -1134,7 +1163,7 @@ mod tests {
         let mut params = ShaderParams::from_inputs(&inputs);
         let mut engine = ModulationEngine::new();
         let uuid = engine.add_source(crate::modulation::ModulationSource::sine_lfo(1.0));
-        engine.update(
+        engine.update_free_running(
             0.25,
             &crate::modulation::AudioValues::default(),
             &crate::modulation::AnalyzerValues::default(),

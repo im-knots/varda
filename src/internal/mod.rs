@@ -1,4 +1,5 @@
 pub mod analyzer;
+pub mod arrangement;
 pub mod audio;
 pub mod camera;
 pub mod channel;
@@ -29,4 +30,6 @@ pub mod surface;
 #[cfg(target_os = "macos")]
 pub mod syphon;
 pub mod sysmon;
+pub mod timebase;
+pub mod transport;
 pub mod video;

@@ -123,12 +123,13 @@ cargo run --release
 
 ![Varda UI](img/screenshot.png)
 
+- **Top bar** — undo, redo, and save on the left. On the right, reading right to left: the **BPM / clock** readout, the **transport position** as timecode, the **📐 render resolution**, and the **🎯 target frame rate**. Each one is clickable and opens its settings.
 - **Library** (left, toggle with **L**) — content browser: shaders, video, images, cameras, screen capture targets, taps, NDI, SRT, HLS/DASH sources, and presets. See [Library Panel](03-library-panel.md).
 - **Center** — channel/deck grid with mixer crossfader. Toggle to **Stage Editor** for surface drawing.
-- **Right** — main output preview (always visible), output list, modulation panel, MIDI device list
+- **Right** — the main output preview at the top, then collapsible sections: **🎨 Tonemap** (curve and 3D LUT), **〰 Modulation**, **🎹 MIDI**, **🗺 Stage Layout**, and **📺 Outputs**. Live performance metrics (frame rate, GPU, CPU, RAM) sit at the very bottom.
 - **Bottom** (resizable) — context-sensitive: shows the selected deck's parameters, effect chains, or sequence editor
 
-All panel dividers are draggable to resize. Left and right panels can be collapsed.
+All panel dividers are draggable to resize. Left and right panels can be collapsed. Collapsing the right panel keeps the performance metrics visible, stacked down the narrow strip that remains.
 
 ## Load Content
 
@@ -156,7 +157,7 @@ To load **video or images**, use the Video or Image sections in the Library — 
 
 ## Output to a Display
 
-1. In the right panel, click **"+ Output"** to create a new output window
+1. In the right panel, open the **📺 Outputs** section and click **"+ Windowed"** to create a new output window
 2. A floating window appears — this is your output
 3. In the output settings, select a **display target** (enumerate monitors from the dropdown)
 4. Click **Fullscreen** to send the output to the selected projector or display
@@ -172,7 +173,7 @@ Varda analyzes audio input for beat detection and frequency-band modulation. To 
 3. Choose a **frequency preset** — Low (bass), Mid, or High (treble) — or set a custom Hz range
 4. Assign the source to any parameter (opacity, shader param, etc.) — it now reacts to the music
 
-Beat detection activates automatically from the audio input — BPM appears in the mixer for beat-synced transitions and auto-crossfades.
+Beat detection activates automatically from the audio input — BPM appears in the top bar and drives beat-synced transitions and auto-crossfades.
 
 ISF shaders also receive audio data directly via built-in uniforms (`audio_bass`, `audio_mid`, `audio_treble`, `audio_bpm`, `audio_beat_phase`) — no modulation setup needed. See [Modulation & Audio Reactivity](05-modulation.md) for the full guide.
 

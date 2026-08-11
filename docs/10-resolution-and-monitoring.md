@@ -1,6 +1,6 @@
 # Resolution, Settings & Monitoring
 
-This page covers the global controls that live in the **top bar**: render resolution, per-deck scaling, and the live performance metrics.
+This page covers render resolution and per-deck scaling, set from the **top bar**, and the live performance metrics, which live at the foot of the **right panel**.
 
 ## Where Settings Live
 
@@ -8,10 +8,12 @@ This page covers the global controls that live in the **top bar**: render resolu
 |---------|-------|-----|
 | Render resolution | Top bar (📐 W×H) | Click to pick a preset or enter a custom size |
 | Audio input device | Audio modulator → device dropdown | Selected per modulator; capture is automatic (a device runs only while referenced) |
-| MIDI devices | Library → MIDI | Enable/disable, rescan |
+| MIDI devices | Right panel → 🎹 MIDI | Enable/disable, rescan |
 | MIDI mappings | Right-click → MIDI learn | Visual mapping (purple glow) |
 | Keyboard shortcuts | Right-click → Keyboard learn | Visual mapping (orange glow) |
 | Clock source | Top bar → BPM display | Auto priority + manual override |
+| Transport | Top bar → position readout | Play/stop, return to zero, source, timecode rate |
+| Tonemap curve and 3D LUT | Right panel → 🎨 Tonemap | Pick a curve; LUTs are read from `.varda/luts/` |
 | OSC port / feedback | `.varda/osc.json` or `--osc-port` | Config file (see [Control Surfaces](06-control-surfaces.md#osc)) |
 | Shader library | `shaders/` directory | Filesystem convention, hot-reloaded |
 
@@ -78,13 +80,14 @@ Because scaling happens once on load rather than every frame, the compositing pi
 
 ## Performance Monitoring
 
-All metrics are displayed inline in the top bar, each with a clickable drill-down popover. Reading left to right:
+All five readouts sit together at the **foot of the right panel**, reading left to right:
 
 ```
-[Undo] [Redo] [Save] | [📐 Resolution] | [CPU%] [RAM] | [GPU Load%] | [FPS] | [BPM/Clock]
+[FPS] [🖥 GPU Load%] [CPU%] [RAM] [decks + VRAM estimate]
 ```
+Collapse the right panel and the same four values reappear stacked vertically down the narrow rail, since the frame rate is exactly what you want to watch when you have just reclaimed screen space to chase performance. Hover any of them for the full label.
 
-This order follows a causal chain of: *what you set → what it costs → what's producing it → how fast → the music.*
+FPS and GPU Load still have clickable drill-down popovers.
 
 ### FPS
 
@@ -97,6 +100,12 @@ Render load as a percentage of the frame budget: `(total_render_ms / 16.67ms) ×
 ### CPU / RAM
 
 CPU percentage and RAM usage (used/total), both color-coded. These are sampled once per second (not per frame) to avoid measurement overhead.
+
+### Decks & VRAM
+
+Deck count across every channel, followed by an estimate of the GPU memory their color targets hold at the current render resolution. It is deliberately an estimate: video decoders and camera buffers hold their own memory on top of it, and the number is there to answer "is this scene getting heavy" rather than to account for the card.
+
+It matters most in [Arrangement Mode](15-arrangement.md), where every deck in a two-hour show holds its targets for the whole show whether or not a region is covering it. A deck the arrangement has put to sleep stops decoding but keeps its memory, so this number does not move when one does. Hover for the channel count and the target size.
 
 ---
 

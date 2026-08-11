@@ -422,6 +422,23 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `DELETE` | `/api/decks/{deck_uuid}/analyzers/{analyzer_type}` | Release an analyzer; it stops when the last consumer detaches. |
 | `GET` | `/api/library/analyzers` | Analyzer types a deck can attach, with their names and parameter descriptors. |
 
+### Arrangement
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/arrangement/cues` |  |
+| `PUT` | `/api/arrangement/cues/{uuid}` |  |
+| `DELETE` | `/api/arrangement/cues/{uuid}` |  |
+| `PUT` | `/api/arrangement/idle` |  |
+| `POST` | `/api/arrangement/lanes/{deck_uuid}` |  |
+| `DELETE` | `/api/arrangement/lanes/{deck_uuid}` |  |
+| `PUT` | `/api/arrangement/lanes/{deck_uuid}/collapsed` |  |
+| `POST` | `/api/arrangement/lanes/{deck_uuid}/regions` |  |
+| `PUT` | `/api/arrangement/lanes/{deck_uuid}/regions/{index}` |  |
+| `DELETE` | `/api/arrangement/lanes/{deck_uuid}/regions/{index}` |  |
+| `POST` | `/api/arrangement/rearm` |  |
+| `POST` | `/api/arrangement/rearm/{param_key}` |  |
+
 ### Audio
 
 | Method | Path | Description |
@@ -448,6 +465,14 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `DELETE` | `/api/channels/{channel_uuid}` |  |
 | `PUT` | `/api/channels/{channel_uuid}/blend-mode` |  |
 | `PUT` | `/api/channels/{channel_uuid}/opacity` |  |
+
+### Clipboard
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/clipboard/copy` |  |
+| `POST` | `/api/clipboard/duplicate` |  |
+| `POST` | `/api/clipboard/paste` |  |
 
 ### Decks
 
@@ -565,6 +590,7 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `POST` | `/api/modulation/analyzer` |  |
 | `POST` | `/api/modulation/assign` |  |
 | `POST` | `/api/modulation/audio-band` |  |
+| `POST` | `/api/modulation/automation` |  |
 | `POST` | `/api/modulation/clear` |  |
 | `POST` | `/api/modulation/lfo` |  |
 | `POST` | `/api/modulation/mod-on-mod` |  |
@@ -585,6 +611,7 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `PUT` | `/api/modulation/{uuid}/audio/preset` |  |
 | `PUT` | `/api/modulation/{uuid}/audio/smoothing` |  |
 | `PUT` | `/api/modulation/{uuid}/audio/source` |  |
+| `PUT` | `/api/modulation/{uuid}/breakpoints` |  |
 | `PUT` | `/api/modulation/{uuid}/lfo/amplitude` |  |
 | `PUT` | `/api/modulation/{uuid}/lfo/bipolar` |  |
 | `PUT` | `/api/modulation/{uuid}/lfo/frequency` |  |
@@ -596,6 +623,7 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `PUT` | `/api/modulation/{uuid}/step-seq/rate` |  |
 | `PUT` | `/api/modulation/{uuid}/step-seq/steps` |  |
 | `PUT` | `/api/modulation/{uuid}/step-seq/value` |  |
+| `PUT` | `/api/modulation/{uuid}/timebase` |  |
 
 ### Outputs
 
@@ -684,6 +712,7 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 
 | Method | Path | Description |
 |---|---|---|
+| `GET` | `/api/state/arrangement` | Arrangement state: authored lanes and regions, whether the arrangement holds authority, and which parameters a performer is holding by hand. |
 | `GET` | `/api/state/audio` | Audio analysis state: level, band energies, FFT bins, detected BPM, and input devices. |
 | `GET` | `/api/state/cameras` | Camera devices discovered by the last scan. |
 | `GET` | `/api/state/clock` | Clock state: resolved BPM, beat phase, active source, and detected clock sources. |
@@ -700,6 +729,7 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `GET` | `/api/state/streams` | Active stream receivers with their URL, mode, and connection status. |
 | `GET` | `/api/state/surfaces` | Every surface with its geometry, warp, and source assignment. |
 | `GET` | `/api/state/syphon` | Syphon framework availability and the server names found by the last scan. |
+| `GET` | `/api/state/transport` | Transport state: absolute position, timecode, run status, loop region, and follower count. |
 
 ### Streams
 
@@ -774,6 +804,20 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `POST` | `/api/undo` |  |
 | `POST` | `/api/workspace/load` |  |
 | `POST` | `/api/workspace/save` |  |
+
+### Transport
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/transport/cue/next` |  |
+| `POST` | `/api/transport/cue/prev` |  |
+| `POST` | `/api/transport/cue/{uuid}` | Locate to one named cue, leaving the transport running or stopped as it was. |
+| `POST` | `/api/transport/locate` |  |
+| `PUT` | `/api/transport/loop` |  |
+| `POST` | `/api/transport/play` |  |
+| `PUT` | `/api/transport/rate` |  |
+| `PUT` | `/api/transport/source` |  |
+| `POST` | `/api/transport/stop` |  |
 
 ### Video
 

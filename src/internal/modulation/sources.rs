@@ -1,8 +1,8 @@
 //! Modulation source types and their computation logic.
 
 use super::{
-    ADSRStage, AnalyzerValues, AudioBandPreset, AudioReactMode, AudioValues, LFOWaveform,
-    StepInterpolation,
+    ADSRStage, AnalyzerValues, AudioBandPreset, AudioReactMode, AudioValues, Breakpoint,
+    LFOWaveform, StepInterpolation,
 };
 use serde::{Deserialize, Serialize};
 
@@ -70,6 +70,16 @@ pub enum ModulationSource {
         /// Smoothing factor (0.0 = no smoothing, 0.99 = heavy smoothing).
         #[serde(default = "default_analyzer_smoothing")]
         smoothing: f32,
+    },
+    /// Automation envelope. A pure function of timebase position.
+    /// See /spec/automation.md.
+    Envelope {
+        /// Sorted by position. The invariant is maintained on edit, not on read.
+        breakpoints: Vec<Breakpoint>,
+        /// Cached segment index. An optimization only; a stale value can never
+        /// produce a wrong result.
+        #[serde(skip)]
+        cursor: usize,
     },
 }
 
@@ -166,6 +176,14 @@ impl ModulationSource {
                     smoothing: sm2,
                 },
             ) => d1 == d2 && at1 == at2 && on1 == on2 && sm1 == sm2,
+            (
+                ModulationSource::Envelope {
+                    breakpoints: b1, ..
+                },
+                ModulationSource::Envelope {
+                    breakpoints: b2, ..
+                },
+            ) => b1 == b2,
             _ => false,
         }
     }
@@ -204,6 +222,32 @@ impl ModulationSource {
             gate: false,
             current_level: 0.0,
         }
+    }
+
+    /// An automation envelope. Starts empty, which is inert by design: a lane
+    /// exists before any point has been drawn on it.
+    pub fn envelope(breakpoints: Vec<Breakpoint>) -> Self {
+        ModulationSource::Envelope {
+            breakpoints,
+            cursor: 0,
+        }
+    }
+
+    /// Whether this is an automation curve. Distinct from
+    /// [`Self::provides_absolute_value`], which an empty curve fails: an empty
+    /// lane contributes nothing, but it is still one parameter's lane and is
+    /// never shared with a second. See /spec/automation.md § One envelope per
+    /// parameter.
+    pub fn is_envelope(&self) -> bool {
+        matches!(self, ModulationSource::Envelope { .. })
+    }
+
+    /// Whether this source replaces a parameter's base value rather than being
+    /// summed onto it. Only a non-empty envelope does; an empty one contributes
+    /// nothing, so the parameter behaves as unautomated.
+    /// See /spec/automation.md § Evaluation.
+    pub fn provides_absolute_value(&self) -> bool {
+        matches!(self, ModulationSource::Envelope { breakpoints, .. } if !breakpoints.is_empty())
     }
 
     pub fn step_sequencer(num_steps: usize, rate: f32) -> Self {
@@ -271,6 +315,22 @@ impl ModulationSource {
 
     /// Calculate current value of this modulation source.
     /// Returns value in range [-1, 1] for bipolar or [0, 1] for unipolar.
+    /// Whether this source's output is a pure function of its `time` argument,
+    /// and so can be locked to any timebase without extra state.
+    ///
+    /// `ADSR`, `AudioBand`, and `Analyzer` are event- or signal-driven: they
+    /// integrate, follow an envelope, or sample the room. Locking them to a
+    /// show clock would be meaningless, so they always read free-run time and
+    /// the UI hides the selector for them. See /spec/timebase.md § Core Insight.
+    pub fn follows_timebase(&self) -> bool {
+        matches!(
+            self,
+            ModulationSource::LFO { .. }
+                | ModulationSource::StepSequencer { .. }
+                | ModulationSource::Envelope { .. }
+        )
+    }
+
     pub fn calculate(
         &mut self,
         time: f32,
@@ -484,6 +544,10 @@ impl ModulationSource {
                 let alpha = 1.0 - *smoothing;
                 alpha * raw + *smoothing * prev_value
             }
+            ModulationSource::Envelope {
+                breakpoints,
+                cursor,
+            } => super::envelope::evaluate(breakpoints, f64::from(time), cursor),
         }
     }
 }

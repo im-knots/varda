@@ -1,6 +1,7 @@
 //! Central panel, mixer box, channel columns, deck thumbnails.
 
 use super::super::{widgets, ChannelUIInfo, DeckDrag, DeckUIInfo, LibraryDrag, UIActions, UIData};
+use super::clipboard_menu;
 use super::macros::render_macro_column;
 use super::sequence::render_sequence_builder;
 use super::stage::render_stage_editor;
@@ -12,6 +13,14 @@ use crate::BlendMode;
 pub(super) fn render_central_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     if data.stage_editor_open {
         render_stage_editor(ui, data, actions);
+        return;
+    }
+
+    // Arrangement is a view of the same decks, so it replaces the central area
+    // and nothing else. The stage editor wins when both are open: it is a modal
+    // task, while arrangement is a way of looking at the scene.
+    if data.arrangement_mode_open {
+        super::arrangement::render_arrangement(ui, data, actions);
         return;
     }
 
@@ -204,6 +213,8 @@ fn render_center_stack(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
             }
             // Macro controls — compact widgets in the center column
             render_macro_column(ui, data, actions);
+            // Cue pads — the arrangement's marks, reachable from the desk
+            super::cue_bank::render_cue_bank(ui, data, actions);
         });
 }
 
@@ -582,6 +593,7 @@ pub(super) fn render_channel_column(
                         if header_resp.clicked() {
                             actions.session.select_channel = Some(ch_idx);
                         }
+                        header_resp.context_menu(|ui| channel_context_menu(ui, data, actions, ch));
 
                         // Blend mode dropdown — right-aligned in header
                         let all_modes = BlendMode::all();
@@ -732,6 +744,16 @@ pub(super) fn render_channel_column(
                         if drop_resp.clicked() {
                             actions.session.select_channel = Some(ch_idx);
                         }
+                        // The body of a column is the obvious place to aim a
+                        // paste, and the only one an empty channel has.
+                        drop_resp.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::WidgetType::Button,
+                                true,
+                                format!("{} deck area", ch.name),
+                            )
+                        });
+                        drop_resp.context_menu(|ui| channel_context_menu(ui, data, actions, ch));
                         if let Some(payload) = drop_resp.dnd_release_payload::<DeckDrag>() {
                             if !ch.decks.iter().any(|d| d.uuid == payload.deck_uuid) {
                                 actions.commands.push(EngineCommand::MoveDeck {
@@ -779,6 +801,18 @@ pub(super) fn render_channel_column(
                 .insert_temp(egui::Id::new("ch_drop_rect").with(ch_idx), ch_rect);
         });
     });
+}
+
+/// Copy, duplicate, and paste for a channel, on every part of its column that
+/// is the channel rather than a deck inside it.
+fn channel_context_menu(
+    ui: &mut egui::Ui,
+    data: &UIData,
+    actions: &mut UIActions,
+    ch: &ChannelUIInfo,
+) {
+    let subject = clipboard_menu::Subject::channel(&ch.uuid, &ch.name);
+    clipboard_menu::items(ui, data, actions, &subject);
 }
 
 /// Render a drop zone in empty mixer side space that creates a new channel on drop.
@@ -967,6 +1001,25 @@ pub(super) fn render_deck_thumbnail(
             }
         }
 
+        card_resp.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Button,
+                true,
+                format!("{} deck card", deck.name),
+            )
+        });
+        card_resp.context_menu(|ui| {
+            let subject = clipboard_menu::Subject::deck(&deck.uuid, &deck.name);
+            clipboard_menu::items(ui, data, actions, &subject);
+            ui.separator();
+            if ui.button("Remove deck").clicked() {
+                actions.commands.push(EngineCommand::RemoveDeck {
+                    deck_uuid: deck.uuid.clone(),
+                });
+                ui.close();
+            }
+        });
+
         // Start drag: set payload for deck move between channels
         if card_resp.drag_started() {
             egui::DragAndDrop::set_payload(
@@ -1041,6 +1094,31 @@ pub(super) fn render_deck_thumbnail(
                 egui::FontId::proportional(9.0),
                 egui::Color32::GRAY,
             );
+        }
+
+        // Arrangement state overlay. A performer looking at the mixer needs the
+        // same answer the timeline gives: is this deck mine right now, or the
+        // arrangement's? See /spec/arrangement.md § Live Override.
+        if let Some(arrangement) = &data.arrangement {
+            let held = arrangement
+                .overridden_params
+                .iter()
+                .any(|p| *p == crate::arrangement::opacity_param_key(&deck.uuid));
+            if held {
+                ui.painter().circle_filled(
+                    egui::pos2(preview_rect.min.x + 7.0, preview_rect.min.y + 7.0),
+                    4.0,
+                    egui::Color32::from_rgb(255, 170, 60),
+                );
+            } else if arrangement.engaged && arrangement.config.drives_deck(&deck.uuid) {
+                ui.painter().text(
+                    egui::pos2(preview_rect.min.x + 2.0, preview_rect.min.y + 2.0),
+                    egui::Align2::LEFT_TOP,
+                    "▤",
+                    egui::FontId::proportional(10.0),
+                    egui::Color32::from_rgb(120, 180, 255),
+                );
+            }
         }
 
         // Auto-transition indicator overlay on preview

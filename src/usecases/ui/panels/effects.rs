@@ -1,12 +1,51 @@
 //! Master and channel effect detail panels.
 
 use super::super::{widgets, EffectDrag, LibraryDrag, UIActions, UIData};
+use super::clipboard_menu;
 use super::utils::{
     channel_color, render_effect_drag_ghost, render_effect_drag_handle, render_effect_drop_zone,
 };
 use crate::engine::EngineCommand;
 use crate::modulation::DEFAULT_ASSIGNMENT_AMOUNT;
 use crate::params::ParamValue;
+
+/// Copy, duplicate, paste, and remove, on any effect card in any chain.
+///
+/// `card` must be the response of a *scope* wrapping the card rather than the
+/// card's own `Frame` response. A `Ui` registers itself before its contents, so
+/// its rect loses hit-test ties to the checkboxes and sliders inside it; a
+/// `Frame` registers after, so making that one sense clicks would swallow every
+/// click meant for a parameter.
+pub(super) fn effect_context_menu(
+    card: &egui::Response,
+    data: &UIData,
+    actions: &mut UIActions,
+    uuid: &str,
+    name: &str,
+) {
+    card.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            true,
+            format!("{name} effect card"),
+        )
+    });
+    card.context_menu(|ui| {
+        clipboard_menu::items(
+            ui,
+            data,
+            actions,
+            &clipboard_menu::Subject::effect(uuid, name),
+        );
+        ui.separator();
+        if ui.button("Remove effect").clicked() {
+            actions.commands.push(EngineCommand::RemoveEffect {
+                effect_uuid: uuid.to_string(),
+            });
+            ui.close();
+        }
+    });
+}
 
 pub(super) fn render_master_effect_detail(
     ui: &mut egui::Ui,
@@ -25,9 +64,15 @@ pub(super) fn render_master_effect_detail(
                     {
                         let eff_uuid_master = eff_uuid.clone();
                         let eff_uuid_master_remove = eff_uuid.clone();
+                        let eff_uuid_master_automate = eff_uuid.clone();
                         render_effect_drop_zone(ui, "master", eff_idx);
 
-                        let card_resp = egui::Frame::default()
+                        // A scope, not the Frame, because a `Ui` registers itself
+                        // before its contents and so loses hit-test ties to the
+                        // parameter widgets inside the card.
+                        let card = egui::UiBuilder::new().sense(egui::Sense::click());
+                        let card_scope = ui.scope_builder(card, |ui| {
+                            egui::Frame::default()
                             .inner_margin(6.0)
                             .corner_radius(4.0)
                             .fill(ui.visuals().faint_bg_color)
@@ -94,6 +139,15 @@ pub(super) fn render_master_effect_detail(
                                                             ),
                                                         }
                                                     }),
+                                                    Some(&|name: &str| {
+                                                        EngineCommand::AddAutomationLane {
+                                                            target: format!(
+                                                                "fx_{eff_uuid_master_automate}:{name}"
+                                                            ),
+                                                            timebase:
+                                                                crate::timebase::Timebase::Transport,
+                                                        }
+                                                    }),
                                                     &mut actions.commands,
                                                     &mut actions.session.gesture_active,
                                                     &format!("master_fx_{eff_idx_copy}"),
@@ -111,7 +165,10 @@ pub(super) fn render_master_effect_detail(
                                             }
                                         });
                                 });
-                            });
+                            })
+                        });
+                        let card_resp = card_scope.inner;
+                        effect_context_menu(&card_scope.response, data, actions, eff_uuid, eff_name);
                         {
                             let card_rect = card_resp.response.rect;
                             let btn_size = egui::vec2(16.0, 16.0);
@@ -286,9 +343,15 @@ pub(super) fn render_channel_effect_detail(
                     {
                         let eff_uuid_ch_assign = eff_uuid.clone();
                         let eff_uuid_ch_remove = eff_uuid.clone();
+                        let eff_uuid_ch_automate = eff_uuid.clone();
                         render_effect_drop_zone(ui, &ch_chain_key, eff_idx);
 
-                        let card_resp = egui::Frame::default()
+                        // A scope, not the Frame, because a `Ui` registers itself
+                        // before its contents and so loses hit-test ties to the
+                        // parameter widgets inside the card.
+                        let card = egui::UiBuilder::new().sense(egui::Sense::click());
+                        let card_scope = ui.scope_builder(card, |ui| {
+                            egui::Frame::default()
                             .inner_margin(6.0)
                             .corner_radius(4.0)
                             .fill(ui.visuals().faint_bg_color)
@@ -360,6 +423,15 @@ pub(super) fn render_channel_effect_detail(
                                                             ),
                                                         }
                                                     }),
+                                                    Some(&|name: &str| {
+                                                        EngineCommand::AddAutomationLane {
+                                                            target: format!(
+                                                                "fx_{eff_uuid_ch_automate}:{name}"
+                                                            ),
+                                                            timebase:
+                                                                crate::timebase::Timebase::Transport,
+                                                        }
+                                                    }),
                                                     &mut actions.commands,
                                                     &mut actions.session.gesture_active,
                                                     &format!("ch_fx_{ch_copy}_{eff_idx_copy}"),
@@ -377,7 +449,10 @@ pub(super) fn render_channel_effect_detail(
                                             }
                                         });
                                 });
-                            });
+                            })
+                        });
+                        let card_resp = card_scope.inner;
+                        effect_context_menu(&card_scope.response, data, actions, eff_uuid, eff_name);
                         {
                             let card_rect = card_resp.response.rect;
                             let btn_size = egui::vec2(16.0, 16.0);

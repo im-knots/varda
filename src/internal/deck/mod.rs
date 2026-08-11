@@ -711,6 +711,28 @@ impl Deck {
         }
     }
 
+    /// Stop or resume this deck's decoding, leaving its play/pause state alone.
+    /// No-op for non-video decks. See /spec/deck-residency.md.
+    pub fn set_video_suspended(&self, suspended: bool) {
+        match &self.source {
+            DeckSource::Video { handle, .. } | DeckSource::HapVideo { handle, .. } => {
+                handle.set_suspended(suspended);
+            }
+            _ => {}
+        }
+    }
+
+    /// Whether this deck's decoding is currently suspended. False for anything
+    /// that is not a video deck, which never suspends.
+    pub fn video_is_suspended(&self) -> bool {
+        match &self.source {
+            DeckSource::Video { handle, .. } | DeckSource::HapVideo { handle, .. } => {
+                handle.is_suspended()
+            }
+            _ => false,
+        }
+    }
+
     /// Send a command to the video decode thread (no-op for non-video decks).
     fn video_send(&self, cmd: VideoCommand) -> bool {
         match &self.source {

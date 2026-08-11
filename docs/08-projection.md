@@ -6,7 +6,7 @@
 
 The simplest setup: one output window displaying the full mixer output on one projector or display.
 
-1. Click **"+ Output"** in the right panel — a floating output window appears
+1. Click **"+ Windowed"** in the right panel's **📺 Outputs** section — a floating output window appears
 2. Select a **display target** from the dropdown (enumerates connected monitors)
 3. Click **Fullscreen** to send the window to that display
 
@@ -156,7 +156,7 @@ the surface automatically on load.
 
 For multi-projector setups where projectors overlap:
 
-1. Create an output for each projector (click **"+ Output"** for each)
+1. Create an output for each projector (click **"+ Windowed"** for each)
 2. Assign each output to its display target and go fullscreen
 3. Draw surfaces in the Stage Editor that match each projector's coverage area
 4. Where surfaces overlap, Varda applies **edge blending** — smoothstep alpha ramps that feather the overlap region for a seamless image

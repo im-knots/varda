@@ -322,7 +322,7 @@ impl HapPlayer {
     /// Returns an error if a HAP packet fails to decode, or if seeking (for
     /// reverse playback and loop wrap-around) fails.
     pub fn next_frame(&mut self) -> Result<Option<HapFrameResult<'_>>> {
-        if !self.playback.playing {
+        if !self.playback.playing || self.playback.suspended {
             return Ok(None);
         }
         let result = self.playback.advance_frame();

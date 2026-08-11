@@ -276,6 +276,38 @@ impl MidiDeviceManager {
         Ok(mgr)
     }
 
+    /// A manager with no hardware behind it, for tests that need to drive the
+    /// input path without a controller plugged in. Scanning is skipped, so a
+    /// developer's own devices cannot wander into a test run.
+    #[cfg(test)]
+    pub(crate) fn detached() -> Self {
+        let (sender, receiver) = channel();
+        Self {
+            receiver,
+            sender,
+            devices: HashMap::new(),
+            next_device_id: 0,
+            input_connections: Vec::new(),
+            output_connections: HashMap::new(),
+            profile_registry: ProfileRegistry::new(),
+        }
+    }
+
+    /// Queue a message as if a device had sent it, registering that device so
+    /// [`try_recv`](Self::try_recv) does not skip it as unknown.
+    #[cfg(test)]
+    pub(crate) fn inject(&mut self, msg: MidiMessage) {
+        let id = msg.device_id();
+        self.devices.entry(id).or_insert_with(|| MidiDeviceInfo {
+            id,
+            name: format!("Test device {id}"),
+            enabled: true,
+            has_output: false,
+            profile: None,
+        });
+        let _ = self.sender.send(msg);
+    }
+
     /// Load user controller profiles from a directory (e.g. `.varda/controller-profiles/`).
     pub fn load_user_profiles(&mut self, dir: &std::path::Path) {
         self.profile_registry.load_user_profiles(dir);

@@ -260,6 +260,10 @@ harness = false
 name = "depth_preprocess"
 harness = false
 
+[[bench]]
+name = "modulation_engine"
+harness = false
+
 
 [profile.release]
 opt-level = 3

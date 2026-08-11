@@ -37,6 +37,30 @@ pub struct ShaderParamsUI {
 pub struct ModSourceUIEntry {
     pub uuid: String,
     pub source: ModSourceUI,
+    /// Which notion of time this source follows. See /spec/timebase.md.
+    pub timebase: crate::timebase::Timebase,
+}
+
+impl ModSourceUIEntry {
+    /// Short label naming this source, for anywhere a modulator is listed as a
+    /// choice or shown as the origin of a value. `idx` is the source's position
+    /// in the full modulation list, which is also what picks its colour.
+    pub fn label(&self, idx: usize) -> String {
+        match &self.source {
+            ModSourceUI::LFO { .. } => format!("LFO {}", idx + 1),
+            ModSourceUI::Audio {
+                freq_low,
+                freq_high,
+                ..
+            } => format!("Audio {freq_low:.0}-{freq_high:.0}Hz"),
+            ModSourceUI::ADSR { .. } => format!("ADSR {}", idx + 1),
+            ModSourceUI::StepSequencer { .. } => format!("StepSeq {}", idx + 1),
+            ModSourceUI::Analyzer { analyzer_type, .. } => {
+                format!("Analyzer {} {}", analyzer_type, idx + 1)
+            }
+            ModSourceUI::Envelope { .. } => format!("Automation {}", idx + 1),
+        }
+    }
 }
 
 /// Modulation source data snapshot for UI display
@@ -76,6 +100,11 @@ pub enum ModSourceUI {
         analyzer_type: String,
         output_name: String,
         smoothing: f32,
+    },
+    /// Automation curve. Edited in its arrangement lane rather than as a card in
+    /// the right panel; see /spec/automation.md § UI.
+    Envelope {
+        breakpoints: Vec<crate::modulation::Breakpoint>,
     },
 }
 
@@ -417,6 +446,20 @@ pub struct UIData {
     pub surfaces: Vec<SurfaceUI>,
     /// Whether the full-screen stage editor is open (replaces deck view)
     pub stage_editor_open: bool,
+    /// Whether the central area shows the arrangement timeline instead of the
+    /// mixer. See /spec/arrangement.md § UI.
+    pub arrangement_mode_open: bool,
+    /// The scene's arrangement, absent in a Performance-only scene.
+    pub arrangement: Option<crate::engine::types::ArrangementSnapshot>,
+    /// Timeline horizontal zoom, in pixels per second of show time.
+    pub arrangement_pixels_per_second: f32,
+    /// Show position at the timeline's left edge.
+    pub arrangement_scroll: f64,
+    /// Whether timeline edits round to whole frames at the ruler's rate.
+    pub arrangement_snap: bool,
+    /// What copy is holding, so a menu can name it and disable Paste when it
+    /// holds nothing that fits. See /spec/clipboard.md § UI surface.
+    pub clipboard: Option<crate::engine::ClipboardSummary>,
     /// Whether the 3D dome preview is open in the stage editor
     pub dome_preview_open: bool,
     /// Dome preview texture (rendered 3D hemisphere)
@@ -528,6 +571,12 @@ pub struct UIData {
     pub clock_preference_force_device_id: Option<crate::midi::DeviceId>,
     /// Manual BPM value (if preference is `ForceManual`)
     pub clock_manual_bpm: Option<f32>,
+    /// How many modulation sources are locked to the beat. Drives the readout's
+    /// emphasis; see /spec/transport.md § Tempo and position are both shown.
+    pub clock_beat_followers: usize,
+    /// Absolute show position. Distinct from the tempo clock above; see
+    /// /spec/transport.md.
+    pub transport: crate::engine::types::TransportSnapshot,
     /// Current master render width
     pub render_width: u32,
     /// Current master render height

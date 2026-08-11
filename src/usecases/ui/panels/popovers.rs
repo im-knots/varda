@@ -1,8 +1,8 @@
 //! Status-bar popovers and the global MIDI-learn popup.
 //!
 //! Transient overlays rendered above the main layout: FPS, GPU, clock,
-//! resolution, target FPS and tonemap readouts, plus the right-click MIDI-learn
-//! toggle.
+//! transport, resolution and target FPS readouts, plus the right-click
+//! MIDI-learn toggle.
 
 use super::super::{UIActions, UIData};
 use crate::engine::EngineCommand;
@@ -22,7 +22,10 @@ pub(super) fn handle_midi_learn_popup(ctx: &egui::Context, data: &UIData, action
                     mem.data.remove::<egui::Pos2>(popup_id);
                     mem.data.remove::<bool>(popup_fresh_id);
                 });
-            } else {
+            } else if !egui::Popup::is_any_open(ctx) {
+                // A widget with its own context menu keeps the click. This popup
+                // is drawn last, so opening it on the same right-click would
+                // cover that menu and eat every press aimed at its items.
                 ctx.memory_mut(|mem| {
                     mem.data.insert_temp(popup_id, pos);
                     mem.data.insert_temp(popup_fresh_id, true);
@@ -208,6 +211,132 @@ pub(super) fn render_gpu_popover(ui: &mut egui::Ui, data: &UIData) {
                 .monospace(),
         );
         ui.end_row();
+    });
+}
+
+/// Colour for the top bar position readout.
+///
+/// Chasing timecode is deliberately loud: it is the state where the position is
+/// out of the operator's hands, and finding that out by scrubbing and having
+/// nothing move is a bad way to learn it.
+pub(super) fn transport_color(data: &UIData) -> egui::Color32 {
+    if data.transport.source == crate::transport::TransportSource::Timecode {
+        egui::Color32::from_rgb(120, 180, 255)
+    } else if data.transport.running {
+        egui::Color32::from_rgb(100, 220, 100)
+    } else if data.transport.has_run {
+        egui::Color32::from_rgb(220, 200, 60)
+    } else {
+        egui::Color32::GRAY
+    }
+}
+
+/// Whether the tempo readout is currently driving anything.
+///
+/// Tempo and position are both always shown, in both modes; the weaker of the
+/// two is the one nothing is reading. That is a statement about engine state,
+/// not about which UI mode is open, so it stays honest when a show is running
+/// on both clocks at once. See /spec/transport.md § Tempo and position are both
+/// shown.
+pub(super) fn clock_is_live(data: &UIData) -> bool {
+    data.clock_active && data.clock_beat_followers > 0
+}
+
+/// Hover text naming what follows each clock.
+///
+/// This is the actual answer to "why is something moving when I have not
+/// pressed play": there are three motion sources (free-running, beat-locked,
+/// transport-locked) and only two have readouts, so the readouts have to say
+/// what depends on them.
+pub(super) fn followers_hint(count: usize, what: &str) -> String {
+    match count {
+        0 => format!("nothing is locked to {what}"),
+        1 => format!("1 modulator locked to {what}"),
+        n => format!("{n} modulators locked to {what}"),
+    }
+}
+
+/// Render the transport popover (shown when clicking the position in the top bar).
+pub(super) fn render_transport_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
+    use crate::transport::{TimecodeRate, TransportSource};
+
+    let t = &data.transport;
+    ui.set_min_width(240.0);
+
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("⏱ Transport").strong());
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(egui::RichText::new(&t.status_label).small().weak());
+        });
+    });
+    ui.separator();
+
+    ui.label(
+        egui::RichText::new(&t.timecode)
+            .monospace()
+            .size(20.0)
+            .color(transport_color(data)),
+    );
+
+    // Position is read-only while chasing, so offering the controls would be
+    // offering a lie.
+    let scrubbable = t.source == TransportSource::Internal;
+
+    ui.horizontal(|ui| {
+        ui.add_enabled_ui(scrubbable, |ui| {
+            let play_label = if t.running { "⏸ Pause" } else { "▶ Play" };
+            if ui.button(play_label).clicked() {
+                actions.commands.push(if t.running {
+                    EngineCommand::TransportStop
+                } else {
+                    EngineCommand::TransportPlay
+                });
+            }
+            if ui
+                .button("⏮ Zero")
+                .on_hover_text("Return to 00:00:00:00")
+                .clicked()
+            {
+                actions
+                    .commands
+                    .push(EngineCommand::TransportLocate { position: 0.0 });
+            }
+        });
+    });
+
+    ui.separator();
+
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Source").small());
+        for (source, label) in [
+            (TransportSource::Internal, "Internal"),
+            (TransportSource::Timecode, "Timecode"),
+        ] {
+            if ui.radio(t.source == source, label).clicked() && t.source != source {
+                actions
+                    .commands
+                    .push(EngineCommand::SetTransportSource { source });
+            }
+        }
+    });
+
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Rate").small());
+        egui::ComboBox::from_id_salt("transport_rate")
+            .selected_text(t.timecode_rate.label())
+            .show_ui(ui, |ui| {
+                for rate in TimecodeRate::ALL {
+                    if ui
+                        .selectable_label(t.timecode_rate == rate, rate.label())
+                        .clicked()
+                        && t.timecode_rate != rate
+                    {
+                        actions
+                            .commands
+                            .push(EngineCommand::SetTimecodeRate { rate });
+                    }
+                }
+            });
     });
 }
 
@@ -451,95 +580,78 @@ pub(super) fn render_target_fps_popover(ui: &mut egui::Ui, data: &UIData, action
     );
 }
 
-pub(super) fn tonemap_short_name(mode: crate::renderer::tonemap::TonemapMode) -> &'static str {
-    use crate::renderer::tonemap::TonemapMode;
-    match mode {
-        TonemapMode::Bypass => "TM:Off",
-        TonemapMode::Aces => "TM:ACES",
-        TonemapMode::Reinhard => "TM:Rein",
-        TonemapMode::ReinhardExtended => "TM:ReinX",
-        TonemapMode::HableFilmic => "TM:Hable",
-        TonemapMode::Uchimura => "TM:Uchi",
-        TonemapMode::Lottes => "TM:Lottes",
-        TonemapMode::AgX => "TM:AgX",
-        TonemapMode::KhronosPbrNeutral => "TM:PBR",
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transport::TransportSource;
 
-const TONEMAP_PRESETS: &[(&str, crate::renderer::tonemap::TonemapMode)] = {
-    use crate::renderer::tonemap::TonemapMode;
-    &[
-        ("Bypass (clamp)", TonemapMode::Bypass),
-        ("ACES Filmic", TonemapMode::Aces),
-        ("Reinhard", TonemapMode::Reinhard),
-        ("Reinhard Extended", TonemapMode::ReinhardExtended),
-        ("Hable Filmic", TonemapMode::HableFilmic),
-        ("Uchimura (GT)", TonemapMode::Uchimura),
-        ("Lottes (AMD)", TonemapMode::Lottes),
-        ("AgX", TonemapMode::AgX),
-        ("PBR Neutral", TonemapMode::KhronosPbrNeutral),
-    ]
-};
+    /// Emphasis follows engine state, not UI mode: the tempo readout is only
+    /// live when a clock exists *and* something reads it.
+    #[test]
+    fn tempo_is_live_only_when_a_clock_has_followers() {
+        let mut data = UIData::test_fixture();
 
-/// Render the tonemap mode popover (shown when clicking tonemap label in the top bar).
-pub(super) fn render_tonemap_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
-    use crate::renderer::tonemap::TonemapMode;
+        data.clock_active = true;
+        data.clock_beat_followers = 2;
+        assert!(clock_is_live(&data));
 
-    ui.set_min_width(180.0);
-    ui.label(egui::RichText::new("🎨 Tonemap Mode").strong());
-    ui.separator();
-
-    let current = data.tonemap_mode;
-
-    for &(label, mode) in TONEMAP_PRESETS {
-        if ui.radio(current == mode, label).clicked() && current != mode {
-            actions.commands.push(EngineCommand::SetTonemapMode(mode));
-        }
-    }
-
-    ui.separator();
-    ui.label(
-        egui::RichText::new(match current {
-            TonemapMode::Bypass => "Values >1.0 are clamped at the output boundary",
-            TonemapMode::Aces => "Cinematic rolloff, warm highlight shift",
-            TonemapMode::Reinhard => "Gentle curve, never reaches pure white",
-            TonemapMode::ReinhardExtended => "Reinhard with white point, full SDR range",
-            TonemapMode::HableFilmic => "Nice toe and shoulder, game-industry standard",
-            TonemapMode::Uchimura => "Gran Turismo style, tunable shoulder",
-            TonemapMode::Lottes => "Fast, invertible, high contrast",
-            TonemapMode::AgX => "Neutral, minimal hue shift",
-            TonemapMode::KhronosPbrNeutral => "Color-accurate, minimal look modification",
-        })
-        .weak()
-        .small(),
-    );
-
-    // ── LUT Section ──
-    ui.separator();
-    ui.label(egui::RichText::new("🎞 3D LUT").strong());
-
-    let active_lut = data.active_lut_filename.as_deref();
-
-    // "None" option
-    if ui.radio(active_lut.is_none(), "None").clicked() && active_lut.is_some() {
-        actions.commands.push(EngineCommand::UnloadLut);
-    }
-
-    // Available LUT files
-    for lut_name in &data.available_luts {
-        let is_active = active_lut == Some(lut_name.as_str());
-        if ui.radio(is_active, lut_name).clicked() && !is_active {
-            actions.commands.push(EngineCommand::LoadLut {
-                filename: lut_name.clone(),
-            });
-        }
-    }
-
-    if data.available_luts.is_empty() {
-        ui.label(
-            egui::RichText::new("Place .cube/.3dl files in .varda/luts/")
-                .weak()
-                .small(),
+        data.clock_beat_followers = 0;
+        assert!(
+            !clock_is_live(&data),
+            "a clock nothing reads is not driving"
         );
+
+        data.clock_active = false;
+        data.clock_beat_followers = 2;
+        assert!(
+            !clock_is_live(&data),
+            "beat-locked sources are frozen with no clock source"
+        );
+    }
+
+    /// Chasing timecode must not dim the tempo readout. Beat-locked modulators
+    /// keep running through a timecode-chased section, and timecode carries no
+    /// tempo to replace them with. See /spec/transport.md.
+    #[test]
+    fn chasing_timecode_does_not_dim_the_tempo() {
+        let mut data = UIData::test_fixture();
+        data.clock_active = true;
+        data.clock_beat_followers = 1;
+        data.transport.source = TransportSource::Timecode;
+
+        assert!(clock_is_live(&data));
+    }
+
+    #[test]
+    fn follower_hints_read_as_sentences() {
+        assert_eq!(
+            followers_hint(0, "the beat"),
+            "nothing is locked to the beat"
+        );
+        assert_eq!(
+            followers_hint(1, "the beat"),
+            "1 modulator locked to the beat"
+        );
+        assert_eq!(
+            followers_hint(4, "the transport"),
+            "4 modulators locked to the transport"
+        );
+    }
+
+    #[test]
+    fn transport_colour_distinguishes_never_run_from_stopped() {
+        let mut data = UIData::test_fixture();
+
+        let never_run = transport_color(&data);
+        data.transport.has_run = true;
+        let stopped = transport_color(&data);
+        data.transport.running = true;
+        let running = transport_color(&data);
+        data.transport.source = TransportSource::Timecode;
+        let chasing = transport_color(&data);
+
+        assert_ne!(never_run, stopped, "idle and stopped must not look alike");
+        assert_ne!(stopped, running);
+        assert_ne!(running, chasing);
     }
 }

@@ -204,6 +204,7 @@ mod tests {
             blend_mode: BlendModeConfig::Normal,
             decks: vec![sample_deck_config()],
             effects: vec![],
+            modulation: vec![],
         }
     }
 
@@ -280,6 +281,7 @@ mod tests {
         config.modulation = vec![ModulationRecipe {
             source_uuid: "test0001".to_string(),
             source: ModulationSource::sine_lfo(2.0),
+            timebase: crate::timebase::Timebase::FreeRun,
             assignments: vec![
                 ModulationRecipeAssignment {
                     param: "brightness".into(),
@@ -312,6 +314,7 @@ mod tests {
         config.modulation = vec![ModulationRecipe {
             source_uuid: "test0002".to_string(),
             source: ModulationSource::adsr(0.1, 0.2, 0.7, 0.3),
+            timebase: crate::timebase::Timebase::FreeRun,
             assignments: vec![ModulationRecipeAssignment {
                 param: "scale".into(),
                 amount: -0.8,

@@ -7,6 +7,88 @@ use crate::params::ParamValue;
 /// Callback that builds a modulation-assignment command from (`param_path`, `source_name`).
 type MakeModAssign<'a> = &'a dyn Fn(&str, &str) -> EngineCommand;
 
+/// Callback that builds a command from a `param_path` alone.
+type MakeParamCommand<'a> = &'a dyn Fn(&str) -> EngineCommand;
+
+/// The commands the 〰 dropdown can emit. Bundled because only the caller knows
+/// how to build a parameter's full target path, and the three always travel
+/// together.
+struct ModMenu<'a> {
+    assign: MakeModAssign<'a>,
+    remove: MakeParamCommand<'a>,
+    automate: Option<MakeParamCommand<'a>>,
+}
+
+/// The 〰 dropdown on a modulatable parameter: assign a source, add an
+/// automation lane, or clear.
+///
+/// Shared by the deck and effect param renderers so the two cannot drift.
+fn modulation_dropdown(
+    ui: &mut egui::Ui,
+    id_salt: String,
+    param_name: &str,
+    modulation_sources: &[ModSourceUIEntry],
+    menu: &ModMenu,
+    commands: &mut Vec<EngineCommand>,
+) {
+    let ModMenu {
+        assign: assign_fn,
+        remove: remove_fn,
+        automate: automate_fn,
+    } = *menu;
+    // An automation curve belongs to the one parameter it was drawn for, so it
+    // is not on offer here. Sharing a shape between parameters is copy and paste
+    // between lanes, which leaves each parameter its own curve to edit. See
+    // /spec/automation.md § One envelope per parameter.
+    //
+    // Indices are kept from the unfiltered list: they pick the modulator's
+    // colour and number, which have to match the modulation panel's cards.
+    let assignable: Vec<(usize, &ModSourceUIEntry)> = modulation_sources
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| !matches!(entry.source, ModSourceUI::Envelope { .. }))
+        .collect();
+    // Automation needs no existing source, so the menu is worth showing even
+    // when nothing has been created yet.
+    if assignable.is_empty() && automate_fn.is_none() {
+        return;
+    }
+    egui::ComboBox::from_id_salt(id_salt)
+        .selected_text("〰")
+        .width(30.0)
+        .show_ui(ui, |ui| {
+            if !assignable.is_empty() {
+                ui.label(egui::RichText::new("Assign Modulation").small().strong());
+                for (src_idx, entry) in &assignable {
+                    let color = modulator_color(*src_idx);
+                    if ui
+                        .button(egui::RichText::new(entry.label(*src_idx)).color(color))
+                        .clicked()
+                    {
+                        commands.push(assign_fn(param_name, &entry.uuid));
+                    }
+                }
+                ui.separator();
+            }
+            if let Some(automate) = automate_fn {
+                if ui
+                    .button("＋ Automation lane")
+                    .on_hover_text(
+                        "Draw this parameter as a curve against the show position.\n\
+                         The curve sets the value outright, so it plays back the same every run.",
+                    )
+                    .clicked()
+                {
+                    commands.push(automate(param_name));
+                }
+                ui.separator();
+            }
+            if ui.button("Clear").clicked() {
+                commands.push(remove_fn(param_name));
+            }
+        });
+}
+
 /// Build a set of prefixes whose params should be hidden.
 /// Convention: a bool param named `<prefix>_mode` controls visibility of params
 /// whose name starts with `<prefix>_`. When the bool is false, those params are hidden.
@@ -41,7 +123,8 @@ pub fn render_params<S: std::hash::BuildHasher>(
     modulation_sources: &[ModSourceUIEntry],
     make_update: &dyn Fn(&str, ParamValue) -> EngineCommand,
     make_mod_assign: Option<MakeModAssign>,
-    make_mod_remove: Option<&dyn Fn(&str) -> EngineCommand>,
+    make_mod_remove: Option<MakeParamCommand>,
+    make_automation: Option<MakeParamCommand>,
     commands: &mut Vec<EngineCommand>,
     gesture_active: &mut bool,
     id_prefix: &str,
@@ -169,51 +252,19 @@ pub fn render_params<S: std::hash::BuildHasher>(
                             );
                         }
                     }
-                    // Modulation assignment dropdown (only if sources exist and callbacks provided)
-                    if !modulation_sources.is_empty() {
-                        if let (Some(assign_fn), Some(remove_fn)) =
-                            (make_mod_assign, make_mod_remove)
-                        {
-                            egui::ComboBox::from_id_salt(format!(
-                                "mod_{}_{}",
-                                id_prefix, param.name
-                            ))
-                            .selected_text("〰")
-                            .width(30.0)
-                            .show_ui(ui, |ui| {
-                                ui.label(egui::RichText::new("Assign Modulation").small().strong());
-                                for (src_idx, entry) in modulation_sources.iter().enumerate() {
-                                    let color = modulator_color(src_idx);
-                                    let src_name = match &entry.source {
-                                        ModSourceUI::LFO { .. } => format!("LFO {}", src_idx + 1),
-                                        ModSourceUI::Audio {
-                                            freq_low,
-                                            freq_high,
-                                            ..
-                                        } => format!("Audio {freq_low:.0}-{freq_high:.0}Hz"),
-                                        ModSourceUI::ADSR { .. } => format!("ADSR {}", src_idx + 1),
-                                        ModSourceUI::StepSequencer { .. } => {
-                                            format!("StepSeq {}", src_idx + 1)
-                                        }
-                                        ModSourceUI::Analyzer {
-                                            ref analyzer_type, ..
-                                        } => {
-                                            format!("Analyzer {} {}", analyzer_type, src_idx + 1)
-                                        }
-                                    };
-                                    if ui
-                                        .button(egui::RichText::new(&src_name).color(color))
-                                        .clicked()
-                                    {
-                                        commands.push(assign_fn(&param.name, &entry.uuid));
-                                    }
-                                }
-                                ui.separator();
-                                if ui.button("Clear").clicked() {
-                                    commands.push(remove_fn(&param.name));
-                                }
-                            });
-                        }
+                    if let (Some(assign_fn), Some(remove_fn)) = (make_mod_assign, make_mod_remove) {
+                        modulation_dropdown(
+                            ui,
+                            format!("mod_{}_{}", id_prefix, param.name),
+                            &param.name,
+                            modulation_sources,
+                            &ModMenu {
+                                assign: assign_fn,
+                                remove: remove_fn,
+                                automate: make_automation,
+                            },
+                            commands,
+                        );
                     }
                 });
             }
@@ -248,7 +299,8 @@ pub fn render_effect_params<S: std::hash::BuildHasher>(
     modulation_sources: &[ModSourceUIEntry],
     make_update: &dyn Fn(&str, ParamValue) -> EngineCommand,
     make_mod_assign: Option<MakeModAssign>,
-    make_mod_remove: Option<&dyn Fn(&str) -> EngineCommand>,
+    make_mod_remove: Option<MakeParamCommand>,
+    make_automation: Option<MakeParamCommand>,
     commands: &mut Vec<EngineCommand>,
     gesture_active: &mut bool,
     id_prefix: &str,
@@ -372,51 +424,19 @@ pub fn render_effect_params<S: std::hash::BuildHasher>(
                             );
                         }
                     }
-                    // Modulation assignment dropdown
-                    if !modulation_sources.is_empty() {
-                        if let (Some(assign_fn), Some(remove_fn)) =
-                            (make_mod_assign, make_mod_remove)
-                        {
-                            egui::ComboBox::from_id_salt(format!(
-                                "mod_{}_{}",
-                                id_prefix, param.name
-                            ))
-                            .selected_text("〰")
-                            .width(30.0)
-                            .show_ui(ui, |ui| {
-                                ui.label(egui::RichText::new("Assign Modulation").small().strong());
-                                for (src_idx, entry) in modulation_sources.iter().enumerate() {
-                                    let color = modulator_color(src_idx);
-                                    let src_name = match &entry.source {
-                                        ModSourceUI::LFO { .. } => format!("LFO {}", src_idx + 1),
-                                        ModSourceUI::Audio {
-                                            freq_low,
-                                            freq_high,
-                                            ..
-                                        } => format!("Audio {freq_low:.0}-{freq_high:.0}Hz"),
-                                        ModSourceUI::ADSR { .. } => format!("ADSR {}", src_idx + 1),
-                                        ModSourceUI::StepSequencer { .. } => {
-                                            format!("StepSeq {}", src_idx + 1)
-                                        }
-                                        ModSourceUI::Analyzer {
-                                            ref analyzer_type, ..
-                                        } => {
-                                            format!("Analyzer {} {}", analyzer_type, src_idx + 1)
-                                        }
-                                    };
-                                    if ui
-                                        .button(egui::RichText::new(&src_name).color(color))
-                                        .clicked()
-                                    {
-                                        commands.push(assign_fn(&param.name, &entry.uuid));
-                                    }
-                                }
-                                ui.separator();
-                                if ui.button("Clear").clicked() {
-                                    commands.push(remove_fn(&param.name));
-                                }
-                            });
-                        }
+                    if let (Some(assign_fn), Some(remove_fn)) = (make_mod_assign, make_mod_remove) {
+                        modulation_dropdown(
+                            ui,
+                            format!("mod_{}_{}", id_prefix, param.name),
+                            &param.name,
+                            modulation_sources,
+                            &ModMenu {
+                                assign: assign_fn,
+                                remove: remove_fn,
+                                automate: make_automation,
+                            },
+                            commands,
+                        );
                     }
                 });
             }
@@ -629,4 +649,183 @@ pub fn render_knob(
     }
 
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::usecases::ui::ModSourceUI;
+    use egui_kittest::kittest::Queryable;
+
+    fn lfo_entry(uuid: &str) -> ModSourceUIEntry {
+        ModSourceUIEntry {
+            uuid: uuid.to_string(),
+            source: ModSourceUI::LFO {
+                waveform: crate::modulation::LFOWaveform::Sine,
+                frequency: 1.0,
+                phase: 0.0,
+                amplitude: 1.0,
+                bipolar: false,
+            },
+            timebase: crate::timebase::Timebase::FreeRun,
+        }
+    }
+
+    fn envelope_entry(uuid: &str) -> ModSourceUIEntry {
+        ModSourceUIEntry {
+            uuid: uuid.to_string(),
+            source: ModSourceUI::Envelope {
+                breakpoints: Vec::new(),
+            },
+            timebase: crate::timebase::Timebase::Transport,
+        }
+    }
+
+    /// Drive the dropdown open and click `label`, returning what it emitted.
+    fn click_in_dropdown(
+        sources: &[ModSourceUIEntry],
+        automate: bool,
+        label: &str,
+    ) -> Vec<EngineCommand> {
+        let mut commands = Vec::new();
+        {
+            let assign = |name: &str, uuid: &str| EngineCommand::AssignModulation {
+                target: name.to_string(),
+                source_id: uuid.to_string(),
+                amount: 1.0,
+            };
+            let remove = |name: &str| EngineCommand::ClearModulation {
+                target: name.to_string(),
+            };
+            let add_lane = |name: &str| EngineCommand::AddAutomationLane {
+                target: name.to_string(),
+                timebase: crate::timebase::Timebase::Transport,
+            };
+            let mut harness = egui_kittest::Harness::new_ui(|ui| {
+                modulation_dropdown(
+                    ui,
+                    "test".to_string(),
+                    "opacity",
+                    sources,
+                    &ModMenu {
+                        assign: &assign,
+                        remove: &remove,
+                        automate: if automate {
+                            Some(&add_lane as MakeParamCommand)
+                        } else {
+                            None
+                        },
+                    },
+                    &mut commands,
+                );
+            });
+            // A ComboBox exposes its selected text as AccessKit `value`, not `label`.
+            harness.get_by_value("〰").click();
+            harness.run();
+            harness.get_by_label(label).click();
+            harness.run();
+        }
+        commands
+    }
+
+    #[test]
+    fn the_automation_entry_creates_a_lane_for_this_parameter() {
+        let commands = click_in_dropdown(&[lfo_entry("lfo1")], true, "＋ Automation lane");
+        assert!(
+            commands.iter().any(|c| matches!(
+                c,
+                EngineCommand::AddAutomationLane { target, timebase }
+                    if target == "opacity" && *timebase == crate::timebase::Timebase::Transport
+            )),
+            "expected a transport-locked lane on this parameter, got {commands:?}"
+        );
+    }
+
+    /// Automation needs no existing source, so the menu has to be reachable on a
+    /// scene that has never created a modulator.
+    #[test]
+    fn the_menu_opens_with_no_modulation_sources_at_all() {
+        let commands = click_in_dropdown(&[], true, "＋ Automation lane");
+        assert!(commands
+            .iter()
+            .any(|c| matches!(c, EngineCommand::AddAutomationLane { .. })));
+    }
+
+    #[test]
+    fn picking_a_source_still_assigns_it() {
+        let commands = click_in_dropdown(&[lfo_entry("lfo1")], true, "LFO 1");
+        assert!(commands.iter().any(|c| matches!(
+            c,
+            EngineCommand::AssignModulation { target, source_id, .. }
+                if target == "opacity" && source_id == "lfo1"
+        )));
+    }
+
+    #[test]
+    fn clearing_removes_the_assignment() {
+        let commands = click_in_dropdown(&[lfo_entry("lfo1")], true, "Clear");
+        assert!(commands.iter().any(|c| matches!(
+            c,
+            EngineCommand::ClearModulation { target } if target == "opacity"
+        )));
+    }
+
+    /// Envelopes are still named for the lanes and cards that list them, even
+    /// though this menu does not offer them.
+    #[test]
+    fn an_envelope_is_labelled_as_automation() {
+        assert_eq!(envelope_entry("e1").label(2), "Automation 3");
+    }
+
+    /// A curve drives the one parameter it was drawn for. Offering it here would
+    /// let two parameters share a source, and then editing either lane would
+    /// silently rewrite the other.
+    #[test]
+    fn an_automation_curve_is_not_offered_as_a_source() {
+        let mut commands = Vec::new();
+        let assign = |name: &str, uuid: &str| EngineCommand::AssignModulation {
+            target: name.to_string(),
+            source_id: uuid.to_string(),
+            amount: 1.0,
+        };
+        let remove = |name: &str| EngineCommand::ClearModulation {
+            target: name.to_string(),
+        };
+        let sources = vec![lfo_entry("lfo1"), envelope_entry("env1")];
+        let mut harness = egui_kittest::Harness::new_ui(|ui| {
+            modulation_dropdown(
+                ui,
+                "test".to_string(),
+                "opacity",
+                &sources,
+                &ModMenu {
+                    assign: &assign,
+                    remove: &remove,
+                    automate: None,
+                },
+                &mut commands,
+            );
+        });
+        harness.get_by_value("〰").click();
+        harness.run();
+
+        assert!(
+            harness.query_by_label("LFO 1").is_some(),
+            "an ordinary modulator is still on offer"
+        );
+        assert!(
+            harness.query_by_label("Automation 2").is_none(),
+            "a curve must not be assignable to a second parameter"
+        );
+    }
+
+    /// The menu still opens for a parameter in a scene whose only sources are
+    /// curves, because drawing a new one has to stay reachable.
+    #[test]
+    fn a_scene_of_only_curves_still_offers_a_new_lane() {
+        let commands = click_in_dropdown(&[envelope_entry("env1")], true, "＋ Automation lane");
+        assert!(commands
+            .iter()
+            .any(|c| matches!(c, EngineCommand::AddAutomationLane { .. })));
+    }
 }

@@ -70,6 +70,10 @@ pub struct ClockState {
     pub bpm: f32,
     /// Beat phase 0.0–1.0 (0.0 = on the beat).
     pub beat_phase: f32,
+    /// Monotonic beat count since the last MIDI Start, accumulated from BPM
+    /// rather than derived from `beat_phase` so tempo drift does not produce
+    /// jumps. Advances only while `active`. See /spec/timebase.md § Unit choice.
+    pub beat_time: f64,
     /// Which source is providing the clock.
     pub source: ClockSource,
     /// Whether any valid clock source is active.
@@ -81,6 +85,7 @@ impl Default for ClockState {
         Self {
             bpm: 120.0,
             beat_phase: 0.0,
+            beat_time: 0.0,
             source: ClockSource::Audio,
             active: false,
         }
@@ -115,6 +120,12 @@ pub struct ClockManager {
     // ── Manual BPM ────────────────────────────────────────────────
     manual_start_time: Option<Instant>,
 
+    // ── Musical time ────────────────────────────────────────────
+    /// Monotonic beat count, advanced each frame while a source is active.
+    beat_time: f64,
+    /// Frame time of the previous `update`, for the beat accumulator's dt.
+    last_update: Option<Instant>,
+
     // ── User preference ─────────────────────────────────────────
     preference: ClockPreference,
 
@@ -138,6 +149,8 @@ impl ClockManager {
             audio_bpm: None,
             audio_beat_phase: 0.0,
             manual_start_time: None,
+            beat_time: 0.0,
+            last_update: None,
             preference: ClockPreference::Auto,
             state: ClockState::default(),
         }
@@ -230,6 +243,10 @@ impl ClockManager {
 
     /// Process MIDI Start (0xFA).
     pub fn process_midi_start(&mut self) {
+        // Start is the musical zero, so beat-locked modulators re-align with
+        // the track rather than carrying the previous take's offset.
+        self.beat_time = 0.0;
+        self.state.beat_time = 0.0;
         for dev in self.midi_devices.values_mut() {
             dev.running = true;
             dev.beat_phase = 0.0;
@@ -309,8 +326,34 @@ impl ClockManager {
 
     /// Resolve clock priority and update state. Call once per frame.
     pub fn update(&mut self) {
-        let now = Instant::now();
+        self.update_at(Instant::now());
+    }
 
+    /// [`Self::update`] with an injectable frame time, so beat accumulation can
+    /// be tested without sleeping.
+    pub fn update_at(&mut self, now: Instant) {
+        self.resolve(now);
+        self.advance_beat_time(now);
+    }
+
+    /// Advance the monotonic beat counter for this frame.
+    ///
+    /// Runs after resolution so it uses the BPM that actually won, and stalls
+    /// while no source is active rather than coasting at the last tempo: a
+    /// beat-locked modulator should freeze when the clock goes away, not drift.
+    fn advance_beat_time(&mut self, now: Instant) {
+        let dt = self.last_update.map_or(0.0, |prev| {
+            now.saturating_duration_since(prev).as_secs_f64()
+        });
+        self.last_update = Some(now);
+
+        if self.state.active {
+            self.beat_time += dt * f64::from(self.state.bpm) / 60.0;
+        }
+        self.state.beat_time = self.beat_time;
+    }
+
+    fn resolve(&mut self, now: Instant) {
         match &self.preference {
             ClockPreference::ForceManual { bpm } => {
                 let bpm = *bpm;
@@ -320,6 +363,7 @@ impl ClockManager {
                 self.state = ClockState {
                     bpm,
                     beat_phase: phase,
+                    beat_time: self.beat_time,
                     source: ClockSource::Manual,
                     active: true,
                 };
@@ -377,6 +421,15 @@ impl ClockManager {
         &self.state
     }
 
+    /// Monotonic beat position, or `None` when no source is active.
+    ///
+    /// This is the input to the `Beat` timebase: `None` freezes beat-locked
+    /// consumers rather than letting them fall back to wall time.
+    /// See /spec/timebase.md § Fallback.
+    pub fn beat_time(&self) -> Option<f64> {
+        self.state.active.then_some(self.state.beat_time)
+    }
+
     // ── Private resolution helpers ──────────────────────────────
 
     fn resolve_midi_device(&mut self, now: Instant, device_id: DeviceId) -> bool {
@@ -388,6 +441,7 @@ impl ClockManager {
                     self.state = ClockState {
                         bpm,
                         beat_phase: dev.beat_phase,
+                        beat_time: self.beat_time,
                         source: ClockSource::MidiClock {
                             device_id,
                             device_name: dev.device_name.clone(),
@@ -410,6 +464,7 @@ impl ClockManager {
                 self.state = ClockState {
                     bpm: osc_bpm,
                     beat_phase: self.osc_beat_phase.unwrap_or(0.0),
+                    beat_time: self.beat_time,
                     source: ClockSource::OscClock,
                     active: true,
                 };
@@ -424,6 +479,7 @@ impl ClockManager {
             self.state = ClockState {
                 bpm: audio_bpm,
                 beat_phase: self.audio_beat_phase,
+                beat_time: self.beat_time,
                 source: ClockSource::Audio,
                 active: true,
             };
@@ -442,6 +498,107 @@ mod tests {
     fn test_default_state_inactive() {
         let mgr = ClockManager::new();
         assert!(!mgr.state().active);
+    }
+
+    // ── Beat accumulator (/spec/timebase.md § Unit choice for Beat) ──
+
+    #[test]
+    fn test_beat_time_accumulates_at_bpm() {
+        let mut mgr = ClockManager::new();
+        mgr.update_audio(Some(120.0), 0.0);
+
+        // 120 BPM is two beats per second, so one second is two beats.
+        let base = Instant::now();
+        mgr.update_at(base);
+        mgr.update_at(base + Duration::from_secs_f64(1.0));
+
+        assert!(
+            (mgr.state().beat_time - 2.0).abs() < 1e-6,
+            "expected 2 beats, got {}",
+            mgr.state().beat_time
+        );
+    }
+
+    #[test]
+    fn test_beat_time_follows_tempo_changes() {
+        let mut mgr = ClockManager::new();
+        let base = Instant::now();
+
+        mgr.update_audio(Some(60.0), 0.0);
+        mgr.update_at(base);
+        mgr.update_at(base + Duration::from_secs_f64(1.0)); // 1 beat at 60 BPM
+
+        mgr.update_audio(Some(120.0), 0.0);
+        mgr.update_at(base + Duration::from_secs_f64(2.0)); // 2 more at 120 BPM
+
+        assert!((mgr.state().beat_time - 3.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_beat_time_is_monotonic_across_frames() {
+        let mut mgr = ClockManager::new();
+        mgr.update_audio(Some(140.0), 0.0);
+        let base = Instant::now();
+
+        let mut prev = 0.0;
+        for i in 0..32 {
+            mgr.update_at(base + Duration::from_secs_f64(f64::from(i) / 60.0));
+            assert!(mgr.state().beat_time >= prev);
+            prev = mgr.state().beat_time;
+        }
+        assert!(prev > 0.0);
+    }
+
+    #[test]
+    fn test_beat_time_stalls_while_no_source_is_active() {
+        let mut mgr = ClockManager::new();
+        mgr.update_audio(Some(120.0), 0.0);
+        let base = Instant::now();
+        mgr.update_at(base);
+        mgr.update_at(base + Duration::from_secs_f64(1.0));
+        let held = mgr.state().beat_time;
+
+        mgr.update_audio(None, 0.0);
+        mgr.update_at(base + Duration::from_secs_f64(2.0));
+
+        assert!(!mgr.state().active);
+        assert!(
+            (mgr.state().beat_time - held).abs() < 1e-9,
+            "beat time must hold while the clock is gone, not coast"
+        );
+    }
+
+    /// `beat_time()` is what the timebase reads, and `None` is what freezes a
+    /// beat-locked modulator, so the gate matters more than the value.
+    #[test]
+    fn test_beat_time_accessor_gates_on_active() {
+        let mut mgr = ClockManager::new();
+        mgr.update();
+        assert!(!mgr.state().active);
+        assert!(mgr.beat_time().is_none());
+
+        mgr.update_audio(Some(120.0), 0.0);
+        let base = Instant::now();
+        mgr.update_at(base);
+        mgr.update_at(base + Duration::from_secs_f64(1.0));
+        assert_eq!(mgr.beat_time(), Some(mgr.state().beat_time));
+
+        mgr.update_audio(None, 0.0);
+        mgr.update_at(base + Duration::from_secs_f64(2.0));
+        assert!(mgr.beat_time().is_none());
+    }
+
+    #[test]
+    fn test_midi_start_resets_beat_time() {
+        let mut mgr = ClockManager::new();
+        mgr.update_audio(Some(120.0), 0.0);
+        let base = Instant::now();
+        mgr.update_at(base);
+        mgr.update_at(base + Duration::from_secs_f64(1.0));
+        assert!(mgr.state().beat_time > 0.0);
+
+        mgr.process_midi_start();
+        assert!((mgr.state().beat_time).abs() < 1e-9);
     }
 
     #[test]

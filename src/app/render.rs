@@ -290,7 +290,15 @@ impl VardaApp {
                 if let Some(cap_id) = slot.deck.screen_capture_id() {
                     *capture_holders.entry(cap_id).or_default() += 1;
                 }
-                if !wanted {
+                // The arrangement knows more than the current opacity does: it
+                // knows this deck is about to be needed, or that it will not be
+                // for the next forty minutes. See /spec/deck-residency.md.
+                let deck_wanted = match slot.source_demand {
+                    crate::arrangement::SourceDemand::Needed => true,
+                    crate::arrangement::SourceDemand::Idle => false,
+                    crate::arrangement::SourceDemand::Unscheduled => wanted,
+                };
+                if !deck_wanted {
                     continue;
                 }
                 if let Some(cam_id) = slot.deck.camera_id() {
@@ -474,19 +482,43 @@ impl VardaApp {
         // Collect analyzer scalar values from all decks
         let analyzer_values = self.collect_analyzer_values();
 
+        let inputs = crate::mixer::FrameInputs {
+            audio_data: &primary_audio,
+            audio_values: &audio_values,
+            analyzer_values: &analyzer_values,
+            beat_time: self.input.clock_manager.beat_time(),
+            transport: self.transport.sample(),
+        };
+
         let target_fps = self.target_fps;
-        if let Err(e) = self.mixer.render(
-            &self.context,
-            &primary_audio,
-            &audio_values,
-            &analyzer_values,
-            target_fps,
-            &self.preview_channels,
-        ) {
+        if let Err(e) =
+            self.mixer
+                .render(&self.context, &inputs, target_fps, &self.preview_channels)
+        {
             log::error!("Failed to render mixer: {e}");
         }
 
         self.report_gpu_faults();
+        self.report_arrangement_blackout();
+    }
+
+    /// Tell the performer when the arrangement is driving the output to nothing.
+    ///
+    /// Correct-and-idle looks exactly like broken on a screen, so the state is
+    /// named rather than left to be inferred. Reported on the transition only:
+    /// a deliberate blackout is legitimate and must not produce a toast every
+    /// frame it lasts. See /spec/transport.md § Black-output detection.
+    fn report_arrangement_blackout(&mut self) {
+        let blacked_out = self.mixer.arrangement_blacked_out();
+        if blacked_out && !self.arrangement_blackout_reported {
+            self.session.notifications.warn(
+                "The arrangement is holding every deck it drives at zero. \
+                 If this is not intentional, check the transport position \
+                 against your regions."
+                    .to_string(),
+            );
+        }
+        self.arrangement_blackout_reported = blacked_out;
     }
 
     /// Surface quarantined decks to the performer, and drain anything the GPU

@@ -334,6 +334,22 @@ impl Mixer {
         }
     }
 
+    /// Stop every playing transition sequence, for when the arrangement takes
+    /// authority. See /spec/transport.md § Relationship to Performance Mode
+    /// Sequencers.
+    pub(super) fn stop_free_running_sequences(&mut self) {
+        for idx in 0..self.transition_sequences.len() {
+            if self.transition_sequences[idx].state.playing {
+                self.stop_sequence(idx);
+            }
+        }
+    }
+
+    /// Whether any transition sequence is currently free-running.
+    pub fn any_sequence_playing(&self) -> bool {
+        self.transition_sequences.iter().any(|s| s.state.playing)
+    }
+
     /// Tick all transition sequences forward by dt seconds.
     pub(super) fn tick_sequence(&mut self, dt: f32, bpm: Option<f64>) {
         let channel_count = self.channels.len();

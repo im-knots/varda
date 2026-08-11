@@ -234,6 +234,14 @@ pub(crate) struct SessionState {
     /// without this a save from the API or a headless process would overwrite
     /// `stage.json` with default panel state.
     pub last_layout: crate::usecases::ui::UILayoutState,
+    /// What copy is holding, as configs rather than live objects. Session state:
+    /// it survives no further than the process. See /spec/clipboard.md.
+    pub clipboard: Option<state::clipboard::ClipboardPayload>,
+    /// Where the last cue jump left the playhead, so repeated presses of an
+    /// arrow walk the list instead of returning to the same cue while playback
+    /// carries the position past it. Cleared by any other move of the playhead.
+    /// See /spec/arrangement.md § Cue points.
+    pub cue_anchor: Option<f64>,
 }
 
 /// Cross-thread message passing.
@@ -264,6 +272,12 @@ pub struct VardaApp {
     registry: ShaderRegistry,
     analyzer_registry: crate::analyzer::AnalyzerRegistry,
     context: GpuContext,
+    /// Absolute show position. Distinct from the tempo clock in
+    /// `input.clock_manager`; see /spec/transport.md.
+    pub(crate) transport: crate::transport::Transport,
+    /// Edge-detect for the arrangement blackout notice, so a deliberate
+    /// blackout reports once rather than every frame it lasts.
+    pub(crate) arrangement_blackout_reported: bool,
 
     // ── Domain sub-structs ───────────────────────────────────────
     pub(crate) input: InputSubsystem,
@@ -471,6 +485,8 @@ impl VardaApp {
             registry,
             analyzer_registry: crate::analyzer::default_registry(),
             context: gpu,
+            transport: crate::transport::Transport::new(),
+            arrangement_blackout_reported: false,
             input: InputSubsystem {
                 osc_receiver,
                 osc_feedback,
@@ -535,6 +551,8 @@ impl VardaApp {
                 history: history::HistoryManager::new(),
                 notifications: NotificationSystem::new(),
                 last_layout: crate::usecases::ui::UILayoutState::default(),
+                clipboard: None,
+                cue_anchor: None,
             },
             bus: MessageBus {
                 command_rx,

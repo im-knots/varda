@@ -59,9 +59,14 @@ fn render_once(ctx: &GpuContext, mixer: &mut Mixer) {
         sources: std::collections::HashMap::default(),
     };
     let analyzer_values = AnalyzerValues::default();
-    mixer
-        .render(ctx, &audio, &audio_values, &analyzer_values, 60, &[])
-        .expect("render");
+    let inputs = varda::mixer::FrameInputs {
+        audio_data: &audio,
+        audio_values: &audio_values,
+        analyzer_values: &analyzer_values,
+        beat_time: None,
+        transport: None,
+    };
+    mixer.render(ctx, &inputs, 60, &[]).expect("render");
 }
 
 /// Read back the mixer composite (`Rgba16Float`) as linear-light RGBA f32,

@@ -129,6 +129,17 @@ The lines then travel at the same screen speed however many of them there are, w
 
 `tests/shader_param_contract_guard.rs` fails the build on all of these. It walks the whole multiplicative chain, so a parameter hiding behind a constant (`PHASE_TIME_0 * 0.5 * look_speed`) is caught, and it follows local aliases within a function, so `float t = PHASE_TIME_0;` buys you nothing. It stops at function calls, because `sin(PHASE_TIME_0) * amount` is legitimate. What it cannot see is a phase passed into a function as an argument and scaled in the callee.
 
+#### Accumulators are not position-deterministic
+
+Phase accumulators integrate, so their value depends on the path taken to get there rather than on
+where the show currently is. This is exactly what makes them smooth under rate changes, and it is
+also their one limitation: a shader that declares `PHASE_INPUTS` resumes from wherever it had
+accumulated to, it does not recompute its phase for the current position.
+
+Modulators, automation, and cues are all deterministic from position. Accumulators are the exception.
+For a shader whose look does not depend on accumulated phase this is invisible. For one that does,
+the drift you see after jumping is the expected behaviour, not a bug.
+
 #### Rates that are affine, not products
 
 `MULTIPLY_BY` covers `speed × amount`. It does not cover `speed × (1 + k · amount)`, the shape you want when `amount` at zero should still leave the base motion running since the product form would stop the animation dead there.

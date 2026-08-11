@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
+pub mod reidentify;
+
 // ── Scene (top-level) ──────────────────────────────────────────────
 
 /// Full scene configuration — the root of `.varda/scene.json`.
@@ -66,6 +68,28 @@ pub struct SceneConfig {
     /// Active LUT filename (relative to `.varda/luts/`), if any
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_lut: Option<String>,
+
+    /// Arrangement mode data. Absent in scenes authored in Performance mode
+    /// only. Additive since scene v7.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arrangement: Option<crate::arrangement::ArrangementConfig>,
+
+    /// How this show counts frames and where it loops. Held with the scene
+    /// rather than inside `arrangement`, because the position readout needs a
+    /// rate before any arrangement exists.
+    #[serde(default)]
+    pub transport: TransportConfig,
+}
+
+/// The persisted half of the transport. Position and run state are deliberately
+/// absent: a scene should open where it was authored to start, not wherever it
+/// happened to be stopped when it was saved.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct TransportConfig {
+    #[serde(default)]
+    pub timecode_rate: crate::transport::TimecodeRate,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_region: Option<crate::transport::LoopRegion>,
 }
 
 fn default_version() -> u32 {
@@ -74,13 +98,17 @@ fn default_version() -> u32 {
 
 impl SceneConfig {
     /// Version written by this build. Bump when adding a migration below.
-    pub const CURRENT_VERSION: u32 = 6;
+    pub const CURRENT_VERSION: u32 = 7;
 
     /// Bring an older scene up to [`Self::CURRENT_VERSION`] in place.
     ///
     /// Runs on load, before validation. Each step is guarded by the version it
     /// upgrades *from*, so a scene several versions behind walks through them in
     /// order.
+    ///
+    /// v6 → v7 adds the arrangement and the persisted transport settings. Both
+    /// are optional and serde-defaulted, so there is no transformation step:
+    /// a v6 scene loads as a Performance-only show, which is exactly what it is.
     pub fn migrate(&mut self) {
         if self.version < 6 {
             self.migrate_v5_bipolar_amplitude();
@@ -149,6 +177,14 @@ pub struct ChannelConfig {
 
     #[serde(default)]
     pub effects: Vec<EffectConfig>,
+
+    /// Modulation on this channel's own effects, in the portable recipe form.
+    /// Empty in `scene.json`, where the modulation engine is serialized whole;
+    /// filled when a channel travels on its own, as a preset or on the
+    /// clipboard, since its effects' assignments would otherwise be left behind.
+    /// See /spec/clipboard.md.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modulation: Vec<ModulationRecipe>,
 }
 
 fn default_opacity() -> f32 {
@@ -229,6 +265,11 @@ pub struct ModulationRecipe {
     pub source_uuid: String,
     /// The modulation source definition
     pub source: crate::modulation::ModulationSource,
+    /// Which clock the source follows. It lives on the engine's entry rather
+    /// than inside the source, so a recipe that omitted it restored an
+    /// arrangement curve as free-running. See /spec/timebase.md.
+    #[serde(default)]
+    pub timebase: crate::timebase::Timebase,
     /// Assignments using relative param keys (no ch/deck prefix)
     pub assignments: Vec<ModulationRecipeAssignment>,
 }
@@ -1222,6 +1263,8 @@ mod tests {
             render_height: None,
             tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
             active_lut: None,
+            arrangement: None,
+            transport: crate::scene::TransportConfig::default(),
         };
         let json = serde_json::to_string_pretty(&scene).unwrap();
         let restored: SceneConfig = serde_json::from_str(&json).unwrap();
@@ -1259,6 +1302,7 @@ mod tests {
                     render_fps: DeckRenderFps::default(),
                 }],
                 effects: vec![],
+                modulation: vec![],
             }],
             crossfader: 0.0,
             active_transition: Some("dissolve".into()),
@@ -1270,6 +1314,8 @@ mod tests {
             render_height: None,
             tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
             active_lut: None,
+            arrangement: None,
+            transport: crate::scene::TransportConfig::default(),
         };
         let json = serde_json::to_string_pretty(&scene).unwrap();
         let restored: SceneConfig = serde_json::from_str(&json).unwrap();
@@ -1305,6 +1351,8 @@ mod tests {
             render_height: None,
             tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
             active_lut: None,
+            arrangement: None,
+            transport: crate::scene::TransportConfig::default(),
         };
         let json = serde_json::to_string_pretty(&scene).unwrap();
         let restored: SceneConfig = serde_json::from_str(&json).unwrap();
@@ -1632,6 +1680,7 @@ mod tests {
                 blend_mode: BlendModeConfig::Add,
                 decks: vec![],
                 effects: vec![],
+                modulation: vec![],
             }],
             crossfader: 0.42,
             active_transition: None,
@@ -1643,6 +1692,8 @@ mod tests {
             render_height: Some(1080),
             tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
             active_lut: None,
+            arrangement: None,
+            transport: crate::scene::TransportConfig::default(),
         };
         scene.save(&path).unwrap();
         let loaded = SceneConfig::load(&path).unwrap();
@@ -1686,6 +1737,7 @@ mod tests {
                     render_fps: DeckRenderFps::default(),
                 }],
                 effects: vec![],
+                modulation: vec![],
             }],
             crossfader: 0.5,
             active_transition: None,
@@ -1697,6 +1749,8 @@ mod tests {
             render_height: Some(1080),
             tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
             active_lut: None,
+            arrangement: None,
+            transport: crate::scene::TransportConfig::default(),
         };
         assert!(scene.validate().is_empty());
     }
@@ -1716,6 +1770,8 @@ mod tests {
             render_height: None,
             tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
             active_lut: None,
+            arrangement: None,
+            transport: crate::scene::TransportConfig::default(),
         };
         let errors = scene.validate();
         assert!(errors.iter().any(|e| e.contains("crossfader")));
@@ -1738,6 +1794,8 @@ mod tests {
             render_height: Some(0),
             tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
             active_lut: None,
+            arrangement: None,
+            transport: crate::scene::TransportConfig::default(),
         };
         let errors = scene.validate();
         assert!(errors.iter().any(|e| e.contains("render_width")));
@@ -1753,6 +1811,7 @@ mod tests {
             blend_mode: BlendModeConfig::Normal,
             decks: vec![],
             effects: vec![],
+            modulation: vec![],
         };
         let errors = ch.validate("ch[0]");
         assert!(errors.iter().any(|e| e.contains("opacity")));

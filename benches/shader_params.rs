@@ -78,7 +78,7 @@ fn engine_with_lfo(param_key: &str) -> ModulationEngine {
         bipolar: false,
     });
     engine.assign(param_key, &src, 1.0, None);
-    engine.update(
+    engine.update_free_running(
         0.5,
         &AudioValues {
             sources: std::collections::HashMap::default(),

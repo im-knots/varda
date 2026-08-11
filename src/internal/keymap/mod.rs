@@ -61,6 +61,11 @@ pub enum ActionId {
     CombineSurfaces,
     ToggleMidiLearn,
     ToggleKeyboardLearn,
+    /// Copy, paste, and duplicate the current selection: the deck, channel, or
+    /// effect the bottom bar is already following. See /spec/clipboard.md.
+    Copy,
+    Paste,
+    Duplicate,
 }
 
 /// Persistent keymap store. Mirrors `MidiMappingStore` pattern.
@@ -136,6 +141,21 @@ impl KeymapStore {
             },
             action(ActionId::ToggleLibrary),
         );
+        for (key, id) in [
+            ("C", ActionId::Copy),
+            ("V", ActionId::Paste),
+            ("D", ActionId::Duplicate),
+        ] {
+            m.insert(
+                KeyCombo {
+                    key: key.into(),
+                    command: true,
+                    shift: false,
+                    alt: false,
+                },
+                action(id),
+            );
+        }
 
         // Stage editor tools (context-checked at dispatch)
         m.insert(

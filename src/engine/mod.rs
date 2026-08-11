@@ -219,6 +219,27 @@ pub enum EngineCommand {
         from_idx: usize,
         to_idx: usize,
     },
+
+    // ── Clipboard (see /spec/clipboard.md) ───────────────────
+    /// Capture an object's config onto the clipboard. Mutates nothing on stage,
+    /// so it is not undoable.
+    ///
+    /// `include_arrangement` carries a deck's regions, which the UI sets when
+    /// the copy was made on the timeline: in the mixer a deck is a source, and
+    /// in Arrangement mode it is a source and a placement.
+    Copy {
+        source: ClipboardSource,
+        #[serde(default)]
+        include_arrangement: bool,
+    },
+    /// Rebuild what the clipboard holds, with a fresh identity throughout.
+    Paste {
+        target: PasteTarget,
+    },
+    /// Paste beside the original in one step, leaving the clipboard untouched.
+    Duplicate {
+        source: ClipboardSource,
+    },
     SetTransition {
         shader_name: Option<String>,
     },
@@ -260,6 +281,21 @@ pub enum EngineCommand {
     AddStepSequencer {
         num_steps: usize,
         rate: f32,
+    },
+    /// Create an automation envelope and assign it to `target` in `Absolute`
+    /// mode, which is the "Add automation lane" gesture.
+    /// See /spec/automation.md.
+    AddAutomationLane {
+        target: String,
+        /// Timebase the curve is drawn against. Arrangement-authored lanes use
+        /// `Transport`.
+        timebase: crate::timebase::Timebase,
+    },
+    /// Replace an envelope's breakpoints wholesale. The engine sorts them, so
+    /// callers do not have to maintain the ordering invariant.
+    SetEnvelopeBreakpoints {
+        uuid: String,
+        breakpoints: Vec<crate::modulation::Breakpoint>,
     },
     RemoveModulationSource {
         uuid: String,
@@ -783,7 +819,113 @@ pub enum EngineCommand {
         params: crate::engine::value::detect::DetectionParams,
     },
 
+    // ── Transport ──────────────────────────────────────────────
+    // Absolute show position. See /spec/transport.md.
+    /// Start the show position advancing. Rejected while chasing timecode.
+    TransportPlay,
+    /// Hold the show position. Anything reading it freezes rather than
+    /// releasing, so a stop keeps the current look.
+    TransportStop,
+    /// Jump to an absolute position in seconds. Rejected while chasing timecode.
+    TransportLocate {
+        position: f64,
+    },
+    /// Choose whether position advances locally or chases incoming timecode.
+    SetTransportSource {
+        source: crate::transport::TransportSource,
+    },
+    /// Set or clear the range internal playback wraps within.
+    SetTransportLoop {
+        region: Option<crate::transport::LoopRegion>,
+    },
+    /// Frame rate positions are displayed and quantised at.
+    SetTimecodeRate {
+        rate: crate::transport::TimecodeRate,
+    },
+    /// Locate to the cue before the playhead, or to zero when there is none.
+    TransportPrevCue,
+    /// Locate to the cue after the playhead, or stay put when there is none.
+    TransportNextCue,
+    /// Locate to one named cue, leaving the transport running or stopped as it
+    /// was. What the Performance-mode cue bank's buttons send.
+    TriggerCue {
+        uuid: String,
+    },
+
+    // ── Arrangement ────────────────────────────────────────────
+    // Deck activity positioned against transport time. See /spec/arrangement.md.
+    /// Give a deck a row in the arrangement. Idempotent: a lane *is* the deck.
+    AddLane {
+        deck_uuid: String,
+    },
+    /// Drop a row and the envelopes it owned, returning the deck to
+    /// Performance mode.
+    RemoveLane {
+        deck_uuid: String,
+    },
+    /// Add a visibility span, creating the lane if the deck has none.
+    AddRegion {
+        deck_uuid: String,
+        region: crate::arrangement::RegionConfig,
+    },
+    /// Replace a span in place, for a move, a resize, or a fade drag.
+    UpdateRegion {
+        deck_uuid: String,
+        index: usize,
+        region: crate::arrangement::RegionConfig,
+    },
+    RemoveRegion {
+        deck_uuid: String,
+        index: usize,
+    },
+    /// Fold a lane's automation rows away. View state, but it belongs to the
+    /// scene: which curves a show wants open is a property of the show.
+    SetLaneCollapsed {
+        deck_uuid: String,
+        collapsed: bool,
+    },
+    /// What renders before the transport reaches the arranged range.
+    SetIdleBehaviour {
+        idle: crate::arrangement::IdleBehaviour,
+    },
+    /// Hand one overridden parameter back to the arrangement, ramping over
+    /// `seconds` rather than snapping.
+    RearmParam {
+        param_key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seconds: Option<f64>,
+    },
+    /// Hand every overridden parameter back at once.
+    RearmAll {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seconds: Option<f64>,
+    },
+    /// Mark an instant worth returning to. Returns the cue's UUID.
+    AddCue {
+        at: f64,
+        /// Left empty to be named by how many cues exist.
+        #[serde(default)]
+        name: String,
+    },
+    /// Move or rename a cue. Absent fields are left alone.
+    UpdateCue {
+        uuid: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+    RemoveCue {
+        uuid: String,
+    },
+
     // ── Modulation Updates ─────────────────────────────────────
+    /// Choose which notion of time a modulation source follows.
+    /// See /spec/timebase.md.
+    UpdateModulationTimebase {
+        uuid: String,
+        timebase: crate::timebase::Timebase,
+    },
     UpdateLfoFrequency {
         uuid: String,
         frequency: f32,

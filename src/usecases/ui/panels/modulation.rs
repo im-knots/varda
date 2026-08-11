@@ -3,6 +3,54 @@
 use super::super::{modulator_color, widgets, ModSourceUI, UIActions, UIData};
 use crate::engine::EngineCommand;
 use crate::modulation::{LFOWaveform, StepInterpolation};
+use crate::timebase::Timebase;
+
+/// Which notion of time a source follows.
+///
+/// Only offered for sources whose output is a pure function of time. An
+/// envelope follower or an ADSR tracks the room or a gate, so there is nothing
+/// for a show clock to mean; those cards show no selector rather than a control
+/// that does nothing. See /spec/timebase.md § Core Insight.
+fn timebase_selector(
+    ui: &mut egui::Ui,
+    idx: usize,
+    uuid: &str,
+    current: Timebase,
+    clock_active: bool,
+    actions: &mut UIActions,
+) {
+    egui::ComboBox::from_id_salt(format!("timebase_{idx}"))
+        .selected_text(egui::RichText::new(current.label()).small())
+        .width(48.0)
+        .show_ui(ui, |ui| {
+            for tb in Timebase::ALL {
+                if ui.selectable_label(current == tb, tb.label()).clicked() {
+                    actions
+                        .commands
+                        .push(EngineCommand::UpdateModulationTimebase {
+                            uuid: uuid.to_string(),
+                            timebase: tb,
+                        });
+                }
+            }
+        })
+        .response
+        .on_hover_text(
+            "Free: seconds since startup.\n\
+             Beat: musical time, so rate is in cycles per beat and follows the tempo.",
+        );
+
+    // A beat-locked source with no clock holds its last value. Say so, rather
+    // than leaving the performer to wonder why a modulator stopped moving.
+    if current == Timebase::Beat && !clock_active {
+        ui.label(
+            egui::RichText::new("⚠")
+                .small()
+                .color(egui::Color32::YELLOW),
+        )
+        .on_hover_text("No clock source — this modulator is frozen at its last value.");
+    }
+}
 
 // Waveform/envelope plotting uses t/x/y, the idiomatic names for this math.
 #[allow(clippy::many_single_char_names)]
@@ -43,6 +91,15 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
             .id_salt("mod_sources_vscroll")
             .show(ui, |ui| {
                 for (idx, entry) in data.modulation_sources.iter().enumerate() {
+                    // Envelopes are edited in their arrangement lane, not as a
+                    // card here: this panel is a row of full parameter cards,
+                    // which suits a handful of LFOs and would be unusable at the
+                    // hundreds of curves an arrangement produces.
+                    // See /spec/automation.md § UI. `idx` still counts them, so
+                    // modulator colours stay stable as envelopes come and go.
+                    if matches!(entry.source, ModSourceUI::Envelope { .. }) {
+                        continue;
+                    }
                     let mod_color = modulator_color(idx);
                     let dim_color = egui::Color32::from_rgba_premultiplied(
                         mod_color.r() / 4,
@@ -68,6 +125,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                         ModSourceUI::Analyzer { analyzer_type, .. } => {
                             format!("Analyzer {} {}", analyzer_type, idx + 1)
                         }
+                        ModSourceUI::Envelope { .. } => format!("Automation {}", idx + 1),
                     };
                     // Show current value in header if available
                     let value_text = data
@@ -97,6 +155,19 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                         .push(EngineCommand::RemoveModulationSource {
                                             uuid: sid.clone(),
                                         });
+                                }
+                                if matches!(
+                                    entry.source,
+                                    ModSourceUI::LFO { .. } | ModSourceUI::StepSequencer { .. }
+                                ) {
+                                    timebase_selector(
+                                        ui,
+                                        idx,
+                                        sid,
+                                        entry.timebase,
+                                        data.clock_active,
+                                        actions,
+                                    );
                                 }
                             });
                             match &entry.source {
@@ -820,6 +891,9 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     ui.label(format!("Output: {output_name}"));
                                     ui.label(format!("Smoothing: {smoothing:.2}"));
                                 }
+                                // Filtered out above; an envelope's editor is
+                                // its arrangement lane, not a card.
+                                ModSourceUI::Envelope { .. } => {}
                             }
                         });
                     ui.add_space(4.0);
@@ -1197,19 +1271,7 @@ pub(super) fn render_mod_on_mod_dropdown(
                     continue;
                 } // can't modulate yourself
                 let color = modulator_color(src_idx);
-                let src_name = match &entry.source {
-                    ModSourceUI::LFO { .. } => format!("LFO {}", src_idx + 1),
-                    ModSourceUI::Audio {
-                        freq_low,
-                        freq_high,
-                        ..
-                    } => format!("Audio {freq_low:.0}-{freq_high:.0}Hz"),
-                    ModSourceUI::ADSR { .. } => format!("ADSR {}", src_idx + 1),
-                    ModSourceUI::StepSequencer { .. } => format!("StepSeq {}", src_idx + 1),
-                    ModSourceUI::Analyzer { analyzer_type, .. } => {
-                        format!("Analyzer {} {}", analyzer_type, src_idx + 1)
-                    }
-                };
+                let src_name = entry.label(src_idx);
                 if ui
                     .button(
                         egui::RichText::new(format!("+ {src_name}"))

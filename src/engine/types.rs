@@ -50,6 +50,48 @@ pub enum EffectTarget {
     Master,
 }
 
+/// What a copy is taken from. See [`/spec/clipboard.md`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
+pub enum ClipboardSource {
+    Deck(String),
+    Channel(String),
+    Effect(String),
+}
+
+/// Where a paste lands.
+///
+/// The `After*` forms are what a right-click uses, so a copy arrives directly
+/// below the thing the menu was opened on; the `Into*` forms append, which is
+/// what the container's own menu and an API caller mean.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
+pub enum PasteTarget {
+    /// This deck's channel, directly below it.
+    AfterDeck(String),
+    /// The end of this channel.
+    IntoChannel(String),
+    /// This effect's chain, directly after it.
+    AfterEffect(String),
+    /// The end of a deck, channel, or master chain.
+    IntoChain(EffectTarget),
+    /// A new channel at the end of the mixer.
+    NewChannel,
+}
+
+/// What the clipboard is holding, for a menu that has to name it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ClipboardSummary {
+    pub kind: ClipboardKind,
+    /// The object's own name, for "Paste deck 'ripple'".
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub enum ClipboardKind {
+    Deck,
+    Channel,
+    Effect,
+}
+
 /// Per-frame engine state snapshot — plain data, no GPU types, no lifetimes.
 ///
 /// Produced by `VardaApp` each frame. Distributed to consumers via watch channel.
@@ -68,6 +110,9 @@ pub struct EngineState {
     pub depth_sensors: DepthSensorSnapshot,
     pub screen_capture: ScreenCaptureSnapshot,
     pub clock: ClockSnapshot,
+    pub transport: TransportSnapshot,
+    /// Present only when the scene has an arrangement.
+    pub arrangement: Option<ArrangementSnapshot>,
     pub fps: f32,
     pub frame_count: u64,
     /// Target FPS (0 = uncapped)
@@ -136,6 +181,90 @@ pub struct ClockSnapshot {
     pub preference_force_device_id: Option<crate::midi::DeviceId>,
     /// Manual BPM value (if preference is `ForceManual`).
     pub manual_bpm: Option<f32>,
+    /// How many modulation sources are locked to the beat. Drives the readout's
+    /// emphasis and answers "what stops if this clock goes away".
+    /// See /spec/transport.md § Tempo and position are both shown.
+    pub beat_followers: usize,
+}
+
+/// Snapshot of arrangement mode. See /spec/arrangement.md.
+///
+/// Absent when the scene has no arrangement, which is how a Performance-only
+/// scene stays free of arrangement concepts entirely.
+#[derive(Clone, Serialize, Default)]
+pub struct ArrangementSnapshot {
+    /// The authored lanes and idle behaviour, verbatim.
+    pub config: crate::arrangement::ArrangementConfig,
+    /// Whether the arrangement is currently driving decks. False before the
+    /// transport has run, so a scene that opens in Performance mode stays there.
+    pub engaged: bool,
+    /// Modulation keys a performer has taken by hand. Drives the "held" badge
+    /// and the re-arm affordance.
+    pub overridden_params: Vec<String>,
+    /// Latest position covered by any region, for the ruler's default extent.
+    pub duration: f64,
+}
+
+/// Snapshot of the absolute show position. See /spec/transport.md.
+///
+/// Distinct from [`ClockSnapshot`], which is tempo. Both can be live at once.
+#[derive(Clone, Serialize)]
+pub struct TransportSnapshot {
+    /// Absolute position in seconds. `f64` because shows conventionally start
+    /// at hour 1.
+    pub position: f64,
+    pub running: bool,
+    /// Whether the transport has advanced at least once this session. Until it
+    /// has, position-locked features stay inert.
+    pub has_run: bool,
+    pub source: crate::transport::TransportSource,
+    /// Why the transport is or is not moving, so idle and broken are
+    /// distinguishable on a dark stage.
+    pub status_label: String,
+    pub loop_region: Option<crate::transport::LoopRegion>,
+    /// Frame rate positions are displayed at.
+    pub timecode_rate: crate::transport::TimecodeRate,
+    /// Position pre-rendered as `HH:MM:SS:FF`, so every consumer shows the
+    /// same string rather than each reimplementing drop-frame.
+    pub timecode: String,
+    /// How many modulation sources are locked to the transport. Counterpart to
+    /// [`ClockSnapshot::beat_followers`].
+    pub followers: usize,
+}
+
+impl Default for TransportSnapshot {
+    fn default() -> Self {
+        Self {
+            position: 0.0,
+            running: false,
+            has_run: false,
+            source: crate::transport::TransportSource::default(),
+            status_label: crate::transport::TransportStatus::Idle.label().to_string(),
+            loop_region: None,
+            timecode_rate: crate::transport::TimecodeRate::default(),
+            timecode: crate::transport::TimecodeRate::default().format(0.0),
+            followers: 0,
+        }
+    }
+}
+
+impl From<&crate::transport::Transport> for TransportSnapshot {
+    /// `followers` is left at zero here: the count lives in the modulation
+    /// engine, which the transport has no reference to. The snapshot builder
+    /// fills it in.
+    fn from(t: &crate::transport::Transport) -> Self {
+        Self {
+            position: t.position(),
+            running: t.running(),
+            has_run: t.has_run(),
+            source: t.source(),
+            status_label: t.status().label().to_string(),
+            loop_region: t.loop_region(),
+            timecode_rate: t.timecode_rate(),
+            timecode: t.formatted_position(),
+            followers: 0,
+        }
+    }
 }
 
 // ── Registry Snapshot ──────────────────────────────────────────────
@@ -226,6 +355,11 @@ pub struct DeckSnapshot {
     pub gpu_render_cost_us: f32,
     /// Smoothed FPS from actual deck render pipeline timing
     pub fps: f32,
+    /// True while the arrangement has this deck's source asleep because no
+    /// region or curve will show it soon. A sleeping video holds its frame and
+    /// resumes from there, which is why a frozen clip is worth reporting rather
+    /// than leaving someone to wonder. See /spec/deck-residency.md.
+    pub source_asleep: bool,
     pub running_analyzers: Vec<RunningAnalyzerSnapshot>,
 }
 
@@ -349,6 +483,8 @@ pub struct ModulationSnapshot {
 pub struct ModulationSourceSnapshotEntry {
     pub uuid: String,
     pub source: ModulationSourceSnapshot,
+    /// Which notion of time this source follows. See /spec/timebase.md.
+    pub timebase: crate::timebase::Timebase,
 }
 
 #[derive(Clone, Serialize)]
@@ -387,6 +523,9 @@ pub enum ModulationSourceSnapshot {
         analyzer_type: String,
         output_name: String,
         smoothing: f32,
+    },
+    Envelope {
+        breakpoints: Vec<crate::modulation::Breakpoint>,
     },
 }
 
@@ -775,6 +914,8 @@ mod tests {
             cameras: CameraSnapshot { devices: vec![] },
             depth_sensors: DepthSensorSnapshot { devices: vec![] },
             screen_capture: ScreenCaptureSnapshot::default(),
+            transport: TransportSnapshot::default(),
+            arrangement: None,
             clock: ClockSnapshot {
                 bpm: None,
                 beat_phase: 0.0,
@@ -788,6 +929,7 @@ mod tests {
                 preference_label: "Auto".into(),
                 preference_force_device_id: None,
                 manual_bpm: None,
+                beat_followers: 0,
             },
             fps: 60.0,
             frame_count: 0,
@@ -857,6 +999,8 @@ mod tests {
             cameras: CameraSnapshot { devices: vec![] },
             depth_sensors: DepthSensorSnapshot { devices: vec![] },
             screen_capture: ScreenCaptureSnapshot::default(),
+            transport: TransportSnapshot::default(),
+            arrangement: None,
             clock: ClockSnapshot {
                 bpm: Some(120.0),
                 beat_phase: 0.0,
@@ -870,6 +1014,7 @@ mod tests {
                 preference_label: "Auto".into(),
                 preference_force_device_id: None,
                 manual_bpm: None,
+                beat_followers: 0,
             },
             fps: 59.9,
             frame_count: 42,
@@ -1010,6 +1155,7 @@ mod tests {
             render_cost_us: 0.0,
             gpu_render_cost_us: 0.0,
             fps: 59.5,
+            source_asleep: false,
             running_analyzers: vec![],
         };
         assert!(d.mute);

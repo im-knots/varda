@@ -10,7 +10,7 @@
 //! The UI is a pure view over `UIData.macros`: it reads the snapshot and emits
 //! `EngineCommand`s / selection actions. All state mutation happens in the engine.
 
-use super::super::{modulator_color, widgets, ModSourceUI, ModSourceUIEntry, UIActions, UIData};
+use super::super::{modulator_color, widgets, ModSourceUI, UIActions, UIData};
 use crate::engine::EngineCommand;
 use crate::macros::{ButtonBehavior, GlobalAction, Macro, MacroCurve, MacroKind, TriggerAction};
 use crate::modulation::DEFAULT_ASSIGNMENT_AMOUNT;
@@ -431,7 +431,7 @@ fn render_macro_modulation(ui: &mut egui::Ui, m: &Macro, data: &UIData, actions:
                 if let Some(idx) = idx {
                     color_dot(ui, modulator_color(idx));
                     ui.label(
-                        egui::RichText::new(mod_source_label(idx, &data.modulation_sources[idx]))
+                        egui::RichText::new(data.modulation_sources[idx].label(idx))
                             .small()
                             .color(modulator_color(idx)),
                     );
@@ -461,11 +461,14 @@ fn render_macro_modulation(ui: &mut egui::Ui, m: &Macro, data: &UIData, actions:
         .show_ui(ui, |ui| {
             ui.label(egui::RichText::new("Assign Modulation").small().strong());
             for (idx, entry) in data.modulation_sources.iter().enumerate() {
+                // A curve belongs to the one parameter it was drawn for, and a
+                // macro fans out to many. See /spec/automation.md § One
+                // envelope per parameter.
+                if matches!(entry.source, ModSourceUI::Envelope { .. }) {
+                    continue;
+                }
                 if ui
-                    .button(
-                        egui::RichText::new(mod_source_label(idx, entry))
-                            .color(modulator_color(idx)),
-                    )
+                    .button(egui::RichText::new(entry.label(idx)).color(modulator_color(idx)))
                     .clicked()
                 {
                     actions.commands.push(EngineCommand::AssignModulation {
@@ -537,23 +540,6 @@ fn color_dot(ui: &mut egui::Ui, color: egui::Color32) {
     let d = 8.0_f32;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(d, d), egui::Sense::hover());
     ui.painter().circle_filled(rect.center(), d * 0.5, color);
-}
-
-/// Short label for a modulation source, matching the shared param widget.
-fn mod_source_label(idx: usize, entry: &ModSourceUIEntry) -> String {
-    match &entry.source {
-        ModSourceUI::LFO { .. } => format!("LFO {}", idx + 1),
-        ModSourceUI::Audio {
-            freq_low,
-            freq_high,
-            ..
-        } => format!("Audio {freq_low:.0}-{freq_high:.0}Hz"),
-        ModSourceUI::ADSR { .. } => format!("ADSR {}", idx + 1),
-        ModSourceUI::StepSequencer { .. } => format!("StepSeq {}", idx + 1),
-        ModSourceUI::Analyzer { analyzer_type, .. } => {
-            format!("Analyzer {} {}", analyzer_type, idx + 1)
-        }
-    }
 }
 
 fn render_targets_editor(
@@ -839,13 +825,17 @@ fn collect_target_paths(data: &UIData) -> Vec<(String, String)> {
     // Paths route through `mod/<uuid>/<param>`; keep the param sets in sync with
     // `param_router::apply_mod_param`.
     for (idx, entry) in data.modulation_sources.iter().enumerate() {
-        let base = mod_source_label(idx, entry);
+        let base = entry.label(idx);
         let params: &[&str] = match &entry.source {
             ModSourceUI::LFO { .. } => &["frequency", "amplitude", "phase"],
             ModSourceUI::Audio { .. } => &["gain", "smoothing", "freq_low", "freq_high"],
             ModSourceUI::ADSR { .. } => &["attack", "decay", "sustain", "release"],
             ModSourceUI::StepSequencer { .. } => &["rate"],
             ModSourceUI::Analyzer { .. } => &["smoothing"],
+            // An envelope's shape is its breakpoints, not a scalar a macro can
+            // ride. Keeping it unmodulatable is what keeps envelopes out of the
+            // mod-on-mod graph; see /spec/automation.md § Performance.
+            ModSourceUI::Envelope { .. } => &[],
         };
         for p in params {
             out.push((format!("{base} · {p}"), format!("mod/{}/{}", entry.uuid, p)));
@@ -956,6 +946,55 @@ mod tests {
         let _harness = egui_kittest::Harness::new_ui(|ui| {
             render_macro_detail(ui, &uuid, &data, &mut actions);
         });
+    }
+
+    /// A curve drives the one parameter it was drawn for. A macro fans out to
+    /// many, so offering one here would share it by the back door.
+    #[test]
+    fn a_curve_is_not_offered_to_a_macro() {
+        use crate::usecases::ui::ModSourceUIEntry;
+        use egui_kittest::kittest::Queryable;
+
+        let mut data = fixture_with_macros();
+        let lfo_idx = data.modulation_sources.len();
+        data.modulation_sources.push(ModSourceUIEntry {
+            uuid: "lfo1".to_string(),
+            source: ModSourceUI::LFO {
+                waveform: crate::modulation::LFOWaveform::Sine,
+                frequency: 1.0,
+                phase: 0.0,
+                amplitude: 1.0,
+                bipolar: false,
+            },
+            timebase: crate::timebase::Timebase::FreeRun,
+        });
+        let curve_idx = data.modulation_sources.len();
+        data.modulation_sources.push(ModSourceUIEntry {
+            uuid: "env1".to_string(),
+            source: ModSourceUI::Envelope {
+                breakpoints: Vec::new(),
+            },
+            timebase: crate::timebase::Timebase::Transport,
+        });
+        let lfo = data.modulation_sources[lfo_idx].label(lfo_idx);
+        let curve = data.modulation_sources[curve_idx].label(curve_idx);
+
+        let uuid = data.macros[0].uuid.clone();
+        let mut actions = UIActions::new();
+        let mut harness = egui_kittest::Harness::new_ui(|ui| {
+            render_macro_detail(ui, &uuid, &data, &mut actions);
+        });
+        harness.get_by_value("+ Modulate").click();
+        harness.run();
+
+        assert!(
+            harness.query_by_label(&lfo).is_some(),
+            "an ordinary modulator is still on offer"
+        );
+        assert!(
+            harness.query_by_label(&curve).is_none(),
+            "{curve} must not be assignable to a macro"
+        );
     }
 
     #[test]

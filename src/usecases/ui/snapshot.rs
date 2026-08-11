@@ -227,10 +227,14 @@ pub(crate) fn build_ui_data(
                     output_name: output_name.clone(),
                     smoothing: *smoothing,
                 },
+                ModulationSourceSnapshot::Envelope { breakpoints } => ModSourceUI::Envelope {
+                    breakpoints: breakpoints.clone(),
+                },
             };
             ModSourceUIEntry {
                 uuid: entry.uuid.clone(),
                 source,
+                timebase: entry.timebase,
             }
         })
         .collect();
@@ -558,6 +562,12 @@ pub(crate) fn build_ui_data(
         outputs,
         surfaces,
         stage_editor_open: layout.stage_editor_open,
+        arrangement_mode_open: layout.arrangement_mode_open,
+        arrangement: engine.arrangement.clone(),
+        arrangement_pixels_per_second: layout.arrangement_pixels_per_second,
+        arrangement_scroll: layout.arrangement_scroll,
+        arrangement_snap: layout.arrangement_snap,
+        clipboard: app.clipboard_summary(),
         dome_preview_open: layout.dome_preview_open,
         dome_preview_texture: None, // populated by UIRunner after build
         dome_mode_active: layout.dome_mode_active,
@@ -702,6 +712,8 @@ pub(crate) fn build_ui_data(
         clock_preference: engine.clock.preference_label,
         clock_preference_force_device_id: engine.clock.preference_force_device_id,
         clock_manual_bpm: engine.clock.manual_bpm,
+        clock_beat_followers: engine.clock.beat_followers,
+        transport: engine.transport,
         render_width: app.render_width(),
         render_height: app.render_height(),
         max_render_dimension: app.max_render_dimension(),

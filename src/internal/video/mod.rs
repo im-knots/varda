@@ -33,10 +33,19 @@ pub struct AdvanceResult {
 }
 
 /// Shared playback state for all video sources (ffmpeg and HAP).
+// The four flags are independent facts about a decoder, not states of one
+// machine: a clip can be playing, suspended, reversing, and at its out-point in
+// any combination, and folding them together would lose that.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 pub struct PlaybackState {
     /// Whether the video is currently playing.
     pub playing: bool,
+    /// Whether decoding is suspended because nothing is going to show this
+    /// deck soon. Orthogonal to `playing`: the performer's transport is
+    /// untouched, and neither position nor decode advances while set.
+    /// See /spec/deck-residency.md.
+    pub suspended: bool,
     /// Loop mode.
     pub loop_mode: LoopMode,
     /// Speed multiplier (1.0 = normal, 0.5 = half, 2.0 = double, negative = reverse).
@@ -67,6 +76,7 @@ impl PlaybackState {
         let frame_rate = if frame_rate > 0.0 { frame_rate } else { 30.0 };
         Self {
             playing: true,
+            suspended: false,
             loop_mode: LoopMode::Loop,
             speed: 1.0,
             in_point: 0.0,
@@ -230,6 +240,14 @@ pub enum VideoFrame<'a> {
 pub enum VideoCommand {
     Play,
     Pause,
+    /// Stop producing frames without touching the deck's play/pause state.
+    ///
+    /// Kept separate from `Pause` because that is the performer's control and
+    /// is reported to the UI and the API. A deck the arrangement has put to
+    /// sleep must still read as playing, and must not be woken by residency
+    /// into a state the performer did not ask for.
+    /// See /spec/deck-residency.md.
+    SetSuspended(bool),
     Seek(f64),
     SetSpeed(f64),
     SetLoopMode(LoopMode),
@@ -302,6 +320,9 @@ pub struct VideoDecodeHandle {
     /// (0 = uncapped). Written by the render thread every frame and read by the
     /// decode thread to bound its own rate — see [`Self::set_output_fps`].
     output_fps: Arc<AtomicU32>,
+    /// Last suspension state sent to the decode thread, so the per-frame call
+    /// from the renderer only sends on a change. See [`Self::set_suspended`].
+    suspended: AtomicBool,
     thread: Option<std::thread::JoinHandle<()>>,
     pub width: u32,
     pub height: u32,
@@ -349,6 +370,7 @@ impl VideoDecodeHandle {
             stop_flag,
             frame_pool,
             output_fps,
+            suspended: AtomicBool::new(false),
             thread: Some(thread),
             width,
             height,
@@ -396,6 +418,7 @@ impl VideoDecodeHandle {
             stop_flag,
             frame_pool,
             output_fps,
+            suspended: AtomicBool::new(false),
             thread: Some(thread),
             width,
             height,
@@ -414,6 +437,24 @@ impl VideoDecodeHandle {
     /// beat against the render clock, which reads as judder.
     pub fn set_output_fps(&self, fps: u32) {
         self.output_fps.store(fps, Ordering::Relaxed);
+    }
+
+    /// Stop or resume decoding without touching the deck's play/pause state.
+    ///
+    /// Called every frame for every deck, so it sends only on a change: the
+    /// command channel is unbounded and a suspended thread wakes rarely, which
+    /// would otherwise leave a queue of identical commands to drain on resume.
+    ///
+    /// See /spec/deck-residency.md.
+    pub fn set_suspended(&self, suspended: bool) {
+        if self.suspended.swap(suspended, Ordering::Relaxed) != suspended {
+            self.send(VideoCommand::SetSuspended(suspended));
+        }
+    }
+
+    /// Whether decoding is currently suspended.
+    pub fn is_suspended(&self) -> bool {
+        self.suspended.load(Ordering::Relaxed)
     }
 
     /// Take the latest decoded frame (returns None if no new frame available).
@@ -474,6 +515,7 @@ fn apply_command(ps: &mut PlaybackState, cmd: &VideoCommand) {
     match cmd {
         VideoCommand::Play => ps.playing = true,
         VideoCommand::Pause => ps.playing = false,
+        VideoCommand::SetSuspended(s) => ps.suspended = *s,
         // Seek is handled specially by the thread loop (calls seek_and_reset / seek)
         VideoCommand::Seek(_) | VideoCommand::Stop => {}
         VideoCommand::SetSpeed(s) => ps.speed = *s,
@@ -539,6 +581,23 @@ fn decode_interval(video_fps: f64, output_fps: &AtomicU32) -> std::time::Duratio
     std::time::Duration::from_secs_f64((1.0 / rate).max(0.001))
 }
 
+/// How long a suspended decode thread sleeps between wakes.
+///
+/// A suspended thread decodes nothing, so this only bounds how long it takes to
+/// notice a stop flag; a resume arrives as a command and wakes it immediately.
+/// Long enough that sixty sleeping decks cost nothing measurable.
+const SUSPENDED_WAKE: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// The interval to wait for, which is the frame schedule while running and a
+/// slow idle poll while suspended.
+fn wake_interval(suspended: bool, video_fps: f64, output_fps: &AtomicU32) -> std::time::Duration {
+    if suspended {
+        SUSPENDED_WAKE
+    } else {
+        decode_interval(video_fps, output_fps)
+    }
+}
+
 fn wait_for_next_frame(
     next_frame_at: &mut std::time::Instant,
     interval: std::time::Duration,
@@ -567,6 +626,7 @@ fn video_decode_thread(
 ) {
     let mut interval = decode_interval(fps, output_fps);
     let mut next_frame_at = std::time::Instant::now() + interval;
+    let mut was_suspended = false;
 
     while !stop_flag.load(Ordering::Acquire) {
         // Drain all pending commands
@@ -587,6 +647,14 @@ fn video_decode_thread(
                 log::warn!("Video seek error: {e}");
             }
         }
+
+        // Waking from suspension restarts the frame schedule, so the first
+        // frames after a resume are not paced against a deadline set while the
+        // thread was idling.
+        if was_suspended && !player.playback.suspended {
+            next_frame_at = std::time::Instant::now();
+        }
+        was_suspended = player.playback.suspended;
 
         // Decode next frame
         match player.next_frame() {
@@ -627,7 +695,7 @@ fn video_decode_thread(
         }
 
         // Sleep until the next frame falls due, or wake early on a command.
-        interval = decode_interval(fps, output_fps);
+        interval = wake_interval(player.playback.suspended, fps, output_fps);
         match cmd_rx.recv_timeout(wait_for_next_frame(&mut next_frame_at, interval)) {
             Ok(cmd) => {
                 if let VideoCommand::Stop = &cmd {
@@ -663,6 +731,7 @@ fn hap_decode_thread(
 ) {
     let mut interval = decode_interval(fps, output_fps);
     let mut next_frame_at = std::time::Instant::now() + interval;
+    let mut was_suspended = false;
 
     while !stop_flag.load(Ordering::Acquire) {
         // Drain all pending commands
@@ -683,6 +752,14 @@ fn hap_decode_thread(
                 log::warn!("HAP seek error: {e}");
             }
         }
+
+        // Waking from suspension restarts the frame schedule, so the first
+        // frames after a resume are not paced against a deadline set while the
+        // thread was idling.
+        if was_suspended && !player.playback.suspended {
+            next_frame_at = std::time::Instant::now();
+        }
+        was_suspended = player.playback.suspended;
 
         // Decode next frame
         match player.next_frame() {
@@ -724,7 +801,7 @@ fn hap_decode_thread(
         }
 
         // Sleep until the next frame falls due, or wake early on a command.
-        interval = decode_interval(fps, output_fps);
+        interval = wake_interval(player.playback.suspended, fps, output_fps);
         match cmd_rx.recv_timeout(wait_for_next_frame(&mut next_frame_at, interval)) {
             Ok(cmd) => {
                 if let VideoCommand::Stop = &cmd {
@@ -914,7 +991,10 @@ impl VideoPlayer {
     /// Returns an error if seeking, packet demuxing, decoding, or colour-space
     /// conversion fails.
     pub fn next_frame(&mut self) -> Result<Option<&[u8]>> {
-        if !self.playback.playing {
+        // Suspension freezes position as well as decode: a clip nobody can see
+        // must not drift on wall-clock time, or the same show position shows a
+        // different frame depending on when the app was launched.
+        if !self.playback.playing || self.playback.suspended {
             return Ok(None);
         }
         let was_reverse = self.playback.reverse;

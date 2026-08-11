@@ -96,6 +96,8 @@ Inactive → Playing → Transitioning → Done
 
 With **ClipEnd** trigger on video decks, each video plays to completion before transitioning — useful for pre-edited clip sequences.
 
+A deck the arrangement is driving has its auto-transition suspended, since both would be deciding when it plays. See [Arrangement Mode](15-arrangement.md#performance-sequencers-while-the-arrangement-runs).
+
 ---
 
 ## Transition Sequences
@@ -125,6 +127,8 @@ All durations support: **seconds**, **minutes**, **hours**, and **beats** (resol
 ### Simultaneous Sequences
 
 Multiple named sequences can play at the same time. This is essential for multi-surface setups where different channel pairs need independent automation. For example: one sequence cycling the main screen (channels A↔B) while another cycles the side panels (channels C↔D).
+
+A Fade step targets a pair of channels rather than one deck, so sequences cannot share the mixer with an arrangement. While the arrangement holds authority, starting a free-running sequence is refused and one already running is stopped.
 
 ### Easing Curves
 
