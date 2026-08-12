@@ -428,6 +428,7 @@ MIDI, OSC, and keyboard shortcuts all use the same parameter path format:
 | `action/undo` | Trigger undo |
 | `action/redo` | Trigger redo |
 | `action/save` | Trigger save |
+| `action/record` | Arm or disarm automation recording (> 0.5) — see [Recording a pass](15-arrangement.md#recording-a-pass) |
 | `cue/<uuid>/fire` | Take the show to that cue (> 0.5) — see [Cue pads](15-arrangement.md#cue-pads-in-performance-mode) |
 
 ---

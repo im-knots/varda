@@ -628,10 +628,13 @@ impl UIRunner {
             let dirty = ui_actions.has_undoable_action()
                 || ui_actions.has_undoable_stage_action()
                 || varda.batch_has_undoable(&ui_actions.commands);
+            // A recording pass is one long gesture: it pushed its own entry
+            // when the first parameter was touched, and every write until it
+            // ends belongs to that entry.
             if wants_history_snapshot(
                 &mut self.prev_gesture_active,
                 dirty,
-                ui_actions.session.gesture_active,
+                ui_actions.session.gesture_active || varda.is_recording(),
             ) {
                 let snapshot = varda.history_snapshot(&self.layout);
                 varda.push_history(snapshot);

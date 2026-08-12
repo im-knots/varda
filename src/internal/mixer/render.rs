@@ -401,12 +401,14 @@ impl Mixer {
         let n_ch_buf: Vec<f32>;
         let effective_opacities: &[f32] = if channel_count == 2 {
             two_ch_buf = [
-                (1.0 - self.crossfader) * self.channels[0].opacity,
-                self.crossfader * self.channels[1].opacity,
+                (1.0 - self.crossfader) * self.channel_opacity(0),
+                self.crossfader * self.channel_opacity(1),
             ];
             &two_ch_buf
         } else {
-            n_ch_buf = self.channels.iter().map(|ch| ch.opacity).collect();
+            n_ch_buf = (0..channel_count)
+                .map(|i| self.channel_opacity(i))
+                .collect();
             &n_ch_buf
         };
 

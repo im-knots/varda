@@ -230,6 +230,14 @@ pub struct TransportSnapshot {
     /// How many modulation sources are locked to the transport. Counterpart to
     /// [`ClockSnapshot::beat_followers`].
     pub followers: usize,
+    /// Whether live parameter writes are being kept as automation. Armed and
+    /// recording are different states: nothing is written until the position
+    /// moves. See /spec/automation-recording.md.
+    pub record_armed: bool,
+    /// Parameter keys with a take open right now, so the lanes catching a pass
+    /// can say so. Filled in by the snapshot builder, which can see the
+    /// recorder.
+    pub recording_params: Vec<String>,
 }
 
 impl Default for TransportSnapshot {
@@ -244,6 +252,8 @@ impl Default for TransportSnapshot {
             timecode_rate: crate::transport::TimecodeRate::default(),
             timecode: crate::transport::TimecodeRate::default().format(0.0),
             followers: 0,
+            record_armed: false,
+            recording_params: Vec::new(),
         }
     }
 }
@@ -263,6 +273,8 @@ impl From<&crate::transport::Transport> for TransportSnapshot {
             timecode_rate: t.timecode_rate(),
             timecode: t.formatted_position(),
             followers: 0,
+            record_armed: false,
+            recording_params: Vec::new(),
         }
     }
 }

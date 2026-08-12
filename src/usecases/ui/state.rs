@@ -16,6 +16,35 @@ use crate::surface::detect::{DetectedContour, DetectionParams};
 pub const MIN_PIXELS_PER_SECOND: f32 = 0.5;
 pub const MAX_PIXELS_PER_SECOND: f32 = 400.0;
 
+/// A marked stretch of show, in seconds. The thing a performer is dialling in.
+///
+/// Ordered on construction, so a range drawn right to left is the same range as
+/// one drawn left to right rather than an empty one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FocusRange {
+    pub start: f64,
+    pub end: f64,
+}
+
+impl FocusRange {
+    pub fn new(a: f64, b: f64) -> Self {
+        Self {
+            start: a.min(b).max(0.0),
+            end: a.max(b).max(0.0),
+        }
+    }
+
+    pub fn span(self) -> f64 {
+        self.end - self.start
+    }
+
+    /// Whether the range is long enough to be worth keeping. A click that
+    /// happened to land on the strip is not a range.
+    pub fn is_usable(self) -> bool {
+        self.span() > f64::EPSILON
+    }
+}
+
 /// UI-consumer-owned layout and selection state.
 ///
 /// These fields are presentation concerns that don't belong in the engine.
@@ -55,6 +84,10 @@ pub struct UILayoutState {
     pub arrangement_scroll_y: f32,
     /// Whether timeline edits round to whole frames at the ruler's rate.
     pub arrangement_snap: bool,
+    /// The stretch of show being worked on, if one is marked. Looping is one
+    /// thing done to it rather than the thing it is, so it outlives the loop it
+    /// sets. See /spec/arrangement.md § The focus area.
+    pub arrangement_focus: Option<FocusRange>,
     /// Whether the library panel (left sidebar) is open
     pub library_panel_open: bool,
     /// Whether the right panel (master output sidebar) is open
@@ -92,6 +125,7 @@ impl Default for UILayoutState {
             // On by default: a show cut to picture wants frame-aligned edits,
             // and a music-led one can turn it off in one click.
             arrangement_snap: true,
+            arrangement_focus: None,
             library_panel_open: true,
             right_panel_open: true,
             dome_preview_open: false,
@@ -204,6 +238,12 @@ impl UILayoutState {
         }
         if session.toggle_arrangement_snap {
             self.arrangement_snap = !self.arrangement_snap;
+        }
+        if let Some(range) = session.set_arrangement_focus {
+            self.arrangement_focus = Some(range);
+        }
+        if session.clear_arrangement_focus {
+            self.arrangement_focus = None;
         }
         if let Some(size) = session.set_grid_size {
             self.stage_editor_grid_size = size;

@@ -772,6 +772,14 @@ impl ModulationEngine {
             .is_some_and(|v| !v.is_empty())
     }
 
+    /// Whether anything at all is assigned.
+    ///
+    /// Lets a per-frame caller skip building a parameter key on a scene that has
+    /// no modulation in it, which is most of them.
+    pub fn has_modulation_for_any(&self) -> bool {
+        !self.assignments.is_empty()
+    }
+
     /// Get number of sources
     pub fn source_count(&self) -> usize {
         self.sources.len()

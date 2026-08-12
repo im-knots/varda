@@ -89,6 +89,44 @@ fn modulation_dropdown(
         });
 }
 
+/// The 〰 dropdown for a parameter that is a control of its own rather than one
+/// row of a param list, addressed by its full modulation key.
+///
+/// The fader panels have no `ParamUIInfo` to hang a menu off, so they name the
+/// key directly. See /spec/modulation.md § Parameter Addressing.
+pub fn modulation_menu_for_key(
+    ui: &mut egui::Ui,
+    id_salt: String,
+    param_key: &str,
+    modulation_sources: &[ModSourceUIEntry],
+    commands: &mut Vec<EngineCommand>,
+) {
+    let assign = |target: &str, source_id: &str| EngineCommand::AssignModulation {
+        target: target.to_string(),
+        source_id: source_id.to_string(),
+        amount: 1.0,
+    };
+    let remove = |target: &str| EngineCommand::ClearModulation {
+        target: target.to_string(),
+    };
+    let automate = |target: &str| EngineCommand::AddAutomationLane {
+        target: target.to_string(),
+        timebase: crate::timebase::Timebase::Transport,
+    };
+    modulation_dropdown(
+        ui,
+        id_salt,
+        param_key,
+        modulation_sources,
+        &ModMenu {
+            assign: &assign,
+            remove: &remove,
+            automate: Some(&automate),
+        },
+        commands,
+    );
+}
+
 /// Build a set of prefixes whose params should be hidden.
 /// Convention: a bool param named `<prefix>_mode` controls visibility of params
 /// whose name starts with `<prefix>_`. When the bool is false, those params are hidden.

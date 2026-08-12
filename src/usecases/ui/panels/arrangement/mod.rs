@@ -12,6 +12,7 @@
 
 mod automation;
 mod cues;
+mod focus;
 mod regions;
 
 /// The colour a cue is drawn in, wherever it is drawn: the ruler here, and the
@@ -175,7 +176,7 @@ pub(super) fn render_arrangement(ui: &mut egui::Ui, data: &UIData, actions: &mut
     let rows = build_rows(data);
     let area = ui.available_rect_before_wrap();
     ui.advance_cursor_after_rect(area);
-    if area.width() <= HEADER_WIDTH || area.height() <= RULER_HEIGHT {
+    if area.width() <= HEADER_WIDTH || area.height() <= RULER_HEIGHT + focus::STRIP_HEIGHT {
         return;
     }
 
@@ -185,9 +186,13 @@ pub(super) fn render_arrangement(ui: &mut egui::Ui, data: &UIData, actions: &mut
     );
     let track_rect =
         egui::Rect::from_min_max(egui::pos2(header_rect.right(), area.top()), area.max);
-    let ruler_rect = egui::Rect::from_min_max(
+    let focus_rect = egui::Rect::from_min_max(
         track_rect.min,
-        egui::pos2(track_rect.right(), track_rect.top() + RULER_HEIGHT),
+        egui::pos2(track_rect.right(), track_rect.top() + focus::STRIP_HEIGHT),
+    );
+    let ruler_rect = egui::Rect::from_min_max(
+        egui::pos2(track_rect.left(), focus_rect.bottom()),
+        egui::pos2(track_rect.right(), focus_rect.bottom() + RULER_HEIGHT),
     );
     let lanes_rect = egui::Rect::from_min_max(
         egui::pos2(track_rect.left(), ruler_rect.bottom()),
@@ -210,6 +215,7 @@ pub(super) fn render_arrangement(ui: &mut egui::Ui, data: &UIData, actions: &mut
         .clamp(0.0, max_scroll_y(&rows, lanes_rect));
 
     handle_pan_and_zoom(ui, data, actions, track_rect, axis, &rows, lanes_rect);
+    focus::render(ui, data, actions, focus_rect, lanes_rect, axis);
     render_ruler(ui, data, actions, ruler_rect, axis);
     let layout = Layout {
         header: header_rect,
@@ -258,14 +264,17 @@ fn build_rows(data: &UIData) -> Vec<Row<'_>> {
                 rows.extend(curves.into_iter().map(Row::Automation));
             }
         }
-        // A channel effect belongs to the channel, not to any one deck, so its
-        // curve sits directly under the group header.
+        // The channel's own fader and its effects belong to the channel rather
+        // than to any one deck, so their curves sit directly under the group
+        // header.
+        let mut channel_sources = vec![(format!("ch_{}:", ch.uuid), None)];
+        channel_sources.extend(effect_sources(&ch.effects));
         rows.extend(
             automation_rows(
                 data,
                 ch.ch_idx,
                 Owner::Channel(ch.ch_idx),
-                &effect_sources(&ch.effects),
+                &channel_sources,
                 None,
             )
             .into_iter()
@@ -435,6 +444,8 @@ fn render_transport_strip(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActi
                 actions.commands.push(EngineCommand::TransportNextCue);
             }
         });
+
+        super::popovers::record_button(ui, data, actions);
 
         ui.label(
             egui::RichText::new(&t.timecode)
@@ -968,6 +979,31 @@ fn render_group_row(
     if response.clicked() {
         actions.session.select_channel = Some(ch_idx);
     }
+    response.context_menu(|ui| {
+        let Some(channel) = data.channels.get(ch_idx) else {
+            return;
+        };
+        // The menu the mixer's channel column shows, plus the delete the mixer
+        // keeps on a button beside the name.
+        let subject = clipboard_menu::Subject::channel(&channel.uuid, &channel.name);
+        clipboard_menu::items(ui, data, actions, &subject);
+        ui.separator();
+        // Through the session action rather than the command, because removing a
+        // channel by index is also what fixes up a selection pointing past the
+        // end of the list.
+        if ui
+            .add_enabled(
+                data.channels.len() > 2,
+                egui::Button::new(format!("Delete channel '{name}'")),
+            )
+            .on_hover_text("Deletes the channel with its decks, their lanes, and their curves.")
+            .on_disabled_hover_text("A mixer keeps at least two channels")
+            .clicked()
+        {
+            actions.session.remove_channel = Some(ch_idx);
+            ui.close();
+        }
+    });
 }
 
 /// The mixer's row, holding master effect automation.
@@ -1066,8 +1102,22 @@ fn render_lane_row(
         let subject = clipboard_menu::Subject::deck(lane.uuid, lane.name);
         clipboard_menu::items(ui, data, actions, &subject);
         ui.separator();
-        if ui.button("Remove lane").clicked() {
+        if ui
+            .button("Remove lane")
+            .on_hover_text("Takes this deck off the timeline. The deck stays in the mixer.")
+            .clicked()
+        {
             actions.commands.push(EngineCommand::RemoveLane {
+                deck_uuid: lane.uuid.to_string(),
+            });
+            ui.close();
+        }
+        if ui
+            .button(format!("Delete deck '{}'", lane.name))
+            .on_hover_text("Deletes the deck itself, here and in the mixer.")
+            .clicked()
+        {
+            actions.commands.push(EngineCommand::RemoveDeck {
                 deck_uuid: lane.uuid.to_string(),
             });
             ui.close();
@@ -1663,6 +1713,81 @@ mod tests {
         );
     }
 
+    /// A timeline is a view of the scene rather than a document beside it, so
+    /// the row menus delete the deck and the channel themselves, not just their
+    /// rows. Removing the *row* is the separate, weaker item beside it.
+    #[test]
+    fn a_lane_header_deletes_the_deck_it_stands_for() {
+        let data = fixture_with_arrangement();
+        let deck = data.channels[0].decks[0].clone();
+        let mut actions = UIActions::new();
+        let mut harness = egui_kittest::Harness::new_ui(|ui| {
+            render_arrangement(ui, &data, &mut actions);
+        });
+
+        harness.get_by_label(&deck.name).click_secondary();
+        harness.run();
+        harness
+            .get_by_label(&format!("Delete deck '{}'", deck.name))
+            .click();
+        harness.run();
+        drop(harness);
+
+        assert!(
+            actions.commands.iter().any(|command| matches!(
+                command,
+                EngineCommand::RemoveDeck { deck_uuid } if *deck_uuid == deck.uuid
+            )),
+            "{:?}",
+            actions.commands
+        );
+    }
+
+    #[test]
+    fn a_group_header_deletes_the_channel_it_stands_for() {
+        let mut data = fixture_with_arrangement();
+        // A third channel, because the mixer keeps two and the item is refused
+        // below that. Empty, so no deck label appears twice in the tree.
+        let mut spare = data.channels[1].clone();
+        spare.ch_idx = 2;
+        spare.uuid = "cc000001".to_string();
+        spare.name = "Ch C".to_string();
+        spare.decks.clear();
+        data.channels.push(spare);
+        let mut actions = UIActions::new();
+        let mut harness = egui_kittest::Harness::new_ui(|ui| {
+            render_arrangement(ui, &data, &mut actions);
+        });
+
+        harness.get_by_label("Ch B").click_secondary();
+        harness.run();
+        harness.get_by_label("Delete channel 'Ch B'").click();
+        harness.run();
+        drop(harness);
+
+        assert_eq!(actions.session.remove_channel, Some(1));
+    }
+
+    /// The engine keeps two channels whatever the UI asks, so the item is shown
+    /// disabled rather than firing a command that comes back refused.
+    #[test]
+    fn the_last_two_channels_cannot_be_deleted_from_the_timeline() {
+        let data = fixture_with_arrangement();
+        assert_eq!(data.channels.len(), 2, "the fixture is at the floor");
+        let mut actions = UIActions::new();
+        let mut harness = egui_kittest::Harness::new_ui(|ui| {
+            render_arrangement(ui, &data, &mut actions);
+        });
+
+        harness.get_by_label("Ch A").click_secondary();
+        harness.run();
+        harness.get_by_label("Delete channel 'Ch A'").click();
+        harness.run();
+        drop(harness);
+
+        assert_eq!(actions.session.remove_channel, None);
+    }
+
     /// Rows are laid out in one pass so the header and the track for a lane are
     /// the same strip of screen. Drift here is the bug the single-rect layout
     /// exists to prevent.
@@ -1828,6 +1953,31 @@ mod tests {
             })
             .collect();
         assert_eq!(owners, vec![data.channels[0].ch_idx]);
+    }
+
+    /// A channel's fader is the channel's, not any deck's, so its curve is a row
+    /// under the group header rather than inside a lane.
+    #[test]
+    fn a_channel_fader_curve_lands_under_its_group() {
+        let mut data = fixture_with_arrangement();
+        let ch = data.channels[0].uuid.clone();
+        push_envelope(
+            &mut data,
+            "env-fader",
+            &crate::arrangement::channel_opacity_param_key(&ch),
+        );
+
+        let rows: Vec<(usize, String)> = build_rows(&data)
+            .into_iter()
+            .filter_map(|r| match r {
+                Row::Automation(curve) => match curve.owner {
+                    Owner::Channel(ch_idx) => Some((ch_idx, curve.label().to_string())),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rows, vec![(data.channels[0].ch_idx, "opacity".to_string())]);
     }
 
     /// A deck effect's curve belongs to the deck's lane, named for the effect so

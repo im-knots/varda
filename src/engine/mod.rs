@@ -842,6 +842,12 @@ pub enum EngineCommand {
     SetTimecodeRate {
         rate: crate::transport::TimecodeRate,
     },
+    /// Keep live parameter writes as automation curves while the transport
+    /// runs. Arming from a stop also rolls the transport. See
+    /// /spec/automation-recording.md.
+    SetRecordArmed {
+        armed: bool,
+    },
     /// Locate to the cue before the playhead, or to zero when there is none.
     TransportPrevCue,
     /// Locate to the cue after the playhead, or stay put when there is none.

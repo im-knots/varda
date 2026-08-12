@@ -40,6 +40,14 @@ enum CurveDrag {
         origin: f32,
         grab_y: f32,
     },
+    /// The flat run of breakpoints `first..=last`, raised or lowered bodily
+    /// from the value `origin` it was pressed at.
+    Level {
+        first: usize,
+        last: usize,
+        origin: f32,
+        grab_y: f32,
+    },
 }
 
 /// What a curve's context menu was opened on: the breakpoint under the press if
@@ -168,7 +176,8 @@ fn render_track(
     if response.hovered() {
         if let Some(pos) = ui.ctx().pointer_latest_pos() {
             if point_at(row.breakpoints, geom, pos).is_none()
-                && bendable_segment_at(row.breakpoints, geom, pos).is_some()
+                && (bendable_segment_at(row.breakpoints, geom, pos).is_some()
+                    || flat_run_at(row.breakpoints, geom, pos).is_some())
             {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
             }
@@ -189,6 +198,15 @@ fn render_track(
                             origin: tension_of(row.breakpoints[index].curve),
                             grab_y: pos.y,
                         }
+                    })
+                })
+                // Flat where a bend would not show, so the two never contend.
+                .or_else(|| {
+                    flat_run_at(row.breakpoints, geom, pos).map(|(first, last)| CurveDrag::Level {
+                        first,
+                        last,
+                        origin: row.breakpoints[first].value,
+                        grab_y: pos.y,
                     })
                 })
         });
@@ -222,6 +240,17 @@ fn render_track(
                             descends(row.breakpoints, index),
                         ),
                     },
+                ),
+                CurveDrag::Level {
+                    first,
+                    last,
+                    origin,
+                    grab_y,
+                } => with_run_levelled(
+                    row.breakpoints,
+                    first,
+                    last,
+                    origin + value_travel(geom.track, grab_y - pos.y),
                 ),
             };
             if edited != row.breakpoints {
@@ -459,6 +488,14 @@ fn value_at(track: egui::Rect, y: f32) -> f32 {
     ((track.bottom() - PADDING - y) / usable).clamp(0.0, 1.0)
 }
 
+/// How much value a vertical travel of `dy` pixels is worth, upward positive.
+///
+/// Unclamped, unlike [`value_at`]: a drag that leaves the lane and comes back
+/// has to return to where it was rather than to the edge it was pinned at.
+fn value_travel(track: egui::Rect, dy: f32) -> f32 {
+    dy / (track.height() - 2.0 * PADDING).max(1.0)
+}
+
 /// Index of the breakpoint under `pointer`, if any.
 fn point_at(points: &[Breakpoint], geom: RowGeometry, pointer: egui::Pos2) -> Option<usize> {
     points
@@ -495,6 +532,56 @@ fn bendable_segment_at(
     let mut cursor = 0;
     let value = crate::modulation::evaluate_envelope(points, position, &mut cursor);
     ((pointer.y - point_y(geom.track, value)).abs() <= CURVE_GRAB).then_some(index)
+}
+
+/// The flat stretch of curve under `pointer`, as the inclusive range of
+/// breakpoints holding it there.
+///
+/// This is the half of the track a bend cannot claim: a segment between two
+/// equal values draws the same straight line at every tension, and outside the
+/// drawn range the envelope holds its end value. Both look like a line worth
+/// grabbing, and dragging one bodily up or down is what a performer means by it.
+///
+/// The run is widened across every neighbour at the same value, because what
+/// reads as one flat line has to move as one rather than breaking into a ramp at
+/// a breakpoint that was never visible.
+fn flat_run_at(
+    points: &[Breakpoint],
+    geom: RowGeometry,
+    pointer: egui::Pos2,
+) -> Option<(usize, usize)> {
+    let position = geom.axis.seconds(pointer.x);
+    let last_index = points.len().checked_sub(1)?;
+    // Strictly before the first point: a press exactly on it belongs to the
+    // segment leaving it, or the two gestures would both claim that one column
+    // of pixels and which one ran would be an accident of ordering.
+    let seed = if position < points[0].position {
+        0
+    } else if position >= points[last_index].position {
+        last_index
+    } else {
+        let index = points
+            .windows(2)
+            .position(|pair| pair[0].position <= position && position < pair[1].position)?;
+        // A segment between two different values is a bend's, whatever shape it
+        // draws on the way.
+        if (points[index].value - points[index + 1].value).abs() > f32::EPSILON {
+            return None;
+        }
+        index
+    };
+
+    let value = points[seed].value;
+    if (pointer.y - point_y(geom.track, value)).abs() > CURVE_GRAB {
+        return None;
+    }
+    let level = |i: &usize| (points[*i].value - value).abs() < f32::EPSILON;
+    let first = (0..seed).rev().take_while(level).last().unwrap_or(seed);
+    let last = (seed + 1..points.len())
+        .take_while(level)
+        .last()
+        .unwrap_or(seed);
+    Some((first, last))
 }
 
 fn tension_of(curve: CurveKind) -> f32 {
@@ -549,6 +636,21 @@ fn with_point_moved(
         .map_or(f64::INFINITY, |p| p.position - GAP);
     point.position = position.clamp(low, high.max(low));
     point.value = value.clamp(0.0, 1.0);
+    out
+}
+
+/// Set every breakpoint in `first..=last` to `value`, which is what raising a
+/// flat line does: the run keeps its length and its shape and changes height.
+fn with_run_levelled(
+    points: &[Breakpoint],
+    first: usize,
+    last: usize,
+    value: f32,
+) -> Vec<Breakpoint> {
+    let mut out = points.to_vec();
+    for point in out.iter_mut().take(last + 1).skip(first) {
+        point.value = value.clamp(0.0, 1.0);
+    }
     out
 }
 
@@ -777,6 +879,139 @@ mod tests {
         let after = egui::pos2(geom.axis.x(12.0), point_y(geom.track, 0.25));
         assert_eq!(bendable_segment_at(&points, geom, before), None);
         assert_eq!(bendable_segment_at(&points, geom, after), None);
+    }
+
+    /// The other half of the bend gesture: where bending is dead, the line is
+    /// dragged bodily instead, and both breakpoints holding it move together.
+    #[test]
+    fn a_flat_segment_is_grabbed_as_a_whole_line() {
+        let flat = vec![linear(0.0, 0.5), linear(4.0, 0.5), linear(8.0, 1.0)];
+        let geom = geom();
+        let on_the_line = egui::pos2(geom.axis.x(2.0), point_y(geom.track, 0.5));
+
+        assert_eq!(flat_run_at(&flat, geom, on_the_line), Some((0, 1)));
+    }
+
+    /// What reads as one flat line has to move as one, however many breakpoints
+    /// happen to sit along it: breaking it into a ramp at a point that was never
+    /// visible is not what the hand asked for.
+    #[test]
+    fn a_flat_run_widens_across_every_point_at_the_same_value() {
+        let points = vec![
+            linear(0.0, 0.2),
+            linear(4.0, 0.6),
+            linear(8.0, 0.6),
+            linear(12.0, 0.6),
+            linear(16.0, 0.9),
+        ];
+        let geom = geom();
+
+        for seconds in [6.0, 10.0] {
+            let on_the_line = egui::pos2(geom.axis.x(seconds), point_y(geom.track, 0.6));
+            assert_eq!(
+                flat_run_at(&points, geom, on_the_line),
+                Some((1, 3)),
+                "at {seconds}s"
+            );
+        }
+    }
+
+    /// Outside the drawn range the envelope holds its end value, which is a flat
+    /// line like any other and the only way to raise a one-point curve.
+    #[test]
+    fn the_held_tails_are_flat_lines_that_can_be_dragged() {
+        let points = curve();
+        let geom = geom();
+
+        let before = egui::pos2(geom.axis.x(-2.0), point_y(geom.track, 0.0));
+        let after = egui::pos2(geom.axis.x(12.0), point_y(geom.track, 0.25));
+        assert_eq!(flat_run_at(&points, geom, before), Some((0, 0)));
+        assert_eq!(flat_run_at(&points, geom, after), Some((2, 2)));
+
+        let lone = vec![linear(4.0, 0.75)];
+        let anywhere = egui::pos2(geom.axis.x(30.0), point_y(geom.track, 0.75));
+        assert_eq!(flat_run_at(&lone, geom, anywhere), Some((0, 0)));
+        assert_eq!(flat_run_at(&[], geom, anywhere), None);
+    }
+
+    /// The two line gestures divide the track between them: a press that bends
+    /// must never also level, or the drag that starts depends on which branch
+    /// was written first.
+    #[test]
+    fn bending_and_levelling_never_claim_the_same_press() {
+        let mut points = curve();
+        points.push(linear(12.0, 0.25));
+        let geom = geom();
+
+        let mut cursor = 0;
+        for step in 0..120 {
+            let seconds = -2.0 + f64::from(step) * 0.125;
+            let value = crate::modulation::evaluate_envelope(&points, seconds, &mut cursor);
+            let on_the_line = egui::pos2(geom.axis.x(seconds), point_y(geom.track, value));
+
+            let bend = bendable_segment_at(&points, geom, on_the_line).is_some();
+            let level = flat_run_at(&points, geom, on_the_line).is_some();
+            assert!(!(bend && level), "both claimed the press at {seconds}s");
+            assert!(bend || level, "neither claimed the press at {seconds}s");
+        }
+    }
+
+    /// A line is only grabbed where it is drawn, so a press in the empty part of
+    /// the lane still falls through to whatever else wants it.
+    #[test]
+    fn a_press_away_from_the_line_grabs_nothing() {
+        let flat = vec![linear(0.0, 0.5), linear(4.0, 0.5)];
+        let geom = geom();
+        let above = egui::pos2(
+            geom.axis.x(2.0),
+            point_y(geom.track, 0.5) - 3.0 * CURVE_GRAB,
+        );
+
+        assert_eq!(flat_run_at(&flat, geom, above), None);
+    }
+
+    #[test]
+    fn levelling_moves_the_whole_run_and_nothing_else() {
+        let points = vec![linear(0.0, 0.2), linear(4.0, 0.6), linear(8.0, 0.6)];
+        let raised = with_run_levelled(&points, 1, 2, 0.8);
+
+        assert!((raised[0].value - 0.2).abs() < f32::EPSILON, "untouched");
+        assert!((raised[1].value - 0.8).abs() < f32::EPSILON);
+        assert!((raised[2].value - 0.8).abs() < f32::EPSILON);
+        assert!(
+            raised
+                .iter()
+                .zip(&points)
+                .all(|(a, b)| (a.position - b.position).abs() < 1e-9),
+            "levelling is vertical only"
+        );
+
+        let over = with_run_levelled(&points, 0, 2, 4.0);
+        assert!(over.iter().all(|p| (p.value - 1.0).abs() < f32::EPSILON));
+        let under = with_run_levelled(&points, 0, 2, -4.0);
+        assert!(under.iter().all(|p| p.value.abs() < f32::EPSILON));
+    }
+
+    /// The drag is relative to where it was pressed and unclamped on the way, so
+    /// dragging out of the lane and back returns the line to where it was rather
+    /// than leaving it pinned at the edge it hit.
+    #[test]
+    fn a_level_drag_out_of_the_lane_and_back_returns_to_its_value() {
+        let track = geom().track;
+        let usable = track.height() - 2.0 * PADDING;
+
+        let up = value_travel(track, usable / 2.0);
+        assert!((up - 0.5).abs() < 1e-6, "half the lane is half the range");
+        assert!(
+            (value_travel(track, -usable) + 1.0).abs() < 1e-6,
+            "down is negative and unclamped"
+        );
+
+        let origin = 0.5_f32;
+        let miles_up = (origin + value_travel(track, 10.0 * usable)).clamp(0.0, 1.0);
+        assert!((miles_up - 1.0).abs() < f32::EPSILON);
+        let back = origin + value_travel(track, 0.0);
+        assert!((back - origin).abs() < f32::EPSILON);
     }
 
     #[test]

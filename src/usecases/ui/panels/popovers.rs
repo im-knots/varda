@@ -256,6 +256,55 @@ pub(super) fn followers_hint(count: usize, what: &str) -> String {
     }
 }
 
+/// Idle, armed, and writing are three states, and a performer mid-show reads
+/// them by colour rather than by hovering for the tooltip.
+fn record_colour(ui: &egui::Ui, data: &UIData) -> egui::Color32 {
+    if !data.transport.recording_params.is_empty() {
+        egui::Color32::from_rgb(255, 80, 80)
+    } else if data.transport.record_armed {
+        egui::Color32::from_rgb(190, 60, 60)
+    } else {
+        ui.visuals().weak_text_color()
+    }
+}
+
+/// The automation record arm. Drawn in both modes, beside the position.
+///
+/// Out in the open rather than inside the transport popover: the gesture it
+/// catches is the one about to be played, and a control you have to go and find
+/// first is one you reach for after the moment has gone. See
+/// /spec/automation-recording.md § Arming.
+pub(super) fn record_button(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
+    let t = &data.transport;
+    let writing = t.recording_params.len();
+    let color = record_colour(ui, data);
+
+    let hover = if writing > 0 {
+        format!(
+            "Recording {}. Press to end the pass.",
+            match writing {
+                1 => "1 parameter".to_string(),
+                n => format!("{n} parameters"),
+            }
+        )
+    } else if t.record_armed {
+        "Armed. Move any control to write it into the arrangement.".to_string()
+    } else {
+        "Record automation. Arms and rolls the show; whatever you touch is kept as a curve."
+            .to_string()
+    };
+
+    if ui
+        .add(egui::Button::new(egui::RichText::new("⏺").color(color)).frame(t.record_armed))
+        .on_hover_text(hover)
+        .clicked()
+    {
+        actions.commands.push(EngineCommand::SetRecordArmed {
+            armed: !t.record_armed,
+        });
+    }
+}
+
 /// Render the transport popover (shown when clicking the position in the top bar).
 pub(super) fn render_transport_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     use crate::transport::{TimecodeRate, TransportSource};
@@ -636,6 +685,54 @@ mod tests {
             followers_hint(4, "the transport"),
             "4 modulators locked to the transport"
         );
+    }
+
+    /// The press is a toggle, so a performer ending a pass presses the same
+    /// thing they started it with.
+    #[test]
+    fn the_record_button_arms_and_disarms() {
+        use egui_kittest::kittest::Queryable;
+
+        for armed in [false, true] {
+            let mut data = UIData::test_fixture();
+            data.transport.record_armed = armed;
+            let mut actions = UIActions::new();
+            {
+                let mut harness =
+                    egui_kittest::Harness::new_ui(|ui| record_button(ui, &data, &mut actions));
+                harness.get_by_label("⏺").click();
+                harness.run();
+            }
+            match actions.commands.as_slice() {
+                [EngineCommand::SetRecordArmed { armed: asked }] => {
+                    assert_eq!(*asked, !armed, "the press asks for the other state");
+                }
+                other => panic!("expected one record arm, got {other:?}"),
+            }
+        }
+    }
+
+    /// A pass that is actually writing has to be visible from across a room:
+    /// the difference between armed and recording is the difference between a
+    /// take you can still set up and one you are already in.
+    #[test]
+    fn a_pass_being_written_looks_different_from_being_armed() {
+        let mut harness = egui_kittest::Harness::new_ui(|ui| {
+            let idle = UIData::test_fixture();
+            let mut armed = UIData::test_fixture();
+            armed.transport.record_armed = true;
+            let mut writing = UIData::test_fixture();
+            writing.transport.record_armed = true;
+            writing.transport.recording_params = vec!["deck_a:opacity".to_string()];
+
+            let colours: Vec<egui::Color32> = [&idle, &armed, &writing]
+                .iter()
+                .map(|data| record_colour(ui, data))
+                .collect();
+            assert_ne!(colours[0], colours[1]);
+            assert_ne!(colours[1], colours[2]);
+        });
+        harness.run();
     }
 
     #[test]

@@ -293,6 +293,19 @@ pub fn write_opacity_param_key(buf: &mut String, deck_uuid: &str) {
     buf.push_str(":opacity");
 }
 
+/// The parameter key the modulation engine addresses a channel's fader by.
+///
+/// A channel has no lane of its own, so unlike a deck's opacity this key is
+/// never compiled from regions: it carries only curves someone drew or recorded.
+/// See /spec/automation-recording.md § What can be recorded.
+pub fn channel_opacity_param_key(channel_uuid: &str) -> String {
+    let mut key = String::with_capacity(channel_uuid.len() + 11);
+    key.push_str("ch_");
+    key.push_str(channel_uuid);
+    key.push_str(":opacity");
+    key
+}
+
 /// Compile a lane's regions into breakpoints on its opacity envelope.
 ///
 /// This is the whole region mechanism. Because the result is an ordinary

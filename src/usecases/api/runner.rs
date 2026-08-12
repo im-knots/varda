@@ -112,7 +112,7 @@ use utoipa_swagger_ui::SwaggerUi;
         // Transport
         routes::transport::play, routes::transport::stop, routes::transport::locate,
         routes::transport::set_source, routes::transport::set_loop,
-        routes::transport::set_rate,
+        routes::transport::set_rate, routes::transport::set_record,
         routes::transport::prev_cue, routes::transport::next_cue,
         routes::transport::trigger_cue,
         // Arrangement
@@ -702,6 +702,10 @@ pub fn build_router(shared: SharedState) -> Router {
         .route(
             "/api/transport/rate",
             axum::routing::put(routes::transport::set_rate),
+        )
+        .route(
+            "/api/transport/record",
+            axum::routing::put(routes::transport::set_record),
         )
         .route(
             "/api/transport/cue/prev",

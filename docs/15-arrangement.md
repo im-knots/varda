@@ -20,12 +20,13 @@ If you want a wider timeline, collapse the library with **L** and the right pane
 
 | Part | What it is |
 |------|------------|
-| **Transport strip** | Play/pause, stop, the cue arrows, the position readout, snap, zoom, and the idle picker. |
+| **Transport strip** | Play/pause, stop, the cue arrows, record, the position readout, snap, zoom, and the idle picker. |
+| **Focus strip** | The thin band above the ruler. Drag out a range there to mark the stretch you are working on, then loop it. |
 | **Ruler** | Show position in timecode. Click or drag it to locate, double-click to drop a cue. |
 | **Playhead** | The vertical line at the current position, colour-coded by transport status. |
 | **Cue point** | A yellow dot on the ruler with a dashed line down the lanes, marking a moment worth returning to. |
-| **Group row** | One channel. Click it to select the channel; it is also the library drop target. |
-| **Lane** | One deck, with its regions. Click it to select the deck, or drag its header to reorder. |
+| **Group row** | One channel. Click it to select the channel, right-click to copy or delete it; it is also the library drop target. |
+| **Lane** | One deck, with its regions. Click it to select the deck, drag its header to reorder, right-click to copy or delete it. |
 | **Automation row** | One automated parameter, drawn as a curve under whatever owns it. |
 | **Master row** | The mixer, below every channel, holding master effect automation. |
 
@@ -44,6 +45,21 @@ The transport strip duplicates the top bar readout rather than replacing it. Bot
 | **⏹** | Stop, holding the position. Press it again to return to the start. |
 
 While the transport is chasing external timecode, position belongs to the master: the ruler and the transport buttons are disabled and say so on hover.
+
+### The focus area
+
+Dialling in one sequence means playing the same eight bars over and over. The thin strip above the ruler is where you say which eight bars: drag across it and a blue bar marks that stretch of show.
+
+| Gesture | Result |
+|---------|--------|
+| **Drag empty strip** | Mark a range. Dragging right to left marks the same range as left to right. |
+| **Drag the bar's body** | Move the range, keeping its length. |
+| **Drag either edge** | Resize it. |
+| **Right-click the bar** | **Loop this range**, **Zoom to range**, or **Clear**. |
+
+**Loop this range** hands the range to the transport, which wraps playback inside it. The bar fills in while it is looping, so a wrap that surprises you has a visible cause. Move or resize the bar while it is looping and the loop follows, which is how you nudge a loop point without stopping.
+
+The range and the loop are separate things: clearing the range stops the loop with it, but turning the loop off leaves the range marked, so you can keep working on the same stretch without it wrapping. **Zoom to range** fills the view with it. A scene saved with a loop opens with that loop showing as the focus area, so a durable loop is never invisible.
 
 ### Cue points
 
@@ -79,6 +95,20 @@ Dragging a lane onto a different channel's lanes does nothing, and no drop line 
 ### Copying a deck here copies its placement
 
 Right-click a lane header for the same **Copy**, **Duplicate**, and **Paste** the mixer offers, with one difference that matters: a copy made in Arrangement mode carries the deck's regions, so the copy plays at the same times as the original and can be dragged from there. The same deck copied in Performance mode arrives as a bare deck with no lane, because in the mixer a deck is a source and here it is a source and a placement. See [Copy and Paste](02-concepts.md#copy-and-paste).
+
+Right-clicking a group row offers the channel's copy, duplicate, and paste in the same way.
+
+### Deleting from the timeline
+
+The timeline is a view of the scene rather than a document beside it, so the row menus delete the real thing:
+
+| Item | On | What goes |
+|------|----|-----------|
+| **Remove lane** | A lane header | The row and its curves. The deck stays in the mixer, unarranged. |
+| **Delete deck** | A lane header | The deck itself, here and in Performance mode, taking its lane and curves with it. |
+| **Delete channel** | A group row | The channel, its decks, and all of their lanes and curves. |
+
+Deleting a channel is refused when only two are left, because a mixer keeps A and B; the item is greyed out rather than failing after the fact. Every one of these is a single Cmd+Z away, and deleting a deck from the mixer removes its lane too, so the two views never disagree about what exists.
 
 ## Regions
 
@@ -119,12 +149,15 @@ Effect parameters are labelled `effect · parameter`, so two effects sharing a p
 
 A segment between two breakpoints is a shape, not just a straight line. Grab the line itself (the pointer turns into a vertical arrow) and drag it to bend the segment, so a move can start slowly and arrive fast or the other way around. Drag toward the way you want it to bulge, on rising and falling segments alike. Right-clicking the breakpoint the segment leaves and picking **Linear** straightens it again, and **Smooth** or **Hold** replace the bend with those shapes.
 
+Where the line is flat there is no bend to make, so dragging it raises or lowers it instead. The whole flat run moves together, however many breakpoints sit along it, and that includes the held stretches before the first breakpoint and after the last one. It is how you set a level for a lane you have not shaped yet: drop one breakpoint and drag the line either side of it to the value you want.
+
 The crossfader cannot be automated yet: it is mappable and macro-drivable, but it is not a modulation target, so there is no curve to draw. Author a crossfade as two overlapping regions in sibling lanes instead, which is the form the arrangement prefers anyway.
 
 | Gesture | Result |
 |---------|--------|
 | **Drag a breakpoint** | Move it in time and value. It cannot cross its neighbours. |
-| **Drag the line between two breakpoints** | Bend that segment. Drag toward the direction you want it to bulge. |
+| **Drag a sloped line** | Bend that segment. Drag toward the direction you want it to bulge. |
+| **Drag a flat line** | Raise or lower it, along with every breakpoint holding it there. |
 | **Double-click empty curve** | Add a breakpoint there. |
 | **Double-click a breakpoint** | Remove it. |
 | **Right-click a breakpoint** | Choose Linear, Smooth, or Hold, or delete it. |
@@ -142,6 +175,26 @@ Curves do not appear as cards in the right panel's modulation list. A show can h
 A curve drives the one parameter it was drawn for, so it is not offered in the `〰` dropdown as a source you can assign somewhere else. To put the same shape on a second parameter, right-click the lane you like and pick **Copy curve**, then right-click the other parameter's lane and pick **Paste curve**. Both items are in the menu wherever you right-click the lane, on a breakpoint or on bare curve. The shape lands where you right-clicked, keeping its own length and replacing whatever it covers. Pasting from the lane header instead, or with the keyboard, lands it at the playhead, since neither of those points at a moment in the show. The keyboard does the same thing: click a lane to select it, then Cmd+C and Cmd+V.
 
 The two lanes are independent from that moment on. Editing one never moves the other, which is the point: a shared source would mean a tweak for one parameter silently rewriting the other, and you would only find out during the show.
+
+## Recording a Pass
+
+Drawing a curve with a mouse is not the same as playing one. **⏺** in the transport strip (and in the top bar, so Performance mode has it too) arms automation recording: from then on, anything you touch is written into the arrangement as a curve at the position the show is at.
+
+1. Press **⏺**. From a stop it also starts playback, because arming and then reaching for play is two gestures for one intent. While chasing timecode it only arms, and the pass starts when the master rolls.
+2. Play the show: mouse, MIDI, OSC, macros, the API. Every control that can be automated is recording.
+3. Press **⏺** again to end the pass.
+
+The button is grey when idle, dark red when armed, and bright red while it is actually writing something, with the number of parameters in its tooltip.
+
+Anything with a `〰` dropdown records, including deck opacity, deck and effect parameters, and channel faders. A parameter that had no curve gets a lane made for it on the spot, so you never have to prepare the timeline before playing.
+
+**A pass replaces only the stretch it covered.** Punch in at bar 9, move a knob, punch out at bar 17, and the curve before bar 9 and after bar 17 is exactly as it was. That is what makes a second pass a fix rather than a rewrite, and it is the same rule pasting a curve follows.
+
+What is written is the gesture, not the frame rate: a hand that was still holds its value rather than ramping across the seconds nobody touched anything, and the points are thinned to the shape you played so a curve stays editable afterwards. A jump in position ends the take, so a loop wrap starts a new one over the same bars instead of folding both into one.
+
+While you are holding a control it is overridden in the usual way, and it is handed back to its new curve when the pass ends. **The whole pass is one undo entry**: Cmd+Z means "that take was no good", not one press per breakpoint.
+
+Recording is also `PUT /api/transport/record` and the `action/record` binding, so a foot switch or a show controller can punch in.
 
 ## Who Is Driving: Authority and Override
 

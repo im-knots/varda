@@ -2543,6 +2543,24 @@ mod tests {
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     }
 
+    /// A show can be driven from a phone or a cue stack, and arming the
+    /// recorder is part of driving it.
+    #[tokio::test]
+    async fn test_transport_record_arm() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = put_json(
+            app,
+            "/api/transport/record",
+            serde_json::json!({"armed": true}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::SetRecordArmed { armed } => assert!(armed),
+            other => panic!("expected a record arm, got {other:?}"),
+        }
+    }
+
     /// Folding a lane away is view state that belongs to the show, so it is
     /// addressable rather than a UI-only click.
     #[tokio::test]

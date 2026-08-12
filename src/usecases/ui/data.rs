@@ -459,6 +459,9 @@ pub struct UIData {
     pub arrangement_scroll_y: f32,
     /// Whether timeline edits round to whole frames at the ruler's rate.
     pub arrangement_snap: bool,
+    /// The stretch of show being worked on. Seeded from the transport's loop on
+    /// a scene that was saved with one, so a durable loop opens visible.
+    pub arrangement_focus: Option<crate::usecases::ui::state::FocusRange>,
     /// What copy is holding, so a menu can name it and disable Paste when it
     /// holds nothing that fits. See /spec/clipboard.md § UI surface.
     pub clipboard: Option<crate::engine::ClipboardSummary>,
