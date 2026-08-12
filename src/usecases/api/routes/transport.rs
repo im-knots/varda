@@ -31,6 +31,12 @@ pub struct LoopBody {
 }
 
 #[derive(Deserialize, ToSchema)]
+pub struct RecordBody {
+    /// Whether live control writes are kept as automation.
+    pub armed: bool,
+}
+
+#[derive(Deserialize, ToSchema)]
 pub struct RateBody {
     /// Frame rate positions are displayed and quantised at.
     pub rate: crate::transport::TimecodeRate,
@@ -115,6 +121,22 @@ pub async fn set_source(
 pub async fn set_loop(State(s): State<SharedState>, Json(b): Json<LoopBody>) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::SetTransportLoop { region: b.region })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+/// Arm or disarm automation recording. Arming from a stop also rolls the show,
+/// the way the record button does. See `/spec/automation-recording.md`.
+#[utoipa::path(put, path = "/api/transport/record", request_body = RecordBody, responses((status = 200, body = CommandResult)), tag = "Transport")]
+pub async fn set_record(
+    State(s): State<SharedState>,
+    Json(b): Json<RecordBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::SetRecordArmed { armed: b.armed })
         .await
     {
         Ok(r) => command_response(r),

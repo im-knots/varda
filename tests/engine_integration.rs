@@ -377,6 +377,275 @@ fn add_automation_lane_creates_an_assigned_transport_locked_envelope() {
     );
 }
 
+/// A pass played through the command bus.
+///
+/// Each write lands wherever the rolling transport has got to, which is what a
+/// hand on a control does. Tests that need the pass to cover a named stretch of
+/// show drive the transport directly instead; see the unit tests beside the
+/// recorder.
+fn record_a_pass(app: &mut VardaApp, deck: &str, values: &[f32]) {
+    fire(app, EngineCommand::SetRecordArmed { armed: true });
+    for opacity in values {
+        step(app);
+        fire(
+            app,
+            EngineCommand::SetDeckOpacity {
+                deck_uuid: deck.to_string(),
+                opacity: *opacity,
+            },
+        );
+    }
+    fire(app, EngineCommand::SetRecordArmed { armed: false });
+}
+
+/// Every breakpoint on the envelope assigned to `param_key`.
+fn recorded_curve(app: &mut VardaApp, param_key: &str) -> Vec<(f64, f32)> {
+    let state = app.build_engine_state();
+    let source_id = state
+        .modulation
+        .assignments
+        .get(param_key)
+        .and_then(|a| a.first())
+        .map_or_else(
+            || panic!("nothing is assigned to '{param_key}'"),
+            |m| m.source_id.clone(),
+        );
+    let entry = state
+        .modulation
+        .sources
+        .iter()
+        .find(|s| s.uuid == source_id)
+        .expect("the assigned source");
+    match &entry.source {
+        varda::engine::types::ModulationSourceSnapshot::Envelope { breakpoints } => {
+            breakpoints.iter().map(|b| (b.position, b.value)).collect()
+        }
+        _ => panic!("'{param_key}' should be driven by an envelope"),
+    }
+}
+
+/// The point of the feature, end to end: play the show and keep what you
+/// played. The lane is created on the spot, because a performer reaching for a
+/// fader has not first gone to the timeline to make one.
+#[test]
+fn a_recorded_pass_becomes_a_curve_on_a_parameter_that_had_none() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let ch = channel_uuid(&mut app, 0);
+    let deck = new_uuid(send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_uuid: ch,
+            color: [1.0, 1.0, 1.0, 1.0],
+        },
+    ));
+    let key = varda::arrangement::opacity_param_key(&deck);
+
+    record_a_pass(&mut app, &deck, &[0.2, 0.6, 1.0]);
+
+    let curve = recorded_curve(&mut app, &key);
+    assert!(
+        curve.len() >= 2,
+        "the pass should have left a curve, got {curve:?}"
+    );
+    assert!(
+        curve.windows(2).all(|w| w[1].0 > w[0].0),
+        "written in the order it was played: {curve:?}"
+    );
+    assert!(
+        (curve[curve.len() - 1].1 - 1.0).abs() < 1e-4,
+        "and ends where the hand left it: {curve:?}"
+    );
+
+    // The whole pass is one undo entry, not one per point: undo means "that
+    // take was no good", and a performer should not have to press it fifty
+    // times to be rid of one.
+    fire(&mut app, EngineCommand::Undo);
+    assert!(
+        !app.build_engine_state()
+            .modulation
+            .assignments
+            .contains_key(&key),
+        "one undo should take the whole take back"
+    );
+}
+
+/// A take that outlived the pass would leave the performer's hand holding the
+/// parameter against the curve they just recorded.
+#[test]
+fn the_parameter_goes_back_to_its_curve_when_the_pass_ends() {
+    let Some((mut app, deck)) = app_with_one_region(0.0, 30.0) else {
+        return;
+    };
+    record_a_pass(&mut app, &deck, &[0.2, 0.6]);
+
+    assert!(
+        app.build_engine_state()
+            .arrangement
+            .expect("arrangement")
+            .overridden_params
+            .is_empty(),
+        "nothing should still be held once the pass is over"
+    );
+}
+
+/// Arming is not recording: a still playhead would put every point of a pass at
+/// one position, which is not a curve.
+#[test]
+fn nothing_is_recorded_while_the_transport_is_not_running() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let ch = channel_uuid(&mut app, 0);
+    let deck = new_uuid(send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_uuid: ch,
+            color: [1.0, 1.0, 1.0, 1.0],
+        },
+    ));
+    fire(&mut app, EngineCommand::SetRecordArmed { armed: true });
+    fire(&mut app, EngineCommand::TransportStop);
+    step(&mut app);
+    fire(
+        &mut app,
+        EngineCommand::SetDeckOpacity {
+            deck_uuid: deck.clone(),
+            opacity: 0.4,
+        },
+    );
+    fire(&mut app, EngineCommand::SetRecordArmed { armed: false });
+
+    assert!(
+        !app.build_engine_state()
+            .modulation
+            .assignments
+            .contains_key(&varda::arrangement::opacity_param_key(&deck)),
+        "a fader turn against a stopped transport is just a fader turn"
+    );
+}
+
+/// Arming and then reaching for play is two gestures for one intent, so the
+/// button does both.
+#[test]
+fn arming_from_a_stop_rolls_the_transport() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    assert!(!app.build_engine_state().transport.running);
+
+    fire(&mut app, EngineCommand::SetRecordArmed { armed: true });
+
+    let transport = app.build_engine_state().transport;
+    assert!(transport.running, "the pass starts where the press was");
+    assert!(transport.record_armed);
+}
+
+/// A channel fader is among the most-played controls in a show, so a curve on
+/// it has to reach the composite. The stored fader position is left alone, the
+/// way every modulated parameter but a deck's opacity works.
+#[test]
+fn a_curve_on_a_channel_fader_drives_the_composite() {
+    use varda::modulation::Breakpoint;
+
+    // Through a scene with a region in it, because taking a parameter back is
+    // gated on the arrangement being engaged at all.
+    let Some((mut app, _deck)) = app_with_one_region(0.0, 30.0) else {
+        return;
+    };
+    let ch = channel_uuid(&mut app, 0);
+    let target = varda::arrangement::channel_opacity_param_key(&ch);
+    let envelope = new_uuid(send_cmd(
+        &mut app,
+        EngineCommand::AddAutomationLane {
+            target: target.clone(),
+            timebase: Timebase::Transport,
+        },
+    ));
+    fire(
+        &mut app,
+        EngineCommand::SetEnvelopeBreakpoints {
+            uuid: envelope,
+            breakpoints: vec![Breakpoint::new(0.0, 0.25), Breakpoint::new(10.0, 0.25)],
+        },
+    );
+
+    run_from(&mut app, 5.0);
+
+    assert!(
+        (app.mixer_ref().channel_opacity(0) - 0.25).abs() < 1e-4,
+        "the curve should set the fader the frame reads, got {}",
+        app.mixer_ref().channel_opacity(0)
+    );
+    assert!(
+        (app.mixer_ref().channels()[0].opacity - 1.0).abs() < 1e-4,
+        "and should not have overwritten the position the performer left"
+    );
+
+    // A hand on the fader wins, exactly as it does on a deck's.
+    fire(
+        &mut app,
+        EngineCommand::SetChannelOpacity {
+            channel_uuid: ch,
+            opacity: 0.8,
+        },
+    );
+    step(&mut app);
+
+    assert!(
+        (app.mixer_ref().channel_opacity(0) - 0.8).abs() < 1e-4,
+        "the performer's value must win while the override is held"
+    );
+    assert!(
+        app.build_engine_state()
+            .arrangement
+            .expect("arrangement")
+            .overridden_params
+            .contains(&target),
+        "and the held fader should be reported so the UI can offer a re-arm"
+    );
+}
+
+/// A key that can never resolve again would be persisted and reloaded as dead
+/// weight, so the fader's curves leave with the channel.
+#[test]
+fn deleting_a_channel_takes_its_fader_curve_with_it() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(&mut app, EngineCommand::AddChannel);
+    let ch = channel_uuid(&mut app, 2);
+    let target = varda::arrangement::channel_opacity_param_key(&ch);
+    send_cmd(
+        &mut app,
+        EngineCommand::AddAutomationLane {
+            target: target.clone(),
+            timebase: Timebase::Transport,
+        },
+    );
+    assert!(app
+        .build_engine_state()
+        .modulation
+        .assignments
+        .contains_key(&target));
+
+    fire(
+        &mut app,
+        EngineCommand::RemoveChannel {
+            channel_uuid: ch.clone(),
+        },
+    );
+
+    assert!(
+        !app.build_engine_state()
+            .modulation
+            .assignments
+            .contains_key(&target),
+        "the fader's assignments should have gone with the channel"
+    );
+}
+
 /// Breakpoints are stored sorted regardless of the order they arrive in, so an
 /// API caller does not have to maintain the invariant.
 #[test]
@@ -2854,6 +3123,112 @@ fn removing_a_lane_takes_its_curves_with_it() {
         before - 1,
         "the lane's envelope must leave with the lane"
     );
+}
+
+/// Lanes and curves for every deck the arrangement knows about.
+fn arranged_decks(app: &mut VardaApp) -> Vec<String> {
+    app.build_engine_state()
+        .arrangement
+        .map(|a| a.config.lanes.iter().map(|l| l.deck_uuid.clone()).collect())
+        .unwrap_or_default()
+}
+
+fn source_count(app: &mut VardaApp) -> usize {
+    app.build_engine_state().modulation.sources.len()
+}
+
+/// A lane is where a deck sits in show time rather than an object beside it, so
+/// deleting the deck takes the lane and its curves too. An orphan lane draws no
+/// row, because rows are read from the mixer, but it still saves and its
+/// envelopes still drive a parameter key nothing answers to.
+#[test]
+fn deleting_a_deck_takes_its_lane_with_it() {
+    let Some((mut app, deck)) = app_with_one_region(10.0, 20.0) else {
+        return;
+    };
+    let before = source_count(&mut app);
+    assert_eq!(arranged_decks(&mut app), vec![deck.clone()]);
+
+    fire(
+        &mut app,
+        EngineCommand::RemoveDeck {
+            deck_uuid: deck.clone(),
+        },
+    );
+
+    assert!(arranged_decks(&mut app).is_empty(), "the lane went with it");
+    assert_eq!(
+        source_count(&mut app),
+        before - 1,
+        "and so did the curve the region compiled to"
+    );
+}
+
+/// Deleting a channel is deleting every deck in it, which means the same
+/// teardown each of those decks would get on its own.
+#[test]
+fn deleting_a_channel_takes_its_decks_lanes_with_it() {
+    let Some((mut app, deck)) = app_with_one_region(10.0, 20.0) else {
+        return;
+    };
+    // A third channel, because the mixer keeps two.
+    fire(&mut app, EngineCommand::AddChannel);
+    let spare = channel_uuid(&mut app, 2);
+    let stranger = new_uuid(send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_uuid: spare,
+            color: [1.0, 1.0, 1.0, 1.0],
+        },
+    ));
+    add_region(&mut app, &stranger, 30.0, 40.0);
+    assert_eq!(source_count(&mut app), 2);
+
+    let doomed = channel_uuid(&mut app, 2);
+    fire(
+        &mut app,
+        EngineCommand::RemoveChannel {
+            channel_uuid: doomed,
+        },
+    );
+
+    assert_eq!(
+        arranged_decks(&mut app),
+        vec![deck],
+        "only the deck in the surviving channel is still arranged"
+    );
+    assert_eq!(source_count(&mut app), 1);
+}
+
+/// The mixer keeps two channels, and a refusal has to leave the one it refused
+/// exactly as it was rather than emptied of its decks on the way to finding out.
+#[test]
+fn a_refused_channel_removal_keeps_the_channels_decks() {
+    let Some((mut app, deck)) = app_with_one_region(10.0, 20.0) else {
+        return;
+    };
+    let channel = channel_uuid(&mut app, 0);
+    let before = source_count(&mut app);
+
+    let result = send_cmd(
+        &mut app,
+        EngineCommand::RemoveChannel {
+            channel_uuid: channel,
+        },
+    );
+
+    assert!(
+        matches!(&result, CommandResult::Err { code, .. } if *code == ErrorCode::InvalidInput),
+        "{result:?}"
+    );
+    assert_eq!(app.build_engine_state().mixer.channels.len(), 2);
+    assert_eq!(
+        deck_snapshot(&mut app, &deck).uuid,
+        deck,
+        "the deck it holds is still there"
+    );
+    assert_eq!(arranged_decks(&mut app), vec![deck]);
+    assert_eq!(source_count(&mut app), before);
 }
 
 /// The panic button: one press hands every held parameter back, not just the

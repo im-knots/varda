@@ -124,6 +124,7 @@ pub fn modulation_key_for_path(path: &str) -> Option<String> {
     match parts.as_slice() {
         ["deck", uuid, "opacity"] => Some(format!("deck_{uuid}:opacity")),
         ["deck", uuid, "param", name] => Some(format!("deck_{uuid}:{name}")),
+        ["ch", uuid, "opacity"] => Some(format!("ch_{uuid}:opacity")),
         ["deck" | "ch", _, "effect", fx, "param", name]
         | ["master", "effect", fx, "param", name] => Some(format!("fx_{fx}:{name}")),
         _ => None,
@@ -741,6 +742,44 @@ fn scaling_mode_from_value(value: f32) -> ScalingMode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A control surface writes a path and the modulation graph is keyed by
+    /// something else, so a missing translation here is a fader that silently
+    /// fails to take its parameter back from a curve.
+    #[test]
+    fn a_path_that_names_an_automatable_parameter_finds_its_key() {
+        for (path, key) in [
+            ("deck/d0000001/opacity", "deck_d0000001:opacity"),
+            ("deck/d0000001/param/speed", "deck_d0000001:speed"),
+            ("ch/c0000001/opacity", "ch_c0000001:opacity"),
+            (
+                "ch/c0000001/effect/f0000001/param/amount",
+                "fx_f0000001:amount",
+            ),
+            ("master/effect/f0000001/param/amount", "fx_f0000001:amount"),
+        ] {
+            assert_eq!(
+                modulation_key_for_path(path).as_deref(),
+                Some(key),
+                "{path}"
+            );
+        }
+    }
+
+    /// The crossfader is routable but deliberately not a modulation target, and
+    /// a trigger is an event rather than a value.
+    #[test]
+    fn a_path_that_names_nothing_automatable_has_no_key() {
+        for path in [
+            "crossfader",
+            "deck/d0000001/trigger",
+            "deck/d0000001/video/play",
+            "macro/m0000001/value",
+            "ch/c0000001",
+        ] {
+            assert_eq!(modulation_key_for_path(path), None, "{path}");
+        }
+    }
 
     #[test]
     fn bucket_index_splits_range_evenly() {

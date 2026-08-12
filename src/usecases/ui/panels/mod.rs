@@ -34,7 +34,7 @@ use mixer::render_central_panel;
 use monitoring::render_monitoring_strip;
 use notifications_overlay::render_notifications;
 use popovers::{
-    clock_is_live, followers_hint, handle_midi_learn_popup, render_clock_popover,
+    clock_is_live, followers_hint, handle_midi_learn_popup, record_button, render_clock_popover,
     render_resolution_popover, render_target_fps_popover, render_transport_popover,
     transport_color,
 };
@@ -334,6 +334,8 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                         .show(|ui| {
                             render_transport_popover(ui, data, &mut actions);
                         });
+
+                    record_button(ui, data, &mut actions);
 
                     ui.separator();
 

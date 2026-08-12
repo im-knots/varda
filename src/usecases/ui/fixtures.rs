@@ -314,6 +314,7 @@ impl UIData {
             arrangement_scroll: 0.0,
             arrangement_scroll_y: 0.0,
             arrangement_snap: true,
+            arrangement_focus: None,
             clipboard: None,
             dome_preview_open: false,
             dome_preview_texture: None,

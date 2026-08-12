@@ -187,6 +187,8 @@ Once a parameter is modulated, a thin **vertical line in the source's color** is
 
 > Behind the scenes, assignments map to the same parameter paths as MIDI/OSC (`deck/<uuid>/param/<name>`, `crossfader`, `ch/<uuid>/opacity`, `fx/<uuid>/param/<name>`, etc. — see [Parameter Paths](06-control-surfaces.md#parameter-paths)). The UI assigns each modulation at a sensible default depth; fine-grained per-assignment **amount** (a signed scale where negative inverts) is exposed through the [HTTP API](13-api.md) rather than the slider dropdown.
 
+**Channel faders** carry a `〰` of their own, so a whole channel can be swept by an LFO or ridden by a recorded curve without touching the decks inside it. The crossfader still cannot: it is mappable and macro-drivable but not a modulation target.
+
 Deck **video playback** (play, speed, seek, in/out points, loop mode) and **source scaling mode** are modulatable too, since they share the same parameter router. An LFO can scrub `seek`, an audio band can gate `play`, and discrete targets (`loop_mode`, `scaling_mode`) step through their options via fader bucketing. As with `mute`/`solo`, choose musically sensible sources for these.
 
 ### Stacking Multiple Sources
@@ -215,6 +217,10 @@ An LFO says "keep moving." An automation curve says "be *this* at *this* moment.
 Open the **`〰`** dropdown on any modulatable parameter and pick **＋ Automation lane**. That creates the curve, locks it to the **Show** timebase, and assigns it to the parameter in one step. The lane starts empty, and an empty lane does nothing at all, so the parameter keeps behaving normally until you draw the first point on it.
 
 Curves are drawn in Arrangement mode, where each lane sits under the channel it belongs to. They do **not** appear as cards in the modulation panel: a show can easily have hundreds of them, and that panel is built for a handful of live modulators.
+
+### Recording One Instead of Drawing It
+
+A curve can also be played rather than drawn: arm **⏺** in the transport strip or the top bar, move any control while the show runs, and what you played is written into the arrangement as a curve, creating the lane if the parameter had none. See [Recording a pass](15-arrangement.md#recording-a-pass).
 
 ### One Curve, One Parameter
 

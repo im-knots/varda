@@ -79,6 +79,12 @@ pub struct UISession {
     /// the stored position. See /spec/arrangement.md § Does the ruler own a
     /// frame rate?
     pub toggle_arrangement_snap: bool,
+    /// Mark the stretch of show being worked on. See /spec/arrangement.md § The
+    /// focus area.
+    pub set_arrangement_focus: Option<super::state::FocusRange>,
+    /// Unmark it. Separate from setting so a clear is not a range nobody can
+    /// express.
+    pub clear_arrangement_focus: bool,
     /// Toggle 3D dome preview in stage editor
     pub toggle_dome_preview: bool,
     /// Dome mode actions (camera, config, mode toggle). UI-local layout state
@@ -142,6 +148,8 @@ impl UISession {
             set_arrangement_scroll: None,
             set_arrangement_scroll_y: None,
             toggle_arrangement_snap: false,
+            set_arrangement_focus: None,
+            clear_arrangement_focus: false,
             toggle_dome_preview: false,
             dome_actions: Vec::new(),
             camera_detect_actions: Vec::new(),

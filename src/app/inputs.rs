@@ -40,6 +40,8 @@ impl VardaApp {
                 "action/undo" => self.midi_pending_undo = true,
                 "action/redo" => self.midi_pending_redo = true,
                 "action/save" => self.midi_pending_save = true,
+                // A pad, so it toggles rather than needing two bindings.
+                "action/record" => self.set_record_armed(!self.record_armed()),
                 _ => log::debug!("Unknown action path: {path}"),
             }
         } else if let Some(uuid) = fired_cue(path, value) {
@@ -340,6 +342,11 @@ impl VardaApp {
         for (path, value) in &changed_params {
             self.note_live_route_write(path, *value);
         }
+
+        // After the writes, so a take that opened this frame is not closed by
+        // the same frame's stop, and after the transport, so a loop wrap has
+        // already been published as the jump it is.
+        self.tick_recorder();
 
         // Broadcast changed parameters to OSC feedback targets
         if !changed_params.is_empty() {

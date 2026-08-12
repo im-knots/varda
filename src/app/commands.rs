@@ -298,7 +298,16 @@ impl VardaApp {
             EngineCommand::SetChannelOpacity {
                 channel_uuid,
                 opacity,
-            } => wire(self.set_channel_opacity(&channel_uuid, opacity)),
+            } => {
+                let result = wire(self.set_channel_opacity(&channel_uuid, opacity));
+                // A hand on the channel fader takes it back from any curve on
+                // it, the same way a deck's does.
+                self.note_live_param_write(
+                    &crate::arrangement::channel_opacity_param_key(&channel_uuid),
+                    opacity,
+                );
+                result
+            }
             EngineCommand::SetChannelBlendMode { channel_uuid, mode } => {
                 wire(self.set_channel_blend_mode(&channel_uuid, mode))
             }
@@ -1024,6 +1033,10 @@ impl VardaApp {
                 self.transport.set_timecode_rate(rate);
                 CommandResult::Ok
             }
+            EngineCommand::SetRecordArmed { armed } => {
+                self.set_record_armed(armed);
+                CommandResult::Ok
+            }
             EngineCommand::TransportPrevCue => self.cmd_locate_cue(false),
             EngineCommand::TransportNextCue => self.cmd_locate_cue(true),
             EngineCommand::TriggerCue { uuid } => self.cmd_trigger_cue(&uuid),
@@ -1730,6 +1743,9 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
             | C::ToggleSequence { .. }
             // Copying reads the scene; paste and duplicate are undoable.
             | C::Copy { .. }
+            // Arming is a mode. What a pass records is undoable, in one entry
+            // pushed when the first take opens.
+            | C::SetRecordArmed { .. }
             // HTML transient window / reload.
             | C::OpenHtmlInteractive { .. }
             | C::CloseHtmlInteractive

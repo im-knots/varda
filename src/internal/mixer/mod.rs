@@ -587,6 +587,26 @@ impl Mixer {
         self.channels.len()
     }
 
+    /// A channel's fader as the frame sees it: the stored position with any
+    /// modulation on `ch_<uuid>:opacity` applied.
+    ///
+    /// The stored value is left alone, the way every other modulated parameter
+    /// works. A deck's opacity is the exception rather than the model here: the
+    /// arrangement overwrites it because regions compile into that same field
+    /// and residency reads it back. See /spec/modulation.md § Parameter
+    /// Addressing.
+    pub fn channel_opacity(&self, index: usize) -> f32 {
+        let Some(channel) = self.channels.get(index) else {
+            return 0.0;
+        };
+        if !self.modulation.has_modulation_for_any() {
+            return channel.opacity;
+        }
+        let key = crate::arrangement::channel_opacity_param_key(channel.uuid());
+        let resolved = self.modulation.resolve(&key, None);
+        (resolved.absolute.unwrap_or(channel.opacity) + resolved.additive).clamp(0.0, 1.0)
+    }
+
     /// Current crossfader position (0.0 = Ch 0, 1.0 = Ch 1).
     pub fn crossfader(&self) -> f32 {
         self.crossfader

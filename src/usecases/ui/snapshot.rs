@@ -568,6 +568,15 @@ pub(crate) fn build_ui_data(
         arrangement_scroll: layout.arrangement_scroll,
         arrangement_scroll_y: layout.arrangement_scroll_y,
         arrangement_snap: layout.arrangement_snap,
+        // A loop that came back with the scene is a focus area nobody has drawn
+        // yet this session, so the strip shows it rather than opening blank over
+        // a loop that is already wrapping playback.
+        arrangement_focus: layout.arrangement_focus.or_else(|| {
+            engine
+                .transport
+                .loop_region
+                .map(|r| crate::usecases::ui::state::FocusRange::new(r.start, r.end))
+        }),
         clipboard: app.clipboard_summary(),
         dome_preview_open: layout.dome_preview_open,
         dome_preview_texture: None, // populated by UIRunner after build

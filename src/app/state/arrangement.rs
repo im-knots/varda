@@ -54,11 +54,27 @@ impl VardaApp {
     /// Remove a lane and everything it drove, handing the deck back to
     /// Performance mode.
     pub(crate) fn cmd_remove_lane(&mut self, deck_uuid: &str) -> CommandResult {
+        if self.drop_lane(deck_uuid) {
+            CommandResult::Ok
+        } else {
+            Self::no_such_lane(deck_uuid)
+        }
+    }
+
+    /// Take a lane and its curves out of the scene, reporting whether there was
+    /// one.
+    ///
+    /// Also the teardown a deck's own removal runs: a lane is a deck's placement
+    /// rather than an object beside it, so a deck that is gone cannot keep one.
+    /// An orphan lane draws no row (rows are read from the mixer's decks) but
+    /// still saves, and its envelopes still drive a parameter key nothing
+    /// answers to.
+    pub(crate) fn drop_lane(&mut self, deck_uuid: &str) -> bool {
         let Some(arrangement) = self.mixer.arrangement().cloned() else {
-            return Self::no_such_lane(deck_uuid);
+            return false;
         };
         let Some(lane) = arrangement.lane(deck_uuid) else {
-            return Self::no_such_lane(deck_uuid);
+            return false;
         };
 
         // Envelopes belong to the modulation graph, so removing the row has to
@@ -68,7 +84,7 @@ impl VardaApp {
         }
         let arrangement = self.mixer.arrangement_mut();
         arrangement.lanes.retain(|l| l.deck_uuid != deck_uuid);
-        CommandResult::Ok
+        true
     }
 
     /// Add a visibility span to a lane, creating the lane if needed.
@@ -171,6 +187,10 @@ impl VardaApp {
     /// Called by every live write path rather than by a UI button: the gesture
     /// *is* the override, so there is nothing to confirm.
     pub fn note_live_param_write(&mut self, param_key: &str, normalized: f32) {
+        // Ahead of the override, and ahead of the authority gate below it: a
+        // scene with only curves in it never engages the arrangement, and
+        // waiting for that would mean its first pass could never be recorded.
+        self.record_param_write(param_key, normalized);
         if !self.arrangement_authority().is_engaged() {
             return;
         }

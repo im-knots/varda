@@ -280,6 +280,13 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                                 actions.session.remove_channel = Some(ch_idx);
                             }
                         });
+                        widgets::modulation_menu_for_key(
+                            ui,
+                            format!("ch_mod_{ch_idx}"),
+                            &crate::arrangement::channel_opacity_param_key(&ch.uuid),
+                            &data.modulation_sources,
+                            &mut actions.commands,
+                        );
                         // Render slider — disabled in learn mode
                         let any_learn = data.midi_learn_active || data.keyboard_learn_active;
                         let slider_rect = if any_learn {

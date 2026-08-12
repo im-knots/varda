@@ -816,6 +816,7 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `PUT` | `/api/transport/loop` |  |
 | `POST` | `/api/transport/play` |  |
 | `PUT` | `/api/transport/rate` |  |
+| `PUT` | `/api/transport/record` | Arm or disarm automation recording. Arming from a stop also rolls the show, |
 | `PUT` | `/api/transport/source` |  |
 | `POST` | `/api/transport/stop` |  |
 

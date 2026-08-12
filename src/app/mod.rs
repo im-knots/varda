@@ -242,6 +242,10 @@ pub(crate) struct SessionState {
     /// carries the position past it. Cleared by any other move of the playhead.
     /// See /spec/arrangement.md § Cue points.
     pub cue_anchor: Option<f64>,
+    /// Whether live parameter writes are being kept as automation, and what is
+    /// being written right now. Session state: an arm is a mode the performer
+    /// is in. See /spec/automation-recording.md.
+    pub recorder: state::recorder::Recorder,
 }
 
 /// Cross-thread message passing.
@@ -553,6 +557,7 @@ impl VardaApp {
                 last_layout: crate::usecases::ui::UILayoutState::default(),
                 clipboard: None,
                 cue_anchor: None,
+                recorder: state::recorder::Recorder::default(),
             },
             bus: MessageBus {
                 command_rx,
@@ -594,7 +599,10 @@ impl VardaApp {
             // windowed UI uses. In-process UI mutations do NOT flow through the
             // bus — the windowed runner records those itself — so there is no
             // double-record here. See commands::command_is_undoable.
-            if commands::command_is_undoable(&cmd) {
+            // A pass under way has already pushed the one entry it gets, and a
+            // performer playing a fader through the API would otherwise fill
+            // the stack a frame at a time.
+            if commands::command_is_undoable(&cmd) && !self.is_recording() {
                 let snapshot = self.history_snapshot_default();
                 self.push_history(snapshot);
             }

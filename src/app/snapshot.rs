@@ -603,14 +603,17 @@ pub(crate) fn build_clock_snapshot(app: &VardaApp) -> ClockSnapshot {
     }
 }
 
-/// Build the transport snapshot, adding the follower count that the `From` impl
-/// cannot see because the transport does not know about the modulation engine.
+/// Build the transport snapshot, adding what the `From` impl cannot see: the
+/// follower count, which lives in the modulation engine, and the record state,
+/// which is the session's.
 pub(crate) fn build_transport_snapshot(app: &VardaApp) -> crate::engine::types::TransportSnapshot {
     let mut snapshot: crate::engine::types::TransportSnapshot = (&app.transport).into();
     snapshot.followers = app
         .mixer
         .modulation()
         .followers_of(crate::timebase::Timebase::Transport);
+    snapshot.record_armed = app.record_armed();
+    snapshot.recording_params = app.recording_params();
     snapshot
 }
 

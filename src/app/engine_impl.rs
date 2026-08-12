@@ -447,6 +447,9 @@ impl MixerCommands for VardaApp {
                 .modulation_mut()
                 .remove_assignments_with_prefix(&format!("fx_{fx_uuid}:"));
         }
+        // A lane is where this deck sits in show time, so it leaves with the
+        // deck. See /spec/arrangement.md § A lane is a deck.
+        self.drop_lane(deck_uuid);
         Ok(())
     }
 
@@ -550,6 +553,43 @@ impl MixerCommands for VardaApp {
 
     fn remove_channel(&mut self, channel_uuid: &str) -> Result<()> {
         let channel_idx = self.resolve_channel(channel_uuid)?;
+        // Asked before anything is torn down, because a refusal has to leave the
+        // channel exactly as it was rather than empty.
+        if self.mixer.channels().len() <= 2 {
+            anyhow::bail!("Cannot remove channel (minimum 2 required)")
+        }
+
+        // Through the deck path rather than dropping the column wholesale, so a
+        // camera, a depth sensor, a stream receiver, and an arrangement lane all
+        // leave with the deck that held them, exactly as they do when the deck is
+        // removed on its own.
+        let channel = &self.mixer.channels()[channel_idx];
+        let decks: Vec<String> = channel
+            .decks
+            .iter()
+            .map(|slot| slot.deck.uuid().to_string())
+            .collect();
+        let effects: Vec<String> = channel
+            .effects
+            .iter()
+            .map(|effect| effect.uuid().to_string())
+            .collect();
+        for uuid in decks {
+            if let Err(e) = self.remove_deck(&uuid) {
+                log::warn!("Removing deck {uuid} with its channel: {e}");
+            }
+        }
+        for uuid in effects {
+            self.mixer
+                .modulation_mut()
+                .remove_assignments_with_prefix(&format!("fx_{uuid}:"));
+        }
+        // The fader's own curves. A key that can never resolve again would be
+        // persisted and reloaded as dead weight.
+        self.mixer
+            .modulation_mut()
+            .remove_assignments_with_prefix(&format!("ch_{channel_uuid}:"));
+
         if self.mixer.remove_channel(channel_idx) {
             // Selection fixup is handled by the UI consumer (UIRunner)
             Ok(())
