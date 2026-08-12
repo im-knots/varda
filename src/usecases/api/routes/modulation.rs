@@ -224,6 +224,84 @@ pub struct InterpolationBody {
     /// Interpolation mode between steps.
     pub interpolation: crate::modulation::StepInterpolation,
 }
+#[derive(Deserialize, ToSchema)]
+pub struct TimebaseBody {
+    /// Which notion of time the source follows.
+    pub timebase: crate::timebase::Timebase,
+}
+
+#[utoipa::path(put, path = "/api/modulation/{uuid}/timebase", params(("uuid" = String, Path, description = "Modulation source UUID")), request_body = TimebaseBody, responses((status = 200, body = CommandResult)), tag = "Modulation")]
+pub async fn update_timebase(
+    State(s): State<SharedState>,
+    Path(uuid): Path<String>,
+    Json(b): Json<TimebaseBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::UpdateModulationTimebase {
+            uuid,
+            timebase: b.timebase,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct AddAutomationLaneBody {
+    /// Dot-separated path of the parameter to automate.
+    pub target: String,
+    /// Timebase the curve is drawn against. Defaults to `Transport`, which is
+    /// what an arrangement-authored lane uses.
+    #[serde(default = "default_automation_timebase")]
+    pub timebase: crate::timebase::Timebase,
+}
+
+fn default_automation_timebase() -> crate::timebase::Timebase {
+    crate::timebase::Timebase::Transport
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct BreakpointsBody {
+    /// Replacement curve. Order does not matter; the engine sorts by position.
+    pub breakpoints: Vec<crate::modulation::Breakpoint>,
+}
+
+#[utoipa::path(post, path = "/api/modulation/automation", request_body = AddAutomationLaneBody, responses((status = 200, body = CommandResult)), tag = "Modulation")]
+pub async fn add_automation_lane(
+    State(s): State<SharedState>,
+    Json(b): Json<AddAutomationLaneBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::AddAutomationLane {
+            target: b.target,
+            timebase: b.timebase,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[utoipa::path(put, path = "/api/modulation/{uuid}/breakpoints", params(("uuid" = String, Path, description = "Envelope source UUID")), request_body = BreakpointsBody, responses((status = 200, body = CommandResult)), tag = "Modulation")]
+pub async fn set_envelope_breakpoints(
+    State(s): State<SharedState>,
+    Path(uuid): Path<String>,
+    Json(b): Json<BreakpointsBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::SetEnvelopeBreakpoints {
+            uuid,
+            breakpoints: b.breakpoints,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
 
 #[utoipa::path(put, path = "/api/modulation/{uuid}/lfo/frequency", params(("uuid" = String, Path, description = "Modulation source UUID")), request_body = FloatBody, responses((status = 200, body = CommandResult)), tag = "Modulation")]
 pub async fn update_lfo_frequency(

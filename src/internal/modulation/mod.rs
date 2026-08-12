@@ -4,13 +4,18 @@
 
 mod audio;
 mod engine;
+mod envelope;
 mod sources;
 
 pub use audio::{AnalyzerValues, AudioSourceValues, AudioValues};
-pub use engine::ModulationEngine;
+pub use engine::{ModulationEngine, ResolvedModulation};
+pub use envelope::{
+    active_between as envelope_active_between, evaluate as evaluate_envelope, Breakpoint, CurveKind,
+};
 pub use sources::ModulationSource;
 
 use crate::deck::generate_short_uuid;
+use crate::timebase::Timebase;
 
 use serde::{Deserialize, Serialize};
 
@@ -94,6 +99,17 @@ pub enum StepInterpolation {
     Smooth,
 }
 
+/// How an assignment's contribution combines with the parameter's base value.
+/// See /spec/automation.md § Absolute vs Additive.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AssignmentMode {
+    /// Contribution is summed onto the base value, range-scaled. Existing behaviour.
+    #[default]
+    Additive,
+    /// Source output replaces the base value before additive sources are summed.
+    Absolute,
+}
+
 /// Modulation assignment linking a source to a parameter
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParamModulation {
@@ -103,6 +119,10 @@ pub struct ParamModulation {
     pub amount: f32,
     /// For color params: which component (0=R, 1=G, 2=B, 3=A), None for scalar
     pub component: Option<usize>,
+    /// Defaults to `Additive`, which is what every assignment did before
+    /// automation existed, so older scenes deserialize unchanged.
+    #[serde(default)]
+    pub mode: AssignmentMode,
 }
 
 /// A modulation source paired with a stable UUID identity.
@@ -110,6 +130,11 @@ pub struct ParamModulation {
 pub struct ModulationSourceEntry {
     pub uuid: String,
     pub source: ModulationSource,
+    /// Which notion of time this source follows. Defaults to `FreeRun`, which
+    /// is the behaviour every scene had before timebases existed, so older
+    /// scenes deserialize unchanged. See /spec/timebase.md.
+    #[serde(default)]
+    pub timebase: Timebase,
 }
 
 impl ModulationSourceEntry {
@@ -117,11 +142,16 @@ impl ModulationSourceEntry {
         Self {
             uuid: generate_short_uuid(),
             source,
+            timebase: Timebase::default(),
         }
     }
 
     pub fn with_uuid(uuid: String, source: ModulationSource) -> Self {
-        Self { uuid, source }
+        Self {
+            uuid,
+            source,
+            timebase: Timebase::default(),
+        }
     }
 }
 
@@ -135,6 +165,684 @@ mod tests {
 
     fn empty_analyzers() -> AnalyzerValues {
         AnalyzerValues::default()
+    }
+
+    // ── Timebase selection (/spec/timebase.md) ───────────────────────
+
+    use crate::timebase::{TimeContext, TimebaseInput, TimebaseResolver, TimebaseSet};
+
+    fn ctx(time: f32, dt: f32, running: bool) -> TimeContext {
+        TimeContext {
+            time,
+            dt,
+            running,
+            discontinuity: false,
+        }
+    }
+
+    /// Every timebase deliberately disagrees, so a test can tell which one a
+    /// source actually read.
+    fn split_timebases(seconds: f32, beats: f32) -> TimebaseSet {
+        split_timebases_with(seconds, beats, 0.0)
+    }
+
+    fn split_timebases_with(seconds: f32, beats: f32, show: f32) -> TimebaseSet {
+        TimebaseSet::new(
+            ctx(seconds, 0.016, true),
+            ctx(beats, 0.1, true),
+            ctx(show, 0.016, true),
+        )
+    }
+
+    #[test]
+    fn source_defaults_to_free_run() {
+        let mut engine = ModulationEngine::new();
+        let uuid = engine.add_source(ModulationSource::sine_lfo(1.0));
+        assert_eq!(engine.timebase(&uuid), Some(Timebase::FreeRun));
+    }
+
+    #[test]
+    fn beat_locked_lfo_reads_beats_not_seconds() {
+        let mut engine = ModulationEngine::new();
+        let uuid = engine.add_source(ModulationSource::sine_lfo(1.0));
+        engine.set_timebase(&uuid, Timebase::Beat);
+        engine.assign("p", &uuid, 1.0, None);
+
+        // A sine LFO at frequency 1.0 peaks a quarter of the way through its
+        // cycle. On the beat timebase that is beat 0.25, whatever the wall
+        // clock says.
+        engine.update(
+            &split_timebases(0.0, 0.25),
+            &empty_audio(),
+            &empty_analyzers(),
+        );
+        let at_quarter_beat = engine.get_modulation("p");
+
+        engine.update(
+            &split_timebases(0.25, 0.0),
+            &empty_audio(),
+            &empty_analyzers(),
+        );
+        let at_quarter_second = engine.get_modulation("p");
+
+        assert!(
+            (at_quarter_beat - 1.0).abs() < 1e-3,
+            "beat-locked LFO should peak at beat 0.25, got {at_quarter_beat}"
+        );
+        assert!(
+            (at_quarter_second - 0.5).abs() < 1e-3,
+            "wall-clock time must not move a beat-locked LFO, got {at_quarter_second}"
+        );
+    }
+
+    #[test]
+    fn free_run_lfo_ignores_the_beat_clock() {
+        let mut engine = ModulationEngine::new();
+        let uuid = engine.add_source(ModulationSource::sine_lfo(1.0));
+        engine.assign("p", &uuid, 1.0, None);
+
+        engine.update(
+            &split_timebases(0.25, 0.0),
+            &empty_audio(),
+            &empty_analyzers(),
+        );
+        assert!((engine.get_modulation("p") - 1.0).abs() < 1e-3);
+    }
+
+    /// The point of measuring in beats: the same LFO settings track the tempo,
+    /// so a performer never re-dials frequency after a BPM change.
+    #[test]
+    fn beat_locked_lfo_retunes_with_bpm() {
+        let mut engine = ModulationEngine::new();
+        let uuid = engine.add_source(ModulationSource::sine_lfo(1.0));
+        engine.set_timebase(&uuid, Timebase::Beat);
+        engine.assign("p", &uuid, 1.0, None);
+
+        // Half a second of wall time is one beat at 120 BPM and half a beat at
+        // 60 BPM. The LFO must be at a different point in its cycle for each,
+        // with no change to its frequency.
+        let mut sample = |beats: f32| {
+            engine.update(
+                &split_timebases(0.5, beats),
+                &empty_audio(),
+                &empty_analyzers(),
+            );
+            engine.get_modulation("p")
+        };
+
+        let at_120 = sample(1.0);
+        let at_60 = sample(0.5);
+
+        assert!(
+            (at_120 - 0.5).abs() < 1e-3,
+            "one full cycle should land back at the start, got {at_120}"
+        );
+        assert!(
+            (at_60 - 0.5).abs() < 1e-3,
+            "half a cycle sits at the same value but travelling the other way"
+        );
+
+        // A quarter beat apart is unambiguous: the tempo genuinely changes where
+        // the LFO is.
+        assert!((sample(0.25) - 1.0).abs() < 1e-3);
+        assert!((sample(0.75) - 0.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn beat_locked_source_freezes_when_the_clock_is_gone() {
+        let mut engine = ModulationEngine::new();
+        let uuid = engine.add_source(ModulationSource::sine_lfo(1.0));
+        engine.set_timebase(&uuid, Timebase::Beat);
+        engine.assign("p", &uuid, 1.0, None);
+
+        let mut resolver = TimebaseResolver::new();
+        let mut frame = |secs: f32, beats: Option<f64>| {
+            let set = resolver.resolve(TimebaseInput {
+                free_run_time: secs,
+                beat_time: beats,
+                transport: None,
+            });
+            engine.update(&set, &empty_audio(), &empty_analyzers());
+            engine.get_modulation("p")
+        };
+
+        frame(0.0, Some(0.0));
+        let held = frame(0.1, Some(0.25));
+
+        // Clock drops out. Wall time keeps advancing; the source must not.
+        assert!((frame(0.2, None) - held).abs() < 1e-6);
+        assert!((frame(5.0, None) - held).abs() < 1e-6);
+        assert!(
+            (held - 1.0).abs() < 1e-3,
+            "should have frozen at the peak it had reached"
+        );
+    }
+
+    /// The point of a transport-locked LFO: the same show position gives the
+    /// same value, whenever it is played and however it was reached.
+    #[test]
+    fn transport_locked_source_is_deterministic_from_position() {
+        let mut engine = ModulationEngine::new();
+        let uuid = engine.add_source(ModulationSource::sine_lfo(1.0));
+        engine.set_timebase(&uuid, Timebase::Transport);
+        engine.assign("p", &uuid, 1.0, None);
+
+        let sample_at = |engine: &mut ModulationEngine, wall: f32, show: f32| {
+            engine.update(
+                &split_timebases_with(wall, 0.0, show),
+                &empty_audio(),
+                &empty_analyzers(),
+            );
+            engine.get_modulation("p")
+        };
+
+        let first = sample_at(&mut engine, 0.0, 12.25);
+        // Wall clock has moved on; the show position has not.
+        let replay = sample_at(&mut engine, 90.0, 12.25);
+        assert!((first - replay).abs() < 1e-6);
+    }
+
+    #[test]
+    fn transport_locked_source_freezes_before_the_show_runs() {
+        let mut engine = ModulationEngine::new();
+        let uuid = engine.add_source(ModulationSource::sine_lfo(1.0));
+        engine.set_timebase(&uuid, Timebase::Transport);
+        engine.assign("p", &uuid, 1.0, None);
+
+        let mut resolver = TimebaseResolver::new();
+        let mut frame = |secs: f32| {
+            let set = resolver.resolve(TimebaseInput {
+                free_run_time: secs,
+                beat_time: None,
+                transport: None,
+            });
+            engine.update(&set, &empty_audio(), &empty_analyzers());
+            engine.get_modulation("p")
+        };
+
+        let held = frame(0.0);
+        assert!((frame(3.0) - held).abs() < 1e-6);
+        assert!((frame(30.0) - held).abs() < 1e-6);
+    }
+
+    // ── Automation envelopes (/spec/automation.md) ───────────────────
+
+    /// Build an engine holding one transport-locked envelope assigned to `param`
+    /// in the given mode, and a closure that samples the resolved contribution
+    /// at a show position.
+    fn envelope_engine(
+        breakpoints: Vec<Breakpoint>,
+        mode: AssignmentMode,
+    ) -> (ModulationEngine, String) {
+        let mut engine = ModulationEngine::new();
+        let uuid = engine.add_source(ModulationSource::envelope(breakpoints));
+        engine.set_timebase(&uuid, Timebase::Transport);
+        engine.assign_with_mode("p", &uuid, 1.0, None, mode);
+        (engine, uuid)
+    }
+
+    fn sample_at(engine: &mut ModulationEngine, show: f32) -> super::engine::ResolvedModulation {
+        engine.update(
+            &split_timebases_with(0.0, 0.0, show),
+            &empty_audio(),
+            &empty_analyzers(),
+        );
+        engine.resolve("p", None)
+    }
+
+    #[test]
+    fn an_absolute_envelope_replaces_the_base_and_an_additive_one_does_not() {
+        let curve = vec![Breakpoint::new(0.0, 0.25), Breakpoint::new(10.0, 0.75)];
+
+        let (mut absolute, _) = envelope_engine(curve.clone(), AssignmentMode::Absolute);
+        let resolved = sample_at(&mut absolute, 5.0);
+        assert!((resolved.absolute.unwrap() - 0.5).abs() < 1e-5);
+        assert!((resolved.additive - 0.0).abs() < 1e-6);
+
+        let (mut additive, _) = envelope_engine(curve, AssignmentMode::Additive);
+        let resolved = sample_at(&mut additive, 5.0);
+        assert!(resolved.absolute.is_none());
+        assert!((resolved.additive - 0.5).abs() < 1e-5);
+    }
+
+    /// The combination the two modes exist to produce: a scheduled shape that
+    /// still breathes. Absolute sets the base, additive rides on top of it.
+    #[test]
+    fn absolute_and_additive_sources_compose_on_one_parameter() {
+        let (mut engine, _) = envelope_engine(
+            vec![Breakpoint::new(0.0, 0.4), Breakpoint::new(10.0, 0.4)],
+            AssignmentMode::Absolute,
+        );
+        let lfo = engine.add_source(ModulationSource::sine_lfo(1.0));
+        engine.assign("p", &lfo, 1.0, None);
+
+        let resolved = sample_at(&mut engine, 5.0);
+        assert!((resolved.absolute.unwrap() - 0.4).abs() < 1e-5);
+        assert!(
+            resolved.additive.abs() > 1e-6,
+            "the LFO must still contribute alongside the curve"
+        );
+    }
+
+    /// A lane exists before any point is drawn on it, and overriding the base
+    /// with zero in the meantime would black the parameter out.
+    #[test]
+    fn an_empty_envelope_contributes_nothing_in_absolute_mode() {
+        let (mut engine, _) = envelope_engine(vec![], AssignmentMode::Absolute);
+        let resolved = sample_at(&mut engine, 5.0);
+        assert!(resolved.absolute.is_none());
+        assert!((resolved.additive - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn stacked_absolute_sources_resolve_to_the_last_assigned() {
+        let (mut engine, _) = envelope_engine(
+            vec![Breakpoint::new(0.0, 0.2), Breakpoint::new(10.0, 0.2)],
+            AssignmentMode::Absolute,
+        );
+        let second = engine.add_source(ModulationSource::envelope(vec![
+            Breakpoint::new(0.0, 0.8),
+            Breakpoint::new(10.0, 0.8),
+        ]));
+        engine.set_timebase(&second, Timebase::Transport);
+        engine.assign_with_mode("p", &second, 1.0, None, AssignmentMode::Absolute);
+
+        let resolved = sample_at(&mut engine, 5.0);
+        assert!((resolved.absolute.unwrap() - 0.8).abs() < 1e-5);
+    }
+
+    /// The reason automation is a modulation source rather than a parallel
+    /// system: it inherits jump-safety from being a pure function of position.
+    #[test]
+    fn locating_to_a_position_matches_playing_to_it() {
+        let curve = vec![
+            Breakpoint::new(0.0, 0.0),
+            Breakpoint::new(4.0, 1.0).with_curve(CurveKind::Smooth),
+            Breakpoint::new(9.0, 0.3),
+        ];
+
+        let (mut played, _) = envelope_engine(curve.clone(), AssignmentMode::Absolute);
+        let mut t = 0.0;
+        while t < 6.0 {
+            sample_at(&mut played, t);
+            t += 0.016;
+        }
+        let after_playing = sample_at(&mut played, 6.0).absolute.unwrap();
+
+        let (mut located, _) = envelope_engine(curve, AssignmentMode::Absolute);
+        let after_locate = sample_at(&mut located, 6.0).absolute.unwrap();
+
+        assert!((after_playing - after_locate).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_transport_locked_envelope_freezes_before_the_show_runs() {
+        let (mut engine, _) = envelope_engine(
+            vec![Breakpoint::new(0.0, 0.0), Breakpoint::new(10.0, 1.0)],
+            AssignmentMode::Absolute,
+        );
+
+        let mut resolver = TimebaseResolver::new();
+        let mut frame = |secs: f32| {
+            let set = resolver.resolve(TimebaseInput {
+                free_run_time: secs,
+                beat_time: None,
+                transport: None,
+            });
+            engine.update(&set, &empty_audio(), &empty_analyzers());
+            engine.resolve("p", None).absolute.unwrap()
+        };
+
+        let held = frame(0.0);
+        assert!((frame(5.0) - held).abs() < 1e-6);
+        assert!((frame(60.0) - held).abs() < 1e-6);
+    }
+
+    // ── Live override and re-arm (/spec/arrangement.md § Live override) ──
+
+    /// A flat curve, so any change in the resolved value comes from the
+    /// override rather than from the envelope moving underneath the test.
+    fn flat_envelope_engine(value: f32) -> ModulationEngine {
+        let (engine, _) = envelope_engine(
+            vec![Breakpoint::new(0.0, value), Breakpoint::new(1000.0, value)],
+            AssignmentMode::Absolute,
+        );
+        engine
+    }
+
+    /// Frames needed to outlast a ramp, given `sample_at` advances 16 ms.
+    fn frames_for(seconds: f64) -> usize {
+        (seconds / 0.016).ceil() as usize + 2
+    }
+
+    #[test]
+    fn a_live_touch_suspends_the_envelope_it_lands_on() {
+        let mut engine = flat_envelope_engine(0.8);
+        assert!((sample_at(&mut engine, 5.0).absolute.unwrap() - 0.8).abs() < 1e-5);
+
+        engine.override_param("p", 0.2);
+
+        assert!(
+            sample_at(&mut engine, 5.0).absolute.is_none(),
+            "the performer's hand wins, immediately and without confirmation"
+        );
+        assert!(engine.is_overridden("p"));
+        assert_eq!(engine.overridden_params().collect::<Vec<_>>(), vec!["p"]);
+    }
+
+    /// An override suspends *arrangement* control, not the parameter. An LFO
+    /// the performer never took is still theirs to run.
+    #[test]
+    fn an_override_leaves_live_modulation_running() {
+        let mut engine = flat_envelope_engine(0.8);
+        let lfo = engine.add_source(ModulationSource::sine_lfo(1.0));
+        engine.assign("p", &lfo, 1.0, None);
+
+        engine.override_param("p", 0.2);
+        let resolved = sample_at(&mut engine, 5.0);
+
+        assert!(resolved.absolute.is_none(), "the curve is suspended");
+        assert!(
+            resolved.additive.abs() > 1e-6,
+            "the LFO must keep contributing"
+        );
+    }
+
+    /// Authority is per lane. Grabbing one fader must not stop the rest of the
+    /// show, which is the whole reason overrides are scoped rather than global.
+    #[test]
+    fn an_override_is_scoped_to_the_parameter_that_was_touched() {
+        let mut engine = flat_envelope_engine(0.8);
+        let other = engine.add_source(ModulationSource::envelope(vec![
+            Breakpoint::new(0.0, 0.3),
+            Breakpoint::new(1000.0, 0.3),
+        ]));
+        engine.set_timebase(&other, Timebase::Transport);
+        engine.assign_with_mode("q", &other, 1.0, None, AssignmentMode::Absolute);
+
+        engine.override_param("p", 0.1);
+        sample_at(&mut engine, 5.0);
+
+        assert!(engine.resolve("p", None).absolute.is_none());
+        assert!(
+            (engine.resolve("q", None).absolute.unwrap() - 0.3).abs() < 1e-5,
+            "an untouched lane keeps following the show"
+        );
+    }
+
+    /// A jump to the automated value is the correct state and the wrong look,
+    /// and this happens live in front of an audience.
+    #[test]
+    fn re_arm_ramps_back_rather_than_snapping() {
+        let mut engine = flat_envelope_engine(0.8);
+        engine.override_param("p", 0.0);
+        sample_at(&mut engine, 5.0);
+
+        engine.rearm_param("p", 0.5);
+
+        let first = sample_at(&mut engine, 5.0).absolute.unwrap();
+        assert!(
+            first < 0.1,
+            "the first frame after re-arm jumped to {first} instead of easing"
+        );
+
+        let mut previous = first;
+        for _ in 0..8 {
+            let next = sample_at(&mut engine, 5.0).absolute.unwrap();
+            assert!(next >= previous, "the ramp went backwards");
+            previous = next;
+        }
+        assert!(previous < 0.8, "the ramp finished far too early");
+    }
+
+    #[test]
+    fn a_completed_re_arm_retires_the_override() {
+        let mut engine = flat_envelope_engine(0.8);
+        engine.override_param("p", 0.0);
+        engine.rearm_param("p", 0.2);
+
+        for _ in 0..frames_for(0.2) {
+            sample_at(&mut engine, 5.0);
+        }
+
+        assert_eq!(engine.override_count(), 0, "the record must not leak");
+        assert!((sample_at(&mut engine, 5.0).absolute.unwrap() - 0.8).abs() < 1e-5);
+    }
+
+    #[test]
+    fn re_arming_with_no_duration_hands_over_immediately() {
+        let mut engine = flat_envelope_engine(0.8);
+        engine.override_param("p", 0.0);
+        engine.rearm_param("p", 0.0);
+
+        assert_eq!(engine.override_count(), 0);
+        assert!((sample_at(&mut engine, 5.0).absolute.unwrap() - 0.8).abs() < 1e-5);
+    }
+
+    /// The performer has spoken more recently than the re-arm did.
+    #[test]
+    fn re_taking_a_parameter_mid_ramp_cancels_the_ramp() {
+        let mut engine = flat_envelope_engine(0.8);
+        engine.override_param("p", 0.0);
+        engine.rearm_param("p", 10.0);
+        for _ in 0..4 {
+            sample_at(&mut engine, 5.0);
+        }
+        assert!(!engine.is_overridden("p"), "mid-ramp is not held");
+
+        engine.override_param("p", 0.6);
+
+        assert!(engine.is_overridden("p"));
+        assert!(
+            sample_at(&mut engine, 5.0).absolute.is_none(),
+            "the curve must be suspended again"
+        );
+    }
+
+    #[test]
+    fn re_arm_all_releases_every_held_parameter() {
+        let mut engine = flat_envelope_engine(0.8);
+        let other = engine.add_source(ModulationSource::envelope(vec![
+            Breakpoint::new(0.0, 0.3),
+            Breakpoint::new(1000.0, 0.3),
+        ]));
+        engine.set_timebase(&other, Timebase::Transport);
+        engine.assign_with_mode("q", &other, 1.0, None, AssignmentMode::Absolute);
+
+        engine.override_param("p", 0.0);
+        engine.override_param("q", 0.0);
+        assert_eq!(engine.override_count(), 2);
+
+        engine.rearm_all(0.2);
+        assert_eq!(engine.override_count(), 0, "none are held any more");
+
+        for _ in 0..frames_for(0.2) {
+            sample_at(&mut engine, 5.0);
+        }
+        assert!((engine.resolve("p", None).absolute.unwrap() - 0.8).abs() < 1e-5);
+        assert!((engine.resolve("q", None).absolute.unwrap() - 0.3).abs() < 1e-5);
+    }
+
+    /// Overrides are session state. A saved override would be an invisible trap
+    /// that silently breaks the show the next time the file is opened.
+    #[test]
+    fn clearing_overrides_restores_full_authority() {
+        let mut engine = flat_envelope_engine(0.8);
+        engine.override_param("p", 0.1);
+        sample_at(&mut engine, 5.0);
+
+        engine.clear_overrides();
+
+        assert_eq!(engine.override_count(), 0);
+        assert!((sample_at(&mut engine, 5.0).absolute.unwrap() - 0.8).abs() < 1e-5);
+    }
+
+    #[test]
+    fn overrides_do_not_survive_serialization() {
+        let mut engine = flat_envelope_engine(0.8);
+        engine.override_param("p", 0.1);
+
+        let json = serde_json::to_string(&engine).expect("serialize");
+        let restored: ModulationEngine = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(restored.override_count(), 0);
+        assert!(!json.contains("override"));
+    }
+
+    /// An additive automation lane has no held value to ease out of, so it
+    /// fades its contribution in instead of appearing at full strength.
+    #[test]
+    fn an_additive_envelope_fades_in_on_re_arm() {
+        let (mut engine, _) = envelope_engine(
+            vec![Breakpoint::new(0.0, 0.9), Breakpoint::new(1000.0, 0.9)],
+            AssignmentMode::Additive,
+        );
+        let full = sample_at(&mut engine, 5.0).additive;
+
+        engine.override_param("p", 0.0);
+        assert!((sample_at(&mut engine, 5.0).additive).abs() < 1e-6);
+
+        engine.rearm_param("p", 0.5);
+        let first = sample_at(&mut engine, 5.0).additive;
+        assert!(
+            first > 0.0 && first < full,
+            "expected a partial contribution"
+        );
+    }
+
+    #[test]
+    fn envelopes_are_counted_as_timebase_followers() {
+        let (engine, _) =
+            envelope_engine(vec![Breakpoint::new(0.0, 0.5)], AssignmentMode::Absolute);
+        assert_eq!(engine.followers_of(Timebase::Transport), 1);
+    }
+
+    /// The readouts dim when nothing reads them, so the count must reflect what
+    /// would actually stop moving. Signal-driven sources carry a timebase field
+    /// but ignore it, so counting them would keep a readout lit for no reason.
+    #[test]
+    fn follower_count_ignores_sources_that_do_not_read_their_timebase() {
+        let mut engine = ModulationEngine::new();
+
+        let lfo = engine.add_source(ModulationSource::sine_lfo(1.0));
+        engine.set_timebase(&lfo, Timebase::Beat);
+        let steps = engine.add_source(ModulationSource::step_sequencer(8, 1.0));
+        engine.set_timebase(&steps, Timebase::Beat);
+
+        let adsr = engine.add_source(ModulationSource::adsr(0.1, 0.1, 0.5, 0.1));
+        engine.set_timebase(&adsr, Timebase::Beat);
+
+        assert_eq!(
+            engine.followers_of(Timebase::Beat),
+            2,
+            "the ADSR is signal-driven and does not follow the beat"
+        );
+        assert_eq!(engine.followers_of(Timebase::Transport), 0);
+
+        engine.set_timebase(&lfo, Timebase::Transport);
+        assert_eq!(engine.followers_of(Timebase::Beat), 1);
+        assert_eq!(engine.followers_of(Timebase::Transport), 1);
+    }
+
+    /// Signal-driven sources have no meaningful notion of show position, so
+    /// they read wall time no matter what they are set to.
+    #[test]
+    fn adsr_ignores_its_timebase() {
+        let mut engine = ModulationEngine::new();
+        let uuid = engine.add_source(ModulationSource::ADSR {
+            attack: 1.0,
+            decay: 0.1,
+            sustain: 1.0,
+            release: 0.1,
+            stage: ADSRStage::Idle,
+            stage_time: 0.0,
+            gate: false,
+            current_level: 0.0,
+        });
+        engine.set_timebase(&uuid, Timebase::Beat);
+        engine.assign("p", &uuid, 1.0, None);
+        engine.trigger_adsr(&uuid);
+
+        // Beat clock frozen, wall clock advancing: the envelope must still open.
+        let stalled_beat = TimebaseSet::new(
+            ctx(0.0, 0.5, true),
+            ctx(0.0, 0.0, false),
+            ctx(0.0, 0.0, false),
+        );
+        engine.update(&stalled_beat, &empty_audio(), &empty_analyzers());
+        assert!(
+            engine.get_modulation("p") > 0.0,
+            "ADSR must advance on wall time even when set to Beat"
+        );
+    }
+
+    /// The split between time-driven and signal-driven sources decides which
+    /// cards get a selector, so it is asserted per variant rather than inferred.
+    #[test]
+    fn only_time_driven_sources_follow_a_timebase() {
+        let step = ModulationSource::StepSequencer {
+            steps: vec![0.0, 1.0],
+            rate: 1.0,
+            interpolation: StepInterpolation::None,
+            bipolar: false,
+        };
+        assert!(ModulationSource::sine_lfo(1.0).follows_timebase());
+        assert!(step.follows_timebase());
+
+        let adsr = ModulationSource::ADSR {
+            attack: 0.1,
+            decay: 0.1,
+            sustain: 0.5,
+            release: 0.1,
+            stage: ADSRStage::Idle,
+            stage_time: 0.0,
+            gate: false,
+            current_level: 0.0,
+        };
+        let band = ModulationSource::AudioBand {
+            source_id: None,
+            freq_low: 20.0,
+            freq_high: 250.0,
+            gain: 1.0,
+            smoothing: 0.5,
+            mode: AudioReactMode::Direct,
+            noise_gate: 0.1,
+        };
+        let analyzer = ModulationSource::Analyzer {
+            deck_id: "d".into(),
+            analyzer_type: "motion".into(),
+            output_name: "amount".into(),
+            smoothing: 0.5,
+        };
+        assert!(!adsr.follows_timebase());
+        assert!(!band.follows_timebase());
+        assert!(!analyzer.follows_timebase());
+    }
+
+    #[test]
+    fn set_timebase_reports_unknown_uuid() {
+        let mut engine = ModulationEngine::new();
+        assert!(!engine.set_timebase("nope", Timebase::Beat));
+        assert_eq!(engine.timebase("nope"), None);
+    }
+
+    /// Scenes written before timebases existed must load as free-running.
+    /// See /spec/timebase.md § Backwards Compatibility.
+    #[test]
+    fn entry_without_timebase_deserializes_as_free_run() {
+        let json = r#"{"uuid":"abc123","source":{"LFO":{"waveform":"Sine","frequency":1.0,"phase":0.0,"amplitude":1.0,"bipolar":false}}}"#;
+        let entry: ModulationSourceEntry = serde_json::from_str(json).expect("legacy entry loads");
+        assert_eq!(entry.timebase, Timebase::FreeRun);
+        assert_eq!(entry.uuid, "abc123");
+    }
+
+    #[test]
+    fn timebase_round_trips_through_serde() {
+        let mut entry = ModulationSourceEntry::new(ModulationSource::sine_lfo(1.0));
+        entry.timebase = Timebase::Beat;
+        let json = serde_json::to_string(&entry).expect("serialize");
+        let back: ModulationSourceEntry = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.timebase, Timebase::Beat);
     }
 
     // ── LFO waveform tests ───────────────────────────────────────────
@@ -532,7 +1240,7 @@ mod tests {
     fn engine_assign_and_get_modulation() {
         let mut engine = ModulationEngine::new();
         let uuid = engine.add_source(ModulationSource::sine_lfo(1.0));
-        engine.update(0.25, &empty_audio(), &empty_analyzers());
+        engine.update_free_running(0.25, &empty_audio(), &empty_analyzers());
         engine.assign("brightness", &uuid, 1.0, None);
         let _mod_val = engine.get_modulation("brightness");
     }
@@ -551,7 +1259,7 @@ mod tests {
     fn engine_update_computes_values() {
         let mut engine = ModulationEngine::new();
         engine.add_source(ModulationSource::sine_lfo(1.0));
-        engine.update(0.0, &empty_audio(), &empty_analyzers());
+        engine.update_free_running(0.0, &empty_audio(), &empty_analyzers());
         let values = engine.current_values();
         assert_eq!(values.len(), 1);
     }
@@ -562,7 +1270,7 @@ mod tests {
         let lfo0 = engine.add_source(ModulationSource::sine_lfo(1.0));
         let lfo1 = engine.add_source(ModulationSource::sine_lfo(2.0));
         engine.assign_mod_on_mod(&lfo0, "frequency", &lfo1, 0.5);
-        engine.update(1.0, &empty_audio(), &empty_analyzers());
+        engine.update_free_running(1.0, &empty_audio(), &empty_analyzers());
         assert_eq!(engine.current_values().len(), 2);
     }
 
@@ -583,7 +1291,7 @@ mod tests {
         let uuid = engine.add_source(ModulationSource::adsr(0.01, 0.01, 0.5, 0.01));
         engine.trigger_adsr(&uuid);
         for i in 0..20 {
-            engine.update(i as f32 * 0.01, &empty_audio(), &empty_analyzers());
+            engine.update_free_running(i as f32 * 0.01, &empty_audio(), &empty_analyzers());
         }
         let val = engine.current_value_for(&uuid);
         assert!(val > 0.0, "ADSR should produce non-zero after trigger");
@@ -595,11 +1303,11 @@ mod tests {
         let uuid = engine.add_source(ModulationSource::adsr(0.01, 0.01, 0.5, 0.01));
         engine.trigger_adsr(&uuid);
         for i in 0..30 {
-            engine.update(i as f32 * 0.01, &empty_audio(), &empty_analyzers());
+            engine.update_free_running(i as f32 * 0.01, &empty_audio(), &empty_analyzers());
         }
         engine.release_adsr(&uuid);
         for i in 30..80 {
-            engine.update(i as f32 * 0.01, &empty_audio(), &empty_analyzers());
+            engine.update_free_running(i as f32 * 0.01, &empty_audio(), &empty_analyzers());
         }
         let val = engine.current_value_for(&uuid);
         assert!(val < 0.1, "ADSR should be near zero after release: {val}");
@@ -624,7 +1332,7 @@ mod tests {
     fn engine_component_modulation() {
         let mut engine = ModulationEngine::new();
         let uuid = engine.add_source(ModulationSource::sine_lfo(1.0));
-        engine.update(0.25, &empty_audio(), &empty_analyzers());
+        engine.update_free_running(0.25, &empty_audio(), &empty_analyzers());
         engine.assign("color", &uuid, 1.0, Some(0));
         engine.assign("color", &uuid, 0.5, Some(1));
         let r_mod = engine.get_modulation_for_component("color", Some(0));
@@ -809,7 +1517,7 @@ mod tests {
         engine.assign_mod_on_mod(&a, "frequency", &c, 0.5);
         // Must complete without hanging, values must be finite
         let audio = AudioValues::default();
-        engine.update(1.0, &audio, &empty_analyzers());
+        engine.update_free_running(1.0, &audio, &empty_analyzers());
         for v in engine.current_values() {
             assert!(v.is_finite(), "circular chain produced non-finite value");
         }
@@ -827,7 +1535,7 @@ mod tests {
             engine.assign_mod_on_mod(&uuids[i + 1], "frequency", &uuids[i], 0.1);
         }
         let audio = AudioValues::default();
-        engine.update(1.0, &audio, &empty_analyzers());
+        engine.update_free_running(1.0, &audio, &empty_analyzers());
         // All 5 sources should have been evaluated
         assert_eq!(engine.current_values().len(), 5);
         for v in engine.current_values() {
@@ -870,7 +1578,7 @@ mod tests {
         assert_eq!(engine.source_count(), 2);
         // Should still update without panic
         let audio = AudioValues::default();
-        engine.update(1.0, &audio, &empty_analyzers());
+        engine.update_free_running(1.0, &audio, &empty_analyzers());
         assert!(engine.has_source(&a));
         assert!(engine.has_source(&c));
     }
@@ -893,7 +1601,7 @@ mod tests {
         let mut engine = ModulationEngine::new();
         let audio = AudioValues::default();
         // Update with 0 sources → no crash
-        engine.update(0.0, &audio, &empty_analyzers());
+        engine.update_free_running(0.0, &audio, &empty_analyzers());
         assert_eq!(engine.source_count(), 0);
         assert!(engine.current_values().is_empty());
     }

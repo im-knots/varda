@@ -4,7 +4,7 @@
 
 ### Connect a Controller
 
-1. Plug in a MIDI controller and it will appear in the **MIDI panel** (bottom section)
+1. Plug in a MIDI controller and it will appear in the **🎹 MIDI** section of the right panel
 2. **Enable** the device with its toggle switch
 3. Click **Rescan** if you hot-plug a device after launch
 
@@ -12,7 +12,7 @@ Varda supports multiple simultaneous MIDI controllers. Each device is identified
 
 ### Learn Mode
 
-1. **Right-click** anywhere in the UI → **"Enter MIDI Learn"**
+1. **Right-click** empty space in the UI → **"Enter MIDI Learn"** (right-clicking a deck, effect, or lane shows that object's own menu instead)
 2. All mappable controls glow **purple**
 3. **Click** a control to select it as the learn target (brighter purple)
 4. **Move a knob or press a button** on your MIDI controller → mapping created
@@ -139,6 +139,9 @@ MIDI learn and keyboard learn are mutually exclusive — entering one exits the 
 | Cmd+Z | Undo |
 | Cmd+Shift+Z | Redo |
 | Cmd+S | Save |
+| Cmd+C | Copy the selected deck or channel |
+| Cmd+V | Paste what was copied |
+| Cmd+D | Duplicate the selection in place |
 | L | Toggle library panel |
 | S | Select tool (stage editor) |
 | R | Rectangle tool |
@@ -150,6 +153,8 @@ MIDI learn and keyboard learn are mutually exclusive — entering one exits the 
 | Delete / Backspace | Delete surface |
 | Escape | Clear drawing |
 | G | Combine surfaces |
+
+The copy keys act on whatever is selected, which is the deck the bottom bar is following, or its channel when no deck is selected. They never fire while you are typing into a field, and while an automation lane is selected they copy that curve's breakpoints instead. See [Copy and Paste](02-concepts.md#copy-and-paste).
 
 ### Param Toggle
 
@@ -187,7 +192,7 @@ By default, Varda uses **Auto** mode (priority resolution). You can force a spec
 - **Force Audio** — use only beat detection
 - **Force Manual** — fixed BPM, no external input
 
-Click the **BPM display** in the mixer to open the clock preference popover. All detected MIDI clock devices appear with their current BPM.
+Click the **BPM display** in the top bar to open the clock preference popover. All detected MIDI clock devices appear with their current BPM.
 
 ### What Uses the Clock
 
@@ -196,10 +201,98 @@ Beat-synced features throughout Varda consume the resolved BPM and beat phase:
 - **Beat-synced crossfades** — crossfade triggered on the next beat boundary
 - **Deck auto-transitions** — play duration specified in beats
 - **Transition sequences** — step durations in beats
-- **Step sequencer** — rate synchronized to BPM
 - **ISF shaders** — `audio_bpm` and `audio_beat_phase` uniforms
+- **LFOs and step sequencers** — when set to the **Beat** timebase, rate is read in cycles per beat
+  and follows the tempo. They run on wall-clock time by default. See [Modulation](05-modulation.md).
 
 The `clock/bpm` parameter path is MIDI-mappable (0.0–1.0 → 20–300 BPM).
+
+---
+
+## Transport
+
+The clock answers "how fast", the **transport** answers "how far in". It is an absolute show
+position, shown as timecode (`HH:MM:SS:FF`), and it is what makes a performance repeatable: anything
+reading it produces the same result at the same position, every time.
+
+The position is always visible in the top bar, beside the BPM readout. Click it for the controls.
+
+| Control | What it does |
+|---------|--------------|
+| **Position** | The current show position. Green while running, amber while held, blue while chasing timecode, grey before the show has started. |
+| **Status** | Why the position is or is not moving. See below. |
+| **▶ Play / ⏸ Pause** | Start or hold the position. |
+| **⏮ Zero** | Jump back to 00:00:00:00. |
+| **Source** | Whether the position advances internally or chases incoming timecode. |
+| **Rate** | The frame rate the position is counted and displayed at: 24, 25, 29.97, 29.97 drop-frame, or 30. |
+
+Arrangement mode shows its own strip with the same controls plus **⏹ Stop** and the cue arrows.
+Stopping holds the position, and stopping again returns to 00:00:00:00, which is how you get home
+there: the back arrow beside it walks cue points rather than rewinding. See
+[Arrangement Mode](15-arrangement.md#cue-points).
+
+### Status
+
+| Status | Meaning |
+|--------|---------|
+| **Idle** | Never started this session. Your scene renders exactly as saved. |
+| **Running** | Position advancing. |
+| **Stopped** | Started, then stopped. The position holds, so anything reading it holds its look. |
+| **Waiting for signal** | Set to chase timecode, but none has arrived yet. |
+
+The distinction between Idle and Waiting for signal matters on a dark stage, where a correctly idle
+system and a broken one look identical on the output. The status tells you which you have.
+
+### The transport does not start itself
+
+Varda deliberately leaves the transport stopped at zero until you press Play. Nothing that reads the
+position moves until then, so an unplugged cable or a mis-set input can never black your output
+before you have touched anything: you get the scene you saved, live.
+
+### Source
+
+**Internal** advances the position on Varda's own clock, which is all you need for looping
+installations and for building a show before any timecode exists.
+
+**Chase timecode** hands position to an external master. While chasing, the position is **read-only**:
+Play and Zero are disabled, because a local control fighting the incoming master helps nobody. Any
+loop range you have set is kept but ignored, so switching back to Internal restores it.
+
+### BPM and timecode are both always shown
+
+The two readouts sit side by side in the top bar in both Performance and Arrangement mode, and
+neither is hidden when you switch. They answer different questions and you can be running on both at
+once: a timecode-locked intro while your beat-locked LFOs stay matched to the DJ, for example. This
+is the normal case rather than the exotic one, and it is why Varda does not treat them as
+alternatives.
+
+There is also a technical reason they cannot be collapsed into one. **Timecode carries no tempo.**
+Nothing in a SMPTE signal says what the music is doing, so chasing timecode does not give beat-locked
+modulators a clock to follow. They still need a BPM from somewhere.
+
+To keep this readable rather than noisy, each readout is **dimmed when nothing is reading it**:
+
+- The BPM dims when there is no clock source, or when no modulator is set to the beat.
+- The position greys out before the show has started, and is colour-coded by status after that.
+
+Hover either one and it tells you how many modulators follow it. That is usually what you actually
+want to know when something is moving unexpectedly: modulators set to **Free-run** move whenever
+Varda is open, ones set to **Beat** move whenever a clock is present, and only ones set to
+**Transport** wait for Play. See [Timebase](10-resolution-and-monitoring.md#timebase).
+
+### Frame rates and drop-frame
+
+`29.97 DF` (drop-frame) is the broadcast default and is written with a semicolon before the frames,
+as in `01:00:00;00`. It skips frame *numbers* (never actual frames) so the label keeps long-run
+agreement with wall time. Plain `29.97` does not, and drifts about 3.6 seconds behind wall time over
+an hour. Both count real frames identically; only the labelling differs.
+
+### What uses the transport
+
+- **Show timebase** — LFOs and step sequencers set to **Show** are pure functions of position. See
+  [Modulation](05-modulation.md).
+- **Arrangement mode** — regions and automation curves are laid out against this position, and take
+  control of their decks once it has run. See [Arrangement Mode](15-arrangement.md).
 
 ---
 
@@ -335,6 +428,7 @@ MIDI, OSC, and keyboard shortcuts all use the same parameter path format:
 | `action/undo` | Trigger undo |
 | `action/redo` | Trigger redo |
 | `action/save` | Trigger save |
+| `cue/<uuid>/fire` | Take the show to that cue (> 0.5) — see [Cue pads](15-arrangement.md#cue-pads-in-performance-mode) |
 
 ---
 

@@ -126,4 +126,4 @@ Assign the returned source to any parameter with `POST /api/modulation/assign`, 
 
 ---
 
-[← Prev: HTTP API & Headless Mode](13-api.md) · [Home](README.md)
+[← Prev: HTTP API & Headless Mode](13-api.md) · [Home](README.md) · [Next: Arrangement Mode →](15-arrangement.md)

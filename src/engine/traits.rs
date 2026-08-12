@@ -203,6 +203,16 @@ pub trait ModulationCommands {
     ) -> String;
     fn add_adsr(&mut self, attack: f32, decay: f32, sustain: f32, release: f32) -> String;
     fn add_step_sequencer(&mut self, num_steps: usize, rate: f32) -> String;
+    /// Create an envelope on `timebase` and assign it to `target` in `Absolute`
+    /// mode. See /spec/automation.md.
+    fn add_automation_lane(&mut self, target: &str, timebase: crate::timebase::Timebase) -> String;
+    /// Replace an envelope's breakpoints. Returns false if the UUID is unknown
+    /// or does not name an envelope.
+    fn set_envelope_breakpoints(
+        &mut self,
+        uuid: &str,
+        breakpoints: Vec<crate::modulation::Breakpoint>,
+    ) -> bool;
     fn remove_modulation_source(&mut self, uuid: &str);
     fn assign_modulation(&mut self, target: &str, source_id: &str, amount: f32);
     fn clear_modulation(&mut self, target: &str);

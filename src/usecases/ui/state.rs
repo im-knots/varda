@@ -9,6 +9,13 @@ use crate::camera::CameraId;
 use crate::renderer::slicer::{DomeGeometry, DomePreset};
 use crate::surface::detect::{DetectedContour, DetectionParams};
 
+/// Zoom bounds for the arrangement timeline, in pixels per second.
+///
+/// The floor keeps an hour-long show legible on one screen; the ceiling is about
+/// one pixel per frame at 60fps, past which there is nothing left to resolve.
+pub const MIN_PIXELS_PER_SECOND: f32 = 0.5;
+pub const MAX_PIXELS_PER_SECOND: f32 = 400.0;
+
 /// UI-consumer-owned layout and selection state.
 ///
 /// These fields are presentation concerns that don't belong in the engine.
@@ -36,6 +43,15 @@ pub struct UILayoutState {
     pub stage_editor_grid_size: f32,
     /// Whether snap-to-grid is enabled in the stage editor
     pub stage_editor_snap: bool,
+    /// Whether the central area shows the arrangement timeline instead of the
+    /// mixer. See /spec/arrangement.md § UI.
+    pub arrangement_mode_open: bool,
+    /// Timeline horizontal zoom, in pixels per second of show time.
+    pub arrangement_pixels_per_second: f32,
+    /// Show position at the timeline's left edge.
+    pub arrangement_scroll: f64,
+    /// Whether timeline edits round to whole frames at the ruler's rate.
+    pub arrangement_snap: bool,
     /// Whether the library panel (left sidebar) is open
     pub library_panel_open: bool,
     /// Whether the right panel (master output sidebar) is open
@@ -64,6 +80,14 @@ impl Default for UILayoutState {
             stage_editor_open: false,
             stage_editor_grid_size: 0.05,
             stage_editor_snap: true,
+            arrangement_mode_open: false,
+            // Ten seconds across a 400px area: wide enough to see a structure,
+            // tight enough that a fade handle is grabbable.
+            arrangement_pixels_per_second: 40.0,
+            arrangement_scroll: 0.0,
+            // On by default: a show cut to picture wants frame-aligned edits,
+            // and a music-led one can turn it off in one click.
+            arrangement_snap: true,
             library_panel_open: true,
             right_panel_open: true,
             dome_preview_open: false,
@@ -159,6 +183,19 @@ impl UILayoutState {
         }
         if session.toggle_stage_editor {
             self.stage_editor_open = !self.stage_editor_open;
+        }
+        if session.toggle_arrangement_mode {
+            self.arrangement_mode_open = !self.arrangement_mode_open;
+        }
+        if let Some(pps) = session.set_arrangement_zoom {
+            self.arrangement_pixels_per_second =
+                pps.clamp(MIN_PIXELS_PER_SECOND, MAX_PIXELS_PER_SECOND);
+        }
+        if let Some(scroll) = session.set_arrangement_scroll {
+            self.arrangement_scroll = scroll.max(0.0);
+        }
+        if session.toggle_arrangement_snap {
+            self.arrangement_snap = !self.arrangement_snap;
         }
         if let Some(size) = session.set_grid_size {
             self.stage_editor_grid_size = size;

@@ -109,6 +109,27 @@ fn ok_or_state(applied: bool, path: &str, reason: &'static str) -> Result<(), Pa
     }
 }
 
+/// The modulation engine's key for a router path, when the two address the
+/// same parameter.
+///
+/// Routes use slashes and the modulation graph uses `prefix:name`, so the live
+/// override (which arrives as a path from OSC, MIDI, or the API) needs a
+/// translation to find out whether it just landed on an automated parameter.
+/// Returns `None` for routes nothing can be assigned to, such as triggers and
+/// video transport.
+///
+/// See /spec/arrangement.md § Live override.
+pub fn modulation_key_for_path(path: &str) -> Option<String> {
+    let parts: Vec<&str> = path.split('/').collect();
+    match parts.as_slice() {
+        ["deck", uuid, "opacity"] => Some(format!("deck_{uuid}:opacity")),
+        ["deck", uuid, "param", name] => Some(format!("deck_{uuid}:{name}")),
+        ["deck" | "ch", _, "effect", fx, "param", name]
+        | ["master", "effect", fx, "param", name] => Some(format!("fx_{fx}:{name}")),
+        _ => None,
+    }
+}
+
 /// Apply a normalized value (0.0–1.0) to the parameter at the given path.
 /// Returns `Ok(())` if the path resolved and the mutation was applied, or a
 /// [`ParamRouteError`] describing why it did not.
@@ -633,6 +654,16 @@ fn apply_mod_param(
                 })
             }
         },
+        // An envelope's shape is its breakpoints, which are edited as a curve
+        // rather than driven as a scalar. Keeping it out of the router is what
+        // keeps envelope parameters unmodulatable, which /spec/automation.md
+        // § Performance relies on.
+        ModulationSource::Envelope { .. } => {
+            return Err(ParamRouteError::UnknownParam {
+                scope: "Envelope",
+                name: param_name.to_string(),
+            })
+        }
     }
     Ok(())
 }

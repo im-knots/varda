@@ -181,6 +181,21 @@ impl OscReceiver {
         })
     }
 
+    /// A receiver with no socket behind it, for tests that need to drive the
+    /// input path without opening a port. The returned sender stands in for the
+    /// network: whatever it sends arrives at [`try_recv`](Self::try_recv).
+    #[cfg(test)]
+    pub(crate) fn detached() -> (Self, Sender<OscInput>) {
+        let (sender, receiver) = channel();
+        (
+            Self {
+                receiver,
+                _thread: thread::spawn(|| {}),
+            },
+            sender,
+        )
+    }
+
     fn receive_loop(socket: &UdpSocket, sender: &Sender<OscInput>) {
         let mut buf = [0u8; rosc::decoder::MTU];
         loop {

@@ -27,11 +27,28 @@ use varda::{
     audio::AudioData,
     deck::Deck,
     isf::ISFShader,
-    mixer::Mixer,
+    mixer::{FrameInputs, Mixer},
     modulation::{AnalyzerValues, AudioValues},
     renderer::context::GpuContext,
     BlendMode,
 };
+
+/// Silent audio, no modulation, no clock: the benchmark measures compositing,
+/// not signal handling.
+fn frame_inputs<'a>(
+    audio_data: &'a AudioData,
+    audio_values: &'a AudioValues,
+    analyzer_values: &'a AnalyzerValues,
+) -> FrameInputs<'a> {
+    FrameInputs {
+        audio_data,
+        audio_values,
+        analyzer_values,
+        beat_time: None,
+        transport: None,
+        free_run_time: None,
+    }
+}
 
 const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
@@ -97,7 +114,12 @@ fn time_render_us(ctx: &GpuContext, mixer: &mut Mixer, samples: usize) -> u128 {
     let analyzer_values = AnalyzerValues::default();
     for _ in 0..3 {
         mixer
-            .render(ctx, &audio, &audio_values, &analyzer_values, 60, &[])
+            .render(
+                ctx,
+                &frame_inputs(&audio, &audio_values, &analyzer_values),
+                60,
+                &[],
+            )
             .expect("warmup");
         poll(ctx);
     }
@@ -105,7 +127,12 @@ fn time_render_us(ctx: &GpuContext, mixer: &mut Mixer, samples: usize) -> u128 {
     for _ in 0..samples {
         let t0 = Instant::now();
         mixer
-            .render(ctx, &audio, &audio_values, &analyzer_values, 60, &[])
+            .render(
+                ctx,
+                &frame_inputs(&audio, &audio_values, &analyzer_values),
+                60,
+                &[],
+            )
             .expect("render");
         poll(ctx);
         times.push(t0.elapsed().as_micros());
@@ -151,7 +178,12 @@ fn bench_channel_composite_solid(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("decks", n_decks), &n_decks, |b, _| {
             b.iter(|| {
                 mixer
-                    .render(&ctx, &audio, &audio_values, &analyzer_values, 60, &[])
+                    .render(
+                        &ctx,
+                        &frame_inputs(&audio, &audio_values, &analyzer_values),
+                        60,
+                        &[],
+                    )
                     .expect("render");
                 poll(&ctx);
             });
@@ -256,7 +288,12 @@ fn bench_composite_resolution(c: &mut Criterion) {
             group.bench_with_input(BenchmarkId::new(label, n_decks), &n_decks, |b, _| {
                 b.iter(|| {
                     mixer
-                        .render(&ctx, &audio, &audio_values, &analyzer_values, 60, &[])
+                        .render(
+                            &ctx,
+                            &frame_inputs(&audio, &audio_values, &analyzer_values),
+                            60,
+                            &[],
+                        )
                         .expect("render");
                     poll(&ctx);
                 });
@@ -287,7 +324,12 @@ fn bench_channel_composite_shader(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("decks", n_decks), &n_decks, |b, _| {
             b.iter(|| {
                 mixer
-                    .render(&ctx, &audio, &audio_values, &analyzer_values, 60, &[])
+                    .render(
+                        &ctx,
+                        &frame_inputs(&audio, &audio_values, &analyzer_values),
+                        60,
+                        &[],
+                    )
                     .expect("render");
                 poll(&ctx);
             });
@@ -320,7 +362,12 @@ fn bench_mixer_crossfade(c: &mut Criterion) {
     group.bench_function("2ch_50pct", |b| {
         b.iter(|| {
             mixer
-                .render(&ctx, &audio, &audio_values, &analyzer_values, 60, &[])
+                .render(
+                    &ctx,
+                    &frame_inputs(&audio, &audio_values, &analyzer_values),
+                    60,
+                    &[],
+                )
                 .expect("render");
             poll(&ctx);
         });
@@ -375,7 +422,12 @@ fn bench_channel_composite_blend(c: &mut Criterion) {
             group.bench_with_input(BenchmarkId::new(label, n_decks), &n_decks, |b, _| {
                 b.iter(|| {
                     mixer
-                        .render(&ctx, &audio, &audio_values, &analyzer_values, 60, &[])
+                        .render(
+                            &ctx,
+                            &frame_inputs(&audio, &audio_values, &analyzer_values),
+                            60,
+                            &[],
+                        )
                         .expect("render");
                     poll(&ctx);
                 });
@@ -425,7 +477,12 @@ fn bench_channel_composite_multipass(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("decks", n_decks), &n_decks, |b, _| {
             b.iter(|| {
                 mixer
-                    .render(&ctx, &audio, &audio_values, &analyzer_values, 60, &[])
+                    .render(
+                        &ctx,
+                        &frame_inputs(&audio, &audio_values, &analyzer_values),
+                        60,
+                        &[],
+                    )
                     .expect("render");
                 poll(&ctx);
             });
@@ -452,13 +509,23 @@ fn report_submits_per_frame(_c: &mut Criterion) {
         // Warm up: first frames allocate pass buffers and pipelines.
         for _ in 0..3 {
             mixer
-                .render(&ctx, &audio, &audio_values, &analyzer_values, 60, &[])
+                .render(
+                    &ctx,
+                    &frame_inputs(&audio, &audio_values, &analyzer_values),
+                    60,
+                    &[],
+                )
                 .expect("warmup");
             poll(&ctx);
         }
         ctx.submits.take();
         mixer
-            .render(&ctx, &audio, &audio_values, &analyzer_values, 60, &[])
+            .render(
+                &ctx,
+                &frame_inputs(&audio, &audio_values, &analyzer_values),
+                60,
+                &[],
+            )
             .expect("render");
         poll(&ctx);
         eprintln!(

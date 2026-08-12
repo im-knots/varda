@@ -445,7 +445,16 @@ fn depth_prepro_config(deck: &Deck) -> Option<crate::scene::DepthPreproConfig> {
 }
 
 /// Build a `SceneConfig` snapshot from live app state (show-specific: channels, effects, modulation).
-pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> SceneConfig {
+///
+/// `transport` contributes only its authored settings (frame rate, loop range);
+/// position and run state are deliberately not persisted, so a scene opens
+/// where it was authored to start rather than wherever it was stopped.
+pub fn snapshot_scene(
+    mixer: &Mixer,
+    transport: Option<&crate::scene::TransportConfig>,
+    render_width: u32,
+    render_height: u32,
+) -> SceneConfig {
     let channels = mixer
         .channels()
         .iter()
@@ -673,6 +682,10 @@ pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> S
                 blend_mode: ch.blend_mode.into(),
                 decks,
                 effects,
+                // A scene serializes the modulation engine whole, so recipes are
+                // only filled when a channel travels alone. See
+                // /spec/clipboard.md.
+                modulation: Vec::new(),
             }
         })
         .collect();
@@ -746,6 +759,8 @@ pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> S
         active_lut: mixer
             .active_lut_filename()
             .map(std::string::ToString::to_string),
+        arrangement: mixer.arrangement().cloned(),
+        transport: transport.cloned().unwrap_or_default(),
     }
 }
 
@@ -1231,6 +1246,10 @@ pub fn restore_scene(
 
     // Restore macro controls
     mixer.set_macros(config.macros.clone());
+
+    // Restore the arrangement. This also drops live overrides, since a reload
+    // returns full authority to the show.
+    mixer.set_arrangement(config.arrangement.clone());
 
     // Restore active transition
     if let Some(transition_name) = &config.active_transition {
@@ -1983,7 +2002,7 @@ mod tests {
         mixer.channels_mut().push(ch);
 
         // Snapshot and verify source match
-        let config = snapshot_scene(&mixer, 64, 64);
+        let config = snapshot_scene(&mixer, None, 64, 64);
         let deck_ref = &mixer.channels()[0].decks[0].deck;
         assert!(source_configs_match(
             deck_ref,

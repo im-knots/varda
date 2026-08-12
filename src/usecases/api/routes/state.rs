@@ -117,6 +117,18 @@ state_route!(
     |s: &crate::engine::EngineState| s.clock.clone()
 );
 state_route!(
+    transport,
+    "/api/state/transport",
+    "Transport state: absolute position, timecode, run status, loop region, and follower count.",
+    |s: &crate::engine::EngineState| s.transport.clone()
+);
+state_route!(
+    arrangement,
+    "/api/state/arrangement",
+    "Arrangement state: authored lanes and regions, whether the arrangement holds authority, and which parameters a performer is holding by hand.",
+    |s: &crate::engine::EngineState| s.arrangement.clone()
+);
+state_route!(
     streams,
     "/api/state/streams",
     "Active stream receivers with their URL, mode, and connection status.",

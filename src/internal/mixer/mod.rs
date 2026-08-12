@@ -88,6 +88,37 @@ impl GpuTimingFrame {
     }
 }
 
+/// Everything sampled from outside the mixer that a single frame's rendering
+/// depends on.
+///
+/// Grouped rather than passed positionally because the set grows as the engine
+/// gains clocks: the transport joins it without touching every call site.
+/// See /spec/timebase.md.
+#[derive(Clone, Copy)]
+pub struct FrameInputs<'a> {
+    /// Primary audio source, used for beat-synced crossfades and sequences.
+    pub audio_data: &'a crate::audio::AudioData,
+    /// Per-source audio analysis for the modulation engine.
+    pub audio_values: &'a crate::modulation::AudioValues,
+    /// Scalar analyzer outputs collected from every deck.
+    pub analyzer_values: &'a crate::modulation::AnalyzerValues,
+    /// Monotonic beat position from the resolved clock, or `None` when no
+    /// clock source is active, which freezes beat-locked modulators.
+    pub beat_time: Option<f64>,
+    /// Show position from the transport, or `None` until it has run, which
+    /// freezes transport-locked modulators.
+    pub transport: Option<crate::timebase::TransportSample>,
+    /// Seconds on the free-running clock, which is what `TIME` reaches every
+    /// shader as. `None` reads the mixer's own wall clock, which is what a live
+    /// show wants.
+    ///
+    /// A caller supplies it when frames are not paced by the wall: a test
+    /// measuring how a picture changes between frames would otherwise be
+    /// measuring how fast the machine renders, and rendering a show to disk
+    /// faster (or slower) than real time needs the same handle.
+    pub free_run_time: Option<f32>,
+}
+
 /// Mixer - Top-level compositor
 pub struct Mixer {
     /// Channels (default 2: A and B)
@@ -111,8 +142,22 @@ pub struct Mixer {
     /// User-defined macro controls (one control → many parameter targets).
     macros: MacroBank,
 
+    /// Arrangement mode data, when this scene has one. Held beside the
+    /// modulation graph it references so a snapshot captures both together.
+    /// See /spec/arrangement.md.
+    arrangement: Option<crate::arrangement::ArrangementConfig>,
+
+    /// True while the arrangement is driving every deck it owns to zero with
+    /// the transport running. Read once per frame by the app, which raises a
+    /// dismissible notification. See /spec/transport.md § Black-output detection.
+    arrangement_blacked_out: bool,
+
     /// Start time for TIME-based modulation
     start_time: std::time::Instant,
+
+    /// Resolves every timebase once per frame for the modulation engine.
+    /// See /spec/timebase.md.
+    timebases: crate::timebase::TimebaseResolver,
 
     /// Last render time for dt calculation
     last_render_time: std::time::Instant,
@@ -254,7 +299,10 @@ impl Mixer {
             beat_sync_crossfade: None,
             modulation: ModulationEngine::new(),
             macros: MacroBank::new(),
+            arrangement: None,
+            arrangement_blacked_out: false,
             start_time: now,
+            timebases: crate::timebase::TimebaseResolver::new(),
             last_render_time: now,
             composite_texture,
             composite_view,
@@ -559,6 +607,35 @@ impl Mixer {
         &mut self.master_effects
     }
 
+    /// Every UUID currently answering to something: channels, decks, effects on
+    /// all three tiers, and modulation sources.
+    ///
+    /// Restoring a config that names one of these would put two entities behind
+    /// one address, since resolution takes the first match. See
+    /// /spec/clipboard.md § Paste reidentifies.
+    pub fn uuids_in_use(&self) -> std::collections::HashSet<String> {
+        let mut live = std::collections::HashSet::new();
+        for channel in &self.channels {
+            live.insert(channel.uuid().to_string());
+            for effect in &channel.effects {
+                live.insert(effect.uuid().to_string());
+            }
+            for slot in &channel.decks {
+                live.insert(slot.deck.uuid().to_string());
+                for effect in &slot.deck.effects {
+                    live.insert(effect.uuid().to_string());
+                }
+            }
+        }
+        for effect in &self.master_effects {
+            live.insert(effect.uuid().to_string());
+        }
+        for entry in &self.modulation.sources {
+            live.insert(entry.uuid.clone());
+        }
+        live
+    }
+
     /// Read-only access to the modulation engine.
     pub fn modulation(&self) -> &ModulationEngine {
         &self.modulation
@@ -718,6 +795,29 @@ impl Mixer {
         }
     }
 
+    /// Read-only access to a single effect by resolved location.
+    pub fn effect_at(&self, location: EffectLocation) -> Option<&Effect> {
+        match location {
+            EffectLocation::Deck {
+                channel_idx,
+                deck_idx,
+                effect_idx,
+            } => self
+                .channels
+                .get(channel_idx)?
+                .decks
+                .get(deck_idx)?
+                .deck
+                .effects
+                .get(effect_idx),
+            EffectLocation::Channel {
+                channel_idx,
+                effect_idx,
+            } => self.channels.get(channel_idx)?.effects.get(effect_idx),
+            EffectLocation::Master { effect_idx } => self.master_effects.get(effect_idx),
+        }
+    }
+
     /// Mutable access to a single effect by resolved location.
     pub fn effect_at_mut(&mut self, location: EffectLocation) -> Option<&mut Effect> {
         let (chain, idx) = self.effect_chain_at_mut(location);
@@ -759,6 +859,92 @@ impl Mixer {
     /// Replace the macro bank (used by persistence restore).
     pub fn set_macros(&mut self, macros: MacroBank) {
         self.macros = macros;
+    }
+
+    /// Read-only access to the arrangement, if this scene has one.
+    pub fn arrangement(&self) -> Option<&crate::arrangement::ArrangementConfig> {
+        self.arrangement.as_ref()
+    }
+
+    /// Whether the arrangement drove every deck it owns to zero this frame
+    /// while the transport was running.
+    pub fn arrangement_blacked_out(&self) -> bool {
+        self.arrangement_blacked_out
+    }
+
+    /// The arrangement, created empty if this scene did not have one.
+    pub fn arrangement_mut(&mut self) -> &mut crate::arrangement::ArrangementConfig {
+        self.arrangement.get_or_insert_with(Default::default)
+    }
+
+    /// Recompile one lane's regions onto its opacity envelope, creating the
+    /// envelope and its absolute assignment the first time a region appears.
+    ///
+    /// Regions are the authored form and the envelope is derived, so this must
+    /// run after any region edit. Deriving one from the other in the opposite
+    /// direction would mean reading regions back out of an arbitrary curve,
+    /// which a hand-edited envelope need not resemble.
+    ///
+    /// Returns the envelope's UUID while the lane has any regions.
+    pub fn sync_lane_opacity_envelope(&mut self, deck_uuid: &str) -> Option<String> {
+        let key = crate::arrangement::opacity_param_key(deck_uuid);
+        let lane = self.arrangement.as_mut()?.lane_mut(deck_uuid)?;
+        let breakpoints = crate::arrangement::compile_regions(&lane.regions);
+
+        if breakpoints.is_empty() {
+            // The last region was deleted. Dropping the source rather than
+            // leaving an empty one behind keeps a Performance-only deck out of
+            // the modulation graph entirely.
+            if let Some(uuid) = lane.envelopes.remove(&key) {
+                self.modulation.remove_source(&uuid);
+            }
+            return None;
+        }
+
+        if let Some(uuid) = lane.envelopes.get(&key).cloned() {
+            if self.modulation.set_envelope_breakpoints(&uuid, breakpoints) {
+                return Some(uuid);
+            }
+            // The source went missing (a scene edited elsewhere, or a stale
+            // reference); fall through and build a fresh one.
+            self.arrangement
+                .as_mut()?
+                .lane_mut(deck_uuid)?
+                .envelopes
+                .remove(&key);
+            return self.sync_lane_opacity_envelope(deck_uuid);
+        }
+
+        let uuid = self
+            .modulation
+            .add_source(crate::modulation::ModulationSource::envelope(breakpoints));
+        self.modulation
+            .set_timebase(&uuid, crate::timebase::Timebase::Transport);
+        // Absolute: a region *is* the deck's opacity for that span, rather than
+        // an offset riding on whatever the fader happened to be left at.
+        self.modulation.assign_with_mode(
+            &key,
+            &uuid,
+            1.0,
+            None,
+            crate::modulation::AssignmentMode::Absolute,
+        );
+        self.arrangement
+            .as_mut()?
+            .lane_mut(deck_uuid)?
+            .envelopes
+            .insert(key, uuid.clone());
+        Some(uuid)
+    }
+
+    /// Replace the arrangement (used by persistence restore and undo).
+    ///
+    /// Clears live overrides, because they are session state: reloading a scene
+    /// restores full arrangement authority rather than reviving whichever
+    /// faders someone had grabbed.
+    pub fn set_arrangement(&mut self, arrangement: Option<crate::arrangement::ArrangementConfig>) {
+        self.arrangement = arrangement;
+        self.modulation.clear_overrides();
     }
 
     /// Replace transition sequences (used by persistence restore).
@@ -1050,8 +1236,16 @@ mod tests {
         let audio = crate::audio::AudioData::default();
         let audio_values = crate::modulation::AudioValues::default();
         let analyzer_values = crate::modulation::AnalyzerValues::default();
+        let inputs = FrameInputs {
+            audio_data: &audio,
+            audio_values: &audio_values,
+            analyzer_values: &analyzer_values,
+            beat_time: None,
+            transport: None,
+            free_run_time: None,
+        };
         mixer
-            .render(gpu, &audio, &audio_values, &analyzer_values, 60, preview)
+            .render(gpu, &inputs, 60, preview)
             .expect("mixer render");
     }
 
@@ -1218,7 +1412,12 @@ mod tests {
             .add_source(ModulationSource::sine_lfo(1.0));
         let key = Macro::value_mod_key(&macro_uuid);
         mixer.modulation_mut().assign(&key, &src, 1.0, None);
-        mixer.update_modulation(&AudioValues::default(), &AnalyzerValues::default());
+        mixer.update_modulation(
+            None,
+            None,
+            &AudioValues::default(),
+            &AnalyzerValues::default(),
+        );
 
         mixer.apply_macro_modulation();
 

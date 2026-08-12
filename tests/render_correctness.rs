@@ -52,16 +52,41 @@ fn f16_to_f32(bits: u16) -> f32 {
     sign_f * mag
 }
 
-/// Advance the mixer by one frame with silent audio and no modulation.
+/// Advance the mixer by one frame with silent audio and no modulation, on the
+/// wall clock.
 fn render_once(ctx: &GpuContext, mixer: &mut Mixer) {
+    render_frame(ctx, mixer, None);
+}
+
+/// One frame at a stated point on the free-running clock.
+///
+/// Any test that grades how a picture changes *between* frames needs this
+/// rather than [`render_once`]: on the wall clock a frame advances `TIME` by
+/// however long the last one took to render, so the metric would partly measure
+/// the machine. Under a software rasterizer on a shared runner that jitter is
+/// larger than the effect being graded.
+fn render_at(ctx: &GpuContext, mixer: &mut Mixer, frame: usize) {
+    /// The rate a show is authored against, so the steps are the ones a
+    /// performer would see.
+    const FPS: f32 = 60.0;
+    render_frame(ctx, mixer, Some(frame as f32 / FPS));
+}
+
+fn render_frame(ctx: &GpuContext, mixer: &mut Mixer, free_run_time: Option<f32>) {
     let audio = AudioData::default();
     let audio_values = AudioValues {
         sources: std::collections::HashMap::default(),
     };
     let analyzer_values = AnalyzerValues::default();
-    mixer
-        .render(ctx, &audio, &audio_values, &analyzer_values, 60, &[])
-        .expect("render");
+    let inputs = varda::mixer::FrameInputs {
+        audio_data: &audio,
+        audio_values: &audio_values,
+        analyzer_values: &analyzer_values,
+        beat_time: None,
+        transport: None,
+        free_run_time,
+    };
+    mixer.render(ctx, &inputs, 60, &[]).expect("render");
 }
 
 /// Read back the mixer composite (`Rgba16Float`) as linear-light RGBA f32,
@@ -1266,13 +1291,13 @@ fn chroma_flow_auto_palette_does_not_lurch_on_smooth_input() {
         // grade the scheduler and vary with machine load.
         ch.decks[0].render_fps = varda::channel::DeckRenderFps::Fixed(0);
 
-        for _ in 0..WARMUP {
-            render_once(&ctx, &mut mixer);
+        for frame in 0..WARMUP {
+            render_at(&ctx, &mut mixer, frame);
         }
         let mut prev = luminance(&ctx, &mixer);
         let mut deltas = Vec::with_capacity(MEASURE);
-        for _ in 0..MEASURE {
-            render_once(&ctx, &mut mixer);
+        for frame in WARMUP..WARMUP + MEASURE {
+            render_at(&ctx, &mut mixer, frame);
             let cur = luminance(&ctx, &mixer);
             deltas.push(mean_delta(&prev, &cur));
             prev = cur;
@@ -1342,7 +1367,7 @@ fn chroma_flow_frames(
     let last = capture_at.iter().copied().max().unwrap_or(0);
     let mut out = Vec::with_capacity(capture_at.len());
     for frame in 1..=last {
-        render_once(ctx, &mut mixer);
+        render_at(ctx, &mut mixer, frame);
         if capture_at.contains(&frame) {
             out.push(
                 read_back(ctx, &mixer, w, h)

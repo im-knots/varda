@@ -3,10 +3,27 @@
 use super::super::{UIActions, UIData};
 use super::midi::render_midi_section;
 use super::modulation::render_modulation_section;
+use super::monitoring::render_monitoring_section;
 use super::outputs::render_output_section;
 use super::stage::render_surface_editor;
+use super::tonemap::{render_tonemap_section, tonemap_name};
 
 pub(super) fn render_right_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
+    // Bottom-up so the telemetry cluster is pinned to the panel floor rather
+    // than riding the end of the scrolled content, where it would drift with
+    // whichever sections happen to be expanded.
+    ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+        ui.add_space(4.0);
+        render_monitoring_section(ui, data, actions);
+        ui.separator();
+
+        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+            render_right_panel_body(ui, data, actions);
+        });
+    });
+}
+
+fn render_right_panel_body(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     egui::ScrollArea::vertical().show(ui, |ui| {
         // Header row: collapse button on left, heading on right (mirror of library panel)
         ui.horizontal(|ui| {
@@ -81,6 +98,19 @@ pub(super) fn render_right_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut
         ui.add_space(6.0);
 
         // === Collapsible sections ===
+
+        // Directly under the preview it grades, and named in full on the header
+        // so the active curve is legible without opening anything.
+        egui::CollapsingHeader::new(
+            egui::RichText::new(format!("🎨 Tonemap — {}", tonemap_name(data.tonemap_mode)))
+                .strong(),
+        )
+        .default_open(false)
+        .show(ui, |ui| {
+            render_tonemap_section(ui, data, actions);
+        });
+
+        ui.add_space(4.0);
 
         egui::CollapsingHeader::new(egui::RichText::new("〰 Modulation").strong())
             .default_open(false)

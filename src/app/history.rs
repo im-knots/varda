@@ -112,6 +112,8 @@ mod tests {
             render_height: None,
             tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
             active_lut: None,
+            arrangement: None,
+            transport: crate::scene::TransportConfig::default(),
         }
     }
 

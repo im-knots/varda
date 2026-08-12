@@ -765,6 +765,7 @@ impl MixerCommands for VardaApp {
         let feedback_value = crate::param_router::param_value_to_norm_f32(&value);
         match crate::param_router::apply_typed_param_by_path(&mut self.mixer, path, value) {
             Ok(()) => {
+                self.note_live_route_write(path, feedback_value);
                 // Broadcast to OSC feedback targets
                 if let Some(ref sender) = self.input.osc_feedback {
                     if sender.has_targets() {
@@ -863,6 +864,32 @@ impl ModulationCommands for VardaApp {
     fn add_step_sequencer(&mut self, num_steps: usize, rate: f32) -> String {
         let source = ModulationSource::step_sequencer(num_steps, rate);
         self.mixer.modulation_mut().add_source(source)
+    }
+
+    fn add_automation_lane(&mut self, target: &str, timebase: crate::timebase::Timebase) -> String {
+        let modulation = self.mixer.modulation_mut();
+        let uuid = modulation.add_source(ModulationSource::envelope(Vec::new()));
+        modulation.set_timebase(&uuid, timebase);
+        // Absolute is the whole point: a curve drawn to a value must produce
+        // that value rather than depending on the saved fader position.
+        modulation.assign_with_mode(
+            target,
+            &uuid,
+            1.0,
+            None,
+            crate::modulation::AssignmentMode::Absolute,
+        );
+        uuid
+    }
+
+    fn set_envelope_breakpoints(
+        &mut self,
+        uuid: &str,
+        breakpoints: Vec<crate::modulation::Breakpoint>,
+    ) -> bool {
+        self.mixer
+            .modulation_mut()
+            .set_envelope_breakpoints(uuid, breakpoints)
     }
 
     fn remove_modulation_source(&mut self, uuid: &str) {
@@ -1064,10 +1091,16 @@ impl ModulationQueries for VardaApp {
                         output_name: output_name.clone(),
                         smoothing: *smoothing,
                     },
+                    ModulationSource::Envelope { breakpoints, .. } => {
+                        ModulationSourceSnapshot::Envelope {
+                            breakpoints: breakpoints.clone(),
+                        }
+                    }
                 };
                 ModulationSourceSnapshotEntry {
                     uuid: entry.uuid.clone(),
                     source: snapshot,
+                    timebase: entry.timebase,
                 }
             })
             .collect();

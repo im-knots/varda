@@ -221,6 +221,7 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                         render_cost_us: slot.render_cost_us,
                         gpu_render_cost_us: slot.gpu_render_cost_us,
                         fps: slot.deck.fps(),
+                        source_asleep: !slot.source_demand.wants_frames(),
                         running_analyzers: slot
                             .deck
                             .analyzers
@@ -595,7 +596,40 @@ pub(crate) fn build_clock_snapshot(app: &VardaApp) -> ClockSnapshot {
         preference_label,
         preference_force_device_id,
         manual_bpm: app.input.clock_manager.manual_bpm(),
+        beat_followers: app
+            .mixer
+            .modulation()
+            .followers_of(crate::timebase::Timebase::Beat),
     }
+}
+
+/// Build the transport snapshot, adding the follower count that the `From` impl
+/// cannot see because the transport does not know about the modulation engine.
+pub(crate) fn build_transport_snapshot(app: &VardaApp) -> crate::engine::types::TransportSnapshot {
+    let mut snapshot: crate::engine::types::TransportSnapshot = (&app.transport).into();
+    snapshot.followers = app
+        .mixer
+        .modulation()
+        .followers_of(crate::timebase::Timebase::Transport);
+    snapshot
+}
+
+/// Build the arrangement snapshot, or `None` for a Performance-only scene.
+pub(crate) fn build_arrangement_snapshot(
+    app: &VardaApp,
+) -> Option<crate::engine::types::ArrangementSnapshot> {
+    let config = app.mixer.arrangement()?;
+    Some(crate::engine::types::ArrangementSnapshot {
+        engaged: app.arrangement_authority().is_engaged(),
+        overridden_params: app
+            .mixer
+            .modulation()
+            .overridden_params()
+            .map(String::from)
+            .collect(),
+        duration: config.duration(),
+        config: config.clone(),
+    })
 }
 
 /// Build a full `EngineState` from all subsystem snapshots.
@@ -614,6 +648,8 @@ pub(crate) fn build_engine_state(app: &VardaApp) -> EngineState {
         depth_sensors: build_depth_sensor_snapshot(app),
         screen_capture: build_screen_capture_snapshot(app),
         clock: build_clock_snapshot(app),
+        transport: build_transport_snapshot(app),
+        arrangement: build_arrangement_snapshot(app),
         fps: app.frame_stats.fps_smoothed,
         frame_count: app.frame_stats.frame_count,
         target_fps: app.target_fps,

@@ -1,5 +1,6 @@
 //! Channel - Groups multiple decks into a composited layer with its own effect chain
 
+use crate::arrangement::SourceDemand;
 use crate::deck::{Deck, Effect};
 use crate::isf::ISFShader;
 use crate::mixer::GpuTimingFrame;
@@ -319,6 +320,15 @@ pub struct DeckSlot {
     pub skip_counter: u32,
     /// GPU-measured render cost in microseconds (EMA, 0 = no data yet)
     pub gpu_render_cost_us: f32,
+    /// True while the arrangement is driving this deck, which suspends its
+    /// auto-transition. Recomputed every frame by `Mixer::apply_arrangement`
+    /// and never persisted. See /spec/arrangement.md § Authority.
+    pub arrangement_authority: bool,
+    /// What the arrangement predicts about this deck's source: whether it is
+    /// wanted soon, or far enough from any region that its decoding can stop.
+    /// Recomputed every frame alongside `arrangement_authority`, never
+    /// persisted. See /spec/deck-residency.md.
+    pub source_demand: SourceDemand,
 }
 
 impl DeckSlot {
@@ -336,6 +346,8 @@ impl DeckSlot {
             render_cost_us: 0.0,
             skip_counter: 0,
             gpu_render_cost_us: 0.0,
+            arrangement_authority: false,
+            source_demand: SourceDemand::default(),
         }
     }
 
@@ -564,8 +576,18 @@ impl Channel {
     /// stay in sync and don't show stale/black frames when faded back in.
     /// `target_fps` is the rate the renderer presents at (0 = uncapped); decode
     /// threads use it to avoid producing frames that can never be shown.
+    ///
+    /// The one exception is a deck the arrangement has put to sleep, which is
+    /// far enough from its next region that nothing can bring it up in time to
+    /// matter. It holds its last frame and resumes from there.
+    /// See /spec/deck-residency.md.
     pub fn tick_video_frames(&mut self, encoder: &mut wgpu::CommandEncoder, target_fps: u32) {
         for slot in &mut self.decks {
+            slot.deck
+                .set_video_suspended(!slot.source_demand.wants_frames());
+            if !slot.source_demand.wants_frames() {
+                continue;
+            }
             slot.deck.set_video_output_fps(target_fps);
             if let Err(e) = slot.deck.update_video_frame(encoder) {
                 log::warn!("Video frame update failed: {e}");
@@ -1330,7 +1352,10 @@ impl Channel {
             let slot = &self.decks[i];
             let has_at = slot.auto_transition.as_ref().is_some_and(|at| at.enabled);
             let phase = slot.transition_phase();
-            has_at && !slot.mute && phase != DeckTransitionPhase::Done
+            has_at
+                && !slot.mute
+                && !slot.arrangement_authority
+                && phase != DeckTransitionPhase::Done
         });
 
         // Update phase for each deck, collecting indices that just started transitioning
@@ -1339,6 +1364,15 @@ impl Channel {
         for i in 0..self.decks.len() {
             let is_active = active_idx == Some(i);
             let slot = &mut self.decks[i];
+            // A deck the arrangement drives keeps its auto-transition config but
+            // stops advancing it. Auto-transitions are *relative* (phase depends
+            // on when a deck became active, not on transport position), so they
+            // cannot be resolved from an arbitrary position and would fight the
+            // regions. See /spec/transport.md § Relationship to Performance Mode
+            // Sequencers.
+            if slot.arrangement_authority {
+                continue;
+            }
             let at = match &mut slot.auto_transition {
                 Some(at) if at.enabled => at,
                 _ => continue,

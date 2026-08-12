@@ -28,6 +28,7 @@ impl VardaApp {
         {
             let scene = crate::persistence::snapshot_scene(
                 &self.mixer,
+                Some(&self.transport_config()),
                 self.render_width,
                 self.render_height,
             );
@@ -184,6 +185,14 @@ impl VardaApp {
                     ) {
                         Ok(result) => {
                             self.mixer = result.mixer;
+                            // How the show counts frames and where it loops are
+                            // authored; where it was stopped is not, so the
+                            // position stays at zero and the arrangement stays
+                            // inert until someone starts it.
+                            self.transport
+                                .set_timecode_rate(scene_config.transport.timecode_rate);
+                            self.transport
+                                .set_loop_region(scene_config.transport.loop_region);
                             for warn in &result.warnings {
                                 self.session.notifications.warn(warn.clone());
                             }
@@ -314,6 +323,14 @@ impl VardaApp {
 
         // (b2) Macros — cheap clone (config changes are undoable; live turns are not)
         self.mixer.set_macros(target.macros.clone());
+
+        // (b3) Arrangement — cheap clone. Regions and lanes are edited through
+        // the undo stack like any other scene data; the transport's *position*
+        // is not, since undoing an edit must not also rewind the show.
+        self.mixer.set_arrangement(target.arrangement.clone());
+        self.transport
+            .set_timecode_rate(target.transport.timecode_rate);
+        self.transport.set_loop_region(target.transport.loop_region);
 
         // (c) Transition shader — compare names, only recreate if changed
         {
@@ -583,6 +600,15 @@ impl VardaApp {
         (warnings, structural)
     }
 
+    /// The persisted half of the transport: how this show counts frames and
+    /// where it loops, without its position or run state.
+    pub fn transport_config(&self) -> crate::scene::TransportConfig {
+        crate::scene::TransportConfig {
+            timecode_rate: self.transport.timecode_rate(),
+            loop_region: self.transport.loop_region(),
+        }
+    }
+
     /// Build a combined history snapshot (scene + stage) of current engine
     /// state using neutral/default editor prefs.
     ///
@@ -592,8 +618,12 @@ impl VardaApp {
     /// defaults are inconsequential to what undo actually restores. The windowed
     /// runner builds its own snapshot with real layout prefs.
     pub fn history_snapshot_default(&self) -> super::history::HistorySnapshot {
-        let scene =
-            crate::persistence::snapshot_scene(&self.mixer, self.render_width, self.render_height);
+        let scene = crate::persistence::snapshot_scene(
+            &self.mixer,
+            Some(&self.transport_config()),
+            self.render_width,
+            self.render_height,
+        );
         let d = crate::persistence::StagePrefs::default();
         let stage = crate::persistence::snapshot_stage(
             &self.output.surface_manager,
@@ -616,8 +646,12 @@ impl VardaApp {
     /// state, sourcing cosmetic editor prefs and dome layout flags from the UI
     /// `layout`. Used by the windowed runner's undo/redo push and restore.
     pub fn history_snapshot(&self, layout: &UILayoutState) -> super::history::HistorySnapshot {
-        let scene =
-            crate::persistence::snapshot_scene(&self.mixer, self.render_width, self.render_height);
+        let scene = crate::persistence::snapshot_scene(
+            &self.mixer,
+            Some(&self.transport_config()),
+            self.render_width,
+            self.render_height,
+        );
         let stage = crate::persistence::snapshot_stage(
             &self.output.surface_manager,
             &self.output.outputs,
@@ -1063,6 +1097,7 @@ mod tests {
                     blend_mode: crate::scene::BlendModeConfig::Normal,
                     decks: vec![],
                     effects: vec![],
+                    modulation: vec![],
                 },
                 crate::scene::ChannelConfig {
                     uuid: crate::deck::generate_short_uuid(),
@@ -1071,6 +1106,7 @@ mod tests {
                     blend_mode: crate::scene::BlendModeConfig::Normal,
                     decks: vec![],
                     effects: vec![],
+                    modulation: vec![],
                 },
             ],
             crossfader: 0.42,
@@ -1083,6 +1119,8 @@ mod tests {
             render_height: Some(1080),
             tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
             active_lut: None,
+            arrangement: None,
+            transport: crate::scene::TransportConfig::default(),
         };
         let (warnings, _structural) = app.apply_scene_diff(&scene, 1920, 1080);
         assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");

@@ -1018,6 +1018,7 @@ pub(super) fn render_selected_deck_detail(
                                     let midi_path_prefix = format!("deck/{deck_uuid}");
                                     let deck_uuid_assign = deck_uuid.clone();
                                     let deck_uuid_remove = deck_uuid.clone();
+                                    let deck_uuid_automate = deck_uuid.clone();
                                     widgets::render_params(
                                         ui,
                                         &gen_params.params,
@@ -1028,6 +1029,10 @@ pub(super) fn render_selected_deck_detail(
                                         }),
                                         Some(&|name: &str| EngineCommand::ClearModulation {
                                             target: format!("deck_{deck_uuid_remove}:{name}"),
+                                        }),
+                                        Some(&|name: &str| EngineCommand::AddAutomationLane {
+                                            target: format!("deck_{deck_uuid_automate}:{name}"),
+                                            timebase: crate::timebase::Timebase::Transport,
                                         }),
                                         &mut actions.commands,
                                         &mut actions.session.gesture_active,
@@ -1066,7 +1071,12 @@ pub(super) fn render_selected_deck_detail(
                     render_effect_drop_zone(ui, &format!("deck_{}", deck.uuid), eff_idx);
 
                     // Effect card with drag handle in header only
-                    let card_resp = egui::Frame::default()
+                    // A scope, not the Frame, because a `Ui` registers itself
+                    // before its contents and so loses hit-test ties to the
+                    // parameter widgets inside the card.
+                    let card = egui::UiBuilder::new().sense(egui::Sense::click());
+                    let card_scope = ui.scope_builder(card, |ui| {
+                        egui::Frame::default()
                         .inner_margin(6.0)
                         .corner_radius(4.0)
                         .fill(ui.visuals().faint_bg_color)
@@ -1092,6 +1102,7 @@ pub(super) fn render_selected_deck_detail(
                                     let eff_uuid_param = eff_uuid.clone();
                                     let eff_uuid_assign = eff_uuid.clone();
                                     let eff_uuid_remove = eff_uuid.clone();
+                                    let eff_uuid_automate = eff_uuid.clone();
                                     let eff_midi_prefix = format!("deck/{deck_uuid_eff}/effect/{eff_uuid}");
                                     widgets::render_effect_params(
                                         ui,
@@ -1103,6 +1114,10 @@ pub(super) fn render_selected_deck_detail(
                                         }),
                                         Some(&|name: &str| EngineCommand::ClearModulation {
                                             target: format!("fx_{eff_uuid_remove}:{name}"),
+                                        }),
+                                        Some(&|name: &str| EngineCommand::AddAutomationLane {
+                                            target: format!("fx_{eff_uuid_automate}:{name}"),
+                                            timebase: crate::timebase::Timebase::Transport,
                                         }),
                                         &mut actions.commands,
                                         &mut actions.session.gesture_active,
@@ -1121,7 +1136,16 @@ pub(super) fn render_selected_deck_detail(
                                 }
                             });
                             });
-                        });
+                        })
+                    });
+                    let card_resp = card_scope.inner;
+                    super::effects::effect_context_menu(
+                        &card_scope.response,
+                        data,
+                        actions,
+                        eff_uuid,
+                        eff_name,
+                    );
                     // X button overlay at top-right of card
                     {
                         let card_rect = card_resp.response.rect;

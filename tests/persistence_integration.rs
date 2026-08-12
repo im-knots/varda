@@ -3,6 +3,7 @@
 use varda::app::{AppConfig, VardaApp};
 use varda::engine::{BlendMode, CommandResult, EffectTarget, EngineCommand};
 use varda::modulation::LFOWaveform;
+use varda::timebase::Timebase;
 use varda::usecases::ui::UILayoutState;
 
 use clap::Parser;
@@ -130,6 +131,226 @@ fn save_load_modulation_sources() {
         !state.modulation.sources.is_empty(),
         "LFO should survive roundtrip"
     );
+}
+
+/// A beat-locked modulator must still be beat-locked after a reload, otherwise
+/// a saved show silently reverts to wall time. See /spec/timebase.md.
+#[test]
+fn save_load_modulation_timebase() {
+    let tmp = TempDir::new().unwrap();
+    let Some(mut app) = headless_app_in(tmp.path()) else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::AddLfo {
+            waveform: LFOWaveform::Sine,
+            frequency: 2.0,
+        },
+    );
+    let uuid = app.build_engine_state().modulation.sources[0].uuid.clone();
+    fire(
+        &mut app,
+        EngineCommand::UpdateModulationTimebase {
+            uuid,
+            timebase: Timebase::Beat,
+        },
+    );
+    app.save_workspace(&UILayoutState::default());
+
+    let Some(mut app2) = headless_app_in(tmp.path()) else {
+        return;
+    };
+    let _ = app2.load_workspace();
+    let state = app2.build_engine_state();
+    assert_eq!(
+        state.modulation.sources[0].timebase,
+        Timebase::Beat,
+        "timebase should survive a save/load roundtrip"
+    );
+}
+
+/// An automation curve is only worth drawing if it survives the save. This also
+/// covers `AssignmentMode::Absolute` persisting, since a curve that reloaded as
+/// additive would ride on the fader instead of setting it.
+/// See /spec/automation.md § Persistence.
+#[test]
+fn save_load_automation_envelope() {
+    use varda::modulation::{Breakpoint, CurveKind};
+
+    let tmp = TempDir::new().unwrap();
+    let Some(mut app) = headless_app_in(tmp.path()) else {
+        return;
+    };
+    let ch = channel_uuid(&mut app, 0);
+    let deck_uuid = match send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_uuid: ch,
+            color: [1.0, 1.0, 1.0, 1.0],
+        },
+    ) {
+        CommandResult::OkWithId { uuid } => uuid,
+        other => panic!("expected OkWithId, got {other:?}"),
+    };
+    let target = format!("deck_{deck_uuid}:opacity");
+
+    let uuid = match send_cmd(
+        &mut app,
+        EngineCommand::AddAutomationLane {
+            target: target.clone(),
+            timebase: Timebase::Transport,
+        },
+    ) {
+        CommandResult::OkWithId { uuid } => uuid,
+        other => panic!("expected the new envelope's uuid, got {other:?}"),
+    };
+
+    let drawn = vec![
+        Breakpoint::new(0.0, 0.1),
+        Breakpoint::new(8.5, 0.9).with_curve(CurveKind::Smooth),
+    ];
+    fire(
+        &mut app,
+        EngineCommand::SetEnvelopeBreakpoints {
+            uuid: uuid.clone(),
+            breakpoints: drawn.clone(),
+        },
+    );
+    app.save_workspace(&UILayoutState::default());
+
+    let Some(mut app2) = headless_app_in(tmp.path()) else {
+        return;
+    };
+    let _ = app2.load_workspace();
+    let state = app2.build_engine_state();
+
+    let entry = state
+        .modulation
+        .sources
+        .iter()
+        .find(|s| s.uuid == uuid)
+        .expect("envelope should survive the reload");
+    assert_eq!(entry.timebase, Timebase::Transport);
+    let varda::engine::types::ModulationSourceSnapshot::Envelope { breakpoints } = &entry.source
+    else {
+        panic!("expected the reloaded source to still be an envelope");
+    };
+    assert_eq!(breakpoints, &drawn, "the drawn curve should round-trip");
+
+    let assigned = state
+        .modulation
+        .assignments
+        .get(&target)
+        .expect("the assignment should survive the reload");
+    assert!(assigned.iter().any(|a| a.source_id == uuid));
+}
+
+/// Everything a timeline edit produces has to survive the file, or the show
+/// authored on Friday is not the show that opens on Saturday.
+/// See /spec/arrangement.md § Storage.
+#[test]
+fn save_load_arrangement_edits() {
+    use varda::arrangement::RegionConfig;
+
+    let tmp = TempDir::new().unwrap();
+    let Some(mut app) = headless_app_in(tmp.path()) else {
+        return;
+    };
+    let ch = channel_uuid(&mut app, 0);
+    let deck_uuid = match send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_uuid: ch,
+            color: [1.0, 1.0, 1.0, 1.0],
+        },
+    ) {
+        CommandResult::OkWithId { uuid } => uuid,
+        other => panic!("expected OkWithId, got {other:?}"),
+    };
+
+    // Author as the panel does: drop a region, then drag it into shape.
+    fire(
+        &mut app,
+        EngineCommand::AddRegion {
+            deck_uuid: deck_uuid.clone(),
+            region: RegionConfig::new(4.0, 8.0),
+        },
+    );
+    let shaped = RegionConfig::new(4.5, 12.25).with_fades(0.5, 1.5);
+    fire(
+        &mut app,
+        EngineCommand::UpdateRegion {
+            deck_uuid: deck_uuid.clone(),
+            index: 0,
+            region: shaped,
+        },
+    );
+    fire(
+        &mut app,
+        EngineCommand::SetLaneCollapsed {
+            deck_uuid: deck_uuid.clone(),
+            collapsed: true,
+        },
+    );
+    app.save_workspace(&UILayoutState::default());
+
+    let Some(mut app2) = headless_app_in(tmp.path()) else {
+        return;
+    };
+    let _ = app2.load_workspace();
+    let state = app2.build_engine_state();
+
+    let arrangement = state
+        .arrangement
+        .expect("the arrangement should survive the reload");
+    let lane = arrangement
+        .config
+        .lane(&deck_uuid)
+        .expect("the lane should still name its deck");
+    assert_eq!(lane.regions, vec![shaped], "the edited span should reload");
+    assert!(lane.collapsed, "a folded lane should reload folded");
+
+    // The region compiles back to an opacity curve on load, so the deck is
+    // driven without anyone having to touch it again.
+    let key = varda::arrangement::opacity_param_key(&deck_uuid);
+    assert!(
+        state.modulation.assignments.contains_key(&key),
+        "the reloaded region should drive the deck's opacity"
+    );
+}
+
+/// Cues are how a show is navigated, so they belong to the scene rather than to
+/// the session that dropped them. See /spec/arrangement.md § Cue points.
+#[test]
+fn save_load_cue_points() {
+    let tmp = TempDir::new().unwrap();
+    let Some(mut app) = headless_app_in(tmp.path()) else {
+        return;
+    };
+    fire(
+        &mut app,
+        EngineCommand::AddCue {
+            at: 64.5,
+            name: "Drop".to_string(),
+        },
+    );
+    app.save_workspace(&UILayoutState::default());
+
+    let Some(mut app2) = headless_app_in(tmp.path()) else {
+        return;
+    };
+    let _ = app2.load_workspace();
+    let cues = app2
+        .build_engine_state()
+        .arrangement
+        .expect("an arrangement holding only cues should still reload")
+        .config
+        .cues;
+
+    assert_eq!(cues.len(), 1);
+    assert_eq!(cues[0].name, "Drop");
+    assert!((cues[0].at - 64.5).abs() < 1e-9);
 }
 
 #[test]

@@ -70,6 +70,99 @@ fn snapshot_full_ui_library_closed() {
     harness.snapshot("full_ui_library_closed");
 }
 
+/// Collapsing the right panel must not take the telemetry with it: the frame
+/// rate matters most to someone who has just reclaimed screen space to chase
+/// performance. See /spec/transport.md.
+#[test]
+fn snapshot_full_ui_right_panel_closed() {
+    let mut data = UIData::test_fixture();
+    data.right_panel_open = false;
+    let Some(mut harness) = snapshot_harness(data) else {
+        return;
+    };
+    harness.snapshot("full_ui_right_panel_closed");
+}
+
+/// Arrangement mode swaps the central area and nothing else: the library,
+/// bottom bar, and right panel must survive the mode switch intact. That is the
+/// whole claim of /spec/arrangement.md § UI, and a picture is the only way to
+/// check it.
+#[test]
+fn snapshot_full_ui_arrangement_mode() {
+    let mut data = UIData::test_fixture();
+    let deck_uuid = data.channels[0].decks[0].uuid.clone();
+    let mut lane = varda::arrangement::LaneConfig::new(&deck_uuid);
+    lane.regions.push(varda::arrangement::RegionConfig {
+        start: 2.0,
+        end: 14.0,
+        fade_in: 1.5,
+        fade_out: 3.0,
+    });
+    let config = varda::arrangement::ArrangementConfig {
+        lanes: vec![lane],
+        // A cue in the picture, because "yellow dot on the ruler, dashed line
+        // down the lanes" is a claim only a picture can check.
+        cues: vec![varda::arrangement::Cue {
+            uuid: "cue00001".to_string(),
+            name: "Drop".to_string(),
+            at: 10.0,
+        }],
+        ..Default::default()
+    };
+    data.arrangement = Some(varda::engine::types::ArrangementSnapshot {
+        duration: config.duration(),
+        config,
+        engaged: true,
+        overridden_params: vec![],
+    });
+    data.arrangement_mode_open = true;
+    data.transport.has_run = true;
+    data.transport.position = 6.0;
+
+    let Some(mut harness) = snapshot_harness(data) else {
+        return;
+    };
+    harness.snapshot("full_ui_arrangement_mode");
+}
+
+/// The same show back at the desk. "Two buttons wide, under the mixer and the
+/// macros, without crowding either" is a claim only a picture can check.
+#[test]
+fn snapshot_full_ui_cue_bank() {
+    let mut data = UIData::test_fixture();
+    let config = varda::arrangement::ArrangementConfig {
+        cues: vec![
+            varda::arrangement::Cue {
+                uuid: "cue00001".to_string(),
+                name: "Intro".to_string(),
+                at: 0.0,
+            },
+            varda::arrangement::Cue {
+                uuid: "cue00002".to_string(),
+                name: "Drop".to_string(),
+                at: 10.0,
+            },
+            varda::arrangement::Cue {
+                uuid: "cue00003".to_string(),
+                name: "Breakdown".to_string(),
+                at: 24.0,
+            },
+        ],
+        ..Default::default()
+    };
+    data.arrangement = Some(varda::engine::types::ArrangementSnapshot {
+        duration: config.duration(),
+        config,
+        engaged: false,
+        overridden_params: vec![],
+    });
+
+    let Some(mut harness) = snapshot_harness(data) else {
+        return;
+    };
+    harness.snapshot("full_ui_cue_bank");
+}
+
 // ── Bottom bar contexts ─────────────────────────────────────────────
 
 #[test]

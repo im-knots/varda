@@ -7,6 +7,7 @@ use varda::engine::{
 use varda::modulation::LFOWaveform;
 use varda::renderer::context::OutputSource;
 use varda::surface::SurfacePath;
+use varda::timebase::Timebase;
 
 mod common;
 
@@ -138,6 +139,340 @@ fn add_lfo_assign_modulation_verify() {
     assert!(matches!(r, CommandResult::Ok));
     let state = app.build_engine_state();
     assert!(state.modulation.assignments.contains_key("crossfader"));
+}
+
+// ── Transport ───────────────────────────────────────────────────
+
+/// Transport control travels the command path and lands in the snapshot both
+/// the UI and the REST API read. See /spec/transport.md.
+#[test]
+fn transport_control_roundtrip() {
+    use varda::transport::{LoopRegion, TransportSource};
+
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+
+    let t = app.build_engine_state().transport;
+    assert!(!t.has_run, "a fresh session has not run");
+    assert_eq!(t.status_label, "Idle");
+    assert_eq!(t.timecode, "00:00:00;00");
+
+    fire(&mut app, EngineCommand::TransportPlay);
+    assert!(app.build_engine_state().transport.running);
+
+    fire(
+        &mut app,
+        EngineCommand::TransportLocate { position: 3600.0 },
+    );
+    let t = app.build_engine_state().transport;
+    assert!((t.position - 3600.0).abs() < 1e-9);
+    assert_eq!(t.timecode, "01:00:00;00");
+
+    fire(&mut app, EngineCommand::TransportStop);
+    assert!(!app.build_engine_state().transport.running);
+
+    fire(
+        &mut app,
+        EngineCommand::SetTransportLoop {
+            region: Some(LoopRegion {
+                start: 10.0,
+                end: 20.0,
+            }),
+        },
+    );
+    assert_eq!(
+        app.build_engine_state().transport.loop_region,
+        Some(LoopRegion {
+            start: 10.0,
+            end: 20.0
+        })
+    );
+
+    fire(
+        &mut app,
+        EngineCommand::SetTransportSource {
+            source: TransportSource::Timecode,
+        },
+    );
+    let t = app.build_engine_state().transport;
+    assert_eq!(t.source, TransportSource::Timecode);
+    assert!(
+        !t.running,
+        "arming to chase must stop local playback rather than race the master"
+    );
+}
+
+/// The API can send an inverted range; the engine has to reject it rather than
+/// store a loop that can never wrap.
+#[test]
+fn transport_rejects_an_inverted_loop_region() {
+    use varda::transport::LoopRegion;
+
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::SetTransportLoop {
+            region: Some(LoopRegion {
+                start: 9.0,
+                end: 2.0,
+            }),
+        },
+    );
+    assert!(matches!(
+        r,
+        CommandResult::Err {
+            code: ErrorCode::InvalidInput,
+            ..
+        }
+    ));
+    assert_eq!(app.build_engine_state().transport.loop_region, None);
+}
+
+/// Position is the master's while chasing, so a locate has to be refused with a
+/// reason rather than silently ignored.
+#[test]
+fn transport_refuses_to_scrub_while_chasing_timecode() {
+    use varda::transport::TransportSource;
+
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    fire(
+        &mut app,
+        EngineCommand::SetTransportSource {
+            source: TransportSource::Timecode,
+        },
+    );
+    assert_eq!(
+        app.build_engine_state().transport.status_label,
+        "Waiting for signal",
+        "armed but silent must not read as merely stopped"
+    );
+
+    for cmd in [
+        EngineCommand::TransportPlay,
+        EngineCommand::TransportLocate { position: 42.0 },
+    ] {
+        assert!(matches!(
+            send_cmd(&mut app, cmd),
+            CommandResult::Err {
+                code: ErrorCode::InvalidInput,
+                ..
+            }
+        ));
+    }
+    assert!(app.build_engine_state().transport.position.abs() < f64::EPSILON);
+}
+
+#[test]
+fn timecode_rate_changes_how_the_position_reads() {
+    use varda::transport::TimecodeRate;
+
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    fire(&mut app, EngineCommand::TransportLocate { position: 1.0 });
+
+    fire(
+        &mut app,
+        EngineCommand::SetTimecodeRate {
+            rate: TimecodeRate::Fps25,
+        },
+    );
+    assert_eq!(app.build_engine_state().transport.timecode, "00:00:01:00");
+
+    fire(
+        &mut app,
+        EngineCommand::SetTimecodeRate {
+            rate: TimecodeRate::Fps24,
+        },
+    );
+    assert_eq!(app.build_engine_state().transport.timecode, "00:00:01:00");
+}
+
+/// A source's timebase is set by command and visible in the engine snapshot,
+/// which is the path both the UI and the REST API read. See /spec/timebase.md.
+#[test]
+fn set_modulation_timebase_roundtrip() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::AddLfo {
+            waveform: LFOWaveform::Sine,
+            frequency: 1.0,
+        },
+    );
+    let uuid = app.build_engine_state().modulation.sources[0].uuid.clone();
+
+    assert_eq!(
+        app.build_engine_state().modulation.sources[0].timebase,
+        Timebase::FreeRun,
+        "a new source free-runs until told otherwise"
+    );
+
+    fire(
+        &mut app,
+        EngineCommand::UpdateModulationTimebase {
+            uuid: uuid.clone(),
+            timebase: Timebase::Beat,
+        },
+    );
+    assert_eq!(
+        app.build_engine_state().modulation.sources[0].timebase,
+        Timebase::Beat
+    );
+
+    fire(
+        &mut app,
+        EngineCommand::UpdateModulationTimebase {
+            uuid,
+            timebase: Timebase::FreeRun,
+        },
+    );
+    assert_eq!(
+        app.build_engine_state().modulation.sources[0].timebase,
+        Timebase::FreeRun
+    );
+}
+
+/// "Add automation lane" creates the envelope, locks it to the transport, and
+/// assigns it, all in one gesture. See /spec/automation.md.
+#[test]
+fn add_automation_lane_creates_an_assigned_transport_locked_envelope() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let target = "deck_abc:opacity".to_string();
+    let uuid = match send_cmd(
+        &mut app,
+        EngineCommand::AddAutomationLane {
+            target: target.clone(),
+            timebase: Timebase::Transport,
+        },
+    ) {
+        CommandResult::OkWithId { uuid } => uuid,
+        other => panic!("expected the new envelope's uuid, got {other:?}"),
+    };
+
+    let state = app.build_engine_state();
+    let entry = state
+        .modulation
+        .sources
+        .iter()
+        .find(|s| s.uuid == uuid)
+        .expect("the envelope should exist");
+    assert_eq!(entry.timebase, Timebase::Transport);
+    assert!(
+        state
+            .modulation
+            .assignments
+            .get(&target)
+            .is_some_and(|a| a.iter().any(|m| m.source_id == uuid)),
+        "the lane should be assigned to its target as part of the same gesture"
+    );
+}
+
+/// Breakpoints are stored sorted regardless of the order they arrive in, so an
+/// API caller does not have to maintain the invariant.
+#[test]
+fn envelope_breakpoints_are_sorted_on_write() {
+    use varda::modulation::Breakpoint;
+
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let uuid = match send_cmd(
+        &mut app,
+        EngineCommand::AddAutomationLane {
+            target: "deck_abc:opacity".into(),
+            timebase: Timebase::Transport,
+        },
+    ) {
+        CommandResult::OkWithId { uuid } => uuid,
+        other => panic!("expected OkWithId, got {other:?}"),
+    };
+
+    fire(
+        &mut app,
+        EngineCommand::SetEnvelopeBreakpoints {
+            uuid: uuid.clone(),
+            breakpoints: vec![
+                Breakpoint::new(9.0, 1.0),
+                Breakpoint::new(1.0, 0.0),
+                Breakpoint::new(5.0, 0.5),
+            ],
+        },
+    );
+
+    let state = app.build_engine_state();
+    let entry = state
+        .modulation
+        .sources
+        .iter()
+        .find(|s| s.uuid == uuid)
+        .unwrap();
+    let varda::engine::types::ModulationSourceSnapshot::Envelope { breakpoints } = &entry.source
+    else {
+        panic!("expected an envelope");
+    };
+    let positions: Vec<f64> = breakpoints.iter().map(|b| b.position).collect();
+    assert_eq!(positions, vec![1.0, 5.0, 9.0]);
+}
+
+#[test]
+fn setting_breakpoints_on_a_non_envelope_reports_not_found() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::AddLfo {
+            waveform: LFOWaveform::Sine,
+            frequency: 1.0,
+        },
+    );
+    let lfo = app.build_engine_state().modulation.sources[0].uuid.clone();
+
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::SetEnvelopeBreakpoints {
+            uuid: lfo,
+            breakpoints: vec![],
+        },
+    );
+    assert!(matches!(
+        r,
+        CommandResult::Err {
+            code: ErrorCode::NotFound,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn set_modulation_timebase_on_unknown_source_reports_not_found() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::UpdateModulationTimebase {
+            uuid: "does-not-exist".into(),
+            timebase: Timebase::Beat,
+        },
+    );
+    assert!(matches!(
+        r,
+        CommandResult::Err {
+            code: ErrorCode::NotFound,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -2066,5 +2401,1262 @@ fn remove_unknown_modulation_source_is_a_silent_noop() {
         app.build_engine_state().modulation.sources.len(),
         sources_before,
         "the existing source must be untouched by a no-op removal"
+    );
+}
+
+// ── Arrangement ──────────────────────────────────────────────────────
+//
+// See /spec/arrangement.md. These exercise the whole path: command in,
+// region compiled to an envelope, transport moved, deck opacity out.
+
+/// A deck with one hard-edged region on it.
+fn app_with_one_region(start: f64, end: f64) -> Option<(VardaApp, String)> {
+    let mut app = headless_app()?;
+    let ch = channel_uuid(&mut app, 0);
+    let deck = new_uuid(send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_uuid: ch,
+            color: [1.0, 1.0, 1.0, 1.0],
+        },
+    ));
+    add_region(&mut app, &deck, start, end);
+    Some((app, deck))
+}
+
+fn add_region(app: &mut VardaApp, deck: &str, start: f64, end: f64) {
+    let r = send_cmd(
+        app,
+        EngineCommand::AddRegion {
+            deck_uuid: deck.to_string(),
+            region: varda::arrangement::RegionConfig {
+                start,
+                end,
+                fade_in: 0.0,
+                fade_out: 0.0,
+            },
+        },
+    );
+    // The new region's index comes back so a caller can address it immediately.
+    assert!(matches!(r, CommandResult::OkWithData { .. }), "{r:?}");
+}
+
+/// One full engine frame: inputs (which advance the transport), then render.
+fn step(app: &mut VardaApp) {
+    app.process_inputs();
+    app.update_frame_timing();
+    app.render_mixer_frame();
+}
+
+/// Put the playhead somewhere and actually run, since locating alone
+/// deliberately does not engage the arrangement.
+fn run_from(app: &mut VardaApp, position: f64) {
+    fire(app, EngineCommand::TransportLocate { position });
+    fire(app, EngineCommand::TransportPlay);
+    step(app);
+}
+
+/// Opening a scene that has an arrangement must not black the output. Until the
+/// transport has actually run, Performance mode still owns the decks.
+#[test]
+fn an_arrangement_stays_inert_until_the_transport_runs() {
+    let Some((mut app, deck)) = app_with_one_region(10.0, 20.0) else {
+        return;
+    };
+    fire(
+        &mut app,
+        EngineCommand::SetDeckOpacity {
+            deck_uuid: deck.clone(),
+            opacity: 0.8,
+        },
+    );
+
+    step(&mut app);
+
+    let state = app.build_engine_state();
+    assert!(
+        !state.arrangement.as_ref().expect("arrangement").engaged,
+        "a parked transport must leave the arrangement inert"
+    );
+    assert!(
+        (deck_snapshot(&mut app, &deck).opacity - 0.8).abs() < 1e-4,
+        "the performer's opacity must survive a cold start"
+    );
+}
+
+#[test]
+fn running_into_a_region_hands_the_deck_to_the_arrangement() {
+    let Some((mut app, deck)) = app_with_one_region(10.0, 20.0) else {
+        return;
+    };
+    fire(
+        &mut app,
+        EngineCommand::SetDeckOpacity {
+            deck_uuid: deck.clone(),
+            opacity: 0.0,
+        },
+    );
+    run_from(&mut app, 15.0);
+
+    assert!(
+        app.build_engine_state()
+            .arrangement
+            .expect("arrangement")
+            .engaged
+    );
+    assert!(
+        (deck_snapshot(&mut app, &deck).opacity - 1.0).abs() < 1e-4,
+        "inside its region the deck should be fully visible"
+    );
+}
+
+/// A gap between two regions is authored silence, not idle: the arrangement did
+/// say something about that stretch, and what it said was "nothing".
+#[test]
+fn a_gap_inside_the_arranged_range_hides_the_deck() {
+    let Some((mut app, deck)) = app_with_one_region(10.0, 20.0) else {
+        return;
+    };
+    add_region(&mut app, &deck, 40.0, 50.0);
+    run_from(&mut app, 25.0);
+
+    assert!(
+        deck_snapshot(&mut app, &deck).opacity.abs() < 1e-4,
+        "between regions the deck should be dark"
+    );
+}
+
+/// `HoldPerformance` is the default, and it means the arrangement declines to
+/// drive anything outside its range rather than driving it to zero.
+#[test]
+fn hold_performance_leaves_the_deck_alone_before_the_show() {
+    let Some((mut app, deck)) = app_with_one_region(100.0, 200.0) else {
+        return;
+    };
+    // Engage inside the range first, so the test is about idle behaviour rather
+    // than about the transport never having run.
+    run_from(&mut app, 150.0);
+    assert!((deck_snapshot(&mut app, &deck).opacity - 1.0).abs() < 1e-4);
+
+    fire(&mut app, EngineCommand::TransportLocate { position: 5.0 });
+    step(&mut app);
+
+    assert!(
+        (deck_snapshot(&mut app, &deck).opacity - 1.0).abs() < 1e-4,
+        "outside the arranged range HoldPerformance must not drive the deck"
+    );
+}
+
+/// "Run this loop until the schedule starts" needs the pre-show state to be
+/// something rather than nothing.
+#[test]
+fn show_deck_lights_a_deck_before_the_arranged_range() {
+    let Some((mut app, deck)) = app_with_one_region(100.0, 200.0) else {
+        return;
+    };
+    fire(
+        &mut app,
+        EngineCommand::SetIdleBehaviour {
+            idle: varda::arrangement::IdleBehaviour::ShowDeck {
+                deck_uuid: deck.clone(),
+            },
+        },
+    );
+    fire(
+        &mut app,
+        EngineCommand::SetDeckOpacity {
+            deck_uuid: deck.clone(),
+            opacity: 0.0,
+        },
+    );
+    run_from(&mut app, 5.0);
+
+    assert!(
+        (deck_snapshot(&mut app, &deck).opacity - 1.0).abs() < 1e-4,
+        "the idle deck should be up before the arranged range"
+    );
+}
+
+/// Touching an automated parameter must take effect immediately, not fight the
+/// envelope for the rest of the show.
+#[test]
+fn a_live_touch_takes_a_parameter_back_from_the_arrangement() {
+    let Some((mut app, deck)) = app_with_one_region(10.0, 20.0) else {
+        return;
+    };
+    run_from(&mut app, 15.0);
+    assert!((deck_snapshot(&mut app, &deck).opacity - 1.0).abs() < 1e-4);
+
+    fire(
+        &mut app,
+        EngineCommand::SetDeckOpacity {
+            deck_uuid: deck.clone(),
+            opacity: 0.25,
+        },
+    );
+    step(&mut app);
+
+    assert!(
+        (deck_snapshot(&mut app, &deck).opacity - 0.25).abs() < 1e-4,
+        "the performer's value must win while the override is held"
+    );
+    let state = app.build_engine_state();
+    assert_eq!(
+        state.arrangement.expect("arrangement").overridden_params,
+        vec![format!("deck_{deck}:opacity")],
+        "the held parameter should be reported so the UI can offer a re-arm"
+    );
+}
+
+#[test]
+fn re_arming_returns_the_parameter_to_the_arrangement() {
+    let Some((mut app, deck)) = app_with_one_region(10.0, 20.0) else {
+        return;
+    };
+    run_from(&mut app, 15.0);
+    fire(
+        &mut app,
+        EngineCommand::SetDeckOpacity {
+            deck_uuid: deck.clone(),
+            opacity: 0.25,
+        },
+    );
+    // Zero seconds is an immediate handover, which keeps the test off the clock.
+    fire(
+        &mut app,
+        EngineCommand::RearmParam {
+            param_key: format!("deck_{deck}:opacity"),
+            seconds: Some(0.0),
+        },
+    );
+    step(&mut app);
+
+    assert!(
+        (deck_snapshot(&mut app, &deck).opacity - 1.0).abs() < 1e-4,
+        "after re-arming the envelope should drive the deck again"
+    );
+    assert!(app
+        .build_engine_state()
+        .arrangement
+        .expect("arrangement")
+        .overridden_params
+        .is_empty());
+}
+
+/// A lane is a deck's row, so removing it must give the deck back rather than
+/// leave it pinned at whatever the envelope last said.
+#[test]
+fn removing_a_lane_returns_the_deck_to_performance() {
+    let Some((mut app, deck)) = app_with_one_region(10.0, 20.0) else {
+        return;
+    };
+    add_region(&mut app, &deck, 40.0, 50.0);
+    run_from(&mut app, 25.0);
+    assert!(deck_snapshot(&mut app, &deck).opacity.abs() < 1e-4);
+
+    fire(
+        &mut app,
+        EngineCommand::RemoveLane {
+            deck_uuid: deck.clone(),
+        },
+    );
+    fire(
+        &mut app,
+        EngineCommand::SetDeckOpacity {
+            deck_uuid: deck.clone(),
+            opacity: 0.7,
+        },
+    );
+    step(&mut app);
+
+    assert!(
+        (deck_snapshot(&mut app, &deck).opacity - 0.7).abs() < 1e-4,
+        "a removed lane must stop driving its deck"
+    );
+}
+
+#[test]
+fn arrangement_commands_reject_decks_that_do_not_exist() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::AddLane {
+            deck_uuid: "no-such-deck".into(),
+        },
+    );
+    assert!(
+        matches!(&r, CommandResult::Err { code, .. } if *code == ErrorCode::NotFound),
+        "{r:?}"
+    );
+}
+
+/// How many regions a lane holds, for tests that care that a refusal stored
+/// nothing rather than merely reporting failure.
+fn region_count(app: &mut VardaApp, deck: &str) -> usize {
+    app.build_engine_state()
+        .arrangement
+        .and_then(|a| {
+            a.config
+                .lanes
+                .iter()
+                .find(|l| l.deck_uuid == deck)
+                .map(|l| l.regions.len())
+        })
+        .unwrap_or_default()
+}
+
+/// A region that ends before it starts compiles to nothing sensible, so it is
+/// refused at the door rather than stored and skipped later.
+#[test]
+fn an_inverted_region_is_refused_rather_than_stored() {
+    let Some((mut app, deck)) = app_with_one_region(10.0, 20.0) else {
+        return;
+    };
+    let inverted = varda::arrangement::RegionConfig {
+        start: 30.0,
+        end: 25.0,
+        fade_in: 0.0,
+        fade_out: 0.0,
+    };
+
+    let added = send_cmd(
+        &mut app,
+        EngineCommand::AddRegion {
+            deck_uuid: deck.clone(),
+            region: inverted,
+        },
+    );
+    assert!(
+        matches!(&added, CommandResult::Err { code, .. } if *code == ErrorCode::InvalidInput),
+        "{added:?}"
+    );
+    assert_eq!(
+        region_count(&mut app, &deck),
+        1,
+        "a refused region must not land on the lane"
+    );
+
+    let updated = send_cmd(
+        &mut app,
+        EngineCommand::UpdateRegion {
+            deck_uuid: deck.clone(),
+            index: 0,
+            region: inverted,
+        },
+    );
+    assert!(
+        matches!(&updated, CommandResult::Err { code, .. } if *code == ErrorCode::InvalidInput),
+        "{updated:?}"
+    );
+    let span = app
+        .build_engine_state()
+        .arrangement
+        .expect("arrangement")
+        .config
+        .lanes[0]
+        .regions[0];
+    assert!(
+        (span.start - 10.0).abs() < 1e-9 && (span.end - 20.0).abs() < 1e-9,
+        "a refused edit must leave the region it was aimed at alone"
+    );
+}
+
+/// An index that arrived from a stale client is a miss, not a panic and not a
+/// silent write to a neighbouring region.
+#[test]
+fn editing_a_region_that_is_not_there_is_an_error() {
+    let Some((mut app, deck)) = app_with_one_region(10.0, 20.0) else {
+        return;
+    };
+    let region = varda::arrangement::RegionConfig {
+        start: 1.0,
+        end: 2.0,
+        fade_in: 0.0,
+        fade_out: 0.0,
+    };
+
+    for result in [
+        send_cmd(
+            &mut app,
+            EngineCommand::UpdateRegion {
+                deck_uuid: deck.clone(),
+                index: 7,
+                region,
+            },
+        ),
+        send_cmd(
+            &mut app,
+            EngineCommand::RemoveRegion {
+                deck_uuid: deck.clone(),
+                index: 7,
+            },
+        ),
+        send_cmd(
+            &mut app,
+            EngineCommand::RemoveRegion {
+                deck_uuid: "no-such-deck".into(),
+                index: 0,
+            },
+        ),
+    ] {
+        assert!(
+            matches!(&result, CommandResult::Err { code, .. } if *code == ErrorCode::NotFound),
+            "{result:?}"
+        );
+    }
+    assert_eq!(region_count(&mut app, &deck), 1, "nothing was removed");
+}
+
+/// The idle deck is shown before the show reaches its first region, so naming
+/// one that is gone would black the output at exactly the wrong moment.
+#[test]
+fn showing_a_deck_that_does_not_exist_before_the_show_is_refused() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let result = send_cmd(
+        &mut app,
+        EngineCommand::SetIdleBehaviour {
+            idle: varda::arrangement::IdleBehaviour::ShowDeck {
+                deck_uuid: "no-such-deck".into(),
+            },
+        },
+    );
+    assert!(
+        matches!(&result, CommandResult::Err { code, .. } if *code == ErrorCode::NotFound),
+        "{result:?}"
+    );
+}
+
+/// A lane owns its curves, so removing the row has to take them out of the
+/// modulation graph. An orphan envelope would keep driving a deck that no
+/// longer has a row to edit it from.
+#[test]
+fn removing_a_lane_takes_its_curves_with_it() {
+    let Some((mut app, deck)) = app_with_one_region(10.0, 20.0) else {
+        return;
+    };
+    let sources = |app: &mut VardaApp| app.build_engine_state().modulation.sources.len();
+    let before = sources(&mut app);
+    assert!(before > 0, "a region compiles to an opacity envelope");
+
+    fire(
+        &mut app,
+        EngineCommand::RemoveLane {
+            deck_uuid: deck.clone(),
+        },
+    );
+
+    assert_eq!(
+        sources(&mut app),
+        before - 1,
+        "the lane's envelope must leave with the lane"
+    );
+}
+
+/// The panic button: one press hands every held parameter back, not just the
+/// one that happens to be selected.
+#[test]
+fn re_arming_everything_hands_back_every_parameter() {
+    let Some((mut app, deck)) = app_with_one_region(10.0, 20.0) else {
+        return;
+    };
+    let ch = channel_uuid(&mut app, 0);
+    let second = new_uuid(send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_uuid: ch,
+            color: [1.0, 1.0, 1.0, 1.0],
+        },
+    ));
+    add_region(&mut app, &second, 10.0, 20.0);
+    run_from(&mut app, 15.0);
+
+    for uuid in [&deck, &second] {
+        fire(
+            &mut app,
+            EngineCommand::SetDeckOpacity {
+                deck_uuid: uuid.clone(),
+                opacity: 0.25,
+            },
+        );
+    }
+    assert_eq!(
+        app.build_engine_state()
+            .arrangement
+            .expect("arrangement")
+            .overridden_params
+            .len(),
+        2,
+        "both hands are on the show"
+    );
+
+    fire(&mut app, EngineCommand::RearmAll { seconds: Some(0.0) });
+    step(&mut app);
+
+    assert!(app
+        .build_engine_state()
+        .arrangement
+        .expect("arrangement")
+        .overridden_params
+        .is_empty());
+    for uuid in [&deck, &second] {
+        assert!(
+            (deck_snapshot(&mut app, uuid).opacity - 1.0).abs() < 1e-4,
+            "every parameter is driven by the show again"
+        );
+    }
+}
+
+/// A parameter handed back over a ramp must not snap: the ramp is what keeps a
+/// re-arm from reading as a cut on the output. The badge, though, clears on the
+/// press rather than at the end of the ramp, because the answer to "is a hand on
+/// this?" became no the moment it was let go.
+#[test]
+fn a_re_armed_parameter_ramps_rather_than_snapping() {
+    let Some((mut app, deck)) = app_with_one_region(10.0, 20.0) else {
+        return;
+    };
+    run_from(&mut app, 15.0);
+    fire(
+        &mut app,
+        EngineCommand::SetDeckOpacity {
+            deck_uuid: deck.clone(),
+            opacity: 0.0,
+        },
+    );
+    step(&mut app);
+
+    fire(
+        &mut app,
+        EngineCommand::RearmParam {
+            param_key: format!("deck_{deck}:opacity"),
+            seconds: Some(30.0),
+        },
+    );
+    step(&mut app);
+
+    let opacity = deck_snapshot(&mut app, &deck).opacity;
+    assert!(
+        opacity < 0.9,
+        "{opacity} should still be on its way back to the envelope's 1.0"
+    );
+    assert!(
+        app.build_engine_state()
+            .arrangement
+            .expect("arrangement")
+            .overridden_params
+            .is_empty(),
+        "a parameter on its way back is no longer held, so the badge is already down"
+    );
+}
+
+/// Every surface write is a performer's hand, including the ones that arrive as
+/// router paths from OSC, MIDI, and the API rather than as engine commands. The
+/// write itself lands through the router; this is the half that stops the show
+/// from writing over it a frame later.
+#[test]
+fn a_route_write_takes_the_parameter_back_from_the_show() {
+    let Some((mut app, deck)) = app_with_one_region(10.0, 20.0) else {
+        return;
+    };
+    run_from(&mut app, 15.0);
+
+    app.note_live_route_write(&format!("deck/{deck}/opacity"), 0.25);
+    step(&mut app);
+
+    assert_eq!(
+        app.build_engine_state()
+            .arrangement
+            .expect("arrangement")
+            .overridden_params,
+        vec![format!("deck_{deck}:opacity")],
+        "a route write holds the parameter exactly as a UI drag does"
+    );
+
+    // Past the region, where the envelope would darken the deck if it still had
+    // the parameter.
+    run_from(&mut app, 25.0);
+    assert!(
+        (deck_snapshot(&mut app, &deck).opacity - 1.0).abs() < 1e-4,
+        "a held parameter stays where the hand left it"
+    );
+}
+
+/// A path that names nothing the modulation engine knows is dropped rather than
+/// holding a parameter that does not exist.
+#[test]
+fn a_route_write_to_an_unknown_path_holds_nothing() {
+    let Some((mut app, _deck)) = app_with_one_region(10.0, 20.0) else {
+        return;
+    };
+    run_from(&mut app, 15.0);
+
+    app.note_live_route_write("deck/no-such-deck/opacity", 0.25);
+    app.note_live_route_write("not/a/path/at/all", 0.25);
+    step(&mut app);
+
+    assert!(app
+        .build_engine_state()
+        .arrangement
+        .expect("arrangement")
+        .overridden_params
+        .is_empty());
+}
+
+// ── Cue points ───────────────────────────────────────────────────────
+//
+// See /spec/arrangement.md § Cue points.
+
+fn cues(app: &mut VardaApp) -> Vec<(String, f64)> {
+    app.build_engine_state()
+        .arrangement
+        .map(|a| {
+            a.config
+                .cues
+                .iter()
+                .map(|c| (c.name.clone(), c.at))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn add_cue(app: &mut VardaApp, at: f64) -> String {
+    match send_cmd(
+        app,
+        EngineCommand::AddCue {
+            at,
+            name: String::new(),
+        },
+    ) {
+        CommandResult::OkWithId { uuid } => uuid,
+        other => panic!("expected a cue uuid, got {other:?}"),
+    }
+}
+
+fn position(app: &mut VardaApp) -> f64 {
+    app.build_engine_state().transport.position
+}
+
+/// Cues are named by how many exist and held in position order, so the arrows
+/// can scan the list rather than sort it on every press.
+#[test]
+fn cues_are_named_as_they_are_dropped_and_kept_in_order() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    add_cue(&mut app, 30.0);
+    add_cue(&mut app, 10.0);
+
+    assert_eq!(
+        cues(&mut app),
+        vec![("Cue 2".to_string(), 10.0), ("Cue 1".to_string(), 30.0)]
+    );
+}
+
+/// A drag moves a cue past its neighbours, and navigation reads the list in
+/// order, so the move has to re-sort.
+#[test]
+fn moving_a_cue_past_its_neighbour_reorders_the_list() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let first = add_cue(&mut app, 10.0);
+    add_cue(&mut app, 30.0);
+
+    fire(
+        &mut app,
+        EngineCommand::UpdateCue {
+            uuid: first.clone(),
+            at: Some(50.0),
+            name: None,
+        },
+    );
+
+    assert_eq!(
+        cues(&mut app),
+        vec![("Cue 2".to_string(), 30.0), ("Cue 1".to_string(), 50.0)]
+    );
+
+    fire(
+        &mut app,
+        EngineCommand::UpdateCue {
+            uuid: first,
+            at: None,
+            name: Some("Drop".to_string()),
+        },
+    );
+    assert_eq!(
+        cues(&mut app)[1],
+        ("Drop".to_string(), 50.0),
+        "renaming leaves the position alone"
+    );
+}
+
+/// Back with no earlier cue goes to zero, which is the way home now that the
+/// return-to-zero arrow walks cues. Forward past the last stays put rather than
+/// running off the end, and a cue level with the playhead is skipped in both
+/// directions so that holding an arrow walks the list.
+#[test]
+fn the_arrows_walk_the_cue_list_and_stop_at_its_ends() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    add_cue(&mut app, 10.0);
+    add_cue(&mut app, 20.0);
+
+    fire(&mut app, EngineCommand::TransportNextCue);
+    assert!((position(&mut app) - 10.0).abs() < 1e-9);
+    fire(&mut app, EngineCommand::TransportNextCue);
+    assert!((position(&mut app) - 20.0).abs() < 1e-9);
+    fire(&mut app, EngineCommand::TransportNextCue);
+    assert!(
+        (position(&mut app) - 20.0).abs() < 1e-9,
+        "forward past the last cue holds"
+    );
+
+    fire(&mut app, EngineCommand::TransportPrevCue);
+    assert!((position(&mut app) - 10.0).abs() < 1e-9);
+    fire(&mut app, EngineCommand::TransportPrevCue);
+    assert!(
+        position(&mut app).abs() < 1e-9,
+        "back past the first cue goes home"
+    );
+}
+
+/// A cue button is a way to *go somewhere*, so it locates and leaves the
+/// transport as it was rather than starting the show as a side effect.
+#[test]
+fn firing_a_cue_locates_without_starting_the_show() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let second = {
+        add_cue(&mut app, 10.0);
+        add_cue(&mut app, 20.0)
+    };
+
+    fire(&mut app, EngineCommand::TriggerCue { uuid: second });
+    assert!((position(&mut app) - 20.0).abs() < 1e-9);
+    assert!(
+        !app.build_engine_state().transport.running,
+        "firing a cue must not roll the show"
+    );
+}
+
+/// The button and the arrows are one way of moving, so a press of back after a
+/// press of a button steps from the cue that was pressed.
+#[test]
+fn firing_a_cue_is_where_the_arrows_carry_on_from() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    add_cue(&mut app, 10.0);
+    add_cue(&mut app, 20.0);
+    let third = add_cue(&mut app, 30.0);
+
+    fire(&mut app, EngineCommand::TriggerCue { uuid: third });
+    fire(&mut app, EngineCommand::TransportPrevCue);
+    assert!((position(&mut app) - 20.0).abs() < 1e-9);
+}
+
+#[test]
+fn firing_a_cue_that_is_gone_is_an_error() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    add_cue(&mut app, 10.0);
+    let result = send_cmd(
+        &mut app,
+        EngineCommand::TriggerCue {
+            uuid: "nope".to_string(),
+        },
+    );
+    assert!(
+        matches!(result, CommandResult::Err { code, .. } if code == ErrorCode::NotFound),
+        "{result:?}"
+    );
+}
+
+/// The position belongs to the incoming signal while chasing, so a cue button
+/// is refused there like every other way of moving the playhead.
+#[test]
+fn firing_a_cue_is_refused_while_chasing_timecode() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let cue = add_cue(&mut app, 10.0);
+    fire(
+        &mut app,
+        EngineCommand::SetTransportSource {
+            source: varda::transport::TransportSource::Timecode,
+        },
+    );
+    let result = send_cmd(&mut app, EngineCommand::TriggerCue { uuid: cue });
+    assert!(matches!(result, CommandResult::Err { .. }), "{result:?}");
+    assert!(position(&mut app).abs() < 1e-9, "the playhead stayed put");
+}
+
+/// The arrows walk the list while the show is running, not just while it is
+/// parked. Reading the live position each press would send every press back to
+/// the same cue, because playback carries the playhead past it between them.
+#[test]
+fn the_back_arrow_keeps_walking_while_the_show_runs() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    add_cue(&mut app, 10.0);
+    add_cue(&mut app, 20.0);
+    add_cue(&mut app, 30.0);
+    fire(&mut app, EngineCommand::TransportLocate { position: 35.0 });
+    fire(&mut app, EngineCommand::TransportPlay);
+
+    for expected in [30.0, 20.0, 10.0, 0.0] {
+        fire(&mut app, EngineCommand::TransportPrevCue);
+        assert!(
+            (position(&mut app) - expected).abs() < 1e-9,
+            "expected {expected}, got {}",
+            position(&mut app)
+        );
+        // Playback carries the playhead off the cue before the next press.
+        app.process_inputs();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        app.process_inputs();
+    }
+}
+
+/// Scrubbing is not walking: the arrows step from the playhead again once a
+/// hand has moved it, rather than from wherever the last press left off.
+#[test]
+fn scrubbing_ends_the_cue_walk() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    add_cue(&mut app, 10.0);
+    add_cue(&mut app, 20.0);
+    add_cue(&mut app, 30.0);
+
+    fire(&mut app, EngineCommand::TransportLocate { position: 25.0 });
+    fire(&mut app, EngineCommand::TransportPrevCue);
+    assert!((position(&mut app) - 20.0).abs() < 1e-9);
+
+    fire(&mut app, EngineCommand::TransportLocate { position: 35.0 });
+    fire(&mut app, EngineCommand::TransportPrevCue);
+    assert!(
+        (position(&mut app) - 30.0).abs() < 1e-9,
+        "the scrub decides where back goes, not the earlier press"
+    );
+}
+
+/// A second stop returns to zero, which is a move the walk did not make. The
+/// next press has to read the playhead again, or back from the top would jump
+/// forward to wherever the walk had reached.
+#[test]
+fn stopping_back_to_zero_ends_the_cue_walk() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    add_cue(&mut app, 10.0);
+    add_cue(&mut app, 20.0);
+
+    fire(&mut app, EngineCommand::TransportLocate { position: 25.0 });
+    fire(&mut app, EngineCommand::TransportPrevCue);
+    assert!((position(&mut app) - 20.0).abs() < 1e-9);
+
+    // Stopped already, so this one returns to zero.
+    fire(&mut app, EngineCommand::TransportStop);
+    assert!(position(&mut app).abs() < 1e-9);
+
+    fire(&mut app, EngineCommand::TransportNextCue);
+    assert!(
+        (position(&mut app) - 10.0).abs() < 1e-9,
+        "forward from the top is the first cue, not the one the walk had reached"
+    );
+}
+
+/// Handing the position to a timecode master ends the walk too: whatever the
+/// master does with the playhead, it is not where the last press left it.
+#[test]
+fn chasing_timecode_ends_the_cue_walk() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    add_cue(&mut app, 10.0);
+    add_cue(&mut app, 20.0);
+
+    fire(&mut app, EngineCommand::TransportLocate { position: 25.0 });
+    fire(&mut app, EngineCommand::TransportPrevCue);
+    for source in [
+        varda::transport::TransportSource::Timecode,
+        varda::transport::TransportSource::Internal,
+    ] {
+        fire(&mut app, EngineCommand::SetTransportSource { source });
+    }
+
+    fire(&mut app, EngineCommand::TransportPrevCue);
+    assert!(
+        (position(&mut app) - 10.0).abs() < 1e-9,
+        "the walk resumed from the playhead the master left behind"
+    );
+}
+
+/// Position is read-only while chasing, so the arrows are rejected like any
+/// other locate rather than fighting the master.
+#[test]
+fn the_arrows_are_refused_while_chasing_timecode() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    add_cue(&mut app, 10.0);
+    fire(
+        &mut app,
+        EngineCommand::SetTransportSource {
+            source: varda::transport::TransportSource::Timecode,
+        },
+    );
+
+    let r = send_cmd(&mut app, EngineCommand::TransportNextCue);
+    assert!(
+        matches!(&r, CommandResult::Err { code, .. } if *code == ErrorCode::InvalidInput),
+        "{r:?}"
+    );
+    assert!(position(&mut app).abs() < 1e-9);
+}
+
+/// One button covers stop and return, because the arrangement's return-to-zero
+/// arrow is now the cue back arrow. See /spec/transport.md § Stop Twice.
+#[test]
+fn stopping_a_second_time_returns_the_show_to_zero() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    fire(&mut app, EngineCommand::TransportLocate { position: 45.0 });
+    fire(&mut app, EngineCommand::TransportPlay);
+
+    fire(&mut app, EngineCommand::TransportStop);
+    assert!(
+        position(&mut app) >= 45.0,
+        "the first stop holds where it stopped"
+    );
+
+    fire(&mut app, EngineCommand::TransportStop);
+    assert!(position(&mut app).abs() < 1e-9);
+}
+
+#[test]
+fn editing_a_cue_that_is_gone_is_an_error() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::RemoveCue {
+            uuid: "nosuch01".into(),
+        },
+    );
+    assert!(
+        matches!(&r, CommandResult::Err { code, .. } if *code == ErrorCode::NotFound),
+        "{r:?}"
+    );
+}
+
+/// A cue before zero, or at a position arithmetic produced rather than a
+/// performer, would sort into a list the arrows then walk into nowhere.
+#[test]
+fn a_cue_at_an_impossible_position_is_refused() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let uuid = add_cue(&mut app, 10.0);
+
+    for at in [-1.0, f64::NAN, f64::INFINITY] {
+        let added = send_cmd(
+            &mut app,
+            EngineCommand::AddCue {
+                at,
+                name: String::new(),
+            },
+        );
+        assert!(
+            matches!(&added, CommandResult::Err { code, .. } if *code == ErrorCode::InvalidInput),
+            "adding at {at}: {added:?}"
+        );
+        let moved = send_cmd(
+            &mut app,
+            EngineCommand::UpdateCue {
+                uuid: uuid.clone(),
+                at: Some(at),
+                name: None,
+            },
+        );
+        assert!(
+            matches!(&moved, CommandResult::Err { code, .. } if *code == ErrorCode::InvalidInput),
+            "moving to {at}: {moved:?}"
+        );
+    }
+
+    assert_eq!(
+        cues(&mut app),
+        vec![("Cue 1".to_string(), 10.0)],
+        "the list is exactly as it was before the refusals"
+    );
+}
+
+// ── Deck residency ───────────────────────────────────────────────────
+//
+// See /spec/deck-residency.md. A deck whose next region is far away stops
+// pulling frames; anything the arrangement cannot predict keeps running.
+
+fn asleep(app: &mut VardaApp, deck: &str) -> bool {
+    deck_snapshot(app, deck).source_asleep
+}
+
+/// A long show with two short appearances, which is the shape residency exists
+/// for. Everything between them is inside the arranged range and dark, so the
+/// arrangement has actually said this deck is unwanted rather than said nothing.
+fn app_with_sparse_regions() -> Option<(VardaApp, String)> {
+    let (mut app, deck) = app_with_one_region(10.0, 20.0)?;
+    add_region(&mut app, &deck, 290.0, 300.0);
+    Some((app, deck))
+}
+
+/// The whole point: sixty decode threads should not run for a show that will
+/// not show their decks for another forty minutes.
+#[test]
+fn a_deck_far_from_its_region_stops_pulling_frames() {
+    let Some((mut app, deck)) = app_with_sparse_regions() else {
+        return;
+    };
+    run_from(&mut app, 150.0);
+
+    assert!(
+        asleep(&mut app, &deck),
+        "a deck two minutes from its next region should be asleep"
+    );
+}
+
+/// Cueing a channel is how an operator looks at what is coming next, so a deck
+/// being watched off-air keeps decoding however dark the arrangement has it.
+/// The same exemption the opacity cull already makes.
+#[test]
+fn a_deck_in_a_previewed_channel_keeps_pulling_frames() {
+    let Some((mut app, deck)) = app_with_sparse_regions() else {
+        return;
+    };
+    run_from(&mut app, 150.0);
+    assert!(asleep(&mut app, &deck), "asleep until someone looks at it");
+
+    app.set_preview_channels(vec![0]);
+    step(&mut app);
+    assert!(
+        !asleep(&mut app, &deck),
+        "a cued channel is being watched, so its decks stay awake"
+    );
+
+    app.set_preview_channels(Vec::new());
+    step(&mut app);
+    assert!(
+        asleep(&mut app, &deck),
+        "and it goes back to sleep when the operator looks away"
+    );
+}
+
+/// Frames must be flowing before the audience sees any, so the wake happens
+/// ahead of the region rather than on its edge.
+#[test]
+fn a_deck_wakes_before_its_region_arrives() {
+    let Some((mut app, deck)) = app_with_sparse_regions() else {
+        return;
+    };
+    run_from(&mut app, 285.0);
+    assert!(asleep(&mut app, &deck), "still five seconds out");
+
+    fire(&mut app, EngineCommand::TransportLocate { position: 289.5 });
+    step(&mut app);
+    assert!(
+        !asleep(&mut app, &deck),
+        "half a second out, the deck must already be decoding"
+    );
+}
+
+#[test]
+fn a_deck_inside_its_region_never_sleeps() {
+    let Some((mut app, deck)) = app_with_sparse_regions() else {
+        return;
+    };
+    run_from(&mut app, 15.0);
+
+    assert!(!asleep(&mut app, &deck));
+}
+
+/// A jump into the middle of a region has to resume decode on the frame it
+/// lands, not on the next one.
+#[test]
+fn locating_into_a_region_wakes_the_deck_in_the_same_frame() {
+    let Some((mut app, deck)) = app_with_sparse_regions() else {
+        return;
+    };
+    run_from(&mut app, 150.0);
+    assert!(asleep(&mut app, &deck));
+
+    fire(&mut app, EngineCommand::TransportLocate { position: 295.0 });
+    step(&mut app);
+
+    assert!(
+        !asleep(&mut app, &deck),
+        "the deck the playhead landed inside must be awake immediately"
+    );
+}
+
+/// Outside the arranged range `HoldPerformance` declines to speak, and silence
+/// is not permission to stop a deck the performer may still have up.
+#[test]
+fn a_deck_outside_the_arranged_range_is_left_alone() {
+    let Some((mut app, deck)) = app_with_sparse_regions() else {
+        return;
+    };
+    run_from(&mut app, 400.0);
+
+    assert!(!asleep(&mut app, &deck));
+}
+
+/// Performance mode has never gated anything, and a scene that has not been
+/// started is Performance mode.
+#[test]
+fn a_parked_transport_leaves_every_deck_awake() {
+    let Some((mut app, deck)) = app_with_sparse_regions() else {
+        return;
+    };
+    step(&mut app);
+
+    assert!(
+        !asleep(&mut app, &deck),
+        "an arrangement that has not run must not put anything to sleep"
+    );
+}
+
+/// An LFO can raise a deck at any moment, so nothing about the timeline says
+/// when its frames are safe to stop.
+#[test]
+fn a_live_modulator_on_opacity_keeps_the_deck_awake() {
+    let Some((mut app, deck)) = app_with_sparse_regions() else {
+        return;
+    };
+    fire(
+        &mut app,
+        EngineCommand::AddLfo {
+            waveform: LFOWaveform::Sine,
+            frequency: 1.0,
+        },
+    );
+    // The lane's own opacity envelope is source zero, so the LFO is the newest.
+    let lfo = app
+        .build_engine_state()
+        .modulation
+        .sources
+        .last()
+        .expect("the LFO just added")
+        .uuid
+        .clone();
+    fire(
+        &mut app,
+        EngineCommand::AssignModulation {
+            target: format!("deck_{deck}:opacity"),
+            source_id: lfo,
+            amount: 1.0,
+        },
+    );
+    run_from(&mut app, 150.0);
+
+    assert!(
+        !asleep(&mut app, &deck),
+        "a deck an LFO can raise must keep decoding"
+    );
+}
+
+/// A hand on the fader is the least predictable driver there is.
+#[test]
+fn an_overridden_deck_keeps_decoding() {
+    let Some((mut app, deck)) = app_with_sparse_regions() else {
+        return;
+    };
+    run_from(&mut app, 150.0);
+    assert!(asleep(&mut app, &deck));
+
+    fire(
+        &mut app,
+        EngineCommand::SetDeckOpacity {
+            deck_uuid: deck.clone(),
+            opacity: 0.6,
+        },
+    );
+    step(&mut app);
+
+    assert!(
+        !asleep(&mut app, &deck),
+        "the performer took this deck back, so its frames are wanted again"
+    );
+}
+
+/// Sleep is derived state, recomputed every frame, so removing the lane that
+/// justified it has to hand the deck back.
+#[test]
+fn removing_a_lane_wakes_its_deck() {
+    let Some((mut app, deck)) = app_with_sparse_regions() else {
+        return;
+    };
+    run_from(&mut app, 150.0);
+    assert!(asleep(&mut app, &deck));
+
+    fire(
+        &mut app,
+        EngineCommand::RemoveLane {
+            deck_uuid: deck.clone(),
+        },
+    );
+    step(&mut app);
+
+    assert!(!asleep(&mut app, &deck));
+}
+
+/// An arrangement that declines to speak outside its range has not said the
+/// deck is unwanted, and the idle deck is the one thing on screen.
+#[test]
+fn the_idle_deck_is_never_put_to_sleep() {
+    let Some((mut app, deck)) = app_with_sparse_regions() else {
+        return;
+    };
+    fire(
+        &mut app,
+        EngineCommand::SetIdleBehaviour {
+            idle: varda::arrangement::IdleBehaviour::ShowDeck {
+                deck_uuid: deck.clone(),
+            },
+        },
+    );
+    run_from(&mut app, 5.0);
+
+    assert!(
+        !asleep(&mut app, &deck),
+        "the deck holding the pre-show output must keep decoding"
+    );
+}
+
+/// An arrangement with authority and a free-running sequence would fight over
+/// the crossfader, so the sequence is refused rather than allowed to lose.
+#[test]
+fn a_sequence_cannot_start_while_the_arrangement_has_authority() {
+    let Some((mut app, _deck)) = app_with_one_region(10.0, 20.0) else {
+        return;
+    };
+    let seq = new_uuid(send_cmd(&mut app, EngineCommand::CreateSequence));
+    run_from(&mut app, 15.0);
+
+    let r = send_cmd(&mut app, EngineCommand::PlaySequence { sequence_uuid: seq });
+    assert!(
+        matches!(r, CommandResult::Err { .. }),
+        "playing a sequence under arrangement authority should be refused, got {r:?}"
     );
 }

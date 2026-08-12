@@ -2359,6 +2359,545 @@ mod tests {
         assert_eq!(json["status"], "ok");
     }
 
+    #[tokio::test]
+    async fn test_update_modulation_timebase() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/modulation/lfo-1/timebase",
+            serde_json::json!({"timebase": "Beat"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_update_modulation_timebase_rejects_unknown_value() {
+        let (status, _) = put_json(
+            router_with_mock_engine(),
+            "/api/modulation/lfo-1/timebase",
+            serde_json::json!({"timebase": "Sidereal"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    // ── Automation (/spec/automation.md) ─────────────────────────
+
+    #[tokio::test]
+    async fn test_add_automation_lane() {
+        let (status, json) = post_json(
+            router_with_mock_engine(),
+            "/api/modulation/automation",
+            serde_json::json!({"target": "deck_abc:opacity", "timebase": "Transport"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    /// An arrangement-authored lane is transport-locked, so the caller should
+    /// not have to say so.
+    #[tokio::test]
+    async fn test_add_automation_lane_defaults_to_the_transport_timebase() {
+        let (status, json) = post_json(
+            router_with_mock_engine(),
+            "/api/modulation/automation",
+            serde_json::json!({"target": "deck_abc:opacity"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_set_envelope_breakpoints() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/modulation/env-1/breakpoints",
+            serde_json::json!({"breakpoints": [
+                {"position": 0.0, "value": 0.0, "curve": {"Linear": {"tension": 0.0}}},
+                {"position": 4.0, "value": 1.0, "curve": "Smooth"},
+            ]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    /// `curve` defaults, so a caller drawing a plain ramp sends only the two
+    /// fields that carry meaning.
+    #[tokio::test]
+    async fn test_set_envelope_breakpoints_curve_is_optional() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/modulation/env-1/breakpoints",
+            serde_json::json!({"breakpoints": [{"position": 1.5, "value": 0.25}]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_set_envelope_breakpoints_rejects_a_malformed_curve() {
+        let (status, _) = put_json(
+            router_with_mock_engine(),
+            "/api/modulation/env-1/breakpoints",
+            serde_json::json!({"breakpoints": [
+                {"position": 0.0, "value": 0.0, "curve": "Parabolic"},
+            ]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    // ── Transport ───────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_transport_play_and_stop() {
+        for path in ["/api/transport/play", "/api/transport/stop"] {
+            let (status, json) =
+                post_json(router_with_mock_engine(), path, serde_json::json!({})).await;
+            assert_eq!(status, StatusCode::OK, "{path}");
+            assert_eq!(json["status"], "ok", "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_transport_locate() {
+        let (status, json) = post_json(
+            router_with_mock_engine(),
+            "/api/transport/locate",
+            serde_json::json!({"position": 3600.5}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_transport_source() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/transport/source",
+            serde_json::json!({"source": "Timecode"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_transport_source_rejects_unknown_value() {
+        let (status, _) = put_json(
+            router_with_mock_engine(),
+            "/api/transport/source",
+            serde_json::json!({"source": "Telepathy"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn test_transport_loop_set_and_clear() {
+        for body in [
+            serde_json::json!({"region": {"start": 10.0, "end": 20.0}}),
+            serde_json::json!({"region": null}),
+        ] {
+            let (status, json) =
+                put_json(router_with_mock_engine(), "/api/transport/loop", body).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(json["status"], "ok");
+        }
+    }
+
+    /// The rate is how a show counts frames, so a client setting it must reach
+    /// the engine with the rate it named rather than a default.
+    #[tokio::test]
+    async fn test_transport_rate() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = put_json(
+            app,
+            "/api/transport/rate",
+            serde_json::json!({"rate": "Fps2997Drop"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::SetTimecodeRate { rate } => {
+                assert_eq!(rate, crate::transport::TimecodeRate::Fps2997Drop);
+            }
+            other => panic!("expected a rate change, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_transport_rate_rejects_unknown_value() {
+        let (status, _) = put_json(
+            router_with_mock_engine(),
+            "/api/transport/rate",
+            serde_json::json!({"rate": "Fps1000"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    /// Folding a lane away is view state that belongs to the show, so it is
+    /// addressable rather than a UI-only click.
+    #[tokio::test]
+    async fn test_set_lane_collapsed() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = put_json(
+            app,
+            "/api/arrangement/lanes/deck0001/collapsed",
+            serde_json::json!({"collapsed": true}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::SetLaneCollapsed {
+                deck_uuid,
+                collapsed,
+            } => {
+                assert_eq!(deck_uuid, "deck0001");
+                assert!(collapsed);
+            }
+            other => panic!("expected a collapse, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_transport_state_is_exposed() {
+        let (status, json) = get_json(router_with_mock_engine(), "/api/state").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["transport"]["position"], 0.0);
+        assert_eq!(json["transport"]["has_run"], false);
+        assert_eq!(json["transport"]["status_label"], "Idle");
+    }
+
+    // ── Clipboard ───────────────────────────────────────────────
+
+    /// The source and target are tagged enums, so a caller says what kind of
+    /// object it means rather than relying on the UUID to disambiguate.
+    #[tokio::test]
+    async fn test_copy_names_the_kind_of_object() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = post_json(
+            app,
+            "/api/clipboard/copy",
+            serde_json::json!({"source": {"Deck": "dk-001"}, "include_arrangement": true}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::Copy {
+                source,
+                include_arrangement,
+            } => {
+                assert_eq!(
+                    source,
+                    crate::engine::ClipboardSource::Deck("dk-001".into())
+                );
+                assert!(include_arrangement);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    /// Omitting the flag copies the object without its placement, which is what
+    /// a caller that has never heard of the arrangement means.
+    #[tokio::test]
+    async fn test_copy_leaves_the_arrangement_out_by_default() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = post_json(
+            app,
+            "/api/clipboard/copy",
+            serde_json::json!({"source": {"Channel": "ch-001"}}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::Copy {
+                include_arrangement,
+                ..
+            } => assert!(!include_arrangement),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_paste_carries_its_target() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = post_json(
+            app,
+            "/api/clipboard/paste",
+            serde_json::json!({"target": {"AfterDeck": "dk-002"}}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::Paste { target } => {
+                assert_eq!(
+                    target,
+                    crate::engine::PasteTarget::AfterDeck("dk-002".into())
+                );
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_takes_a_source_alone() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = post_json(
+            app,
+            "/api/clipboard/duplicate",
+            serde_json::json!({"source": {"Effect": "fx-009"}}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::Duplicate { source } => {
+                assert_eq!(
+                    source,
+                    crate::engine::ClipboardSource::Effect("fx-009".into())
+                );
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    // ── Arrangement ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_add_and_remove_lane() {
+        let (status, json) = post_json(
+            router_with_mock_engine(),
+            "/api/arrangement/lanes/dk-001",
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+
+        let resp = router_with_mock_engine()
+            .oneshot(
+                Request::delete("/api/arrangement/lanes/dk-001")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    /// The region body is flattened, so a caller writes the region's own fields
+    /// rather than nesting them under a wrapper key.
+    #[tokio::test]
+    async fn test_add_region_takes_a_flat_body() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = post_json(
+            app,
+            "/api/arrangement/lanes/dk-007/regions",
+            serde_json::json!({"start": 10.0, "end": 20.0, "fade_in": 1.0, "fade_out": 2.0}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::AddRegion { deck_uuid, region } => {
+                assert_eq!(deck_uuid, "dk-007");
+                assert!((region.start - 10.0).abs() < f64::EPSILON);
+                assert!((region.end - 20.0).abs() < f64::EPSILON);
+                assert!((region.fade_in - 1.0).abs() < f64::EPSILON);
+                assert!((region.fade_out - 2.0).abs() < f64::EPSILON);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    /// A lane and an index address a region, and neither may be substituted for
+    /// the other.
+    #[tokio::test]
+    async fn test_update_region_does_not_swap_lane_and_index() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = put_json(
+            app,
+            "/api/arrangement/lanes/dk-003/regions/2",
+            serde_json::json!({"start": 0.0, "end": 5.0}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::UpdateRegion {
+                deck_uuid, index, ..
+            } => {
+                assert_eq!(deck_uuid, "dk-003");
+                assert_eq!(index, 2);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_remove_region() {
+        let app = router_with_mock_engine();
+        let resp = app
+            .oneshot(
+                Request::delete("/api/arrangement/lanes/dk-001/regions/0")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_set_idle_behaviour() {
+        for body in [
+            serde_json::json!({"idle": "HoldPerformance"}),
+            serde_json::json!({"idle": {"ShowDeck": {"deck_uuid": "dk-001"}}}),
+        ] {
+            let (status, json) =
+                put_json(router_with_mock_engine(), "/api/arrangement/idle", body).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(json["status"], "ok");
+        }
+    }
+
+    /// Omitting `seconds` is the common case and must not be an error: it means
+    /// "use the configured ramp".
+    #[tokio::test]
+    async fn test_rearm_defaults_its_ramp_length() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = post_json(app, "/api/arrangement/rearm", serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::RearmAll { seconds } => assert!(seconds.is_none()),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_rearm_one_parameter() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = post_json(
+            app,
+            "/api/arrangement/rearm/deck_dk-001:opacity",
+            serde_json::json!({"seconds": 1.5}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::RearmParam { param_key, seconds } => {
+                assert_eq!(param_key, "deck_dk-001:opacity");
+                assert_eq!(seconds, Some(1.5));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    /// A cue can be dropped without naming it, which is what the ruler does.
+    #[tokio::test]
+    async fn test_add_cue_names_itself_when_the_body_does_not() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = post_json(
+            app,
+            "/api/arrangement/cues",
+            serde_json::json!({"at": 64.5}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::AddCue { at, name } => {
+                assert!((at - 64.5).abs() < f64::EPSILON);
+                assert!(name.is_empty(), "the engine names an unnamed cue");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    /// A move restates the position and nothing else, so a rename cannot be
+    /// undone by a drag that had no opinion about the name.
+    #[tokio::test]
+    async fn test_update_cue_leaves_absent_fields_alone() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = put_json(
+            app,
+            "/api/arrangement/cues/cue00001",
+            serde_json::json!({"at": 12.0}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::UpdateCue { uuid, at, name } => {
+                assert_eq!(uuid, "cue00001");
+                assert_eq!(at, Some(12.0));
+                assert_eq!(name, None);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_remove_cue() {
+        let app = router_with_mock_engine();
+        let resp = app
+            .oneshot(
+                Request::delete("/api/arrangement/cues/cue00001")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    /// The arrows are engine commands so a foot switch and the API walk a show
+    /// the same way the UI does.
+    #[tokio::test]
+    async fn test_cue_navigation_routes() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = post_json(app, "/api/transport/cue/next", serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(matches!(
+            take_command(&seen),
+            crate::engine::EngineCommand::TransportNextCue
+        ));
+
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = post_json(app, "/api/transport/cue/prev", serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(matches!(
+            take_command(&seen),
+            crate::engine::EngineCommand::TransportPrevCue
+        ));
+    }
+
+    /// One named cue, which is what the Performance-mode pads send. The literal
+    /// `prev` and `next` still win over the UUID pattern that follows them.
+    #[tokio::test]
+    async fn test_trigger_cue_route() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) =
+            post_json(app, "/api/transport/cue/cue00001", serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::TriggerCue { uuid } => assert_eq!(uuid, "cue00001"),
+            other => panic!("expected a cue trigger, got {other:?}"),
+        }
+    }
+
+    /// A Performance-only scene reports no arrangement rather than an empty one,
+    /// so clients can tell "not used" from "used and empty".
+    #[tokio::test]
+    async fn test_arrangement_state_is_absent_without_one() {
+        let (status, json) = get_json(router_with_mock_engine(), "/api/state").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(json["arrangement"].is_null());
+    }
+
     // ══════════════════════════════════════════════════════════════
     // ── Edge Cases & Error Handling ─────────────────────────────
     // ══════════════════════════════════════════════════════════════

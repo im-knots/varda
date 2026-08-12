@@ -186,6 +186,22 @@ impl UIRunner {
     }
 }
 
+/// Whether this frame's mutations deserve their own undo entry.
+///
+/// A held drag reports a mutation on every frame it moves, so only the frame
+/// that *starts* the gesture takes a snapshot. Without this a single region drag
+/// would fill the fifty-deep history by itself and undo would rewind the show a
+/// pixel at a time.
+fn wants_history_snapshot(
+    prev_gesture_active: &mut bool,
+    dirty: bool,
+    gesture_active: bool,
+) -> bool {
+    let continuation = gesture_active && *prev_gesture_active;
+    *prev_gesture_active = gesture_active;
+    dirty && !continuation
+}
+
 impl UIRunner {
     /// Complete initialization once GPU context is available.
     /// Called from `resumed()` for headless or from `about_to_wait()` for windowed.
@@ -612,13 +628,14 @@ impl UIRunner {
             let dirty = ui_actions.has_undoable_action()
                 || ui_actions.has_undoable_stage_action()
                 || varda.batch_has_undoable(&ui_actions.commands);
-            let gesture_continuation =
-                ui_actions.session.gesture_active && self.prev_gesture_active;
-            if dirty && !gesture_continuation {
+            if wants_history_snapshot(
+                &mut self.prev_gesture_active,
+                dirty,
+                ui_actions.session.gesture_active,
+            ) {
                 let snapshot = varda.history_snapshot(&self.layout);
                 varda.push_history(snapshot);
             }
-            self.prev_gesture_active = ui_actions.session.gesture_active;
 
             // Intercept shader_to_add: resolve and route to background loading
             if let Some((channel_uuid, gen_idx)) = ui_actions.session.shader_to_add.take() {
@@ -1396,5 +1413,50 @@ mod tests {
             runner.publish_counter, 0,
             "shutdown returns before the publish gate"
         );
+    }
+
+    /// A timeline drag pushes a mutation every frame it moves. Exactly one of
+    /// them may become an undo entry, or a two-second drag would bury the rest
+    /// of the session's history.
+    #[test]
+    fn a_held_drag_is_one_undo_entry() {
+        let mut prev = false;
+        let frames: Vec<bool> = (0..40)
+            .map(|_| wants_history_snapshot(&mut prev, true, true))
+            .collect();
+        assert_eq!(frames.iter().filter(|pushed| **pushed).count(), 1);
+        assert!(frames[0], "the entry belongs to the frame that started it");
+    }
+
+    /// Releasing and grabbing again is a second edit, and undo has to be able to
+    /// step between them.
+    #[test]
+    fn a_second_drag_gets_its_own_entry() {
+        let mut prev = false;
+        let mut pushes = 0;
+        for gesture in [true, true, false, true, true] {
+            if wants_history_snapshot(&mut prev, true, gesture) {
+                pushes += 1;
+            }
+        }
+        assert_eq!(pushes, 3, "two drags and the release between them");
+    }
+
+    /// Discrete edits are unaffected: every click is still its own step.
+    #[test]
+    fn clicks_are_not_coalesced() {
+        let mut prev = false;
+        let pushes = (0..5)
+            .filter(|_| wants_history_snapshot(&mut prev, true, false))
+            .count();
+        assert_eq!(pushes, 5);
+    }
+
+    /// A frame that changed nothing never takes a snapshot, gesture or not.
+    #[test]
+    fn a_quiet_frame_records_nothing() {
+        let mut prev = false;
+        assert!(!wants_history_snapshot(&mut prev, false, true));
+        assert!(!wants_history_snapshot(&mut prev, false, false));
     }
 }

@@ -1513,7 +1513,7 @@ mod tests {
             bipolar: false,
         });
         engine.assign(target, &uuid, amount, None);
-        engine.update(
+        engine.update_free_running(
             0.0,
             &crate::modulation::AudioValues::default(),
             &crate::modulation::AnalyzerValues::default(),

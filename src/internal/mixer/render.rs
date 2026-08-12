@@ -26,14 +26,37 @@ impl std::ops::Deref for CompositingOpacities {
 }
 
 impl Mixer {
+    /// Resolve every timebase for this frame.
+    ///
+    /// `beat_time` is the clock's monotonic beat position, or `None` when no
+    /// clock source is active, which freezes beat-locked sources. `transport`
+    /// is `None` until the transport has run, which freezes transport-locked
+    /// sources. `free_run_time` is `None` whenever frames are paced by the wall,
+    /// which is every live frame. See /spec/timebase.md.
+    fn resolve_timebases(
+        &mut self,
+        free_run_time: Option<f32>,
+        beat_time: Option<f64>,
+        transport: Option<crate::timebase::TransportSample>,
+    ) -> crate::timebase::TimebaseSet {
+        self.timebases.resolve(crate::timebase::TimebaseInput {
+            free_run_time: free_run_time.unwrap_or_else(|| self.start_time.elapsed().as_secs_f32()),
+            beat_time,
+            transport,
+        })
+    }
+
     /// Pre-update modulation engine with latest audio + analyzer data.
     pub fn update_modulation(
         &mut self,
+        beat_time: Option<f64>,
+        transport: Option<crate::timebase::TransportSample>,
         audio_values: &crate::modulation::AudioValues,
         analyzer_values: &crate::modulation::AnalyzerValues,
     ) {
-        let time = self.start_time.elapsed().as_secs_f32();
-        self.modulation.update(time, audio_values, analyzer_values);
+        let timebases = self.resolve_timebases(None, beat_time, transport);
+        self.modulation
+            .update(&timebases, audio_values, analyzer_values);
     }
 
     /// Drive knob/fader macros from any modulation assigned to their value, then
@@ -56,7 +79,13 @@ impl Mixer {
             if !self.modulation.has_modulation(&key) {
                 continue;
             }
-            let offset = self.modulation.get_modulation(&key);
+            let resolved = self.modulation.resolve(&key, None);
+            // An absolute source replaces the macro's manual set point, so it is
+            // expressed as the offset that lands on it. `modulated_fanout` keeps
+            // the stored base untouched either way.
+            let offset = resolved
+                .absolute
+                .map_or(resolved.additive, |v| v - m.value + resolved.additive);
             writes.extend(m.modulated_fanout(offset));
         }
         for (path, value) in writes {
@@ -64,6 +93,158 @@ impl Mixer {
                 log::debug!("macro modulation target '{path}' skipped: {e}");
             }
         }
+    }
+
+    /// Let the arrangement drive the decks it owns, and mark those decks so
+    /// their auto-transitions stand down for the frame.
+    ///
+    /// Authority is per lane and gated on the transport having actually run
+    /// ([`crate::arrangement::Authority`]), so a cold start renders the saved
+    /// scene rather than an arrangement's pre-show state. A lane whose opacity
+    /// the performer has grabbed resolves to no absolute value at all, which is
+    /// how an override leaves the deck exactly where they put it.
+    ///
+    /// See /spec/arrangement.md § Authority.
+    pub(super) fn apply_arrangement(
+        &mut self,
+        transport: Option<crate::timebase::TransportSample>,
+        preview_channels: &[usize],
+    ) {
+        // Moved out rather than borrowed so the deck writes below can take
+        // `&mut self`; this is an `Option` move, not a deep clone.
+        let Some(arrangement) = self.arrangement.take() else {
+            self.clear_arrangement_authority();
+            return;
+        };
+
+        // Cleared unconditionally first: a lane deleted or emptied since the
+        // last frame must give its deck back rather than leave it pinned.
+        self.clear_arrangement_authority();
+        self.arrangement_blacked_out = false;
+
+        let engaged =
+            crate::arrangement::Authority::resolve(Some(&arrangement), transport.as_ref())
+                .is_engaged();
+        // Outside the arranged range the arrangement has said nothing, so idle
+        // behaviour speaks for it. `HoldPerformance` means exactly that: stay
+        // out of the way. Gaps *inside* the range are authored silence and are
+        // not idle.
+        let outside_range = transport.is_some_and(|t| !arrangement.within_range(t.position));
+        let idle_outside_range =
+            outside_range && arrangement.idle == crate::arrangement::IdleBehaviour::HoldPerformance;
+
+        if engaged && !idle_outside_range {
+            // A Fade step targets a *pair* of channels, so transition sequences
+            // cannot partition per lane the way auto-transitions do. The rule is
+            // therefore blunt: a sequence still free-running when the
+            // arrangement takes authority is stopped rather than left to fight
+            // the crossfader automation.
+            self.stop_free_running_sequences();
+
+            let mut key = String::with_capacity(48);
+            let mut driven = 0_u32;
+            let mut visible = 0_u32;
+            for lane in &arrangement.lanes {
+                if !lane.drives_anything() {
+                    continue;
+                }
+                let Some((ch, dk)) = self.find_deck_by_uuid(&lane.deck_uuid) else {
+                    continue;
+                };
+                self.channels[ch].decks[dk].arrangement_authority = true;
+
+                crate::arrangement::write_opacity_param_key(&mut key, &lane.deck_uuid);
+
+                // A previewed or tapped channel is being watched off-air, which
+                // is the same exemption the opacity cull already makes.
+                let watched =
+                    preview_channels.contains(&ch) || self.channels[ch].tap_view().is_some();
+                self.channels[ch].decks[dk].source_demand = match transport {
+                    Some(t) if !watched => self.opacity_demand(&key, t.position),
+                    _ => crate::arrangement::SourceDemand::Unscheduled,
+                };
+
+                if let Some(value) = self.modulation.resolve(&key, None).absolute {
+                    let opacity = value.clamp(0.0, 1.0);
+                    self.channels[ch].decks[dk].opacity = opacity;
+                    driven += 1;
+                    if opacity > 0.0 {
+                        visible += 1;
+                    }
+                }
+            }
+
+            if let crate::arrangement::IdleBehaviour::ShowDeck { deck_uuid } = &arrangement.idle {
+                // "Run this loop until the schedule starts" is a normal
+                // installation requirement, so the pre-show state needs
+                // something to *be* rather than something to fail at.
+                if outside_range {
+                    if let Some((ch, dk)) = self.find_deck_by_uuid(deck_uuid) {
+                        self.channels[ch].decks[dk].opacity = 1.0;
+                        self.channels[ch].decks[dk].arrangement_authority = true;
+                        // The one deck on screen before the show starts, which
+                        // its own lane may have just called idle.
+                        self.channels[ch].decks[dk].source_demand =
+                            crate::arrangement::SourceDemand::Unscheduled;
+                        visible += 1;
+                    }
+                }
+            }
+
+            // Idle and broken look identical on the output, so the fact that the
+            // arrangement is driving everything to nothing gets reported rather
+            // than inferred. Never an intervention: deliberate blackouts are
+            // legitimate.
+            self.arrangement_blacked_out =
+                driven > 0 && visible == 0 && transport.is_some_and(|t| t.running);
+        }
+
+        self.arrangement = Some(arrangement);
+    }
+
+    /// Hand every deck back to Performance mode.
+    fn clear_arrangement_authority(&mut self) {
+        for channel in &mut self.channels {
+            for slot in &mut channel.decks {
+                slot.arrangement_authority = false;
+                slot.source_demand = crate::arrangement::SourceDemand::Unscheduled;
+            }
+        }
+    }
+
+    /// What the arrangement predicts about the source behind one opacity key.
+    ///
+    /// Deliberately conservative, and every uncertain answer is `Unscheduled`:
+    /// gating one deck too few costs a decode thread nobody needed, and gating
+    /// one too many is a black frame in front of an audience.
+    ///
+    /// See /spec/deck-residency.md § When a deck is scheduled.
+    fn opacity_demand(&self, key: &str, position: f64) -> crate::arrangement::SourceDemand {
+        use crate::arrangement::SourceDemand;
+
+        // A hand on the fader is the least predictable driver there is.
+        if self.modulation.is_overridden(key) {
+            return SourceDemand::Unscheduled;
+        }
+
+        crate::arrangement::residency::demand(
+            self.modulation.assignments_for(key).iter().map(|a| {
+                let entry = self.modulation.find_source_by_uuid(&a.source_id)?;
+                // A curve on any other timebase is positioned in beats or in
+                // wall-clock seconds, so a window in show seconds says nothing
+                // about it.
+                if entry.timebase != crate::timebase::Timebase::Transport {
+                    return None;
+                }
+                match &entry.source {
+                    crate::modulation::ModulationSource::Envelope { breakpoints, .. } => {
+                        Some(breakpoints.as_slice())
+                    }
+                    _ => None,
+                }
+            }),
+            position,
+        )
     }
 
     /// Render all channels and composite them via crossfader, then apply master effects.
@@ -79,12 +260,18 @@ impl Mixer {
     pub fn render(
         &mut self,
         context: &GpuContext,
-        audio_data: &crate::audio::AudioData,
-        audio_values: &crate::modulation::AudioValues,
-        analyzer_values: &crate::modulation::AnalyzerValues,
+        inputs: &super::FrameInputs<'_>,
         target_fps: u32,
         preview_channels: &[usize],
     ) -> Result<()> {
+        let super::FrameInputs {
+            audio_data,
+            audio_values,
+            analyzer_values,
+            beat_time,
+            transport,
+            free_run_time,
+        } = *inputs;
         let now = std::time::Instant::now();
         let dt = (now - self.last_render_time).as_secs_f32();
         self.last_render_time = now;
@@ -193,11 +380,19 @@ impl Mixer {
 
         // Update global modulation engine
         let t_modulation = std::time::Instant::now();
-        let time = self.start_time.elapsed().as_secs_f32();
-        self.modulation.update(time, audio_values, analyzer_values);
+        let timebases = self.resolve_timebases(free_run_time, beat_time, transport);
+        self.modulation
+            .update(&timebases, audio_values, analyzer_values);
+        // Shader uniforms follow the free-running clock: `TIME` is expected to advance
+        // smoothly regardless of what any modulator is locked to.
+        let time = timebases.free_run().time;
         // Drive any modulation-assigned macros and fan their values out to targets
         // before compositing reads opacities/params this frame.
         self.apply_macro_modulation();
+        // The arrangement runs after macros so a scheduled region wins over a
+        // macro fan-out on the same deck: a macro turn is a live gesture, and
+        // taking a deck back from the show is what an override is for.
+        self.apply_arrangement(transport, preview_channels);
         let modulation_us = t_modulation.elapsed().as_micros();
 
         // Compute effective opacity per channel (stack-allocated for the common 2-channel case)

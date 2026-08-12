@@ -106,6 +106,25 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::modulation::update_step_seq_bipolar, routes::modulation::set_step_seq_count,
         routes::modulation::update_step_seq_value,
         routes::modulation::assign_mod_on_mod, routes::modulation::remove_mod_on_mod,
+        routes::modulation::update_timebase,
+        routes::modulation::add_automation_lane,
+        routes::modulation::set_envelope_breakpoints,
+        // Transport
+        routes::transport::play, routes::transport::stop, routes::transport::locate,
+        routes::transport::set_source, routes::transport::set_loop,
+        routes::transport::set_rate,
+        routes::transport::prev_cue, routes::transport::next_cue,
+        routes::transport::trigger_cue,
+        // Arrangement
+        routes::arrangement::add_lane, routes::arrangement::remove_lane,
+        routes::arrangement::add_region, routes::arrangement::update_region,
+        routes::arrangement::remove_region, routes::arrangement::set_idle,
+        routes::arrangement::set_lane_collapsed,
+        routes::arrangement::rearm_param, routes::arrangement::rearm_all,
+        routes::arrangement::add_cue, routes::arrangement::update_cue,
+        routes::arrangement::remove_cue,
+        // Clipboard
+        routes::clipboard::copy, routes::clipboard::paste, routes::clipboard::duplicate,
         // Macros
         routes::macros::add_macro, routes::macros::remove_macro,
         routes::macros::rename_macro, routes::macros::set_kind,
@@ -121,6 +140,7 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::state::registry, routes::state::midi,
         routes::state::cameras, routes::state::depth,
         routes::state::clock, routes::state::ndi,
+        routes::state::transport, routes::state::arrangement,
         routes::state::syphon, routes::state::streams,
         routes::state::performance,
         // Scene
@@ -204,6 +224,8 @@ use utoipa_swagger_ui::SwaggerUi;
         (name = "Surfaces", description = "Surface geometry and mapping"),
         (name = "Outputs", description = "Output window management and warp"),
         (name = "Sequences", description = "Transition sequence automation"),
+        (name = "Transport", description = "Absolute show position — play, stop, locate, loop, and timecode source"),
+        (name = "Arrangement", description = "Deck activity positioned against transport time — lanes, regions, idle behaviour, re-arm"),
         (name = "Params", description = "Shader parameter control"),
         (name = "Depth Sensors", description = "Depth sensor (Kinect/LIDAR) scanning, listing, and point-cloud deck creation"),
     )
@@ -237,6 +259,8 @@ pub fn build_router(shared: SharedState) -> Router {
         .route("/api/state/cameras", get(routes::state::cameras))
         .route("/api/state/depth", get(routes::state::depth))
         .route("/api/state/clock", get(routes::state::clock))
+        .route("/api/state/transport", get(routes::state::transport))
+        .route("/api/state/arrangement", get(routes::state::arrangement))
         .route("/api/state/ndi", get(routes::state::ndi))
         .route("/api/state/syphon", get(routes::state::syphon))
         .route("/api/state/streams", get(routes::state::streams))
@@ -654,7 +678,111 @@ pub fn build_router(shared: SharedState) -> Router {
             "/api/decks/{deck_uuid}/html/interactive",
             axum::routing::post(routes::decks::set_html_interactive),
         )
+        // ── Write: Transport ─────────────────────────────────────
+        .route(
+            "/api/transport/play",
+            axum::routing::post(routes::transport::play),
+        )
+        .route(
+            "/api/transport/stop",
+            axum::routing::post(routes::transport::stop),
+        )
+        .route(
+            "/api/transport/locate",
+            axum::routing::post(routes::transport::locate),
+        )
+        .route(
+            "/api/transport/source",
+            axum::routing::put(routes::transport::set_source),
+        )
+        .route(
+            "/api/transport/loop",
+            axum::routing::put(routes::transport::set_loop),
+        )
+        .route(
+            "/api/transport/rate",
+            axum::routing::put(routes::transport::set_rate),
+        )
+        .route(
+            "/api/transport/cue/prev",
+            axum::routing::post(routes::transport::prev_cue),
+        )
+        .route(
+            "/api/transport/cue/next",
+            axum::routing::post(routes::transport::next_cue),
+        )
+        // Registered after prev and next, which are literal segments and win
+        // over this one in axum's matcher regardless.
+        .route(
+            "/api/transport/cue/{uuid}",
+            axum::routing::post(routes::transport::trigger_cue),
+        )
+        // ── Write: Clipboard ─────────────────────────────────────
+        .route(
+            "/api/clipboard/copy",
+            axum::routing::post(routes::clipboard::copy),
+        )
+        .route(
+            "/api/clipboard/paste",
+            axum::routing::post(routes::clipboard::paste),
+        )
+        .route(
+            "/api/clipboard/duplicate",
+            axum::routing::post(routes::clipboard::duplicate),
+        )
+        // ── Write: Arrangement ───────────────────────────────────
+        .route(
+            "/api/arrangement/lanes/{deck_uuid}",
+            axum::routing::post(routes::arrangement::add_lane)
+                .delete(routes::arrangement::remove_lane),
+        )
+        .route(
+            "/api/arrangement/lanes/{deck_uuid}/collapsed",
+            axum::routing::put(routes::arrangement::set_lane_collapsed),
+        )
+        .route(
+            "/api/arrangement/lanes/{deck_uuid}/regions",
+            axum::routing::post(routes::arrangement::add_region),
+        )
+        .route(
+            "/api/arrangement/lanes/{deck_uuid}/regions/{index}",
+            axum::routing::put(routes::arrangement::update_region)
+                .delete(routes::arrangement::remove_region),
+        )
+        .route(
+            "/api/arrangement/idle",
+            axum::routing::put(routes::arrangement::set_idle),
+        )
+        .route(
+            "/api/arrangement/rearm",
+            axum::routing::post(routes::arrangement::rearm_all),
+        )
+        .route(
+            "/api/arrangement/rearm/{param_key}",
+            axum::routing::post(routes::arrangement::rearm_param),
+        )
+        .route(
+            "/api/arrangement/cues",
+            axum::routing::post(routes::arrangement::add_cue),
+        )
+        .route(
+            "/api/arrangement/cues/{uuid}",
+            axum::routing::put(routes::arrangement::update_cue)
+                .delete(routes::arrangement::remove_cue),
+        )
         // ── Write: Modulation Updates ────────────────────────────
+        .route(
+            "/api/modulation/{uuid}/timebase",
+            axum::routing::put(routes::modulation::update_timebase),
+        )
+        .route(
+            "/api/modulation/automation",
+            axum::routing::post(routes::modulation::add_automation_lane),
+        )
+        .route(
+            "/api/modulation/{uuid}/breakpoints",
+            axum::routing::put(routes::modulation::set_envelope_breakpoints),
+        )
         .route(
             "/api/modulation/{uuid}/lfo/frequency",
             axum::routing::put(routes::modulation::update_lfo_frequency),

@@ -4,6 +4,8 @@ Varda is a free, open-source live visual mixer and broadcast router for Linux, m
 
 Varda is built for live VJ performance, dome projection, multi-projector installations, and headless media serving and is controlled via MIDI, OSC, keyboard shortcuts, or a full REST/WebSocket API.
 
+A scene can be worked two ways, and they are two views of the same thing rather than two projects. **Performance mode** is the mixer: channels, decks, faders, everything by hand. **[Arrangement mode](15-arrangement.md)** is that scene against show time, where regions decide when a deck is up, curves automate any parameter, cue points mark the moments worth returning to, and the transport can follow SMPTE timecode. Use either on its own or both together, and when both are running your hand wins: touch an automated control and it hands over until you re-arm it.
+
 Here you will find everything you need to start throwing those pixels. 
 
 ---
@@ -28,6 +30,7 @@ Here you will find everything you need to start throwing those pixels.
   - [Blend Modes](02-concepts.md#blend-modes) — 15 compositing modes
   - [Effect Chains](02-concepts.md#effect-chains) — deck, channel, and master FX levels
   - [Modulation](02-concepts.md#modulation) — LFO, audio bands, ADSR, step sequencer, analyzer
+  - [Copy and Paste](02-concepts.md#copy-and-paste) — right-click or Cmd+C/V/D on decks, channels, effects
   - [Persistence](02-concepts.md#persistence) — scene vs stage, presets, asset handling
 
 ### Part II — Performing
@@ -117,6 +120,21 @@ Here you will find everything you need to start throwing those pixels.
   - [Depth Sensor](14-frame-analysis.md#depth-sensor-performers) — near/far framing, per-deck controls
   - [Preprocessors](14-frame-analysis.md#preprocessors-concept) — structured data as shader textures
   - [Analyzer HTTP API](14-frame-analysis.md#analyzer-http-api)
+
+### Part V — Arranging
+
+- **15. [Arrangement Mode](15-arrangement.md)** — the mixer turned ninety degrees, laid out against show time
+  - [What Changes and What Doesn't](15-arrangement.md#what-changes-and-what-doesnt) — only the central area
+  - [Anatomy](15-arrangement.md#anatomy) — transport strip, ruler, groups, lanes, navigation
+  - [Cue Points](15-arrangement.md#cue-points) — mark a moment, walk the show with the arrows, and hit it from a pad in Performance mode
+  - [Reordering Decks](15-arrangement.md#reordering-decks) — drag a lane header, shared with the mixer's order
+  - [Regions](15-arrangement.md#regions) — draw, move, resize, fades, frame snapping
+  - [Automation Lanes](15-arrangement.md#automation-lanes) — breakpoints, curve shapes, copy/paste
+  - [Reusing a Shape](15-arrangement.md#reusing-a-shape) — one curve per parameter, copied between lanes
+  - [Authority and Override](15-arrangement.md#who-is-driving-authority-and-override) — grabbing a control back, re-arm
+  - [Idle Behaviour](15-arrangement.md#idle-behaviour) — what plays before the show starts
+  - [Undo, Saving, and Load](15-arrangement.md#undo-saving-and-load) — scene version 7, memory
+  - [Sleeping Clips](15-arrangement.md#sleeping-clips) — why a distant clip stops decoding, and what that changes
 
 ---
 
