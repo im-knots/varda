@@ -566,6 +566,7 @@ pub(crate) fn build_ui_data(
         arrangement: engine.arrangement.clone(),
         arrangement_pixels_per_second: layout.arrangement_pixels_per_second,
         arrangement_scroll: layout.arrangement_scroll,
+        arrangement_scroll_y: layout.arrangement_scroll_y,
         arrangement_snap: layout.arrangement_snap,
         clipboard: app.clipboard_summary(),
         dome_preview_open: layout.dome_preview_open,

@@ -35,6 +35,10 @@ const RULER_HEIGHT: f32 = 22.0;
 const GROUP_HEIGHT: f32 = 20.0;
 const LANE_HEIGHT: f32 = 32.0;
 const AUTOMATION_HEIGHT: f32 = 46.0;
+/// How much of the scale a wheel notch covers when the wheel is being used to
+/// zoom. egui's own figure for Cmd + wheel, so the fallback gesture and the
+/// pinch move the timeline at the same rate.
+const WHEEL_ZOOM_SPEED: f32 = 1.0 / 200.0;
 /// Blank time kept past the end of the last region, so there is somewhere to
 /// scroll to and somewhere to drop the next region.
 const TRAILING_SECONDS: f64 = 30.0;
@@ -135,6 +139,16 @@ struct RowGeometry {
     idx: usize,
 }
 
+/// The timeline's two columns and how far the rows have been scrolled past the
+/// top of them. Bundled for the same reason as [`RowGeometry`].
+#[derive(Clone, Copy)]
+struct Layout {
+    header: egui::Rect,
+    lanes: egui::Rect,
+    axis: TimeAxis,
+    scroll_y: f32,
+}
+
 /// Round an edit to the nearest frame when the snap preference is on.
 ///
 /// Snapping is a property of the gesture, never of the stored value: positions
@@ -189,15 +203,28 @@ pub(super) fn render_arrangement(ui: &mut egui::Ui, data: &UIData, actions: &mut
         pps,
     };
 
-    handle_pan_and_zoom(ui, data, actions, track_rect, axis);
+    // Clamped here rather than where it is stored, because the limit is this
+    // frame's row count against this frame's panel height.
+    let scroll_y = data
+        .arrangement_scroll_y
+        .clamp(0.0, max_scroll_y(&rows, lanes_rect));
+
+    handle_pan_and_zoom(ui, data, actions, track_rect, axis, &rows, lanes_rect);
     render_ruler(ui, data, actions, ruler_rect, axis);
-    render_rows(ui, &rows, data, actions, header_rect, lanes_rect, axis);
+    let layout = Layout {
+        header: header_rect,
+        lanes: lanes_rect,
+        axis,
+        scroll_y,
+    };
+    render_rows(ui, &rows, data, actions, layout);
+    render_vertical_scrollbar(ui, actions, &rows, lanes_rect, scroll_y);
     // After the rows, so a cue's line reads over the regions it marks, and after
     // the ruler, so its handle wins the press that would otherwise scrub.
     cues::render(ui, data, actions, ruler_rect, lanes_rect, axis);
     draw_playhead(ui, data, track_rect, axis);
     automation::handle_clipboard_shortcuts(ui, data, actions);
-    offer_channel_drop_targets(ui, &rows, header_rect, lanes_rect);
+    offer_channel_drop_targets(ui, &rows, layout);
 }
 
 /// Every deck gets a lane, whether or not the arrangement has claimed it yet.
@@ -551,7 +578,8 @@ fn render_idle_picker(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions)
     }
 }
 
-/// Scroll pans, modifier-scroll zooms about the pointer.
+/// A pinch zooms the timescale, the wheel moves the rows, and Shift or a
+/// horizontal wheel pans along time.
 ///
 /// Zooming about the pointer rather than the left edge is what makes a long show
 /// navigable: the thing being looked at stays put.
@@ -561,6 +589,8 @@ fn handle_pan_and_zoom(
     actions: &mut UIActions,
     track_rect: egui::Rect,
     axis: TimeAxis,
+    rows: &[Row<'_>],
+    lanes_rect: egui::Rect,
 ) {
     let Some(pointer) = ui.ctx().pointer_latest_pos() else {
         return;
@@ -569,36 +599,123 @@ fn handle_pan_and_zoom(
         return;
     }
 
-    let (scroll_delta, zoom_modifier) = ui.ctx().input(|i| {
+    let (scroll_delta, zoom_delta, zoom_modifier, pan_modifier) = ui.ctx().input(|i| {
         (
             i.smooth_scroll_delta,
-            i.modifiers.command || i.modifiers.alt,
+            i.zoom_delta(),
+            i.modifiers.alt,
+            i.modifiers.shift,
         )
     });
 
-    if zoom_modifier && scroll_delta.y.abs() > 0.0 {
-        let anchor = axis.seconds(pointer.x);
-        let next = (axis.pps * (1.0 + scroll_delta.y * 0.01))
-            .clamp(MIN_PIXELS_PER_SECOND, MAX_PIXELS_PER_SECOND);
-        actions.session.set_arrangement_zoom = Some(next);
-        // Hold the anchored instant under the cursor across the scale change.
-        let offset = f64::from(pointer.x - axis.left) / f64::from(next);
-        actions.session.set_arrangement_scroll =
-            Some((anchor - offset).clamp(0.0, max_scroll(data)));
+    // A trackpad pinch and Cmd + wheel are one gesture by the time they reach
+    // here: egui turns both into a zoom factor and withholds the scroll they
+    // came from. Alt keeps a zoom on the wheel for a mouse that has no pinch to
+    // give, on the same multiplicative scale so both feel alike.
+    let zoom = if (zoom_delta - 1.0).abs() > f32::EPSILON {
+        zoom_delta
+    } else if zoom_modifier && scroll_delta.y.abs() > 0.0 {
+        (scroll_delta.y * WHEEL_ZOOM_SPEED).exp()
+    } else {
+        1.0
+    };
+    if (zoom - 1.0).abs() > f32::EPSILON {
+        let (pps, scroll) = zoomed(axis, pointer.x, zoom);
+        actions.session.set_arrangement_zoom = Some(pps);
+        actions.session.set_arrangement_scroll = Some(scroll.clamp(0.0, max_scroll(data)));
         return;
     }
 
-    // Horizontal wheel where there is one, vertical otherwise, so a mouse with a
-    // single wheel can still pan.
+    // A horizontal wheel pans, and so does the vertical one held with Shift, for
+    // the single-wheel mouse that has no other way across a long show.
     let pan_px = if scroll_delta.x.abs() > 0.0 {
         scroll_delta.x
-    } else {
+    } else if pan_modifier {
         scroll_delta.y
+    } else {
+        0.0
     };
     if pan_px.abs() > 0.0 {
         let seconds = data.arrangement_scroll - f64::from(pan_px) / f64::from(axis.pps);
         actions.session.set_arrangement_scroll = Some(seconds.clamp(0.0, max_scroll(data)));
+        return;
     }
+
+    // Everything else the wheel does is what it does in every other list: move
+    // the rows. A show with more channels than fit on screen is otherwise
+    // unreachable below the fold.
+    if scroll_delta.y.abs() > 0.0 {
+        let limit = max_scroll_y(rows, lanes_rect);
+        let next = (data.arrangement_scroll_y - scroll_delta.y).clamp(0.0, limit);
+        actions.session.set_arrangement_scroll_y = Some(next);
+    }
+}
+
+/// The strip down the right edge of the lanes, present only when the rows
+/// overrun their area. Drag it, or use the wheel.
+fn render_vertical_scrollbar(
+    ui: &egui::Ui,
+    actions: &mut UIActions,
+    rows: &[Row<'_>],
+    lanes_rect: egui::Rect,
+    scroll_y: f32,
+) {
+    const WIDTH: f32 = 8.0;
+    /// Short enough to stay grabbable on a show with a hundred lanes.
+    const MIN_THUMB: f32 = 24.0;
+
+    let limit = max_scroll_y(rows, lanes_rect);
+    if limit <= 0.0 {
+        return;
+    }
+
+    let track = egui::Rect::from_min_max(
+        egui::pos2(lanes_rect.right() - WIDTH, lanes_rect.top()),
+        lanes_rect.max,
+    );
+    let content = content_height(rows);
+    let thumb_height = (track.height() * (lanes_rect.height() / content)).max(MIN_THUMB);
+    let travel = track.height() - thumb_height;
+    let thumb_top = track.top() + travel * (scroll_y / limit);
+    let thumb = egui::Rect::from_min_size(
+        egui::pos2(track.left(), thumb_top),
+        egui::vec2(WIDTH, thumb_height),
+    );
+
+    let response = ui.interact(
+        track,
+        ui.id().with("arrangement_vscroll"),
+        egui::Sense::click_and_drag(),
+    );
+    let painter = ui.painter_at(track);
+    painter.rect_filled(track, 4.0, ui.visuals().extreme_bg_color);
+    let colors = ui.visuals().widgets.style(&response);
+    painter.rect_filled(thumb.shrink(1.0), 4.0, colors.bg_fill);
+
+    // Both a drag on the thumb and a click on the track put the pointer where
+    // it asked to be, which is the same arithmetic either way.
+    if response.is_pointer_button_down_on() {
+        if let Some(pointer) = ui.ctx().pointer_latest_pos() {
+            let wanted = pointer.y - track.top() - thumb_height / 2.0;
+            let fraction = if travel > 0.0 { wanted / travel } else { 0.0 };
+            actions.session.set_arrangement_scroll_y = Some((fraction * limit).clamp(0.0, limit));
+        }
+    }
+}
+
+/// The zoom and horizontal scroll a gesture of `factor` lands on, holding the
+/// instant under `pointer_x` where it is.
+///
+/// Multiplicative, so a pinch out and back leaves the view where it started
+/// however many frames it took, and so the same gesture covers the same
+/// proportion of the scale at every zoom. Near the top of the show the anchor is
+/// given up rather than scrolling to before it starts, since there is nothing
+/// there to show.
+fn zoomed(axis: TimeAxis, pointer_x: f32, factor: f32) -> (f32, f64) {
+    let anchor = axis.seconds(pointer_x);
+    let pps = (axis.pps * factor).clamp(MIN_PIXELS_PER_SECOND, MAX_PIXELS_PER_SECOND);
+    let offset = f64::from(pointer_x - axis.left) / f64::from(pps);
+    (pps, (anchor - offset).max(0.0))
 }
 
 /// Furthest the timeline can be panned.
@@ -706,12 +823,32 @@ fn render_rows(
     rows: &[Row<'_>],
     data: &UIData,
     actions: &mut UIActions,
-    header_rect: egui::Rect,
-    lanes_rect: egui::Rect,
-    axis: TimeAxis,
+    layout: Layout,
 ) {
-    for (i, (row, (top, height))) in rows.iter().zip(row_spans(rows, lanes_rect)).enumerate() {
-        if top + height > lanes_rect.bottom() {
+    let Layout {
+        header: header_rect,
+        lanes: lanes_rect,
+        axis,
+        scroll_y,
+    } = layout;
+    // A row straddling either edge is drawn and clipped rather than dropped, so
+    // scrolling reveals a row gradually instead of snapping it into place.
+    let visible = egui::Rect::from_min_max(
+        egui::pos2(header_rect.left(), lanes_rect.top()),
+        lanes_rect.max,
+    );
+    let ui = &mut ui.new_child(egui::UiBuilder::new().max_rect(visible));
+    ui.set_clip_rect(visible);
+
+    for (i, (row, (top, height))) in rows
+        .iter()
+        .zip(row_spans(rows, lanes_rect, scroll_y))
+        .enumerate()
+    {
+        if top + height < lanes_rect.top() {
+            continue;
+        }
+        if top > lanes_rect.bottom() {
             break;
         }
         let geom = RowGeometry {
@@ -737,9 +874,10 @@ fn render_rows(
     }
 }
 
-/// Top and height of each row, tiled from the top of the lane area.
-fn row_spans(rows: &[Row<'_>], lanes_rect: egui::Rect) -> Vec<(f32, f32)> {
-    let mut y = lanes_rect.top();
+/// Top and height of each row, tiled from the top of the lane area with
+/// `scroll_y` pixels of rows already past it.
+fn row_spans(rows: &[Row<'_>], lanes_rect: egui::Rect, scroll_y: f32) -> Vec<(f32, f32)> {
+    let mut y = lanes_rect.top() - scroll_y;
     rows.iter()
         .map(|row| {
             let span = (y, row.height());
@@ -749,19 +887,31 @@ fn row_spans(rows: &[Row<'_>], lanes_rect: egui::Rect) -> Vec<(f32, f32)> {
         .collect()
 }
 
+/// Height of every row stacked, whether or not it fits.
+fn content_height(rows: &[Row<'_>]) -> f32 {
+    rows.iter().map(Row::height).sum()
+}
+
+/// Furthest the rows can be scrolled: enough to bring the last one into view and
+/// no further, so a flick cannot leave the timeline showing nothing.
+fn max_scroll_y(rows: &[Row<'_>], lanes_rect: egui::Rect) -> f32 {
+    (content_height(rows) - lanes_rect.height()).max(0.0)
+}
+
 /// Publish each group's row as a channel drop target.
 ///
 /// The deferred library drop handler resolves targets by looking up a rect per
 /// channel index, so dropping a generator onto a group creates the deck (and
 /// therefore its lane) with no arrangement-specific drop code at all. See
 /// /spec/arrangement.md § UI.
-fn offer_channel_drop_targets(
-    ui: &egui::Ui,
-    rows: &[Row<'_>],
-    header_rect: egui::Rect,
-    lanes_rect: egui::Rect,
-) {
-    for (row, (top, height)) in rows.iter().zip(row_spans(rows, lanes_rect)) {
+fn offer_channel_drop_targets(ui: &egui::Ui, rows: &[Row<'_>], layout: Layout) {
+    let Layout {
+        header: header_rect,
+        lanes: lanes_rect,
+        scroll_y,
+        ..
+    } = layout;
+    for (row, (top, height)) in rows.iter().zip(row_spans(rows, lanes_rect, scroll_y)) {
         let Row::Group { ch_idx, .. } = row else {
             continue;
         };
@@ -1413,6 +1563,106 @@ mod tests {
         assert!(limit < authored + 60.0, "but not unbounded room");
     }
 
+    /// Zooming about the pointer is what makes a long show navigable: the frame
+    /// being looked at has to stay under the finger while the scale changes
+    /// around it.
+    #[test]
+    fn a_pinch_holds_the_instant_under_the_pointer() {
+        // Well into the show, so a zoom out has somewhere to go: an anchor near
+        // zero cannot be held, because holding it would put the view before the
+        // start of the show.
+        let axis = TimeAxis {
+            scroll: 600.0,
+            ..axis()
+        };
+        let pointer_x = axis.left + 300.0;
+        let looked_at = axis.seconds(pointer_x);
+
+        for factor in [1.1, 1.9, 0.9, 0.5] {
+            let (pps, scroll) = zoomed(axis, pointer_x, factor);
+            let after = TimeAxis {
+                scroll,
+                pps,
+                ..axis
+            };
+            assert!(
+                (after.seconds(pointer_x) - looked_at).abs() < 0.001,
+                "a pinch of {factor} moved the instant under the pointer"
+            );
+        }
+    }
+
+    /// A pinch out and back has to leave the view where it started, which it
+    /// only does if the gesture scales the timebase rather than adding to it.
+    #[test]
+    fn pinching_out_and_back_returns_to_the_same_view() {
+        let axis = TimeAxis {
+            scroll: 600.0,
+            ..axis()
+        };
+        let pointer_x = axis.left + 200.0;
+
+        let (pps, scroll) = zoomed(axis, pointer_x, 1.4);
+        let (back, scroll_back) = zoomed(
+            TimeAxis {
+                scroll,
+                pps,
+                ..axis
+            },
+            pointer_x,
+            1.0 / 1.4,
+        );
+
+        assert!(
+            (back - axis.pps).abs() < 0.001,
+            "{back} is not {}",
+            axis.pps
+        );
+        assert!((scroll_back - axis.scroll).abs() < 0.001);
+    }
+
+    /// The scale is bounded at both ends, and a gesture that runs into a bound
+    /// still has to leave the pointer somewhere sensible rather than at a
+    /// negative position.
+    #[test]
+    fn a_pinch_stops_at_the_ends_of_the_scale() {
+        let axis = axis();
+        let pointer_x = axis.left + 50.0;
+
+        let (widest, scroll) = zoomed(axis, pointer_x, 0.000_1);
+        assert!((widest - MIN_PIXELS_PER_SECOND).abs() < f32::EPSILON);
+        assert!(scroll >= 0.0, "{scroll} is before the start of the show");
+
+        let (tightest, scroll) = zoomed(axis, pointer_x, 10_000.0);
+        assert!((tightest - MAX_PIXELS_PER_SECOND).abs() < f32::EPSILON);
+        assert!(scroll >= 0.0);
+    }
+
+    /// The gesture arrives from egui as a zoom factor whether it was a trackpad
+    /// pinch or Cmd held on the wheel, so this covers both entry points.
+    #[test]
+    fn a_pinch_over_the_timeline_zooms_the_timescale() {
+        let data = fixture_with_arrangement();
+        let mut actions = UIActions::new();
+        let mut harness = egui_kittest::Harness::new_ui(|ui| {
+            render_arrangement(ui, &data, &mut actions);
+        });
+        // Over the tracks rather than the headers, and past the ruler.
+        harness.event(egui::Event::PointerMoved(egui::pos2(400.0, 200.0)));
+        harness.event(egui::Event::Zoom(1.5));
+        harness.run();
+        drop(harness);
+
+        let zoom = actions
+            .session
+            .set_arrangement_zoom
+            .expect("a pinch must change the timescale");
+        assert!(
+            zoom > data.arrangement_pixels_per_second,
+            "pinching out has to widen the scale, got {zoom}"
+        );
+    }
+
     /// Rows are laid out in one pass so the header and the track for a lane are
     /// the same strip of screen. Drift here is the bug the single-rect layout
     /// exists to prevent.
@@ -1421,7 +1671,7 @@ mod tests {
         let data = fixture_with_automation();
         let rows = build_rows(&data);
         let lanes = egui::Rect::from_min_size(egui::pos2(0.0, 100.0), egui::vec2(600.0, 800.0));
-        let spans = row_spans(&rows, lanes);
+        let spans = row_spans(&rows, lanes, 0.0);
 
         // Rows tile without gaps or overlaps, which is what keeps the two
         // columns aligned however the row heights change.
@@ -1432,6 +1682,81 @@ mod tests {
             );
         }
         assert!((spans[0].0 - lanes.top()).abs() < f32::EPSILON);
+    }
+
+    /// Scrolling moves every row by the same amount, headers included. Anything
+    /// else would slide a lane's name away from its regions.
+    #[test]
+    fn scrolling_the_rows_moves_all_of_them_together() {
+        let data = fixture_with_automation();
+        let rows = build_rows(&data);
+        let lanes = egui::Rect::from_min_size(egui::pos2(0.0, 100.0), egui::vec2(600.0, 800.0));
+
+        let still = row_spans(&rows, lanes, 0.0);
+        let scrolled = row_spans(&rows, lanes, 50.0);
+
+        for (a, b) in still.iter().zip(&scrolled) {
+            assert!((a.0 - b.0 - 50.0).abs() < f32::EPSILON, "{a:?} vs {b:?}");
+            assert!((a.1 - b.1).abs() < f32::EPSILON, "heights do not scroll");
+        }
+    }
+
+    /// A show with more channels than fit has to be reachable to the last row,
+    /// and no further: scrolling past the end would leave the timeline blank
+    /// with nothing to navigate back by.
+    #[test]
+    fn the_rows_scroll_exactly_far_enough_to_reach_the_last_one() {
+        let data = fixture_with_automation();
+        let rows = build_rows(&data);
+        let content = content_height(&rows);
+        assert!(content > 0.0);
+
+        let roomy = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(600.0, content));
+        assert!(
+            max_scroll_y(&rows, roomy).abs() < f32::EPSILON,
+            "rows that all fit do not scroll at all"
+        );
+
+        let cramped =
+            egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(600.0, content / 2.0));
+        let limit = max_scroll_y(&rows, cramped);
+        let last = *row_spans(&rows, cramped, limit)
+            .last()
+            .expect("a fixture with rows");
+        assert!(
+            (last.0 + last.1 - cramped.bottom()).abs() < 0.001,
+            "the last row sits exactly on the bottom edge at full scroll"
+        );
+    }
+
+    /// The bug this fixes: rows below the fold used to stop being drawn, so a
+    /// scene with more channels than fit could not be managed at all.
+    #[test]
+    fn a_row_below_the_fold_is_reachable_by_scrolling() {
+        let data = fixture_with_automation();
+        let rows = build_rows(&data);
+        // A viewport too short for even the first two rows.
+        let lanes = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(600.0, 24.0));
+        let limit = max_scroll_y(&rows, lanes);
+        assert!(
+            limit > 0.0,
+            "the fixture must overflow for this to mean anything"
+        );
+
+        let visible = |scroll_y: f32| {
+            row_spans(&rows, lanes, scroll_y)
+                .into_iter()
+                .enumerate()
+                .filter(|(_, (top, height))| *top + *height > lanes.top() && *top < lanes.bottom())
+                .map(|(i, _)| i)
+                .collect::<Vec<_>>()
+        };
+
+        assert!(!visible(0.0).contains(&(rows.len() - 1)));
+        assert!(
+            visible(limit).contains(&(rows.len() - 1)),
+            "the last row must be on screen once scrolled to the end"
+        );
     }
 
     /// Dropping a generator on a group has to create the deck, which it does by

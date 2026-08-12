@@ -73,6 +73,8 @@ pub struct UISession {
     pub set_arrangement_zoom: Option<f32>,
     /// Timeline horizontal scroll, as the show position at the left edge.
     pub set_arrangement_scroll: Option<f64>,
+    /// Timeline vertical scroll, in pixels of rows above the top edge.
+    pub set_arrangement_scroll_y: Option<f32>,
     /// Round timeline edits to whole frames. A property of the gesture, never of
     /// the stored position. See /spec/arrangement.md § Does the ruler own a
     /// frame rate?
@@ -138,6 +140,7 @@ impl UISession {
             toggle_arrangement_mode: false,
             set_arrangement_zoom: None,
             set_arrangement_scroll: None,
+            set_arrangement_scroll_y: None,
             toggle_arrangement_snap: false,
             toggle_dome_preview: false,
             dome_actions: Vec::new(),

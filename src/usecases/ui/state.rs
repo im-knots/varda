@@ -50,6 +50,9 @@ pub struct UILayoutState {
     pub arrangement_pixels_per_second: f32,
     /// Show position at the timeline's left edge.
     pub arrangement_scroll: f64,
+    /// Rows scrolled off the top of the timeline, in pixels. A show with more
+    /// channels than fit has to stay reachable.
+    pub arrangement_scroll_y: f32,
     /// Whether timeline edits round to whole frames at the ruler's rate.
     pub arrangement_snap: bool,
     /// Whether the library panel (left sidebar) is open
@@ -85,6 +88,7 @@ impl Default for UILayoutState {
             // tight enough that a fade handle is grabbable.
             arrangement_pixels_per_second: 40.0,
             arrangement_scroll: 0.0,
+            arrangement_scroll_y: 0.0,
             // On by default: a show cut to picture wants frame-aligned edits,
             // and a music-led one can turn it off in one click.
             arrangement_snap: true,
@@ -193,6 +197,10 @@ impl UILayoutState {
         }
         if let Some(scroll) = session.set_arrangement_scroll {
             self.arrangement_scroll = scroll.max(0.0);
+        }
+        if let Some(scroll) = session.set_arrangement_scroll_y {
+            // The panel clamps against its own height, which only it knows.
+            self.arrangement_scroll_y = scroll.max(0.0);
         }
         if session.toggle_arrangement_snap {
             self.arrangement_snap = !self.arrangement_snap;

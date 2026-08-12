@@ -455,6 +455,8 @@ pub struct UIData {
     pub arrangement_pixels_per_second: f32,
     /// Show position at the timeline's left edge.
     pub arrangement_scroll: f64,
+    /// Rows scrolled off the top of the timeline, in pixels.
+    pub arrangement_scroll_y: f32,
     /// Whether timeline edits round to whole frames at the ruler's rate.
     pub arrangement_snap: bool,
     /// What copy is holding, so a menu can name it and disable Paste when it
