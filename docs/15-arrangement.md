@@ -35,8 +35,9 @@ The transport strip duplicates the top bar readout rather than replacing it. Bot
 
 | Gesture | Result |
 |---------|--------|
-| **Scroll** | Pan along the timeline. |
-| **Cmd/Alt + scroll** | Zoom about the pointer, so whatever you are looking at stays under the cursor. |
+| **Scroll** | Move up and down the rows. A scene with more channels than fit on screen gets a scrollbar down the right edge of the tracks, which you can drag instead. |
+| **Shift + scroll**, or a horizontal wheel | Pan along the timeline. |
+| **Pinch**, or **Cmd/Alt + scroll** | Zoom the timescale about the pointer, so whatever you are looking at stays under it. |
 | **+ / −** | Zoom in and out from the transport strip. |
 | **Click or drag the ruler** | Locate the transport. |
 | **⏮ / ⏭** | Jump to the previous or next cue point. |
