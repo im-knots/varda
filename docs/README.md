@@ -4,6 +4,8 @@ Varda is a free, open-source live visual mixer and broadcast router for Linux, m
 
 Varda is built for live VJ performance, dome projection, multi-projector installations, and headless media serving and is controlled via MIDI, OSC, keyboard shortcuts, or a full REST/WebSocket API.
 
+A scene can be worked two ways, and they are two views of the same thing rather than two projects. **Performance mode** is the mixer: channels, decks, faders, everything by hand. **[Arrangement mode](15-arrangement.md)** is that scene against show time, where regions decide when a deck is up, curves automate any parameter, cue points mark the moments worth returning to, and the transport can follow SMPTE timecode. Use either on its own or both together, and when both are running your hand wins: touch an automated control and it hands over until you re-arm it.
+
 Here you will find everything you need to start throwing those pixels. 
 
 ---

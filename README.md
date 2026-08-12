@@ -2,12 +2,14 @@
 
 A visual performance tool with broadcast style routing for VJs, installation artists, and anyone who wants to throw pixels at things.
 
-![Varda](docs/img/screenshot.png)
+![Varda Performance Mode](docs/img/varda-performance.png)
 
+![Varda Arrangement Mode](docs/img/varda-arrangement.png)
 
-Varda applies broadcast video workflows to live visuals. Sources (video, cameras, generative shaders, streams, images) flow through a routing graph of decks, channels, and surfaces to reach outputs (projectors, streams, recordings). Instead of a clip-launch grid, you control what's live by adjusting opacity, blend modes, crossfaders, mute/solo, and effect chains. 
+Varda applies broadcast video workflows to live visuals. Sources (video, cameras, generative shaders, streams, images) flow through a routing graph of decks, channels, and surfaces to reach outputs (projectors, streams, recordings). Instead of a clip-launch grid, you control what's live by adjusting opacity, blend modes, crossfaders, mute/solo, and effect chains. When a show has to land the same way every night, the same scene can be laid out against a timeline instead, and you can still take over manual control on any of it while it runs.
 
 - **Routing matrix**: Sources > Decks > Channels > Mixer > Surfaces > Outputs. Any source to any output, split, branch, or sub-mix at every junction
+- **Two views of one scene**: **Performance mode** is the mixer, played by hand with live performance controls. **Arrangement mode** is the same scene with a show timeline: regions say when each deck is up, automation curves draw any parameter over the timeline, cue points mark the moments worth jumping to, and the transport can chase SMPTE timecode. An edit in either view appears immediately in the other
 - **Sources**: video (HAP GPU-native + ffmpeg), cameras, GLSL shaders (generators/filters, ISF-style metadata), NDI, SRT, HLS, DASH, RTMP/RTMPS, Syphon (macOS receive), screen and window capture, program taps of Varda's own output, images, and html/css/js sources (Servo)
 - **Mixing**: N-channel compositing, A/B crossfader, per-deck opacity, 15 blend modes, linear-light HDR pipeline
 - **Color**: 9 tonemap presets (ACES, AgX, Reinhard, Hable, etc.), 3D LUT support (.cube/.3dl) for color grading
