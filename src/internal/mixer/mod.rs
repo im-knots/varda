@@ -108,6 +108,15 @@ pub struct FrameInputs<'a> {
     /// Show position from the transport, or `None` until it has run, which
     /// freezes transport-locked modulators.
     pub transport: Option<crate::timebase::TransportSample>,
+    /// Seconds on the free-running clock, which is what `TIME` reaches every
+    /// shader as. `None` reads the mixer's own wall clock, which is what a live
+    /// show wants.
+    ///
+    /// A caller supplies it when frames are not paced by the wall: a test
+    /// measuring how a picture changes between frames would otherwise be
+    /// measuring how fast the machine renders, and rendering a show to disk
+    /// faster (or slower) than real time needs the same handle.
+    pub free_run_time: Option<f32>,
 }
 
 /// Mixer - Top-level compositor
@@ -1233,6 +1242,7 @@ mod tests {
             analyzer_values: &analyzer_values,
             beat_time: None,
             transport: None,
+            free_run_time: None,
         };
         mixer
             .render(gpu, &inputs, 60, preview)

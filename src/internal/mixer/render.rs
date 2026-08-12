@@ -31,14 +31,16 @@ impl Mixer {
     /// `beat_time` is the clock's monotonic beat position, or `None` when no
     /// clock source is active, which freezes beat-locked sources. `transport`
     /// is `None` until the transport has run, which freezes transport-locked
-    /// sources. See /spec/timebase.md.
+    /// sources. `free_run_time` is `None` whenever frames are paced by the wall,
+    /// which is every live frame. See /spec/timebase.md.
     fn resolve_timebases(
         &mut self,
+        free_run_time: Option<f32>,
         beat_time: Option<f64>,
         transport: Option<crate::timebase::TransportSample>,
     ) -> crate::timebase::TimebaseSet {
         self.timebases.resolve(crate::timebase::TimebaseInput {
-            free_run_time: self.start_time.elapsed().as_secs_f32(),
+            free_run_time: free_run_time.unwrap_or_else(|| self.start_time.elapsed().as_secs_f32()),
             beat_time,
             transport,
         })
@@ -52,7 +54,7 @@ impl Mixer {
         audio_values: &crate::modulation::AudioValues,
         analyzer_values: &crate::modulation::AnalyzerValues,
     ) {
-        let timebases = self.resolve_timebases(beat_time, transport);
+        let timebases = self.resolve_timebases(None, beat_time, transport);
         self.modulation
             .update(&timebases, audio_values, analyzer_values);
     }
@@ -268,6 +270,7 @@ impl Mixer {
             analyzer_values,
             beat_time,
             transport,
+            free_run_time,
         } = *inputs;
         let now = std::time::Instant::now();
         let dt = (now - self.last_render_time).as_secs_f32();
@@ -377,10 +380,10 @@ impl Mixer {
 
         // Update global modulation engine
         let t_modulation = std::time::Instant::now();
-        let timebases = self.resolve_timebases(beat_time, transport);
+        let timebases = self.resolve_timebases(free_run_time, beat_time, transport);
         self.modulation
             .update(&timebases, audio_values, analyzer_values);
-        // Shader uniforms stay on wall time: `TIME` is expected to advance
+        // Shader uniforms follow the free-running clock: `TIME` is expected to advance
         // smoothly regardless of what any modulator is locked to.
         let time = timebases.free_run().time;
         // Drive any modulation-assigned macros and fan their values out to targets

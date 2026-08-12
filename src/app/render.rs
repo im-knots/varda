@@ -488,6 +488,8 @@ impl VardaApp {
             analyzer_values: &analyzer_values,
             beat_time: self.input.clock_manager.beat_time(),
             transport: self.transport.sample(),
+            // The wall paces a live show.
+            free_run_time: None,
         };
 
         let target_fps = self.target_fps;

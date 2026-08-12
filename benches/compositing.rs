@@ -46,6 +46,7 @@ fn frame_inputs<'a>(
         analyzer_values,
         beat_time: None,
         transport: None,
+        free_run_time: None,
     }
 }
 
