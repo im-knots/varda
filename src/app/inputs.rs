@@ -119,8 +119,16 @@ impl VardaApp {
             self.audio_manager.set_modulation_refs(&needed);
         }
 
+        // One frame time for every signal ingested below, so LTC and MTC are
+        // aged against the same instant rather than against each other.
+        let now = std::time::Instant::now();
+
         // Poll all audio sources
         self.audio_manager.poll();
+
+        // Timecode arrives on two paths. This is the audio one; the MIDI one is
+        // answered in the drain below.
+        self.tick_ltc(now);
 
         // Update audio textures (using primary source)
         self.audio_textures
@@ -199,6 +207,16 @@ impl VardaApp {
                     }
                     crate::midi::MidiMessage::ClockStop { .. } => {
                         self.input.clock_manager.process_midi_stop();
+                    }
+                    // Timecode, like clock, is an engine-internal signal rather
+                    // than a control, so it never reaches the mapping store.
+                    crate::midi::MidiMessage::MtcQuarterFrame { device_id, .. }
+                    | crate::midi::MidiMessage::MtcFullFrame { device_id, .. } => {
+                        let device_id = *device_id;
+                        self.input.timecode.ingest_midi(&msg, now);
+                        if let Some(name) = midi.device(device_id).map(|d| d.name.clone()) {
+                            self.input.timecode.name_device(device_id, &name);
+                        }
                     }
                     _ => mappable.push(msg),
                 }
@@ -331,6 +349,11 @@ impl VardaApp {
         // Resolve clock priority
         self.input.clock_manager.update();
 
+        // Resolve timecode and hand the transport its position. Before the tick
+        // below, so a master's locate is published as this frame's jump rather
+        // than next frame's.
+        self.chase_timecode(now);
+
         // Advance the show position. After command processing, so a locate that
         // arrived this frame is published rather than overwritten.
         self.transport.update();
@@ -348,6 +371,8 @@ impl VardaApp {
         // already been published as the jump it is.
         self.tick_recorder();
 
+        self.publish_timecode();
+
         // Broadcast changed parameters to OSC feedback targets
         if !changed_params.is_empty() {
             if let Some(ref sender) = self.input.osc_feedback {
@@ -356,6 +381,121 @@ impl VardaApp {
                         sender.send_param(path, *value);
                     }
                 }
+            }
+        }
+    }
+
+    /// Republish the show position over OSC, once per frame of timecode.
+    ///
+    /// Rate-limited by the label rather than by the render loop: a receiver
+    /// wants the position at the rate positions exist, and 60 fps of identical
+    /// frame numbers is noise on someone else's network.
+    fn publish_timecode(&mut self) {
+        let Some(sender) = &self.input.osc_feedback else {
+            return;
+        };
+        if !sender.has_targets() || !self.transport.has_run() {
+            return;
+        }
+        let label = self.transport.formatted_position();
+        if self.session.published_timecode.as_deref() == Some(label.as_str()) {
+            return;
+        }
+        sender.send_timecode(self.transport.position(), &label);
+        self.session.published_timecode = Some(label);
+    }
+
+    /// Keep the LTC tap matching what is patched, and decode what it heard.
+    ///
+    /// The subscription is reconciled from the patch each frame rather than on
+    /// a command, so naming an input, changing it, switching the preference to
+    /// `Off`, and loading a scene all release the device by the same path.
+    /// See /spec/audio-capture-lifecycle.md.
+    fn tick_ltc(&mut self, now: std::time::Instant) {
+        let wanted = self
+            .input
+            .timecode
+            .wants_ltc()
+            .then(|| self.input.timecode.ltc_input())
+            .flatten();
+
+        if self.input.ltc_tap.as_ref().map(|tap| tap.source_id) != wanted.map(|i| i.source_id) {
+            if let Some(tap) = self.input.ltc_tap.take() {
+                self.audio_manager.unsubscribe_pcm(tap.source_id, tap.token);
+            }
+            if let Some(input) = wanted {
+                if let Some(sub) = self.audio_manager.subscribe_pcm(input.source_id) {
+                    log::info!(
+                        "Listening for LTC on audio source {} channel {}",
+                        input.source_id,
+                        input.channel + 1
+                    );
+                    self.input.ltc_tap = Some(crate::app::LtcTap {
+                        source_id: input.source_id,
+                        token: sub.token,
+                        receiver: sub.receiver,
+                        sample_rate: sub.format.sample_rate,
+                        channels: sub.format.channels,
+                    });
+                } else {
+                    self.session.notifications.warn(format!(
+                        "Could not open audio source {} to listen for timecode",
+                        input.source_id
+                    ));
+                    // Forget the patch, or this retries every frame for the
+                    // rest of the show.
+                    self.input.timecode.set_ltc_input(None);
+                }
+            }
+        }
+
+        let Some(tap) = &self.input.ltc_tap else {
+            return;
+        };
+        let (source_id, channels, sample_rate) = (tap.source_id, tap.channels, tap.sample_rate);
+        let chunks: Vec<crate::audio::PcmChunk> =
+            std::iter::from_fn(|| tap.receiver.try_recv().ok()).collect();
+        for chunk in chunks {
+            self.input
+                .timecode
+                .ingest_pcm(source_id, &chunk.samples, channels, sample_rate, now);
+        }
+    }
+
+    /// Resolve the incoming timecode and give the transport its position.
+    fn chase_timecode(&mut self, now: std::time::Instant) {
+        self.input.timecode.update(now);
+        if self.transport.source() != crate::transport::TransportSource::Timecode {
+            return;
+        }
+
+        let state = self.input.timecode.state();
+        self.transport.chase(crate::transport::Chase {
+            position: state.position,
+            running: state.running,
+            discontinuity: state.discontinuity,
+            freewheeling: state.freewheeling,
+            speed: state.speed,
+        });
+
+        // Armed to chase and hearing nothing looks exactly like a show that has
+        // not started. Headless has nobody watching the popover, so it is said
+        // out loud, once per silence rather than every frame of it.
+        if state.running {
+            self.session.chase_silent_since = None;
+            self.session.chase_silence_reported = false;
+        } else {
+            let since = *self.session.chase_silent_since.get_or_insert(now);
+            if now.duration_since(since) > std::time::Duration::from_secs(5)
+                && !self.session.chase_silence_reported
+            {
+                self.session.chase_silence_reported = true;
+                log::warn!(
+                    "Transport is chasing timecode but nothing has arrived for 5 seconds \
+                     (preference {:?}, {} input(s) seen)",
+                    self.input.timecode.preference(),
+                    self.input.timecode.inputs().len()
+                );
             }
         }
     }
@@ -606,6 +746,488 @@ mod tests {
         app.process_inputs();
 
         assert!(app.transport.position().abs() < 1e-9);
+    }
+
+    // ── Chasing timecode ────────────────────────────────────────
+
+    /// Queue every quarter frame for one address, in order.
+    fn a_master_at(frame: crate::timecode::TimecodeFrame) -> Vec<MidiMessage> {
+        let hours = frame.hours | (crate::timecode::mtc::rate_bits(frame.rate) << 5);
+        [
+            frame.frames & 0x0F,
+            frame.frames >> 4,
+            frame.seconds & 0x0F,
+            frame.seconds >> 4,
+            frame.minutes & 0x0F,
+            frame.minutes >> 4,
+            hours & 0x0F,
+            hours >> 4,
+        ]
+        .iter()
+        .enumerate()
+        .map(|(piece, value)| MidiMessage::MtcQuarterFrame {
+            device_id: 0,
+            data: ((piece as u8) << 4) | value,
+        })
+        .collect()
+    }
+
+    fn send(app: &mut VardaApp, messages: Vec<MidiMessage>) {
+        let mut devices = MidiDeviceManager::detached();
+        for message in messages {
+            devices.inject(message);
+        }
+        app.input.midi_devices = Some(devices);
+        app.process_inputs();
+    }
+
+    /// The end of the whole feature: bytes off a MIDI port become the show's
+    /// position, and that is what engages the arrangement.
+    #[test]
+    fn an_incoming_master_drives_the_show() {
+        let Some((mut app, _deck)) = app_with_a_deck() else {
+            return;
+        };
+        app.execute_command(C::SetTransportSource {
+            source: crate::transport::TransportSource::Timecode,
+        });
+
+        send(
+            &mut app,
+            a_master_at(crate::timecode::TimecodeFrame::new(
+                1,
+                0,
+                30,
+                0,
+                crate::transport::TimecodeRate::Fps25,
+            )),
+        );
+
+        assert!(
+            (app.transport.position() - 3630.0).abs() < 0.2,
+            "an hour and half a minute in, got {}",
+            app.transport.position()
+        );
+        assert!(app.transport.running());
+        assert!(
+            app.transport.has_run(),
+            "a chased show engages the arrangement like any other"
+        );
+    }
+
+    /// A cable left patched from yesterday must not drag the playhead of a show
+    /// being run by hand.
+    #[test]
+    fn a_master_is_ignored_until_the_transport_is_asked_to_follow_it() {
+        let Some((mut app, _deck)) = app_with_a_deck() else {
+            return;
+        };
+
+        send(
+            &mut app,
+            a_master_at(crate::timecode::TimecodeFrame::new(
+                1,
+                0,
+                0,
+                0,
+                crate::transport::TimecodeRate::Fps25,
+            )),
+        );
+
+        assert!(app.transport.position().abs() < 1e-9);
+        assert!(
+            !app.input.timecode.inputs().is_empty(),
+            "but it is still heard, so the popover can offer it"
+        );
+    }
+
+    /// A master that stops leaves the show where it stopped rather than
+    /// releasing it, so a pulled cable holds the last look.
+    #[test]
+    fn the_show_holds_where_a_master_left_it() {
+        let Some((mut app, _deck)) = app_with_a_deck() else {
+            return;
+        };
+        app.execute_command(C::SetTransportSource {
+            source: crate::transport::TransportSource::Timecode,
+        });
+        send(
+            &mut app,
+            a_master_at(crate::timecode::TimecodeFrame::new(
+                0,
+                10,
+                0,
+                0,
+                crate::transport::TimecodeRate::Fps25,
+            )),
+        );
+        let held = app.transport.position();
+
+        // Nothing arrives for well past the freewheel window.
+        app.input
+            .timecode
+            .update(std::time::Instant::now() + std::time::Duration::from_secs(2));
+        app.process_inputs();
+
+        assert!(!app.transport.running(), "the master stopped");
+        assert!(
+            (app.transport.position() - held).abs() < 0.5,
+            "and the position held rather than snapping home"
+        );
+        assert_eq!(
+            app.transport.status(),
+            crate::transport::TransportStatus::Stopped
+        );
+    }
+
+    // ── Listening for LTC on an audio input ─────────────────────
+
+    /// Every capture device this machine enumerated.
+    fn audio_inputs(app: &VardaApp) -> Vec<crate::audio::AudioSourceId> {
+        app.audio_manager.devices().iter().map(|d| d.id).collect()
+    }
+
+    /// Patch LTC to `source_id` and let one frame reconcile the tap, returning
+    /// the source it actually opened.
+    ///
+    /// `None` when the device could not be opened, which is the CI case: there
+    /// is no mock capture device, so the tests below skip the way the
+    /// GPU-backed ones do with no adapter.
+    fn patch_ltc(
+        app: &mut VardaApp,
+        source_id: crate::audio::AudioSourceId,
+        channel: u16,
+    ) -> Option<crate::audio::AudioSourceId> {
+        app.execute_command(C::SetLtcInput {
+            input: Some(crate::timecode::LtcInput {
+                source_id,
+                channel,
+                rate: None,
+            }),
+        });
+        app.process_inputs();
+        app.input.ltc_tap.as_ref().map(|tap| tap.source_id)
+    }
+
+    /// Naming an input is what opens the interface, and unpatching it is what
+    /// gives it back. A rehearsal that is done with timecode must not hold a
+    /// channel of somebody else's console open for the rest of the night.
+    #[test]
+    fn unpatching_ltc_gives_the_audio_interface_back() {
+        let Some((mut app, _deck)) = app_with_a_deck() else {
+            return;
+        };
+        let Some(&source_id) = audio_inputs(&app).first() else {
+            return;
+        };
+        let Some(tapped) = patch_ltc(&mut app, source_id, 1) else {
+            return;
+        };
+        assert_eq!(tapped, source_id);
+        assert!(
+            app.audio_manager.active_source_ids().contains(&source_id),
+            "the interface is captured while timecode is being listened for"
+        );
+
+        app.execute_command(C::SetLtcInput { input: None });
+        app.process_inputs();
+
+        assert!(app.input.ltc_tap.is_none());
+        assert!(
+            !app.audio_manager.active_source_ids().contains(&source_id),
+            "and let go once nobody is listening"
+        );
+    }
+
+    /// `Off` is the same release by another route: deciding not to follow
+    /// timecode this evening leaves the patch written down but must not leave
+    /// the device open.
+    #[test]
+    fn switching_timecode_off_releases_the_audio_interface() {
+        let Some((mut app, _deck)) = app_with_a_deck() else {
+            return;
+        };
+        let Some(&source_id) = audio_inputs(&app).first() else {
+            return;
+        };
+        if patch_ltc(&mut app, source_id, 0).is_none() {
+            return;
+        }
+
+        app.execute_command(C::SetTimecodePreference {
+            preference: crate::timecode::TimecodePreference::Off,
+        });
+        app.process_inputs();
+
+        assert!(app.input.ltc_tap.is_none());
+        assert!(!app.audio_manager.active_source_ids().contains(&source_id));
+        assert!(
+            app.input.timecode.ltc_input().is_some(),
+            "the patch itself is remembered, so turning timecode back on needs no re-patching"
+        );
+    }
+
+    /// Moving the patch to another interface moves the tap rather than adding a
+    /// second one: two taps would decode two positions, and the interface the
+    /// patch left would still be held open by a reader nobody is asking.
+    #[test]
+    fn repatching_ltc_moves_the_tap_rather_than_stacking_one() {
+        let Some((mut app, _deck)) = app_with_a_deck() else {
+            return;
+        };
+        let [first, second] = match audio_inputs(&app).as_slice() {
+            [first, second, ..] => [*first, *second],
+            _ => return,
+        };
+        if patch_ltc(&mut app, first, 0).is_none() {
+            return;
+        }
+        let Some(moved) = patch_ltc(&mut app, second, 0) else {
+            return;
+        };
+
+        assert_eq!(moved, second);
+        assert!(
+            !app.audio_manager.active_source_ids().contains(&first),
+            "the interface the patch left is released"
+        );
+    }
+
+    /// Both channels of one interface arrive on the same tap, so changing which
+    /// one carries timecode must not reopen the device. A reopen is a gap in the
+    /// capture, and on the standard field rig the other channel is the music
+    /// going to the PA.
+    #[test]
+    fn changing_channel_on_the_same_interface_keeps_the_stream_open() {
+        let Some((mut app, _deck)) = app_with_a_deck() else {
+            return;
+        };
+        let Some(&source_id) = audio_inputs(&app).first() else {
+            return;
+        };
+        if patch_ltc(&mut app, source_id, 0).is_none() {
+            return;
+        }
+        let token = app.input.ltc_tap.as_ref().map(|tap| tap.token);
+
+        if patch_ltc(&mut app, source_id, 1).is_none() {
+            return;
+        }
+
+        assert_eq!(
+            app.input.ltc_tap.as_ref().map(|tap| tap.token),
+            token,
+            "the same subscription carries the other channel"
+        );
+        assert_eq!(
+            app.input.timecode.ltc_input().map(|input| input.channel),
+            Some(1),
+            "but the decoder is now reading the channel that was asked for"
+        );
+    }
+
+    /// A patch pointing at an interface the rig no longer has is reported and
+    /// then forgotten. Left in place it would try to open a device that is not
+    /// there sixty times a second, and log it sixty times a second, for the rest
+    /// of the show.
+    #[test]
+    fn a_patch_naming_an_absent_interface_is_reported_once_and_dropped() {
+        let Some((mut app, _deck)) = app_with_a_deck() else {
+            return;
+        };
+        let absent = audio_inputs(&app).len() as crate::audio::AudioSourceId + 1000;
+        app.execute_command(C::SetLtcInput {
+            input: Some(crate::timecode::LtcInput {
+                source_id: absent,
+                channel: 0,
+                rate: None,
+            }),
+        });
+
+        app.process_inputs();
+
+        assert!(app.input.ltc_tap.is_none());
+        assert_eq!(
+            app.input.timecode.ltc_input(),
+            None,
+            "the patch is dropped rather than retried every frame"
+        );
+        let complaints = |app: &VardaApp| {
+            app.session
+                .notifications
+                .visible()
+                .iter()
+                .filter(|n| n.message.contains("listen for timecode"))
+                .count()
+        };
+        assert_eq!(complaints(&app), 1);
+        assert!(
+            app.session
+                .notifications
+                .visible()
+                .iter()
+                .any(|n| n.message.contains(&absent.to_string())),
+            "and it names the source that could not be opened"
+        );
+
+        app.process_inputs();
+        app.process_inputs();
+
+        assert_eq!(complaints(&app), 1, "said once, not once per frame");
+    }
+
+    // ── Republishing the position over OSC ──────────────────────
+
+    /// A feedback sender aimed at a socket this test owns, so what went on the
+    /// wire can be read back.
+    fn osc_loopback() -> Option<(std::net::UdpSocket, crate::osc::OscFeedbackSender)> {
+        let socket = std::net::UdpSocket::bind("127.0.0.1:0").ok()?;
+        socket
+            .set_read_timeout(Some(std::time::Duration::from_millis(100)))
+            .ok()?;
+        let mut sender = crate::osc::OscFeedbackSender::new().ok()?;
+        sender
+            .add_target(&socket.local_addr().ok()?.to_string())
+            .ok()?;
+        Some((socket, sender))
+    }
+
+    /// Every OSC address waiting on the socket.
+    fn received_addresses(socket: &std::net::UdpSocket) -> Vec<String> {
+        let mut addresses = Vec::new();
+        let mut buf = [0u8; 1024];
+        while let Ok((size, _)) = socket.recv_from(&mut buf) {
+            if let Ok((_, rosc::OscPacket::Message(msg))) = rosc::decoder::decode_udp(&buf[..size])
+            {
+                addresses.push(msg.addr);
+            }
+        }
+        addresses
+    }
+
+    /// An app publishing to a socket the test owns, with the show parked at a
+    /// position that has already been published once.
+    fn app_publishing_position() -> Option<(VardaApp, std::net::UdpSocket)> {
+        let (mut app, _deck) = app_with_a_deck()?;
+        let (socket, sender) = osc_loopback()?;
+        app.input.osc_feedback = Some(sender);
+        // Nothing is published until the show has actually moved, so play a
+        // frame and then park it.
+        app.execute_command(C::TransportPlay);
+        app.process_inputs();
+        app.execute_command(C::TransportStop);
+        app.process_inputs();
+        let _ = received_addresses(&socket);
+        Some((app, socket))
+    }
+
+    /// A receiver wants the position at the rate positions exist. Sixty frames
+    /// a second of the same frame number is traffic on somebody else's show
+    /// network, where traffic is dropped packets.
+    #[test]
+    fn a_position_that_has_not_moved_is_not_republished() {
+        let Some((mut app, socket)) = app_publishing_position() else {
+            return;
+        };
+
+        app.process_inputs();
+
+        assert!(
+            received_addresses(&socket).is_empty(),
+            "the show is parked, so there is nothing new to say"
+        );
+    }
+
+    /// A position that moved is published again, or software following Varda
+    /// would sit at the old position through a locate.
+    #[test]
+    fn a_position_that_moved_is_published_again() {
+        let Some((mut app, socket)) = app_publishing_position() else {
+            return;
+        };
+
+        app.execute_command(C::TransportLocate { position: 90.0 });
+        app.process_inputs();
+
+        let addresses = received_addresses(&socket);
+        assert!(
+            addresses.contains(&"/varda/timecode/position".to_string()),
+            "got {addresses:?}"
+        );
+        assert!(
+            addresses.contains(&"/varda/timecode/string".to_string()),
+            "got {addresses:?}"
+        );
+        let label = app.transport.formatted_position();
+        assert_eq!(
+            app.session.published_timecode.as_deref(),
+            Some(label.as_str())
+        );
+    }
+
+    // ── Chasing nothing ─────────────────────────────────────────
+
+    /// Armed to chase with nothing arriving looks exactly like a show that has
+    /// not started yet. A headless rig has nobody watching the popover, so it
+    /// has to be said out loud.
+    #[test]
+    fn chasing_silence_is_reported_after_a_few_seconds() {
+        let Some((mut app, _deck)) = app_with_a_deck() else {
+            return;
+        };
+        app.execute_command(C::SetTransportSource {
+            source: crate::transport::TransportSource::Timecode,
+        });
+        let start = std::time::Instant::now();
+
+        app.chase_timecode(start);
+        assert!(
+            !app.session.chase_silence_reported,
+            "a gap between cues is not a fault"
+        );
+
+        app.chase_timecode(start + std::time::Duration::from_secs(6));
+        assert!(app.session.chase_silence_reported);
+
+        app.chase_timecode(start + std::time::Duration::from_secs(7));
+        assert!(
+            app.session.chase_silence_reported,
+            "still one silence, not a second complaint about it"
+        );
+    }
+
+    /// And it arms again when the master comes back, so a second dropout later
+    /// in the night is reported rather than swallowed by the first one.
+    #[test]
+    fn the_silence_warning_arms_again_when_a_master_returns() {
+        let Some((mut app, _deck)) = app_with_a_deck() else {
+            return;
+        };
+        app.execute_command(C::SetTransportSource {
+            source: crate::transport::TransportSource::Timecode,
+        });
+        let start = std::time::Instant::now();
+        app.chase_timecode(start);
+        app.chase_timecode(start + std::time::Duration::from_secs(6));
+        assert!(app.session.chase_silence_reported);
+
+        let returned = start + std::time::Duration::from_secs(7);
+        app.input.timecode.ingest(
+            crate::timecode::TimecodeSource::Ltc {
+                source_id: 0,
+                channel: 0,
+            },
+            crate::timecode::TimecodeFrame::at(10.0, crate::transport::TimecodeRate::Fps25),
+            returned,
+        );
+        app.chase_timecode(returned);
+
+        assert!(app.transport.running(), "the master is back");
+        assert!(!app.session.chase_silence_reported);
+        assert!(
+            app.session.chase_silent_since.is_none(),
+            "and the next silence is timed from when it starts, not from tonight's first one"
+        );
     }
 
     #[test]

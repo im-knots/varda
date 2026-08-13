@@ -54,6 +54,15 @@ pub enum MidiMessage {
     ClockContinue { device_id: DeviceId },
     /// MIDI Stop (0xFC) — stop clock
     ClockStop { device_id: DeviceId },
+    /// MTC quarter frame (0xF1) — one nibble of a position. Interpreted by
+    /// [`crate::timecode::mtc`]; this layer only carries it.
+    MtcQuarterFrame { device_id: DeviceId, data: u8 },
+    /// MTC full-frame locate, as `hh mm ss ff` lifted out of its
+    /// system-exclusive wrapper.
+    MtcFullFrame {
+        device_id: DeviceId,
+        payload: [u8; 4],
+    },
 }
 
 impl MidiMessage {
@@ -70,7 +79,28 @@ impl MidiMessage {
             0xFA => return Some(MidiMessage::ClockStart { device_id }),
             0xFB => return Some(MidiMessage::ClockContinue { device_id }),
             0xFC => return Some(MidiMessage::ClockStop { device_id }),
+            0xF1 if data.len() >= 2 => {
+                return Some(MidiMessage::MtcQuarterFrame {
+                    device_id,
+                    data: data[1],
+                })
+            }
             _ => {}
+        }
+
+        // Universal real-time SysEx: `F0 7F <dev> 01 01 hh mm ss ff F7`, which
+        // is how a master says where it jumped to. Only the shape is recognised
+        // here; what the bytes mean belongs to the timecode receiver.
+        if status == 0xF0
+            && data.len() >= 10
+            && data[1] == 0x7F
+            && data[3] == 0x01
+            && data[4] == 0x01
+        {
+            return Some(MidiMessage::MtcFullFrame {
+                device_id,
+                payload: [data[5], data[6], data[7], data[8]],
+            });
         }
 
         let msg_type = status & 0xF0;
@@ -113,7 +143,9 @@ impl MidiMessage {
             | MidiMessage::ClockTick { device_id }
             | MidiMessage::ClockStart { device_id }
             | MidiMessage::ClockContinue { device_id }
-            | MidiMessage::ClockStop { device_id } => *device_id,
+            | MidiMessage::ClockStop { device_id }
+            | MidiMessage::MtcQuarterFrame { device_id, .. }
+            | MidiMessage::MtcFullFrame { device_id, .. } => *device_id,
         }
     }
 
@@ -139,11 +171,13 @@ impl MidiMessage {
                 note,
                 ..
             } => Some(MidiKey::Note(*device_id, *channel, *note)),
-            // Clock messages are not mappable
+            // Clock and timecode are engine-internal signals, not controls
             MidiMessage::ClockTick { .. }
             | MidiMessage::ClockStart { .. }
             | MidiMessage::ClockContinue { .. }
-            | MidiMessage::ClockStop { .. } => None,
+            | MidiMessage::ClockStop { .. }
+            | MidiMessage::MtcQuarterFrame { .. }
+            | MidiMessage::MtcFullFrame { .. } => None,
         }
     }
 
@@ -156,7 +190,9 @@ impl MidiMessage {
             | MidiMessage::ClockTick { .. }
             | MidiMessage::ClockStart { .. }
             | MidiMessage::ClockContinue { .. }
-            | MidiMessage::ClockStop { .. } => 0.0,
+            | MidiMessage::ClockStop { .. }
+            | MidiMessage::MtcQuarterFrame { .. }
+            | MidiMessage::MtcFullFrame { .. } => 0.0,
         }
     }
 }
@@ -922,6 +958,66 @@ mod tests {
 
         let stop = MidiMessage::from_bytes(&[0xFC], 0).unwrap();
         assert!(matches!(stop, MidiMessage::ClockStop { .. }));
+    }
+
+    /// The first thing timecode over MIDI has to survive is this parser. A
+    /// quarter frame that arrived as a control change would be silently
+    /// mappable to a fader instead of driving the show.
+    #[test]
+    fn a_quarter_frame_is_read_as_timecode_and_kept_off_the_mapping_table() {
+        let msg = MidiMessage::from_bytes(&[0xF1, 0x37], 4).expect("a quarter frame");
+        assert!(matches!(
+            msg,
+            MidiMessage::MtcQuarterFrame {
+                device_id: 4,
+                data: 0x37
+            }
+        ));
+        assert_eq!(msg.device_id(), 4);
+        assert!(
+            msg.mapping_key().is_none(),
+            "timecode is an engine signal, not a control"
+        );
+        assert!((msg.normalized_value() - 0.0).abs() < f32::EPSILON);
+
+        assert!(
+            MidiMessage::from_bytes(&[0xF1], 4).is_none(),
+            "a status byte with its data byte lost carries no nibble"
+        );
+    }
+
+    /// How a master says where it jumped to. The payload is lifted out of its
+    /// wrapper here and read as an address further in, so the shape is all this
+    /// layer has to get right.
+    #[test]
+    fn a_locate_arrives_as_universal_real_time_sysex() {
+        let bytes = [0xF0, 0x7F, 0x7F, 0x01, 0x01, 0x21, 0x0A, 0x1E, 0x0C, 0xF7];
+        let msg = MidiMessage::from_bytes(&bytes, 2).expect("a full frame");
+        assert!(matches!(
+            msg,
+            MidiMessage::MtcFullFrame {
+                device_id: 2,
+                payload: [0x21, 0x0A, 0x1E, 0x0C]
+            }
+        ));
+    }
+
+    /// A busy bus carries plenty of system-exclusive traffic that is not
+    /// timecode. Mistaking a synth patch dump for a locate would throw the show
+    /// to wherever those bytes happened to spell.
+    #[test]
+    fn other_sysex_traffic_is_not_mistaken_for_a_locate() {
+        // A device enquiry: same universal prefix, different sub-id.
+        let enquiry = [0xF0, 0x7F, 0x7F, 0x06, 0x01, 0x00, 0x00, 0x00, 0x00, 0xF7];
+        assert!(MidiMessage::from_bytes(&enquiry, 0).is_none());
+
+        // A manufacturer's own dump, which is not universal at all.
+        let dump = [0xF0, 0x43, 0x00, 0x01, 0x01, 0x10, 0x20, 0x30, 0x40, 0xF7];
+        assert!(MidiMessage::from_bytes(&dump, 0).is_none());
+
+        // Truncated: the address is not all there.
+        let short = [0xF0, 0x7F, 0x7F, 0x01, 0x01, 0x21, 0xF7];
+        assert!(MidiMessage::from_bytes(&short, 0).is_none());
     }
 
     #[test]

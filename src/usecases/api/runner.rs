@@ -115,6 +115,8 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::transport::set_rate, routes::transport::set_record,
         routes::transport::prev_cue, routes::transport::next_cue,
         routes::transport::trigger_cue,
+        // Timecode
+        routes::timecode::set_preference, routes::timecode::set_ltc_input,
         // Arrangement
         routes::arrangement::add_lane, routes::arrangement::remove_lane,
         routes::arrangement::add_region, routes::arrangement::update_region,
@@ -140,7 +142,8 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::state::registry, routes::state::midi,
         routes::state::cameras, routes::state::depth,
         routes::state::clock, routes::state::ndi,
-        routes::state::transport, routes::state::arrangement,
+        routes::state::transport, routes::state::timecode,
+        routes::state::arrangement,
         routes::state::syphon, routes::state::streams,
         routes::state::performance,
         // Scene
@@ -225,6 +228,7 @@ use utoipa_swagger_ui::SwaggerUi;
         (name = "Outputs", description = "Output window management and warp"),
         (name = "Sequences", description = "Transition sequence automation"),
         (name = "Transport", description = "Absolute show position — play, stop, locate, loop, and timecode source"),
+        (name = "Timecode", description = "Which incoming SMPTE signal the transport follows — LTC and MTC input selection"),
         (name = "Arrangement", description = "Deck activity positioned against transport time — lanes, regions, idle behaviour, re-arm"),
         (name = "Params", description = "Shader parameter control"),
         (name = "Depth Sensors", description = "Depth sensor (Kinect/LIDAR) scanning, listing, and point-cloud deck creation"),
@@ -260,6 +264,7 @@ pub fn build_router(shared: SharedState) -> Router {
         .route("/api/state/depth", get(routes::state::depth))
         .route("/api/state/clock", get(routes::state::clock))
         .route("/api/state/transport", get(routes::state::transport))
+        .route("/api/state/timecode", get(routes::state::timecode))
         .route("/api/state/arrangement", get(routes::state::arrangement))
         .route("/api/state/ndi", get(routes::state::ndi))
         .route("/api/state/syphon", get(routes::state::syphon))
@@ -702,6 +707,14 @@ pub fn build_router(shared: SharedState) -> Router {
         .route(
             "/api/transport/rate",
             axum::routing::put(routes::transport::set_rate),
+        )
+        .route(
+            "/api/timecode/preference",
+            axum::routing::put(routes::timecode::set_preference),
+        )
+        .route(
+            "/api/timecode/ltc-input",
+            axum::routing::put(routes::timecode::set_ltc_input),
         )
         .route(
             "/api/transport/record",

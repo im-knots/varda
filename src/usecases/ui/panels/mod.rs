@@ -35,7 +35,7 @@ use monitoring::render_monitoring_strip;
 use notifications_overlay::render_notifications;
 use popovers::{
     clock_is_live, followers_hint, handle_midi_learn_popup, record_button, render_clock_popover,
-    render_resolution_popover, render_target_fps_popover, render_transport_popover,
+    render_resolution_popover, render_target_fps_popover, render_transport_popover, status_popover,
     transport_color,
 };
 use right_panel::render_right_panel;
@@ -304,11 +304,9 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                             },
                             followers_hint(data.clock_beat_followers, "the beat")
                         ));
-                    egui::Popup::from_toggle_button_response(&bpm_response)
-                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                        .show(|ui| {
-                            render_clock_popover(ui, data, &mut actions);
-                        });
+                    status_popover(&bpm_response, |ui| {
+                        render_clock_popover(ui, data, &mut actions);
+                    });
 
                     ui.separator();
 
@@ -329,11 +327,9 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                             data.transport.status_label,
                             followers_hint(data.transport.followers, "the transport")
                         ));
-                    egui::Popup::from_toggle_button_response(&transport_response)
-                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                        .show(|ui| {
-                            render_transport_popover(ui, data, &mut actions);
-                        });
+                    status_popover(&transport_response, |ui| {
+                        render_transport_popover(ui, data, &mut actions);
+                    });
 
                     record_button(ui, data, &mut actions);
 
@@ -347,11 +343,9 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                                 .sense(egui::Sense::click()),
                         )
                         .on_hover_text("Click to change render resolution");
-                    egui::Popup::from_toggle_button_response(&res_response)
-                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                        .show(|ui| {
-                            render_resolution_popover(ui, data, &mut actions);
-                        });
+                    status_popover(&res_response, |ui| {
+                        render_resolution_popover(ui, data, &mut actions);
+                    });
 
                     ui.separator();
 
@@ -367,11 +361,9 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                                 .sense(egui::Sense::click()),
                         )
                         .on_hover_text("Click to change target FPS");
-                    egui::Popup::from_toggle_button_response(&fps_target_response)
-                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                        .show(|ui| {
-                            render_target_fps_popover(ui, data, &mut actions);
-                        });
+                    status_popover(&fps_target_response, |ui| {
+                        render_target_fps_popover(ui, data, &mut actions);
+                    });
                 });
             });
         });

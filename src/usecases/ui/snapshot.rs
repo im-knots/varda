@@ -724,6 +724,7 @@ pub(crate) fn build_ui_data(
         clock_manual_bpm: engine.clock.manual_bpm,
         clock_beat_followers: engine.clock.beat_followers,
         transport: engine.transport,
+        timecode: engine.timecode,
         render_width: app.render_width(),
         render_height: app.render_height(),
         max_render_dimension: app.max_render_dimension(),

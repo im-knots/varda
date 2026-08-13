@@ -63,6 +63,18 @@ impl TimecodeRate {
     /// a `;` before the frames, which is the convention desks and players use
     /// to signal the distinction. Negative positions clamp to zero.
     pub fn format(self, position: f64) -> String {
+        let (hours, minutes, seconds, frames) = self.label_parts(position);
+        let sep = if self.is_drop_frame() { ';' } else { ':' };
+        format!("{hours:02}:{minutes:02}:{seconds:02}{sep}{frames:02}")
+    }
+
+    /// The `HH`, `MM`, `SS`, `FF` a position is labelled with.
+    ///
+    /// Split out of [`Self::format`] because the timecode receiver needs the
+    /// same arithmetic to *write* frames, and a decoder that disagreed with the
+    /// display about drop-frame would be a bug nobody could see.
+    /// See /spec/timecode.md § Data Model.
+    pub fn label_parts(self, position: f64) -> (u8, u8, u8, u8) {
         let elapsed_frames = (position.max(0.0) * self.fps()).floor() as u64;
         let counted = if self.is_drop_frame() {
             Self::renumber_drop_frame(elapsed_frames)
@@ -72,15 +84,19 @@ impl TimecodeRate {
 
         // Label rate: 29.97 counts to 30 and lets the label drift against wall
         // time, which is exactly what non-drop means.
-        let fps = self.fps().round() as u64;
+        let fps = self.nominal_fps();
         let (frames, total_seconds) = (counted % fps, counted / fps);
-        let sep = if self.is_drop_frame() { ';' } else { ':' };
-        format!(
-            "{:02}:{:02}:{:02}{sep}{frames:02}",
-            total_seconds / 3600,
-            (total_seconds / 60) % 60,
-            total_seconds % 60
+        (
+            (total_seconds / 3600) as u8,
+            ((total_seconds / 60) % 60) as u8,
+            (total_seconds % 60) as u8,
+            frames as u8,
         )
+    }
+
+    /// Frames per second as labels are counted: 30 for both 29.97 variants.
+    pub fn nominal_fps(self) -> u64 {
+        self.fps().round() as u64
     }
 
     /// SMPTE 12M drop-frame: skip frame numbers 0 and 1 at the start of every
@@ -143,6 +159,25 @@ impl LoopRegion {
     }
 }
 
+/// One read of an external timecode master, as the transport sees it.
+///
+/// A plain struct rather than the receiver's own state so the transport does
+/// not depend on the timecode module: the transport is what everything reads,
+/// and it should not know which protocol, if any, is behind the position.
+/// See /spec/timecode.md § Consumer 1.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Chase {
+    pub position: f64,
+    /// Frames are arriving, or the freewheel is still coasting.
+    pub running: bool,
+    /// The master jumped rather than played on.
+    pub discontinuity: bool,
+    /// Coasting through a dropout.
+    pub freewheeling: bool,
+    /// Measured against wall time; 1.0 while a master plays forwards.
+    pub speed: f64,
+}
+
 /// Why the transport is or is not moving.
 ///
 /// Idle and broken look identical on the output (both are "nothing is
@@ -156,6 +191,9 @@ pub enum TransportStatus {
     WaitingForSignal,
     /// Position is advancing.
     Running,
+    /// Coasting through a timecode dropout. Still running, but on the reader's
+    /// extrapolation rather than on frames that arrived.
+    Freewheeling,
     /// Ran and stopped. Position holds, so envelopes freeze.
     Stopped,
 }
@@ -166,6 +204,7 @@ impl TransportStatus {
             TransportStatus::Idle => "Idle",
             TransportStatus::WaitingForSignal => "Waiting for signal",
             TransportStatus::Running => "Running",
+            TransportStatus::Freewheeling => "Freewheeling",
             TransportStatus::Stopped => "Stopped",
         }
     }
@@ -215,6 +254,8 @@ pub struct Transport {
     pending_discontinuity: bool,
     timecode_rate: TimecodeRate,
     source: TransportSource,
+    /// Coasting through a timecode dropout. Only ever true while chasing.
+    freewheeling: bool,
     loop_region: Option<LoopRegion>,
     /// Frame time of the previous [`Transport::update`], for `tick`'s dt.
     last_update: Option<std::time::Instant>,
@@ -231,6 +272,7 @@ impl Default for Transport {
             pending_discontinuity: false,
             timecode_rate: TimecodeRate::default(),
             source: TransportSource::default(),
+            freewheeling: false,
             loop_region: None,
             last_update: None,
         }
@@ -313,7 +355,11 @@ impl Transport {
 
     pub fn status(&self) -> TransportStatus {
         if self.running {
-            TransportStatus::Running
+            if self.freewheeling {
+                TransportStatus::Freewheeling
+            } else {
+                TransportStatus::Running
+            }
         } else if self.source == TransportSource::Timecode && !self.has_run {
             TransportStatus::WaitingForSignal
         } else if self.has_run {
@@ -334,6 +380,7 @@ impl Transport {
             return;
         }
         self.source = source;
+        self.freewheeling = false;
         if source == TransportSource::Timecode {
             self.running = false;
             self.rate = 1.0;
@@ -387,6 +434,44 @@ impl Transport {
         self.position = position.max(0.0);
         self.pending_discontinuity = true;
         Ok(())
+    }
+
+    /// Take this frame's position from an external timecode master.
+    ///
+    /// The one way position may be written while the source is `Timecode`, and
+    /// the reason [`Self::play`] and [`Self::locate`] can refuse everyone else
+    /// outright. Ignored when the source is `Internal`, so a cable left patched
+    /// during a rehearsal cannot drag the playhead.
+    ///
+    /// A loop is not applied here: the master owns position, and wrapping it
+    /// locally would put the show somewhere the master says it is not.
+    /// See /spec/timecode.md § Consumer 1.
+    pub fn chase(&mut self, chase: Chase) {
+        if self.source != TransportSource::Timecode {
+            return;
+        }
+        if chase.discontinuity {
+            self.pending_discontinuity = true;
+        }
+        // A master that reports something that is not a place keeps the last
+        // one it did. This is what the whole renderer reads: a position that is
+        // not a number stops the show rendering, where holding the last look is
+        // survivable and legible.
+        if chase.position.is_finite() {
+            self.position = chase.position.max(0.0);
+        }
+        self.running = chase.running;
+        self.freewheeling = chase.running && chase.freewheeling;
+        self.rate = if chase.running && chase.speed.is_finite() {
+            chase.speed
+        } else {
+            1.0
+        };
+        // Engagement is "the show has moved", however it moved: a chased
+        // arrangement takes authority exactly as an internally played one does.
+        if chase.running {
+            self.has_run = true;
+        }
     }
 
     /// Set or clear the loop range honoured during internal playback.
@@ -676,6 +761,153 @@ mod tests {
         let mut t = Transport::new();
         t.set_source(TransportSource::Timecode);
         assert_eq!(t.status(), TransportStatus::WaitingForSignal);
+    }
+
+    fn arrived(position: f64) -> Chase {
+        Chase {
+            position,
+            running: true,
+            discontinuity: false,
+            freewheeling: false,
+            speed: 1.0,
+        }
+    }
+
+    /// The whole point of the source: an incoming master moves the show, and
+    /// moving the show is what engages the arrangement.
+    #[test]
+    fn an_arriving_master_drives_the_position() {
+        let mut t = Transport::new();
+        t.set_source(TransportSource::Timecode);
+
+        t.chase(arrived(3600.0));
+
+        assert!((t.position() - 3600.0).abs() < 1e-9);
+        assert!(t.running());
+        assert!(t.has_run(), "a chased show is a running show");
+        assert_eq!(t.status(), TransportStatus::Running);
+    }
+
+    /// A cable left patched from yesterday's rehearsal must not drag the
+    /// playhead of a show being run by hand.
+    #[test]
+    fn a_master_is_ignored_while_running_internally() {
+        let mut t = Transport::new();
+        t.play().expect("play");
+        t.tick(FRAME);
+        let position = t.position();
+
+        t.chase(arrived(3600.0));
+
+        assert!((t.position() - position).abs() < 1e-9);
+    }
+
+    /// Coasting is still running (the show must not stutter on one bad frame)
+    /// but it is a different thing to be told about.
+    #[test]
+    fn coasting_through_a_dropout_reads_as_freewheeling() {
+        let mut t = Transport::new();
+        t.set_source(TransportSource::Timecode);
+        t.chase(Chase {
+            freewheeling: true,
+            ..arrived(10.0)
+        });
+
+        assert!(t.running());
+        assert_eq!(t.status(), TransportStatus::Freewheeling);
+
+        t.chase(arrived(10.1));
+        assert_eq!(t.status(), TransportStatus::Running, "and it clears");
+    }
+
+    /// A master that stops holds the show where it stopped, exactly as a local
+    /// stop does: a dropped signal should keep the last look, not cut it.
+    #[test]
+    fn a_master_that_stops_holds_the_position() {
+        let mut t = Transport::new();
+        t.set_source(TransportSource::Timecode);
+        t.chase(arrived(42.0));
+        t.chase(Chase {
+            running: false,
+            ..arrived(42.0)
+        });
+
+        assert!(!t.running());
+        assert_eq!(t.status(), TransportStatus::Stopped);
+        assert!((t.position() - 42.0).abs() < 1e-9);
+        assert!(
+            (t.rate() - 1.0).abs() < 1e-9,
+            "a stopped master has no speed to report"
+        );
+    }
+
+    /// A master's locate has to reach the consumers that integrate, or a video
+    /// deck chasing it would varispeed its way across an hour.
+    #[test]
+    fn a_master_locate_is_published_as_a_jump() {
+        let mut t = Transport::new();
+        t.set_source(TransportSource::Timecode);
+        t.chase(Chase {
+            discontinuity: true,
+            ..arrived(600.0)
+        });
+        t.tick(FRAME);
+
+        assert!(t.discontinuity());
+        t.chase(arrived(600.04));
+        t.tick(FRAME);
+        assert!(!t.discontinuity(), "and playing on is not a jump");
+    }
+
+    /// Freewheeling is a claim that the show is still moving on an educated
+    /// guess. A master that has stopped is not moving at all, and saying
+    /// otherwise sends a performer looking for a cable fault that is not there.
+    #[test]
+    fn a_stopped_master_is_never_reported_as_coasting() {
+        let mut t = Transport::new();
+        t.set_source(TransportSource::Timecode);
+        t.chase(arrived(10.0));
+        t.chase(Chase {
+            running: false,
+            freewheeling: true,
+            ..arrived(10.0)
+        });
+
+        assert_eq!(t.status(), TransportStatus::Stopped);
+    }
+
+    /// Nothing downstream expects a negative show position: an arrangement
+    /// starts at zero and a region lookup before it has nothing to return. A
+    /// master counting down to its start must not take the show there.
+    #[test]
+    fn a_master_counting_down_cannot_push_the_show_before_zero() {
+        let mut t = Transport::new();
+        t.set_source(TransportSource::Timecode);
+        t.chase(arrived(-5.0));
+
+        assert!(
+            t.position() >= 0.0,
+            "the show cannot start before it starts, got {}",
+            t.position()
+        );
+    }
+
+    /// Switching back to internal must not leave the show reading as if a
+    /// master were still coasting it along.
+    #[test]
+    fn taking_the_show_back_clears_the_chase() {
+        let mut t = Transport::new();
+        t.set_source(TransportSource::Timecode);
+        t.chase(Chase {
+            freewheeling: true,
+            speed: 0.5,
+            ..arrived(10.0)
+        });
+
+        t.set_source(TransportSource::Internal);
+
+        assert_ne!(t.status(), TransportStatus::Freewheeling);
+        assert!((t.position() - 10.0).abs() < 1e-9, "position is kept");
     }
 
     #[test]

@@ -123,6 +123,12 @@ state_route!(
     |s: &crate::engine::EngineState| s.transport.clone()
 );
 state_route!(
+    timecode,
+    "/api/state/timecode",
+    "Timecode diagnostics: every LTC and MTC input being listened to with its own position and run state, which one is driving the transport, and the current preference and LTC patch.",
+    |s: &crate::engine::EngineState| s.timecode.clone()
+);
+state_route!(
     arrangement,
     "/api/state/arrangement",
     "Arrangement state: authored lanes and regions, whether the arrangement holds authority, and which parameters a performer is holding by hand.",

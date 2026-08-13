@@ -1033,6 +1033,14 @@ impl VardaApp {
                 self.transport.set_timecode_rate(rate);
                 CommandResult::Ok
             }
+            EngineCommand::SetTimecodePreference { preference } => {
+                self.input.timecode.set_preference(preference);
+                CommandResult::Ok
+            }
+            EngineCommand::SetLtcInput { input } => {
+                self.input.timecode.set_ltc_input(input);
+                CommandResult::Ok
+            }
             EngineCommand::SetRecordArmed { armed } => {
                 self.set_record_armed(armed);
                 CommandResult::Ok
@@ -1798,6 +1806,10 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
             // Clock preference / manual BPM (live sync config).
             | C::SetClockPreference { .. }
             | C::SetManualBpm { .. }
+            // Which cable the show is following is live rig config, like the
+            // clock's: undoing an edit must not silently re-patch the room.
+            | C::SetTimecodePreference { .. }
+            | C::SetLtcInput { .. }
             // Show position and re-arm are session state. Lane and region edits
             // are ordinary scene data and stay undoable; undoing one of them
             // must not also rewind the show or revive a released fader.
@@ -2097,5 +2109,103 @@ mod tests {
             outcome,
             CommandOutcome::Plain(CommandResult::Err { .. })
         ));
+    }
+
+    // ── Timecode ────────────────────────────────────────────────
+
+    /// Which signal to follow is a decision a headless rig makes over the bus,
+    /// so the command has to land on the reader rather than only be accepted.
+    #[test]
+    fn choosing_a_timecode_signal_reaches_the_reader() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        let result = app.execute_command(C::SetTimecodePreference {
+            preference: crate::timecode::TimecodePreference::ForceMtc { device_id: 2 },
+        });
+
+        assert!(matches!(result, CommandResult::Ok), "got {result:?}");
+        assert_eq!(
+            app.input.timecode.preference(),
+            crate::timecode::TimecodePreference::ForceMtc { device_id: 2 }
+        );
+        assert!(
+            app.input.timecode.wants_mtc(2),
+            "and the reader now parses that port"
+        );
+        assert!(!app.input.timecode.wants_mtc(3), "and only that port");
+    }
+
+    /// Patching LTC is the same journey, and unpatching it has to be a real
+    /// value rather than a no-op, because that is what releases the interface.
+    #[test]
+    fn patching_and_unpatching_ltc_reaches_the_reader() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        let patch = crate::timecode::LtcInput {
+            source_id: 4,
+            channel: 1,
+            rate: None,
+        };
+
+        let result = app.execute_command(C::SetLtcInput { input: Some(patch) });
+
+        assert!(matches!(result, CommandResult::Ok), "got {result:?}");
+        assert_eq!(app.input.timecode.ltc_input(), Some(patch));
+        assert!(app.input.timecode.wants_ltc());
+
+        app.execute_command(C::SetLtcInput { input: None });
+
+        assert_eq!(app.input.timecode.ltc_input(), None);
+        assert!(!app.input.timecode.wants_ltc());
+    }
+
+    /// Which cable the show follows is live rig config, like the clock's.
+    /// Undoing a deck edit must not silently re-patch the room mid-show.
+    #[test]
+    fn choosing_a_timecode_signal_is_not_undoable() {
+        assert!(!command_is_undoable(&C::SetTimecodePreference {
+            preference: crate::timecode::TimecodePreference::Off,
+        }));
+        assert!(!command_is_undoable(&C::SetLtcInput { input: None }));
+        assert!(!command_is_undoable(&C::SetTransportSource {
+            source: crate::transport::TransportSource::Timecode,
+        }));
+    }
+
+    /// And the engine agrees: a patch sent over the bus leaves the undo timeline
+    /// exactly as it found it.
+    #[test]
+    fn a_timecode_patch_over_the_bus_leaves_the_undo_stack_alone() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        let tx = app.command_sender();
+        tx.send((
+            C::SetLtcInput {
+                input: Some(crate::timecode::LtcInput {
+                    source_id: 1,
+                    channel: 0,
+                    rate: None,
+                }),
+            },
+            None,
+        ))
+        .expect("the receiver is in the app");
+        tx.send((
+            C::SetTimecodePreference {
+                preference: crate::timecode::TimecodePreference::ForceLtc,
+            },
+            None,
+        ))
+        .expect("the receiver is in the app");
+        app.process_commands();
+
+        assert!(app.input.timecode.ltc_input().is_some(), "both landed");
+        assert!(
+            !app.history_can_undo(),
+            "patching a cable is not an edit to the show"
+        );
     }
 }

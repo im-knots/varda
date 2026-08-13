@@ -298,6 +298,7 @@ pub(crate) mod tests {
             depth_sensors: crate::engine::DepthSensorSnapshot { devices: vec![] },
             screen_capture: crate::engine::types::ScreenCaptureSnapshot::default(),
             transport: crate::engine::types::TransportSnapshot::default(),
+            timecode: crate::engine::types::TimecodeSnapshot::default(),
             arrangement: None,
             clock: ClockSnapshot {
                 bpm: Some(120.0),

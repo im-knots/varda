@@ -842,6 +842,15 @@ pub enum EngineCommand {
     SetTimecodeRate {
         rate: crate::transport::TimecodeRate,
     },
+    /// Which incoming timecode signal the transport should follow.
+    /// See /spec/timecode.md § Preference and Priority.
+    SetTimecodePreference {
+        preference: crate::timecode::TimecodePreference,
+    },
+    /// Name the audio input carrying LTC, or stop listening for it.
+    SetLtcInput {
+        input: Option<crate::timecode::LtcInput>,
+    },
     /// Keep live parameter writes as automation curves while the transport
     /// runs. Arming from a stop also rolls the transport. See
     /// /spec/automation-recording.md.

@@ -239,6 +239,7 @@ there: the back arrow beside it walks cue points rather than rewinding. See
 | **Running** | Position advancing. |
 | **Stopped** | Started, then stopped. The position holds, so anything reading it holds its look. |
 | **Waiting for signal** | Set to chase timecode, but none has arrived yet. |
+| **Freewheeling** | Chasing, and the signal has dropped out. The position keeps moving on the last known speed for about five frames before the transport gives up and holds. |
 
 The distinction between Idle and Waiting for signal matters on a dark stage, where a correctly idle
 system and a broken one look identical on the output. The status tells you which you have.
@@ -257,6 +258,47 @@ installations and for building a show before any timecode exists.
 **Chase timecode** hands position to an external master. While chasing, the position is **read-only**:
 Play and Zero are disabled, because a local control fighting the incoming master helps nobody. Any
 loop range you have set is kept but ignored, so switching back to Internal restores it.
+
+### Following SMPTE
+
+Varda reads both flavours of SMPTE, and both produce the same thing: an absolute position the
+transport chases.
+
+| Flavour | Where it arrives | What to do |
+|---------|------------------|------------|
+| **MTC** (MIDI Timecode) | Any connected MIDI port | Nothing. Every port is listened to already. |
+| **LTC** (Linear Timecode) | An audio input, as sound | Choose the input and channel under **LTC in**. |
+
+The asymmetry is deliberate. MIDI ports are already open and already delivering bytes, so listening
+for MTC costs nothing. LTC means opening an audio device, and opening every input on the machine to
+sniff for timecode would take hardware you did not offer it. So LTC is listened for only once you
+have said where it is.
+
+Set the source to **Chase timecode** and the popover grows the timecode controls:
+
+| Control | What it does |
+|---------|--------------|
+| **Follow** | Which signal wins. **Auto** takes LTC if it is patched and arriving, otherwise MTC. **LTC** and a named MIDI port force one and ignore the other. **Off** ignores timecode entirely, for a rehearsal where the master is running and you do not want to be dragged around by it. |
+| **LTC in** | The audio input carrying LTC, and which channel of it. Field rigs commonly send programme audio down one channel and timecode down the other, so the channel matters. |
+
+Below those, every signal Varda can currently hear is listed with its own position and state, whether
+or not it is the one driving. This is the part you want when something is wrong: an input that is
+listed but stopped is a master that is not rolling, and an input that is not listed at all is a
+patching problem. If nothing is arriving at all, the panel says so rather than sitting blank.
+
+Frame rate is detected from the signal itself, so a master at 25 fps reads as 25 fps without being
+told. The one exception is `29.97` non-drop, which is a thousandth of a frame away from `30` in the
+signal and identical in the labels, but 3.6 seconds an hour apart in position. Set **Rate** to it
+explicitly if that is what your master sends.
+
+The patch is saved with the venue (in `stage.json`, alongside surfaces and outputs) rather than with
+the show, because which cable carries timecode belongs to the room. Devices are remembered by name,
+so they survive being plugged into different ports. If a remembered device is missing at load, Varda
+says so in the notification bar instead of silently following nothing.
+
+Timecode is also republished over OSC as `/varda/timecode/position` (seconds) and
+`/varda/timecode/string` (`HH:MM:SS:FF`), and readable over HTTP at `GET /api/state/timecode`, which
+reports every input and which one resolved. See [API](13-api.md).
 
 ### BPM and timecode are both always shown
 
