@@ -31,5 +31,6 @@ pub mod surface;
 pub mod syphon;
 pub mod sysmon;
 pub mod timebase;
+pub mod timecode;
 pub mod transport;
 pub mod video;

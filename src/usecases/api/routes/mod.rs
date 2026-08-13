@@ -23,4 +23,5 @@ pub mod surfaces;
 pub mod system;
 #[cfg(test)]
 mod tests;
+pub mod timecode;
 pub mod transport;

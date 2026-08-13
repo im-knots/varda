@@ -7,7 +7,7 @@
 //! who reclaims the screen space does not lose the frame rate with it.
 
 use super::super::{UIActions, UIData};
-use super::popovers::{render_fps_popover, render_gpu_popover};
+use super::popovers::{render_fps_popover, render_gpu_popover, status_popover};
 
 const GOOD: egui::Color32 = egui::Color32::from_rgb(100, 220, 100);
 const WARN: egui::Color32 = egui::Color32::from_rgb(220, 200, 60);
@@ -95,11 +95,9 @@ pub(super) fn render_monitoring_section(
                 .sense(egui::Sense::click()),
             )
             .on_hover_text("Click for render timing details");
-        egui::Popup::from_toggle_button_response(&fps_response)
-            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-            .show(|ui| {
-                render_fps_popover(ui, data);
-            });
+        status_popover(&fps_response, |ui| {
+            render_fps_popover(ui, data);
+        });
 
         let gpu = data.gpu_utilization;
         let gpu_response = ui
@@ -113,11 +111,9 @@ pub(super) fn render_monitoring_section(
                 .sense(egui::Sense::click()),
             )
             .on_hover_text("GPU utilization — click for details");
-        egui::Popup::from_toggle_button_response(&gpu_response)
-            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-            .show(|ui| {
-                render_gpu_popover(ui, data);
-            });
+        status_popover(&gpu_response, |ui| {
+            render_gpu_popover(ui, data);
+        });
 
         ui.label(
             egui::RichText::new(format!("CPU {:.0}%", data.cpu_usage))

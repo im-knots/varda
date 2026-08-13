@@ -148,6 +148,84 @@ mod tests {
         assert_eq!(json["source_label"], "Audio");
     }
 
+    /// A show run over the API has no popover to look at, so this route is the
+    /// only place a rig can be told what it is hearing. Every field a performer
+    /// would read off the panel has to be on the wire, including the input that
+    /// is not resolving.
+    #[tokio::test]
+    async fn test_state_timecode() {
+        let mut state = make_test_state();
+        state.timecode = crate::engine::types::TimecodeSnapshot {
+            inputs: vec![
+                crate::engine::types::TimecodeInputSnapshot {
+                    key: "ltc".into(),
+                    label: "LTC (channel 2)".into(),
+                    position: 3630.0,
+                    timecode: "01:00:30:00".into(),
+                    rate: crate::transport::TimecodeRate::Fps25,
+                    running: true,
+                    freewheeling: false,
+                    speed: 1.0,
+                },
+                crate::engine::types::TimecodeInputSnapshot {
+                    key: "mtc:7".into(),
+                    label: "MTC (Tascam DA-6400)".into(),
+                    position: 12.0,
+                    timecode: "00:00:12:00".into(),
+                    rate: crate::transport::TimecodeRate::Fps25,
+                    running: false,
+                    freewheeling: true,
+                    speed: 0.5,
+                },
+            ],
+            resolved: Some("ltc".into()),
+            preference: crate::timecode::TimecodePreference::ForceLtc,
+            ltc_input: Some(crate::timecode::LtcInput {
+                source_id: 4,
+                channel: 1,
+                rate: None,
+            }),
+        };
+        let shared = SharedState {
+            command_tx: tokio::sync::mpsc::unbounded_channel().0,
+            engine_state: std::sync::Arc::new(std::sync::RwLock::new(Some(state))),
+        };
+        let app = crate::usecases::api::runner::build_router(shared);
+
+        let (status, json) = get_json(app, "/api/state/timecode").await;
+
+        assert_eq!(status, StatusCode::OK);
+        let driving = &json["inputs"][0];
+        assert_eq!(driving["key"], "ltc");
+        assert_eq!(driving["label"], "LTC (channel 2)");
+        assert_eq!(driving["position"], 3630.0);
+        assert_eq!(driving["timecode"], "01:00:30:00");
+        assert_eq!(driving["rate"], "Fps25");
+        assert_eq!(driving["running"], true);
+        assert_eq!(driving["freewheeling"], false);
+        assert_eq!(driving["speed"], 1.0);
+        let silent = &json["inputs"][1];
+        assert_eq!(silent["key"], "mtc:7");
+        assert_eq!(silent["running"], false);
+        assert_eq!(silent["freewheeling"], true);
+        assert_eq!(json["resolved"], "ltc");
+        assert_eq!(json["preference"], "ForceLtc");
+        assert_eq!(json["ltc_input"]["source_id"], 4);
+        assert_eq!(json["ltc_input"]["channel"], 1);
+    }
+
+    /// With nothing patched and nothing arriving the route still answers, so a
+    /// client can tell "no timecode" from "no route".
+    #[tokio::test]
+    async fn test_state_timecode_with_nothing_arriving() {
+        let (status, json) = get_json(router_with_state(), "/api/state/timecode").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["inputs"].as_array().map(Vec::len), Some(0));
+        assert_eq!(json["resolved"], serde_json::Value::Null);
+        assert_eq!(json["preference"], "Auto");
+        assert_eq!(json["ltc_input"], serde_json::Value::Null);
+    }
+
     #[tokio::test]
     async fn test_state_modulation() {
         let (status, json) = get_json(router_with_state(), "/api/state/modulation").await;
@@ -2530,6 +2608,106 @@ mod tests {
             }
             other => panic!("expected a rate change, got {other:?}"),
         }
+    }
+
+    /// Which cable the show follows is a rig decision a headless installation
+    /// has to be able to make over the wire.
+    #[tokio::test]
+    async fn test_timecode_preference() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = put_json(
+            app,
+            "/api/timecode/preference",
+            serde_json::json!({"preference": {"ForceMtc": {"device_id": 2}}}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::SetTimecodePreference { preference } => {
+                assert_eq!(
+                    preference,
+                    crate::timecode::TimecodePreference::ForceMtc { device_id: 2 }
+                );
+            }
+            other => panic!("expected a preference change, got {other:?}"),
+        }
+    }
+
+    /// The channel is the whole point of the patch: music goes to the PA on one
+    /// and timecode comes to us on the other.
+    #[tokio::test]
+    async fn test_timecode_ltc_input() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = put_json(
+            app,
+            "/api/timecode/ltc-input",
+            serde_json::json!({"input": {"source_id": 4, "channel": 1}}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::SetLtcInput { input } => {
+                let input = input.expect("an input");
+                assert_eq!(input.source_id, 4);
+                assert_eq!(input.channel, 1);
+                assert_eq!(input.rate, None, "inferred unless named");
+            }
+            other => panic!("expected an LTC patch, got {other:?}"),
+        }
+    }
+
+    /// Unpatching has to release the audio device, so `null` is a real value
+    /// rather than a missing field.
+    #[tokio::test]
+    async fn test_timecode_ltc_input_can_be_cleared() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = put_json(
+            app,
+            "/api/timecode/ltc-input",
+            serde_json::json!({"input": null}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::SetLtcInput { input } => assert!(input.is_none()),
+            other => panic!("expected an LTC patch, got {other:?}"),
+        }
+    }
+
+    /// A body that names no audio input at all is a mistake worth reporting, not
+    /// a silent unpatch: an installation script with a typo must fail loudly
+    /// rather than quietly stop listening for timecode.
+    #[tokio::test]
+    async fn test_timecode_ltc_input_rejects_a_malformed_patch() {
+        for body in [
+            serde_json::json!({"input": {"channel": 1}}),
+            serde_json::json!({"input": {"source_id": "the second one", "channel": 1}}),
+            serde_json::json!({"input": {"source_id": 4, "channel": -1}}),
+            serde_json::json!({"input": {"source_id": 4, "channel": 1, "rate": "Fps4000"}}),
+        ] {
+            let (status, _) = put_json(
+                router_with_mock_engine(),
+                "/api/timecode/ltc-input",
+                body.clone(),
+            )
+            .await;
+            assert_eq!(
+                status,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "should have been rejected: {body}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_timecode_preference_rejects_unknown_value() {
+        let (status, _) = put_json(
+            router_with_mock_engine(),
+            "/api/timecode/preference",
+            serde_json::json!({"preference": "ForceCarrierPigeon"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     #[tokio::test]

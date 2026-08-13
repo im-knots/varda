@@ -617,6 +617,30 @@ pub(crate) fn build_transport_snapshot(app: &VardaApp) -> crate::engine::types::
     snapshot
 }
 
+/// Build the timecode diagnostics: every input heard, and which one drives.
+pub(crate) fn build_timecode_snapshot(app: &VardaApp) -> crate::engine::types::TimecodeSnapshot {
+    let manager = &app.input.timecode;
+    crate::engine::types::TimecodeSnapshot {
+        inputs: manager
+            .inputs()
+            .iter()
+            .map(|input| crate::engine::types::TimecodeInputSnapshot {
+                key: input.source.key(),
+                label: input.source.label(),
+                position: input.position,
+                timecode: input.label(),
+                rate: input.rate,
+                running: input.running,
+                freewheeling: input.freewheeling,
+                speed: input.speed,
+            })
+            .collect(),
+        resolved: manager.resolved_key(),
+        preference: manager.preference(),
+        ltc_input: manager.ltc_input(),
+    }
+}
+
 /// Build the arrangement snapshot, or `None` for a Performance-only scene.
 pub(crate) fn build_arrangement_snapshot(
     app: &VardaApp,
@@ -652,6 +676,7 @@ pub(crate) fn build_engine_state(app: &VardaApp) -> EngineState {
         screen_capture: build_screen_capture_snapshot(app),
         clock: build_clock_snapshot(app),
         transport: build_transport_snapshot(app),
+        timecode: build_timecode_snapshot(app),
         arrangement: build_arrangement_snapshot(app),
         fps: app.frame_stats.fps_smoothed,
         frame_count: app.frame_stats.frame_count,
@@ -850,6 +875,106 @@ mod tests {
             "unexpected source label: {}",
             snap.source_label
         );
+    }
+
+    /// The diagnostics panel and the API both read this snapshot and nothing
+    /// else, so every input the reader is listening to has to appear in it with
+    /// its own position and run state. A performer chasing a bad cable is
+    /// looking for the input that is *not* resolving.
+    #[test]
+    fn build_timecode_snapshot_lists_every_input_it_heard() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        let at = |seconds| {
+            crate::timecode::TimecodeFrame::at(seconds, crate::transport::TimecodeRate::Fps25)
+        };
+        app.input.timecode.ingest(
+            crate::timecode::TimecodeSource::Ltc {
+                source_id: 3,
+                channel: 1,
+            },
+            at(90.0),
+            now,
+        );
+        app.input.timecode.ingest(
+            crate::timecode::TimecodeSource::Mtc {
+                device_id: 7,
+                device_name: "Tascam DA-6400".to_string(),
+            },
+            at(5.0),
+            now,
+        );
+        app.input.timecode.update(now);
+
+        let snap = build_timecode_snapshot(&app);
+
+        assert_eq!(
+            snap.inputs
+                .iter()
+                .map(|i| i.key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ltc", "mtc:7"]
+        );
+        assert_eq!(
+            snap.inputs
+                .iter()
+                .map(|i| i.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["LTC (channel 2)", "MTC (Tascam DA-6400)"],
+            "the labels are what a performer reads off the panel"
+        );
+        let ltc = &snap.inputs[0];
+        assert!((ltc.position - 90.0).abs() < 0.05);
+        assert_eq!(ltc.timecode, "00:01:30:00");
+        assert_eq!(ltc.rate, crate::transport::TimecodeRate::Fps25);
+        assert!(ltc.running);
+        assert!(!ltc.freewheeling, "a frame just arrived");
+        assert!((ltc.speed - 1.0).abs() < 1e-9);
+        assert_eq!(
+            snap.resolved.as_deref(),
+            Some("ltc"),
+            "LTC outranks MTC, and the snapshot has to say which one is driving"
+        );
+
+        // A master that stops is still listed, holding where it stopped.
+        app.input
+            .timecode
+            .update(now + std::time::Duration::from_secs(2));
+        let stopped = build_timecode_snapshot(&app);
+        assert_eq!(stopped.inputs.len(), 2, "a silent input is still an input");
+        assert!(stopped.inputs.iter().all(|i| !i.running));
+        assert!(stopped.inputs.iter().all(|i| !i.freewheeling));
+    }
+
+    /// The patch is read back out of the same snapshot the positions come from,
+    /// so the popover cannot show one interface while the reader listens to
+    /// another.
+    #[test]
+    fn build_timecode_snapshot_reports_the_patch_it_is_reading() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        let patch = crate::timecode::LtcInput {
+            source_id: 2,
+            channel: 1,
+            rate: Some(crate::transport::TimecodeRate::Fps2997),
+        };
+        app.input.timecode.set_ltc_input(Some(patch));
+        app.input
+            .timecode
+            .set_preference(crate::timecode::TimecodePreference::ForceLtc);
+
+        let snap = build_timecode_snapshot(&app);
+
+        assert_eq!(snap.ltc_input, Some(patch));
+        assert_eq!(
+            snap.preference,
+            crate::timecode::TimecodePreference::ForceLtc
+        );
+        assert!(snap.inputs.is_empty(), "nothing has arrived on it yet");
+        assert_eq!(snap.resolved, None);
     }
 
     #[test]

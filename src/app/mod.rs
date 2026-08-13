@@ -171,6 +171,24 @@ pub(crate) struct InputSubsystem {
     pub auto_map_engine: midi::AutoMapEngine,
     pub keymap: KeymapStore,
     pub clock_manager: crate::clock::ClockManager,
+    /// Absolute position from an external master. Distinct from the clock
+    /// beside it, which resolves tempo; see /spec/timecode.md § Why This Is Not
+    /// the Clock Either.
+    pub timecode: crate::timecode::TimecodeManager,
+    /// The PCM tap LTC is decoded from, while one is patched.
+    pub ltc_tap: Option<LtcTap>,
+}
+
+/// A live subscription to the raw PCM of the audio input carrying LTC.
+///
+/// Rides the same tee as the recording path, so listening for timecode costs
+/// no change to the capture callback. See /spec/audio-passthrough.md.
+pub(crate) struct LtcTap {
+    pub source_id: crate::audio::AudioSourceId,
+    pub token: crate::audio::PcmToken,
+    pub receiver: crossbeam_channel::Receiver<crate::audio::PcmChunk>,
+    pub sample_rate: u32,
+    pub channels: u16,
 }
 
 /// Output and surface subsystem: windows, headless outputs, surface layout, dome.
@@ -242,6 +260,13 @@ pub(crate) struct SessionState {
     /// carries the position past it. Cleared by any other move of the playhead.
     /// See /spec/arrangement.md § Cue points.
     pub cue_anchor: Option<f64>,
+    /// When the transport last had timecode to chase, so silence can be
+    /// reported once rather than every frame of it.
+    pub chase_silent_since: Option<std::time::Instant>,
+    pub chase_silence_reported: bool,
+    /// Last position republished over OSC, so the show is sent at the rate
+    /// frames exist rather than at the rate the renderer runs.
+    pub published_timecode: Option<String>,
     /// Whether live parameter writes are being kept as automation, and what is
     /// being written right now. Session state: an arm is a mode the performer
     /// is in. See /spec/automation-recording.md.
@@ -501,6 +526,8 @@ impl VardaApp {
                 controller_led_mgr,
                 auto_map_engine,
                 clock_manager: crate::clock::ClockManager::new(),
+                timecode: crate::timecode::TimecodeManager::new(),
+                ltc_tap: None,
             },
             output: OutputSubsystem {
                 outputs: Vec::new(),
@@ -557,6 +584,9 @@ impl VardaApp {
                 last_layout: crate::usecases::ui::UILayoutState::default(),
                 clipboard: None,
                 cue_anchor: None,
+                chase_silent_since: None,
+                chase_silence_reported: false,
+                published_timecode: None,
                 recorder: state::recorder::Recorder::default(),
             },
             bus: MessageBus {

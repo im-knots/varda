@@ -386,6 +386,7 @@ impl UIData {
             clock_manual_bpm: None,
             clock_beat_followers: 0,
             transport: crate::engine::types::TransportSnapshot::default(),
+            timecode: crate::engine::types::TimecodeSnapshot::default(),
             render_width: 1920,
             render_height: 1080,
             max_render_dimension: 16384,

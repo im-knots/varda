@@ -729,6 +729,7 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `GET` | `/api/state/streams` | Active stream receivers with their URL, mode, and connection status. |
 | `GET` | `/api/state/surfaces` | Every surface with its geometry, warp, and source assignment. |
 | `GET` | `/api/state/syphon` | Syphon framework availability and the server names found by the last scan. |
+| `GET` | `/api/state/timecode` | Timecode diagnostics: every LTC and MTC input being listened to with its own position and run state, which one is driving the transport, and the current preference and LTC patch. |
 | `GET` | `/api/state/transport` | Transport state: absolute position, timecode, run status, loop region, and follower count. |
 
 ### Streams
@@ -804,6 +805,13 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `POST` | `/api/undo` |  |
 | `POST` | `/api/workspace/load` |  |
 | `POST` | `/api/workspace/save` |  |
+
+### Timecode
+
+| Method | Path | Description |
+|---|---|---|
+| `PUT` | `/api/timecode/ltc-input` | Name the audio input carrying LTC, or stop listening for it. |
+| `PUT` | `/api/timecode/preference` | Choose which incoming timecode signal the transport follows. |
 
 ### Transport
 

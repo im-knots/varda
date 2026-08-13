@@ -111,6 +111,7 @@ pub struct EngineState {
     pub screen_capture: ScreenCaptureSnapshot,
     pub clock: ClockSnapshot,
     pub transport: TransportSnapshot,
+    pub timecode: TimecodeSnapshot,
     /// Present only when the scene has an arrangement.
     pub arrangement: Option<ArrangementSnapshot>,
     pub fps: f32,
@@ -277,6 +278,42 @@ impl From<&crate::transport::Transport> for TransportSnapshot {
             recording_params: Vec::new(),
         }
     }
+}
+
+// ── Timecode Snapshot ──────────────────────────────────────────────
+
+/// One timecode input, resolved or not. See /spec/timecode.md.
+#[derive(Clone, Serialize, utoipa::ToSchema)]
+pub struct TimecodeInputSnapshot {
+    /// Stable name, `ltc` or `mtc:<device>`, and what `resolved` names.
+    pub key: String,
+    /// For a readout: "LTC (channel 2)", "MTC (Tascam Model 12)".
+    pub label: String,
+    pub position: f64,
+    /// Position as `HH:MM:SS:FF` at this input's own rate, which is not
+    /// necessarily the rate the ruler is drawn at.
+    pub timecode: String,
+    pub rate: crate::transport::TimecodeRate,
+    pub running: bool,
+    /// Coasting through a dropout rather than reading frames.
+    pub freewheeling: bool,
+    /// Measured against wall time; 1.0 while a master plays forwards.
+    pub speed: f64,
+}
+
+/// Every timecode input being listened to, and which one is driving.
+///
+/// A list rather than an object even though one signal drives the transport: a
+/// performer chasing a bad cable needs to see the input that is *not*
+/// resolving. See /spec/timecode.md § Dual simultaneous inputs.
+#[derive(Clone, Serialize, Default, utoipa::ToSchema)]
+pub struct TimecodeSnapshot {
+    pub inputs: Vec<TimecodeInputSnapshot>,
+    /// `key` of the input driving the transport, if any.
+    pub resolved: Option<String>,
+    pub preference: crate::timecode::TimecodePreference,
+    /// The audio input LTC is expected on, while one is patched.
+    pub ltc_input: Option<crate::timecode::LtcInput>,
 }
 
 // ── Registry Snapshot ──────────────────────────────────────────────
@@ -927,6 +964,7 @@ mod tests {
             depth_sensors: DepthSensorSnapshot { devices: vec![] },
             screen_capture: ScreenCaptureSnapshot::default(),
             transport: TransportSnapshot::default(),
+            timecode: TimecodeSnapshot::default(),
             arrangement: None,
             clock: ClockSnapshot {
                 bpm: None,
@@ -1012,6 +1050,7 @@ mod tests {
             depth_sensors: DepthSensorSnapshot { devices: vec![] },
             screen_capture: ScreenCaptureSnapshot::default(),
             transport: TransportSnapshot::default(),
+            timecode: TimecodeSnapshot::default(),
             arrangement: None,
             clock: ClockSnapshot {
                 bpm: Some(120.0),

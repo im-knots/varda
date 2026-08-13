@@ -582,6 +582,10 @@ pub struct UIData {
     /// Absolute show position. Distinct from the tempo clock above; see
     /// /spec/transport.md.
     pub transport: crate::engine::types::TransportSnapshot,
+    /// Every timecode input being listened to, and which one is driving.
+    /// Read by the transport popover so a bad cable is diagnosable separately
+    /// from a stopped show. See /spec/timecode.md.
+    pub timecode: crate::engine::types::TimecodeSnapshot,
     /// Current master render width
     pub render_width: u32,
     /// Current master render height

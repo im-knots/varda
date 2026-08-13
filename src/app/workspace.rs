@@ -53,7 +53,7 @@ impl VardaApp {
                 Err(e) => log::error!("Failed to save MIDI config: {e}"),
             }
         }
-        let stage = crate::persistence::snapshot_stage(
+        let mut stage = crate::persistence::snapshot_stage(
             &self.output.surface_manager,
             &self.output.outputs,
             layout.stage_editor_grid_size,
@@ -67,6 +67,7 @@ impl VardaApp {
             layout.dome_geometry,
             self.output.domemaster_resolution,
         );
+        stage.timecode = self.timecode_config();
         match stage.save(self.session.workspace.stage_path()) {
             Ok(()) => log::info!(
                 "Saved stage to {}",
@@ -124,6 +125,7 @@ impl VardaApp {
                         dome_geometry: prefs.dome_geometry,
                         ..UILayoutState::default()
                     });
+                    self.apply_timecode_config(&prefs.timecode);
                     self.output.surface_manager = prefs.surfaces;
                     // Set before `ensure_domemaster` below, which builds at
                     // whatever this says.
@@ -606,6 +608,61 @@ impl VardaApp {
         crate::scene::TransportConfig {
             timecode_rate: self.transport.timecode_rate(),
             loop_region: self.transport.loop_region(),
+        }
+    }
+
+    /// The timecode patch with its devices named, ready to persist.
+    pub fn timecode_config(&self) -> crate::timecode::TimecodeConfig {
+        self.input.timecode.to_config(
+            |id| {
+                self.audio_manager
+                    .devices()
+                    .iter()
+                    .find(|d| d.id == id)
+                    .map(|d| d.name.clone())
+            },
+            |id| {
+                self.input
+                    .midi_devices
+                    .as_ref()
+                    .and_then(|midi| midi.devices.get(&id))
+                    .map(|d| d.name.clone())
+            },
+        )
+    }
+
+    /// Restore a saved timecode patch against the devices present now,
+    /// reporting anything the rig no longer has.
+    pub fn apply_timecode_config(&mut self, config: &crate::timecode::TimecodeConfig) {
+        let audio: Vec<(crate::audio::AudioSourceId, String)> = self
+            .audio_manager
+            .devices()
+            .iter()
+            .map(|d| (d.id, d.name.clone()))
+            .collect();
+        let midi: Vec<(crate::midi::DeviceId, String)> = self
+            .input
+            .midi_devices
+            .as_ref()
+            .map(|m| m.devices.values().map(|d| (d.id, d.name.clone())).collect())
+            .unwrap_or_default();
+
+        let warnings = self.input.timecode.apply_config(
+            config,
+            |name| {
+                audio
+                    .iter()
+                    .find(|(_, device)| device == name)
+                    .map(|(id, _)| *id)
+            },
+            |name| {
+                midi.iter()
+                    .find(|(_, device)| device == name)
+                    .map(|(id, _)| *id)
+            },
+        );
+        for warning in warnings {
+            self.session.notifications.warn(warning);
         }
     }
 
@@ -1129,5 +1186,182 @@ mod tests {
             (snap.crossfader - 0.42).abs() < 1e-4,
             "crossfader should be applied via diff"
         );
+    }
+
+    // ── The timecode patch in stage.json ────────────────────────
+
+    /// Warnings the load raised, as the performer would read them.
+    fn warnings(app: &super::super::VardaApp) -> Vec<String> {
+        app.session
+            .notifications
+            .visible()
+            .iter()
+            .filter(|n| n.level == crate::notifications::NotificationLevel::Warning)
+            .map(|n| n.message.clone())
+            .collect()
+    }
+
+    /// The patch is written down as the name of a box, not the slot it happened
+    /// to enumerate in. Ids are handed out at enumeration and shift whenever the
+    /// rig changes between load-ins, so a saved id would point at whatever
+    /// interface came up in that slot the next night.
+    #[test]
+    fn a_saved_ltc_patch_names_the_interface_rather_than_its_slot() {
+        let tmp = TempDir::new().unwrap();
+        let Some(mut app) = headless_app_in(tmp.path()) else {
+            return;
+        };
+        let Some(device) = app.audio_manager.devices().first().cloned() else {
+            return;
+        };
+        app.input
+            .timecode
+            .set_ltc_input(Some(crate::timecode::LtcInput {
+                source_id: device.id,
+                channel: 1,
+                rate: Some(crate::transport::TimecodeRate::Fps2997),
+            }));
+
+        let saved = app.timecode_config().ltc_input.expect("a patched input");
+
+        assert_eq!(saved.device, device.name);
+        assert_eq!(
+            saved.channel, 1,
+            "which channel carries timecode is the patch"
+        );
+        assert_eq!(
+            saved.rate,
+            Some(crate::transport::TimecodeRate::Fps2997),
+            "29.97 non-drop has to be named, so the naming must survive"
+        );
+    }
+
+    /// The same patch coming back finds the interface by name, whatever id it
+    /// holds tonight.
+    #[test]
+    fn a_saved_ltc_patch_is_restored_against_the_interface_of_that_name() {
+        let tmp = TempDir::new().unwrap();
+        let Some(mut app) = headless_app_in(tmp.path()) else {
+            return;
+        };
+        let Some(device) = app.audio_manager.devices().last().cloned() else {
+            return;
+        };
+        // Written by a previous load-in, when nobody recorded an id at all.
+        let config = crate::timecode::TimecodeConfig {
+            preference: crate::timecode::PreferenceConfig::Auto,
+            ltc_input: Some(crate::timecode::LtcInputConfig {
+                device: device.name.clone(),
+                channel: 1,
+                rate: None,
+            }),
+        };
+
+        app.apply_timecode_config(&config);
+
+        assert_eq!(
+            app.input.timecode.ltc_input(),
+            Some(crate::timecode::LtcInput {
+                source_id: device.id,
+                channel: 1,
+                rate: None,
+            })
+        );
+        assert!(warnings(&app).is_empty(), "the interface is right there");
+    }
+
+    /// A rig one interface short has to say so. Pointing the patch at whatever
+    /// box now holds that slot would read timecode off the wrong cable, and
+    /// saying nothing looks identical to a show that has not started.
+    #[test]
+    fn an_ltc_patch_naming_an_absent_interface_is_reported_and_left_unset() {
+        let tmp = TempDir::new().unwrap();
+        let Some(mut app) = headless_app_in(tmp.path()) else {
+            return;
+        };
+        let config = crate::timecode::TimecodeConfig {
+            preference: crate::timecode::PreferenceConfig::Auto,
+            ltc_input: Some(crate::timecode::LtcInputConfig {
+                device: "Scarlett 2i2 That Stayed Home".to_string(),
+                channel: 1,
+                rate: None,
+            }),
+        };
+
+        app.apply_timecode_config(&config);
+
+        assert_eq!(
+            app.input.timecode.ltc_input(),
+            None,
+            "unset beats pointing at the wrong box"
+        );
+        assert!(
+            warnings(&app)
+                .iter()
+                .any(|w| w.contains("Scarlett 2i2 That Stayed Home")),
+            "the performer is told which interface is missing: {:?}",
+            warnings(&app)
+        );
+    }
+
+    /// Same for the MIDI port a forced MTC patch names: it falls back to
+    /// following whatever arrives, and says that it did.
+    #[test]
+    fn a_forced_mtc_port_that_is_absent_is_reported_and_falls_back() {
+        let tmp = TempDir::new().unwrap();
+        let Some(mut app) = headless_app_in(tmp.path()) else {
+            return;
+        };
+        let config = crate::timecode::TimecodeConfig {
+            preference: crate::timecode::PreferenceConfig::ForceMtc {
+                device: "Tascam DA-6400 On The Other Truck".to_string(),
+            },
+            ltc_input: None,
+        };
+
+        app.apply_timecode_config(&config);
+
+        assert_eq!(
+            app.input.timecode.preference(),
+            crate::timecode::TimecodePreference::Auto
+        );
+        assert!(
+            warnings(&app)
+                .iter()
+                .any(|w| w.contains("Tascam DA-6400 On The Other Truck")),
+            "the performer is told which port is missing: {:?}",
+            warnings(&app)
+        );
+    }
+
+    /// A MIDI port that is present is found by name and forced by id, which is
+    /// the whole reason `midi.json` and the timecode patch both store names.
+    #[test]
+    fn a_forced_mtc_port_that_is_present_is_restored_by_name() {
+        let tmp = TempDir::new().unwrap();
+        let Some(mut app) = headless_app_in(tmp.path()) else {
+            return;
+        };
+        let Some((id, name)) = app
+            .input
+            .midi_devices
+            .as_ref()
+            .and_then(|midi| midi.devices.values().next())
+            .map(|device| (device.id, device.name.clone()))
+        else {
+            return;
+        };
+        let config = crate::timecode::TimecodeConfig {
+            preference: crate::timecode::PreferenceConfig::ForceMtc { device: name },
+            ltc_input: None,
+        };
+
+        app.apply_timecode_config(&config);
+
+        assert_eq!(
+            app.input.timecode.preference(),
+            crate::timecode::TimecodePreference::ForceMtc { device_id: id }
+        );
+        assert!(warnings(&app).is_empty());
     }
 }

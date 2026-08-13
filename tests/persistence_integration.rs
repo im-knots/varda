@@ -375,6 +375,111 @@ fn save_load_render_resolution() {
     assert_eq!(app2.render_height(), 720);
 }
 
+/// Which signal a rig follows belongs to the venue, so it comes back with the
+/// stage rather than with the show.
+#[test]
+fn save_load_timecode_preference() {
+    let tmp = TempDir::new().unwrap();
+    let Some(mut app) = headless_app_in(tmp.path()) else {
+        return;
+    };
+    fire(
+        &mut app,
+        EngineCommand::SetTimecodePreference {
+            preference: varda::timecode::TimecodePreference::Off,
+        },
+    );
+    app.save_workspace(&UILayoutState::default());
+
+    let Some(mut app2) = headless_app_in(tmp.path()) else {
+        return;
+    };
+    let _ = app2.load_workspace();
+    assert_eq!(
+        app2.build_engine_state().timecode.preference,
+        varda::timecode::TimecodePreference::Off,
+        "ignoring timecode is a decision, so it must survive a restart"
+    );
+}
+
+/// The patch is written down as the name of a box, never the slot it enumerated
+/// in: ids are handed out at scan time and move whenever the rig changes between
+/// load-ins, so a saved id would point at whatever interface came up in that slot
+/// tonight and the show would chase silence.
+#[test]
+fn save_load_ltc_patch_by_interface_name() {
+    let tmp = TempDir::new().unwrap();
+    let Some(mut app) = headless_app_in(tmp.path()) else {
+        return;
+    };
+    let Some(device) = app.build_engine_state().audio.devices.last().cloned() else {
+        return;
+    };
+    let patched = varda::timecode::LtcInput {
+        source_id: device.id,
+        channel: 1,
+        rate: None,
+    };
+    fire(
+        &mut app,
+        EngineCommand::SetLtcInput {
+            input: Some(patched),
+        },
+    );
+    app.save_workspace(&UILayoutState::default());
+
+    let stage: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(tmp.path().join(".varda").join("stage.json"))
+            .expect("stage.json should exist"),
+    )
+    .expect("stage.json should be valid JSON");
+    let saved = &stage["timecode"]["ltc_input"];
+    assert_eq!(saved["device"], device.name);
+    assert_eq!(saved["channel"], 1);
+    assert!(
+        saved.get("source_id").is_none(),
+        "an id in the file would point at whatever enumerates in that slot next time"
+    );
+
+    let Some(mut app2) = headless_app_in(tmp.path()) else {
+        return;
+    };
+    let _ = app2.load_workspace();
+    assert_eq!(
+        app2.build_engine_state().timecode.ltc_input,
+        Some(patched),
+        "the name resolves to the id that interface holds now"
+    );
+}
+
+/// A stage naming an interface the rig no longer has must leave the patch unset
+/// rather than reading timecode off whichever cable took its number.
+#[test]
+fn load_ltc_patch_for_a_missing_interface_leaves_it_unset() {
+    let tmp = TempDir::new().unwrap();
+    let varda_dir = tmp.path().join(".varda");
+    std::fs::create_dir_all(&varda_dir).unwrap();
+    std::fs::write(
+        varda_dir.join("stage.json"),
+        r#"{"timecode":{"preference":"ForceLtc",
+            "ltc_input":{"device":"Scarlett 2i2 That Stayed Home","channel":1}}}"#,
+    )
+    .unwrap();
+
+    let Some(mut app) = headless_app_in(tmp.path()) else {
+        return;
+    };
+    let _ = app.load_workspace();
+
+    let timecode = app.build_engine_state().timecode;
+    assert_eq!(timecode.ltc_input, None);
+    assert_eq!(
+        timecode.preference,
+        varda::timecode::TimecodePreference::ForceLtc,
+        "the decision to follow LTC is kept, so the popover reads as waiting on an input"
+    );
+}
+
 #[test]
 fn save_load_domemaster_resolution() {
     let tmp = TempDir::new().unwrap();

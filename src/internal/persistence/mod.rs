@@ -68,6 +68,10 @@ pub struct StagePrefs {
     /// Output window configurations (surface assignments, warp calibration)
     #[serde(default)]
     pub outputs: Vec<crate::scene::OutputConfig>,
+    /// Which incoming SMPTE signal the transport follows, and where LTC is
+    /// patched. Venue data: the cable belongs to the room, not to the show.
+    #[serde(default)]
+    pub timecode: crate::timecode::TimecodeConfig,
 }
 
 fn default_grid_size() -> f32 {
@@ -95,6 +99,7 @@ impl Default for StagePrefs {
             domemaster_resolution: crate::renderer::dome::DomemasterResolution::default(),
             surfaces: crate::surface::SurfaceManager::default(),
             outputs: Vec::new(),
+            timecode: crate::timecode::TimecodeConfig::default(),
         }
     }
 }
@@ -1011,6 +1016,9 @@ pub fn snapshot_stage(
         domemaster_resolution,
         surfaces: surface_manager.clone(),
         outputs,
+        // Filled by the caller: the timecode patch is not derived from the
+        // stage geometry this function is given.
+        timecode: crate::timecode::TimecodeConfig::default(),
     }
 }
 

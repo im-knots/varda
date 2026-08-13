@@ -291,6 +291,29 @@ impl OscFeedbackSender {
         }
     }
 
+    /// Republish the show position, so other software can follow Varda.
+    ///
+    /// Sent as both seconds and `HH:MM:SS:FF`: the float is what a receiver
+    /// does arithmetic with, and the string is what an operator reads without
+    /// having to reimplement drop-frame. Not a parameter path, because nothing
+    /// may write it back. See /spec/timecode.md § Control Surfaces.
+    pub fn send_timecode(&self, position: f64, label: &str) {
+        for (suffix, arg) in [
+            ("timecode/position", OscType::Float(position as f32)),
+            ("timecode/string", OscType::String(label.to_string())),
+        ] {
+            let packet = OscPacket::Message(OscMessage {
+                addr: format!("{OSC_PREFIX}{suffix}"),
+                args: vec![arg],
+            });
+            if let Ok(buf) = rosc::encoder::encode(&packet) {
+                for target in &self.targets {
+                    let _ = self.socket.send_to(&buf, target);
+                }
+            }
+        }
+    }
+
     /// Whether any feedback targets are registered.
     pub fn has_targets(&self) -> bool {
         !self.targets.is_empty()
@@ -483,6 +506,52 @@ mod tests {
         assert!(!sender.has_targets());
         // send_param should be a no-op without targets
         sender.send_param("crossfader", 0.5);
+    }
+
+    /// Other software following Varda gets the position twice: the float is
+    /// what a receiver does arithmetic with, and the string is what an operator
+    /// reads without having to reimplement drop-frame.
+    #[test]
+    fn timecode_goes_on_the_wire_as_both_seconds_and_a_label() {
+        let socket = UdpSocket::bind("127.0.0.1:0").expect("a free loopback port");
+        socket
+            .set_read_timeout(Some(std::time::Duration::from_millis(200)))
+            .expect("read timeout");
+        let mut sender = OscFeedbackSender::new().expect("outbound socket");
+        sender
+            .add_target(&socket.local_addr().expect("bound address").to_string())
+            .expect("loopback is a valid target");
+
+        sender.send_timecode(3630.5, "01:00:30;15");
+
+        let mut received = Vec::new();
+        let mut buf = [0u8; rosc::decoder::MTU];
+        while let Ok((size, _)) = socket.recv_from(&mut buf) {
+            let (_, packet) = rosc::decoder::decode_udp(&buf[..size]).expect("a valid OSC packet");
+            let OscPacket::Message(msg) = packet else {
+                panic!("feedback is sent as messages, not bundles");
+            };
+            received.push((msg.addr, msg.args));
+            if received.len() == 2 {
+                break;
+            }
+        }
+
+        assert_eq!(
+            received
+                .iter()
+                .map(|(addr, _)| addr.as_str())
+                .collect::<Vec<_>>(),
+            vec!["/varda/timecode/position", "/varda/timecode/string"]
+        );
+        let OscType::Float(position) = received[0].1[0] else {
+            panic!("the position is a float, got {:?}", received[0].1)
+        };
+        assert!((position - 3630.5).abs() < 1e-3);
+        assert_eq!(
+            received[1].1,
+            vec![OscType::String("01:00:30;15".to_string())]
+        );
     }
 
     #[test]
