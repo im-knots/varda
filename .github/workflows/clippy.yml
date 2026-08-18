@@ -3,6 +3,9 @@ name: clippy
 on:
   pull_request:
     branches: [main]
+    # Allowlist: docs, README, CONTRIBUTING, LICENSE, and .gitignore are
+    # omitted on purpose so PRs that only touch them skip this workflow.
+    # GitHub forbids combining `paths` with `paths-ignore` on one event.
     paths:
       - 'src/**'
       - 'tests/**'
@@ -11,6 +14,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'build.rs'
+      - '.github/workflows/clippy.yml'
 
 env:
   CARGO_TERM_COLOR: always

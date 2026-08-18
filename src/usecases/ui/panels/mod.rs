@@ -426,11 +426,14 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                         KeyTarget::Action(
                             id @ (ActionId::Copy | ActionId::Paste | ActionId::Duplicate),
                         ) => {
-                            // Never into a text field, and never over an
-                            // automation lane, which has its own clipboard for
-                            // breakpoints.
+                            // Never into a text field, never over an automation
+                            // lane (its own breakpoint clipboard), and never
+                            // while an arrangement slice selection is armed (its
+                            // slice clipboard wins). See
+                            // /spec/arrangement-selection.md § Copy.
                             if !ui.egui_wants_keyboard_input()
                                 && !arrangement::a_lane_is_selected(ui.ctx())
+                                && !arrangement::selection_active(ui.ctx())
                             {
                                 clipboard_menu::shortcut(*id, data, &mut actions);
                             }

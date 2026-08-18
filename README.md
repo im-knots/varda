@@ -2,6 +2,8 @@
 
 A visual performance tool with broadcast style routing for VJs, installation artists, and anyone who wants to throw pixels at things.
 
+**Come hang out:** Join channel #varda on the [Libera.Chat](https://web.libera.chat/#varda) IRC Network
+
 ![Varda Performance Mode](docs/img/varda-performance.png)
 
 ![Varda Arrangement Mode](docs/img/varda-arrangement.png)

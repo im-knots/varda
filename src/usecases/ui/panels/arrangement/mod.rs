@@ -14,12 +14,19 @@ mod automation;
 mod cues;
 mod focus;
 mod regions;
+mod selection;
 
 /// The colour a cue is drawn in, wherever it is drawn: the ruler here, and the
 /// bank of pads in Performance mode.
 pub(super) const CUE_COLOR: egui::Color32 = cues::COLOR;
 
 pub(super) use automation::a_lane_is_selected;
+
+/// Whether an arrangement slice selection is armed, so the scene-object copy
+/// shortcuts in the top-level keyboard handler stand down in its favour.
+pub(in crate::usecases::ui::panels) fn selection_active(ctx: &egui::Context) -> bool {
+    selection::load(ctx).is_some()
+}
 
 use super::super::state::{MAX_PIXELS_PER_SECOND, MIN_PIXELS_PER_SECOND};
 use super::super::{DeckDrag, ModSourceUI, UIActions, UIData};
@@ -225,10 +232,20 @@ pub(super) fn render_arrangement(ui: &mut egui::Ui, data: &UIData, actions: &mut
     };
     render_rows(ui, &rows, data, actions, layout);
     render_vertical_scrollbar(ui, actions, &rows, lanes_rect, scroll_y);
+    // The marquee is driven from raw pointer state rather than a widget, so it
+    // never fights the row tracks for the press: the bare-drag gestures already
+    // stand down while Shift is held, and this reads the same drag to build the
+    // selection. See /spec/arrangement-selection.md § Building the selection.
+    handle_marquee(ui, &rows, layout);
+    // After the marquee, which owns the Shift+drag, and before the highlight, so
+    // a move in flight draws its ghost under the selection it came from.
+    handle_selection_drag(ui, data, actions, &rows, layout);
+    draw_selection(ui, &rows, layout);
     // After the rows, so a cue's line reads over the regions it marks, and after
     // the ruler, so its handle wins the press that would otherwise scrub.
     cues::render(ui, data, actions, ruler_rect, lanes_rect, axis);
     draw_playhead(ui, data, track_rect, axis);
+    handle_selection_shortcuts(ui, data, actions, &rows, layout);
     automation::handle_clipboard_shortcuts(ui, data, actions);
     offer_channel_drop_targets(ui, &rows, layout);
 }
@@ -1310,6 +1327,521 @@ fn draw_override_badge(
     }
 }
 
+/// Shortest Shift+drag that counts as a marquee rather than a click, in pixels.
+/// Below this a Shift+click leaves a region-click selection untouched.
+const MARQUEE_MIN_DRAG: f32 = 3.0;
+/// Kept clear of the vertical scrollbar so a Shift+drag on it still scrolls.
+const MARQUEE_RIGHT_INSET: f32 = 8.0;
+
+/// The deck a row stands for, if it is a deck lane.
+fn row_deck<'a>(row: &Row<'a>) -> Option<&'a str> {
+    match row {
+        Row::Lane(lane) => Some(lane.uuid),
+        _ => None,
+    }
+}
+
+/// The envelope a row edits, if it is an automation row.
+fn row_envelope<'a>(row: &Row<'a>) -> Option<&'a str> {
+    match row {
+        Row::Automation(curve) => Some(curve.envelope_uuid),
+        _ => None,
+    }
+}
+
+/// Drive the Shift+drag marquee from raw pointer state.
+///
+/// A widget would contend with the row tracks for the press; reading the pointer
+/// directly does not, and the bare-drag gestures already ignore Shift, so the
+/// same drag that would author a region instead builds the selection.
+fn handle_marquee(ui: &egui::Ui, rows: &[Row<'_>], layout: Layout) {
+    let Layout {
+        lanes: lanes_rect,
+        axis,
+        scroll_y,
+        ..
+    } = layout;
+    let area = egui::Rect::from_min_max(
+        lanes_rect.min,
+        egui::pos2(
+            lanes_rect.right() - MARQUEE_RIGHT_INSET,
+            lanes_rect.bottom(),
+        ),
+    );
+    let ctx = ui.ctx();
+    let anchor_id = ui.id().with("arrangement_marquee_anchor");
+
+    let (shift, pressed, released, down, press_origin, pointer) = ctx.input(|i| {
+        (
+            i.modifiers.shift,
+            i.pointer.primary_pressed(),
+            i.pointer.primary_released(),
+            i.pointer.primary_down(),
+            i.pointer.press_origin(),
+            i.pointer.interact_pos().or_else(|| i.pointer.latest_pos()),
+        )
+    });
+
+    if pressed && shift {
+        if let Some(origin) = press_origin.or(pointer) {
+            if area.contains(origin) {
+                ctx.memory_mut(|mem| mem.data.insert_temp(anchor_id, origin));
+            }
+        }
+    }
+
+    let Some(anchor): Option<egui::Pos2> = ctx.memory(|mem| mem.data.get_temp(anchor_id)) else {
+        return;
+    };
+    let Some(pointer) = pointer.or(press_origin) else {
+        return;
+    };
+
+    if down && (pointer - anchor).length() >= MARQUEE_MIN_DRAG {
+        selection::store(
+            ctx,
+            marquee_selection(rows, lanes_rect, scroll_y, axis, anchor, pointer),
+        );
+    }
+    if released || !down {
+        ctx.memory_mut(|mem| mem.data.remove::<egui::Pos2>(anchor_id));
+    }
+}
+
+/// The selection a marquee from `anchor` to `pointer` describes: every lane the
+/// rectangle crosses, in as many channels as it reaches.
+///
+/// Deliberately not penned into the group the drag started in. A show's
+/// structure runs across channels, and "everything between these two timecodes"
+/// is a normal thing to want to grab. See /spec/arrangement-selection.md
+/// § Marquees are not penned into one channel.
+fn marquee_selection(
+    rows: &[Row<'_>],
+    lanes_rect: egui::Rect,
+    scroll_y: f32,
+    axis: TimeAxis,
+    anchor: egui::Pos2,
+    pointer: egui::Pos2,
+) -> selection::Selection {
+    let top = anchor.y.min(pointer.y);
+    let bottom = anchor.y.max(pointer.y);
+
+    let mut decks = Vec::new();
+    let mut envelopes = Vec::new();
+    for (row, (row_top, height)) in rows.iter().zip(row_spans(rows, lanes_rect, scroll_y)) {
+        if row_top + height <= top || row_top >= bottom {
+            continue;
+        }
+        if let Some(uuid) = row_deck(row) {
+            decks.push(uuid.to_string());
+        } else if let Some(uuid) = row_envelope(row) {
+            envelopes.push(uuid.to_string());
+        }
+    }
+    selection::Selection {
+        start: axis.seconds(anchor.x.min(pointer.x)).max(0.0),
+        end: axis.seconds(anchor.x.max(pointer.x)).max(0.0),
+        decks,
+        envelopes,
+    }
+}
+
+/// A held selection move, carried across the frames of one gesture.
+///
+/// The armed selection stays where it was until the release: the drag only draws
+/// a ghost, and one batch of commands is emitted at the end. Editing frame by
+/// frame would renumber a lane's regions underneath the indices the rest of the
+/// move was computed from, and would spread one gesture over several undo
+/// entries. See /spec/arrangement-selection.md § Moving a selection.
+#[derive(Clone)]
+struct SelectionDrag {
+    origin: selection::Selection,
+    /// Show time under the press, so the move is an absolute offset rather than
+    /// accumulated deltas.
+    grab: f64,
+    /// Deck-lane ordinal nearest the press, against which vertical travel is
+    /// measured.
+    grab_lane: Option<usize>,
+    /// Alt at the press: leave the original behind and move a copy.
+    duplicate: bool,
+}
+
+/// Every deck lane in the timeline, in row order.
+///
+/// One stack rather than one per channel, so a vertical move can carry regions
+/// into another channel exactly as a marquee can select across one.
+fn deck_lanes<'a>(rows: &[Row<'a>]) -> Vec<&'a str> {
+    rows.iter().filter_map(row_deck).collect()
+}
+
+/// The ordinal, among the timeline's deck lanes, of the one nearest `y`.
+///
+/// Nearest rather than the row actually under the pointer, so a drag passing
+/// over the automation rows between two lanes keeps travelling instead of
+/// snapping back to no shift at all.
+fn nearest_deck_lane(rows: &[Row<'_>], layout: Layout, y: f32) -> Option<usize> {
+    rows.iter()
+        .zip(row_spans(rows, layout.lanes, layout.scroll_y))
+        .filter(|(row, _)| row_deck(row).is_some())
+        .enumerate()
+        .min_by(|(_, (_, first)), (_, (_, second))| {
+            let a = (first.0 + first.1 / 2.0 - y).abs();
+            let b = (second.0 + second.1 / 2.0 - y).abs();
+            a.total_cmp(&b)
+        })
+        .map(|(ordinal, _)| ordinal)
+}
+
+/// Whether a press landed inside the armed selection: within its span, on one of
+/// its member rows.
+fn selection_hit(
+    rows: &[Row<'_>],
+    layout: Layout,
+    selection: &selection::Selection,
+    pos: egui::Pos2,
+) -> bool {
+    if !layout.lanes.contains(pos) {
+        return false;
+    }
+    let at = layout.axis.seconds(pos.x);
+    if at < selection.start || at > selection.end {
+        return false;
+    }
+    rows.iter()
+        .zip(row_spans(rows, layout.lanes, layout.scroll_y))
+        .any(|(row, (top, height))| {
+            pos.y >= top
+                && pos.y < top + height
+                && (row_deck(row).is_some_and(|uuid| selection.includes_deck(uuid))
+                    || row_envelope(row).is_some_and(|uuid| selection.includes_envelope(uuid)))
+        })
+}
+
+/// Which lane each member deck's regions land on for a vertical travel of
+/// `shift` lanes, clamped so the block keeps its shape rather than piling up
+/// against the first or last lane of the timeline.
+fn lane_mapping(
+    lanes: &[&str],
+    selection: &selection::Selection,
+    shift: isize,
+) -> Vec<(String, String)> {
+    let ordinals: Vec<usize> = selection
+        .decks
+        .iter()
+        .filter_map(|uuid| lanes.iter().position(|lane| *lane == uuid.as_str()))
+        .collect();
+    let (Some(lowest), Some(highest)) = (
+        ordinals.iter().min().copied(),
+        ordinals.iter().max().copied(),
+    ) else {
+        return Vec::new();
+    };
+    let floor = isize::try_from(lowest).unwrap_or(0);
+    let headroom = isize::try_from(lanes.len() - 1 - highest).unwrap_or(0);
+    let shift = shift.clamp(-floor, headroom);
+
+    selection
+        .decks
+        .iter()
+        .filter_map(|uuid| {
+            let from = lanes.iter().position(|lane| *lane == uuid.as_str())?;
+            let to = from.checked_add_signed(shift)?;
+            Some((uuid.clone(), (*lanes.get(to)?).to_string()))
+        })
+        .collect()
+}
+
+/// Drag an armed selection to move everything it holds.
+///
+/// Driven from raw pointer state for the same reason the marquee is: a widget
+/// would contend with the row tracks for the press. The tracks themselves stand
+/// down inside an armed selection, except on a region's edge and fade handles,
+/// which keep their grab zones.
+fn handle_selection_drag(
+    ui: &egui::Ui,
+    data: &UIData,
+    actions: &mut UIActions,
+    rows: &[Row<'_>],
+    layout: Layout,
+) {
+    let ctx = ui.ctx();
+    let drag_id = ui.id().with("arrangement_selection_drag");
+    let (shift, alt, pressed, down, press_origin, pointer) = ctx.input(|i| {
+        (
+            i.modifiers.shift,
+            i.modifiers.alt,
+            i.pointer.primary_pressed(),
+            i.pointer.primary_down(),
+            i.pointer.press_origin(),
+            i.pointer.interact_pos().or_else(|| i.pointer.latest_pos()),
+        )
+    });
+
+    if pressed && !shift {
+        if let (Some(armed), Some(origin)) = (selection::load(ctx), press_origin.or(pointer)) {
+            if selection_hit(rows, layout, &armed, origin) {
+                let drag = SelectionDrag {
+                    grab: layout.axis.seconds(origin.x),
+                    grab_lane: nearest_deck_lane(rows, layout, origin.y),
+                    duplicate: alt,
+                    origin: armed,
+                };
+                ctx.memory_mut(|mem| mem.data.insert_temp(drag_id, drag));
+            }
+        }
+    }
+
+    let Some(drag): Option<SelectionDrag> = ctx.memory(|mem| mem.data.get_temp(drag_id)) else {
+        return;
+    };
+    let Some(pointer) = pointer.or(press_origin) else {
+        return;
+    };
+
+    // Snapping rounds where the selection lands rather than how far the pointer
+    // travelled, so a snapped move puts the block on a frame boundary.
+    let travelled = layout.axis.seconds(pointer.x) - drag.grab;
+    let delta = (snap_seconds(data, drag.origin.start + travelled) - drag.origin.start)
+        .max(-selection::move_floor(data, &drag.origin));
+
+    let lanes = deck_lanes(rows);
+    let travelled_lanes = match (drag.grab_lane, nearest_deck_lane(rows, layout, pointer.y)) {
+        (Some(from), Some(to)) => {
+            isize::try_from(to).unwrap_or(0) - isize::try_from(from).unwrap_or(0)
+        }
+        _ => 0,
+    };
+    let lane_map = lane_mapping(&lanes, &drag.origin, travelled_lanes);
+    let landed = drag.origin.moved(delta, &lane_map);
+
+    if down {
+        draw_move_ghost(ui, rows, layout, &landed);
+        return;
+    }
+
+    ctx.memory_mut(|mem| mem.data.remove::<SelectionDrag>(drag_id));
+    let changed_lane = lane_map.iter().any(|(source, target)| source != target);
+    if delta.abs() < f64::EPSILON && !changed_lane {
+        return;
+    }
+    for command in selection::move_commands(data, &drag.origin, delta, &lane_map, drag.duplicate) {
+        actions.commands.push(command);
+    }
+    // Re-armed where it landed, so the slice can be nudged again without being
+    // marked a second time.
+    selection::store(ctx, landed);
+}
+
+/// Outline where a move would land, leaving the armed highlight in place so both
+/// ends of the gesture are visible at once.
+fn draw_move_ghost(ui: &egui::Ui, rows: &[Row<'_>], layout: Layout, landed: &selection::Selection) {
+    let Layout {
+        lanes: lanes_rect,
+        axis,
+        scroll_y,
+        ..
+    } = layout;
+    let x0 = axis.x(landed.start).max(lanes_rect.left());
+    let x1 = axis.x(landed.end).min(lanes_rect.right()).max(x0);
+    let painter = ui.painter_at(lanes_rect);
+    let stroke = egui::Stroke::new(1.5_f32, ui.visuals().selection.stroke.color);
+
+    for (row, (top, height)) in rows.iter().zip(row_spans(rows, lanes_rect, scroll_y)) {
+        let member = row_deck(row).is_some_and(|uuid| landed.includes_deck(uuid))
+            || row_envelope(row).is_some_and(|uuid| landed.includes_envelope(uuid));
+        if !member {
+            continue;
+        }
+        let row_top = top.max(lanes_rect.top());
+        let row_bottom = (top + height).min(lanes_rect.bottom());
+        if row_bottom <= row_top {
+            continue;
+        }
+        painter.rect_stroke(
+            egui::Rect::from_min_max(
+                egui::pos2(x0, row_top),
+                egui::pos2(x1.max(x0 + 1.0), row_bottom),
+            ),
+            1.0,
+            stroke,
+            egui::StrokeKind::Inside,
+        );
+    }
+}
+
+/// Paint the selection: a translucent fill over each member row's span, and a
+/// thin span marker when the marquee holds no lanes at all.
+fn draw_selection(ui: &egui::Ui, rows: &[Row<'_>], layout: Layout) {
+    let Some(selection) = selection::load(ui.ctx()) else {
+        return;
+    };
+    let Layout {
+        lanes: lanes_rect,
+        axis,
+        scroll_y,
+        ..
+    } = layout;
+    let x0 = axis.x(selection.start).max(lanes_rect.left());
+    let x1 = axis.x(selection.end).min(lanes_rect.right()).max(x0);
+    let painter = ui.painter_at(lanes_rect);
+    let fill = ui.visuals().selection.bg_fill.gamma_multiply(0.35);
+    let stroke = egui::Stroke::new(1.0_f32, ui.visuals().selection.stroke.color);
+
+    let mut drew_a_row = false;
+    for (row, (top, height)) in rows.iter().zip(row_spans(rows, lanes_rect, scroll_y)) {
+        let member = row_deck(row).is_some_and(|u| selection.includes_deck(u))
+            || row_envelope(row).is_some_and(|u| selection.includes_envelope(u));
+        if !member {
+            continue;
+        }
+        let row_top = top.max(lanes_rect.top());
+        let row_bottom = (top + height).min(lanes_rect.bottom());
+        if row_bottom <= row_top {
+            continue;
+        }
+        drew_a_row = true;
+        let rect = egui::Rect::from_min_max(
+            egui::pos2(x0, row_top),
+            egui::pos2(x1.max(x0 + 1.0), row_bottom),
+        );
+        painter.rect_filled(rect, 1.0, fill);
+        painter.rect_stroke(rect, 1.0, stroke, egui::StrokeKind::Inside);
+    }
+
+    if !drew_a_row {
+        let marker = egui::Rect::from_min_max(
+            egui::pos2(x0, lanes_rect.top()),
+            egui::pos2(x1.max(x0 + 1.0), lanes_rect.bottom()),
+        );
+        painter.rect_stroke(marker, 0.0, stroke, egui::StrokeKind::Inside);
+    }
+}
+
+/// Copy, Delete, Paste, and Escape for the arrangement selection.
+///
+/// Runs before [`automation::handle_clipboard_shortcuts`] so a selection wins
+/// `Cmd+C` over the whole-curve clipboard; that handler stands down while a
+/// selection is armed.
+fn handle_selection_shortcuts(
+    ui: &egui::Ui,
+    data: &UIData,
+    actions: &mut UIActions,
+    rows: &[Row<'_>],
+    layout: Layout,
+) {
+    let ctx = ui.ctx();
+    if ctx.memory(egui::Memory::focused).is_some() {
+        return;
+    }
+    let (escape, delete, copy, paste) = ctx.input(|i| {
+        (
+            i.key_pressed(egui::Key::Escape),
+            i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace),
+            i.modifiers.command && i.key_pressed(egui::Key::C),
+            i.modifiers.command && i.key_pressed(egui::Key::V),
+        )
+    });
+
+    let Some(selection) = selection::load(ctx) else {
+        if paste {
+            paste_from_keyboard(ui, data, actions, rows, layout);
+        }
+        return;
+    };
+
+    if escape {
+        selection::clear(ctx);
+        return;
+    }
+    if copy {
+        selection::copy(ctx, data, &selection);
+    }
+    if delete {
+        for command in selection::delete_commands(data, &selection) {
+            actions.commands.push(command);
+        }
+        selection::clear(ctx);
+    }
+    if paste {
+        paste_from_keyboard(ui, data, actions, rows, layout);
+    }
+}
+
+/// Paste the held slice at the pointer when it is over a lane, or at the
+/// playhead onto the bottom-bar / envelope selection when it is not.
+fn paste_from_keyboard(
+    ui: &egui::Ui,
+    data: &UIData,
+    actions: &mut UIActions,
+    rows: &[Row<'_>],
+    layout: Layout,
+) {
+    let ctx = ui.ctx();
+    if !selection::slice_available(ctx) {
+        return;
+    }
+    let pointer = ctx.input(|i| i.pointer.interact_pos().or_else(|| i.pointer.latest_pos()));
+    let landing = pointer
+        .and_then(|pointer| paste_target_at(rows, layout, pointer))
+        .or_else(|| paste_target_fallback(ui, data, data.transport.position));
+    let Some((target, anchor)) = landing else {
+        return;
+    };
+    for command in selection::paste_commands(ctx, data, anchor, &target) {
+        actions.commands.push(command);
+    }
+}
+
+/// The row under `pointer` and the show time there, as a paste landing.
+fn paste_target_at(
+    rows: &[Row<'_>],
+    layout: Layout,
+    pointer: egui::Pos2,
+) -> Option<(selection::PasteTarget, f64)> {
+    let Layout {
+        lanes: lanes_rect,
+        axis,
+        scroll_y,
+        ..
+    } = layout;
+    if !lanes_rect.contains(pointer) {
+        return None;
+    }
+    let anchor = axis.seconds(pointer.x).max(0.0);
+    rows.iter()
+        .zip(row_spans(rows, lanes_rect, scroll_y))
+        .find_map(|(row, (top, height))| {
+            if pointer.y < top || pointer.y >= top + height {
+                return None;
+            }
+            if let Some(uuid) = row_deck(row) {
+                return Some((selection::PasteTarget::Deck(uuid.to_string()), anchor));
+            }
+            row_envelope(row)
+                .map(|uuid| (selection::PasteTarget::Envelope(uuid.to_string()), anchor))
+        })
+}
+
+/// The playhead landing: the bottom-bar deck, or the selected envelope.
+fn paste_target_fallback(
+    ui: &egui::Ui,
+    data: &UIData,
+    anchor: f64,
+) -> Option<(selection::PasteTarget, f64)> {
+    if let Some((ch_idx, deck_idx)) = data.selected_deck {
+        if let Some(uuid) = data
+            .channels
+            .get(ch_idx)
+            .and_then(|ch| ch.decks.get(deck_idx))
+            .map(|deck| deck.uuid.clone())
+        {
+            return Some((selection::PasteTarget::Deck(uuid), anchor));
+        }
+    }
+    automation::selected_envelope(ui.ctx())
+        .map(|uuid| (selection::PasteTarget::Envelope(uuid), anchor))
+}
+
 fn draw_playhead(ui: &egui::Ui, data: &UIData, track_rect: egui::Rect, axis: TimeAxis) {
     let x = axis.x(data.transport.position);
     if x < track_rect.left() || x > track_rect.right() {
@@ -1328,6 +1860,7 @@ fn draw_playhead(ui: &egui::Ui, data: &UIData, track_rect: egui::Rect, axis: Tim
 mod tests {
     use super::*;
     use egui_kittest::kittest::Queryable;
+    use proptest::prelude::*;
 
     pub(super) fn fixture_with_arrangement() -> UIData {
         let mut data = UIData::test_fixture();
@@ -2073,5 +2606,475 @@ mod tests {
 
         data.arrangement_snap = false;
         assert!((snap_seconds(&data, 1.031) - 1.031).abs() < 1e-9);
+    }
+
+    fn marquee_axis() -> TimeAxis {
+        TimeAxis {
+            left: 0.0,
+            scroll: 0.0,
+            pps: 40.0,
+        }
+    }
+
+    /// A show's structure runs across channels, so a drag that reaches past the
+    /// group it started in takes the rows it crossed. This deliberately reverses
+    /// the confinement slices A–E shipped with. See
+    /// /spec/arrangement-selection.md § Marquees are not penned into one channel.
+    #[test]
+    fn a_marquee_reaches_across_channels() {
+        let data = fixture_with_automation();
+        let rows = build_rows(&data);
+        let lanes = egui::Rect::from_min_size(egui::pos2(0.0, 100.0), egui::vec2(600.0, 4000.0));
+        let axis = marquee_axis();
+        let spans = row_spans(&rows, lanes, 0.0);
+
+        // Anchor on the first channel's deck lane, drag far down past the second
+        // channel's rows.
+        let (_, (top, height)) = rows
+            .iter()
+            .zip(&spans)
+            .find(|(row, _)| matches!(row, Row::Lane(_)))
+            .expect("a deck lane");
+        let anchor = egui::pos2(axis.x(2.0), top + height / 2.0);
+        let pointer = egui::pos2(axis.x(10.0), lanes.bottom());
+
+        let selection = marquee_selection(&rows, lanes, 0.0, axis, anchor, pointer);
+
+        let ch0_deck = data.channels[0].decks[0].uuid.clone();
+        let ch1_deck = data.channels[1].decks[0].uuid.clone();
+        assert!(selection.includes_deck(&ch0_deck), "the started lane is in");
+        assert!(
+            selection.includes_deck(&ch1_deck),
+            "the drag crossed into the next channel and took its lane"
+        );
+        assert!((selection.start - 2.0).abs() < 0.001);
+        assert!((selection.end - 10.0).abs() < 0.001);
+    }
+
+    /// Clicking a region arms exactly that region's span on its own lane.
+    #[test]
+    fn clicking_a_region_arms_a_single_region_selection() {
+        let data = fixture_with_arrangement();
+        let deck = &data.channels[0].decks[0];
+        let mut actions = UIActions::new();
+        let ctx = {
+            let mut harness = egui_kittest::Harness::new_ui(|ui| {
+                render_arrangement(ui, &data, &mut actions);
+            });
+            harness.run();
+            harness
+                .get_by_label(&format!("{} region 1", deck.name))
+                .click();
+            harness.run();
+            harness.ctx.clone()
+        };
+
+        let armed = selection::load(&ctx).expect("a region click arms a selection");
+        assert_eq!(armed.decks, vec![deck.uuid.clone()]);
+        assert!(armed.envelopes.is_empty());
+        assert!((armed.start - 4.0).abs() < f64::EPSILON);
+        assert!((armed.end - 12.0).abs() < f64::EPSILON);
+    }
+
+    /// Delete of a region selection removes that region through the same engine
+    /// command a hand delete uses.
+    #[test]
+    fn deleting_a_region_selection_removes_that_region() {
+        let data = fixture_with_arrangement();
+        let deck = data.channels[0].decks[0].uuid.clone();
+        let sel = selection::Selection {
+            start: 4.0,
+            end: 12.0,
+            decks: vec![deck.clone()],
+            envelopes: Vec::new(),
+        };
+        let commands = selection::delete_commands(&data, &sel);
+        assert!(commands.iter().any(|c| matches!(
+            c,
+            EngineCommand::RemoveRegion { deck_uuid, index: 0 } if *deck_uuid == deck
+        )));
+    }
+
+    /// A copied region slice rebases onto the paste anchor and lands on whatever
+    /// deck lane it is dropped on.
+    #[test]
+    fn a_copied_region_slice_pastes_onto_another_lane() {
+        let data = fixture_with_arrangement();
+        let src = data.channels[0].decks[0].uuid.clone();
+        let dst = data.channels[1].decks[0].uuid.clone();
+        let ctx = egui::Context::default();
+        let sel = selection::Selection {
+            start: 4.0,
+            end: 12.0,
+            decks: vec![src],
+            envelopes: Vec::new(),
+        };
+        selection::copy(&ctx, &data, &sel);
+
+        let commands = selection::paste_commands(
+            &ctx,
+            &data,
+            20.0,
+            &selection::PasteTarget::Deck(dst.clone()),
+        );
+        let region = commands
+            .iter()
+            .find_map(|c| match c {
+                EngineCommand::AddRegion { deck_uuid, region } if *deck_uuid == dst => {
+                    Some(*region)
+                }
+                _ => None,
+            })
+            .expect("a region landed on the target lane");
+        // The region ran 4..12; rebased so its start sits at anchor 20, it is
+        // 20..28.
+        assert!((region.start - 20.0).abs() < 1e-9);
+        assert!((region.end - 28.0).abs() < 1e-9);
+    }
+
+    /// A block of lanes moves as a block, so a shift that would push its top
+    /// member off the end of the timeline is held back rather than piling the
+    /// members onto one lane.
+    #[test]
+    fn a_lane_shift_stops_at_the_ends_of_the_timeline() {
+        let lanes = ["a", "b", "c", "d"];
+        let both = selection::Selection {
+            start: 0.0,
+            end: 1.0,
+            decks: vec!["b".to_string(), "c".to_string()],
+            envelopes: Vec::new(),
+        };
+
+        let up = lane_mapping(&lanes, &both, -1);
+        assert_eq!(up[0].1, "a");
+        assert_eq!(up[1].1, "b", "the pair keeps its spacing");
+
+        let too_far_up = lane_mapping(&lanes, &both, -9);
+        assert_eq!(too_far_up[0].1, "a", "clamped at the first lane");
+        assert_eq!(too_far_up[1].1, "b");
+
+        let too_far_down = lane_mapping(&lanes, &both, 9);
+        assert_eq!(too_far_down[0].1, "c");
+        assert_eq!(too_far_down[1].1, "d", "clamped at the last lane");
+    }
+
+    /// The deck lanes are one stack across the whole timeline, so a vertical
+    /// move can carry regions into another channel exactly as a marquee can
+    /// select across one.
+    #[test]
+    fn a_vertical_move_can_carry_regions_into_another_channel() {
+        let data = fixture_with_automation();
+        let rows = build_rows(&data);
+        let lanes = deck_lanes(&rows);
+        let first = data.channels[0].decks[0].uuid.clone();
+        let other_channel = data.channels[1].decks[0].uuid.clone();
+
+        // The stack runs through every channel's lanes in row order, so the
+        // travel that reaches the next channel is however many lanes this one
+        // has. Under the old rule no shift could reach it at all.
+        let reach = lanes
+            .iter()
+            .position(|lane| *lane == other_channel)
+            .expect("the next channel's lane is in the same stack");
+        assert!(reach > 0, "the fixture has to stack more than one lane");
+
+        let armed = selection::Selection {
+            start: 0.0,
+            end: 1.0,
+            decks: vec![first.clone()],
+            envelopes: Vec::new(),
+        };
+        let mapping = lane_mapping(
+            &lanes,
+            &armed,
+            isize::try_from(reach).expect("a small stack"),
+        );
+        assert_eq!(mapping, vec![(first, other_channel)]);
+    }
+
+    /// A selection that names no deck lane has nowhere to be sent, so a vertical
+    /// drag over it is inert rather than mapping onto lane zero.
+    #[test]
+    fn a_curve_only_selection_never_changes_lane() {
+        let curves = selection::Selection {
+            start: 0.0,
+            end: 1.0,
+            decks: Vec::new(),
+            envelopes: vec!["env-speed".to_string()],
+        };
+        assert!(lane_mapping(&["a", "b"], &curves, 1).is_empty());
+    }
+
+    /// Only a press inside the marked rectangle, on a row the selection holds,
+    /// starts a move. Everywhere else the surface keeps its own gesture.
+    #[test]
+    fn only_a_press_inside_the_selection_starts_a_move() {
+        let data = fixture_with_automation();
+        let rows = build_rows(&data);
+        let lanes = egui::Rect::from_min_size(egui::pos2(0.0, 100.0), egui::vec2(600.0, 4000.0));
+        let layout = Layout {
+            header: egui::Rect::from_min_size(egui::pos2(-168.0, 100.0), egui::vec2(168.0, 4000.0)),
+            lanes,
+            axis: marquee_axis(),
+            scroll_y: 0.0,
+        };
+        let spans = row_spans(&rows, lanes, 0.0);
+        let (_, (top, height)) = rows
+            .iter()
+            .zip(&spans)
+            .find(|(row, _)| matches!(row, Row::Lane(_)))
+            .expect("a deck lane");
+        let armed = selection::Selection {
+            start: 4.0,
+            end: 12.0,
+            decks: vec![data.channels[0].decks[0].uuid.clone()],
+            envelopes: Vec::new(),
+        };
+        let middle = top + height / 2.0;
+
+        assert!(selection_hit(
+            &rows,
+            layout,
+            &armed,
+            egui::pos2(layout.axis.x(8.0), middle)
+        ));
+        assert!(
+            !selection_hit(
+                &rows,
+                layout,
+                &armed,
+                egui::pos2(layout.axis.x(20.0), middle)
+            ),
+            "past the end of the span the lane keeps its own drag"
+        );
+        assert!(
+            !selection_hit(
+                &rows,
+                layout,
+                &armed,
+                egui::pos2(layout.axis.x(8.0), lanes.bottom() - 1.0)
+            ),
+            "a row the selection does not hold is not part of it"
+        );
+    }
+
+    /// The whole gesture through the real event path: an armed selection dragged
+    /// sideways moves its region in one batch, and the lane it was dragged
+    /// across does not also author a region or move the region by itself.
+    #[test]
+    fn dragging_an_armed_selection_moves_its_regions() {
+        let data = fixture_with_arrangement();
+        let deck = data.channels[0].decks[0].uuid.clone();
+        let mut actions = UIActions::new();
+        let mut harness = egui_kittest::Harness::new_ui(|ui| {
+            render_arrangement(ui, &data, &mut actions);
+        });
+        harness.run();
+
+        // The published channel drop rect is the first row of the lane area, so
+        // the axis and the first deck lane's centre follow from it and the row
+        // constants rather than from guessed screen coordinates.
+        let group: egui::Rect = harness
+            .ctx
+            .memory(|mem| {
+                mem.data
+                    .get_temp(egui::Id::new("ch_drop_rect").with(0_usize))
+            })
+            .expect("the first channel publishes its row");
+        let axis = TimeAxis {
+            left: group.left() + HEADER_WIDTH,
+            scroll: data.arrangement_scroll,
+            pps: data.arrangement_pixels_per_second,
+        };
+        let y = group.bottom() + LANE_HEIGHT / 2.0;
+
+        selection::store(
+            &harness.ctx,
+            selection::Selection {
+                start: 4.0,
+                end: 12.0,
+                decks: vec![deck.clone()],
+                envelopes: Vec::new(),
+            },
+        );
+
+        let from = egui::pos2(axis.x(8.0), y);
+        let to = egui::pos2(axis.x(12.0), y);
+        harness.event(egui::Event::PointerMoved(from));
+        harness.event(egui::Event::PointerButton {
+            pos: from,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.run();
+        for t in [0.25_f32, 0.6, 1.0] {
+            harness.event(egui::Event::PointerMoved(from + (to - from) * t));
+            harness.run();
+        }
+        harness.event(egui::Event::PointerButton {
+            pos: to,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.run();
+        let armed = selection::load(&harness.ctx).expect("the move re-arms where it landed");
+        drop(harness);
+
+        let moved = actions
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                EngineCommand::UpdateRegion {
+                    deck_uuid, region, ..
+                } if *deck_uuid == deck => Some(*region),
+                _ => None,
+            })
+            .expect("the drag must move the region the selection holds");
+        assert!((moved.start - 8.0).abs() < 0.1, "{moved:?}");
+        assert!((moved.end - 16.0).abs() < 0.1, "the span rides along");
+        assert!(
+            !actions
+                .commands
+                .iter()
+                .any(|c| matches!(c, EngineCommand::AddRegion { .. })),
+            "a move inside a selection must not author a region: {:?}",
+            actions.commands
+        );
+        assert!((armed.start - 8.0).abs() < 0.1, "{armed:?}");
+    }
+
+    /// An armed selection owns the copy shortcut, so the scene-object handler
+    /// stands down for it.
+    #[test]
+    fn an_armed_selection_claims_the_clipboard() {
+        let ctx = egui::Context::default();
+        assert!(!selection_active(&ctx));
+        selection::store(
+            &ctx,
+            selection::Selection {
+                start: 0.0,
+                end: 1.0,
+                decks: Vec::new(),
+                envelopes: Vec::new(),
+            },
+        );
+        assert!(selection_active(&ctx));
+        selection::clear(&ctx);
+        assert!(!selection_active(&ctx));
+    }
+
+    /// Exercise the real egui event path, not only the pure marquee geometry.
+    /// Shift must survive pointer movement across frames, the row widgets must
+    /// stand down, and release must leave a coherent selection without also
+    /// authoring or editing arrangement content.
+    #[test]
+    fn chaos_shift_drag_event_sequence_selects_without_mutating() {
+        let data = fixture_with_automation();
+        let mut actions = UIActions::new();
+        let mut harness = egui_kittest::Harness::new_ui(|ui| {
+            render_arrangement(ui, &data, &mut actions);
+        });
+        harness.run();
+
+        let start = egui::pos2(400.0, 200.0);
+        let end = egui::pos2(650.0, 360.0);
+        let shift = egui::Modifiers {
+            shift: true,
+            ..egui::Modifiers::default()
+        };
+        harness.event_modifiers(egui::Event::PointerMoved(start), shift);
+        harness.event_modifiers(
+            egui::Event::PointerButton {
+                pos: start,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: shift,
+            },
+            shift,
+        );
+        harness.run();
+        for t in [0.1_f32, 0.3, 0.6, 1.0] {
+            harness.event_modifiers(egui::Event::PointerMoved(start + (end - start) * t), shift);
+            harness.run();
+        }
+        harness.event_modifiers(
+            egui::Event::PointerButton {
+                pos: end,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: shift,
+            },
+            shift,
+        );
+        harness.run();
+
+        let selected = selection::load(&harness.ctx).expect("the Shift+drag must arm a selection");
+        assert!(selected.start.is_finite() && selected.end.is_finite());
+        assert!(selected.start <= selected.end);
+        drop(harness);
+        assert!(
+            actions.commands.iter().all(|command| !matches!(
+                command,
+                EngineCommand::AddRegion { .. }
+                    | EngineCommand::UpdateRegion { .. }
+                    | EngineCommand::SetEnvelopeBreakpoints { .. }
+            )),
+            "Shift+drag leaked into an authoring gesture: {:?}",
+            actions.commands
+        );
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(512))]
+
+        /// Offensive gesture geometry: after a valid press on a deck lane, the
+        /// pointer may fly far before release, reverse direction, or leave the
+        /// viewport entirely. Reaching other channels is now the point rather
+        /// than the hazard, so what is guarded is that every row the marquee
+        /// claims is a real row of this timeline, claimed once.
+        #[test]
+        fn chaos_marquee_pointer_excursions_stay_on_real_rows(
+            pointer_x in -20_000.0f32..20_000.0,
+            pointer_y in -20_000.0f32..20_000.0,
+            scroll_y in 0.0f32..2_000.0,
+        ) {
+            let data = fixture_with_automation();
+            let rows = build_rows(&data);
+            let lanes =
+                egui::Rect::from_min_size(egui::pos2(0.0, 100.0), egui::vec2(600.0, 4_000.0));
+            let axis = marquee_axis();
+            let spans = row_spans(&rows, lanes, scroll_y);
+            let (_, (top, height)) = rows
+                .iter()
+                .zip(&spans)
+                .find(|(row, _)| matches!(row, Row::Lane(_)))
+                .expect("a deck lane");
+            let anchor = egui::pos2(axis.x(4.0), top + height / 2.0);
+            let pointer = egui::pos2(pointer_x, pointer_y);
+
+            let selected = marquee_selection(&rows, lanes, scroll_y, axis, anchor, pointer);
+
+            prop_assert!(selected.start.is_finite() && selected.end.is_finite());
+            prop_assert!(selected.start >= 0.0);
+            prop_assert!(selected.start <= selected.end);
+
+            let decks_are_real_rows = selected.decks.iter().all(|uuid| {
+                rows.iter().any(|row| row_deck(row) == Some(uuid.as_str()))
+            });
+            prop_assert!(decks_are_real_rows);
+            let envelopes_are_real_rows = selected.envelopes.iter().all(|uuid| {
+                rows.iter().any(|row| row_envelope(row) == Some(uuid.as_str()))
+            });
+            prop_assert!(envelopes_are_real_rows);
+
+            // A row claimed twice would delete or move its content twice over.
+            let mut claimed = selected.decks.clone();
+            claimed.extend(selected.envelopes.iter().cloned());
+            let unique: std::collections::BTreeSet<&String> = claimed.iter().collect();
+            prop_assert_eq!(unique.len(), claimed.len(), "a row was claimed twice");
+            prop_assert!(claimed.len() <= rows.len());
+        }
     }
 }

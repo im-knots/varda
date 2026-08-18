@@ -135,6 +135,42 @@ The edges are forgiving: a press a few pixels outside a region still grabs its e
 
 Snapping applies to the *gesture*, never to what is stored: positions are continuous everywhere in Varda, so changing the show's frame rate re-labels the ruler without moving a single region. See [Frame rates](06-control-surfaces.md#frame-rates-and-drop-frame).
 
+## Selecting a Slice
+
+Copying a whole deck takes every region on it, and copying a whole curve takes every breakpoint. When you want *just this clip transition* or *just this stretch of the curve*, mark a **selection** and copy the slice instead.
+
+| Gesture | Result |
+|---------|--------|
+| **Click a region** | Selects that one region, ready to copy or delete. The bottom bar still follows the deck. |
+| **Shift+drag on the tracks** | Draws a marquee: a time span crossed with the lanes it covers. Everything inside is selected. |
+| **Esc** | Clears the selection. Clicking empty track or a curve clears it too. |
+
+A marquee can be one lane tall, or cover several deck and automation lanes at once, and it crosses channels freely: drag down past a channel's rows and it keeps taking the rows it reaches, which is how you grab everything happening between two timecodes. A region counts as inside the marquee if it overlaps the time span at all, but only the part inside the highlighted time range is selected. If the marquee cuts through the middle of a region, Copy takes that cropped middle, Delete leaves the unselected ends behind, and dragging moves the cropped middle while leaving those ends in place. New cut edges are hard edges; original fades stay with whichever fragment keeps the original region edge. An empty marquee (one that covers no regions or points) is fine; the highlight still shows what you marked.
+
+Shift is the disambiguator: a bare drag still authors or edits, and holding Shift turns the same drag into a selection.
+
+Once something is marked:
+
+- **Cmd+C** copies the slice. Cropped region pieces and curve pieces travel together, with their times measured from the start of the selection.
+- **Delete** (or Backspace) removes only the selected part of each region, leaving unselected fragments behind, and clears the marked stretch of any curve it covers while keeping the shape either side continuous. The whole delete is one undo entry.
+- **Cmd+V** pastes at the pointer when it is over a lane, or at the playhead onto the selected deck or curve when it is not. A copied automation slice synthesizes edge points so it lands looking exactly as it did under the marquee, and replaces whatever it covers rather than fighting it.
+
+A slice knows what each target can hold: paste onto a deck lane and only the region parts land; paste onto an automation lane and only the curve parts do. The other half stays on the clipboard for a second paste onto a lane that can take it. You can also right-click empty track and pick **Paste slice here** to drop the region parts at that exact spot.
+
+### Dragging a selection
+
+A marked slice can also be picked up and moved. **Drag from inside the highlight** and everything it holds travels together, keeping its internal spacing: regions, curve pieces, and the gaps between them.
+
+| Gesture | Result |
+|---------|--------|
+| **Drag inside the highlight** | Moves the whole selection. |
+| **Alt/Option + drag** | Leaves the original where it was and moves a copy. |
+| **Drag up or down** | Moves regions onto another deck lane, crossing channels if you drag that far. Curves stay on their own parameter row. |
+
+While you drag, an outline shows where the slice will land and nothing moves yet; the edit happens on release, as one undo entry. The selection re-arms where it landed, so you can nudge it again straight away. Snap rounds the landing to a whole frame, and the block stops at the start of the show rather than pushing anything to a negative position.
+
+A region's edge and fade handles still work while it is selected, so a single clicked region resizes and fades exactly as it does with nothing marked. On an automation lane the drag belongs to the selection, so press **Esc** first if you want to hand-edit a point inside the marked stretch.
+
 ## Automation Lanes
 
 Curves are created from the parameter, not from the timeline: open the **`〰`** dropdown on any modulatable parameter and pick **＋ Automation lane**. The curve then appears as a row under whatever owns that parameter, so you always know where to look for it:

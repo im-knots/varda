@@ -2,6 +2,8 @@
 
 Thanks for your interest in contributing to Varda. This document covers the architecture, conventions, and workflow you need to get a change merged. For end-user documentation (install, usage, panels, shaders), see the [manual](docs/README.md).
 
+First, join #varda on the [Libera.Chat](https://web.libera.chat/#varda) IRC Network and say hello! Open an issue in this repo with your bug/suggestion/request. Or see below on how to open your own PR. 
+
 ## AI Usage Policy
 
 Listen its basically just me at this point. I honestly dont care as long as the quality of output is "good" and you can explain in your own words in your PR descriptions: what you are trying to do, why, and how you did it. Also you know... the linux foundation's guidence of dont use AI tools with ToS that say "we own everything you make :)". Good engineering gets praise and merged. Bad engineering gets your PR closed. 

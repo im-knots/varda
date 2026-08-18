@@ -169,8 +169,16 @@ fn render_track(
         )
     });
 
+    // Shift turns a drag into a marquee, so the point edits below stand down and
+    // the top-level marquee handler reads the same drag.
+    let shift = ui.ctx().input(|i| i.modifiers.shift);
     if response.clicked() || response.drag_started() {
         select(ui.ctx(), row.envelope_uuid);
+    }
+    if !shift && response.clicked() {
+        // Clicking a curve clears any armed selection, so the whole-curve
+        // clipboard is available again on that row.
+        super::selection::clear(ui.ctx());
     }
 
     if response.hovered() {
@@ -185,8 +193,17 @@ fn render_track(
     }
 
     let grabbed_id = id.with("grabbed");
-    if response.drag_started() {
+    if !shift && response.drag_started() {
         let grabbed = super::regions::press_origin(&response).and_then(|pos| {
+            // Inside an armed selection the whole slice moves instead, so
+            // hand-editing points there means clearing the selection first.
+            if super::selection::owns_envelope_press(
+                ui.ctx(),
+                row.envelope_uuid,
+                geom.axis.seconds(pos.x),
+            ) {
+                return None;
+            }
             // A breakpoint wins over the segment it sits on: moving a point is
             // the more common gesture and the more precise target.
             point_at(row.breakpoints, geom, pos)
@@ -264,7 +281,7 @@ fn render_track(
             .memory_mut(|mem| mem.data.remove::<Option<CurveDrag>>(grabbed_id));
     }
 
-    if response.double_clicked() {
+    if !shift && response.double_clicked() {
         if let Some(pos) = response.interact_pointer_pos() {
             let position = snap_seconds(data, geom.axis.seconds(pos.x));
             let points = match point_at(row.breakpoints, geom, pos) {
@@ -413,6 +430,12 @@ pub(super) fn handle_clipboard_shortcuts(ui: &egui::Ui, data: &UIData, actions: 
     if ui.ctx().memory(egui::Memory::focused).is_some() {
         return;
     }
+    // An armed arrangement selection owns the clipboard: its slice copy wins
+    // over the whole-curve copy this handler offers. See
+    // /spec/arrangement-selection.md § Copy.
+    if super::selection::load(ui.ctx()).is_some() {
+        return;
+    }
     let Some(uuid): Option<String> = ui.ctx().memory(|mem| mem.data.get_temp(selected_id())) else {
         return;
     };
@@ -457,6 +480,11 @@ pub(in crate::usecases::ui::panels) fn a_lane_is_selected(ctx: &egui::Context) -
 fn select(ctx: &egui::Context, envelope_uuid: &str) {
     let uuid = envelope_uuid.to_string();
     ctx.memory_mut(|mem| mem.data.insert_temp(selected_id(), uuid));
+}
+
+/// The envelope the keyboard is addressing, for the playhead paste fallback.
+pub(super) fn selected_envelope(ctx: &egui::Context) -> Option<String> {
+    ctx.memory(|mem| mem.data.get_temp(selected_id()))
 }
 
 fn envelope_points<'a>(data: &'a UIData, uuid: &str) -> Option<&'a [Breakpoint]> {
