@@ -12,7 +12,7 @@
 
 use super::super::super::{UIActions, UIData};
 use super::super::utils::channel_color;
-use super::{min_span, snap_seconds, LaneRow, RowGeometry, TimeAxis};
+use super::{min_span, selection, snap_seconds, LaneRow, RowGeometry, TimeAxis};
 use crate::arrangement::RegionConfig;
 use crate::engine::EngineCommand;
 
@@ -82,12 +82,23 @@ fn handle_create(
         )
     });
 
+    // Shift is the marquee's disambiguator, so a Shift+drag on empty track
+    // selects rather than authoring a region. See
+    // /spec/arrangement-selection.md § Building the selection.
+    let shift = ui.ctx().input(|i| i.modifiers.shift);
+
     let anchor_id = id.with("anchor");
-    if response.drag_started() {
+    if !shift && response.drag_started() {
         if let Some(pos) = press_origin(&response) {
-            let anchor = snap_seconds(data, geom.axis.seconds(pos.x));
-            ui.ctx()
-                .memory_mut(|mem| mem.data.insert_temp(anchor_id, anchor));
+            let at = geom.axis.seconds(pos.x);
+            // Empty track inside an armed selection belongs to the selection's
+            // own move, so a drag there rearranges rather than authoring a
+            // region on top of what is being dragged.
+            if !selection::owns_deck_press(ui.ctx(), lane.uuid, at) {
+                let anchor = snap_seconds(data, at);
+                ui.ctx()
+                    .memory_mut(|mem| mem.data.insert_temp(anchor_id, anchor));
+            }
         }
     }
 
@@ -118,11 +129,14 @@ fn handle_create(
 
     if response.clicked() {
         actions.session.select_deck = Some((lane.ch_idx, lane.deck_idx));
+        // A bare click on empty track clears any armed selection, matching the
+        // "click elsewhere clears" rule.
+        selection::clear(ui.ctx());
     }
 
     // Creating on a single click would put a region under every attempt to
     // select a lane, so the bare click selects and the double click authors.
-    if response.double_clicked() {
+    if !shift && response.double_clicked() {
         if let Some(pos) = response.interact_pointer_pos() {
             let start = snap_seconds(data, geom.axis.seconds(pos.x));
             actions.commands.push(EngineCommand::AddRegion {
@@ -131,6 +145,38 @@ fn handle_create(
             });
         }
     }
+
+    // Paste a copied slice's regions onto this lane, landing at the time the
+    // menu was opened over. Frozen at open so the anchor does not chase the
+    // pointer while the menu is up. See /spec/arrangement-selection.md § Paste.
+    let paste_anchor_id = id.with("paste_anchor");
+    if response.secondary_clicked() {
+        if let Some(pos) = response.interact_pointer_pos() {
+            let at = snap_seconds(data, geom.axis.seconds(pos.x));
+            ui.ctx()
+                .memory_mut(|mem| mem.data.insert_temp(paste_anchor_id, at));
+        }
+    }
+    response.context_menu(|ui| {
+        let anchor: f64 = ui
+            .ctx()
+            .memory(|mem| mem.data.get_temp(paste_anchor_id))
+            .unwrap_or(data.transport.position);
+        if ui
+            .add_enabled(
+                selection::slice_available(ui.ctx()),
+                egui::Button::new("Paste slice here"),
+            )
+            .on_disabled_hover_text("Copy an arrangement selection first")
+            .clicked()
+        {
+            let target = selection::PasteTarget::Deck(lane.uuid.to_string());
+            for command in selection::paste_commands(ui.ctx(), data, anchor, &target) {
+                actions.commands.push(command);
+            }
+            ui.close();
+        }
+    });
 }
 
 /// Move, resize, and fade one region.
@@ -172,14 +218,27 @@ fn handle_region_edit(
         }
     }
 
-    if response.drag_started() {
+    // A Shift+drag over a region is a marquee, not a move, so the region under
+    // the press stays put while the selection is drawn.
+    let shift = ui.ctx().input(|i| i.modifiers.shift);
+    if !shift && response.drag_started() {
         if let Some(pos) = press_origin(&response) {
-            let drag = RegionDrag {
-                kind: hit_kind(region, geom.axis, pos, body),
-                origin: *region,
-                grab: geom.axis.seconds(pos.x),
-            };
-            ui.ctx().memory_mut(|mem| mem.data.insert_temp(id, drag));
+            let kind = hit_kind(region, geom.axis, pos, body);
+            let at = geom.axis.seconds(pos.x);
+            // Inside an armed selection the body's move gives way to the
+            // selection's own move. The edge and fade handles keep their grab
+            // zones, so a single clicked region still resizes and fades exactly
+            // as it does with nothing selected.
+            let owned_by_selection =
+                kind == DragKind::Move && selection::owns_deck_press(ui.ctx(), lane.uuid, at);
+            if !owned_by_selection {
+                let drag = RegionDrag {
+                    kind,
+                    origin: *region,
+                    grab: at,
+                };
+                ui.ctx().memory_mut(|mem| mem.data.insert_temp(id, drag));
+            }
         }
     }
 
@@ -210,7 +269,19 @@ fn handle_region_edit(
     }
 
     if response.clicked() {
+        // Clicking a region selects that region as the arrangement selection,
+        // ready for Copy or Delete, and still selects its deck for the bottom
+        // bar. See /spec/arrangement-selection.md § Building the selection.
         actions.session.select_deck = Some((lane.ch_idx, lane.deck_idx));
+        selection::store(
+            ui.ctx(),
+            selection::Selection {
+                start: region.start,
+                end: region.end,
+                decks: vec![lane.uuid.to_string()],
+                envelopes: Vec::new(),
+            },
+        );
     }
 
     response.context_menu(|ui| {
