@@ -29,7 +29,7 @@ The Library is built around drag-and-drop. The core gesture is **drag an item on
 | Item | Marker | Action |
 |------|--------|--------|
 | **Generator** | `◆` | Drag onto a channel → new shader deck. Double-click adds it to Channel 0. |
-| **Effect** | `◇` | Drag onto a deck/channel/master **effect chain** → appends the effect. |
+| **Effect** | `◇` | Drag onto a deck/channel/master **effect chain**, or onto the owner itself (mixer deck card, channel empty space, Main Output preview, arrangement lane / automation) → appends the effect and selects the owner. |
 | **Camera** | `📹` | Drag onto a channel → new camera deck. |
 | **Capture target** | `🖥` | Drag onto a channel → new screen or window capture deck. |
 | **Tap** | `🔁` | Drag onto a channel → new deck reading Varda's own output. |

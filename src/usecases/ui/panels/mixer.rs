@@ -2,6 +2,7 @@
 
 use super::super::{widgets, ChannelUIInfo, DeckDrag, DeckUIInfo, LibraryDrag, UIActions, UIData};
 use super::clipboard_menu;
+use super::dnd::{publish_channel_surface_fx, publish_deck_surface_fx};
 use super::macros::render_macro_column;
 use super::sequence::render_sequence_builder;
 use super::stage::render_stage_editor;
@@ -9,6 +10,15 @@ use super::utils::channel_color;
 use crate::engine::EngineCommand;
 use crate::mixer::CrossfadeEasing;
 use crate::BlendMode;
+
+fn effect_drag_active(ctx: &egui::Context) -> bool {
+    egui::DragAndDrop::payload::<LibraryDrag>(ctx)
+        .is_some_and(|p| matches!(&*p, LibraryDrag::Effect(_)))
+}
+
+fn fx_accent() -> egui::Color32 {
+    egui::Color32::from_rgb(100, 200, 255)
+}
 
 pub(super) fn render_central_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     if data.stage_editor_open {
@@ -541,8 +551,10 @@ pub(super) fn render_channel_column(
         let has_source_drag = egui::DragAndDrop::payload::<LibraryDrag>(ui.ctx())
             .is_some_and(|p| !matches!(&*p, LibraryDrag::Effect(_)));
         let has_deck_drag = egui::DragAndDrop::has_payload_of_type::<DeckDrag>(ui.ctx());
+        let has_fx_drag = effect_drag_active(ui.ctx());
         let has_relevant_drag = has_source_drag || has_deck_drag;
         let is_hovering = has_relevant_drag && ui.rect_contains_pointer(ui.max_rect());
+        let fx_hovering = has_fx_drag && ui.rect_contains_pointer(ui.max_rect());
         let is_ch_selected = data.selected_channel == Some(ch_idx);
 
         // Always show a bordered box — glow when a relevant drag is active, intensify on hover
@@ -553,8 +565,22 @@ pub(super) fn render_channel_column(
                 .stroke(egui::Stroke::new(2.0_f32, accent))
                 .corner_radius(4.0)
                 .inner_margin(2.0)
+        } else if fx_hovering {
+            let accent = fx_accent();
+            egui::Frame::default()
+                .fill(accent.linear_multiply(0.15))
+                .stroke(egui::Stroke::new(2.0_f32, accent))
+                .corner_radius(4.0)
+                .inner_margin(2.0)
         } else if has_relevant_drag {
             // Drag active but not hovering this channel — subtle glow
+            egui::Frame::default()
+                .fill(accent.linear_multiply(0.08))
+                .stroke(egui::Stroke::new(1.5_f32, accent.linear_multiply(0.5)))
+                .corner_radius(4.0)
+                .inner_margin(2.0)
+        } else if has_fx_drag {
+            let accent = fx_accent();
             egui::Frame::default()
                 .fill(accent.linear_multiply(0.08))
                 .stroke(egui::Stroke::new(1.5_f32, accent.linear_multiply(0.5)))
@@ -807,6 +833,9 @@ pub(super) fn render_channel_column(
             mem.data
                 .insert_temp(egui::Id::new("ch_drop_rect").with(ch_idx), ch_rect);
         });
+        // Effect drops resolve channel ownership from this surface (deck cards
+        // publish their own rects and win by hit priority).
+        publish_channel_surface_fx(ui.ctx(), &ch.uuid, ch_idx, ch_rect);
     });
 }
 
@@ -960,13 +989,6 @@ pub(super) fn render_deck_thumbnail(
     let card_width = preview_width + slider_width + 8.0; // preview + slider + padding
 
     ui.push_id(format!("deck_{ch_idx}_{idx}"), |ui| {
-        let border_color = if is_selected {
-            accent
-        } else {
-            accent.linear_multiply(0.3)
-        };
-        let border_width = if is_selected { 2.0_f32 } else { 1.0_f32 };
-
         // Use manual rect-based painting to avoid egui layout overlap issues.
         // Total card height = preview_height + name_row(16) + button_row(20) + spacing(8) + padding(8)
         let name_row_h = 16.0;
@@ -979,6 +1001,22 @@ pub(super) fn render_deck_thumbnail(
         let card_size = egui::vec2(card_width + padding * 2.0, total_h);
         let (card_rect, card_resp) =
             ui.allocate_exact_size(card_size, egui::Sense::click_and_drag());
+
+        publish_deck_surface_fx(ui.ctx(), &deck.uuid, ch_idx, idx, card_rect);
+
+        let fx_hover = effect_drag_active(ui.ctx()) && ui.rect_contains_pointer(card_rect);
+        let border_color = if fx_hover {
+            fx_accent()
+        } else if is_selected {
+            accent
+        } else {
+            accent.linear_multiply(0.3)
+        };
+        let border_width = if fx_hover || is_selected {
+            2.0_f32
+        } else {
+            1.0_f32
+        };
 
         // MIDI learn mode: glow on deck card, click to select trigger
         if data.midi_learn_active {

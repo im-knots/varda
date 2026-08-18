@@ -1,12 +1,23 @@
 //! Right side panel.
 
 use super::super::{UIActions, UIData};
+use super::dnd::publish_master_surface_fx;
 use super::midi::render_midi_section;
 use super::modulation::render_modulation_section;
 use super::monitoring::render_monitoring_section;
 use super::outputs::render_output_section;
 use super::stage::render_surface_editor;
 use super::tonemap::{render_tonemap_section, tonemap_name};
+
+fn effect_drag_active(ctx: &egui::Context) -> bool {
+    use super::super::LibraryDrag;
+    egui::DragAndDrop::payload::<LibraryDrag>(ctx)
+        .is_some_and(|p| matches!(&*p, LibraryDrag::Effect(_)))
+}
+
+fn fx_accent() -> egui::Color32 {
+    egui::Color32::from_rgb(100, 200, 255)
+}
 
 pub(super) fn render_right_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     // Bottom-up so the telemetry cluster is pinned to the panel floor rather
@@ -61,14 +72,32 @@ fn render_right_panel_body(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAct
                     .corner_radius(4.0)
                     .sense(egui::Sense::click()),
             );
+            publish_master_surface_fx(ui.ctx(), img_response.rect);
+            if effect_drag_active(ui.ctx()) && ui.rect_contains_pointer(img_response.rect) {
+                ui.painter().rect_stroke(
+                    img_response.rect,
+                    4.0,
+                    egui::Stroke::new(2.0_f32, fx_accent()),
+                    egui::StrokeKind::Outside,
+                );
+            }
             if img_response.clicked() {
                 actions.session.select_master = true;
             }
         } else {
             ui.allocate_ui(preview_size, |ui| {
                 let (rect, response) = ui.allocate_exact_size(preview_size, egui::Sense::click());
+                publish_master_surface_fx(ui.ctx(), rect);
                 ui.painter()
                     .rect_filled(rect, 4.0, egui::Color32::from_rgb(20, 20, 30));
+                if effect_drag_active(ui.ctx()) && ui.rect_contains_pointer(rect) {
+                    ui.painter().rect_stroke(
+                        rect,
+                        4.0,
+                        egui::Stroke::new(2.0_f32, fx_accent()),
+                        egui::StrokeKind::Outside,
+                    );
+                }
                 ui.painter().text(
                     rect.center(),
                     egui::Align2::CENTER_CENTER,
