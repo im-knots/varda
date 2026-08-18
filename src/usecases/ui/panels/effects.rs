@@ -239,11 +239,10 @@ pub(super) fn render_master_effect_detail(
                         });
                 }
 
-                // Store master effect chain rect for deferred library drops
+                // Master effect chain takes deferred library drops
                 let chain_rect = ui.min_rect();
+                super::dnd::publish_master_surface_fx(ui.ctx(), chain_rect);
                 ui.ctx().memory_mut(|mem| {
-                    mem.data
-                        .insert_temp(egui::Id::new("master_fx_drop_rect"), chain_rect);
                     mem.data.insert_temp(
                         egui::Id::new("eff_dz_count").with("master".to_string()),
                         data.master_effect_info.len() + 1,
@@ -523,11 +522,10 @@ pub(super) fn render_channel_effect_detail(
                         });
                 }
 
-                // Store channel effect chain rect for deferred library drops
+                // Channel effect chain takes deferred library drops
                 let chain_rect = ui.min_rect();
+                super::dnd::publish_channel_surface_fx(ui.ctx(), &ch.uuid, ch_idx, chain_rect);
                 ui.ctx().memory_mut(|mem| {
-                    mem.data
-                        .insert_temp(egui::Id::new("ch_fx_drop_rect").with(ch_idx), chain_rect);
                     mem.data.insert_temp(
                         egui::Id::new("eff_dz_count").with(ch_chain_key),
                         ch.effects.len() + 1,

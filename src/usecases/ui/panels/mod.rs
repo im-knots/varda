@@ -28,7 +28,9 @@ pub(crate) mod utils;
 use super::{UIActions, UIData};
 use crate::engine::EngineCommand;
 use bottom_bar::render_bottom_panel;
-use dnd::{handle_effect_dnd, handle_library_dnd, handle_sequence_step_dnd};
+use dnd::{
+    begin_fx_surface_frame, handle_effect_dnd, handle_library_dnd, handle_sequence_step_dnd,
+};
 use library::render_library_panel;
 use mixer::render_central_panel;
 use monitoring::render_monitoring_strip;
@@ -48,6 +50,9 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
     ui.global_style_mut(|style| {
         style.animation_time = 0.0;
     });
+
+    // Before any panel publishes: effect drop surfaces are rebuilt every frame.
+    begin_fx_surface_frame(ui.ctx());
 
     // === LEFT PANEL: Library (collapsible) ===
     if data.library_panel_open {

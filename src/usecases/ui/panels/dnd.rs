@@ -7,6 +7,128 @@
 use super::super::{EffectDrag, LibraryDrag, SequenceStepDrag, UIActions, UIData};
 use crate::engine::{EffectTarget, EngineCommand};
 
+/// Where a library effect will land if released now.
+///
+/// Hit order is deck, then master, then channel, so a deck card inside a channel
+/// column claims the drop. See /spec/effect-drop-targets.md.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum FxHover {
+    Deck {
+        uuid: String,
+        ch_idx: usize,
+        deck_idx: usize,
+    },
+    Channel {
+        uuid: String,
+        ch_idx: usize,
+    },
+    Master,
+}
+
+/// Every effect drop surface drawn this frame, in draw order.
+type FxSurfaces = Vec<(FxHover, egui::Rect)>;
+
+fn fx_surfaces_id() -> egui::Id {
+    egui::Id::new("__fx_drop_surfaces")
+}
+
+/// Drop the surfaces published last frame, before the panels republish.
+///
+/// The registry has to be rebuilt from scratch every frame rather than
+/// accumulated: a surface that is no longer drawn (a deselected deck's
+/// bottom-bar chain, an arrangement lane after leaving arrangement mode, a card
+/// that has since moved) would otherwise keep claiming drops at the place it
+/// used to occupy. See /spec/effect-drop-targets.md.
+pub(super) fn begin_fx_surface_frame(ctx: &egui::Context) {
+    ctx.memory_mut(|mem| mem.data.remove::<FxSurfaces>(fx_surfaces_id()));
+}
+
+fn publish_fx_surface(ctx: &egui::Context, owner: FxHover, rect: egui::Rect) {
+    ctx.memory_mut(|mem| {
+        let id = fx_surfaces_id();
+        let mut surfaces: FxSurfaces = mem.data.get_temp(id).unwrap_or_default();
+        surfaces.push((owner, rect));
+        mem.data.insert_temp(id, surfaces);
+    });
+}
+
+/// Mixer deck cards, the deck's bottom-bar chain, arrangement lanes, and deck
+/// automation rows.
+pub(super) fn publish_deck_surface_fx(
+    ctx: &egui::Context,
+    deck_uuid: &str,
+    ch_idx: usize,
+    deck_idx: usize,
+    rect: egui::Rect,
+) {
+    publish_fx_surface(
+        ctx,
+        FxHover::Deck {
+            uuid: deck_uuid.to_string(),
+            ch_idx,
+            deck_idx,
+        },
+        rect,
+    );
+}
+
+/// Channel columns (deck cards inside them win by hit priority), the channel's
+/// bottom-bar chain, arrangement group rows, and channel automation.
+pub(super) fn publish_channel_surface_fx(
+    ctx: &egui::Context,
+    channel_uuid: &str,
+    ch_idx: usize,
+    rect: egui::Rect,
+) {
+    publish_fx_surface(
+        ctx,
+        FxHover::Channel {
+            uuid: channel_uuid.to_string(),
+            ch_idx,
+        },
+        rect,
+    );
+}
+
+/// Main Output preview, the master bottom-bar chain, and the arrangement Master
+/// row.
+pub(super) fn publish_master_surface_fx(ctx: &egui::Context, rect: egui::Rect) {
+    publish_fx_surface(ctx, FxHover::Master, rect);
+}
+
+/// Pure hit test used by the deferred handler and by unit tests.
+///
+/// Deck surfaces are tried before master and master before channel, so a deck
+/// card claims a drop over the channel column it sits in. Within one kind the
+/// first surface drawn wins.
+fn resolve_fx_from_surfaces(
+    pos: egui::Pos2,
+    surfaces: &[(FxHover, egui::Rect)],
+) -> Option<FxHover> {
+    let hit = |want: fn(&FxHover) -> bool| {
+        surfaces
+            .iter()
+            .find(|(owner, rect)| want(owner) && rect.contains(pos))
+            .map(|(owner, _)| owner.clone())
+    };
+    hit(|o| matches!(o, FxHover::Deck { .. }))
+        .or_else(|| hit(|o| matches!(o, FxHover::Master)))
+        .or_else(|| hit(|o| matches!(o, FxHover::Channel { .. })))
+}
+
+fn resolve_fx_hover(ctx: &egui::Context, pos: egui::Pos2) -> Option<FxHover> {
+    let surfaces: FxSurfaces =
+        ctx.memory(|mem| mem.data.get_temp(fx_surfaces_id()).unwrap_or_default());
+    resolve_fx_from_surfaces(pos, &surfaces)
+}
+
+/// Selection applied alongside `AddEffect` so the bottom bar shows the chain.
+enum FxSelect {
+    Deck(usize, usize),
+    Channel(usize),
+    Master,
+}
+
 /// Deferred library drag-and-drop handler.
 /// Each frame while a `LibraryDrag` payload is active, find which drop target the pointer is over.
 /// When the payload disappears (mouse released), apply the drop action.
@@ -19,7 +141,8 @@ pub(super) fn resolve_filter_name(data: &UIData, filter_idx: usize) -> Option<St
         .map(|(name, _)| name.clone())
 }
 
-pub(super) fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIActions) {
+pub(super) fn handle_library_dnd(ui: &egui::Ui, data: &UIData, actions: &mut UIActions) {
+    let ctx = ui.ctx();
     let had_payload_id = egui::Id::new("__lib_dnd_had_payload");
     let hover_ch_id = egui::Id::new("__lib_dnd_hover_ch");
     let hover_fx_target_id = egui::Id::new("__lib_dnd_hover_fx_target");
@@ -54,37 +177,7 @@ pub(super) fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &m
                 }
             }
 
-            // The chain is recorded by UUID: the drop is applied after release,
-            // so an index recorded here could name another entity by then.
-            let mut found_fx: Option<(String, String)> = None;
-            if data.selected_master {
-                let master_key = egui::Id::new("master_fx_drop_rect");
-                if let Some(rect) = ctx.memory(|mem| mem.data.get_temp::<egui::Rect>(master_key)) {
-                    if rect.contains(pos) {
-                        found_fx = Some(("master".to_string(), String::new()));
-                    }
-                }
-            } else if let Some(ch) = data.selected_channel.and_then(|i| data.channels.get(i)) {
-                let key = egui::Id::new("ch_fx_drop_rect").with(ch.ch_idx);
-                if let Some(rect) = ctx.memory(|mem| mem.data.get_temp::<egui::Rect>(key)) {
-                    if rect.contains(pos) {
-                        found_fx = Some(("channel".to_string(), ch.uuid.clone()));
-                    }
-                }
-            } else if let Some((sel_ch, sel_dk)) = data.selected_deck {
-                let key = egui::Id::new("deck_fx_drop_rect").with((sel_ch, sel_dk));
-                if let Some(rect) = ctx.memory(|mem| mem.data.get_temp::<egui::Rect>(key)) {
-                    if rect.contains(pos) {
-                        if let Some(deck) = data
-                            .channels
-                            .get(sel_ch)
-                            .and_then(|ch| ch.decks.get(sel_dk))
-                        {
-                            found_fx = Some(("deck".to_string(), deck.uuid.clone()));
-                        }
-                    }
-                }
-            }
+            let found_fx = resolve_fx_hover(ctx, pos);
 
             ctx.memory_mut(|mem| {
                 mem.data.insert_temp(hover_ch_id, found_ch);
@@ -99,7 +192,7 @@ pub(super) fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &m
         if drag_just_ended {
             let hover_ch: Option<usize> =
                 ctx.memory(|mem| mem.data.get_temp(hover_ch_id).unwrap_or(None));
-            let hover_fx: Option<(String, String)> =
+            let hover_fx: Option<FxHover> =
                 ctx.memory(|mem| mem.data.get_temp(hover_fx_target_id).unwrap_or(None));
             let on_new_ch_zone: bool =
                 ctx.memory(|mem| mem.data.get_temp(on_new_ch_id).unwrap_or(false));
@@ -310,20 +403,28 @@ pub(super) fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &m
                 });
             }
 
-            if let Some((target_type, target_uuid)) = hover_fx {
+            if let Some(hover) = hover_fx {
                 let fx_key = egui::Id::new("__lib_dnd_fx_idx");
                 let filter_idx: Option<usize> = ctx.memory(|mem| mem.data.get_temp(fx_key));
                 if let Some(filter_idx) = filter_idx {
-                    let target = match target_type.as_str() {
-                        "deck" => Some(EffectTarget::Deck(target_uuid)),
-                        "channel" => Some(EffectTarget::Channel(target_uuid)),
-                        "master" => Some(EffectTarget::Master),
-                        _ => None,
-                    };
-                    if let (Some(target), Some(shader_name)) =
-                        (target, resolve_filter_name(data, filter_idx))
-                    {
+                    if let Some(shader_name) = resolve_filter_name(data, filter_idx) {
+                        let (target, select) = match hover {
+                            FxHover::Deck {
+                                uuid,
+                                ch_idx,
+                                deck_idx,
+                            } => (EffectTarget::Deck(uuid), FxSelect::Deck(ch_idx, deck_idx)),
+                            FxHover::Channel { uuid, ch_idx } => {
+                                (EffectTarget::Channel(uuid), FxSelect::Channel(ch_idx))
+                            }
+                            FxHover::Master => (EffectTarget::Master, FxSelect::Master),
+                        };
                         log::info!("Library drop (deferred): effect {filter_idx} -> {target:?}");
+                        match select {
+                            FxSelect::Deck(ch, dk) => actions.session.select_deck = Some((ch, dk)),
+                            FxSelect::Channel(ch) => actions.session.select_channel = Some(ch),
+                            FxSelect::Master => actions.session.select_master = true,
+                        }
                         actions.commands.push(EngineCommand::AddEffect {
                             target,
                             shader_name,
@@ -341,8 +442,7 @@ pub(super) fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &m
             ctx.memory_mut(|mem| {
                 mem.data.remove::<bool>(had_payload_id);
                 mem.data.remove::<Option<usize>>(hover_ch_id);
-                mem.data
-                    .remove::<Option<(String, String)>>(hover_fx_target_id);
+                mem.data.remove::<Option<FxHover>>(hover_fx_target_id);
                 mem.data.remove::<bool>(on_new_ch_id);
                 mem.data.remove::<usize>(egui::Id::new("__lib_dnd_gen_idx"));
                 mem.data.remove::<usize>(egui::Id::new("__lib_dnd_fx_idx"));
@@ -386,7 +486,8 @@ pub(super) fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &m
 /// Deferred effect reorder drag-and-drop handler.
 /// Same pattern as library drops — tracks which drop zone the pointer is over,
 /// then applies the move when the payload disappears.
-pub(super) fn handle_effect_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIActions) {
+pub(super) fn handle_effect_dnd(ui: &egui::Ui, data: &UIData, actions: &mut UIActions) {
+    let ctx = ui.ctx();
     let had_eff_id = egui::Id::new("__eff_dnd_had_payload");
     let hover_dz_id = egui::Id::new("__eff_dnd_hover_dz");
     let has_eff_payload = egui::DragAndDrop::has_payload_of_type::<EffectDrag>(ctx);
@@ -521,11 +622,8 @@ pub(super) fn handle_effect_dnd(ctx: &egui::Context, data: &UIData, actions: &mu
 /// Deferred `DnD` handler for reordering steps within a sequence.
 /// Follows the same pattern as effect `DnD`: source is stored in egui memory
 /// during drag (since `DragAndDrop::payload()` is None after mouse release).
-pub(super) fn handle_sequence_step_dnd(
-    ctx: &egui::Context,
-    _data: &UIData,
-    actions: &mut UIActions,
-) {
+pub(super) fn handle_sequence_step_dnd(ui: &egui::Ui, _data: &UIData, actions: &mut UIActions) {
+    let ctx = ui.ctx();
     let had_id = egui::Id::new("__seq_step_dnd_had");
     let target_id = egui::Id::new("__seq_step_dnd_target");
     let src_id = egui::Id::new("__seq_step_dnd_src");
@@ -562,5 +660,125 @@ pub(super) fn handle_sequence_step_dnd(
                 mem.data.remove::<SequenceStepDrag>(src_id);
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{resolve_fx_from_surfaces, FxHover};
+    use egui::{pos2, Rect};
+
+    fn rect(min_x: f32, min_y: f32, max_x: f32, max_y: f32) -> Rect {
+        Rect::from_min_max(pos2(min_x, min_y), pos2(max_x, max_y))
+    }
+
+    fn deck(uuid: &str, ch_idx: usize, deck_idx: usize) -> FxHover {
+        FxHover::Deck {
+            uuid: uuid.to_string(),
+            ch_idx,
+            deck_idx,
+        }
+    }
+
+    fn channel(uuid: &str, ch_idx: usize) -> FxHover {
+        FxHover::Channel {
+            uuid: uuid.to_string(),
+            ch_idx,
+        }
+    }
+
+    #[test]
+    fn deck_inside_channel_wins() {
+        let surfaces = vec![
+            (channel("ch-a", 0), rect(0.0, 0.0, 100.0, 100.0)),
+            (deck("deck-a", 0, 0), rect(10.0, 10.0, 50.0, 50.0)),
+        ];
+        assert_eq!(
+            resolve_fx_from_surfaces(pos2(20.0, 20.0), &surfaces),
+            Some(deck("deck-a", 0, 0))
+        );
+    }
+
+    #[test]
+    fn channel_empty_space_hits_channel() {
+        let surfaces = vec![
+            (channel("ch-a", 0), rect(0.0, 0.0, 100.0, 100.0)),
+            (deck("deck-a", 0, 0), rect(10.0, 10.0, 50.0, 50.0)),
+        ];
+        assert_eq!(
+            resolve_fx_from_surfaces(pos2(80.0, 80.0), &surfaces),
+            Some(channel("ch-a", 0))
+        );
+    }
+
+    /// The card under the pointer takes the drop, not the deck whose chain
+    /// happens to be open in the bottom bar.
+    #[test]
+    fn a_drop_lands_on_the_hovered_deck_not_the_selected_one() {
+        let surfaces = vec![
+            (deck("deck-a", 0, 0), rect(0.0, 0.0, 100.0, 100.0)),
+            (deck("deck-a", 0, 0), rect(0.0, 400.0, 800.0, 500.0)),
+            (deck("deck-b", 0, 1), rect(120.0, 0.0, 220.0, 100.0)),
+        ];
+        assert_eq!(
+            resolve_fx_from_surfaces(pos2(150.0, 50.0), &surfaces),
+            Some(deck("deck-b", 0, 1))
+        );
+    }
+
+    /// Only the selected deck draws a bottom-bar chain, so the frame's surfaces
+    /// name it and no deck that was selected earlier can still claim the area.
+    #[test]
+    fn the_bottom_bar_chain_belongs_to_whichever_deck_drew_it() {
+        let chain = rect(0.0, 400.0, 800.0, 500.0);
+        let first = vec![(deck("deck-a", 0, 0), chain)];
+        let second = vec![(deck("deck-b", 0, 1), chain)];
+        assert_eq!(
+            resolve_fx_from_surfaces(pos2(400.0, 450.0), &first),
+            Some(deck("deck-a", 0, 0))
+        );
+        assert_eq!(
+            resolve_fx_from_surfaces(pos2(400.0, 450.0), &second),
+            Some(deck("deck-b", 0, 1))
+        );
+    }
+
+    #[test]
+    fn master_preview_hits_without_selection() {
+        let surfaces = vec![(FxHover::Master, rect(200.0, 0.0, 300.0, 100.0))];
+        assert_eq!(
+            resolve_fx_from_surfaces(pos2(250.0, 50.0), &surfaces),
+            Some(FxHover::Master)
+        );
+    }
+
+    #[test]
+    fn master_beats_overlapping_channel() {
+        let surfaces = vec![
+            (channel("ch-a", 0), rect(0.0, 0.0, 100.0, 100.0)),
+            (FxHover::Master, rect(0.0, 0.0, 100.0, 100.0)),
+        ];
+        assert_eq!(
+            resolve_fx_from_surfaces(pos2(50.0, 50.0), &surfaces),
+            Some(FxHover::Master)
+        );
+    }
+
+    #[test]
+    fn automation_under_deck_is_deck_surface() {
+        let surfaces = vec![(deck("deck-a", 0, 1), rect(0.0, 40.0, 400.0, 60.0))];
+        assert_eq!(
+            resolve_fx_from_surfaces(pos2(100.0, 50.0), &surfaces),
+            Some(deck("deck-a", 0, 1))
+        );
+    }
+
+    #[test]
+    fn empty_space_resolves_to_nothing() {
+        let surfaces = vec![(deck("deck-a", 0, 0), rect(0.0, 0.0, 100.0, 100.0))];
+        assert_eq!(
+            resolve_fx_from_surfaces(pos2(500.0, 500.0), &surfaces),
+            None
+        );
     }
 }

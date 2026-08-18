@@ -1196,11 +1196,11 @@ pub(super) fn render_selected_deck_detail(
                     });
             }
 
-            // Store the entire horizontal_top area as the drop rect for deferred library effect drops
+            // The entire horizontal_top area takes deferred library effect drops
             let chain_rect = ui.min_rect();
+            super::dnd::publish_deck_surface_fx(ui.ctx(), &deck.uuid, ch_idx, deck_idx, chain_rect);
             let deck_chain_key = format!("deck_{}", deck.uuid);
             ui.ctx().memory_mut(|mem| {
-                mem.data.insert_temp(egui::Id::new("deck_fx_drop_rect").with((ch_idx, deck_idx)), chain_rect);
                 mem.data.insert_temp(egui::Id::new("eff_dz_count").with(deck_chain_key), deck.effects.len() + 1);
             });
         });

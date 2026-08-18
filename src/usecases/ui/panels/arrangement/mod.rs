@@ -29,8 +29,9 @@ pub(in crate::usecases::ui::panels) fn selection_active(ctx: &egui::Context) -> 
 }
 
 use super::super::state::{MAX_PIXELS_PER_SECOND, MIN_PIXELS_PER_SECOND};
-use super::super::{DeckDrag, ModSourceUI, UIActions, UIData};
+use super::super::{DeckDrag, LibraryDrag, ModSourceUI, UIActions, UIData};
 use super::clipboard_menu;
+use super::dnd::{publish_channel_surface_fx, publish_deck_surface_fx, publish_master_surface_fx};
 use super::utils::channel_color;
 use crate::arrangement::RegionConfig;
 use crate::engine::EngineCommand;
@@ -247,7 +248,7 @@ pub(super) fn render_arrangement(ui: &mut egui::Ui, data: &UIData, actions: &mut
     draw_playhead(ui, data, track_rect, axis);
     handle_selection_shortcuts(ui, data, actions, &rows, layout);
     automation::handle_clipboard_shortcuts(ui, data, actions);
-    offer_channel_drop_targets(ui, &rows, layout);
+    offer_drop_targets(ui, data, &rows, layout);
 }
 
 /// Every deck gets a lane, whether or not the arrangement has claimed it yet.
@@ -926,31 +927,74 @@ fn max_scroll_y(rows: &[Row<'_>], lanes_rect: egui::Rect) -> f32 {
     (content_height(rows) - lanes_rect.height()).max(0.0)
 }
 
-/// Publish each group's row as a channel drop target.
+/// Publish arrangement rows as library drop targets.
 ///
-/// The deferred library drop handler resolves targets by looking up a rect per
-/// channel index, so dropping a generator onto a group creates the deck (and
-/// therefore its lane) with no arrangement-specific drop code at all. See
-/// /spec/arrangement.md § UI.
-fn offer_channel_drop_targets(ui: &egui::Ui, rows: &[Row<'_>], layout: Layout) {
+/// Generator drops still use `ch_drop_rect` on group rows (same as Performance
+/// channel columns). Effect drops use the surface keys in
+/// `/spec/effect-drop-targets.md`: deck lanes and deck automation → deck FX;
+/// groups and channel automation → channel FX; Master and its automation →
+/// Master FX.
+fn offer_drop_targets(ui: &egui::Ui, data: &UIData, rows: &[Row<'_>], layout: Layout) {
     let Layout {
         header: header_rect,
         lanes: lanes_rect,
         scroll_y,
         ..
     } = layout;
+    let has_fx = egui::DragAndDrop::payload::<LibraryDrag>(ui.ctx())
+        .is_some_and(|p| matches!(&*p, LibraryDrag::Effect(_)));
+    let fx_accent = egui::Color32::from_rgb(100, 200, 255);
+
     for (row, (top, height)) in rows.iter().zip(row_spans(rows, lanes_rect, scroll_y)) {
-        let Row::Group { ch_idx, .. } = row else {
-            continue;
-        };
         let rect = egui::Rect::from_min_max(
             egui::pos2(header_rect.left(), top),
             egui::pos2(lanes_rect.right(), top + height),
         );
-        ui.ctx().memory_mut(|mem| {
-            mem.data
-                .insert_temp(egui::Id::new("ch_drop_rect").with(*ch_idx), rect);
-        });
+        match row {
+            Row::Group { ch_idx, .. } => {
+                ui.ctx().memory_mut(|mem| {
+                    mem.data
+                        .insert_temp(egui::Id::new("ch_drop_rect").with(*ch_idx), rect);
+                });
+                if let Some(ch) = data.channels.get(*ch_idx) {
+                    publish_channel_surface_fx(ui.ctx(), &ch.uuid, *ch_idx, rect);
+                }
+            }
+            Row::Lane(lane) => {
+                publish_deck_surface_fx(ui.ctx(), lane.uuid, lane.ch_idx, lane.deck_idx, rect);
+            }
+            Row::Master => {
+                publish_master_surface_fx(ui.ctx(), rect);
+            }
+            Row::Automation(curve) => match curve.owner {
+                Owner::Deck(ch_idx, deck_idx) => {
+                    if let Some(uuid) = data
+                        .channels
+                        .get(ch_idx)
+                        .and_then(|ch| ch.decks.get(deck_idx))
+                        .map(|d| d.uuid.as_str())
+                    {
+                        publish_deck_surface_fx(ui.ctx(), uuid, ch_idx, deck_idx, rect);
+                    }
+                }
+                Owner::Channel(ch_idx) => {
+                    if let Some(ch) = data.channels.get(ch_idx) {
+                        publish_channel_surface_fx(ui.ctx(), &ch.uuid, ch_idx, rect);
+                    }
+                }
+                Owner::Master => {
+                    publish_master_surface_fx(ui.ctx(), rect);
+                }
+            },
+        }
+        if has_fx && ui.rect_contains_pointer(rect) {
+            ui.painter().rect_stroke(
+                rect,
+                0.0,
+                egui::Stroke::new(1.5_f32, fx_accent),
+                egui::StrokeKind::Inside,
+            );
+        }
     }
 }
 

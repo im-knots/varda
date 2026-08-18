@@ -12,6 +12,7 @@ Only the **central mixing area** is replaced. The library on the left, the detai
 
 - Selecting a lane selects its deck, so the bottom bar edits generator parameters, effect chains, and playback for the deck you clicked in the timeline.
 - Dragging a generator from the library onto a **group row** creates a deck in that channel, and therefore a lane, the same way dropping onto a channel column does.
+- Dragging an **effect** onto a lane, group, Master row, or any automation under them appends to that owner's effect chain and selects the owner (same surfaces as Performance mode; see [Library → Drag-and-Drop](03-library-panel.md#drag-and-drop)).
 - Modulators, tonemapping, surfaces, and outputs stay reachable, so you can build an LFO while looking at the timeline.
 
 If you want a wider timeline, collapse the library with **L** and the right panel with **«**.
