@@ -2,7 +2,7 @@
 
 Thanks for your interest in contributing to Varda. This document covers the architecture, conventions, and workflow you need to get a change merged. For end-user documentation (install, usage, panels, shaders), see the [manual](docs/README.md).
 
-First, join #varda on the [Libera.Chat](https://web.libera.chat/#varda) IRC Network and say whats up. Open an issue in this repo with your bug/suggestion/request. Or see below on how to open your own PR. 
+First, join #varda on the [Libera.Chat](https://web.libera.chat/#varda) IRC Network and say hello! Open an issue in this repo with your bug/suggestion/request. Or see below on how to open your own PR. 
 
 ## AI Usage Policy
 
