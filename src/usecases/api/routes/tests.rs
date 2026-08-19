@@ -1579,6 +1579,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_video_set_transport_sync() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/decks/dk-001/video/transport-sync",
+            serde_json::json!({"mode": "Never", "offset": 3600.0, "delay_frames": -2}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_video_transport_sync_rejects_unknown_mode() {
+        let (status, _) = put_json(
+            router_with_mock_engine(),
+            "/api/decks/dk-001/video/transport-sync",
+            serde_json::json!({"mode": "Sometimes"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
     async fn test_video_set_in_point() {
         let (status, json) = put_json(
             router_with_mock_engine(),
@@ -3636,6 +3659,31 @@ mod tests {
             crate::engine::EngineCommand::SetDeckOpacity { deck_uuid, opacity } => {
                 assert_eq!(deck_uuid, "dk-007");
                 assert!((opacity - 0.25).abs() < 1e-6);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_video_transport_sync_carries_all_mapping_fields() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = put_json(
+            app,
+            "/api/decks/dk-007/video/transport-sync",
+            serde_json::json!({
+                "mode": "Always",
+                "offset": 3600.25,
+                "delay_frames": -3
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::VideoSetTransportSync { deck_uuid, sync } => {
+                assert_eq!(deck_uuid, "dk-007");
+                assert_eq!(sync.mode, crate::video::TransportSyncMode::Always);
+                assert!((sync.offset - 3600.25).abs() < 1e-9);
+                assert_eq!(sync.delay_frames, -3);
             }
             other => panic!("unexpected command: {other:?}"),
         }

@@ -5,6 +5,7 @@
 //!   Supports Hap (BC1), Hap Alpha (BC3), Hap R (BC7).
 //! - **ffmpeg path**: CPU decode for H.264, `ProRes`, VP9, etc. — fallback for all other codecs.
 
+pub mod chase;
 pub mod hap;
 
 use anyhow::{Context, Result};
@@ -22,7 +23,8 @@ use ffmpeg::util::frame::video::Video;
 /// Loop mode for video playback. Definition lives in `engine::value::video`
 /// (see /spec/engine-value-types.md); re-exported here so existing
 /// `crate::video::LoopMode` call sites keep working.
-pub use crate::engine::value::video::LoopMode;
+pub use crate::engine::value::video::{DeckTransportSync, LoopMode, TransportSyncMode};
+pub use chase::{ChaseInbox, VideoChaseBroadcast};
 
 /// Result of advancing playback state.
 pub struct AdvanceResult {
@@ -69,6 +71,14 @@ pub struct PlaybackState {
     last_advance: std::time::Instant,
     /// Fractional frame accumulator — tracks sub-frame position for pacing.
     frame_accumulator: f64,
+    /// Per-clip transport mapping. Default Auto.
+    pub transport_sync: DeckTransportSync,
+    /// Latest transport sample, written by the decode thread each tick.
+    chase_transport: Option<chase::ChaseTransport>,
+    /// Previous transport position, for `transport_dt` while chasing.
+    last_transport_position: Option<f64>,
+    /// True for the duration of a chase tick. Decode EOS paths hold instead of wrapping.
+    pub chasing: bool,
 }
 
 impl PlaybackState {
@@ -88,6 +98,10 @@ impl PlaybackState {
             reached_end: false,
             last_advance: std::time::Instant::now(),
             frame_accumulator: 0.0,
+            transport_sync: DeckTransportSync::default(),
+            chase_transport: None,
+            last_transport_position: None,
+            chasing: false,
         }
     }
 
@@ -100,17 +114,31 @@ impl PlaybackState {
         }
     }
 
+    /// Bind this tick's transport snapshot before [`Self::advance_frame`].
+    pub fn set_chase_transport(&mut self, sample: chase::ChaseTransport) {
+        self.chase_transport = Some(sample);
+    }
+
     /// Advance playback position using real wall-clock time.
     /// Returns how many video frames to decode and whether a seek is needed.
     pub fn advance_frame(&mut self) -> AdvanceResult {
         self.reached_end = false;
         if !self.playing {
             self.last_advance = std::time::Instant::now();
+            self.chasing = false;
             return AdvanceResult {
                 needs_seek: false,
                 frames_to_decode: 0,
             };
         }
+
+        if let Some(transport) = self.chase_transport.take() {
+            if self.transport_sync.mode.is_chasing(transport.running) {
+                return self.advance_chase(transport);
+            }
+        }
+        self.chasing = false;
+        self.last_transport_position = None;
 
         let now = std::time::Instant::now();
         let wall_dt = now.duration_since(self.last_advance).as_secs_f64();
@@ -172,6 +200,57 @@ impl PlaybackState {
         AdvanceResult {
             needs_seek: false,
             frames_to_decode,
+        }
+    }
+
+    fn advance_chase(&mut self, transport: chase::ChaseTransport) -> AdvanceResult {
+        self.chasing = true;
+        self.reverse = false;
+        self.last_advance = std::time::Instant::now();
+
+        let transport_dt = if transport.running {
+            self.last_transport_position
+                .map_or(0.0, |prev| transport.position - prev)
+        } else {
+            0.0
+        };
+        let first = self.last_transport_position.is_none();
+        self.last_transport_position = Some(transport.position);
+
+        let step = chase::step_chase(chase::ChaseInput {
+            position: self.position,
+            in_point: self.in_point,
+            out_point: self.effective_out(),
+            frame_rate: self.frame_rate,
+            base_speed: self.speed,
+            transport_position: transport.position,
+            transport_dt,
+            transport_fps: transport.fps,
+            discontinuity: transport.discontinuity || first,
+            sync: self.transport_sync,
+        });
+
+        let moved = (step.position - self.position).abs();
+        let going_back = step.position + (1.0 / self.frame_rate) < self.position;
+        self.position = step.position;
+        let out_pt = self.effective_out();
+        self.reached_end = self.position >= out_pt - (0.5 / self.frame_rate);
+
+        if step.needs_seek || going_back {
+            self.frame_accumulator = 0.0;
+            return AdvanceResult {
+                needs_seek: true,
+                frames_to_decode: 1,
+            };
+        }
+
+        let frame_time = 1.0 / self.frame_rate;
+        self.frame_accumulator += moved;
+        let frames_to_decode = (self.frame_accumulator / frame_time).floor() as u32;
+        self.frame_accumulator -= f64::from(frames_to_decode) * frame_time;
+        AdvanceResult {
+            needs_seek: false,
+            frames_to_decode: frames_to_decode.max(step.frames_to_decode),
         }
     }
 }
@@ -254,6 +333,7 @@ pub enum VideoCommand {
     SetInPoint(f64),
     SetOutPoint(f64),
     ClearInOutPoints,
+    SetTransportSync(DeckTransportSync),
     Stop,
 }
 
@@ -323,6 +403,10 @@ pub struct VideoDecodeHandle {
     /// Last suspension state sent to the decode thread, so the per-frame call
     /// from the renderer only sends on a change. See [`Self::set_suspended`].
     suspended: AtomicBool,
+    /// Render-thread publish / decode-thread consume of the show transport.
+    chase: Arc<ChaseInbox>,
+    /// Last sync config applied from the main thread (for save/UI).
+    transport_sync: Mutex<DeckTransportSync>,
     thread: Option<std::thread::JoinHandle<()>>,
     pub width: u32,
     pub height: u32,
@@ -349,17 +433,19 @@ impl VideoDecodeHandle {
 
         let frame_pool: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
         let output_fps = Arc::new(AtomicU32::new(0));
+        let chase = Arc::new(ChaseInbox::new());
 
         let fd = frame_data.clone();
         let ss = snapshot.clone();
         let sf = stop_flag.clone();
         let fp = frame_pool.clone();
         let ofps = output_fps.clone();
+        let ch = chase.clone();
 
         let thread = std::thread::Builder::new()
             .name("video-decode".into())
             .spawn(move || {
-                video_decode_thread(player, &cmd_rx, &fd, &ss, &sf, &fp, fps, &ofps);
+                video_decode_thread(player, &cmd_rx, &fd, &ss, &sf, &fp, fps, &ofps, &ch);
             })
             .expect("failed to spawn video decode thread");
 
@@ -371,6 +457,8 @@ impl VideoDecodeHandle {
             frame_pool,
             output_fps,
             suspended: AtomicBool::new(false),
+            chase,
+            transport_sync: Mutex::new(DeckTransportSync::default()),
             thread: Some(thread),
             width,
             height,
@@ -397,17 +485,19 @@ impl VideoDecodeHandle {
 
         let frame_pool: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
         let output_fps = Arc::new(AtomicU32::new(0));
+        let chase = Arc::new(ChaseInbox::new());
 
         let fd = frame_data.clone();
         let ss = snapshot.clone();
         let sf = stop_flag.clone();
         let fp = frame_pool.clone();
         let ofps = output_fps.clone();
+        let ch = chase.clone();
 
         let thread = std::thread::Builder::new()
             .name("hap-decode".into())
             .spawn(move || {
-                hap_decode_thread(player, &cmd_rx, &fd, &ss, &sf, &fp, fps, &ofps);
+                hap_decode_thread(player, &cmd_rx, &fd, &ss, &sf, &fp, fps, &ofps, &ch);
             })
             .expect("failed to spawn hap decode thread");
 
@@ -419,6 +509,8 @@ impl VideoDecodeHandle {
             frame_pool,
             output_fps,
             suspended: AtomicBool::new(false),
+            chase,
+            transport_sync: Mutex::new(DeckTransportSync::default()),
             thread: Some(thread),
             width,
             height,
@@ -437,6 +529,22 @@ impl VideoDecodeHandle {
     /// beat against the render clock, which reads as judder.
     pub fn set_output_fps(&self, fps: u32) {
         self.output_fps.store(fps, Ordering::Relaxed);
+    }
+
+    /// Publish this frame's transport to the decode thread.
+    pub fn publish_chase(&self, sample: VideoChaseBroadcast, discontinuity: bool) {
+        self.chase.publish(sample, discontinuity);
+    }
+
+    pub fn set_transport_sync(&self, sync: DeckTransportSync) {
+        if let Ok(mut slot) = self.transport_sync.lock() {
+            *slot = sync;
+        }
+        self.send(VideoCommand::SetTransportSync(sync));
+    }
+
+    pub fn transport_sync(&self) -> DeckTransportSync {
+        self.transport_sync.lock().map(|g| *g).unwrap_or_default()
     }
 
     /// Stop or resume decoding without touching the deck's play/pause state.
@@ -526,6 +634,7 @@ fn apply_command(ps: &mut PlaybackState, cmd: &VideoCommand) {
             ps.in_point = 0.0;
             ps.out_point = 0.0;
         }
+        VideoCommand::SetTransportSync(sync) => ps.transport_sync = *sync,
     }
 }
 
@@ -623,6 +732,7 @@ fn video_decode_thread(
     frame_pool: &Mutex<Vec<Vec<u8>>>,
     fps: f64,
     output_fps: &AtomicU32,
+    chase: &ChaseInbox,
 ) {
     let mut interval = decode_interval(fps, output_fps);
     let mut next_frame_at = std::time::Instant::now() + interval;
@@ -654,7 +764,9 @@ fn video_decode_thread(
         if was_suspended && !player.playback.suspended {
             next_frame_at = std::time::Instant::now();
         }
+        let woke = was_suspended && !player.playback.suspended;
         was_suspended = player.playback.suspended;
+        player.playback.set_chase_transport(chase.take(woke));
 
         // Decode next frame
         match player.next_frame() {
@@ -728,6 +840,7 @@ fn hap_decode_thread(
     frame_pool: &Mutex<Vec<Vec<u8>>>,
     fps: f64,
     output_fps: &AtomicU32,
+    chase: &ChaseInbox,
 ) {
     let mut interval = decode_interval(fps, output_fps);
     let mut next_frame_at = std::time::Instant::now() + interval;
@@ -759,7 +872,9 @@ fn hap_decode_thread(
         if was_suspended && !player.playback.suspended {
             next_frame_at = std::time::Instant::now();
         }
+        let woke = was_suspended && !player.playback.suspended;
         was_suspended = player.playback.suspended;
+        player.playback.set_chase_transport(chase.take(woke));
 
         // Decode next frame
         match player.next_frame() {
@@ -1109,39 +1224,39 @@ impl VideoPlayer {
                 }
                 continue;
             }
-            match self.ictx.packets().next() {
-                Some((stream, packet)) => {
-                    if stream.index() == self.video_stream_index {
-                        self.decoder.send_packet(&packet)?;
-                    }
+            if let Some((stream, packet)) = self.ictx.packets().next() {
+                if stream.index() == self.video_stream_index {
+                    self.decoder.send_packet(&packet)?;
                 }
-                None => {
-                    // End of stream
-                    match self.playback.loop_mode {
-                        LoopMode::Loop => {
-                            self.playback.position = self.playback.in_point;
-                            self.seek(self.playback.position)?;
+            } else {
+                // End of stream
+                if self.playback.chasing {
+                    return Ok(Some(&self.frame_data));
+                }
+                match self.playback.loop_mode {
+                    LoopMode::Loop => {
+                        self.playback.position = self.playback.in_point;
+                        self.seek(self.playback.position)?;
+                    }
+                    LoopMode::PingPong => {
+                        self.playback.reverse = true;
+                        if !self.frame_cache.is_empty() {
+                            self.cache_read_idx = self.frame_cache.len() - 1;
+                            return self.next_frame();
                         }
-                        LoopMode::PingPong => {
-                            self.playback.reverse = true;
-                            if !self.frame_cache.is_empty() {
-                                self.cache_read_idx = self.frame_cache.len() - 1;
-                                return self.next_frame();
-                            }
-                            // No cache: hold current frame at boundary.
-                            // advance_frame will walk position backward until in_point,
-                            // then flip back to forward on the next pass.
-                            self.playback.position =
-                                self.playback.effective_out() - (1.0 / self.playback.frame_rate);
-                            return Ok(Some(&self.frame_data));
-                        }
-                        LoopMode::OneShot => {
-                            self.playback.playing = false;
-                            return Ok(None);
-                        }
-                        LoopMode::HoldLast => {
-                            return Ok(Some(&self.frame_data));
-                        }
+                        // No cache: hold current frame at boundary.
+                        // advance_frame will walk position backward until in_point,
+                        // then flip back to forward on the next pass.
+                        self.playback.position =
+                            self.playback.effective_out() - (1.0 / self.playback.frame_rate);
+                        return Ok(Some(&self.frame_data));
+                    }
+                    LoopMode::OneShot => {
+                        self.playback.playing = false;
+                        return Ok(None);
+                    }
+                    LoopMode::HoldLast => {
+                        return Ok(Some(&self.frame_data));
                     }
                 }
             }
@@ -1535,6 +1650,251 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(10));
         let result = ps.advance_frame();
         assert_eq!(result.frames_to_decode, 0);
+    }
+
+    #[test]
+    fn chase_ignores_every_loop_mode_and_holds_out_point() {
+        for loop_mode in [
+            LoopMode::Loop,
+            LoopMode::PingPong,
+            LoopMode::OneShot,
+            LoopMode::HoldLast,
+        ] {
+            let mut ps = PlaybackState::new(10.0, 30.0);
+            ps.loop_mode = loop_mode;
+            ps.transport_sync.mode = TransportSyncMode::Always;
+            ps.set_chase_transport(chase::ChaseTransport {
+                position: 50.0,
+                running: true,
+                discontinuity: true,
+                fps: 30.0,
+            });
+            let result = ps.advance_frame();
+            assert!(result.needs_seek, "{loop_mode:?}");
+            assert!((ps.position - 10.0).abs() < 1e-9, "{loop_mode:?}");
+            assert!(ps.chasing, "{loop_mode:?}");
+            assert!(ps.playing, "{loop_mode:?} must not stop a chasing clip");
+            assert!(!ps.reverse, "{loop_mode:?} must not reverse while chasing");
+        }
+    }
+
+    #[test]
+    fn chase_auto_does_not_chase_when_transport_is_stopped() {
+        let mut ps = PlaybackState::new(10.0, 30.0);
+        ps.transport_sync.mode = TransportSyncMode::Auto;
+        ps.position = 1.0;
+        ps.set_chase_transport(chase::ChaseTransport {
+            position: 8.0,
+            running: false,
+            discontinuity: false,
+            fps: 30.0,
+        });
+        let _ = ps.advance_frame();
+        assert!(!ps.chasing);
+        assert!(ps.position >= 1.0);
+        assert!(ps.position < 8.0);
+    }
+
+    #[test]
+    fn chase_auto_follows_a_running_transport() {
+        let mut ps = PlaybackState::new(10.0, 30.0);
+        ps.transport_sync.mode = TransportSyncMode::Auto;
+        ps.set_chase_transport(chase::ChaseTransport {
+            position: 4.0,
+            running: true,
+            discontinuity: false,
+            fps: 30.0,
+        });
+        let result = ps.advance_frame();
+        assert!(ps.chasing);
+        assert!(result.needs_seek, "first chase sample must locate");
+        assert!((ps.position - 4.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn chase_always_freezes_on_stopped_transport() {
+        let mut ps = PlaybackState::new(10.0, 30.0);
+        ps.transport_sync.mode = TransportSyncMode::Always;
+        ps.set_chase_transport(chase::ChaseTransport {
+            position: 4.0,
+            running: false,
+            discontinuity: false,
+            fps: 30.0,
+        });
+        let result = ps.advance_frame();
+        assert!(ps.chasing);
+        assert!(result.needs_seek);
+        assert!((ps.position - 4.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn chase_never_free_runs_while_transport_runs() {
+        let mut ps = PlaybackState::new(10.0, 30.0);
+        ps.transport_sync.mode = TransportSyncMode::Never;
+        ps.position = 1.0;
+        ps.set_chase_transport(chase::ChaseTransport {
+            position: 8.0,
+            running: true,
+            discontinuity: true,
+            fps: 30.0,
+        });
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let result = ps.advance_frame();
+        assert!(!ps.chasing);
+        assert!(!result.needs_seek);
+        assert!(ps.position > 1.0);
+        assert!(ps.position < 8.0);
+    }
+
+    #[test]
+    fn auto_restores_loop_mode_while_transport_is_stopped() {
+        let mut ps = PlaybackState::new(10.0, 30.0);
+        ps.transport_sync.mode = TransportSyncMode::Auto;
+        ps.loop_mode = LoopMode::Loop;
+        ps.position = 10.1;
+        ps.set_chase_transport(chase::ChaseTransport {
+            position: 8.0,
+            running: false,
+            discontinuity: false,
+            fps: 30.0,
+        });
+        let result = ps.advance_frame();
+        assert!(!ps.chasing);
+        assert!(result.needs_seek);
+        assert_eq!(ps.position, ps.in_point);
+    }
+
+    #[test]
+    fn auto_reacquires_with_a_seek_after_free_run() {
+        let mut ps = PlaybackState::new(10.0, 30.0);
+        ps.transport_sync.mode = TransportSyncMode::Auto;
+        ps.set_chase_transport(chase::ChaseTransport {
+            position: 2.0,
+            running: true,
+            discontinuity: false,
+            fps: 30.0,
+        });
+        let _ = ps.advance_frame();
+
+        ps.set_chase_transport(chase::ChaseTransport {
+            position: 2.0,
+            running: false,
+            discontinuity: false,
+            fps: 30.0,
+        });
+        let _ = ps.advance_frame();
+        assert!(!ps.chasing);
+
+        ps.set_chase_transport(chase::ChaseTransport {
+            position: 3.0,
+            running: true,
+            discontinuity: false,
+            fps: 30.0,
+        });
+        let result = ps.advance_frame();
+        assert!(ps.chasing);
+        assert!(result.needs_seek);
+        assert!((ps.position - 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn clip_pause_wins_over_chase() {
+        let mut ps = PlaybackState::new(10.0, 30.0);
+        ps.transport_sync.mode = TransportSyncMode::Always;
+        ps.playing = false;
+        ps.position = 1.0;
+        ps.set_chase_transport(chase::ChaseTransport {
+            position: 8.0,
+            running: true,
+            discontinuity: true,
+            fps: 30.0,
+        });
+        let result = ps.advance_frame();
+        assert!(!ps.chasing);
+        assert!(!result.needs_seek);
+        assert_eq!(result.frames_to_decode, 0);
+        assert_eq!(ps.position, 1.0);
+    }
+
+    #[test]
+    fn chase_trim_preserves_the_servos_decode_request() {
+        let mut ps = PlaybackState::new(10.0, 30.0);
+        ps.transport_sync.mode = TransportSyncMode::Always;
+        ps.set_chase_transport(chase::ChaseTransport {
+            position: 1.0,
+            running: true,
+            discontinuity: false,
+            fps: 30.0,
+        });
+        let _ = ps.advance_frame();
+
+        // Simulate a decoder lag just beyond the deadband while the next
+        // transport tick itself is sub-frame.
+        ps.position = 0.96;
+        ps.set_chase_transport(chase::ChaseTransport {
+            position: 1.01,
+            running: true,
+            discontinuity: false,
+            fps: 30.0,
+        });
+        let result = ps.advance_frame();
+        assert!(!result.needs_seek);
+        assert_eq!(
+            result.frames_to_decode, 1,
+            "a trim step's decode request must reach ffmpeg/HAP"
+        );
+    }
+
+    #[test]
+    fn chase_moving_back_more_than_a_frame_seeks() {
+        let mut ps = PlaybackState::new(10.0, 30.0);
+        ps.transport_sync.mode = TransportSyncMode::Always;
+        ps.set_chase_transport(chase::ChaseTransport {
+            position: 2.0,
+            running: true,
+            discontinuity: false,
+            fps: 30.0,
+        });
+        let _ = ps.advance_frame();
+
+        ps.set_chase_transport(chase::ChaseTransport {
+            position: 1.9,
+            running: true,
+            discontinuity: false,
+            fps: 30.0,
+        });
+        let result = ps.advance_frame();
+        assert!(result.needs_seek);
+        assert!(ps.position < 2.0);
+    }
+
+    #[test]
+    fn transport_locate_reaches_video_as_a_seek() {
+        let mut transport = crate::transport::Transport::new();
+        transport.play().expect("internal transport can play");
+        transport.tick(1.0 / 30.0);
+        transport
+            .locate(4.0)
+            .expect("internal transport can locate");
+        let sample = transport.sample().expect("transport has run");
+        assert!(sample.discontinuity);
+
+        let inbox = chase::ChaseInbox::new();
+        inbox.publish(
+            chase::VideoChaseBroadcast {
+                position: sample.position,
+                running: sample.running,
+                fps: sample.fps,
+            },
+            sample.discontinuity,
+        );
+
+        let mut ps = PlaybackState::new(10.0, 30.0);
+        ps.transport_sync.mode = TransportSyncMode::Auto;
+        ps.set_chase_transport(inbox.take(false));
+        let result = ps.advance_frame();
+        assert!(result.needs_seek);
+        assert!((ps.position - 4.0).abs() < 1e-9);
     }
 
     #[test]

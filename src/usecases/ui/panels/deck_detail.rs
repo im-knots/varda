@@ -621,6 +621,72 @@ pub(super) fn render_selected_deck_detail(
                             });
                             learn_overlay(ui, loop_resp.response.rect, format!("deck/{}/video/loop_mode", deck.uuid), data, actions);
 
+                            let chasing_now = vp.transport_sync.mode.is_chasing(data.transport.running);
+                            if chasing_now {
+                                ui.label(
+                                    egui::RichText::new("Loop is ignored while chasing the transport")
+                                        .small()
+                                        .weak(),
+                                );
+                            }
+
+                            ui.add_space(4.0);
+                            ui.label(egui::RichText::new("⏱ Transport").strong());
+                            let mut sync = vp.transport_sync;
+                            ui.horizontal(|ui| {
+                                ui.label("Chase:");
+                                egui::ComboBox::from_id_salt(format!("deck-chase-{}", deck.uuid))
+                                    .selected_text(sync.mode.label())
+                                    .show_ui(ui, |ui| {
+                                        for mode in [
+                                            crate::video::TransportSyncMode::Auto,
+                                            crate::video::TransportSyncMode::Always,
+                                            crate::video::TransportSyncMode::Never,
+                                        ] {
+                                            if ui
+                                                .selectable_label(sync.mode == mode, mode.label())
+                                                .clicked()
+                                            {
+                                                sync.mode = mode;
+                                                actions.commands.push(
+                                                    EngineCommand::VideoSetTransportSync {
+                                                        deck_uuid: deck.uuid.clone(),
+                                                        sync,
+                                                    },
+                                                );
+                                            }
+                                        }
+                                    });
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Offset:");
+                                let resp = ui.add(
+                                    egui::DragValue::new(&mut sync.offset)
+                                        .speed(0.01)
+                                        .suffix(" s"),
+                                );
+                                if resp.changed() {
+                                    actions.commands.push(EngineCommand::VideoSetTransportSync {
+                                        deck_uuid: deck.uuid.clone(),
+                                        sync,
+                                    });
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Delay:");
+                                let resp = ui.add(
+                                    egui::DragValue::new(&mut sync.delay_frames)
+                                        .speed(1.0)
+                                        .suffix(" f"),
+                                );
+                                if resp.changed() {
+                                    actions.commands.push(EngineCommand::VideoSetTransportSync {
+                                        deck_uuid: deck.uuid.clone(),
+                                        sync,
+                                    });
+                                }
+                            });
+
                             // In/Out points (bookshelf)
                             ui.add_space(4.0);
                             ui.label(egui::RichText::new("📐 In/Out Points").strong());

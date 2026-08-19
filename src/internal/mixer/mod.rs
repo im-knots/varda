@@ -582,6 +582,19 @@ impl Mixer {
         &mut self.channels
     }
 
+    /// Push this frame's transport to every video deck's decode thread.
+    pub fn publish_video_chase(
+        &self,
+        sample: crate::video::VideoChaseBroadcast,
+        discontinuity: bool,
+    ) {
+        for channel in &self.channels {
+            for slot in &channel.decks {
+                slot.deck.publish_video_chase(sample, discontinuity);
+            }
+        }
+    }
+
     /// Number of channels.
     pub fn channel_count(&self) -> usize {
         self.channels.len()

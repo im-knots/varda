@@ -61,6 +61,10 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                                 in_point: ps.in_point,
                                 out_point: ps.out_point,
                                 frame_rate: ps.frame_rate,
+                                transport_sync: slot
+                                    .deck
+                                    .video_transport_sync()
+                                    .unwrap_or_default(),
                             });
 
                     let auto_transition =

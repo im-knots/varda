@@ -72,7 +72,7 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::decks::video_toggle_play, routes::decks::video_seek,
         routes::decks::video_set_speed, routes::decks::video_set_loop_mode,
         routes::decks::video_set_in_point, routes::decks::video_set_out_point,
-        routes::decks::video_clear_in_out,
+        routes::decks::video_clear_in_out, routes::decks::video_set_transport_sync,
         // Auto Transitions
         routes::decks::set_auto_transition_enabled, routes::decks::set_auto_transition_trigger,
         routes::decks::set_auto_transition_play_duration, routes::decks::set_auto_transition_duration,
@@ -624,6 +624,10 @@ pub fn build_router(shared: SharedState) -> Router {
         .route(
             "/api/decks/{deck_uuid}/video/in-out-points",
             axum::routing::delete(routes::decks::video_clear_in_out),
+        )
+        .route(
+            "/api/decks/{deck_uuid}/video/transport-sync",
+            axum::routing::put(routes::decks::video_set_transport_sync),
         )
         // ── Write: Auto-Transitions ──────────────────────────────
         .route(

@@ -839,6 +839,7 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `PUT` | `/api/decks/{deck_uuid}/video/seek` |  |
 | `PUT` | `/api/decks/{deck_uuid}/video/speed` |  |
 | `POST` | `/api/decks/{deck_uuid}/video/toggle-play` |  |
+| `PUT` | `/api/decks/{deck_uuid}/video/transport-sync` |  |
 
 <!-- END GENERATED ROUTES -->
 

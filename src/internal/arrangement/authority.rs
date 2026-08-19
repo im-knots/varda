@@ -83,6 +83,7 @@ mod tests {
             position,
             running: true,
             discontinuity: false,
+            fps: 30.0,
         }
     }
 
@@ -126,6 +127,7 @@ mod tests {
             position: 5.0,
             running: false,
             discontinuity: false,
+            fps: 30.0,
         };
         assert_eq!(
             Authority::resolve(Some(&arrangement), Some(&stopped)),

@@ -33,7 +33,7 @@ pub use crate::engine::value::render::OutputSource;
 pub use crate::engine::value::surface::{
     CircleHint, ContentMapping, CubicHandle, SurfaceOutputType, SurfacePath, SurfaceReorderOp,
 };
-pub use crate::engine::value::video::LoopMode;
+pub use crate::engine::value::video::{DeckTransportSync, LoopMode, TransportSyncMode};
 
 /// Identifies which effect chain to operate on.
 ///
@@ -480,6 +480,7 @@ pub struct VideoPlaybackSnapshot {
     pub in_point: f64,
     pub out_point: f64,
     pub frame_rate: f64,
+    pub transport_sync: crate::engine::value::video::DeckTransportSync,
 }
 
 // Serialized DTO: each flag pairs with its own value field (beats vs seconds).

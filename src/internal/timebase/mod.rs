@@ -50,6 +50,8 @@ pub struct TransportSample {
     pub position: f64,
     pub running: bool,
     pub discontinuity: bool,
+    /// Display rate used by `delay_frames` on video chase.
+    pub fps: f64,
 }
 
 /// One timebase resolved for the current frame.
@@ -276,6 +278,7 @@ mod tests {
             position,
             running: true,
             discontinuity: false,
+            fps: 30.0,
         }
     }
 
@@ -428,6 +431,7 @@ mod tests {
                 position: 10.0,
                 running: false,
                 discontinuity: false,
+                fps: 30.0,
             }),
         );
         let ctx = set.get(Timebase::Transport);
@@ -460,6 +464,7 @@ mod tests {
                 position: 900.0,
                 running: true,
                 discontinuity: true,
+                fps: 30.0,
             }),
         );
         assert!(set.get(Timebase::Transport).discontinuity);

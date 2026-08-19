@@ -33,7 +33,7 @@ Define a sub-range of the clip to play:
 
 Click **Clear In/Out** to reset to the full clip duration.
 
-Play/pause, speed, seek, loop mode, in/out points, and clear are all MIDI, OSC, keyboard mappable and modulatable. Loop mode uses **fader bucketing**: sweeping a fader/knob steps through Loop → Ping-Pong → One Shot → Hold Last. Enter learn mode and click any of these controls in the deck detail panel to bind it. See [Parameter Paths](06-control-surfaces.md#parameter-paths).
+Play/pause, speed, seek, loop mode, in/out points, transport chase (Auto / Always / Never, offset, delay), and clear are all MIDI, OSC, keyboard mappable and modulatable except chase, which is authored on the clip. Loop mode uses **fader bucketing**: sweeping a fader/knob steps through Loop → Ping-Pong → One Shot → Hold Last. Enter learn mode and click any of these controls in the deck detail panel to bind it. See [Parameter Paths](06-control-surfaces.md#parameter-paths). Video chase is described in [Arrangement Mode](15-arrangement.md#chasing-a-clip-to-the-show).
 
 ### HAP Hardware Codecs
 

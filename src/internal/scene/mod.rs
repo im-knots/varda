@@ -477,6 +477,10 @@ pub enum SourceConfig {
         /// How the video is scaled to the deck (default: Fill)
         #[serde(default)]
         scaling_mode: crate::deck::ScalingMode,
+        /// Mapping onto the show transport. Default Auto: chase while the
+        /// transport is running. See /spec/timecode.md § Consumer 2.
+        #[serde(default)]
+        transport_sync: crate::video::DeckTransportSync,
     },
     /// Static image
     Image {
@@ -1384,6 +1388,11 @@ mod tests {
             in_point: 0.0,
             out_point: 0.0,
             scaling_mode: crate::deck::ScalingMode::Fit,
+            transport_sync: crate::video::DeckTransportSync {
+                mode: crate::video::TransportSyncMode::Never,
+                offset: 3600.0,
+                delay_frames: -2,
+            },
         };
         let json = serde_json::to_string(&source).unwrap();
         let restored: SourceConfig = serde_json::from_str(&json).unwrap();
@@ -1395,6 +1404,7 @@ mod tests {
                 in_point,
                 out_point,
                 scaling_mode,
+                transport_sync,
             } => {
                 assert_eq!(path, "clips/intro.mov");
                 assert_eq!(loop_mode, crate::video::LoopMode::Loop);
@@ -1402,6 +1412,23 @@ mod tests {
                 assert!((in_point - 0.0).abs() < 1e-5);
                 assert!((out_point - 0.0).abs() < 1e-5);
                 assert_eq!(scaling_mode, crate::deck::ScalingMode::Fit);
+                assert_eq!(transport_sync.mode, crate::video::TransportSyncMode::Never);
+                assert!((transport_sync.offset - 3600.0).abs() < 1e-9);
+                assert_eq!(transport_sync.delay_frames, -2);
+            }
+            _ => panic!("Expected Video"),
+        }
+    }
+
+    #[test]
+    fn video_source_defaults_transport_sync_to_auto() {
+        let restored: SourceConfig =
+            serde_json::from_str(r#"{"type":"Video","path":"clips/intro.mov"}"#).unwrap();
+        match restored {
+            SourceConfig::Video { transport_sync, .. } => {
+                assert_eq!(transport_sync.mode, crate::video::TransportSyncMode::Auto);
+                assert_eq!(transport_sync.offset, 0.0);
+                assert_eq!(transport_sync.delay_frames, 0);
             }
             _ => panic!("Expected Video"),
         }
@@ -1857,6 +1884,7 @@ mod tests {
             in_point: 0.0,
             out_point: 0.0,
             scaling_mode: crate::deck::ScalingMode::default(),
+            transport_sync: crate::video::DeckTransportSync::default(),
         };
         assert!(!s.validate("src").is_empty());
         let s = SourceConfig::Image {

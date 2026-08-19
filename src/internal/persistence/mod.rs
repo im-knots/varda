@@ -486,6 +486,10 @@ pub fn snapshot_scene(
                                 in_point: pb.as_ref().map_or(0.0, |p| p.in_point),
                                 out_point: pb.as_ref().map_or(0.0, |p| p.out_point),
                                 scaling_mode: slot.deck.scaling_mode().unwrap_or_default(),
+                                transport_sync: slot
+                                    .deck
+                                    .video_transport_sync()
+                                    .unwrap_or_default(),
                             }
                         }
                         "image" => SourceConfig::Image {
@@ -1454,6 +1458,7 @@ pub(crate) fn restore_deck(
             in_point,
             out_point,
             scaling_mode,
+            transport_sync,
         } => {
             let mut deck = Deck::new_from_video(context, path, render_width, render_height)?;
             deck.video_set_loop_mode(*loop_mode);
@@ -1461,6 +1466,7 @@ pub(crate) fn restore_deck(
             deck.video_set_in_point(*in_point);
             deck.video_set_out_point(*out_point);
             deck.set_scaling_mode(*scaling_mode);
+            deck.video_set_transport_sync(*transport_sync);
             deck
         }
         SourceConfig::Image { path, scaling_mode } => {
@@ -1964,7 +1970,8 @@ mod tests {
                 speed: 1.0,
                 in_point: 0.0,
                 out_point: 0.0,
-                scaling_mode: crate::deck::ScalingMode::default()
+                scaling_mode: crate::deck::ScalingMode::default(),
+                transport_sync: crate::video::DeckTransportSync::default(),
             }
         ));
         assert!(!source_configs_match(

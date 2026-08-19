@@ -1733,6 +1733,39 @@ mod tests {
     }
 
     #[test]
+    fn video_transport_sync_rejects_a_non_video_deck() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        let ch0 = channel_uuid(&app, 0);
+        let added = send_cmd(
+            &mut app,
+            crate::engine::EngineCommand::AddSolidColorDeck {
+                channel_uuid: ch0,
+                color: [1.0, 0.0, 0.0, 1.0],
+            },
+        );
+        let crate::engine::CommandResult::OkWithId { uuid } = added else {
+            panic!("expected OkWithId, got {added:?}");
+        };
+
+        let result = send_cmd(
+            &mut app,
+            crate::engine::EngineCommand::VideoSetTransportSync {
+                deck_uuid: uuid,
+                sync: crate::video::DeckTransportSync::default(),
+            },
+        );
+        assert!(matches!(
+            result,
+            crate::engine::CommandResult::Err {
+                code: crate::engine::ErrorCode::InvalidInput,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn smoke_create_sequence() {
         let Some(mut app) = headless_app() else {
             return;
