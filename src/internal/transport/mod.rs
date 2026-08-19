@@ -350,6 +350,7 @@ impl Transport {
             position: self.position,
             running: self.running,
             discontinuity: self.discontinuity(),
+            fps: self.timecode_rate.fps(),
         })
     }
 

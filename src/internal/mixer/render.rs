@@ -420,6 +420,15 @@ impl Mixer {
         // prefix to the first channel's deck submit, eliminating a separate
         // queue.submit() call that would stall under GPU pressure.
         let t_video_tick = std::time::Instant::now();
+        let chase = transport.map_or_else(crate::video::VideoChaseBroadcast::default, |t| {
+            crate::video::VideoChaseBroadcast {
+                position: t.position,
+                running: t.running,
+                fps: t.fps,
+            }
+        });
+        let chase_disc = transport.is_some_and(|t| t.discontinuity);
+        self.publish_video_chase(chase, chase_disc);
         let mut video_encoder =
             context
                 .device

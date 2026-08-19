@@ -673,6 +673,9 @@ impl VardaApp {
             EngineCommand::VideoClearInOutPoints { deck_uuid } => {
                 self.exec_on_deck(&deck_uuid, |d| d.video_clear_in_out_points())
             }
+            EngineCommand::VideoSetTransportSync { deck_uuid, sync } => {
+                self.exec_on_deck(&deck_uuid, |d| d.video_set_transport_sync(sync))
+            }
 
             // ── Deck Auto-Transitions ─────────────────────────
             EngineCommand::SetAutoTransitionEnabled { deck_uuid, enabled } => self
@@ -1742,6 +1745,7 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
             | C::VideoSetInPoint { .. }
             | C::VideoSetOutPoint { .. }
             | C::VideoClearInOutPoints { .. }
+            | C::VideoSetTransportSync { .. }
             // ADSR live triggers.
             | C::TriggerAdsr { .. }
             | C::ReleaseAdsr { .. }
@@ -1876,6 +1880,10 @@ mod tests {
         assert!(!command_is_undoable(&C::SetCrossfader(0.5)));
         assert!(!command_is_undoable(&C::VideoTogglePlay {
             deck_uuid: "dk".into(),
+        }));
+        assert!(!command_is_undoable(&C::VideoSetTransportSync {
+            deck_uuid: "dk".into(),
+            sync: crate::video::DeckTransportSync::default(),
         }));
         assert!(!command_is_undoable(&C::PlaySequence {
             sequence_uuid: "sq".into(),

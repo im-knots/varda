@@ -157,6 +157,7 @@ pub struct VideoPlaybackUI {
     pub in_point: f64,
     pub out_point: f64,
     pub frame_rate: f64,
+    pub transport_sync: crate::video::DeckTransportSync,
 }
 
 /// Auto-transition state snapshot for UI display

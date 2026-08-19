@@ -340,6 +340,10 @@ pub enum EngineCommand {
     VideoClearInOutPoints {
         deck_uuid: String,
     },
+    VideoSetTransportSync {
+        deck_uuid: String,
+        sync: crate::engine::value::video::DeckTransportSync,
+    },
 
     // ── Deck Auto-Transitions ──────────────────────────────────
     SetAutoTransitionEnabled {

@@ -253,6 +253,18 @@ Re-armed parameters **ramp** back to their automated value rather than snapping 
 
 Overrides are session state and are **never saved**. Reloading the scene restores full arrangement control, because a saved override is an invisible trap that breaks the show the next time the file opens.
 
+### Chasing a clip to the show
+
+A video deck can lock its playhead to the transport, the same clock the arrangement, automation, and cues already follow. It chases the **transport**, not the LTC/MTC cable, so an internally running show and a house clock look the same to the clip.
+
+In the deck detail bar, **Chase** is Auto, Always, or Never. Auto (the default) chases while the transport is running and free-runs, with loop modes, when it is not. Always freezes on the mapped frame even while stopped. Never is wall-clock playback as before.
+
+**Offset** is the transport time at which the clip's in-point sits. It is independent of regions: a region still decides when the deck is visible, offset decides which frame is showing. **Delay** is a signed frame offset at the transport's displayed rate, for sound-vs-light latency.
+
+While chasing, loop mode is ignored. If the mapped time is before the in-point or after the out-point, the clip holds that bound. The speed fader stays the clip's rate against the transport.
+
+Old scenes default to Auto. They play as they used to until you hit Play on the transport; then video decks lock unless you set Never.
+
 ### Performance sequencers while the arrangement runs
 
 - **Deck auto-transitions** are per deck, so they partition cleanly. A deck under arrangement control has its auto-transition suspended; a deck without regions keeps it.

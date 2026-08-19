@@ -56,6 +56,7 @@ pub(crate) fn build_ui_data(
                         in_point: vp.in_point,
                         out_point: vp.out_point,
                         frame_rate: vp.frame_rate,
+                        transport_sync: vp.transport_sync,
                     });
                     let auto_transition = d.auto_transition.as_ref().map(|at| AutoTransitionUI {
                         enabled: at.enabled,

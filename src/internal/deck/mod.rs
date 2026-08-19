@@ -776,6 +776,40 @@ impl Deck {
         self.video_send(VideoCommand::SetLoopMode(mode))
     }
 
+    /// Map this clip onto the show transport. No-op for non-video decks.
+    pub fn video_set_transport_sync(&self, sync: crate::video::DeckTransportSync) -> bool {
+        match &self.source {
+            DeckSource::Video { handle, .. } | DeckSource::HapVideo { handle, .. } => {
+                handle.set_transport_sync(sync);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn video_transport_sync(&self) -> Option<crate::video::DeckTransportSync> {
+        match &self.source {
+            DeckSource::Video { handle, .. } | DeckSource::HapVideo { handle, .. } => {
+                Some(handle.transport_sync())
+            }
+            _ => None,
+        }
+    }
+
+    /// Publish this frame's transport so a chasing clip can servo.
+    pub fn publish_video_chase(
+        &self,
+        sample: crate::video::VideoChaseBroadcast,
+        discontinuity: bool,
+    ) {
+        match &self.source {
+            DeckSource::Video { handle, .. } | DeckSource::HapVideo { handle, .. } => {
+                handle.publish_chase(sample, discontinuity);
+            }
+            _ => {}
+        }
+    }
+
     /// Set in-point on the video decode thread.
     pub fn video_set_in_point(&self, secs: f64) -> bool {
         self.video_send(VideoCommand::SetInPoint(secs))

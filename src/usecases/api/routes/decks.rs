@@ -786,6 +786,47 @@ pub async fn video_clear_in_out(
     }
 }
 
+#[derive(Deserialize, ToSchema)]
+pub struct VideoTransportSyncBody {
+    pub mode: crate::video::TransportSyncMode,
+    #[serde(default)]
+    pub offset: f64,
+    #[serde(default)]
+    pub delay_frames: i32,
+}
+#[utoipa::path(
+    put,
+    path = "/api/decks/{deck_uuid}/video/transport-sync",
+    params(("deck_uuid" = String, Path, description = "Deck UUID")),
+    request_body = VideoTransportSyncBody,
+    responses(
+        (status = 200, body = CommandResult),
+        (status = 400, description = "Not a video deck"),
+        (status = 404, description = "Deck not found")
+    ),
+    tag = "Video"
+)]
+pub async fn video_set_transport_sync(
+    State(s): State<SharedState>,
+    Path(deck_uuid): Path<String>,
+    Json(b): Json<VideoTransportSyncBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::VideoSetTransportSync {
+            deck_uuid,
+            sync: crate::video::DeckTransportSync {
+                mode: b.mode,
+                offset: b.offset,
+                delay_frames: b.delay_frames,
+            },
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
 // ── Auto-Transitions ───────────────────────────────────────────────
 
 #[derive(Deserialize, ToSchema)]

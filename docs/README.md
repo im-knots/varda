@@ -132,6 +132,7 @@ Here you will find everything you need to start throwing those pixels.
   - [Automation Lanes](15-arrangement.md#automation-lanes) — breakpoints, curve shapes, copy/paste
   - [Reusing a Shape](15-arrangement.md#reusing-a-shape) — one curve per parameter, copied between lanes
   - [Authority and Override](15-arrangement.md#who-is-driving-authority-and-override) — grabbing a control back, re-arm
+  - [Chasing a clip to the show](15-arrangement.md#chasing-a-clip-to-the-show) — lock a video deck to the transport
   - [Idle Behaviour](15-arrangement.md#idle-behaviour) — what plays before the show starts
   - [Undo, Saving, and Load](15-arrangement.md#undo-saving-and-load) — scene version 7, memory
   - [Sleeping Clips](15-arrangement.md#sleeping-clips) — why a distant clip stops decoding, and what that changes

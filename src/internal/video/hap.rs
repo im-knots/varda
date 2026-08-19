@@ -361,7 +361,10 @@ impl HapPlayer {
                     );
                     return Ok(None);
                 }
-                // End of stream — handle loop modes inline
+                // End of stream — hold while chasing; otherwise honour loop modes
+                if self.playback.chasing {
+                    return Ok(None);
+                }
                 match self.playback.loop_mode {
                     LoopMode::Loop => {
                         self.playback.position = self.playback.in_point;
