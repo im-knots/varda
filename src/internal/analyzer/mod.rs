@@ -315,7 +315,10 @@ impl DeckAnalyzers {
         // Create or recreate readback buffer if dimensions changed
         if self.readback.is_none() || self.readback_size != (tex_width, tex_height) {
             self.readback = Some(crate::renderer::ReadbackBuffer::new(
-                device, tex_width, tex_height,
+                device,
+                tex_width,
+                tex_height,
+                crate::renderer::ReadbackFormat::Rgba8,
             ));
             self.readback_size = (tex_width, tex_height);
         }
@@ -326,7 +329,7 @@ impl DeckAnalyzers {
         // Deliver previous frame data to analyzer threads
         if let Some(rgba_data) = prev_frame {
             let input = AnalyzerInput {
-                frame: rgba_data,
+                frame: rgba_data.into_bytes(),
                 width: self.readback_size.0,
                 height: self.readback_size.1,
                 timestamp: std::time::Instant::now(),

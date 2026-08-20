@@ -150,7 +150,10 @@ fn read_texture(ctx: &GpuContext, tex: &wgpu::Texture, width: u32, height: u32) 
 
     let mut out = Vec::with_capacity((width * height) as usize);
     {
-        let data = buffer.slice(..).get_mapped_range();
+        let data = buffer
+            .slice(..)
+            .get_mapped_range()
+            .expect("render correctness readback must be mapped");
         let channel = |px: usize, i: usize| {
             f16_to_f32(u16::from_le_bytes([data[px + i * 2], data[px + i * 2 + 1]]))
         };

@@ -54,6 +54,8 @@ pub struct NDIlib_FourCC_video_type_e(pub u32);
 impl NDIlib_FourCC_video_type_e {
     /// UYVY 4:2:2 (most common NDI format)
     pub const UYVY: Self = Self(u32::from_le_bytes(*b"UYVY"));
+    /// Semi-planar 16-bit 4:2:2 (Y plane followed by interleaved U,V).
+    pub const P216: Self = Self(u32::from_le_bytes(*b"P216"));
     /// RGBA 8-bit
     pub const RGBA: Self = Self(u32::from_le_bytes(*b"RGBA"));
     /// BGRA 8-bit
@@ -134,4 +136,26 @@ pub struct NDIlib_send_create_t {
     pub clock_video: bool,
     /// Whether to clock audio.
     pub clock_audio: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{NDIlib_FourCC_video_type_e, NDIlib_video_frame_v2_t};
+
+    #[test]
+    fn p216_fourcc_matches_sdk_bytes() {
+        assert_eq!(NDIlib_FourCC_video_type_e::P216.0.to_le_bytes(), *b"P216");
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn video_frame_v2_matches_64_bit_sdk_abi() {
+        assert_eq!(std::mem::size_of::<NDIlib_video_frame_v2_t>(), 72);
+        assert_eq!(std::mem::align_of::<NDIlib_video_frame_v2_t>(), 8);
+        assert_eq!(std::mem::offset_of!(NDIlib_video_frame_v2_t, p_data), 40);
+        assert_eq!(
+            std::mem::offset_of!(NDIlib_video_frame_v2_t, p_metadata),
+            56
+        );
+    }
 }

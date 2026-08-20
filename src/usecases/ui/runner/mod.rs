@@ -1038,8 +1038,10 @@ impl UIRunner {
         let Some(egui_renderer) = &mut self.egui_renderer else {
             return;
         };
-        for (id, delta) in &textures_delta.set {
-            egui_renderer.update_texture(&context.device, &context.queue, *id, delta);
+        for (id, deltas) in &textures_delta.set {
+            for delta in deltas {
+                egui_renderer.update_texture(&context.device, &context.queue, *id, delta);
+            }
         }
 
         let _ = context.device.poll(wgpu::PollType::Poll);
@@ -1132,7 +1134,7 @@ impl UIRunner {
         }
 
         context.submit(std::iter::once(encoder.finish()));
-        output.present();
+        context.queue.present(output);
     }
 }
 

@@ -819,10 +819,12 @@ fn target_to_config(target: &OutputTarget) -> OutputTargetConfig {
         OutputTarget::RtmpStream {
             url,
             codec,
+            codec_contract,
             audio_device,
         } => OutputTargetConfig::RtmpStream {
             url: url.clone(),
             codec: codec.to_string(),
+            codec_contract: *codec_contract,
             audio_device: audio_device.clone(),
         },
         OutputTarget::NdiSend { sender_name } => OutputTargetConfig::NdiSend {
@@ -908,6 +910,7 @@ fn config_to_target(config: &OutputTargetConfig) -> OutputTarget {
         OutputTargetConfig::RtmpStream {
             url,
             codec,
+            codec_contract,
             audio_device,
         } => OutputTarget::RtmpStream {
             url: url.clone(),
@@ -916,6 +919,7 @@ fn config_to_target(config: &OutputTargetConfig) -> OutputTarget {
                 "AV1" | "av1" => crate::renderer::context::StreamingCodec::AV1,
                 _ => crate::renderer::context::StreamingCodec::H264,
             },
+            codec_contract: *codec_contract,
             audio_device: audio_device.clone(),
         },
         OutputTargetConfig::NdiSend { sender_name } => OutputTarget::NdiSend {
@@ -1003,6 +1007,7 @@ pub fn snapshot_stage(
                 edge_blend_mode,
                 edge_blend,
                 rotation: unified.rotation(),
+                presentation: unified.presentation_request(),
             }
         })
         .collect();
@@ -2108,11 +2113,30 @@ mod tests {
         let silent = OutputTarget::RtmpStream {
             url: "rtmp://x".into(),
             codec: crate::renderer::context::StreamingCodec::H264,
+            codec_contract: crate::renderer::context::RtmpCodecContract::Legacy,
             audio_device: None,
         };
         assert_eq!(
             config_to_target(&target_to_config(&silent)).audio_device(),
             None
         );
+    }
+
+    #[test]
+    fn enhanced_rtmp_contract_survives_target_config_roundtrip() {
+        let target = OutputTarget::RtmpStream {
+            url: "rtmps://example/live".into(),
+            codec: crate::renderer::context::StreamingCodec::H265,
+            codec_contract: crate::renderer::context::RtmpCodecContract::Enhanced,
+            audio_device: None,
+        };
+        let restored = config_to_target(&target_to_config(&target));
+        assert!(matches!(
+            restored,
+            OutputTarget::RtmpStream {
+                codec_contract: crate::renderer::context::RtmpCodecContract::Enhanced,
+                ..
+            }
+        ));
     }
 }

@@ -645,6 +645,10 @@ pub enum EngineCommand {
         output_uuid: String,
         rotation: crate::engine::value::render::OutputRotation,
     },
+    SetOutputPresentation {
+        output_uuid: String,
+        request: crate::engine::value::render::PresentationRequest,
+    },
 
     // ── Surfaces ────────────────────────────────────────────────
     AddSurface {

@@ -818,7 +818,8 @@ impl VardaApp {
         //     snapshot's OutputConfig. Never create/destroy/reposition windows;
         //     outputs present in the snapshot but not live (or vice versa) are
         //     ignored for lifecycle.
-        for output in &mut self.output.outputs {
+        let mut restored_output_indices = Vec::new();
+        for (idx, output) in self.output.outputs.iter_mut().enumerate() {
             let uuid = output.uuid().to_string();
             if let Some(cfg) = target.outputs.iter().find(|c| c.uuid == uuid) {
                 *output.surface_assignments_mut() = cfg
@@ -830,7 +831,33 @@ impl VardaApp {
                         overlap_zones: crate::renderer::edge_blend::SurfaceOverlapZones::default(),
                     })
                     .collect();
+                match output.set_presentation_request(&self.context, cfg.presentation) {
+                    Ok(()) => {
+                        if let crate::renderer::context::UnifiedOutput::Headless(headless) = output
+                        {
+                            if matches!(
+                                &headless.target,
+                                crate::renderer::context::OutputTarget::NdiSend { .. }
+                            ) {
+                                let resolved = self
+                                    .external_io
+                                    .ndi_manager
+                                    .resolve_presentation(cfg.presentation);
+                                headless.set_resolved_presentation(&self.context.device, resolved);
+                            }
+                        }
+                        restored_output_indices.push(idx);
+                    }
+                    Err(error) => {
+                        log::warn!(
+                            "Could not restore presentation precision for output '{uuid}': {error}"
+                        );
+                    }
+                }
             }
+        }
+        for idx in restored_output_indices {
+            self.refresh_presentation_notification(idx);
         }
 
         // (c) Recompute Auto-mode edge-blend overlap zones for the restored
@@ -1038,6 +1065,47 @@ mod tests {
             surfaces.iter().any(|s| s.name == "Test Surface"),
             "surface should survive roundtrip"
         );
+    }
+
+    #[test]
+    fn save_load_roundtrip_keeps_requested_presentation() {
+        use crate::engine::value::render::{PresentationDepth, PresentationRequest};
+        use crate::engine::{CommandResult, EngineCommand};
+        use crate::renderer::context::OutputTarget;
+
+        let tmp = TempDir::new().unwrap();
+        let Some(mut app) = headless_app_in(tmp.path()) else {
+            return;
+        };
+        assert!(matches!(
+            app.execute_command(EngineCommand::CreateHeadlessOutput {
+                target: OutputTarget::SyphonServer {
+                    server_name: "Precision".into(),
+                },
+            }),
+            CommandResult::Ok
+        ));
+        let output_uuid = app.build_engine_state().outputs.windows[0].uuid.clone();
+        assert!(matches!(
+            app.execute_command(EngineCommand::SetOutputPresentation {
+                output_uuid: output_uuid.clone(),
+                request: PresentationRequest {
+                    depth: PresentationDepth::Sdr10,
+                    dither: false,
+                },
+            }),
+            CommandResult::Ok
+        ));
+        app.save_workspace(&UILayoutState::default());
+
+        let stage: crate::persistence::StagePrefs = serde_json::from_str(
+            &std::fs::read_to_string(tmp.path().join(".varda").join("stage.json")).unwrap(),
+        )
+        .unwrap();
+        let output = stage.outputs.first().expect("saved headless output");
+        assert_eq!(output.uuid, output_uuid);
+        assert_eq!(output.presentation.depth, PresentationDepth::Sdr10);
+        assert!(!output.presentation.dither);
     }
 
     #[test]

@@ -240,6 +240,14 @@ mod tests {
         assert!(json["windows"].is_array());
         assert!(json["surfaces"].is_array());
         assert!(json["monitors"].is_array());
+        assert_eq!(
+            json["windows"][0]["presentation_request"]["presentation_depth"],
+            "sdr8"
+        );
+        assert_eq!(
+            json["windows"][0]["resolved_presentation"]["resolved"],
+            "sdr8"
+        );
     }
 
     #[tokio::test]
@@ -3559,6 +3567,45 @@ mod tests {
             router_with_not_found_engine(),
             "/api/outputs/no-such-output/calibration",
             serde_json::json!({"mode": "Projector"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(json["error"], "not_found");
+    }
+
+    #[tokio::test]
+    async fn test_set_output_presentation_carries_request() {
+        let (app, seen) = router_capturing_commands();
+        let (status, json) = put_json(
+            app,
+            "/api/outputs/out-001/presentation",
+            serde_json::json!({"presentation_depth": "sdr10", "dither": false}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+        match take_command(&seen) {
+            crate::engine::EngineCommand::SetOutputPresentation {
+                output_uuid,
+                request,
+            } => {
+                assert_eq!(output_uuid, "out-001");
+                assert_eq!(
+                    request.depth,
+                    crate::engine::value::render::PresentationDepth::Sdr10
+                );
+                assert!(!request.dither);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_unresolvable_output_uuid_presentation_returns_404() {
+        let (status, json) = put_json(
+            router_with_not_found_engine(),
+            "/api/outputs/no-such-output/presentation",
+            serde_json::json!({"presentation_depth": "sdr10"}),
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);

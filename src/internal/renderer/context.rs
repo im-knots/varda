@@ -7,8 +7,10 @@ use winit::window::Window;
 // re-exported here so existing `crate::renderer::context::…` paths still work;
 // window-lifecycle inherent impls (e.g. `OutputWindow::set_target`) stay below.
 pub use super::config::{
-    CalibrationMode, OutputRotation, OutputSource, OutputTarget, RecordingCodec, SrtCodec,
-    StreamingCodec,
+    AlphaMode, CalibrationMode, OutputRotation, OutputSource, OutputTarget,
+    PresentationCapabilities, PresentationColorProfile, PresentationDepth, PresentationFormat,
+    PresentationPixelFormat, PresentationRequest, RecordingCodec, ResolvedPresentation,
+    RtmpCodecContract, SrtCodec, StreamingCodec,
 };
 
 /// Linear-light format used by the entire color path: deck render targets, all
@@ -21,6 +23,154 @@ pub use super::config::{
 /// Non-color data textures (analyzer, audio, calibration, MSDF atlases) keep
 /// their own formats and are deliberately excluded.
 pub const COLOR_PATH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+
+fn resolve_eight_bit_presentation(
+    request: PresentationRequest,
+    pixel_format: PresentationPixelFormat,
+    color_profile: PresentationColorProfile,
+    alpha_mode: AlphaMode,
+    fallback_reason: impl Into<String>,
+) -> ResolvedPresentation {
+    PresentationCapabilities::new(
+        vec![PresentationFormat {
+            depth: PresentationDepth::Sdr8,
+            pixel_format,
+            color_profile,
+            alpha_mode,
+        }],
+        Some(fallback_reason.into()),
+    )
+    .resolve(request)
+    .expect("every output adapter provides an eight-bit presentation format")
+}
+
+fn surface_pixel_format(format: wgpu::TextureFormat) -> PresentationPixelFormat {
+    match format {
+        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb => {
+            PresentationPixelFormat::Bgra8
+        }
+        _ => PresentationPixelFormat::Rgba8,
+    }
+}
+
+struct SurfacePresentationSelection {
+    format: wgpu::TextureFormat,
+    color_space: wgpu::SurfaceColorSpace,
+    resolved: ResolvedPresentation,
+}
+
+fn select_surface_presentation(
+    request: PresentationRequest,
+    capabilities: &wgpu::SurfaceCapabilities,
+) -> Result<SurfacePresentationSelection> {
+    let sdr8_format = capabilities
+        .formats
+        .iter()
+        .copied()
+        .find(wgpu::TextureFormat::is_srgb)
+        .or_else(|| capabilities.formats.first().copied())
+        .context("output surface exposes no SDR presentation format")?;
+    let supports_rgb10_srgb = capabilities
+        .color_spaces(wgpu::TextureFormat::Rgb10a2Unorm)
+        .contains(wgpu::SurfaceColorSpaces::SRGB);
+
+    let mut formats = Vec::with_capacity(2);
+    if supports_rgb10_srgb {
+        formats.push(PresentationFormat {
+            depth: PresentationDepth::Sdr10,
+            pixel_format: PresentationPixelFormat::Rgb10A2,
+            color_profile: PresentationColorProfile::SrgbFull,
+            alpha_mode: AlphaMode::Opaque,
+        });
+    }
+    formats.push(PresentationFormat {
+        depth: PresentationDepth::Sdr8,
+        pixel_format: surface_pixel_format(sdr8_format),
+        color_profile: PresentationColorProfile::SrgbFull,
+        alpha_mode: AlphaMode::Opaque,
+    });
+    let reason = (!supports_rgb10_srgb).then(|| {
+        if capabilities
+            .format_capabilities
+            .iter()
+            .any(|candidate| candidate.format == wgpu::TextureFormat::Rgb10a2Unorm)
+        {
+            "RGB10A2 is available, but not with an sRGB color-space contract".to_string()
+        } else {
+            "the output surface does not expose RGB10A2".to_string()
+        }
+    });
+    let resolved = PresentationCapabilities::new(formats, reason).resolve(request)?;
+    let (format, color_space) = if resolved.resolved == PresentationDepth::Sdr10 {
+        (
+            wgpu::TextureFormat::Rgb10a2Unorm,
+            wgpu::SurfaceColorSpace::Srgb,
+        )
+    } else {
+        (sdr8_format, wgpu::SurfaceColorSpace::Auto)
+    };
+
+    Ok(SurfacePresentationSelection {
+        format,
+        color_space,
+        resolved,
+    })
+}
+
+fn resolve_headless_presentation(
+    request: PresentationRequest,
+    target: &OutputTarget,
+) -> ResolvedPresentation {
+    if let Some(plan) = super::subprocess::StreamingPlan::for_target(target, request) {
+        debug_assert_eq!(
+            plan.expected_readback(),
+            if plan.resolved.resolved == PresentationDepth::Sdr10 {
+                super::ReadbackFormat::Rgb10A2
+            } else {
+                super::ReadbackFormat::Rgba8
+            }
+        );
+        return plan.resolved;
+    }
+    let (pixel_format, color_profile, alpha_mode, fallback_reason) = match target {
+        OutputTarget::NdiSend { .. } => (
+            PresentationPixelFormat::Uyvy,
+            PresentationColorProfile::Rec709Limited,
+            AlphaMode::Opaque,
+            "the active NDI sender supports UYVY only",
+        ),
+        OutputTarget::SyphonServer { .. } => (
+            PresentationPixelFormat::Bgra8,
+            PresentationColorProfile::SrgbFull,
+            AlphaMode::Premultiplied,
+            "Syphon interoperability is limited to BGRA8",
+        ),
+        OutputTarget::Recording { .. } => (
+            PresentationPixelFormat::EncoderNative("yuv420p".to_string()),
+            PresentationColorProfile::Rec709Limited,
+            AlphaMode::Opaque,
+            "the active FFmpeg path is configured for eight-bit video",
+        ),
+        OutputTarget::SrtStream { .. }
+        | OutputTarget::HlsStream { .. }
+        | OutputTarget::DashStream { .. }
+        | OutputTarget::RtmpStream { .. } => unreachable!("streaming targets resolve above"),
+        OutputTarget::Windowed | OutputTarget::Display { .. } => (
+            PresentationPixelFormat::Rgba8,
+            PresentationColorProfile::SrgbFull,
+            AlphaMode::Opaque,
+            "the output surface is configured for eight-bit SDR",
+        ),
+    };
+
+    resolve_eight_bit_presentation(
+        request,
+        pixel_format,
+        color_profile,
+        alpha_mode,
+        fallback_reason,
+    )
+}
 
 /// GPU rendering context — device, queue, and adapter.
 ///
@@ -124,6 +274,7 @@ impl GpuContext {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
+                apply_limit_buckets: false,
             })
             .await
             .context("Failed to find suitable GPU adapter")?;
@@ -185,6 +336,7 @@ impl GpuContext {
             height: size.height,
             present_mode,
             alpha_mode: surface_caps.alpha_modes[0],
+            color_space: wgpu::SurfaceColorSpace::Auto,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
@@ -234,6 +386,23 @@ impl GpuContext {
             log::warn!("GPU does not support BC texture compression — HAP video will fall back to ffmpeg CPU decode");
         }
 
+        let rgba16_features = wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
+            | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
+        let rgba16_renderable = adapter.features().contains(rgba16_features)
+            && adapter
+                .get_texture_format_features(wgpu::TextureFormat::Rgba16Unorm)
+                .allowed_usages
+                .contains(wgpu::TextureUsages::RENDER_ATTACHMENT);
+        if rgba16_renderable {
+            required_features |= rgba16_features;
+            log::info!("GPU supports normalized RGBA16 recording targets");
+        } else {
+            log::warn!(
+                "GPU does not support normalized RGBA16 targets — 10-bit ProRes 4444 will \
+                 fall back to eight-bit SDR"
+            );
+        }
+
         let mut timestamp_supported = false;
         if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
             required_features |= wgpu::Features::TIMESTAMP_QUERY;
@@ -278,6 +447,7 @@ impl GpuContext {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter: false,
+            apply_limit_buckets: false,
         }))
         .context("Failed to find GPU adapter for headless context")?;
 
@@ -520,6 +690,10 @@ pub struct OutputWindow {
     pub preview_texture_view: wgpu::TextureView,
     /// Per-output rotation applied at the final blit stage.
     pub rotation: OutputRotation,
+    /// Persisted precision and dithering request.
+    pub presentation_request: PresentationRequest,
+    /// Runtime format selected for the active surface.
+    pub resolved_presentation: ResolvedPresentation,
 }
 
 impl OutputWindow {
@@ -538,12 +712,8 @@ impl OutputWindow {
             .context("Failed to create output surface")?;
 
         let surface_caps = surface.get_capabilities(&context.adapter);
-        let surface_format = surface_caps
-            .formats
-            .iter()
-            .copied()
-            .find(wgpu::TextureFormat::is_srgb)
-            .unwrap_or(surface_caps.formats[0]);
+        let presentation_request = PresentationRequest::default();
+        let selection = select_surface_presentation(presentation_request, &surface_caps)?;
 
         // Output windows use Immediate mode for lowest latency to projectors/displays.
         // This avoids output windows throttling the main render loop via vsync contention.
@@ -558,11 +728,12 @@ impl OutputWindow {
 
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: surface_format,
+            format: selection.format,
             width: size.width,
             height: size.height,
             present_mode,
             alpha_mode: surface_caps.alpha_modes[0],
+            color_space: selection.color_space,
             view_formats: vec![],
             desired_maximum_frame_latency: 3,
         };
@@ -608,6 +779,8 @@ impl OutputWindow {
             preview_texture,
             preview_texture_view,
             rotation: OutputRotation::default(),
+            presentation_request,
+            resolved_presentation: selection.resolved,
         })
     }
 
@@ -637,6 +810,44 @@ impl OutputWindow {
         (tex, view)
     }
 
+    fn intermediate_format_for(
+        depth: PresentationDepth,
+        surface_format: wgpu::TextureFormat,
+    ) -> wgpu::TextureFormat {
+        if depth == PresentationDepth::Sdr10 {
+            COLOR_PATH_FORMAT
+        } else {
+            surface_format
+        }
+    }
+
+    fn intermediate_format(&self) -> wgpu::TextureFormat {
+        Self::intermediate_format_for(
+            self.resolved_presentation.resolved,
+            self.surface_config.format,
+        )
+    }
+
+    fn rebuild_intermediate_textures(&mut self, device: &wgpu::Device) {
+        let format = self.intermediate_format();
+        let (width, height) = self
+            .rotation
+            .effective_dimensions(self.size.width, self.size.height);
+        let (texture, view) = Self::create_intermediate_texture(
+            device,
+            width,
+            height,
+            format,
+            "Surface Intermediate",
+        );
+        self.surface_texture = texture;
+        self.surface_texture_view = view;
+        let (texture, view) =
+            Self::create_intermediate_texture(device, width, height, format, "Preview");
+        self.preview_texture = texture;
+        self.preview_texture_view = view;
+    }
+
     /// Resize this output window's surface
     pub fn resize(&mut self, device: &wgpu::Device, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
@@ -644,32 +855,68 @@ impl OutputWindow {
             self.surface_config.width = new_size.width;
             self.surface_config.height = new_size.height;
             self.surface.configure(device, &self.surface_config);
-            let fmt = self.surface_config.format;
-            let (ew, eh) = self
-                .rotation
-                .effective_dimensions(new_size.width, new_size.height);
-            let (tex, view) =
-                Self::create_intermediate_texture(device, ew, eh, fmt, "Surface Intermediate");
-            self.surface_texture = tex;
-            self.surface_texture_view = view;
-            let (tex, view) = Self::create_intermediate_texture(device, ew, eh, fmt, "Preview");
-            self.preview_texture = tex;
-            self.preview_texture_view = view;
+            self.rebuild_intermediate_textures(device);
         }
     }
 
     /// Set output rotation and rebuild intermediate textures at effective dimensions.
     pub fn set_rotation(&mut self, device: &wgpu::Device, rotation: OutputRotation) {
         self.rotation = rotation;
-        let fmt = self.surface_config.format;
-        let (ew, eh) = rotation.effective_dimensions(self.size.width, self.size.height);
-        let (tex, view) =
-            Self::create_intermediate_texture(device, ew, eh, fmt, "Surface Intermediate");
-        self.surface_texture = tex;
-        self.surface_texture_view = view;
-        let (tex, view) = Self::create_intermediate_texture(device, ew, eh, fmt, "Preview");
-        self.preview_texture = tex;
-        self.preview_texture_view = view;
+        self.rebuild_intermediate_textures(device);
+    }
+
+    /// Update the request, reconfigure the surface, and rebuild format-bound resources.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the active surface has no SDR format or a replacement
+    /// presentation pipeline cannot be created.
+    pub fn set_presentation_request(
+        &mut self,
+        context: &GpuContext,
+        request: PresentationRequest,
+    ) -> Result<()> {
+        let capabilities = self.surface.get_capabilities(&context.adapter);
+        let selection = select_surface_presentation(request, &capabilities)?;
+        let intermediate_format =
+            Self::intermediate_format_for(selection.resolved.resolved, selection.format);
+        let surface_changed = self.surface_config.format != selection.format
+            || self.surface_config.color_space != selection.color_space;
+        let intermediate_changed = self.preview_texture.format() != intermediate_format;
+
+        let blit_pipeline = surface_changed
+            .then(|| BlitPipeline::new(&context.device, selection.format))
+            .transpose()?;
+        let polygon_pipeline = intermediate_changed
+            .then(|| PolygonBlitPipeline::new(&context.device, intermediate_format))
+            .transpose()?;
+        let edge_blend_pipeline = intermediate_changed
+            .then(|| {
+                super::edge_blend::EdgeBlendPipeline::new(&context.device, intermediate_format)
+            })
+            .transpose()?;
+
+        self.presentation_request = request;
+        self.resolved_presentation = selection.resolved;
+        if surface_changed {
+            self.surface_config.format = selection.format;
+            self.surface_config.color_space = selection.color_space;
+            self.surface
+                .configure(&context.device, &self.surface_config);
+            if let Some(pipeline) = blit_pipeline {
+                self.blit_pipeline = pipeline;
+            }
+        }
+        if intermediate_changed {
+            if let Some(pipeline) = polygon_pipeline {
+                self.polygon_pipeline = pipeline;
+            }
+            if let Some(pipeline) = edge_blend_pipeline {
+                self.edge_blend_pipeline = pipeline;
+            }
+            self.rebuild_intermediate_textures(&context.device);
+        }
+        Ok(())
     }
 
     /// Render the routed content stretched over the whole window.
@@ -677,7 +924,7 @@ impl OutputWindow {
     /// Used for the projector calibration card, which has to reach the physical
     /// edges of the output for alignment against it to mean anything. Content
     /// should go through [`render_fit`](Self::render_fit) instead.
-    pub fn render(&self, context: &GpuContext, content_view: &wgpu::TextureView) {
+    pub fn render(&mut self, context: &GpuContext, content_view: &wgpu::TextureView) {
         self.render_quad(context, content_view, [0.0, 0.0, 1.0, 1.0]);
     }
 
@@ -690,7 +937,7 @@ impl OutputWindow {
     /// distorting it. A window that already matches the content aspect insets by
     /// nothing and renders exactly as before.
     pub fn render_fit(
-        &self,
+        &mut self,
         context: &GpuContext,
         content_view: &wgpu::TextureView,
         content_aspect: f32,
@@ -711,7 +958,12 @@ impl OutputWindow {
 
     /// Blit `content_view` into one normalised `[x, y, w, h]` rectangle of the
     /// window, with the content's full extent mapped across it.
-    fn render_quad(&self, context: &GpuContext, content_view: &wgpu::TextureView, rect: [f32; 4]) {
+    fn render_quad(
+        &mut self,
+        context: &GpuContext,
+        content_view: &wgpu::TextureView,
+        rect: [f32; 4],
+    ) {
         let [x, y, w, h] = rect;
         let quad: [[f32; 2]; 4] = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
         self.render_surfaces(
@@ -735,7 +987,7 @@ impl OutputWindow {
     /// Each surface is rendered as a textured polygon using fan triangulation.
     /// Warp is applied per the `WarpMode`: `CornerPin` uses homography in the vertex shader,
     /// Mesh mode bakes warp into triangle vertices directly.
-    pub fn render_surfaces(&self, context: &GpuContext, surfaces: &[SurfaceRenderInfo<'_>]) {
+    pub fn render_surfaces(&mut self, context: &GpuContext, surfaces: &[SurfaceRenderInfo<'_>]) {
         let output = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(output) => output,
             wgpu::CurrentSurfaceTexture::Suboptimal(output) => {
@@ -747,8 +999,15 @@ impl OutputWindow {
             }
             wgpu::CurrentSurfaceTexture::Outdated => {
                 log::warn!("Output '{}': surface outdated, reconfiguring", self.name);
-                self.surface
-                    .configure(&context.device, &self.surface_config);
+                if let Err(error) =
+                    self.set_presentation_request(context, self.presentation_request)
+                {
+                    log::error!(
+                        "Output '{}': failed to re-resolve presentation after surface loss: {error}",
+                        self.name
+                    );
+                    return;
+                }
                 match self.surface.get_current_texture() {
                     wgpu::CurrentSurfaceTexture::Success(output)
                     | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
@@ -909,8 +1168,11 @@ impl OutputWindow {
 
         // Final pass: blit preview_texture → swap chain (with rotation)
         {
-            self.blit_pipeline
-                .set_rotation(&context.queue, self.rotation.index());
+            self.blit_pipeline.set_presentation(
+                &context.queue,
+                self.rotation.index(),
+                &self.resolved_presentation,
+            );
             let blit_bg = self
                 .blit_pipeline
                 .create_bind_group(&context.device, &self.preview_texture_view);
@@ -934,7 +1196,7 @@ impl OutputWindow {
         }
 
         context.submit(std::iter::once(encoder.finish()));
-        output.present();
+        context.queue.present(output);
     }
 
     /// Set the display target for this output window.
@@ -1259,6 +1521,10 @@ pub struct HeadlessOutput {
     pub edge_blend_texture_view: wgpu::TextureView,
     /// Per-output rotation applied at the final blit stage.
     pub rotation: OutputRotation,
+    /// Persisted precision and dithering request.
+    pub presentation_request: PresentationRequest,
+    /// Runtime format selected for the active adapter.
+    pub resolved_presentation: ResolvedPresentation,
 }
 
 /// Result of delivering a frame to an output target.
@@ -1275,6 +1541,37 @@ pub enum DeliveryResult {
 }
 
 impl HeadlessOutput {
+    fn storage_formats(
+        presentation: &ResolvedPresentation,
+    ) -> (wgpu::TextureFormat, super::ReadbackFormat) {
+        match presentation.pixel_format {
+            PresentationPixelFormat::Rgba16 => (
+                wgpu::TextureFormat::Rgba16Unorm,
+                super::ReadbackFormat::Rgba16Unorm,
+            ),
+            PresentationPixelFormat::P216 => (
+                wgpu::TextureFormat::Rgba16Float,
+                super::ReadbackFormat::P216,
+            ),
+            _ if presentation.resolved == PresentationDepth::Sdr10 => (
+                wgpu::TextureFormat::Rgb10a2Unorm,
+                super::ReadbackFormat::Rgb10A2,
+            ),
+            _ => (
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+                super::ReadbackFormat::Rgba8,
+            ),
+        }
+    }
+
+    fn readback_alpha_mode(presentation: &ResolvedPresentation) -> AlphaMode {
+        if presentation.pixel_format == PresentationPixelFormat::Rgba16 {
+            AlphaMode::Premultiplied
+        } else {
+            presentation.alpha_mode
+        }
+    }
+
     /// Deliver readback frame data to the configured output target.
     ///
     /// For subprocess targets (Recording, SRT, HLS, DASH, RTMP), feeds the frame to ffmpeg.
@@ -1351,16 +1648,18 @@ impl HeadlessOutput {
         width: u32,
         height: u32,
     ) -> Self {
-        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
-        let (texture, texture_view, eb_tex, eb_view) = Self::create_textures(device, width, height);
-        let readback = super::ReadbackBuffer::new(device, width, height);
+        let presentation_request = PresentationRequest::default();
+        let resolved_presentation = resolve_headless_presentation(presentation_request, &target);
+        let (format, readback_format) = Self::storage_formats(&resolved_presentation);
+        let (texture, texture_view, eb_tex, eb_view) =
+            Self::create_textures(device, width, height, format);
+        let readback = super::ReadbackBuffer::new(device, width, height, readback_format);
         let blit_pipeline =
             BlitPipeline::new(device, format).expect("Failed to create headless blit pipeline");
         let polygon_pipeline = PolygonBlitPipeline::new(device, format)
             .expect("Failed to create headless polygon pipeline");
         let edge_blend_pipeline = super::edge_blend::EdgeBlendPipeline::new(device, format)
             .expect("Failed to create headless edge blend pipeline");
-
         Self {
             uuid: crate::deck::generate_short_uuid(),
             name,
@@ -1384,6 +1683,8 @@ impl HeadlessOutput {
             edge_blend_texture: eb_tex,
             edge_blend_texture_view: eb_view,
             rotation: OutputRotation::default(),
+            presentation_request,
+            resolved_presentation,
         }
     }
 
@@ -1394,13 +1695,13 @@ impl HeadlessOutput {
         device: &wgpu::Device,
         width: u32,
         height: u32,
+        format: wgpu::TextureFormat,
     ) -> (
         wgpu::Texture,
         wgpu::TextureView,
         wgpu::Texture,
         wgpu::TextureView,
     ) {
-        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Headless Output Texture"),
             size: wgpu::Extent3d {
@@ -1456,12 +1757,21 @@ impl HeadlessOutput {
         if width == 0 || height == 0 || (width == self.width && height == self.height) {
             return;
         }
-        let (texture, texture_view, eb_tex, eb_view) = Self::create_textures(device, width, height);
+        let (format, readback_format) = Self::storage_formats(&self.resolved_presentation);
+        let (texture, texture_view, eb_tex, eb_view) =
+            Self::create_textures(device, width, height, format);
         self.texture = texture;
         self.texture_view = texture_view;
         self.edge_blend_texture = eb_tex;
         self.edge_blend_texture_view = eb_view;
-        self.readback = super::ReadbackBuffer::new(device, width, height);
+        self.readback = super::ReadbackBuffer::new_with_contract(
+            device,
+            width,
+            height,
+            readback_format,
+            self.resolved_presentation.color_profile,
+            Self::readback_alpha_mode(&self.resolved_presentation),
+        );
         self.width = width;
         self.height = height;
     }
@@ -1470,6 +1780,63 @@ impl HeadlessOutput {
     /// but the rotation is stored for the blit shader.
     pub fn set_rotation(&mut self, rotation: OutputRotation) {
         self.rotation = rotation;
+    }
+
+    /// Update the persisted request and resolve it against the active adapter.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a format-bound GPU pipeline cannot be rebuilt for the resolved
+    /// presentation format.
+    pub fn set_presentation_request(
+        &mut self,
+        device: &wgpu::Device,
+        request: PresentationRequest,
+    ) {
+        self.presentation_request = request;
+        let resolved = resolve_headless_presentation(request, &self.target);
+        self.set_resolved_presentation(device, resolved);
+    }
+
+    /// Apply an adapter-resolved presentation and rebuild format-bound GPU resources.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a format-bound GPU pipeline cannot be rebuilt for the resolved
+    /// presentation format.
+    pub fn set_resolved_presentation(
+        &mut self,
+        device: &wgpu::Device,
+        resolved: ResolvedPresentation,
+    ) {
+        let (format, readback_format) = Self::storage_formats(&resolved);
+        if self.texture.format() != format
+            || self.readback.format() != readback_format
+            || self.readback.color_profile() != resolved.color_profile
+            || self.readback.alpha_mode() != Self::readback_alpha_mode(&resolved)
+        {
+            let (texture, texture_view, eb_tex, eb_view) =
+                Self::create_textures(device, self.width, self.height, format);
+            self.texture = texture;
+            self.texture_view = texture_view;
+            self.edge_blend_texture = eb_tex;
+            self.edge_blend_texture_view = eb_view;
+            self.readback = super::ReadbackBuffer::new_with_contract(
+                device,
+                self.width,
+                self.height,
+                readback_format,
+                resolved.color_profile,
+                Self::readback_alpha_mode(&resolved),
+            );
+            self.blit_pipeline = BlitPipeline::new(device, format)
+                .expect("Failed to rebuild headless blit pipeline");
+            self.polygon_pipeline = PolygonBlitPipeline::new(device, format)
+                .expect("Failed to rebuild headless polygon pipeline");
+            self.edge_blend_pipeline = super::edge_blend::EdgeBlendPipeline::new(device, format)
+                .expect("Failed to rebuild headless edge blend pipeline");
+        }
+        self.resolved_presentation = resolved;
     }
 }
 
@@ -1563,6 +1930,41 @@ impl UnifiedOutput {
         }
     }
 
+    /// Persisted precision and dithering request.
+    pub fn presentation_request(&self) -> PresentationRequest {
+        match self {
+            UnifiedOutput::Window(w) => w.presentation_request,
+            UnifiedOutput::Headless(h) => h.presentation_request,
+        }
+    }
+
+    /// Runtime format selected by the active output adapter.
+    pub fn resolved_presentation(&self) -> &ResolvedPresentation {
+        match self {
+            UnifiedOutput::Window(w) => &w.resolved_presentation,
+            UnifiedOutput::Headless(h) => &h.resolved_presentation,
+        }
+    }
+
+    /// Apply a new request through the variant's resolver.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a window surface cannot be configured for any SDR format.
+    pub fn set_presentation_request(
+        &mut self,
+        context: &GpuContext,
+        request: PresentationRequest,
+    ) -> Result<()> {
+        match self {
+            UnifiedOutput::Window(w) => w.set_presentation_request(context, request),
+            UnifiedOutput::Headless(h) => {
+                h.set_presentation_request(&context.device, request);
+                Ok(())
+            }
+        }
+    }
+
     /// Active duration for headless outputs (subprocess or NDI/Syphon).
     pub fn active_duration(&self) -> std::time::Duration {
         match self {
@@ -1581,7 +1983,216 @@ impl UnifiedOutput {
 
 #[cfg(test)]
 mod tests {
-    use super::{aspect_fit_rect, HeadlessOutput, OutputRotation, OutputWindow};
+    use super::{
+        aspect_fit_rect, resolve_headless_presentation, select_surface_presentation,
+        HeadlessOutput, OutputRotation, OutputTarget, OutputWindow,
+    };
+    use crate::engine::value::render::{
+        AlphaMode, PresentationColorProfile, PresentationDepth, PresentationPixelFormat,
+        PresentationRequest, ResolvedPresentation,
+    };
+
+    fn surface_capabilities(
+        format_capabilities: Vec<wgpu::SurfaceFormatCapabilities>,
+    ) -> wgpu::SurfaceCapabilities {
+        wgpu::SurfaceCapabilities {
+            formats: vec![
+                wgpu::TextureFormat::Bgra8UnormSrgb,
+                wgpu::TextureFormat::Rgb10a2Unorm,
+            ],
+            format_capabilities,
+            present_modes: vec![wgpu::PresentMode::Fifo],
+            alpha_modes: vec![wgpu::CompositeAlphaMode::Opaque],
+            usages: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        }
+    }
+
+    #[test]
+    fn ten_bit_surface_requires_rgb10_and_srgb_as_a_pair() {
+        let capabilities = surface_capabilities(vec![wgpu::SurfaceFormatCapabilities {
+            format: wgpu::TextureFormat::Rgb10a2Unorm,
+            color_spaces: wgpu::SurfaceColorSpaces::SRGB,
+        }]);
+        let selected = select_surface_presentation(
+            PresentationRequest {
+                depth: PresentationDepth::Sdr10,
+                dither: true,
+            },
+            &capabilities,
+        )
+        .unwrap();
+
+        assert_eq!(selected.format, wgpu::TextureFormat::Rgb10a2Unorm);
+        assert_eq!(selected.color_space, wgpu::SurfaceColorSpace::Srgb);
+        assert_eq!(selected.resolved.resolved, PresentationDepth::Sdr10);
+        assert!(selected.resolved.fallback_reason.is_none());
+    }
+
+    #[test]
+    fn rgb10_without_srgb_falls_back_to_eight_bit() {
+        let capabilities = surface_capabilities(vec![wgpu::SurfaceFormatCapabilities {
+            format: wgpu::TextureFormat::Rgb10a2Unorm,
+            color_spaces: wgpu::SurfaceColorSpaces::DISPLAY_P3,
+        }]);
+        let selected = select_surface_presentation(
+            PresentationRequest {
+                depth: PresentationDepth::Sdr10,
+                dither: true,
+            },
+            &capabilities,
+        )
+        .unwrap();
+
+        assert_eq!(selected.format, wgpu::TextureFormat::Bgra8UnormSrgb);
+        assert_eq!(selected.color_space, wgpu::SurfaceColorSpace::Auto);
+        assert_eq!(selected.resolved.resolved, PresentationDepth::Sdr8);
+        assert!(selected
+            .resolved
+            .fallback_reason
+            .as_deref()
+            .unwrap()
+            .contains("not with an sRGB"));
+    }
+
+    #[test]
+    fn ten_bit_display_keeps_a_float_intermediate() {
+        assert_eq!(
+            super::OutputWindow::intermediate_format_for(
+                PresentationDepth::Sdr10,
+                wgpu::TextureFormat::Rgb10a2Unorm
+            ),
+            super::COLOR_PATH_FORMAT
+        );
+        assert_eq!(
+            super::OutputWindow::intermediate_format_for(
+                PresentationDepth::Sdr8,
+                wgpu::TextureFormat::Bgra8UnormSrgb
+            ),
+            wgpu::TextureFormat::Bgra8UnormSrgb
+        );
+    }
+
+    #[test]
+    fn syphon_eight_bit_request_has_no_fallback_reason() {
+        let resolved = resolve_headless_presentation(
+            PresentationRequest::default(),
+            &OutputTarget::SyphonServer {
+                server_name: "Precision Test".into(),
+            },
+        );
+        assert_eq!(resolved.resolved, PresentationDepth::Sdr8);
+        assert_eq!(resolved.pixel_format, PresentationPixelFormat::Bgra8);
+        assert!(resolved.fallback_reason.is_none());
+    }
+
+    #[test]
+    fn eight_bit_request_keeps_the_srgb_surface() {
+        let capabilities = surface_capabilities(vec![wgpu::SurfaceFormatCapabilities {
+            format: wgpu::TextureFormat::Rgb10a2Unorm,
+            color_spaces: wgpu::SurfaceColorSpaces::SRGB,
+        }]);
+        let selected =
+            select_surface_presentation(PresentationRequest::default(), &capabilities).unwrap();
+
+        assert_eq!(selected.format, wgpu::TextureFormat::Bgra8UnormSrgb);
+        assert_eq!(selected.resolved.resolved, PresentationDepth::Sdr8);
+    }
+
+    #[test]
+    fn syphon_truthfully_resolves_ten_bit_requests_to_bgra8() {
+        let resolved = resolve_headless_presentation(
+            PresentationRequest {
+                depth: PresentationDepth::Sdr10,
+                dither: true,
+            },
+            &OutputTarget::SyphonServer {
+                server_name: "Precision Test".into(),
+            },
+        );
+
+        assert_eq!(resolved.requested, PresentationDepth::Sdr10);
+        assert_eq!(resolved.resolved, PresentationDepth::Sdr8);
+        assert_eq!(resolved.pixel_format, PresentationPixelFormat::Bgra8);
+        assert_eq!(resolved.alpha_mode, AlphaMode::Premultiplied);
+        assert!(resolved.fallback_reason.unwrap().contains("BGRA8"));
+    }
+
+    #[test]
+    fn p216_resolution_rebuilds_headless_output_as_linear_float() {
+        let Ok(gpu) = super::GpuContext::new_headless() else {
+            return;
+        };
+        let mut output = HeadlessOutput::new(
+            &gpu.device,
+            "P216 Test".into(),
+            super::OutputSource::Master,
+            OutputTarget::NdiSend {
+                sender_name: "P216 Test".into(),
+            },
+            2,
+            1,
+        );
+
+        output.set_resolved_presentation(
+            &gpu.device,
+            ResolvedPresentation {
+                requested: PresentationDepth::Sdr10,
+                resolved: PresentationDepth::Sdr10,
+                pixel_format: PresentationPixelFormat::P216,
+                color_profile: PresentationColorProfile::Rec709Limited,
+                alpha_mode: AlphaMode::Opaque,
+                dither: true,
+                fallback_reason: None,
+            },
+        );
+
+        assert_eq!(output.texture.format(), wgpu::TextureFormat::Rgba16Float);
+        assert_eq!(output.readback.format(), super::super::ReadbackFormat::P216);
+    }
+
+    #[test]
+    fn rgba16_resolution_rebuilds_headless_output_as_integer_unorm() {
+        let Ok(gpu) = super::GpuContext::new_headless() else {
+            return;
+        };
+        let required_features = wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
+            | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
+        if !gpu.device.features().contains(required_features) {
+            return;
+        }
+        let mut output = HeadlessOutput::new(
+            &gpu.device,
+            "RGBA16 Test".into(),
+            super::OutputSource::Master,
+            OutputTarget::Recording {
+                path: "alpha.mov".into(),
+                codec: crate::engine::value::render::RecordingCodec::ProRes4444,
+                audio_device: None,
+            },
+            2,
+            1,
+        );
+
+        output.set_resolved_presentation(
+            &gpu.device,
+            ResolvedPresentation {
+                requested: PresentationDepth::Sdr10,
+                resolved: PresentationDepth::Sdr10,
+                pixel_format: PresentationPixelFormat::Rgba16,
+                color_profile: PresentationColorProfile::Rec709Limited,
+                alpha_mode: AlphaMode::Straight,
+                dither: true,
+                fallback_reason: None,
+            },
+        );
+
+        assert_eq!(output.texture.format(), wgpu::TextureFormat::Rgba16Unorm);
+        assert_eq!(
+            output.readback.format(),
+            super::super::ReadbackFormat::Rgba16Unorm
+        );
+        assert_eq!(output.readback.alpha_mode(), AlphaMode::Premultiplied);
+    }
 
     /// `UnifiedOutput` holds both variants inline, and `clippy::large_enum_variant`
     /// fails the build when one exceeds the other by more than 200 bytes. The two
@@ -1758,5 +2369,26 @@ mod tests {
             adapter_bc, device_bc,
             "headless device should request BC iff the adapter supports it"
         );
+    }
+
+    #[test]
+    fn headless_context_enables_rgba16_unorm_when_adapter_supports_it() {
+        let Ok(gpu) = super::GpuContext::new_headless() else {
+            return;
+        };
+        let features = wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
+            | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
+        let renderable = gpu.adapter.features().contains(features)
+            && gpu
+                .adapter
+                .get_texture_format_features(wgpu::TextureFormat::Rgba16Unorm)
+                .allowed_usages
+                .contains(wgpu::TextureUsages::RENDER_ATTACHMENT);
+        if renderable {
+            assert!(
+                gpu.device.features().contains(features),
+                "the device must request RGBA16 normalized texture support"
+            );
+        }
     }
 }

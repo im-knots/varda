@@ -1307,6 +1307,8 @@ impl OutputQueries for VardaApp {
                         is_active,
                         surface_assignments,
                         calibration_mode,
+                        presentation_request: o.presentation_request(),
+                        resolved_presentation: o.resolved_presentation().clone(),
                         audio_passthrough,
                     }
                 })

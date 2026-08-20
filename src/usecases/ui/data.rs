@@ -716,6 +716,10 @@ pub struct OutputUI {
     pub edge_blend: crate::renderer::edge_blend::EdgeBlendConfig,
     /// Per-output rotation (0°/90°/180°/270°)
     pub rotation: crate::renderer::context::OutputRotation,
+    /// Persisted precision and dithering request.
+    pub presentation_request: crate::engine::value::render::PresentationRequest,
+    /// Runtime format selected by the active adapter.
+    pub resolved_presentation: crate::engine::value::render::ResolvedPresentation,
     /// Audio passthrough health for an active ffmpeg output (None = video-only).
     pub audio_passthrough: Option<AudioPassthroughUI>,
     /// Pixel size of the texture the output panel previews. A headless output

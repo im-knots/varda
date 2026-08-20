@@ -10,7 +10,22 @@ use crate::renderer::edge_blend::EdgeBlendMode;
 impl VardaApp {
     /// Set the output target for a windowed or headless output.
     pub fn cmd_set_output_target(&mut self, idx: usize, target: OutputTarget) -> CommandResult {
-        if let Some(output) = self.output.outputs.get_mut(idx) {
+        let ndi_resolution = matches!(&target, OutputTarget::NdiSend { .. }).then(|| {
+            let request = self
+                .output
+                .outputs
+                .get(idx)
+                .map(UnifiedOutput::presentation_request)
+                .unwrap_or_default();
+            self.external_io.ndi_manager.resolve_presentation(request)
+        });
+        {
+            let Some(output) = self.output.outputs.get_mut(idx) else {
+                return CommandResult::Err {
+                    code: ErrorCode::NotFound,
+                    message: "Output not found".into(),
+                };
+            };
             match output {
                 UnifiedOutput::Window(w) => {
                     if target.is_windowed() {
@@ -23,8 +38,17 @@ impl VardaApp {
                             _ => None,
                         };
                         w.set_target(target, monitor);
+                        if let Err(error) =
+                            w.set_presentation_request(&self.context, w.presentation_request)
+                        {
+                            return CommandResult::Err {
+                                code: ErrorCode::InternalError,
+                                message: format!(
+                                    "Failed to reconfigure output presentation: {error}"
+                                ),
+                            };
+                        }
                     }
-                    CommandResult::Ok
                 }
                 UnifiedOutput::Headless(h) => {
                     if target.is_headless() {
@@ -41,23 +65,24 @@ impl VardaApp {
                             }
                         }
                         h.target = target;
+                        h.set_presentation_request(&self.context.device, h.presentation_request);
+                        if let Some(resolved) = ndi_resolution {
+                            h.set_resolved_presentation(&self.context.device, resolved);
+                        }
                     }
-                    CommandResult::Ok
                 }
             }
-        } else {
-            CommandResult::Err {
-                code: ErrorCode::NotFound,
-                message: "Output not found".into(),
-            }
         }
+        self.refresh_presentation_notification(idx);
+        CommandResult::Ok
     }
 
     /// Create a new headless output with the given target.
     pub fn cmd_create_headless_output(&mut self, target: OutputTarget) -> CommandResult {
         let idx = self.output.outputs.len() + 1;
         let name = format!("Output {idx}");
-        let headless = HeadlessOutput::new(
+        let is_ndi = matches!(&target, OutputTarget::NdiSend { .. });
+        let mut headless = HeadlessOutput::new(
             &self.context.device,
             name.clone(),
             OutputSource::Master,
@@ -65,6 +90,13 @@ impl VardaApp {
             self.render_width,
             self.render_height,
         );
+        if is_ndi {
+            let resolved = self
+                .external_io
+                .ndi_manager
+                .resolve_presentation(headless.presentation_request);
+            headless.set_resolved_presentation(&self.context.device, resolved);
+        }
         log::info!("Created headless output '{name}'");
         self.output.outputs.push(UnifiedOutput::Headless(headless));
         CommandResult::Ok
@@ -133,27 +165,53 @@ impl VardaApp {
         // workspace loader applying a scene's resolution.
         let (render_width, render_height) = (self.render_width, self.render_height);
         let device = &self.context.device;
-        let (target, name, width, height, stale) = match self.output.outputs.get_mut(idx) {
-            Some(UnifiedOutput::Headless(h)) => {
-                if h.active {
-                    return CommandResult::Ok; // already active
+        let (target, name, width, height, presentation_request, mut readback_format, stale) =
+            match self.output.outputs.get_mut(idx) {
+                Some(UnifiedOutput::Headless(h)) => {
+                    if h.active {
+                        return CommandResult::Ok; // already active
+                    }
+                    h.resize(device, render_width, render_height);
+                    (
+                        h.target.clone(),
+                        h.name.clone(),
+                        h.width,
+                        h.height,
+                        h.presentation_request,
+                        h.readback.format(),
+                        h.audio_pcm.take(),
+                    )
                 }
-                h.resize(device, render_width, render_height);
-                (
-                    h.target.clone(),
-                    h.name.clone(),
-                    h.width,
-                    h.height,
-                    h.audio_pcm.take(),
-                )
-            }
-            _ => {
-                return CommandResult::Err {
-                    code: ErrorCode::NotFound,
-                    message: "Output not found or not headless".into(),
+                _ => {
+                    return CommandResult::Err {
+                        code: ErrorCode::NotFound,
+                        message: "Output not found or not headless".into(),
+                    }
                 }
+            };
+        if let OutputTarget::Recording { codec, .. } = &target {
+            let resolved = match crate::renderer::FfmpegSubprocess::probe_recording_presentation(
+                codec,
+                presentation_request,
+                device.features().contains(
+                    wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
+                        | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
+                ),
+            ) {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    self.release_passthrough(stale.map(|subscription| *subscription));
+                    return CommandResult::Err {
+                        code: ErrorCode::Unavailable,
+                        message: error.to_string(),
+                    };
+                }
+            };
+            if let Some(UnifiedOutput::Headless(output)) = self.output.outputs.get_mut(idx) {
+                output.set_resolved_presentation(device, resolved);
+                readback_format = output.readback.format();
             }
-        };
+        }
         self.release_passthrough(stale.map(|b| *b));
 
         // Resolve optional audio passthrough (emits a notification + falls back
@@ -172,6 +230,7 @@ impl VardaApp {
                 crate::renderer::FfmpegSubprocess::spawn_srt(
                     url,
                     codec,
+                    presentation_request,
                     width,
                     height,
                     fps,
@@ -179,13 +238,15 @@ impl VardaApp {
                 )
             }
             OutputTarget::Recording { path, codec, .. } => {
-                crate::renderer::FfmpegSubprocess::spawn_recording(
+                crate::renderer::FfmpegSubprocess::spawn_recording_with_presentation(
                     path,
                     codec,
                     width,
                     height,
                     fps,
                     audio_input,
+                    presentation_request,
+                    readback_format,
                 )
             }
             OutputTarget::HlsStream {
@@ -196,6 +257,7 @@ impl VardaApp {
             } => crate::renderer::FfmpegSubprocess::spawn_hls(
                 target_name,
                 codec,
+                presentation_request,
                 width,
                 height,
                 fps,
@@ -209,21 +271,27 @@ impl VardaApp {
             } => crate::renderer::FfmpegSubprocess::spawn_dash(
                 target_name,
                 codec,
+                presentation_request,
                 width,
                 height,
                 fps,
                 audio_input,
             ),
-            OutputTarget::RtmpStream { url, codec, .. } => {
-                crate::renderer::FfmpegSubprocess::spawn_rtmp(
-                    url,
-                    codec,
-                    width,
-                    height,
-                    fps,
-                    audio_input,
-                )
-            }
+            OutputTarget::RtmpStream {
+                url,
+                codec,
+                codec_contract,
+                ..
+            } => crate::renderer::FfmpegSubprocess::spawn_rtmp(
+                url,
+                codec,
+                *codec_contract,
+                presentation_request,
+                width,
+                height,
+                fps,
+                audio_input,
+            ),
             OutputTarget::NdiSend { .. } => {
                 // No ffmpeg subprocess; NDI doesn't carry passthrough audio.
                 self.release_passthrough(passthrough);
@@ -266,11 +334,16 @@ impl VardaApp {
 
         match spawn_result {
             Ok(sub) => {
+                let presentation = sub.presentation().cloned();
                 if let Some(UnifiedOutput::Headless(h)) = self.output.outputs.get_mut(idx) {
+                    if let Some(resolved) = presentation {
+                        h.set_resolved_presentation(&self.context.device, resolved);
+                    }
                     h.subprocess = Some(Box::new(sub));
                     h.audio_pcm = passthrough.map(Box::new);
                     h.active = true;
                 }
+                self.refresh_presentation_notification(idx);
                 CommandResult::Ok
             }
             Err(e) => {
@@ -588,6 +661,87 @@ impl VardaApp {
                 code: ErrorCode::NotFound,
                 message: "Output not found".into(),
             }
+        }
+    }
+
+    /// Set requested SDR precision and dithering, preserving any fallback status.
+    pub fn cmd_set_output_presentation(
+        &mut self,
+        output_uuid: &str,
+        request: crate::engine::value::render::PresentationRequest,
+    ) -> CommandResult {
+        let idx = match self.resolve_output(output_uuid) {
+            Ok(idx) => idx,
+            Err(e) => return e.into(),
+        };
+        let restart = self.output.outputs.get(idx).is_some_and(
+            |output| matches!(output, UnifiedOutput::Headless(headless) if headless.active),
+        );
+        if restart {
+            let stopped = self.cmd_stop_output(output_uuid);
+            if !matches!(stopped, CommandResult::Ok) {
+                return stopped;
+            }
+        }
+        let ndi_resolution = self
+            .output
+            .outputs
+            .get(idx)
+            .is_some_and(|output| matches!(output.target(), OutputTarget::NdiSend { .. }))
+            .then(|| self.external_io.ndi_manager.resolve_presentation(request));
+        if let Some(output) = self.output.outputs.get_mut(idx) {
+            if let Err(error) = output.set_presentation_request(&self.context, request) {
+                return CommandResult::Err {
+                    code: ErrorCode::InternalError,
+                    message: format!("Failed to configure output presentation: {error}"),
+                };
+            }
+            if let (UnifiedOutput::Headless(headless), Some(resolved)) = (output, ndi_resolution) {
+                headless.set_resolved_presentation(&self.context.device, resolved);
+            }
+            self.refresh_presentation_notification(idx);
+            if restart {
+                self.cmd_start_output(output_uuid)
+            } else {
+                CommandResult::Ok
+            }
+        } else {
+            CommandResult::Err {
+                code: ErrorCode::NotFound,
+                message: "Output not found".into(),
+            }
+        }
+    }
+
+    /// Synchronize the one-shot fallback warning with one output's resolution.
+    pub(crate) fn refresh_presentation_notification(&mut self, idx: usize) {
+        let Some((uuid, name, resolved)) = self.output.outputs.get(idx).map(|output| {
+            (
+                output.uuid().to_string(),
+                output.name().to_string(),
+                output.resolved_presentation().clone(),
+            )
+        }) else {
+            return;
+        };
+        let prefix = format!("presentation_fallback:{uuid}:");
+        if let Some(reason) = resolved.fallback_reason {
+            self.session.notifications.notify_once(
+                format!("{prefix}{reason}"),
+                crate::notifications::NotificationLevel::Warning,
+                format!(
+                    "Output '{name}' requested {} but is delivering {} ({}): {reason}",
+                    resolved.requested.label(),
+                    resolved.resolved.label(),
+                    resolved.pixel_format,
+                ),
+            );
+        } else if self.session.notifications.clear_once_key_prefix(&prefix) {
+            self.session.notifications.info(format!(
+                "Output '{name}' presentation recovered and is delivering {} ({})",
+                resolved.resolved.label(),
+                resolved.pixel_format,
+            ));
         }
     }
 }

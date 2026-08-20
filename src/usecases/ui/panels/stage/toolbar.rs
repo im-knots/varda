@@ -327,17 +327,11 @@ pub(super) fn render(
                 .button("📷 Detect ▼")
                 .on_hover_text("Enter camera detection mode");
             let cam_popup_id = cam_btn.id.with("cam_detect_popup");
-            if cam_btn.clicked() {
-                #[allow(deprecated)]
-                ui.memory_mut(|mem| mem.toggle_popup(cam_popup_id));
-            }
-            #[allow(deprecated)]
-            egui::popup_below_widget(
-                ui,
-                cam_popup_id,
-                &cam_btn,
-                egui::PopupCloseBehavior::CloseOnClick,
-                |ui| {
+            egui::Popup::from_toggle_button_response(&cam_btn)
+                .id(cam_popup_id)
+                .width(cam_btn.rect.width())
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClick)
+                .show(|ui| {
                     ui.set_min_width(150.0);
                     for (name, cam_id) in active_cameras {
                         if ui.button(name).clicked() {
@@ -347,8 +341,7 @@ pub(super) fn render(
                                 .push(CameraDetectAction::Enter { camera_id: *cam_id });
                         }
                     }
-                },
-            );
+                });
         }
     });
 }

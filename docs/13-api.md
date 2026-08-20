@@ -636,6 +636,7 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `PUT` | `/api/outputs/{output_uuid}/display` |  |
 | `PUT` | `/api/outputs/{output_uuid}/edge-blend` |  |
 | `PUT` | `/api/outputs/{output_uuid}/edge-blend-mode` |  |
+| `PUT` | `/api/outputs/{output_uuid}/presentation` |  |
 | `POST` | `/api/outputs/{output_uuid}/start` |  |
 | `POST` | `/api/outputs/{output_uuid}/stop` |  |
 | `POST` | `/api/outputs/{output_uuid}/surfaces` |  |

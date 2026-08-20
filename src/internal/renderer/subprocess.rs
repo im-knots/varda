@@ -12,7 +12,658 @@ use std::sync::mpsc;
 use std::sync::Arc;
 
 use crate::audio::PcmChunk;
-use crate::renderer::context::RecordingCodec;
+use crate::engine::value::render::{
+    AlphaMode, PresentationColorProfile, PresentationDepth, PresentationPixelFormat,
+    PresentationRequest, RecordingCodec, ResolvedPresentation, RtmpCodecContract, SrtCodec,
+    StreamingCodec,
+};
+use crate::renderer::{ReadbackFormat, ReadbackFrame};
+
+/// Fully pinned video contract for one recording subprocess.
+///
+/// Resolution happens before the writer queue starts. A ten-bit request is only
+/// accepted when both the encoder and the typed GPU readback can carry it.
+#[derive(Debug, Clone)]
+struct RecordingPlan {
+    /// Runtime precision and encoded pixel format reported to output status.
+    resolved: ResolvedPresentation,
+    input_pixel_format: &'static str,
+    output_pixel_format: &'static str,
+    expected_readback: ReadbackFormat,
+    video_args: Vec<String>,
+    unpremultiply: bool,
+}
+
+impl RecordingPlan {
+    fn resolve(
+        codec: &RecordingCodec,
+        request: PresentationRequest,
+        readback: ReadbackFormat,
+        encoder_help: Option<&str>,
+    ) -> Self {
+        let encoder = recording_encoder(codec);
+        let ten_bit_output = ten_bit_output_format(codec);
+        let codec_supports_ten_bit = ten_bit_output.is_some();
+        let encoder_supports_ten_bit = ten_bit_output.is_some_and(|format| {
+            encoder_help.is_some_and(|help| encoder_supports_pixel_format(help, format))
+        });
+        let required_readback = if matches!(codec, RecordingCodec::ProRes4444) {
+            ReadbackFormat::Rgba16Unorm
+        } else {
+            ReadbackFormat::Rgb10A2
+        };
+
+        let fallback_reason = if request.depth != PresentationDepth::Sdr10 {
+            None
+        } else if !codec_supports_ten_bit {
+            Some(format!(
+                "{codec} is an eight-bit recording codec; 10-bit SDR is unavailable"
+            ))
+        } else if matches!(codec, RecordingCodec::ProRes4444)
+            && readback == ReadbackFormat::Rgba16Float
+        {
+            Some(
+                "10-bit ProRes 4444 requires integer RGBA16 readback; RGBA16 half-float bytes \
+                 cannot be passed to FFmpeg as rgba64le"
+                    .to_string(),
+            )
+        } else if matches!(codec, RecordingCodec::ProRes4444)
+            && readback != ReadbackFormat::Rgba16Unorm
+        {
+            Some(
+                "10-bit ProRes 4444 is unavailable because the GPU does not support normalized \
+                 16-bit RGBA render targets"
+                    .to_string(),
+            )
+        } else if required_readback != readback {
+            Some(format!(
+                "10-bit SDR recording requires packed RGB10 readback, but the active renderer \
+                 supplies {}",
+                readback_label(readback)
+            ))
+        } else if encoder_help.is_none() {
+            Some(format!(
+                "FFmpeg encoder '{encoder}' is unavailable or could not be queried"
+            ))
+        } else if !encoder_supports_ten_bit {
+            Some(format!(
+                "FFmpeg encoder '{encoder}' does not support {}",
+                ten_bit_output.expect("ten-bit codec has an output format")
+            ))
+        } else {
+            None
+        };
+
+        let use_ten_bit = request.depth == PresentationDepth::Sdr10 && fallback_reason.is_none();
+        let (input_pixel_format, output_pixel_format, expected_readback) = if use_ten_bit {
+            if matches!(codec, RecordingCodec::ProRes4444) {
+                (
+                    "rgba64le",
+                    ten_bit_output.expect("resolved ten-bit recording has an output format"),
+                    ReadbackFormat::Rgba16Unorm,
+                )
+            } else {
+                (
+                    packed_rgb10_input_format(),
+                    ten_bit_output.expect("resolved ten-bit recording has an output format"),
+                    ReadbackFormat::Rgb10A2,
+                )
+            }
+        } else {
+            (
+                "rgba",
+                eight_bit_output_format(codec),
+                ReadbackFormat::Rgba8,
+            )
+        };
+        let alpha_mode = if codec_preserves_alpha(codec) {
+            AlphaMode::Straight
+        } else {
+            AlphaMode::Opaque
+        };
+        let resolved_depth = if use_ten_bit {
+            PresentationDepth::Sdr10
+        } else {
+            PresentationDepth::Sdr8
+        };
+        let pixel_format = if use_ten_bit && matches!(codec, RecordingCodec::ProRes4444) {
+            PresentationPixelFormat::Rgba16
+        } else {
+            PresentationPixelFormat::EncoderNative(output_pixel_format.to_string())
+        };
+        let resolved = ResolvedPresentation {
+            requested: request.depth,
+            resolved: resolved_depth,
+            pixel_format,
+            color_profile: PresentationColorProfile::Rec709Limited,
+            alpha_mode,
+            dither: request.dither,
+            fallback_reason,
+        };
+        let video_args = recording_video_args(codec, resolved_depth, output_pixel_format);
+
+        Self {
+            resolved,
+            input_pixel_format,
+            output_pixel_format,
+            expected_readback,
+            video_args,
+            unpremultiply: codec_preserves_alpha(codec),
+        }
+    }
+}
+
+fn recording_encoder(codec: &RecordingCodec) -> &'static str {
+    match codec {
+        RecordingCodec::H264 => "libx264",
+        RecordingCodec::H265 => "libx265",
+        RecordingCodec::AV1 => "libsvtav1",
+        RecordingCodec::ProRes | RecordingCodec::ProRes4444 => "prores_ks",
+        RecordingCodec::Hap | RecordingCodec::HapAlpha | RecordingCodec::HapQ => "hap",
+    }
+}
+
+fn ten_bit_output_format(codec: &RecordingCodec) -> Option<&'static str> {
+    match codec {
+        RecordingCodec::H265 | RecordingCodec::AV1 => Some("yuv420p10le"),
+        RecordingCodec::ProRes => Some("yuv422p10le"),
+        RecordingCodec::ProRes4444 => Some("yuva444p10le"),
+        RecordingCodec::H264
+        | RecordingCodec::Hap
+        | RecordingCodec::HapAlpha
+        | RecordingCodec::HapQ => None,
+    }
+}
+
+fn eight_bit_output_format(codec: &RecordingCodec) -> &'static str {
+    match codec {
+        RecordingCodec::H264 | RecordingCodec::H265 | RecordingCodec::AV1 => "yuv420p",
+        RecordingCodec::ProRes => "yuv422p10le",
+        RecordingCodec::ProRes4444 => "yuva444p10le",
+        RecordingCodec::Hap | RecordingCodec::HapAlpha | RecordingCodec::HapQ => "rgba",
+    }
+}
+
+fn codec_preserves_alpha(codec: &RecordingCodec) -> bool {
+    matches!(codec, RecordingCodec::ProRes4444 | RecordingCodec::HapAlpha)
+}
+
+fn encoder_supports_pixel_format(help: &str, pixel_format: &str) -> bool {
+    help.lines()
+        .find(|line| line.trim_start().starts_with("Supported pixel formats:"))
+        .is_some_and(|line| line.split_whitespace().any(|item| item == pixel_format))
+}
+
+fn readback_label(format: ReadbackFormat) -> &'static str {
+    match format {
+        ReadbackFormat::Rgba8 => "RGBA8",
+        ReadbackFormat::Bgra8 => "BGRA8",
+        ReadbackFormat::Rgb10A2 => "RGB10A2",
+        ReadbackFormat::Rgba16Float => "RGBA16 half-float",
+        ReadbackFormat::Rgba16Unorm => "RGBA16",
+        ReadbackFormat::Uyvy => "UYVY",
+        ReadbackFormat::P216 => "P216",
+    }
+}
+
+fn preferred_recording_readback(
+    codec: &RecordingCodec,
+    request: PresentationRequest,
+    rgba16_unorm_supported: bool,
+) -> ReadbackFormat {
+    if request.depth != PresentationDepth::Sdr10 {
+        ReadbackFormat::Rgba8
+    } else if matches!(codec, RecordingCodec::ProRes4444) && rgba16_unorm_supported {
+        ReadbackFormat::Rgba16Unorm
+    } else if matches!(codec, RecordingCodec::ProRes4444) {
+        ReadbackFormat::Rgba8
+    } else {
+        ReadbackFormat::Rgb10A2
+    }
+}
+
+/// wgpu `Rgb10a2Unorm` stores R in bits 0..9, G in 10..19, and B in
+/// 20..29. FFmpeg names that little-endian word `x2bgr10le` (the component
+/// names describe most-significant to least-significant fields).
+const fn packed_rgb10_input_format() -> &'static str {
+    "x2bgr10le"
+}
+
+fn unpremultiply_filter(input_pixel_format: &str) -> &'static str {
+    if input_pixel_format == "rgba64le" {
+        "setparams=alpha_mode=premultiplied,format=gbrap16le,unpremultiply=inplace=1"
+    } else {
+        "setparams=alpha_mode=premultiplied,format=gbrap,unpremultiply=inplace=1"
+    }
+}
+
+fn recording_video_args(
+    codec: &RecordingCodec,
+    depth: PresentationDepth,
+    output_pixel_format: &str,
+) -> Vec<String> {
+    let mut args: Vec<String> = match codec {
+        RecordingCodec::H264 => vec![
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-crf",
+            "18",
+            "-profile:v",
+            "high",
+        ],
+        RecordingCodec::H265 => {
+            let profile = if depth == PresentationDepth::Sdr10 {
+                "main10"
+            } else {
+                "main"
+            };
+            vec![
+                "-c:v",
+                "libx265",
+                "-preset",
+                "ultrafast",
+                "-crf",
+                "20",
+                "-profile:v",
+                profile,
+            ]
+        }
+        RecordingCodec::AV1 => vec![
+            "-c:v",
+            "libsvtav1",
+            "-preset",
+            "10",
+            "-crf",
+            "28",
+            "-profile:v",
+            "0",
+        ],
+        RecordingCodec::ProRes => {
+            vec!["-c:v", "prores_ks", "-profile:v", "2"]
+        }
+        RecordingCodec::ProRes4444 => {
+            vec!["-c:v", "prores_ks", "-profile:v", "4", "-alpha_bits", "16"]
+        }
+        RecordingCodec::Hap => vec!["-c:v", "hap", "-format", "hap"],
+        RecordingCodec::HapAlpha => vec!["-c:v", "hap", "-format", "hap_alpha"],
+        RecordingCodec::HapQ => vec!["-c:v", "hap", "-format", "hap_q"],
+    }
+    .into_iter()
+    .map(str::to_string)
+    .collect();
+    args.extend(
+        [
+            "-pix_fmt",
+            output_pixel_format,
+            "-color_primaries",
+            "bt709",
+            "-color_trc",
+            "bt709",
+            "-colorspace",
+            "bt709",
+            "-color_range",
+            "tv",
+        ]
+        .into_iter()
+        .map(str::to_string),
+    );
+    args
+}
+
+fn probe_encoder_help(encoder: &str) -> Option<String> {
+    let output = Command::new("ffmpeg")
+        .args(["-hide_banner", "-h", &format!("encoder={encoder}")])
+        .output()
+        .ok()?;
+    output.status.success().then(|| {
+        let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+        text.push_str(&String::from_utf8_lossy(&output.stderr));
+        text
+    })
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+// Each flag is an independent result from an installed FFmpeg capability probe.
+#[allow(clippy::struct_excessive_bools)]
+struct StreamingCapabilities {
+    hevc_main10: bool,
+    av1_10: bool,
+    enhanced_hevc: bool,
+    enhanced_av1: bool,
+}
+
+impl StreamingCapabilities {
+    fn detect() -> Self {
+        let hevc_help = probe_encoder_help("libx265");
+        let av1_help = probe_encoder_help("libsvtav1");
+        let hevc_main10 = hevc_help
+            .as_deref()
+            .is_some_and(|help| encoder_supports_pixel_format(help, "yuv420p10le"));
+        let av1_10 = av1_help
+            .as_deref()
+            .is_some_and(|help| encoder_supports_pixel_format(help, "yuv420p10le"));
+        Self {
+            hevc_main10,
+            av1_10,
+            enhanced_hevc: hevc_main10 && probe_enhanced_flv("libx265", "main10"),
+            enhanced_av1: av1_10 && probe_enhanced_flv("libsvtav1", "main"),
+        }
+    }
+
+    fn installed() -> Self {
+        static CAPABILITIES: std::sync::OnceLock<StreamingCapabilities> =
+            std::sync::OnceLock::new();
+        *CAPABILITIES.get_or_init(Self::detect)
+    }
+}
+
+fn probe_enhanced_flv(encoder: &str, profile: &str) -> bool {
+    Command::new("ffmpeg")
+        .args([
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=size=16x16:rate=1",
+            "-frames:v",
+            "1",
+            "-c:v",
+            encoder,
+            "-pix_fmt",
+            "yuv420p10le",
+            "-profile:v",
+            profile,
+            "-f",
+            "flv",
+            "-",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamingProtocol {
+    Srt,
+    Hls,
+    Dash,
+    Rtmp(RtmpCodecContract),
+}
+
+/// Fully negotiated codec, pixel format, metadata, and muxer contract for a stream.
+#[derive(Debug, Clone)]
+pub(crate) struct StreamingPlan {
+    /// Runtime precision and encoded pixel format reported to output status.
+    pub resolved: ResolvedPresentation,
+    input_pixel_format: &'static str,
+    expected_readback: ReadbackFormat,
+    effective_codec: StreamingCodec,
+    video_args: Vec<String>,
+    muxer_args: Vec<String>,
+}
+
+impl StreamingPlan {
+    pub(crate) const fn expected_readback(&self) -> ReadbackFormat {
+        self.expected_readback
+    }
+
+    fn resolve(
+        protocol: StreamingProtocol,
+        configured_codec: StreamingCodec,
+        request: PresentationRequest,
+        capabilities: StreamingCapabilities,
+    ) -> Self {
+        let unavailable = if request.depth == PresentationDepth::Sdr10 {
+            match (protocol, &configured_codec) {
+                (_, StreamingCodec::H264) => {
+                    Some("H.264 streaming is limited to eight-bit SDR".to_string())
+                }
+                (StreamingProtocol::Srt, StreamingCodec::AV1) => {
+                    Some("AV1 is not supported by the interoperable SRT MPEG-TS path".to_string())
+                }
+                (
+                    StreamingProtocol::Srt | StreamingProtocol::Hls | StreamingProtocol::Dash,
+                    StreamingCodec::H265,
+                ) if !capabilities.hevc_main10 => {
+                    Some("installed FFmpeg encoder lacks HEVC Main10".to_string())
+                }
+                (StreamingProtocol::Hls | StreamingProtocol::Dash, StreamingCodec::AV1)
+                    if !capabilities.av1_10 =>
+                {
+                    Some("installed FFmpeg encoder lacks AV1 10-bit support".to_string())
+                }
+                (StreamingProtocol::Rtmp(RtmpCodecContract::Legacy), _) => {
+                    Some("the endpoint contract is legacy RTMP".to_string())
+                }
+                (StreamingProtocol::Rtmp(RtmpCodecContract::Enhanced), StreamingCodec::H265)
+                    if !capabilities.enhanced_hevc =>
+                {
+                    Some("FFmpeg cannot mux HEVC Main10 with Enhanced RTMP signaling".to_string())
+                }
+                (StreamingProtocol::Rtmp(RtmpCodecContract::Enhanced), StreamingCodec::AV1)
+                    if !capabilities.enhanced_av1 =>
+                {
+                    Some("FFmpeg cannot mux AV1 10-bit with Enhanced RTMP signaling".to_string())
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let use_ten_bit = request.depth == PresentationDepth::Sdr10 && unavailable.is_none();
+        let legacy_rtmp = matches!(protocol, StreamingProtocol::Rtmp(RtmpCodecContract::Legacy));
+        let effective_codec = if legacy_rtmp
+            || (request.depth == PresentationDepth::Sdr10 && unavailable.is_some())
+            || (matches!(protocol, StreamingProtocol::Srt)
+                && configured_codec == StreamingCodec::AV1)
+        {
+            StreamingCodec::H264
+        } else {
+            configured_codec
+        };
+        let resolved_depth = if use_ten_bit {
+            PresentationDepth::Sdr10
+        } else {
+            PresentationDepth::Sdr8
+        };
+        let output_pixel_format = if use_ten_bit {
+            "yuv420p10le"
+        } else {
+            "yuv420p"
+        };
+        let input_pixel_format = if use_ten_bit {
+            packed_rgb10_input_format()
+        } else {
+            "rgba"
+        };
+        let expected_readback = if use_ten_bit {
+            ReadbackFormat::Rgb10A2
+        } else {
+            ReadbackFormat::Rgba8
+        };
+        let video_args =
+            streaming_video_args(&effective_codec, resolved_depth, output_pixel_format);
+        let muxer_args = streaming_muxer_args(protocol, use_ten_bit, &effective_codec);
+        let resolved = ResolvedPresentation {
+            requested: request.depth,
+            resolved: resolved_depth,
+            pixel_format: PresentationPixelFormat::EncoderNative(output_pixel_format.to_string()),
+            color_profile: PresentationColorProfile::Rec709Limited,
+            alpha_mode: AlphaMode::Opaque,
+            dither: request.dither,
+            fallback_reason: unavailable,
+        };
+        Self {
+            resolved,
+            input_pixel_format,
+            expected_readback,
+            effective_codec,
+            video_args,
+            muxer_args,
+        }
+    }
+
+    pub(crate) fn for_target(
+        target: &crate::engine::value::render::OutputTarget,
+        request: PresentationRequest,
+    ) -> Option<Self> {
+        let capabilities = StreamingCapabilities::installed();
+        match target {
+            crate::engine::value::render::OutputTarget::SrtStream { codec, .. } => {
+                let codec = match codec {
+                    SrtCodec::H264 => StreamingCodec::H264,
+                    SrtCodec::H265 => StreamingCodec::H265,
+                };
+                Some(Self::resolve(
+                    StreamingProtocol::Srt,
+                    codec,
+                    request,
+                    capabilities,
+                ))
+            }
+            crate::engine::value::render::OutputTarget::HlsStream { codec, .. } => Some(
+                Self::resolve(StreamingProtocol::Hls, codec.clone(), request, capabilities),
+            ),
+            crate::engine::value::render::OutputTarget::DashStream { codec, .. } => {
+                Some(Self::resolve(
+                    StreamingProtocol::Dash,
+                    codec.clone(),
+                    request,
+                    capabilities,
+                ))
+            }
+            crate::engine::value::render::OutputTarget::RtmpStream {
+                codec,
+                codec_contract,
+                ..
+            } => Some(Self::resolve(
+                StreamingProtocol::Rtmp(*codec_contract),
+                codec.clone(),
+                request,
+                capabilities,
+            )),
+            _ => None,
+        }
+    }
+}
+
+fn streaming_video_args(
+    codec: &StreamingCodec,
+    depth: PresentationDepth,
+    output_pixel_format: &str,
+) -> Vec<String> {
+    let mut args: Vec<String> = match codec {
+        StreamingCodec::H264 => {
+            vec![
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-tune",
+                "zerolatency",
+                "-profile:v",
+                "high",
+            ]
+        }
+        StreamingCodec::H265 => vec![
+            "-c:v",
+            "libx265",
+            "-preset",
+            "ultrafast",
+            "-tune",
+            "zerolatency",
+            "-profile:v",
+            if depth == PresentationDepth::Sdr10 {
+                "main10"
+            } else {
+                "main"
+            },
+        ],
+        StreamingCodec::AV1 => vec!["-c:v", "libsvtav1", "-preset", "10", "-profile:v", "0"],
+    }
+    .into_iter()
+    .map(str::to_string)
+    .collect();
+    args.extend(
+        [
+            "-pix_fmt",
+            output_pixel_format,
+            "-color_primaries",
+            "bt709",
+            "-color_trc",
+            "bt709",
+            "-colorspace",
+            "bt709",
+            "-color_range",
+            "tv",
+        ]
+        .into_iter()
+        .map(str::to_string),
+    );
+    args
+}
+
+fn streaming_muxer_args(
+    protocol: StreamingProtocol,
+    ten_bit: bool,
+    codec: &StreamingCodec,
+) -> Vec<String> {
+    let args: Vec<&str> = match protocol {
+        StreamingProtocol::Srt => vec!["-f", "mpegts"],
+        StreamingProtocol::Hls if ten_bit => vec!["-tag:v", codec_tag(codec), "-f", "hls"],
+        StreamingProtocol::Hls => vec!["-f", "hls"],
+        StreamingProtocol::Dash => vec!["-tag:v", codec_tag(codec), "-f", "dash"],
+        StreamingProtocol::Rtmp(RtmpCodecContract::Enhanced) if ten_bit => {
+            vec!["-flvflags", "no_sequence_end+no_metadata", "-f", "flv"]
+        }
+        StreamingProtocol::Rtmp(_) => vec!["-f", "flv"],
+    };
+    args.into_iter().map(str::to_string).collect()
+}
+
+fn codec_tag(codec: &StreamingCodec) -> &'static str {
+    match codec {
+        StreamingCodec::H264 => "avc1",
+        StreamingCodec::H265 => "hvc1",
+        StreamingCodec::AV1 => "av01",
+    }
+}
+
+fn hls_segment_args(dir: &str, low_latency: bool, use_fmp4: bool) -> Vec<String> {
+    let (time, list_size, flags, extension) = if low_latency {
+        ("1", "6", "independent_segments+delete_segments", "m4s")
+    } else if use_fmp4 {
+        ("2", "30", "delete_segments+independent_segments", "m4s")
+    } else {
+        ("2", "30", "delete_segments", "ts")
+    };
+    let mut args = vec![
+        "-hls_time".to_string(),
+        time.to_string(),
+        "-hls_list_size".to_string(),
+        list_size.to_string(),
+        "-hls_flags".to_string(),
+        flags.to_string(),
+    ];
+    if low_latency || use_fmp4 {
+        args.extend([
+            "-hls_segment_type".to_string(),
+            "fmp4".to_string(),
+            "-hls_fmp4_init_filename".to_string(),
+            "init.mp4".to_string(),
+        ]);
+    }
+    args.extend([
+        "-hls_segment_filename".to_string(),
+        format!("{dir}/seg_%05d.{extension}"),
+    ]);
+    args
+}
 
 /// Write a self-contained HTML player page into a stream directory.
 /// Uses hls.js for HLS streams and dash.js for DASH streams.
@@ -88,6 +739,17 @@ pub struct FfmpegSubprocess {
     /// When false, `stop()` kills ffmpeg immediately (safe for streams, required
     /// when the writer thread may be blocked on a full network pipe).
     graceful_shutdown: bool,
+    /// Typed frame contract negotiated before the FFmpeg process starts.
+    frame_contract: Option<FrameContract>,
+    /// Resolved precision selected by the recording or streaming adapter.
+    presentation: Option<ResolvedPresentation>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FrameContract {
+    format: ReadbackFormat,
+    width: u32,
+    height: u32,
 }
 
 /// Bounded channel capacity — 2 frames of buffer allows the writer thread
@@ -530,7 +1192,8 @@ impl FfmpegSubprocess {
     ///
     /// Panics if ffmpeg's stdin was not piped, or if the writer thread cannot
     /// be spawned — both indicate the process/thread limits are exhausted.
-    pub fn spawn_recording(
+    #[cfg(test)]
+    fn spawn_recording(
         path: &str,
         codec: &RecordingCodec,
         width: u32,
@@ -538,6 +1201,71 @@ impl FfmpegSubprocess {
         fps: u32,
         audio: Option<AudioInput>,
     ) -> anyhow::Result<Self> {
+        Self::spawn_recording_with_presentation(
+            path,
+            codec,
+            width,
+            height,
+            fps,
+            audio,
+            PresentationRequest::default(),
+            ReadbackFormat::Rgba8,
+        )
+    }
+
+    /// Resolve recording precision before configuring the headless render target.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the configured FFmpeg encoder cannot be queried.
+    pub fn probe_recording_presentation(
+        codec: &RecordingCodec,
+        request: PresentationRequest,
+        rgba16_unorm_supported: bool,
+    ) -> anyhow::Result<ResolvedPresentation> {
+        let encoder = recording_encoder(codec);
+        let encoder_help = probe_encoder_help(encoder).ok_or_else(|| {
+            anyhow::anyhow!("FFmpeg encoder '{encoder}' is not installed or cannot be queried")
+        })?;
+        Ok(RecordingPlan::resolve(
+            codec,
+            request,
+            preferred_recording_readback(codec, request, rgba16_unorm_supported),
+            Some(&encoder_help),
+        )
+        .resolved)
+    }
+
+    /// Spawn a recording after resolving codec, FFmpeg, and typed readback
+    /// capabilities as one complete presentation path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the audio endpoint or FFmpeg process cannot start.
+    ///
+    /// # Panics
+    ///
+    /// Panics if FFmpeg's piped stdin is unavailable or the bounded writer
+    /// thread cannot be spawned.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the spawn boundary mirrors FFmpeg's fixed recording inputs"
+    )]
+    pub fn spawn_recording_with_presentation(
+        path: &str,
+        codec: &RecordingCodec,
+        width: u32,
+        height: u32,
+        fps: u32,
+        audio: Option<AudioInput>,
+        request: PresentationRequest,
+        readback_format: ReadbackFormat,
+    ) -> anyhow::Result<Self> {
+        let encoder = recording_encoder(codec);
+        let encoder_help = probe_encoder_help(encoder).ok_or_else(|| {
+            anyhow::anyhow!("FFmpeg encoder '{encoder}' is not installed or cannot be queried")
+        })?;
+        let plan = RecordingPlan::resolve(codec, request, readback_format, Some(&encoder_help));
         // Recording keeps the device's native sample rate (Decision 5).
         let prepared = prepare_audio(audio, false)?;
         let empty: Vec<String> = Vec::new();
@@ -545,60 +1273,18 @@ impl FfmpegSubprocess {
             Some(p) => (&p.in_args, &p.out_args),
             None => (&empty, &empty),
         };
-        // (codec args, needs yuv420p output, alpha-capable). Alpha-capable codecs
-        // get an `unpremultiply` filter because the program output is
-        // premultiplied-alpha (see /spec/html-source.md §2); for fully opaque
-        // pixels unpremultiply is a no-op, so existing opaque recordings are
-        // unchanged.
-        let (codec_args, needs_yuv420p, alpha): (Vec<&str>, bool, bool) = match codec {
-            RecordingCodec::H264 => (
-                vec!["-c:v", "libx264", "-preset", "ultrafast", "-crf", "18"],
-                true,
-                false,
-            ),
-            RecordingCodec::H265 => (
-                vec!["-c:v", "libx265", "-preset", "ultrafast", "-crf", "20"],
-                true,
-                false,
-            ),
-            RecordingCodec::AV1 => (
-                vec!["-c:v", "libsvtav1", "-preset", "10", "-crf", "28"],
-                true,
-                false,
-            ),
-            RecordingCodec::ProRes => (vec!["-c:v", "prores_ks", "-profile:v", "2"], true, false),
-            RecordingCodec::ProRes4444 => (
-                vec![
-                    "-c:v",
-                    "prores_ks",
-                    "-profile:v",
-                    "4",
-                    "-pix_fmt",
-                    "yuva444p10le",
-                ],
-                false,
-                true,
-            ),
-            RecordingCodec::Hap => (vec!["-c:v", "hap", "-format", "hap"], false, false),
-            RecordingCodec::HapAlpha => (vec!["-c:v", "hap", "-format", "hap_alpha"], false, true),
-            RecordingCodec::HapQ => (vec!["-c:v", "hap", "-format", "hap_q"], false, true),
-        };
-
         let mut cmd = Command::new("ffmpeg");
         cmd.arg("-y")
             .args(["-f", "rawvideo"])
-            .args(["-pix_fmt", "rgba"])
+            .args(["-pix_fmt", plan.input_pixel_format])
             .args(["-s", &format!("{width}x{height}")])
             .args(["-r", &fps.to_string()])
             .args(["-i", "-"])
             .args(a_in);
-        if alpha {
-            cmd.args(["-vf", "unpremultiply=inplace=1"]);
+        if plan.unpremultiply {
+            cmd.args(["-vf", unpremultiply_filter(plan.input_pixel_format)]);
         }
-        cmd.args(&codec_args);
-        if needs_yuv420p {
-            cmd.args(["-pix_fmt", "yuv420p"]);
-        }
+        cmd.args(&plan.video_args);
         cmd.args(a_out)
             .arg(path)
             .stdin(Stdio::piped())
@@ -609,7 +1295,11 @@ impl FfmpegSubprocess {
             .spawn()
             .map_err(|e| anyhow::anyhow!("Failed to spawn ffmpeg: {e}. Is ffmpeg installed?"))?;
 
-        log::info!("Recording started: {path} ({codec}, {width}x{height} @ {fps}fps)");
+        log::info!(
+            "Recording started: {path} ({codec}, {width}x{height} @ {fps}fps, {} -> {})",
+            plan.input_pixel_format,
+            plan.output_pixel_format
+        );
 
         let stdin = child.stdin.take().expect("ffmpeg stdin not piped");
         let counters = FrameCounters::new();
@@ -639,6 +1329,12 @@ impl FfmpegSubprocess {
             stopped: false,
             audio,
             graceful_shutdown: true,
+            frame_contract: Some(FrameContract {
+                format: plan.expected_readback,
+                width,
+                height,
+            }),
+            presentation: Some(plan.resolved),
         })
     }
 
@@ -657,6 +1353,7 @@ impl FfmpegSubprocess {
     pub fn spawn_srt(
         url: &str,
         codec: &super::context::SrtCodec,
+        request: PresentationRequest,
         width: u32,
         height: u32,
         fps: u32,
@@ -678,25 +1375,28 @@ impl FfmpegSubprocess {
             format!("{url}?mode=listener")
         };
 
-        let encoder = match codec {
-            super::context::SrtCodec::H264 => "libx264",
-            super::context::SrtCodec::H265 => "libx265",
+        let configured_codec = match codec {
+            super::context::SrtCodec::H264 => StreamingCodec::H264,
+            super::context::SrtCodec::H265 => StreamingCodec::H265,
         };
+        let plan = StreamingPlan::resolve(
+            StreamingProtocol::Srt,
+            configured_codec,
+            request,
+            StreamingCapabilities::installed(),
+        );
 
         let mut cmd = Command::new("ffmpeg");
         cmd.arg("-y")
             .args(["-f", "rawvideo"])
-            .args(["-pix_fmt", "rgba"])
+            .args(["-pix_fmt", plan.input_pixel_format])
             .args(["-s", &format!("{width}x{height}")])
             .args(["-r", &fps.to_string()])
             .args(["-i", "-"])
             .args(a_in)
-            .args(["-c:v", encoder])
-            .args(["-preset", "ultrafast"])
-            .args(["-tune", "zerolatency"])
-            .args(["-pix_fmt", "yuv420p"])
+            .args(&plan.video_args)
             .args(a_out)
-            .args(["-f", "mpegts"])
+            .args(&plan.muxer_args)
             .arg(&srt_url)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
@@ -736,6 +1436,12 @@ impl FfmpegSubprocess {
             stopped: false,
             audio,
             graceful_shutdown: false,
+            frame_contract: Some(FrameContract {
+                format: plan.expected_readback,
+                width,
+                height,
+            }),
+            presentation: Some(plan.resolved),
         })
     }
 
@@ -752,9 +1458,12 @@ impl FfmpegSubprocess {
     ///
     /// Panics if ffmpeg's stdin was not piped, or if the writer thread cannot
     /// be spawned — both indicate the process/thread limits are exhausted.
+    // Arguments mirror the persisted HLS target plus frame/audio transport.
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn_hls(
         name: &str,
         codec: &super::context::StreamingCodec,
+        request: PresentationRequest,
         width: u32,
         height: u32,
         fps: u32,
@@ -774,42 +1483,31 @@ impl FfmpegSubprocess {
         let playlist = format!("{dir}/index.m3u8");
         write_stream_player(&dir, "hls", "index.m3u8", low_latency);
 
-        let (encoder, extra): (&str, Vec<&str>) = match codec {
-            super::context::StreamingCodec::H264 => (
-                "libx264",
-                vec!["-preset", "ultrafast", "-tune", "zerolatency"],
-            ),
-            super::context::StreamingCodec::H265 => ("libx265", vec!["-preset", "ultrafast"]),
-            super::context::StreamingCodec::AV1 => ("libsvtav1", vec!["-preset", "10"]),
-        };
+        let plan = StreamingPlan::resolve(
+            StreamingProtocol::Hls,
+            codec.clone(),
+            request,
+            StreamingCapabilities::installed(),
+        );
 
         let mut cmd = Command::new("ffmpeg");
         cmd.arg("-y")
             .args(["-f", "rawvideo"])
-            .args(["-pix_fmt", "rgba"])
+            .args(["-pix_fmt", plan.input_pixel_format])
             .args(["-s", &format!("{width}x{height}")])
             .args(["-r", &fps.to_string()])
             .args(["-i", "-"])
             .args(a_in)
-            .args(["-c:v", encoder])
-            .args(&extra)
-            .args(["-pix_fmt", "yuv420p"])
+            .args(&plan.video_args)
             .args(a_out)
-            .args(["-f", "hls"]);
+            .args(&plan.muxer_args);
 
-        if low_latency {
-            cmd.args(["-hls_time", "1"])
-                .args(["-hls_list_size", "6"])
-                .args(["-hls_flags", "independent_segments+delete_segments"])
-                .args(["-hls_segment_type", "fmp4"])
-                .args(["-hls_fmp4_init_filename", "init.mp4"])
-                .args(["-hls_segment_filename", &format!("{dir}/seg_%05d.m4s")]);
-        } else {
-            cmd.args(["-hls_time", "2"])
-                .args(["-hls_list_size", "30"])
-                .args(["-hls_flags", "delete_segments"])
-                .args(["-hls_segment_filename", &format!("{dir}/seg_%05d.ts")]);
-        }
+        cmd.args(hls_segment_args(
+            &dir,
+            low_latency,
+            plan.resolved.resolved == PresentationDepth::Sdr10
+                || plan.effective_codec != StreamingCodec::H264,
+        ));
 
         cmd.arg(&playlist)
             .stdin(Stdio::piped())
@@ -851,6 +1549,12 @@ impl FfmpegSubprocess {
             stopped: false,
             audio,
             graceful_shutdown: false,
+            frame_contract: Some(FrameContract {
+                format: plan.expected_readback,
+                width,
+                height,
+            }),
+            presentation: Some(plan.resolved),
         })
     }
 
@@ -865,9 +1569,13 @@ impl FfmpegSubprocess {
     ///
     /// Panics if ffmpeg's stdin was not piped, or if the writer thread cannot
     /// be spawned — both indicate the process/thread limits are exhausted.
+    // Arguments mirror the persisted RTMP target plus frame/audio transport.
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn_rtmp(
         url: &str,
         codec: &super::context::StreamingCodec,
+        codec_contract: RtmpCodecContract,
+        request: PresentationRequest,
         width: u32,
         height: u32,
         fps: u32,
@@ -880,16 +1588,12 @@ impl FfmpegSubprocess {
             Some(p) => (&p.in_args, &p.out_args),
             None => (&empty, &empty),
         };
-        let (encoder, extra): (&str, Vec<&str>) = match codec {
-            super::context::StreamingCodec::H264 => (
-                "libx264",
-                vec!["-preset", "ultrafast", "-tune", "zerolatency"],
-            ),
-            super::context::StreamingCodec::H265 => {
-                ("libx265", vec!["-preset", "ultrafast", "-vtag", "hvc1"])
-            }
-            super::context::StreamingCodec::AV1 => ("libsvtav1", vec!["-preset", "10"]),
-        };
+        let plan = StreamingPlan::resolve(
+            StreamingProtocol::Rtmp(codec_contract),
+            codec.clone(),
+            request,
+            StreamingCapabilities::installed(),
+        );
 
         let (maxrate, bufsize) = compute_rtmp_bitrate(width, height, fps);
         let gop = fps * 2;
@@ -897,20 +1601,18 @@ impl FfmpegSubprocess {
         let mut cmd = Command::new("ffmpeg");
         cmd.arg("-y")
             .args(["-f", "rawvideo"])
-            .args(["-pix_fmt", "rgba"])
+            .args(["-pix_fmt", plan.input_pixel_format])
             .args(["-s", &format!("{width}x{height}")])
             .args(["-r", &fps.to_string()])
             .args(["-i", "-"])
             .args(a_in)
-            .args(["-c:v", encoder])
-            .args(&extra)
-            .args(["-pix_fmt", "yuv420p"])
+            .args(&plan.video_args)
             .args(["-b:v", &format!("{maxrate}k")])
             .args(["-maxrate", &format!("{maxrate}k")])
             .args(["-bufsize", &format!("{bufsize}k")])
             .args(["-g", &gop.to_string()])
             .args(a_out)
-            .args(["-f", "flv"])
+            .args(&plan.muxer_args)
             .arg(url)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
@@ -951,6 +1653,12 @@ impl FfmpegSubprocess {
             stopped: false,
             audio,
             graceful_shutdown: false,
+            frame_contract: Some(FrameContract {
+                format: plan.expected_readback,
+                width,
+                height,
+            }),
+            presentation: Some(plan.resolved),
         })
     }
 
@@ -970,6 +1678,7 @@ impl FfmpegSubprocess {
     pub fn spawn_dash(
         name: &str,
         codec: &super::context::StreamingCodec,
+        request: PresentationRequest,
         width: u32,
         height: u32,
         fps: u32,
@@ -988,28 +1697,24 @@ impl FfmpegSubprocess {
         let manifest = format!("{dir}/manifest.mpd");
         write_stream_player(&dir, "dash", "manifest.mpd", false);
 
-        let (encoder, extra): (&str, Vec<&str>) = match codec {
-            super::context::StreamingCodec::H264 => (
-                "libx264",
-                vec!["-preset", "ultrafast", "-tune", "zerolatency"],
-            ),
-            super::context::StreamingCodec::H265 => ("libx265", vec!["-preset", "ultrafast"]),
-            super::context::StreamingCodec::AV1 => ("libsvtav1", vec!["-preset", "10"]),
-        };
+        let plan = StreamingPlan::resolve(
+            StreamingProtocol::Dash,
+            codec.clone(),
+            request,
+            StreamingCapabilities::installed(),
+        );
 
         let mut cmd = Command::new("ffmpeg");
         cmd.arg("-y")
             .args(["-f", "rawvideo"])
-            .args(["-pix_fmt", "rgba"])
+            .args(["-pix_fmt", plan.input_pixel_format])
             .args(["-s", &format!("{width}x{height}")])
             .args(["-r", &fps.to_string()])
             .args(["-i", "-"])
             .args(a_in)
-            .args(["-c:v", encoder])
-            .args(&extra)
-            .args(["-pix_fmt", "yuv420p"])
+            .args(&plan.video_args)
             .args(a_out)
-            .args(["-f", "dash"])
+            .args(&plan.muxer_args)
             .args(["-seg_duration", "2"])
             .args(["-window_size", "30"])
             .args(["-extra_window_size", "5"])
@@ -1052,10 +1757,71 @@ impl FfmpegSubprocess {
             stopped: false,
             audio,
             graceful_shutdown: false,
+            frame_contract: Some(FrameContract {
+                format: plan.expected_readback,
+                width,
+                height,
+            }),
+            presentation: Some(plan.resolved),
         })
     }
 
-    /// Feed a frame of RGBA data to the subprocess.
+    /// Presentation selected for this FFmpeg output.
+    pub fn presentation(&self) -> Option<&ResolvedPresentation> {
+        self.presentation.as_ref()
+    }
+
+    /// Feed one typed GPU readback frame to an FFmpeg subprocess.
+    ///
+    /// The format, dimensions, and stride must match the contract negotiated
+    /// before FFmpeg was spawned. A mismatch stops bytes from entering the raw
+    /// video pipe, where they would otherwise silently desynchronize frames.
+    pub fn feed_readback_frame(&mut self, frame: &ReadbackFrame) -> bool {
+        let Some(contract) = self.frame_contract else {
+            log::error!(
+                "typed frame sent without an FFmpeg contract for '{}'",
+                self.label
+            );
+            return false;
+        };
+        if frame.format() != contract.format
+            || frame.width() != contract.width
+            || frame.height() != contract.height
+        {
+            log::error!(
+                "FFmpeg frame contract mismatch for '{}': expected {} {}x{}, got {} {}x{}",
+                self.label,
+                readback_label(contract.format),
+                contract.width,
+                contract.height,
+                readback_label(frame.format()),
+                frame.width(),
+                frame.height()
+            );
+            return false;
+        }
+        let bytes_per_pixel = match contract.format {
+            ReadbackFormat::Rgba8
+            | ReadbackFormat::Bgra8
+            | ReadbackFormat::Rgb10A2
+            | ReadbackFormat::P216 => 4,
+            ReadbackFormat::Rgba16Float | ReadbackFormat::Rgba16Unorm => 8,
+            ReadbackFormat::Uyvy => 2,
+        };
+        let expected_stride = contract.width * bytes_per_pixel;
+        if frame.stride() != expected_stride {
+            log::error!(
+                "FFmpeg frame stride mismatch for '{}': expected {}, got {}",
+                self.label,
+                expected_stride,
+                frame.stride()
+            );
+            return false;
+        }
+        self.feed_frame(frame.bytes())
+    }
+
+    /// Feed a frame of raw data to a byte-oriented streaming subprocess.
     /// Never blocks — drops the frame if the writer thread can't keep up.
     /// Returns false if the subprocess has failed (write error or process exited).
     pub fn feed_frame(&mut self, rgba: &[u8]) -> bool {
@@ -1315,6 +2081,8 @@ impl Drop for FfmpegSubprocess {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::value::render::{PresentationDepth, PresentationRequest};
+    use crate::renderer::ReadbackFormat;
 
     /// Check if ffmpeg is available on this system.
     fn ffmpeg_available() -> bool {
@@ -1383,6 +2151,625 @@ mod tests {
         assert_eq!(format!("{}", SrtCodec::H265), "H.265 (HEVC)");
     }
 
+    fn ten_bit_request() -> PresentationRequest {
+        PresentationRequest {
+            depth: PresentationDepth::Sdr10,
+            dither: true,
+        }
+    }
+
+    #[test]
+    fn hap_family_ten_bit_request_falls_back_by_product_contract() {
+        for codec in [
+            RecordingCodec::Hap,
+            RecordingCodec::HapAlpha,
+            RecordingCodec::HapQ,
+        ] {
+            let plan = RecordingPlan::resolve(
+                &codec,
+                ten_bit_request(),
+                ReadbackFormat::Rgb10A2,
+                Some("Supported pixel formats: rgba"),
+            );
+            assert_eq!(plan.resolved.requested, PresentationDepth::Sdr10, "{codec}");
+            assert_eq!(plan.resolved.resolved, PresentationDepth::Sdr8, "{codec}");
+            assert_eq!(plan.input_pixel_format, "rgba", "{codec}");
+            assert!(
+                plan.resolved
+                    .fallback_reason
+                    .as_deref()
+                    .unwrap()
+                    .contains("HAP"),
+                "{codec}: {:?}",
+                plan.resolved.fallback_reason
+            );
+        }
+    }
+
+    #[test]
+    fn h264_ten_bit_request_falls_back_by_product_contract() {
+        let plan = RecordingPlan::resolve(
+            &RecordingCodec::H264,
+            ten_bit_request(),
+            ReadbackFormat::Rgb10A2,
+            Some("Supported pixel formats: yuv420p yuv420p10le"),
+        );
+
+        assert_eq!(plan.resolved.resolved, PresentationDepth::Sdr8);
+        assert_eq!(plan.input_pixel_format, "rgba");
+        assert_eq!(plan.output_pixel_format, "yuv420p");
+        assert!(plan
+            .resolved
+            .fallback_reason
+            .as_deref()
+            .unwrap()
+            .contains("H.264"));
+    }
+
+    #[test]
+    fn hevc_main10_uses_packed_rgb10_and_explicit_rec709_metadata() {
+        let plan = RecordingPlan::resolve(
+            &RecordingCodec::H265,
+            ten_bit_request(),
+            ReadbackFormat::Rgb10A2,
+            Some("Supported pixel formats: yuv420p yuv420p10le yuv422p10le"),
+        );
+
+        assert_eq!(plan.resolved.resolved, PresentationDepth::Sdr10);
+        assert_eq!(plan.input_pixel_format, "x2bgr10le");
+        assert_eq!(plan.output_pixel_format, "yuv420p10le");
+        assert!(has_pair(&plan.video_args, "-profile:v", "main10"));
+        assert!(has_pair(&plan.video_args, "-color_primaries", "bt709"));
+        assert!(has_pair(&plan.video_args, "-color_trc", "bt709"));
+        assert!(has_pair(&plan.video_args, "-colorspace", "bt709"));
+        assert!(has_pair(&plan.video_args, "-color_range", "tv"));
+    }
+
+    #[test]
+    fn ten_bit_codec_falls_back_when_renderer_only_supplies_rgba8() {
+        let plan = RecordingPlan::resolve(
+            &RecordingCodec::ProRes,
+            ten_bit_request(),
+            ReadbackFormat::Rgba8,
+            Some("Supported pixel formats: yuv422p10le"),
+        );
+
+        assert_eq!(plan.resolved.requested, PresentationDepth::Sdr10);
+        assert_eq!(plan.resolved.resolved, PresentationDepth::Sdr8);
+        assert_eq!(plan.input_pixel_format, "rgba");
+        assert_eq!(
+            plan.resolved.fallback_reason.as_deref(),
+            Some(
+                "10-bit SDR recording requires packed RGB10 readback, but the active renderer \
+                 supplies RGBA8"
+            )
+        );
+    }
+
+    #[test]
+    fn ten_bit_codec_falls_back_when_encoder_lacks_required_pixel_format() {
+        let plan = RecordingPlan::resolve(
+            &RecordingCodec::AV1,
+            ten_bit_request(),
+            ReadbackFormat::Rgb10A2,
+            Some("Supported pixel formats: yuv420p"),
+        );
+
+        assert_eq!(plan.resolved.resolved, PresentationDepth::Sdr8);
+        assert!(plan
+            .resolved
+            .fallback_reason
+            .as_deref()
+            .unwrap()
+            .contains("does not support yuv420p10le"));
+    }
+
+    #[test]
+    fn every_recording_codec_pins_its_eight_bit_contract() {
+        let cases = [
+            (RecordingCodec::H264, "yuv420p"),
+            (RecordingCodec::H265, "yuv420p"),
+            (RecordingCodec::AV1, "yuv420p"),
+            (RecordingCodec::ProRes, "yuv422p10le"),
+            (RecordingCodec::ProRes4444, "yuva444p10le"),
+            (RecordingCodec::Hap, "rgba"),
+            (RecordingCodec::HapAlpha, "rgba"),
+            (RecordingCodec::HapQ, "rgba"),
+        ];
+        for (codec, expected_output) in cases {
+            let plan = RecordingPlan::resolve(
+                &codec,
+                PresentationRequest::default(),
+                ReadbackFormat::Rgba8,
+                Some(&format!("Supported pixel formats: {expected_output}")),
+            );
+            assert_eq!(plan.resolved.resolved, PresentationDepth::Sdr8, "{codec}");
+            assert_eq!(plan.input_pixel_format, "rgba", "{codec}");
+            assert_eq!(plan.output_pixel_format, expected_output, "{codec}");
+            assert!(has_pair(&plan.video_args, "-pix_fmt", expected_output));
+            assert!(has_pair(&plan.video_args, "-color_primaries", "bt709"));
+            assert!(has_pair(&plan.video_args, "-color_trc", "bt709"));
+            assert!(has_pair(&plan.video_args, "-colorspace", "bt709"));
+            assert!(has_pair(&plan.video_args, "-color_range", "tv"));
+        }
+    }
+
+    #[test]
+    fn supported_opaque_ten_bit_codecs_pin_profiles_and_formats() {
+        let cases = [
+            (RecordingCodec::H265, "yuv420p10le", "main10"),
+            (RecordingCodec::AV1, "yuv420p10le", "0"),
+            (RecordingCodec::ProRes, "yuv422p10le", "2"),
+        ];
+        for (codec, output, profile) in cases {
+            let plan = RecordingPlan::resolve(
+                &codec,
+                ten_bit_request(),
+                ReadbackFormat::Rgb10A2,
+                Some(&format!("Supported pixel formats: {output}")),
+            );
+            assert_eq!(plan.resolved.resolved, PresentationDepth::Sdr10, "{codec}");
+            assert_eq!(plan.input_pixel_format, "x2bgr10le", "{codec}");
+            assert_eq!(plan.output_pixel_format, output, "{codec}");
+            assert!(has_pair(&plan.video_args, "-profile:v", profile));
+        }
+    }
+
+    #[test]
+    fn missing_encoder_probe_never_claims_ten_bit() {
+        let plan = RecordingPlan::resolve(
+            &RecordingCodec::H265,
+            ten_bit_request(),
+            ReadbackFormat::Rgb10A2,
+            None,
+        );
+        assert_eq!(plan.resolved.resolved, PresentationDepth::Sdr8);
+        assert!(plan
+            .resolved
+            .fallback_reason
+            .as_deref()
+            .unwrap()
+            .contains("unavailable"));
+    }
+
+    #[test]
+    fn prores_4444_uses_integer_rgba16_and_explicit_alpha_contract() {
+        let plan = RecordingPlan::resolve(
+            &RecordingCodec::ProRes4444,
+            ten_bit_request(),
+            ReadbackFormat::Rgba16Unorm,
+            Some("Supported pixel formats: yuva444p10le"),
+        );
+
+        assert_eq!(plan.resolved.resolved, PresentationDepth::Sdr10);
+        assert_eq!(plan.resolved.pixel_format, PresentationPixelFormat::Rgba16);
+        assert_eq!(plan.input_pixel_format, "rgba64le");
+        assert_eq!(plan.output_pixel_format, "yuva444p10le");
+        assert_eq!(plan.expected_readback, ReadbackFormat::Rgba16Unorm);
+        assert!(plan.unpremultiply);
+        assert!(has_pair(&plan.video_args, "-profile:v", "4"));
+        assert!(has_pair(&plan.video_args, "-pix_fmt", "yuva444p10le"));
+        assert!(has_pair(&plan.video_args, "-alpha_bits", "16"));
+        assert_eq!(
+            unpremultiply_filter(plan.input_pixel_format),
+            "setparams=alpha_mode=premultiplied,format=gbrap16le,unpremultiply=inplace=1"
+        );
+    }
+
+    #[test]
+    fn prores_4444_rejects_half_float_bytes_as_rgba64le() {
+        let plan = RecordingPlan::resolve(
+            &RecordingCodec::ProRes4444,
+            ten_bit_request(),
+            ReadbackFormat::Rgba16Float,
+            Some("Supported pixel formats: yuva444p10le"),
+        );
+
+        assert_eq!(plan.resolved.resolved, PresentationDepth::Sdr8);
+        assert!(plan
+            .resolved
+            .fallback_reason
+            .as_deref()
+            .unwrap()
+            .contains("integer RGBA16"));
+    }
+
+    #[test]
+    fn prores_4444_falls_back_when_gpu_lacks_rgba16_unorm() {
+        let plan = RecordingPlan::resolve(
+            &RecordingCodec::ProRes4444,
+            ten_bit_request(),
+            ReadbackFormat::Rgba8,
+            Some("Supported pixel formats: yuva444p10le"),
+        );
+
+        assert_eq!(plan.resolved.requested, PresentationDepth::Sdr10);
+        assert_eq!(plan.resolved.resolved, PresentationDepth::Sdr8);
+        assert!(plan
+            .resolved
+            .fallback_reason
+            .as_deref()
+            .unwrap()
+            .contains("GPU does not support"));
+    }
+
+    #[test]
+    fn prores_4444_falls_back_when_encoder_lacks_yuva444p10le() {
+        let plan = RecordingPlan::resolve(
+            &RecordingCodec::ProRes4444,
+            ten_bit_request(),
+            ReadbackFormat::Rgba16Unorm,
+            Some("Supported pixel formats: yuv422p10le"),
+        );
+
+        assert_eq!(plan.resolved.resolved, PresentationDepth::Sdr8);
+        assert!(plan
+            .resolved
+            .fallback_reason
+            .as_deref()
+            .unwrap()
+            .contains("does not support yuva444p10le"));
+    }
+
+    #[test]
+    fn prores_4444_preserves_known_rgb_and_alpha_ramp() {
+        const WIDTH: u32 = 16;
+        const HEIGHT: u32 = 16;
+
+        let Some(help) = probe_encoder_help("prores_ks") else {
+            eprintln!("Skipping test: prores_ks encoder unavailable");
+            return;
+        };
+        if !encoder_supports_pixel_format(&help, "yuva444p10le") {
+            eprintln!("Skipping test: prores_ks lacks yuva444p10le");
+            return;
+        }
+
+        let mut input = Vec::with_capacity((WIDTH * HEIGHT * 8) as usize);
+        for _y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                let alpha = x as f32 / (WIDTH - 1) as f32;
+                for straight in [0.75_f32, 0.5, 0.25] {
+                    input.extend_from_slice(
+                        &((straight * alpha * f32::from(u16::MAX)).round() as u16).to_le_bytes(),
+                    );
+                }
+                input.extend_from_slice(
+                    &((alpha * f32::from(u16::MAX)).round() as u16).to_le_bytes(),
+                );
+            }
+        }
+
+        let path = std::env::temp_dir().join(format!(
+            "varda-prores-alpha-{}-{}.mov",
+            std::process::id(),
+            crate::deck::generate_short_uuid()
+        ));
+        let mut encoder = Command::new("ffmpeg")
+            .args(["-v", "error", "-y", "-f", "rawvideo"])
+            .args(["-pix_fmt", "rgba64le", "-s", "16x16", "-i", "-"])
+            .args(["-vf", unpremultiply_filter("rgba64le")])
+            .args(["-frames:v", "1", "-c:v", "prores_ks"])
+            .args(["-profile:v", "4", "-alpha_bits", "16"])
+            .args(["-pix_fmt", "yuva444p10le"])
+            .arg(&path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn prores alpha encode");
+        encoder
+            .stdin
+            .take()
+            .expect("piped stdin")
+            .write_all(&input)
+            .expect("write RGBA16 frame");
+        let encode_output = encoder.wait_with_output().expect("finish prores encode");
+        assert!(
+            encode_output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&encode_output.stderr)
+        );
+
+        let decoded = Command::new("ffmpeg")
+            .args(["-v", "error", "-i"])
+            .arg(&path)
+            .args([
+                "-frames:v",
+                "1",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgba64le",
+                "-",
+            ])
+            .output()
+            .expect("decode prores alpha frame");
+        let _ = std::fs::remove_file(path);
+        assert!(
+            decoded.status.success(),
+            "{}",
+            String::from_utf8_lossy(&decoded.stderr)
+        );
+        let words: Vec<u16> = decoded
+            .stdout
+            .chunks_exact(2)
+            .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
+            .collect();
+        assert_eq!(words.len(), (WIDTH * HEIGHT * 4) as usize);
+
+        let samples: Vec<[u16; 4]> = [5_usize, 10, 15]
+            .into_iter()
+            .map(|x| {
+                let offset = x * 4;
+                words[offset..offset + 4].try_into().unwrap()
+            })
+            .collect();
+        for [red, green, blue, _alpha] in &samples {
+            assert!(red.abs_diff(49_151) < 256, "red code {red}");
+            assert!(green.abs_diff(32_768) < 256, "green code {green}");
+            assert!(blue.abs_diff(16_384) < 256, "blue code {blue}");
+        }
+        assert!(samples[0][3] < samples[1][3] && samples[1][3] < samples[2][3]);
+        assert!(samples[2][3].abs_diff(u16::MAX) < 32);
+    }
+
+    #[test]
+    fn wgpu_rgb10a2_channel_order_maps_to_ffmpeg_x2bgr10le() {
+        // wgpu packs a red-only texel as 0x0000_03ff. FFmpeg's
+        // x2bgr10le layout assigns those low ten bits to R; x2rgb10le would
+        // decode the same word as blue.
+        let red_only_wgpu_word = 0x0000_03ff_u32;
+        assert_eq!(red_only_wgpu_word & 0x3ff, 1023);
+        assert_eq!(packed_rgb10_input_format(), "x2bgr10le");
+    }
+
+    #[test]
+    fn recording_preflight_selects_renderer_storage_before_spawn() {
+        assert_eq!(
+            preferred_recording_readback(&RecordingCodec::H265, ten_bit_request(), true),
+            ReadbackFormat::Rgb10A2
+        );
+        assert_eq!(
+            preferred_recording_readback(
+                &RecordingCodec::H264,
+                PresentationRequest::default(),
+                true
+            ),
+            ReadbackFormat::Rgba8
+        );
+        assert_eq!(
+            preferred_recording_readback(&RecordingCodec::ProRes4444, ten_bit_request(), true),
+            ReadbackFormat::Rgba16Unorm
+        );
+        assert_eq!(
+            preferred_recording_readback(&RecordingCodec::ProRes4444, ten_bit_request(), false),
+            ReadbackFormat::Rgba8
+        );
+    }
+
+    fn all_streaming_capabilities() -> StreamingCapabilities {
+        StreamingCapabilities {
+            hevc_main10: true,
+            av1_10: true,
+            enhanced_hevc: true,
+            enhanced_av1: true,
+        }
+    }
+
+    #[test]
+    fn srt_hevc_main10_plan_pins_mpegts_and_rec709() {
+        let plan = StreamingPlan::resolve(
+            StreamingProtocol::Srt,
+            StreamingCodec::H265,
+            ten_bit_request(),
+            all_streaming_capabilities(),
+        );
+        assert_eq!(plan.resolved.resolved, PresentationDepth::Sdr10);
+        assert_eq!(plan.input_pixel_format, "x2bgr10le");
+        assert_eq!(plan.expected_readback, ReadbackFormat::Rgb10A2);
+        assert!(has_pair(&plan.video_args, "-profile:v", "main10"));
+        assert!(has_pair(&plan.video_args, "-pix_fmt", "yuv420p10le"));
+        assert!(has_pair(&plan.video_args, "-color_primaries", "bt709"));
+        assert!(has_pair(&plan.video_args, "-color_trc", "bt709"));
+        assert!(has_pair(&plan.video_args, "-colorspace", "bt709"));
+        assert!(has_pair(&plan.video_args, "-color_range", "tv"));
+        assert!(has_pair(&plan.muxer_args, "-f", "mpegts"));
+    }
+
+    #[test]
+    fn hls_and_dash_ten_bit_plans_pin_isobmff_codec_tags() {
+        let hls = StreamingPlan::resolve(
+            StreamingProtocol::Hls,
+            StreamingCodec::H265,
+            ten_bit_request(),
+            all_streaming_capabilities(),
+        );
+        assert_eq!(hls.resolved.resolved, PresentationDepth::Sdr10);
+        assert!(has_pair(&hls.muxer_args, "-tag:v", "hvc1"));
+        assert!(has_pair(&hls.muxer_args, "-f", "hls"));
+        let hls_segments = hls_segment_args("stream", false, true);
+        assert!(has_pair(&hls_segments, "-hls_segment_type", "fmp4"));
+        assert!(has_pair(
+            &hls_segments,
+            "-hls_segment_filename",
+            "stream/seg_%05d.m4s"
+        ));
+
+        let dash = StreamingPlan::resolve(
+            StreamingProtocol::Dash,
+            StreamingCodec::AV1,
+            ten_bit_request(),
+            all_streaming_capabilities(),
+        );
+        assert_eq!(dash.resolved.resolved, PresentationDepth::Sdr10);
+        assert!(has_pair(&dash.muxer_args, "-tag:v", "av01"));
+        assert!(has_pair(&dash.muxer_args, "-f", "dash"));
+    }
+
+    #[test]
+    fn legacy_rtmp_forces_truthful_h264_eight_bit_fallback() {
+        let plan = StreamingPlan::resolve(
+            StreamingProtocol::Rtmp(RtmpCodecContract::Legacy),
+            StreamingCodec::H265,
+            ten_bit_request(),
+            all_streaming_capabilities(),
+        );
+        assert_eq!(plan.resolved.requested, PresentationDepth::Sdr10);
+        assert_eq!(plan.resolved.resolved, PresentationDepth::Sdr8);
+        assert_eq!(plan.expected_readback, ReadbackFormat::Rgba8);
+        assert!(plan
+            .resolved
+            .fallback_reason
+            .as_deref()
+            .unwrap()
+            .contains("legacy RTMP"));
+        assert!(has_pair(&plan.video_args, "-c:v", "libx264"));
+        assert!(has_pair(&plan.video_args, "-pix_fmt", "yuv420p"));
+        assert!(has_pair(&plan.muxer_args, "-f", "flv"));
+    }
+
+    #[test]
+    fn enhanced_rtmp_requires_ffmpeg_muxer_capability() {
+        let missing = StreamingCapabilities {
+            hevc_main10: true,
+            enhanced_hevc: false,
+            ..all_streaming_capabilities()
+        };
+        let fallback = StreamingPlan::resolve(
+            StreamingProtocol::Rtmp(RtmpCodecContract::Enhanced),
+            StreamingCodec::H265,
+            ten_bit_request(),
+            missing,
+        );
+        assert_eq!(fallback.resolved.resolved, PresentationDepth::Sdr8);
+        assert!(fallback
+            .resolved
+            .fallback_reason
+            .as_deref()
+            .unwrap()
+            .contains("Enhanced RTMP"));
+
+        let supported = StreamingPlan::resolve(
+            StreamingProtocol::Rtmp(RtmpCodecContract::Enhanced),
+            StreamingCodec::AV1,
+            ten_bit_request(),
+            all_streaming_capabilities(),
+        );
+        assert_eq!(supported.resolved.resolved, PresentationDepth::Sdr10);
+        assert!(has_pair(&supported.video_args, "-c:v", "libsvtav1"));
+        assert!(has_pair(
+            &supported.muxer_args,
+            "-flvflags",
+            "no_sequence_end+no_metadata"
+        ));
+    }
+
+    #[test]
+    fn ten_bit_stream_falls_back_when_encoder_lacks_profile() {
+        let plan = StreamingPlan::resolve(
+            StreamingProtocol::Dash,
+            StreamingCodec::AV1,
+            ten_bit_request(),
+            StreamingCapabilities::default(),
+        );
+        assert_eq!(plan.resolved.resolved, PresentationDepth::Sdr8);
+        assert!(plan
+            .resolved
+            .fallback_reason
+            .as_deref()
+            .unwrap()
+            .contains("AV1 10-bit"));
+    }
+
+    #[test]
+    fn streaming_resolver_covers_protocol_codec_contract_matrix() {
+        let cases = [
+            (
+                StreamingProtocol::Srt,
+                StreamingCodec::H264,
+                PresentationDepth::Sdr8,
+            ),
+            (
+                StreamingProtocol::Srt,
+                StreamingCodec::H265,
+                PresentationDepth::Sdr10,
+            ),
+            (
+                StreamingProtocol::Hls,
+                StreamingCodec::H264,
+                PresentationDepth::Sdr8,
+            ),
+            (
+                StreamingProtocol::Hls,
+                StreamingCodec::H265,
+                PresentationDepth::Sdr10,
+            ),
+            (
+                StreamingProtocol::Hls,
+                StreamingCodec::AV1,
+                PresentationDepth::Sdr10,
+            ),
+            (
+                StreamingProtocol::Dash,
+                StreamingCodec::H264,
+                PresentationDepth::Sdr8,
+            ),
+            (
+                StreamingProtocol::Dash,
+                StreamingCodec::H265,
+                PresentationDepth::Sdr10,
+            ),
+            (
+                StreamingProtocol::Dash,
+                StreamingCodec::AV1,
+                PresentationDepth::Sdr10,
+            ),
+            (
+                StreamingProtocol::Rtmp(RtmpCodecContract::Legacy),
+                StreamingCodec::H264,
+                PresentationDepth::Sdr8,
+            ),
+            (
+                StreamingProtocol::Rtmp(RtmpCodecContract::Legacy),
+                StreamingCodec::H265,
+                PresentationDepth::Sdr8,
+            ),
+            (
+                StreamingProtocol::Rtmp(RtmpCodecContract::Legacy),
+                StreamingCodec::AV1,
+                PresentationDepth::Sdr8,
+            ),
+            (
+                StreamingProtocol::Rtmp(RtmpCodecContract::Enhanced),
+                StreamingCodec::H264,
+                PresentationDepth::Sdr8,
+            ),
+            (
+                StreamingProtocol::Rtmp(RtmpCodecContract::Enhanced),
+                StreamingCodec::H265,
+                PresentationDepth::Sdr10,
+            ),
+            (
+                StreamingProtocol::Rtmp(RtmpCodecContract::Enhanced),
+                StreamingCodec::AV1,
+                PresentationDepth::Sdr10,
+            ),
+        ];
+        for (protocol, codec, expected) in cases {
+            let plan = StreamingPlan::resolve(
+                protocol,
+                codec.clone(),
+                ten_bit_request(),
+                all_streaming_capabilities(),
+            );
+            assert_eq!(
+                plan.resolved.resolved, expected,
+                "{protocol:?} {codec:?} resolved incorrectly"
+            );
+        }
+    }
+
     // ── Subprocess lifecycle (requires ffmpeg) ─────────────────────
 
     #[test]
@@ -1448,6 +2835,7 @@ mod tests {
         let mut sub = FfmpegSubprocess::spawn_srt(
             url,
             &crate::renderer::context::SrtCodec::H264,
+            PresentationRequest::default(),
             64,
             64,
             30,

@@ -411,7 +411,7 @@ where
                 .min_size(180.0)
                 .default_size(PANEL_DEFAULT_WIDTH)
                 .resizable(true)
-                .show_inside(ui, |ui| add(ui));
+                .show(ui, |ui| add(ui));
         });
     // Run several frames to catch runaway growth (content-driven inflation).
     for _ in 0..5 {
@@ -419,7 +419,7 @@ where
     }
     h.ctx
         .data_mut(|d| d.get_persisted::<egui::PanelState>(id))
-        .map(|s| s.rect.width())
+        .map(|s| s.outer_rect.width())
         .expect("panel state should exist")
 }
 

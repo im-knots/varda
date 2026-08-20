@@ -193,6 +193,31 @@ pub async fn set_target(
     }
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/outputs/{output_uuid}/presentation",
+    params(("output_uuid" = String, Path, description = "Output UUID")),
+    request_body = crate::engine::value::render::PresentationRequest,
+    responses((status = 200, body = CommandResult), (status = 404, description = "Output not found")),
+    tag = "Outputs"
+)]
+pub async fn set_presentation(
+    State(s): State<SharedState>,
+    Path(output_uuid): Path<String>,
+    Json(request): Json<crate::engine::value::render::PresentationRequest>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::SetOutputPresentation {
+            output_uuid,
+            request,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
 // ── Edge Blending ────────────────────────────────────────────────────
 
 #[derive(Deserialize, ToSchema)]

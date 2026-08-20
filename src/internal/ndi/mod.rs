@@ -6,12 +6,18 @@
 
 #[allow(non_camel_case_types, non_snake_case, dead_code)]
 pub mod ffi;
+mod p216;
 pub mod sdk;
 
 use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
+};
+
+use crate::engine::value::render::{
+    AlphaMode, PresentationCapabilities, PresentationColorProfile, PresentationDepth,
+    PresentationFormat, PresentationPixelFormat, PresentationRequest, ResolvedPresentation,
 };
 
 /// Frame rate declared to receivers when the caller's rate will not fit the
@@ -26,14 +32,28 @@ pub struct NdiSource {
     pub name: String,
 }
 
+/// Borrowed GPU resources for one P216 conversion dispatch.
+pub(crate) struct P216FrameConversion<'a> {
+    pub device: &'a wgpu::Device,
+    pub queue: &'a wgpu::Queue,
+    pub encoder: &'a mut wgpu::CommandEncoder,
+    pub source: &'a wgpu::TextureView,
+    pub width: u32,
+    pub height: u32,
+    pub dither: bool,
+}
+
 /// Manages NDI discovery, receive, and send.
 pub struct NdiManager {
     sdk: Option<sdk::NdiSdk>,
+    send_capability: sdk::NdiSendCapability,
     sources: Vec<NdiSource>,
     receivers: Vec<NdiReceiver>,
     textures: Vec<(wgpu::Texture, wgpu::TextureView)>,
     /// Active NDI senders keyed by sender name.
     senders: HashMap<String, NdiSender>,
+    /// GPU P216 conversion/readback state keyed by sender name.
+    p216_converters: HashMap<String, p216::P216Converter>,
 }
 
 /// Shared frame payload passed from receive thread → main thread.
@@ -70,23 +90,39 @@ impl Default for NdiManager {
 
 impl NdiManager {
     pub fn new() -> Self {
-        let sdk = sdk::NdiSdk::load();
-        if let Some(ref sdk) = sdk {
-            let ok = unsafe { (sdk.initialize)() };
+        let mut sdk = sdk::NdiSdk::load();
+        if let Some(loaded) = sdk.as_ref() {
+            let ok = unsafe { (loaded.initialize)() };
             if ok {
-                log::info!("NDI SDK initialized successfully");
+                log::info!(
+                    "NDI SDK {} initialized successfully",
+                    loaded.runtime_version
+                );
             } else {
                 log::error!("NDI SDK initialize() returned false");
+                // A loaded library that rejected initialization cannot submit
+                // either UYVY or P216, so do not advertise runtime capability.
+            }
+            if !ok {
+                sdk = None;
             }
         } else {
             log::info!("NDI SDK not found — NDI features disabled");
         }
+        let send_capability = sdk::NdiSendCapability::from_runtime_evidence(
+            sdk.as_ref()
+                .map(|loaded| loaded.runtime_version.as_str())
+                .filter(|version| !version.is_empty()),
+            sdk.is_some(),
+        );
         Self {
             sdk,
+            send_capability,
             sources: Vec::new(),
             receivers: Vec::new(),
             textures: Vec::new(),
             senders: HashMap::new(),
+            p216_converters: HashMap::new(),
         }
     }
 
@@ -94,16 +130,52 @@ impl NdiManager {
     pub fn new_disabled() -> Self {
         Self {
             sdk: None,
+            send_capability: sdk::NdiSendCapability::from_runtime_evidence(None, false),
             sources: Vec::new(),
             receivers: Vec::new(),
             textures: Vec::new(),
             senders: HashMap::new(),
+            p216_converters: HashMap::new(),
         }
     }
 
     pub fn is_available(&self) -> bool {
         self.sdk.is_some()
     }
+
+    /// Resolve an NDI presentation request from runtime evidence.
+    ///
+    /// NDI 6 plus the resolved v2 submission symbol enables P216. Older or
+    /// unidentified runtimes retain the byte-compatible UYVY fallback.
+    pub fn resolve_presentation(&self, request: PresentationRequest) -> ResolvedPresentation {
+        Self::resolve_presentation_for_capability(request, self.send_capability)
+    }
+
+    fn resolve_presentation_for_capability(
+        request: PresentationRequest,
+        capability: sdk::NdiSendCapability,
+    ) -> ResolvedPresentation {
+        let mut formats = Vec::with_capacity(2);
+        if capability.p216_confirmed() {
+            formats.push(PresentationFormat {
+                depth: PresentationDepth::Sdr10,
+                pixel_format: PresentationPixelFormat::P216,
+                color_profile: PresentationColorProfile::Rec709Limited,
+                alpha_mode: AlphaMode::Opaque,
+            });
+        }
+        formats.push(PresentationFormat {
+            depth: PresentationDepth::Sdr8,
+            pixel_format: PresentationPixelFormat::Uyvy,
+            color_profile: PresentationColorProfile::Rec709Limited,
+            alpha_mode: AlphaMode::Opaque,
+        });
+
+        PresentationCapabilities::new(formats, Some(capability.p216_unavailable_reason()))
+            .resolve(request)
+            .expect("NDI always provides the UYVY fallback")
+    }
+
     pub fn sources(&self) -> &[NdiSource] {
         &self.sources
     }
@@ -383,6 +455,126 @@ impl NdiManager {
             .is_some_and(|r| r.connected.load(Ordering::SeqCst))
     }
 
+    /// Encode a linear `Rgba16Float` output into P216 and enqueue asynchronous
+    /// GPU readback. When both readback slots are busy the frame is dropped.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when P216 is unavailable or the dimensions cannot form
+    /// a valid even-width P216 frame.
+    pub(crate) fn begin_p216_frame(
+        &mut self,
+        sender_name: &str,
+        conversion: P216FrameConversion<'_>,
+    ) -> Result<(), String> {
+        let P216FrameConversion {
+            device,
+            queue,
+            encoder,
+            source,
+            width,
+            height,
+            dither,
+        } = conversion;
+        if !self.send_capability.p216_confirmed() {
+            return Err(self.send_capability.p216_unavailable_reason());
+        }
+        let recreate = self
+            .p216_converters
+            .get(sender_name)
+            .is_none_or(|converter| converter.dimensions() != (width, height));
+        if recreate {
+            let converter = p216::P216Converter::new(device, width, height)
+                .map_err(|error| error.to_string())?;
+            self.p216_converters
+                .insert(sender_name.to_string(), converter);
+        }
+        if let Some(converter) = self.p216_converters.get_mut(sender_name) {
+            let _ = converter.encode(device, queue, encoder, source, dither);
+        }
+        Ok(())
+    }
+
+    /// Submit the oldest completed P216 readback frame through NDI.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when sender creation or frame-contract validation fails.
+    pub(crate) fn try_send_p216(
+        &mut self,
+        sender_name: &str,
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        fps: u32,
+    ) -> Result<(), String> {
+        let Some((mut bytes, layout)) =
+            self.p216_converters
+                .get_mut(sender_name)
+                .and_then(|converter| {
+                    converter
+                        .try_read(device)
+                        .map(|bytes| (bytes, converter.layout()))
+                })
+        else {
+            return Ok(());
+        };
+        if !self.ensure_sender(sender_name, width, height) {
+            return Err(format!("NDI sender '{sender_name}' could not be created"));
+        }
+        let Some(sdk) = &self.sdk else {
+            return Err("NDI runtime is unavailable".to_string());
+        };
+        let Some(sender) = self.senders.get(sender_name) else {
+            return Err(format!("NDI sender '{sender_name}' disappeared"));
+        };
+        submit_p216_with(
+            &mut bytes,
+            width,
+            height,
+            layout.stride,
+            fps,
+            |frame| unsafe {
+                (sdk.send_send_video_v2)(sender.instance, frame);
+            },
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    fn ensure_sender(&mut self, sender_name: &str, width: u32, height: u32) -> bool {
+        if self.senders.contains_key(sender_name) {
+            return true;
+        }
+        let Some(sdk) = &self.sdk else {
+            return false;
+        };
+        let Ok(name_c) = std::ffi::CString::new(sender_name) else {
+            return false;
+        };
+        // Varda's render loop is the clock. Enabling NDI clocking would block
+        // the render thread inside the submission call.
+        let settings = ffi::NDIlib_send_create_t {
+            p_ndi_name: name_c.as_ptr(),
+            p_groups: std::ptr::null(),
+            clock_video: false,
+            clock_audio: false,
+        };
+        let instance = unsafe { (sdk.send_create)(&raw const settings) };
+        if instance.is_null() {
+            log::error!("NDI send_create returned null for '{sender_name}'");
+            return false;
+        }
+        self.senders.insert(
+            sender_name.to_string(),
+            NdiSender {
+                instance,
+                uyvy_buf: vec![0u8; width as usize * height as usize * 2],
+            },
+        );
+        log::info!("NDI sender created: '{sender_name}'");
+        true
+    }
+
     /// Send a frame via NDI for a specific sender name.
     /// Creates the sender instance on first call for a given name.
     ///
@@ -397,41 +589,12 @@ impl NdiManager {
         height: u32,
         fps: u32,
     ) {
+        if !self.ensure_sender(sender_name, width, height) {
+            return;
+        }
         let Some(sdk) = &self.sdk else {
             return;
         };
-
-        // Get or create sender for this name
-        if !self.senders.contains_key(sender_name) {
-            let Ok(name_c) = std::ffi::CString::new(sender_name) else {
-                return;
-            };
-            // Varda's render loop is the clock. A clocked sender blocks
-            // `send_send_video_v2` until the next frame is due at the rate in the
-            // frame struct, and that call runs on the render thread — so clocking
-            // here would throttle the whole stage, every output and the UI with
-            // it, to the NDI rate.
-            let settings = ffi::NDIlib_send_create_t {
-                p_ndi_name: name_c.as_ptr(),
-                p_groups: std::ptr::null(),
-                clock_video: false,
-                clock_audio: false,
-            };
-            let instance = unsafe { (sdk.send_create)(&raw const settings) };
-            if instance.is_null() {
-                log::error!("NDI send_create returned null for '{sender_name}'");
-                return;
-            }
-            let uyvy_size = (width as usize) * (height as usize) * 2;
-            self.senders.insert(
-                sender_name.to_string(),
-                NdiSender {
-                    instance,
-                    uyvy_buf: vec![0u8; uyvy_size],
-                },
-            );
-            log::info!("NDI sender created: '{sender_name}'");
-        }
 
         let Some(sender) = self.senders.get_mut(sender_name) else {
             log::error!("NDI sender '{sender_name}' not found after creation");
@@ -468,6 +631,7 @@ impl NdiManager {
 
     /// Destroy a specific sender by name.
     pub fn destroy_sender(&mut self, sender_name: &str) {
+        self.p216_converters.remove(sender_name);
         if let Some(sender) = self.senders.remove(sender_name) {
             if let Some(ref sdk) = self.sdk {
                 unsafe { (sdk.send_destroy)(sender.instance) };
@@ -484,6 +648,39 @@ impl NdiManager {
             }
         }
     }
+}
+
+fn submit_p216_with(
+    data: &mut [u8],
+    width: u32,
+    height: u32,
+    stride: u32,
+    fps: u32,
+    mut submit: impl FnMut(*const ffi::NDIlib_video_frame_v2_t),
+) -> Result<(), p216::P216Error> {
+    let layout = p216::P216Layout::new(width, height)?;
+    if stride != layout.stride || data.len() as u64 != layout.byte_len {
+        return Err(p216::P216Error::InvalidBuffer {
+            expected: layout.byte_len,
+            actual: data.len(),
+        });
+    }
+    let frame = ffi::NDIlib_video_frame_v2_t {
+        xres: i32::try_from(width).unwrap_or(i32::MAX),
+        yres: i32::try_from(height).unwrap_or(i32::MAX),
+        FourCC: ffi::NDIlib_FourCC_video_type_e::P216,
+        frame_rate_N: i32::try_from(fps).unwrap_or(DEFAULT_NDI_FPS).max(1),
+        frame_rate_D: 1,
+        picture_aspect_ratio: 0.0,
+        frame_format_type: 1,
+        timecode: i64::MAX,
+        p_data: data.as_mut_ptr(),
+        line_stride_in_bytes: i32::try_from(stride).unwrap_or(i32::MAX),
+        p_metadata: p216::REC709_METADATA.as_ptr().cast(),
+        timestamp: 0,
+    };
+    submit(&raw const frame);
+    Ok(())
 }
 
 impl Drop for NdiManager {
@@ -621,6 +818,7 @@ fn rgba_to_uyvy(rgba: &[u8], uyvy: &mut [u8], w: u32, h: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::value::render::{PresentationDepth, PresentationPixelFormat};
 
     #[test]
     fn ndi_manager_new_no_crash() {
@@ -674,6 +872,91 @@ mod tests {
         };
         let cloned = src.clone();
         assert_eq!(src.name, cloned.name);
+    }
+
+    #[test]
+    fn ndi_six_request_resolves_to_p216() {
+        let request = PresentationRequest {
+            depth: PresentationDepth::Sdr10,
+            dither: true,
+        };
+        let capability = sdk::NdiSendCapability::from_runtime_evidence(Some("NDI SDK 6.3.1"), true);
+
+        let resolved = NdiManager::resolve_presentation_for_capability(request, capability);
+
+        assert_eq!(resolved.requested, PresentationDepth::Sdr10);
+        assert_eq!(resolved.resolved, PresentationDepth::Sdr10);
+        assert_eq!(resolved.pixel_format, PresentationPixelFormat::P216);
+        assert_eq!(
+            resolved.color_profile,
+            PresentationColorProfile::Rec709Limited
+        );
+        assert_eq!(resolved.alpha_mode, AlphaMode::Opaque);
+        assert!(resolved.fallback_reason.is_none());
+    }
+
+    #[test]
+    fn eight_bit_request_remains_uyvy_without_fallback_warning() {
+        let capability = sdk::NdiSendCapability::from_runtime_evidence(Some("NDI SDK 6.3.1"), true);
+
+        let resolved = NdiManager::resolve_presentation_for_capability(
+            PresentationRequest::default(),
+            capability,
+        );
+
+        assert_eq!(resolved.resolved, PresentationDepth::Sdr8);
+        assert_eq!(resolved.pixel_format, PresentationPixelFormat::Uyvy);
+        assert!(resolved.fallback_reason.is_none());
+    }
+
+    #[test]
+    fn pre_ndi_six_request_resolves_to_uyvy_fallback() {
+        let request = PresentationRequest {
+            depth: PresentationDepth::Sdr10,
+            dither: true,
+        };
+        let capability = sdk::NdiSendCapability::from_runtime_evidence(Some("NDI SDK 5.6.0"), true);
+
+        let resolved = NdiManager::resolve_presentation_for_capability(request, capability);
+
+        assert_eq!(resolved.resolved, PresentationDepth::Sdr8);
+        assert_eq!(resolved.pixel_format, PresentationPixelFormat::Uyvy);
+        assert!(resolved
+            .fallback_reason
+            .as_deref()
+            .unwrap()
+            .contains("predates"));
+    }
+
+    #[test]
+    fn mock_sender_receives_p216_contract_and_planes() {
+        let mut bytes = vec![
+            0x00, 0x10, 0x00, 0xeb, // Y: limited black, limited white
+            0x00, 0x80, 0x00, 0x80, // U,V: neutral
+        ];
+        let mut captured = None;
+
+        submit_p216_with(&mut bytes, 2, 1, 4, 60, |frame_ptr| {
+            let frame = unsafe { &*frame_ptr };
+            let metadata = unsafe { std::ffi::CStr::from_ptr(frame.p_metadata) }
+                .to_str()
+                .unwrap()
+                .to_string();
+            let submitted = unsafe { std::slice::from_raw_parts(frame.p_data, 8) }.to_vec();
+            captured = Some((
+                frame.FourCC,
+                frame.line_stride_in_bytes,
+                metadata,
+                submitted,
+            ));
+        })
+        .unwrap();
+
+        let (fourcc, stride, metadata, submitted) = captured.unwrap();
+        assert_eq!(fourcc, ffi::NDIlib_FourCC_video_type_e::P216);
+        assert_eq!(stride, 4);
+        assert!(metadata.contains("primaries=\"bt_709\""));
+        assert_eq!(submitted, bytes);
     }
 
     // ── Color conversion tests ──────────────────────────────────────

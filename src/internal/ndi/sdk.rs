@@ -11,12 +11,63 @@ use super::ffi::{
     NDIlib_video_frame_v2_t,
 };
 use libloading::{Library, Symbol};
-use std::os::raw::c_uint;
+use std::os::raw::{c_char, c_uint};
+
+/// Evidence available from the dynamically loaded runtime for high-bit sending.
+///
+/// NDI 6 documents P216 submission through the same `send_send_video_v2`
+/// symbol resolved below. The compatible v2 frame structure is compiled into
+/// this adapter, so runtime generation is the remaining capability evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NdiSendCapability {
+    runtime_major: Option<u32>,
+    send_video_v2_resolved: bool,
+}
+
+impl NdiSendCapability {
+    /// Build capability evidence from the runtime generation and sender symbol.
+    pub fn from_runtime_evidence(version: Option<&str>, send_video_v2_resolved: bool) -> Self {
+        Self {
+            runtime_major: version.and_then(parse_runtime_major),
+            send_video_v2_resolved,
+        }
+    }
+
+    /// Whether the complete sender path has positively confirmed P216 support.
+    pub const fn p216_confirmed(self) -> bool {
+        matches!(self.runtime_major, Some(6..)) && self.send_video_v2_resolved
+    }
+
+    /// User-facing explanation for the honest UYVY fallback.
+    pub fn p216_unavailable_reason(self) -> String {
+        match self.runtime_major {
+            None => "the NDI runtime version is unavailable, so P216 sending cannot be verified"
+                .to_string(),
+            Some(major) if major < 6 => {
+                format!("the loaded NDI {major} runtime predates the NDI 6 high-bit contract")
+            }
+            Some(major) if !self.send_video_v2_resolved => {
+                format!("the loaded NDI {major} runtime does not resolve NDIlib_send_send_video_v2")
+            }
+            Some(major) => format!("the loaded NDI {major} runtime supports P216"),
+        }
+    }
+}
+
+fn parse_runtime_major(version: &str) -> Option<u32> {
+    version
+        .split(|character: char| !character.is_ascii_digit() && character != '.')
+        .filter(|token| token.contains('.'))
+        .filter_map(|token| token.split('.').next())
+        .find_map(|major| major.parse().ok())
+}
 
 /// Loaded NDI SDK with resolved function pointers.
 pub struct NdiSdk {
     #[allow(dead_code)]
     lib: Library,
+    /// Runtime identity returned by `NDIlib_version`.
+    pub runtime_version: String,
 
     // Core lifecycle
     pub initialize: unsafe extern "C" fn() -> bool,
@@ -149,6 +200,7 @@ impl NdiSdk {
 
         type FnInit = unsafe extern "C" fn() -> bool;
         type FnDestroy = unsafe extern "C" fn();
+        type FnVersion = unsafe extern "C" fn() -> *const c_char;
         type FnFindCreate =
             unsafe extern "C" fn(*const NDIlib_find_create_t) -> NDIlib_find_instance_t;
         type FnFindDestroy = unsafe extern "C" fn(NDIlib_find_instance_t);
@@ -173,6 +225,16 @@ impl NdiSdk {
         type FnSendVideo =
             unsafe extern "C" fn(NDIlib_send_instance_t, *const NDIlib_video_frame_v2_t);
 
+        let version_fn = load_fn!(lib, b"NDIlib_version\0", FnVersion);
+        let version_ptr = version_fn();
+        let runtime_version = if version_ptr.is_null() {
+            String::new()
+        } else {
+            std::ffi::CStr::from_ptr(version_ptr)
+                .to_string_lossy()
+                .into_owned()
+        };
+
         Some(Self {
             initialize: load_fn!(lib, b"NDIlib_initialize\0", FnInit),
             destroy: load_fn!(lib, b"NDIlib_destroy\0", FnDestroy),
@@ -191,7 +253,60 @@ impl NdiSdk {
             send_create: load_fn!(lib, b"NDIlib_send_create\0", FnSendCreate),
             send_destroy: load_fn!(lib, b"NDIlib_send_destroy\0", FnSendDestroy),
             send_send_video_v2: load_fn!(lib, b"NDIlib_send_send_video_v2\0", FnSendVideo),
+            runtime_version,
             lib,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_runtime_major, NdiSendCapability};
+
+    #[test]
+    fn runtime_major_accepts_vendor_version_strings() {
+        assert_eq!(parse_runtime_major("NDI SDK 6.3.1"), Some(6));
+        assert_eq!(parse_runtime_major("6.0.0"), Some(6));
+        assert_eq!(parse_runtime_major("NDI Runtime v5.6.0"), Some(5));
+        assert_eq!(
+            parse_runtime_major("NDI SDK APPLE 12:49:17 Apr 13 2026 6.3.2.0"),
+            Some(6)
+        );
+        assert_eq!(parse_runtime_major("unknown"), None);
+    }
+
+    #[test]
+    fn ndi_six_confirms_p216_submission_contract() {
+        let capability = NdiSendCapability::from_runtime_evidence(Some("NDI SDK 6.3.1"), true);
+
+        assert!(capability.p216_confirmed());
+    }
+
+    #[test]
+    fn pre_ndi_six_runtime_reports_version_limitation() {
+        let capability = NdiSendCapability::from_runtime_evidence(Some("NDI SDK 5.6.0"), true);
+
+        assert!(!capability.p216_confirmed());
+        assert!(capability.p216_unavailable_reason().contains("NDI 5"));
+    }
+
+    #[test]
+    fn missing_runtime_reports_runtime_limitation() {
+        let capability = NdiSendCapability::from_runtime_evidence(None, false);
+
+        assert!(!capability.p216_confirmed());
+        assert!(capability
+            .p216_unavailable_reason()
+            .contains("runtime version is unavailable"));
+    }
+
+    #[test]
+    fn missing_sender_symbol_disables_p216() {
+        let capability = NdiSendCapability::from_runtime_evidence(Some("NDI SDK 6.3.1"), false);
+
+        assert!(!capability.p216_confirmed());
+        assert!(capability
+            .p216_unavailable_reason()
+            .contains("NDIlib_send_send_video_v2"));
     }
 }

@@ -622,7 +622,7 @@ impl VardaApp {
             None
         };
 
-        for output in &self.output.outputs {
+        for output in &mut self.output.outputs {
             match output {
                 crate::renderer::context::UnifiedOutput::Window(output) => {
                     Self::render_window_output(
@@ -661,7 +661,7 @@ impl VardaApp {
     }
 
     fn render_window_output(
-        output: &crate::renderer::context::OutputWindow,
+        output: &mut crate::renderer::context::OutputWindow,
         context: &crate::renderer::context::GpuContext,
         mixer: &crate::mixer::Mixer,
         surface_manager: &crate::surface::SurfaceManager,
@@ -847,8 +847,11 @@ impl VardaApp {
                 else {
                     continue;
                 };
-                h.blit_pipeline
-                    .set_rotation(&context.queue, h.rotation.index());
+                h.blit_pipeline.set_presentation(
+                    &context.queue,
+                    h.rotation.index(),
+                    &h.resolved_presentation,
+                );
                 let bind_group = h
                     .blit_pipeline
                     .create_bind_group(&context.device, source_view);
@@ -1015,11 +1018,51 @@ impl VardaApp {
             #[cfg(not(target_os = "macos"))]
             let is_syphon = false;
 
-            if !is_syphon {
+            let is_ndi_p216 = matches!(
+                (&h.target, &h.resolved_presentation.pixel_format),
+                (
+                    crate::renderer::context::OutputTarget::NdiSend { .. },
+                    crate::renderer::context::PresentationPixelFormat::P216
+                )
+            );
+            if is_ndi_p216 {
+                if let crate::renderer::context::OutputTarget::NdiSend { sender_name } = &h.target {
+                    if let Err(error) = sinks.ndi_manager.begin_p216_frame(
+                        sender_name,
+                        crate::ndi::P216FrameConversion {
+                            device: &context.device,
+                            queue: &context.queue,
+                            encoder: &mut encoder,
+                            source: &h.texture_view,
+                            width: h.width,
+                            height: h.height,
+                            dither: h.presentation_request.dither,
+                        },
+                    ) {
+                        log::error!("NDI P216 conversion failed for '{}': {error}", h.name);
+                        h.active = false;
+                    }
+                }
+            } else if !is_syphon {
                 // Enqueue readback copy from the now-rendered texture
                 h.readback.begin_readback(&mut encoder, &h.texture);
             }
             context.submit(std::iter::once(encoder.finish()));
+
+            if is_ndi_p216 {
+                if let crate::renderer::context::OutputTarget::NdiSend { sender_name } = &h.target {
+                    if let Err(error) = sinks.ndi_manager.try_send_p216(
+                        sender_name,
+                        &context.device,
+                        h.width,
+                        h.height,
+                        sinks.encoder_fps,
+                    ) {
+                        log::error!("NDI P216 submission failed for '{}': {error}", h.name);
+                        h.active = false;
+                    }
+                }
+            }
 
             #[cfg(target_os = "macos")]
             if let crate::renderer::context::OutputTarget::SyphonServer { ref server_name } =
@@ -1035,9 +1078,34 @@ impl VardaApp {
             }
 
             // Deliver previous frame's readback data to target
-            if !is_syphon {
+            if !is_syphon && !is_ndi_p216 {
                 if let Some(frame_data) = h.readback.try_read(&context.device) {
-                    match h.deliver_frame(&frame_data, sinks.ndi_manager, sinks.encoder_fps) {
+                    let delivery = if h.subprocess.is_some() {
+                        if h.subprocess
+                            .as_mut()
+                            .is_some_and(|subprocess| !subprocess.feed_readback_frame(&frame_data))
+                        {
+                            if let Some(mut subprocess) = h.subprocess.take() {
+                                subprocess.stop();
+                            }
+                            if matches!(
+                                h.target,
+                                crate::renderer::context::OutputTarget::SrtStream { .. }
+                            ) {
+                                crate::renderer::context::DeliveryResult::SrtNeedsRestart
+                            } else {
+                                crate::renderer::context::DeliveryResult::Failed(format!(
+                                    "FFmpeg frame contract failed for '{}'",
+                                    h.name
+                                ))
+                            }
+                        } else {
+                            crate::renderer::context::DeliveryResult::Ok
+                        }
+                    } else {
+                        h.deliver_frame(frame_data.bytes(), sinks.ndi_manager, sinks.encoder_fps)
+                    };
+                    match delivery {
                         crate::renderer::context::DeliveryResult::Failed(msg) => {
                             log::error!("{msg}");
                             h.active = false;
@@ -1070,6 +1138,7 @@ impl VardaApp {
                             match crate::renderer::FfmpegSubprocess::spawn_srt(
                                 &url,
                                 &codec,
+                                h.presentation_request,
                                 h.width,
                                 h.height,
                                 sinks.encoder_fps,

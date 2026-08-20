@@ -4035,3 +4035,336 @@ fn a_sequence_cannot_start_while_the_arrangement_has_authority() {
         "playing a sequence under arrangement authority should be refused, got {r:?}"
     );
 }
+
+#[test]
+fn presentation_request_keeps_ten_bit_intent_and_reports_ndi_fallback() {
+    use varda::engine::value::render::{PresentationDepth, PresentationRequest};
+    use varda::renderer::context::OutputTarget;
+
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::CreateHeadlessOutput {
+            target: OutputTarget::NdiSend {
+                sender_name: "Precision Test".into(),
+            },
+        },
+    );
+    let output_uuid = app
+        .build_engine_state()
+        .outputs
+        .windows
+        .last()
+        .expect("headless output created")
+        .uuid
+        .clone();
+    assert!(matches!(
+        send_cmd(
+            &mut app,
+            EngineCommand::SetOutputPresentation {
+                output_uuid: output_uuid.clone(),
+                request: PresentationRequest {
+                    depth: PresentationDepth::Sdr10,
+                    dither: true,
+                },
+            },
+        ),
+        CommandResult::Ok
+    ));
+
+    let state = app.build_engine_state();
+    let output = state
+        .outputs
+        .windows
+        .iter()
+        .find(|output| output.uuid == output_uuid)
+        .unwrap();
+    assert_eq!(output.presentation_request.depth, PresentationDepth::Sdr10);
+    assert_eq!(
+        output.resolved_presentation.resolved,
+        PresentationDepth::Sdr8
+    );
+    assert!(output.resolved_presentation.fallback_reason.is_some());
+}
+
+fn last_output_uuid(app: &mut VardaApp) -> String {
+    app.build_engine_state()
+        .outputs
+        .windows
+        .last()
+        .expect("output created")
+        .uuid
+        .clone()
+}
+
+#[test]
+fn presentation_request_unknown_output_is_not_found() {
+    use varda::engine::value::render::{PresentationDepth, PresentationRequest};
+
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let result = send_cmd(
+        &mut app,
+        EngineCommand::SetOutputPresentation {
+            output_uuid: "no-such-output".into(),
+            request: PresentationRequest {
+                depth: PresentationDepth::Sdr10,
+                dither: true,
+            },
+        },
+    );
+    assert!(
+        matches!(
+            result,
+            CommandResult::Err {
+                code: ErrorCode::NotFound,
+                ..
+            }
+        ),
+        "unknown output should error: {result:?}"
+    );
+}
+
+#[test]
+fn presentation_request_keeps_ten_bit_intent_on_syphon_fallback() {
+    use varda::engine::value::render::{
+        PresentationDepth, PresentationPixelFormat, PresentationRequest,
+    };
+    use varda::renderer::context::OutputTarget;
+
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::CreateHeadlessOutput {
+            target: OutputTarget::SyphonServer {
+                server_name: "Precision Syphon".into(),
+            },
+        },
+    );
+    let output_uuid = last_output_uuid(&mut app);
+    assert!(matches!(
+        send_cmd(
+            &mut app,
+            EngineCommand::SetOutputPresentation {
+                output_uuid: output_uuid.clone(),
+                request: PresentationRequest {
+                    depth: PresentationDepth::Sdr10,
+                    dither: false,
+                },
+            },
+        ),
+        CommandResult::Ok
+    ));
+
+    let output = app
+        .build_engine_state()
+        .outputs
+        .windows
+        .into_iter()
+        .find(|output| output.uuid == output_uuid)
+        .unwrap();
+    assert_eq!(output.presentation_request.depth, PresentationDepth::Sdr10);
+    assert!(!output.presentation_request.dither);
+    assert_eq!(
+        output.resolved_presentation.resolved,
+        PresentationDepth::Sdr8
+    );
+    assert_eq!(
+        output.resolved_presentation.pixel_format,
+        PresentationPixelFormat::Bgra8
+    );
+    assert!(output.resolved_presentation.fallback_reason.is_some());
+}
+
+#[test]
+fn chaos_unknown_output_uuid_presentation_does_not_panic() {
+    use varda::engine::value::render::{PresentationDepth, PresentationRequest};
+
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    for uuid in ["", "no-such-output", "🔥", &"x".repeat(4096), "out\0null"] {
+        fire(
+            &mut app,
+            EngineCommand::SetOutputPresentation {
+                output_uuid: uuid.to_string(),
+                request: PresentationRequest {
+                    depth: PresentationDepth::Sdr10,
+                    dither: uuid.len() % 2 == 0,
+                },
+            },
+        );
+    }
+    app.update_frame_timing();
+    app.render_mixer_frame();
+    assert!(app.build_engine_state().outputs.windows.is_empty());
+}
+
+#[test]
+fn chaos_rapid_presentation_toggle_while_rendering() {
+    use varda::engine::value::render::{PresentationDepth, PresentationRequest};
+    use varda::renderer::context::OutputTarget;
+
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::CreateHeadlessOutput {
+            target: OutputTarget::NdiSend {
+                sender_name: "Storm".into(),
+            },
+        },
+    );
+    let output_uuid = last_output_uuid(&mut app);
+    for i in 0..64 {
+        fire(
+            &mut app,
+            EngineCommand::SetOutputPresentation {
+                output_uuid: output_uuid.clone(),
+                request: PresentationRequest {
+                    depth: if i % 2 == 0 {
+                        PresentationDepth::Sdr10
+                    } else {
+                        PresentationDepth::Sdr8
+                    },
+                    dither: i % 3 != 0,
+                },
+            },
+        );
+        if i % 8 == 0 {
+            app.update_frame_timing();
+            app.render_mixer_frame();
+        }
+    }
+    app.update_frame_timing();
+    app.render_mixer_frame();
+    let output = app
+        .build_engine_state()
+        .outputs
+        .windows
+        .into_iter()
+        .find(|output| output.uuid == output_uuid)
+        .unwrap();
+    assert_eq!(output.presentation_request.depth, PresentationDepth::Sdr8);
+    assert!(!output.presentation_request.dither);
+}
+
+#[test]
+fn chaos_retarget_and_presentation_storm() {
+    use varda::engine::value::render::{
+        PresentationDepth, PresentationRequest, RecordingCodec, StreamingCodec,
+    };
+    use varda::renderer::context::OutputTarget;
+
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::CreateHeadlessOutput {
+            target: OutputTarget::NdiSend {
+                sender_name: "Storm".into(),
+            },
+        },
+    );
+    let output_uuid = last_output_uuid(&mut app);
+    let targets = [
+        OutputTarget::SyphonServer {
+            server_name: "Storm Syphon".into(),
+        },
+        OutputTarget::Recording {
+            path: "/tmp/varda-chaos-presentation.mov".into(),
+            codec: RecordingCodec::Hap,
+            audio_device: None,
+        },
+        OutputTarget::HlsStream {
+            name: "storm".into(),
+            codec: StreamingCodec::H265,
+            low_latency: true,
+            audio_device: None,
+        },
+        OutputTarget::NdiSend {
+            sender_name: "Storm".into(),
+        },
+    ];
+    for (i, target) in targets.into_iter().cycle().take(24).enumerate() {
+        fire(
+            &mut app,
+            EngineCommand::SetOutputTarget {
+                output_uuid: output_uuid.clone(),
+                target,
+            },
+        );
+        fire(
+            &mut app,
+            EngineCommand::SetOutputPresentation {
+                output_uuid: output_uuid.clone(),
+                request: PresentationRequest {
+                    depth: PresentationDepth::Sdr10,
+                    dither: i % 2 == 0,
+                },
+            },
+        );
+        if i % 5 == 0 {
+            app.update_frame_timing();
+            app.render_mixer_frame();
+        }
+    }
+    app.update_frame_timing();
+    app.render_mixer_frame();
+    let output = app
+        .build_engine_state()
+        .outputs
+        .windows
+        .into_iter()
+        .find(|output| output.uuid == output_uuid)
+        .unwrap();
+    assert_eq!(output.presentation_request.depth, PresentationDepth::Sdr10);
+    assert_eq!(
+        output.resolved_presentation.requested,
+        PresentationDepth::Sdr10
+    );
+}
+
+#[test]
+fn chaos_create_close_presentation_cycle() {
+    use varda::engine::value::render::{PresentationDepth, PresentationRequest};
+    use varda::renderer::context::OutputTarget;
+
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    for i in 0..16 {
+        send_cmd(
+            &mut app,
+            EngineCommand::CreateHeadlessOutput {
+                target: OutputTarget::NdiSend {
+                    sender_name: format!("Cycle {i}"),
+                },
+            },
+        );
+        let output_uuid = last_output_uuid(&mut app);
+        fire(
+            &mut app,
+            EngineCommand::SetOutputPresentation {
+                output_uuid: output_uuid.clone(),
+                request: PresentationRequest {
+                    depth: PresentationDepth::Sdr10,
+                    dither: true,
+                },
+            },
+        );
+        app.update_frame_timing();
+        app.render_mixer_frame();
+        fire(&mut app, EngineCommand::CloseOutput { output_uuid });
+    }
+    app.update_frame_timing();
+    app.render_mixer_frame();
+    assert!(app.build_engine_state().outputs.windows.is_empty());
+}

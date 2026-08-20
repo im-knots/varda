@@ -11,7 +11,7 @@ use wgpu::util::DeviceExt;
 /// Supports batching up to 16 composites in a single `queue.submit()`.
 const MAX_DRAW_SLOTS: u64 = 16;
 
-/// Uniform buffer for blit parameters - 32 bytes (8 x f32)
+/// Uniform buffer for blit and final presentation parameters.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct BlitParams {
@@ -28,6 +28,12 @@ struct BlitParams {
     /// blitting linear content into a non-sRGB target whose consumer expects
     /// gamma-encoded samples. See `BlitPipeline::set_srgb_encode`.
     srgb_encode: u32,
+    /// Number of integer code intervals at the destination (255 or 1023).
+    quantization_levels: f32,
+    /// 1 enables deterministic destination-aware RGB dithering.
+    dither_enabled: u32,
+    /// Uniform structs are padded to a 16-byte multiple for WGSL layout.
+    _padding: [u32; 2],
 }
 
 pub struct BlitPipeline {
@@ -42,6 +48,23 @@ pub struct BlitPipeline {
     ring_slots: Cell<usize>,
     /// Byte stride between slots (aligned to device minimum).
     ring_stride: u64,
+}
+
+fn presentation_encoding(
+    presentation: &crate::engine::value::render::ResolvedPresentation,
+) -> (f32, bool, bool) {
+    use crate::engine::value::render::{PresentationDepth, PresentationPixelFormat};
+
+    let adapter_encodes_after_the_blit =
+        matches!(presentation.pixel_format, PresentationPixelFormat::P216);
+    let quantization_levels = match presentation.resolved {
+        PresentationDepth::Sdr8 => 255.0,
+        PresentationDepth::Sdr10 => 1023.0,
+    };
+    let explicit_srgb_encode =
+        presentation.resolved == PresentationDepth::Sdr10 && !adapter_encodes_after_the_blit;
+    let dither = presentation.dither && !adapter_encodes_after_the_blit;
+    (quantization_levels, explicit_srgb_encode, dither)
 }
 
 impl BlitPipeline {
@@ -113,6 +136,9 @@ impl BlitPipeline {
                 uv_offset: [0.0, 0.0],
                 premultiplied: 0,
                 srgb_encode: 0,
+                quantization_levels: 0.0,
+                dither_enabled: 0,
+                _padding: [0; 2],
             }]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
@@ -256,6 +282,9 @@ impl BlitPipeline {
                 uv_offset: [0.0, 0.0],
                 premultiplied: 0,
                 srgb_encode: 0,
+                quantization_levels: 0.0,
+                dither_enabled: 0,
+                _padding: [0; 2],
             }]),
         );
     }
@@ -278,6 +307,9 @@ impl BlitPipeline {
                 uv_offset,
                 premultiplied: 0,
                 srgb_encode: 0,
+                quantization_levels: 0.0,
+                dither_enabled: 0,
+                _padding: [0; 2],
             }]),
         );
     }
@@ -304,6 +336,9 @@ impl BlitPipeline {
                 uv_offset: [0.0, 0.0],
                 premultiplied: 0,
                 srgb_encode: u32::from(encode),
+                quantization_levels: 0.0,
+                dither_enabled: 0,
+                _padding: [0; 2],
             }]),
         );
     }
@@ -320,6 +355,37 @@ impl BlitPipeline {
                 uv_offset: [0.0, 0.0],
                 premultiplied: 0,
                 srgb_encode: 0,
+                quantization_levels: 0.0,
+                dither_enabled: 0,
+                _padding: [0; 2],
+            }]),
+        );
+    }
+
+    /// Configure the final SDR transfer, quantization depth, dither, and rotation.
+    pub fn set_presentation(
+        &self,
+        queue: &wgpu::Queue,
+        rotation: u32,
+        presentation: &crate::engine::value::render::ResolvedPresentation,
+    ) {
+        let (quantization_levels, explicit_srgb_encode, dither_enabled) =
+            presentation_encoding(presentation);
+        queue.write_buffer(
+            &self.params_buffer,
+            0,
+            bytemuck::cast_slice(&[BlitParams {
+                opacity: 1.0,
+                rotation,
+                uv_scale: [1.0, 1.0],
+                uv_offset: [0.0, 0.0],
+                premultiplied: 0,
+                srgb_encode: u32::from(explicit_srgb_encode),
+                quantization_levels,
+                // NDI P216 dithers Y, U and V immediately before ten-bit
+                // quantization in its dedicated GPU conversion pass.
+                dither_enabled: u32::from(dither_enabled),
+                _padding: [0; 2],
             }]),
         );
     }
@@ -386,6 +452,9 @@ impl BlitPipeline {
                 uv_offset,
                 premultiplied: u32::from(premultiplied),
                 srgb_encode: 0,
+                quantization_levels: 0.0,
+                dither_enabled: 0,
+                _padding: [0; 2],
             }]),
         );
     }
@@ -1150,7 +1219,7 @@ impl PolygonBlitPipeline {
             vertex: wgpu::VertexState {
                 module: &shader_module,
                 entry_point: Some("vs_main"),
-                buffers: &[PolygonVertex::LAYOUT],
+                buffers: &[Some(PolygonVertex::LAYOUT)],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -1677,6 +1746,604 @@ mod tests {
         assert_eq!(indices.len() % 3, 0, "indices must form whole triangles");
         for &i in indices {
             assert!((i as usize) < n, "index {i} out of range for {n} verts");
+        }
+    }
+
+    #[test]
+    fn presentation_blit_shader_builds_for_eight_and_ten_bit_targets() {
+        let Ok(ctx) = GpuContext::new_headless() else {
+            return;
+        };
+        for format in [
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            wgpu::TextureFormat::Rgb10a2Unorm,
+        ] {
+            BlitPipeline::new(&ctx.device, format).expect("presentation blit pipeline");
+        }
+    }
+
+    #[test]
+    fn encoder_native_rgb10_gets_srgb_encoding_and_dither() {
+        use crate::engine::value::render::{
+            AlphaMode, PresentationColorProfile, PresentationDepth, PresentationPixelFormat,
+            ResolvedPresentation,
+        };
+        let presentation = ResolvedPresentation {
+            requested: PresentationDepth::Sdr10,
+            resolved: PresentationDepth::Sdr10,
+            pixel_format: PresentationPixelFormat::EncoderNative("yuv420p10le".into()),
+            color_profile: PresentationColorProfile::Rec709Limited,
+            alpha_mode: AlphaMode::Opaque,
+            dither: true,
+            fallback_reason: None,
+        };
+
+        assert_eq!(presentation_encoding(&presentation), (1023.0, true, true));
+    }
+
+    #[test]
+    fn eight_bit_presentation_quantizes_to_255_and_can_dither() {
+        use crate::engine::value::render::{
+            AlphaMode, PresentationColorProfile, PresentationDepth, PresentationPixelFormat,
+            ResolvedPresentation,
+        };
+        let presentation = ResolvedPresentation {
+            requested: PresentationDepth::Sdr8,
+            resolved: PresentationDepth::Sdr8,
+            pixel_format: PresentationPixelFormat::Bgra8,
+            color_profile: PresentationColorProfile::SrgbFull,
+            alpha_mode: AlphaMode::Premultiplied,
+            dither: true,
+            fallback_reason: None,
+        };
+        assert_eq!(presentation_encoding(&presentation), (255.0, false, true));
+    }
+
+    #[test]
+    fn rgb10_presentation_encodes_and_dithers_in_the_blit() {
+        use crate::engine::value::render::{
+            AlphaMode, PresentationColorProfile, PresentationDepth, PresentationPixelFormat,
+            ResolvedPresentation,
+        };
+        let presentation = ResolvedPresentation {
+            requested: PresentationDepth::Sdr10,
+            resolved: PresentationDepth::Sdr10,
+            pixel_format: PresentationPixelFormat::Rgb10A2,
+            color_profile: PresentationColorProfile::SrgbFull,
+            alpha_mode: AlphaMode::Opaque,
+            dither: true,
+            fallback_reason: None,
+        };
+        assert_eq!(presentation_encoding(&presentation), (1023.0, true, true));
+    }
+
+    #[test]
+    fn p216_defers_transfer_and_dither_to_its_conversion_pass() {
+        use crate::engine::value::render::{
+            AlphaMode, PresentationColorProfile, PresentationDepth, PresentationPixelFormat,
+            ResolvedPresentation,
+        };
+        let presentation = ResolvedPresentation {
+            requested: PresentationDepth::Sdr10,
+            resolved: PresentationDepth::Sdr10,
+            pixel_format: PresentationPixelFormat::P216,
+            color_profile: PresentationColorProfile::Rec709Limited,
+            alpha_mode: AlphaMode::Opaque,
+            dither: true,
+            fallback_reason: None,
+        };
+
+        assert_eq!(presentation_encoding(&presentation), (1023.0, false, false));
+    }
+
+    #[test]
+    fn rgba16_recording_encodes_rgb_but_never_dithers_alpha() {
+        use crate::engine::value::render::{
+            AlphaMode, PresentationColorProfile, PresentationDepth, PresentationPixelFormat,
+            ResolvedPresentation,
+        };
+        let presentation = ResolvedPresentation {
+            requested: PresentationDepth::Sdr10,
+            resolved: PresentationDepth::Sdr10,
+            pixel_format: PresentationPixelFormat::Rgba16,
+            color_profile: PresentationColorProfile::Rec709Limited,
+            alpha_mode: AlphaMode::Straight,
+            dither: true,
+            fallback_reason: None,
+        };
+
+        assert_eq!(presentation_encoding(&presentation), (1023.0, true, true));
+    }
+
+    #[test]
+    fn rgba16_recording_target_preserves_known_rgb_codes_and_alpha_ramp() {
+        use crate::engine::value::render::{
+            AlphaMode, PresentationColorProfile, PresentationDepth, PresentationPixelFormat,
+            ResolvedPresentation,
+        };
+
+        const WIDTH: u32 = 4;
+        const ROW_BYTES: u32 = 256;
+        let Ok(ctx) = GpuContext::new_headless() else {
+            return;
+        };
+        let required_features = wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
+            | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
+        if !ctx.device.features().contains(required_features) {
+            return;
+        }
+        let pipeline = BlitPipeline::new(&ctx.device, wgpu::TextureFormat::Rgba16Unorm).unwrap();
+        let source = ctx.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("RGBA16 Code Source"),
+            size: wgpu::Extent3d {
+                width: WIDTH,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let mut source_words = Vec::with_capacity(WIDTH as usize * 4);
+        for x in 0..WIDTH {
+            source_words.extend_from_slice(&[
+                half::f16::ZERO.to_bits(),
+                half::f16::from_f32(0.214_041_14).to_bits(),
+                half::f16::ONE.to_bits(),
+                half::f16::from_f32(x as f32 / (WIDTH - 1) as f32).to_bits(),
+            ]);
+        }
+        ctx.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &source,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(&source_words),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(WIDTH * 8),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d {
+                width: WIDTH,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        let target = ctx.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("RGBA16 Code Target"),
+            size: wgpu::Extent3d {
+                width: WIDTH,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let source_view = source.create_view(&wgpu::TextureViewDescriptor::default());
+        let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = pipeline.create_bind_group(&ctx.device, &source_view);
+        pipeline.set_presentation(
+            &ctx.queue,
+            0,
+            &ResolvedPresentation {
+                requested: PresentationDepth::Sdr10,
+                resolved: PresentationDepth::Sdr10,
+                pixel_format: PresentationPixelFormat::Rgba16,
+                color_profile: PresentationColorProfile::Rec709Limited,
+                alpha_mode: AlphaMode::Straight,
+                dither: false,
+                fallback_reason: None,
+            },
+        );
+        let readback = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("RGBA16 Code Readback"),
+            size: u64::from(ROW_BYTES),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("RGBA16 Code Encoder"),
+            });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("RGBA16 Code Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pipeline.render(&mut pass, &bind_group);
+        }
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(ROW_BYTES),
+                    rows_per_image: Some(1),
+                },
+            },
+            wgpu::Extent3d {
+                width: WIDTH,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        ctx.queue.submit([encoder.finish()]);
+        let (tx, rx) = std::sync::mpsc::channel();
+        readback
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                let _ = tx.send(result);
+            });
+        let _ = ctx.device.poll(wgpu::PollType::wait_indefinitely());
+        rx.recv().unwrap().unwrap();
+        let mapped = readback.slice(..).get_mapped_range().unwrap();
+        let words = bytemuck::cast_slice::<u8, u16>(&mapped[..(WIDTH * 8) as usize]);
+
+        for (x, pixel) in words.chunks_exact(4).enumerate() {
+            assert_eq!(pixel[0], 0);
+            assert!(pixel[1].abs_diff(32_768) < 64, "green code {}", pixel[1]);
+            assert_eq!(pixel[2], u16::MAX);
+            let expected_alpha =
+                ((x as f32 / (WIDTH - 1) as f32) * f32::from(u16::MAX)).round() as u16;
+            assert!(pixel[3].abs_diff(expected_alpha) < 64);
+        }
+    }
+
+    #[test]
+    fn rgb10_presentation_preserves_more_than_eight_bits_of_a_gradient() {
+        use crate::engine::value::render::{
+            AlphaMode, PresentationColorProfile, PresentationDepth, PresentationPixelFormat,
+            ResolvedPresentation,
+        };
+
+        const WIDTH: u32 = 1024;
+        let Ok(ctx) = GpuContext::new_headless() else {
+            return;
+        };
+        let Ok(pipeline) = BlitPipeline::new(&ctx.device, wgpu::TextureFormat::Rgb10a2Unorm) else {
+            return;
+        };
+        let source = ctx.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("RGB10 Gradient Source"),
+            size: wgpu::Extent3d {
+                width: WIDTH,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let mut source_words = Vec::with_capacity(WIDTH as usize * 4);
+        for x in 0..WIDTH {
+            let value = half::f16::from_f32(x as f32 / (WIDTH - 1) as f32).to_bits();
+            source_words.extend_from_slice(&[value, value, value, half::f16::ONE.to_bits()]);
+        }
+        ctx.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &source,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(&source_words),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(WIDTH * 8),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d {
+                width: WIDTH,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        let target = ctx.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("RGB10 Gradient Target"),
+            size: wgpu::Extent3d {
+                width: WIDTH,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgb10a2Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let source_view = source.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = pipeline.create_bind_group(&ctx.device, &source_view);
+        pipeline.set_presentation(
+            &ctx.queue,
+            0,
+            &ResolvedPresentation {
+                requested: PresentationDepth::Sdr10,
+                resolved: PresentationDepth::Sdr10,
+                pixel_format: PresentationPixelFormat::Rgb10A2,
+                color_profile: PresentationColorProfile::SrgbFull,
+                alpha_mode: AlphaMode::Opaque,
+                dither: false,
+                fallback_reason: None,
+            },
+        );
+        let readback = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("RGB10 Gradient Readback"),
+            size: u64::from(WIDTH * 4),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("RGB10 Gradient Encoder"),
+            });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("RGB10 Gradient Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pipeline.render(&mut pass, &bind_group);
+        }
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(WIDTH * 4),
+                    rows_per_image: Some(1),
+                },
+            },
+            wgpu::Extent3d {
+                width: WIDTH,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        ctx.queue.submit([encoder.finish()]);
+        let (tx, rx) = std::sync::mpsc::channel();
+        readback
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                let _ = tx.send(result);
+            });
+        let _ = ctx.device.poll(wgpu::PollType::wait_indefinitely());
+        rx.recv().unwrap().unwrap();
+        let mapped = readback.slice(..).get_mapped_range().unwrap();
+        let unique_red_codes = bytemuck::cast_slice::<u8, u32>(&mapped)
+            .iter()
+            .map(|packed| packed & 0x3ff)
+            .collect::<std::collections::HashSet<_>>();
+
+        assert!(
+            unique_red_codes.len() > 256,
+            "RGB10 output retained only {} distinct red codes",
+            unique_red_codes.len()
+        );
+    }
+
+    fn blit_rgb10_constant(
+        ctx: &GpuContext,
+        pipeline: &BlitPipeline,
+        width: u32,
+        linear: f32,
+        dither: bool,
+    ) -> Vec<u32> {
+        use crate::engine::value::render::{
+            AlphaMode, PresentationColorProfile, PresentationDepth, PresentationPixelFormat,
+            ResolvedPresentation,
+        };
+        let row_bytes = width
+            .saturating_mul(4)
+            .div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+            .saturating_mul(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let source = ctx.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("RGB10 Dither Source"),
+            size: wgpu::Extent3d {
+                width,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let mut source_words = Vec::with_capacity(width as usize * 4);
+        let value = half::f16::from_f32(linear).to_bits();
+        for _ in 0..width {
+            source_words.extend_from_slice(&[value, value, value, half::f16::ONE.to_bits()]);
+        }
+        ctx.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &source,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(&source_words),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 8),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d {
+                width,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        let target = ctx.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("RGB10 Dither Target"),
+            size: wgpu::Extent3d {
+                width,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgb10a2Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let source_view = source.create_view(&wgpu::TextureViewDescriptor::default());
+        let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = pipeline.create_bind_group(&ctx.device, &source_view);
+        pipeline.set_presentation(
+            &ctx.queue,
+            0,
+            &ResolvedPresentation {
+                requested: PresentationDepth::Sdr10,
+                resolved: PresentationDepth::Sdr10,
+                pixel_format: PresentationPixelFormat::Rgb10A2,
+                color_profile: PresentationColorProfile::SrgbFull,
+                alpha_mode: AlphaMode::Opaque,
+                dither,
+                fallback_reason: None,
+            },
+        );
+        let readback = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("RGB10 Dither Readback"),
+            size: u64::from(row_bytes),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("RGB10 Dither Encoder"),
+            });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("RGB10 Dither Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pipeline.render(&mut pass, &bind_group);
+        }
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row_bytes),
+                    rows_per_image: Some(1),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        ctx.queue.submit([encoder.finish()]);
+        let (tx, rx) = std::sync::mpsc::channel();
+        readback
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                let _ = tx.send(result);
+            });
+        let _ = ctx.device.poll(wgpu::PollType::wait_indefinitely());
+        rx.recv().unwrap().unwrap();
+        let mapped = readback.slice(..).get_mapped_range().unwrap();
+        bytemuck::cast_slice::<u8, u32>(&mapped[..(width * 4) as usize]).to_vec()
+    }
+
+    #[test]
+    fn rgb10_dither_is_stable_and_changes_codes_versus_off() {
+        const WIDTH: u32 = 32;
+        let Ok(ctx) = GpuContext::new_headless() else {
+            return;
+        };
+        let Ok(pipeline) = BlitPipeline::new(&ctx.device, wgpu::TextureFormat::Rgb10a2Unorm) else {
+            return;
+        };
+        let undithered = blit_rgb10_constant(&ctx, &pipeline, WIDTH, 0.42, false);
+        let first = blit_rgb10_constant(&ctx, &pipeline, WIDTH, 0.42, true);
+        let second = blit_rgb10_constant(&ctx, &pipeline, WIDTH, 0.42, true);
+        assert_eq!(first, second, "destination-aware dither must be stable");
+        assert_ne!(
+            undithered, first,
+            "dither must change at least one destination code"
+        );
+        let undithered_red = undithered[0] & 0x3ff;
+        for packed in &first {
+            let red = packed & 0x3ff;
+            assert!(
+                red.abs_diff(undithered_red) <= 1,
+                "dither amplitude exceeded one 10-bit LSB: {red} vs {undithered_red}"
+            );
         }
     }
 

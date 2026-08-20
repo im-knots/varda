@@ -663,7 +663,7 @@ pub(super) fn render_channel_column(
                 egui::ScrollArea::vertical()
                     .id_salt(format!("ch_scroll_{ch_idx}"))
                     .scroll_source(egui::scroll_area::ScrollSource {
-                        drag: false,
+                        drag: egui::scroll_area::DragScroll::Never,
                         scroll_bar: true,
                         mouse_wheel: true,
                     })

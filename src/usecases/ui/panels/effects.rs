@@ -85,7 +85,7 @@ pub(super) fn render_master_effect_detail(
                                         .id_salt(format!("master_fx_scroll_{eff_idx}"))
                                         .max_height(max_h)
                                         .scroll_source(egui::scroll_area::ScrollSource {
-                                            drag: false,
+                                            drag: egui::scroll_area::DragScroll::Never,
                                             scroll_bar: true,
                                             mouse_wheel: true,
                                         })
@@ -363,7 +363,7 @@ pub(super) fn render_channel_effect_detail(
                                         .id_salt(format!("ch_fx_scroll_{ch_idx}_{eff_idx}"))
                                         .max_height(max_h)
                                         .scroll_source(egui::scroll_area::ScrollSource {
-                                            drag: false,
+                                            drag: egui::scroll_area::DragScroll::Never,
                                             scroll_bar: true,
                                             mouse_wheel: true,
                                         })

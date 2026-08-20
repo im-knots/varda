@@ -135,8 +135,19 @@ impl VardaApp {
                                         output.set_target(OutputTarget::Windowed, None);
                                     }
                                 }
+                                if let Err(error) = output
+                                    .set_presentation_request(&self.context, config.presentation)
+                                {
+                                    log::warn!(
+                                        "Output '{}' presentation request fell back during restore: {error}",
+                                        output.name
+                                    );
+                                }
                                 log::info!("Created output window '{}'", output.name);
                                 self.output.outputs.push(UnifiedOutput::Window(output));
+                                self.refresh_presentation_notification(
+                                    self.output.outputs.len() - 1,
+                                );
                             }
                             Err(e) => {
                                 log::error!("Failed to create output window: {e}");
@@ -177,8 +188,17 @@ impl VardaApp {
                 headless.edge_blend_mode = config.edge_blend_mode;
                 headless.edge_blend = config.edge_blend;
                 headless.rotation = config.rotation;
+                headless.set_presentation_request(&self.context.device, config.presentation);
+                if matches!(&headless.target, OutputTarget::NdiSend { .. }) {
+                    let resolved = self
+                        .external_io
+                        .ndi_manager
+                        .resolve_presentation(config.presentation);
+                    headless.set_resolved_presentation(&self.context.device, resolved);
+                }
                 log::info!("Created headless output '{name}'");
                 self.output.outputs.push(UnifiedOutput::Headless(headless));
+                self.refresh_presentation_notification(self.output.outputs.len() - 1);
             }
         }
     }
