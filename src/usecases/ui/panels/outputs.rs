@@ -131,9 +131,77 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
                         // Headless output controls (recording/SRT/NDI/Syphon)
                         render_headless_controls(ui, &output.uuid, output, data, actions);
                     }
+                    render_presentation_controls(ui, &output.uuid, output, actions);
                 });
             ui.add_space(4.0);
         }
+    }
+}
+
+fn render_presentation_controls(
+    ui: &mut egui::Ui,
+    output_uuid: &str,
+    output: &super::super::OutputUI,
+    actions: &mut UIActions,
+) {
+    use crate::engine::value::render::{PresentationDepth, PresentationRequest};
+
+    ui.add_space(2.0);
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("SDR precision:").small());
+        egui::ComboBox::from_id_salt(format!("presentation_depth_{output_uuid}"))
+            .selected_text(egui::RichText::new(output.presentation_request.depth.label()).small())
+            .width(100.0)
+            .show_ui(ui, |ui| {
+                for depth in PresentationDepth::ALL {
+                    if ui
+                        .selectable_label(output.presentation_request.depth == depth, depth.label())
+                        .clicked()
+                    {
+                        actions.commands.push(EngineCommand::SetOutputPresentation {
+                            output_uuid: output_uuid.to_string(),
+                            request: PresentationRequest {
+                                depth,
+                                dither: output.presentation_request.dither,
+                            },
+                        });
+                    }
+                }
+            });
+
+        let mut dither = output.presentation_request.dither;
+        if ui
+            .checkbox(&mut dither, egui::RichText::new("Dither").small())
+            .changed()
+        {
+            actions.commands.push(EngineCommand::SetOutputPresentation {
+                output_uuid: output_uuid.to_string(),
+                request: PresentationRequest {
+                    depth: output.presentation_request.depth,
+                    dither,
+                },
+            });
+        }
+    });
+
+    let resolved = &output.resolved_presentation;
+    let status = format!(
+        "Delivering {} · {}",
+        resolved.resolved.label(),
+        resolved.pixel_format
+    );
+    let color = if resolved.fallback_reason.is_some() {
+        egui::Color32::from_rgb(255, 190, 80)
+    } else {
+        egui::Color32::from_rgb(120, 200, 255)
+    };
+    ui.label(egui::RichText::new(status).small().color(color));
+    if let Some(reason) = &resolved.fallback_reason {
+        ui.label(
+            egui::RichText::new(format!("10-bit fallback: {reason}"))
+                .small()
+                .color(color),
+        );
     }
 }
 
@@ -480,7 +548,7 @@ fn render_stream_config(
     output: &super::super::OutputUI,
     actions: &mut UIActions,
 ) {
-    use crate::renderer::context::{SrtCodec, StreamingCodec};
+    use crate::renderer::context::{RtmpCodecContract, SrtCodec, StreamingCodec};
 
     // Determine current protocol label
     let current_proto = match &output.target {
@@ -541,6 +609,7 @@ fn render_stream_config(
                             OutputTarget::RtmpStream {
                                 url: "rtmp://".to_string(),
                                 codec: StreamingCodec::default(),
+                                codec_contract: RtmpCodecContract::default(),
                                 audio_device: None,
                             },
                         ),
@@ -701,6 +770,7 @@ fn render_stream_config(
         OutputTarget::RtmpStream {
             ref url,
             ref codec,
+            codec_contract,
             ref audio_device,
         } => {
             if !output.is_active {
@@ -721,6 +791,36 @@ fn render_stream_config(
                                         target: OutputTarget::RtmpStream {
                                             url: url.clone(),
                                             codec: c.clone(),
+                                            codec_contract: *codec_contract,
+                                            audio_device: audio_device.clone(),
+                                        },
+                                    });
+                                }
+                            }
+                        });
+                });
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Endpoint:").small());
+                    egui::ComboBox::from_id_salt(format!("rtmp_contract_{output_uuid}"))
+                        .selected_text(match codec_contract {
+                            RtmpCodecContract::Legacy => "Legacy RTMP",
+                            RtmpCodecContract::Enhanced => "Enhanced RTMP",
+                        })
+                        .show_ui(ui, |ui| {
+                            for (contract, label) in [
+                                (RtmpCodecContract::Legacy, "Legacy RTMP"),
+                                (RtmpCodecContract::Enhanced, "Enhanced RTMP"),
+                            ] {
+                                if ui
+                                    .selectable_label(*codec_contract == contract, label)
+                                    .clicked()
+                                {
+                                    actions.commands.push(EngineCommand::SetOutputTarget {
+                                        output_uuid: output_uuid.to_string(),
+                                        target: OutputTarget::RtmpStream {
+                                            url: url.clone(),
+                                            codec: codec.clone(),
+                                            codec_contract: contract,
                                             audio_device: audio_device.clone(),
                                         },
                                     });
@@ -747,6 +847,7 @@ fn render_stream_config(
                                 target: OutputTarget::RtmpStream {
                                     url: current_url,
                                     codec: codec.clone(),
+                                    codec_contract: *codec_contract,
                                     audio_device: audio_device.clone(),
                                 },
                             });
@@ -1052,6 +1153,31 @@ fn render_edge_blend_controls(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui_kittest::kittest::Queryable;
+
+    fn sample_output(
+        resolved: crate::engine::value::render::ResolvedPresentation,
+    ) -> crate::usecases::ui::OutputUI {
+        crate::usecases::ui::OutputUI {
+            uuid: "out00001".to_string(),
+            name: "Main".to_string(),
+            target: OutputTarget::Windowed,
+            target_label: "Windowed".to_string(),
+            is_windowed: true,
+            is_active: true,
+            active_duration: std::time::Duration::ZERO,
+            surface_assignments: vec![],
+            calibration_mode: crate::renderer::context::CalibrationMode::Off,
+            edge_blend_mode: crate::renderer::edge_blend::EdgeBlendMode::default(),
+            edge_blend: crate::renderer::edge_blend::EdgeBlendConfig::default(),
+            rotation: crate::renderer::context::OutputRotation::default(),
+            presentation_request: crate::engine::value::render::PresentationRequest::default(),
+            resolved_presentation: resolved,
+            audio_passthrough: None,
+            preview_width: 1920,
+            preview_height: 1080,
+        }
+    }
 
     #[test]
     fn render_output_section_smoke() {
@@ -1065,26 +1191,64 @@ mod tests {
     #[test]
     fn render_output_section_smoke_with_outputs() {
         let mut data = UIData::test_fixture();
-        data.outputs.push(crate::usecases::ui::OutputUI {
-            uuid: "out00001".to_string(),
-            name: "Main".to_string(),
-            target: OutputTarget::Windowed,
-            target_label: "Windowed".to_string(),
-            is_windowed: true,
-            is_active: true,
-            active_duration: std::time::Duration::ZERO,
-            surface_assignments: vec![],
-            calibration_mode: crate::renderer::context::CalibrationMode::Off,
-            edge_blend_mode: crate::renderer::edge_blend::EdgeBlendMode::default(),
-            edge_blend: crate::renderer::edge_blend::EdgeBlendConfig::default(),
-            rotation: crate::renderer::context::OutputRotation::default(),
-            audio_passthrough: None,
-            preview_width: 1920,
-            preview_height: 1080,
-        });
+        data.outputs.push(sample_output(
+            crate::engine::value::render::ResolvedPresentation::default(),
+        ));
         let mut actions = UIActions::new();
         let _harness = egui_kittest::Harness::new_ui(|ui| {
             render_output_section(ui, &data, &mut actions);
         });
+    }
+
+    #[test]
+    fn dither_checkbox_emits_set_output_presentation() {
+        let mut data = UIData::test_fixture();
+        data.outputs.push(sample_output(
+            crate::engine::value::render::ResolvedPresentation::default(),
+        ));
+        let mut actions = UIActions::new();
+        {
+            let mut harness = egui_kittest::Harness::builder()
+                .with_size(egui::vec2(420.0, 640.0))
+                .build_ui(|ui| {
+                    render_output_section(ui, &data, &mut actions);
+                });
+            harness.get_by_label("Dither").click();
+            harness.run();
+        }
+        assert!(actions.commands.iter().any(|command| matches!(
+            command,
+            EngineCommand::SetOutputPresentation {
+                output_uuid,
+                request
+            } if output_uuid == "out00001" && !request.dither
+        )));
+    }
+
+    #[test]
+    fn fallback_reason_is_visible_on_the_output_card() {
+        use crate::engine::value::render::{
+            AlphaMode, PresentationColorProfile, PresentationDepth, PresentationPixelFormat,
+            ResolvedPresentation,
+        };
+        let mut data = UIData::test_fixture();
+        data.outputs.push(sample_output(ResolvedPresentation {
+            requested: PresentationDepth::Sdr10,
+            resolved: PresentationDepth::Sdr8,
+            pixel_format: PresentationPixelFormat::Bgra8,
+            color_profile: PresentationColorProfile::SrgbFull,
+            alpha_mode: AlphaMode::Premultiplied,
+            dither: true,
+            fallback_reason: Some("Syphon interoperability is limited to BGRA8".into()),
+        }));
+        let mut actions = UIActions::new();
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(420.0, 640.0))
+            .build_ui(|ui| {
+                render_output_section(ui, &data, &mut actions);
+            });
+        harness.run();
+        harness.get_by_label("Delivering 8-bit SDR · BGRA8");
+        harness.get_by_label("10-bit fallback: Syphon interoperability is limited to BGRA8");
     }
 }

@@ -59,6 +59,7 @@ impl InteractiveWindow {
             height: size.height.max(1),
             present_mode: wgpu::PresentMode::Fifo,
             alpha_mode: caps.alpha_modes[0],
+            color_space: wgpu::SurfaceColorSpace::Auto,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
@@ -195,7 +196,7 @@ impl InteractiveWindow {
             self.blit_pipeline.render(&mut pass, &bind_group);
         }
         context.submit(std::iter::once(encoder.finish()));
-        frame.present();
+        context.queue.present(frame);
         self.window.request_redraw();
     }
 

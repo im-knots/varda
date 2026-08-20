@@ -787,6 +787,8 @@ pub enum OutputTargetConfig {
         #[serde(default)]
         codec: String,
         #[serde(default)]
+        codec_contract: crate::renderer::context::RtmpCodecContract,
+        #[serde(default)]
         audio_device: Option<String>,
     },
     NdiSend {
@@ -829,6 +831,9 @@ pub struct OutputConfig {
     /// Per-output rotation (0°/90°/180°/270°).
     #[serde(default)]
     pub rotation: crate::renderer::context::OutputRotation,
+    /// Requested SDR precision and deterministic presentation dithering.
+    #[serde(default, flatten)]
+    pub presentation: crate::engine::value::render::PresentationRequest,
 }
 
 impl OutputConfig {
@@ -845,6 +850,7 @@ impl OutputConfig {
             edge_blend_mode: crate::renderer::edge_blend::EdgeBlendMode::default(),
             edge_blend: crate::renderer::edge_blend::EdgeBlendConfig::default(),
             rotation: crate::renderer::context::OutputRotation::default(),
+            presentation: crate::engine::value::render::PresentationRequest::default(),
         }
     }
 }
@@ -2110,10 +2116,32 @@ mod tests {
     }
 
     #[test]
+    fn legacy_output_defaults_to_eight_bit_dithered_presentation() {
+        let output: OutputConfig = serde_json::from_str(r#"{"name":"Main"}"#).unwrap();
+        assert_eq!(
+            output.presentation,
+            crate::engine::value::render::PresentationRequest::default()
+        );
+    }
+
+    #[test]
+    fn output_presentation_fields_are_flat_in_stage_json() {
+        let mut output = OutputConfig::default_windowed();
+        output.presentation.depth = crate::engine::value::render::PresentationDepth::Sdr10;
+        output.presentation.dither = false;
+
+        let value = serde_json::to_value(output).unwrap();
+        assert_eq!(value["presentation_depth"], "sdr10");
+        assert_eq!(value["dither"], false);
+        assert!(value.get("presentation").is_none());
+    }
+
+    #[test]
     fn scene_config_roundtrip_rtmp_output() {
         let target = OutputTargetConfig::RtmpStream {
             url: "rtmp://live.twitch.tv/app/key".to_string(),
             codec: "H.264".to_string(),
+            codec_contract: crate::renderer::context::RtmpCodecContract::Enhanced,
             audio_device: None,
         };
         let json = serde_json::to_string(&target).unwrap();
@@ -2122,14 +2150,34 @@ mod tests {
             OutputTargetConfig::RtmpStream {
                 url,
                 codec,
+                codec_contract,
                 audio_device,
             } => {
                 assert_eq!(url, "rtmp://live.twitch.tv/app/key");
                 assert_eq!(codec, "H.264");
+                assert_eq!(
+                    codec_contract,
+                    crate::renderer::context::RtmpCodecContract::Enhanced
+                );
                 assert_eq!(audio_device, None);
             }
             _ => panic!("Expected RtmpStream target"),
         }
+    }
+
+    #[test]
+    fn legacy_rtmp_target_defaults_codec_contract() {
+        let restored: OutputTargetConfig = serde_json::from_str(
+            r#"{"type":"rtmp_stream","url":"rtmps://example/live","codec":"H264"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            restored,
+            OutputTargetConfig::RtmpStream {
+                codec_contract: crate::renderer::context::RtmpCodecContract::Legacy,
+                ..
+            }
+        ));
     }
 
     #[test]

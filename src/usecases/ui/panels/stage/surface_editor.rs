@@ -397,17 +397,11 @@ pub(crate) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                     let current_label = format!("{}", surface.source);
                     let response = ui.button(format!("{current_label} ▼"));
                     let popup_id = response.id.with("surf_src_popup");
-                    if response.clicked() {
-                        #[allow(deprecated)]
-                        ui.memory_mut(|mem| mem.toggle_popup(popup_id));
-                    }
-                    #[allow(deprecated)]
-                    egui::popup_below_widget(
-                        ui,
-                        popup_id,
-                        &response,
-                        egui::PopupCloseBehavior::CloseOnClick,
-                        |ui| {
+                    egui::Popup::from_toggle_button_response(&response)
+                        .id(popup_id)
+                        .width(response.rect.width())
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClick)
+                        .show(|ui| {
                             ui.set_min_width(150.0);
                             // Master option
                             if ui
@@ -451,8 +445,7 @@ pub(crate) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                                     });
                                 }
                             }
-                        },
-                    );
+                        });
                 });
 
                 ui.horizontal(|ui| {

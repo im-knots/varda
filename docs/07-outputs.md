@@ -29,6 +29,24 @@ A windowed output has a **Display:** dropdown listing **Windowed** plus every co
 
 Monitors are re-enumerated every frame, so hot-plugging works without restart. If an output is configured for a monitor that isn't connected at startup, it falls back to a window and shows a notice (`Monitor '<name>' not connected — output '<name>' opened as window`); re-select the monitor from the dropdown once it appears.
 
+## SDR Precision
+
+Every output has an **SDR precision** choice:
+
+- **8-bit SDR** is the compatibility default.
+- **10-bit SDR** requests higher output precision without changing gamut, brightness range, or tonemapping.
+
+The **Dither** checkbox is enabled by default. It applies a stable, destination-aware pattern before
+the final integer conversion, which reduces visible banding without temporal noise.
+
+The output card always reports what is actually being delivered. A 10-bit request uses RGB10 on a
+display only when the GPU surface exposes both RGB10A2 and an sRGB color-space contract. Otherwise
+the output continues in 8-bit and shows the reason. This status reports Varda's configured signal
+format, not unverified monitor panel depth or cable behavior.
+
+Recording and network outputs apply the same request to their codec or protocol. See
+[10-bit delivery](09-streaming-and-io.md#10-bit-sdr-delivery) for the supported combinations.
+
 ## Output Rotation
 
 Each output has a **Rotation:** control with four options — **0°**, **90°**, **180°**, **270°** — applied at the final blit. Use 90°/270° for portrait projectors/displays; those values swap width/height for the effective render. Rotation is GPU-only (no mesh recompute).
@@ -59,7 +77,10 @@ Click **+ Recording** to add a recording output; each runs its own ffmpeg subpro
 
 ## Persistence
 
-Outputs, their targets, rotation, surface assignments, and warp calibration are saved in `stage.json` (the venue layout), separate from your scene/show. See [Persistence](02-concepts.md#persistence).
+Outputs, their targets, rotation, SDR precision request, dithering preference, surface assignments,
+and warp calibration are saved in `stage.json` (the venue layout), separate from your scene/show.
+Existing stages default to 8-bit SDR with dithering enabled. See
+[Persistence](02-concepts.md#persistence).
 
 ---
 

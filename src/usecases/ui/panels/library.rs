@@ -148,7 +148,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
     egui::ScrollArea::vertical()
         .scroll_source(egui::scroll_area::ScrollSource {
             scroll_bar: true,
-            drag: false,
+            drag: egui::scroll_area::DragScroll::Never,
             mouse_wheel: true,
         })
         .show(ui, |ui| {

@@ -130,8 +130,10 @@ impl NotificationSystem {
     /// Used when the underlying cause may have been resolved — a shader
     /// hot-reload lifts GPU quarantines, and a deck that fails again afterwards
     /// is new information the performer needs.
-    pub fn clear_once_key_prefix(&mut self, prefix: &str) {
+    pub fn clear_once_key_prefix(&mut self, prefix: &str) -> bool {
+        let previous_len = self.once_keys.len();
         self.once_keys.retain(|k| !k.starts_with(prefix));
+        self.once_keys.len() != previous_len
     }
 
     /// Remove expired notifications
@@ -197,6 +199,23 @@ mod tests {
         // A different key still emits.
         assert!(ns.notify_once("k2", NotificationLevel::Warning, "other"));
         assert_eq!(ns.visible().len(), 2);
+    }
+
+    #[test]
+    fn clearing_a_fallback_lifecycle_allows_a_recovery_to_rearm_it() {
+        let mut ns = NotificationSystem::new();
+        assert!(ns.notify_once(
+            "presentation_fallback:out:reason",
+            NotificationLevel::Warning,
+            "fallback"
+        ));
+        assert!(ns.clear_once_key_prefix("presentation_fallback:out:"));
+        assert!(!ns.clear_once_key_prefix("presentation_fallback:out:"));
+        assert!(ns.notify_once(
+            "presentation_fallback:out:reason",
+            NotificationLevel::Warning,
+            "fallback again"
+        ));
     }
 
     #[test]

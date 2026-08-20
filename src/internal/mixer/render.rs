@@ -257,6 +257,11 @@ impl Mixer {
     ///
     /// Returns an error if any channel fails to render its decks, or if master
     /// effect / tonemap / LUT compositing fails on the GPU device.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a timestamp callback marks a staging buffer ready after its
+    /// mapped range has become unavailable.
     pub fn render(
         &mut self,
         context: &GpuContext,
@@ -338,7 +343,9 @@ impl Mixer {
                 let buf = &staging[ready_idx];
                 {
                     let slice = buf.slice(..);
-                    let mapped = slice.get_mapped_range();
+                    let mapped = slice
+                        .get_mapped_range()
+                        .expect("timestamp staging callback only marks mapped buffers ready");
                     let timestamps: &[u64] = bytemuck::cast_slice(&mapped);
                     let period_us = self.timestamp_period / 1000.0; // ns → µs
                     self.last_frame_gpu_times.clear();

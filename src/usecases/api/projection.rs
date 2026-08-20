@@ -257,6 +257,10 @@ pub(crate) mod tests {
                     is_active: false,
                     surface_assignments: vec![],
                     calibration_mode: crate::renderer::context::CalibrationMode::Off,
+                    presentation_request:
+                        crate::engine::value::render::PresentationRequest::default(),
+                    resolved_presentation:
+                        crate::engine::value::render::ResolvedPresentation::default(),
                     audio_passthrough: None,
                 }],
                 surfaces: vec![SurfaceSnapshot {
@@ -412,6 +416,8 @@ pub(crate) mod tests {
             is_active: true,
             surface_assignments: vec![],
             calibration_mode: crate::renderer::context::CalibrationMode::Off,
+            presentation_request: crate::engine::value::render::PresentationRequest::default(),
+            resolved_presentation: crate::engine::value::render::ResolvedPresentation::default(),
             audio_passthrough: Some(AudioPassthroughSnapshot {
                 device: "Scarlett 2i2".into(),
                 frames_written: 42,

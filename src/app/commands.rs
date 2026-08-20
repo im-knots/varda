@@ -983,6 +983,10 @@ impl VardaApp {
                 output_uuid,
                 rotation,
             } => self.cmd_set_output_rotation(&output_uuid, rotation),
+            EngineCommand::SetOutputPresentation {
+                output_uuid,
+                request,
+            } => self.cmd_set_output_presentation(&output_uuid, request),
 
             // ── Modulation Updates ────────────────────────────────
             EngineCommand::UpdateLfoFrequency { uuid, frequency } => {
@@ -1784,6 +1788,7 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
             | C::StopOutput { .. }
             | C::SetCalibrationMode { .. }
             | C::SetOutputRotation { .. }
+            | C::SetOutputPresentation { .. }
             | C::SetEdgeBlend { .. }
             | C::SetEdgeBlendMode { .. }
             // Surface auto-detection produces preview contours only; the scene

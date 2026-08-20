@@ -6,6 +6,9 @@
 //! `crate::renderer::config::…` paths keep working.
 
 pub use crate::engine::value::render::{
-    CalibrationMode, EdgeBlendConfig, EdgeBlendEdge, EdgeBlendMode, OutputRotation, OutputSource,
-    OutputTarget, RecordingCodec, SrtCodec, StreamingCodec, TonemapMode,
+    AlphaMode, CalibrationMode, EdgeBlendConfig, EdgeBlendEdge, EdgeBlendMode, OutputRotation,
+    OutputSource, OutputTarget, PresentationCapabilities, PresentationColorProfile,
+    PresentationDepth, PresentationFormat, PresentationPixelFormat, PresentationRequest,
+    PresentationResolveError, RecordingCodec, ResolvedPresentation, RtmpCodecContract, SrtCodec,
+    StreamingCodec, TonemapMode,
 };

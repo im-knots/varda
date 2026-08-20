@@ -862,7 +862,9 @@ mod tests {
                 timeout: Some(std::time::Duration::from_secs(5)),
             })
             .expect("poll");
-        let data = slice.get_mapped_range();
+        let data = slice
+            .get_mapped_range()
+            .expect("depth preprocess readback must be mapped");
         let mut out = Vec::with_capacity((W * H) as usize);
         for y in 0..H {
             let row = (y * padded) as usize;
@@ -1061,7 +1063,9 @@ mod tests {
                 timeout: Some(std::time::Duration::from_secs(5)),
             })
             .expect("poll");
-        let data = slice.get_mapped_range();
+        let data = slice
+            .get_mapped_range()
+            .expect("depth preprocess readback must be mapped");
         let mut out = Vec::with_capacity((W * H) as usize);
         for y in 0..H {
             let row = (y * padded) as usize;

@@ -261,7 +261,7 @@ impl DomePreviewRenderer {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[DomeVertex::LAYOUT],
+                buffers: &[Some(DomeVertex::LAYOUT)],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -325,7 +325,7 @@ impl DomePreviewRenderer {
             vertex: wgpu::VertexState {
                 module: &overlay_shader,
                 entry_point: Some("vs_main"),
-                buffers: &[OverlayVertex::LAYOUT],
+                buffers: &[Some(OverlayVertex::LAYOUT)],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {

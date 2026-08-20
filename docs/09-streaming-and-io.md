@@ -1,5 +1,23 @@
 # Streaming, Recording & Network I/O
 
+## 10-bit SDR Delivery
+
+Set **SDR precision** to **10-bit SDR** on an output to request a high-precision codec or transport.
+Varda probes the installed GPU, FFmpeg encoders, NDI runtime, and endpoint contract before starting.
+If the complete path is unavailable, it keeps the request, delivers 8-bit SDR, and reports why.
+
+| Destination | 10-bit path | Explicit fallback |
+|---|---|---|
+| Recording | HEVC Main10, AV1 10-bit, ProRes 422, ProRes 4444 | H.264 and HAP remain 8-bit |
+| NDI send | NDI 6 P216 | Older or incomplete runtimes use UYVY |
+| SRT | HEVC Main10 in MPEG-TS | H.264 remains 8-bit |
+| HLS / DASH | HEVC Main10 or AV1 10-bit in fMP4 | Unsupported encoders use 8-bit |
+| RTMP / RTMPS | HEVC Main10 or AV1 with an Enhanced endpoint contract | Legacy RTMP uses H.264 8-bit |
+| Syphon | No interoperable 10-bit path | BGRA8 |
+
+Ten-bit delivery is still SDR. It preserves more code values after Varda's existing tonemap and LUT;
+it does not enable HDR metadata or extended brightness.
+
 ## NDI
 
 ### Sending
@@ -10,6 +28,10 @@ Each output can send video over NDI to other applications and machines on the ne
 2. Select **NDI** from the protocol dropdown
 3. Enter a sender name (e.g., "Varda Main")
 4. The NDI stream is discoverable by any NDI-compatible application on the LAN
+
+With a loaded NDI 6 runtime, a 10-bit request sends P216 with Rec.709 limited-range conversion.
+Older runtimes use UYVY and show a fallback reason. Receiver software should request its best or
+highest-quality color mode to avoid converting P216 back to 8-bit.
 
 ### Receiving
 
@@ -150,9 +172,13 @@ Push video directly to Twitch, YouTube, Kick, or any RTMP/RTMPS ingest endpoint.
 1. Click **"+ Stream"** → select **RTMP**
 2. Enter the ingest URL (e.g., `rtmp://live.twitch.tv/app/<stream-key>` or `rtmps://a.rtmps.youtube.com/live2/<stream-key>`)
 3. Choose a codec: **H.264**, **H.265**, or **AV1** (H.265 and AV1 via Enhanced RTMP)
-4. Start the output
+4. Choose **Enhanced** only when the endpoint explicitly accepts Enhanced RTMP signaling
+5. Start the output
 
 Varda uses FLV muxing with auto-scaled CBR bitrate and 2-second keyframe intervals. Frame delivery is non-blocking.
+
+Legacy RTMP always resolves to H.264 8-bit. A 10-bit HEVC or AV1 request requires the persisted
+Enhanced endpoint contract and compatible FFmpeg muxer support.
 
 > **Stream keys are credentials.** An ingest URL contains your platform stream key. Treat it as a password. Avoid screen-sharing or recording your screen while the RTMP output field is visible, and never paste full ingest URLs into bug reports.
 

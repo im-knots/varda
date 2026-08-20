@@ -384,6 +384,8 @@ pub(crate) fn build_ui_data(
                 edge_blend_mode,
                 edge_blend,
                 rotation: o.rotation(),
+                presentation_request: o.presentation_request(),
+                resolved_presentation: o.resolved_presentation().clone(),
                 audio_passthrough,
                 preview_width,
                 preview_height,

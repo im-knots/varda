@@ -159,7 +159,10 @@ fn encode_solid(ctx: &GpuContext, linear: [f64; 3], encode: bool) -> [u8; 4] {
     rx.recv().expect("map channel").expect("map ok");
     let out;
     {
-        let d = buf.slice(..).get_mapped_range();
+        let d = buf
+            .slice(..)
+            .get_mapped_range()
+            .expect("preview readback must be mapped");
         let b = ((H / 2) * padded) as usize + (W / 2) as usize * 4;
         out = [d[b], d[b + 1], d[b + 2], d[b + 3]];
     }

@@ -140,6 +140,10 @@ impl VideoStagingBuffers {
 
     /// Write frame data into the current staging buffer and encode a copy
     /// to the destination texture. Returns true if the upload was performed.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a staging slot marked as mapped no longer exposes its mapped range.
     pub fn upload(
         &mut self,
         data: &[u8],
@@ -157,7 +161,10 @@ impl VideoStagingBuffers {
 
         {
             let buf = &self.buffers[idx];
-            let mut view = buf.slice(..).get_mapped_range_mut();
+            let mut view = buf
+                .slice(..)
+                .get_mapped_range_mut()
+                .expect("upload staging buffer must remain mapped");
             if self.padded_bpr == self.unpadded_bpr {
                 // Row stride matches — single memcpy
                 let copy_len = (self.unpadded_bpr as usize) * (self.rows as usize);

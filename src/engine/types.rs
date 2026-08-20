@@ -647,6 +647,10 @@ pub struct OutputWindowSnapshot {
     pub is_active: bool,
     pub surface_assignments: Vec<SurfaceAssignmentSnapshot>,
     pub calibration_mode: crate::engine::value::render::CalibrationMode,
+    /// Persisted precision and dithering request.
+    pub presentation_request: crate::engine::value::render::PresentationRequest,
+    /// Runtime format selected by the active output adapter.
+    pub resolved_presentation: crate::engine::value::render::ResolvedPresentation,
     /// Live audio passthrough health for an active ffmpeg output (None = video-only).
     pub audio_passthrough: Option<AudioPassthroughSnapshot>,
 }

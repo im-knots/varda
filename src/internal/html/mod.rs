@@ -457,7 +457,10 @@ mod smoke_tests {
         let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
         rx.recv().unwrap().unwrap();
 
-        let data = buffer.slice(..).get_mapped_range();
+        let data = buffer
+            .slice(..)
+            .get_mapped_range()
+            .expect("test readback buffer must be mapped");
         let off = ((H / 2) * ROW_BYTES + (W / 2) * 4) as usize;
         let px = [data[off], data[off + 1], data[off + 2], data[off + 3]];
         drop(data);

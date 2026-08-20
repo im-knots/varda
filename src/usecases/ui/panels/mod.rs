@@ -60,14 +60,14 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
             .min_size(180.0)
             .default_size(220.0)
             .resizable(true)
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 render_library_panel(ui, data, &mut actions);
             });
     } else {
         egui::Panel::left("library_collapsed")
             .exact_size(36.0)
             .resizable(false)
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                     ui.add_space(6.0);
                     if ui
@@ -87,14 +87,14 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
             .min_size(280.0)
             .default_size(320.0)
             .resizable(true)
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 render_right_panel(ui, data, &mut actions);
             });
     } else {
         egui::Panel::right("master_collapsed")
             .exact_size(36.0)
             .resizable(false)
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                     ui.add_space(6.0);
                     if ui
@@ -122,260 +122,255 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
         .default_size(180.0)
         .resizable(true)
         .show_separator_line(true)
-        .show_inside(ui, |ui| {
+        .show(ui, |ui| {
             ui.set_min_height(ui.max_rect().height());
             render_bottom_panel(ui, data, &mut actions);
         });
 
     // === TOP BAR: Save button + FPS/BPM status ===
-    egui::Panel::top("top_bar")
-        .exact_size(28.0)
-        .show_inside(ui, |ui| {
-            ui.horizontal_centered(|ui| {
-                let any_learn = data.midi_learn_active || data.keyboard_learn_active;
-                // Undo / Redo / Save — in learn mode: show glow + select target on click.
-                // Outside learn mode: normal action on click.
-                {
-                    let undo_enabled = if any_learn { true } else { data.can_undo };
-                    let undo_resp = ui
-                        .add_enabled(undo_enabled, egui::Button::new("↩ Undo"))
-                        .on_hover_text("Undo (⌘Z)");
-                    if any_learn {
-                        if data.midi_learn_active {
-                            let is_target =
-                                data.midi_learn_target.as_deref() == Some("action/undo");
-                            if is_target {
-                                super::widgets::draw_midi_learn_selected(ui, undo_resp.rect);
-                            } else {
-                                super::widgets::draw_midi_learn_glow(ui, undo_resp.rect);
-                            }
-                            if undo_resp.clicked() {
-                                actions.session.midi_learn_select = Some("action/undo".to_string());
-                            }
+    egui::Panel::top("top_bar").exact_size(28.0).show(ui, |ui| {
+        ui.horizontal_centered(|ui| {
+            let any_learn = data.midi_learn_active || data.keyboard_learn_active;
+            // Undo / Redo / Save — in learn mode: show glow + select target on click.
+            // Outside learn mode: normal action on click.
+            {
+                let undo_enabled = if any_learn { true } else { data.can_undo };
+                let undo_resp = ui
+                    .add_enabled(undo_enabled, egui::Button::new("↩ Undo"))
+                    .on_hover_text("Undo (⌘Z)");
+                if any_learn {
+                    if data.midi_learn_active {
+                        let is_target = data.midi_learn_target.as_deref() == Some("action/undo");
+                        if is_target {
+                            super::widgets::draw_midi_learn_selected(ui, undo_resp.rect);
                         } else {
-                            let is_target = data.keyboard_learn_target.as_deref() == Some("Undo");
-                            if is_target {
-                                super::widgets::draw_keyboard_learn_selected(ui, undo_resp.rect);
-                            } else {
-                                super::widgets::draw_keyboard_learn_glow(ui, undo_resp.rect);
-                            }
-                            if undo_resp.clicked() {
-                                actions.session.keyboard_learn_select = Some(
-                                    crate::keymap::KeyTarget::Action(crate::keymap::ActionId::Undo),
-                                );
-                            }
+                            super::widgets::draw_midi_learn_glow(ui, undo_resp.rect);
                         }
-                    } else if undo_resp.clicked() {
-                        actions.session.undo_requested = true;
-                    }
-                }
-                {
-                    let redo_enabled = if any_learn { true } else { data.can_redo };
-                    let redo_resp = ui
-                        .add_enabled(redo_enabled, egui::Button::new("↪ Redo"))
-                        .on_hover_text("Redo (⌘⇧Z)");
-                    if any_learn {
-                        if data.midi_learn_active {
-                            let is_target =
-                                data.midi_learn_target.as_deref() == Some("action/redo");
-                            if is_target {
-                                super::widgets::draw_midi_learn_selected(ui, redo_resp.rect);
-                            } else {
-                                super::widgets::draw_midi_learn_glow(ui, redo_resp.rect);
-                            }
-                            if redo_resp.clicked() {
-                                actions.session.midi_learn_select = Some("action/redo".to_string());
-                            }
+                        if undo_resp.clicked() {
+                            actions.session.midi_learn_select = Some("action/undo".to_string());
+                        }
+                    } else {
+                        let is_target = data.keyboard_learn_target.as_deref() == Some("Undo");
+                        if is_target {
+                            super::widgets::draw_keyboard_learn_selected(ui, undo_resp.rect);
                         } else {
-                            let is_target = data.keyboard_learn_target.as_deref() == Some("Redo");
-                            if is_target {
-                                super::widgets::draw_keyboard_learn_selected(ui, redo_resp.rect);
-                            } else {
-                                super::widgets::draw_keyboard_learn_glow(ui, redo_resp.rect);
-                            }
-                            if redo_resp.clicked() {
-                                actions.session.keyboard_learn_select = Some(
-                                    crate::keymap::KeyTarget::Action(crate::keymap::ActionId::Redo),
-                                );
-                            }
+                            super::widgets::draw_keyboard_learn_glow(ui, undo_resp.rect);
                         }
-                    } else if redo_resp.clicked() {
-                        actions.session.redo_requested = true;
+                        if undo_resp.clicked() {
+                            actions.session.keyboard_learn_select = Some(
+                                crate::keymap::KeyTarget::Action(crate::keymap::ActionId::Undo),
+                            );
+                        }
                     }
+                } else if undo_resp.clicked() {
+                    actions.session.undo_requested = true;
                 }
-                {
-                    let save_resp = ui.button("💾 Save").on_hover_text("Save workspace (⌘S)");
-                    if any_learn {
-                        if data.midi_learn_active {
-                            let is_target =
-                                data.midi_learn_target.as_deref() == Some("action/save");
-                            if is_target {
-                                super::widgets::draw_midi_learn_selected(ui, save_resp.rect);
-                            } else {
-                                super::widgets::draw_midi_learn_glow(ui, save_resp.rect);
-                            }
-                            if save_resp.clicked() {
-                                actions.session.midi_learn_select = Some("action/save".to_string());
-                            }
+            }
+            {
+                let redo_enabled = if any_learn { true } else { data.can_redo };
+                let redo_resp = ui
+                    .add_enabled(redo_enabled, egui::Button::new("↪ Redo"))
+                    .on_hover_text("Redo (⌘⇧Z)");
+                if any_learn {
+                    if data.midi_learn_active {
+                        let is_target = data.midi_learn_target.as_deref() == Some("action/redo");
+                        if is_target {
+                            super::widgets::draw_midi_learn_selected(ui, redo_resp.rect);
                         } else {
-                            let is_target = data.keyboard_learn_target.as_deref() == Some("Save");
-                            if is_target {
-                                super::widgets::draw_keyboard_learn_selected(ui, save_resp.rect);
-                            } else {
-                                super::widgets::draw_keyboard_learn_glow(ui, save_resp.rect);
-                            }
-                            if save_resp.clicked() {
-                                actions.session.keyboard_learn_select = Some(
-                                    crate::keymap::KeyTarget::Action(crate::keymap::ActionId::Save),
-                                );
-                            }
+                            super::widgets::draw_midi_learn_glow(ui, redo_resp.rect);
                         }
-                    } else if save_resp.clicked() {
-                        actions.session.save_requested = true;
+                        if redo_resp.clicked() {
+                            actions.session.midi_learn_select = Some("action/redo".to_string());
+                        }
+                    } else {
+                        let is_target = data.keyboard_learn_target.as_deref() == Some("Redo");
+                        if is_target {
+                            super::widgets::draw_keyboard_learn_selected(ui, redo_resp.rect);
+                        } else {
+                            super::widgets::draw_keyboard_learn_glow(ui, redo_resp.rect);
+                        }
+                        if redo_resp.clicked() {
+                            actions.session.keyboard_learn_select = Some(
+                                crate::keymap::KeyTarget::Action(crate::keymap::ActionId::Redo),
+                            );
+                        }
                     }
+                } else if redo_resp.clicked() {
+                    actions.session.redo_requested = true;
                 }
+            }
+            {
+                let save_resp = ui.button("💾 Save").on_hover_text("Save workspace (⌘S)");
+                if any_learn {
+                    if data.midi_learn_active {
+                        let is_target = data.midi_learn_target.as_deref() == Some("action/save");
+                        if is_target {
+                            super::widgets::draw_midi_learn_selected(ui, save_resp.rect);
+                        } else {
+                            super::widgets::draw_midi_learn_glow(ui, save_resp.rect);
+                        }
+                        if save_resp.clicked() {
+                            actions.session.midi_learn_select = Some("action/save".to_string());
+                        }
+                    } else {
+                        let is_target = data.keyboard_learn_target.as_deref() == Some("Save");
+                        if is_target {
+                            super::widgets::draw_keyboard_learn_selected(ui, save_resp.rect);
+                        } else {
+                            super::widgets::draw_keyboard_learn_glow(ui, save_resp.rect);
+                        }
+                        if save_resp.clicked() {
+                            actions.session.keyboard_learn_select = Some(
+                                crate::keymap::KeyTarget::Action(crate::keymap::ActionId::Save),
+                            );
+                        }
+                    }
+                } else if save_resp.clicked() {
+                    actions.session.save_requested = true;
+                }
+            }
+
+            ui.separator();
+
+            // Performance and Arrangement are two views of one scene, so the
+            // switch is a toggle rather than a mode people enter and leave.
+            // See /spec/arrangement.md § UI.
+            {
+                let label = if data.arrangement_mode_open {
+                    "🎛 Perform"
+                } else {
+                    "▤ Arrange"
+                };
+                let hover = if data.arrangement_mode_open {
+                    "Back to the mixer. The arrangement keeps driving decks either way."
+                } else {
+                    "Lay decks out against show time"
+                };
+                if ui.button(label).on_hover_text(hover).clicked() {
+                    actions.session.toggle_arrangement_mode = true;
+                }
+            }
+
+            // Learn mode indicators
+            if data.midi_learn_active {
+                let text = egui::RichText::new("🎹 MIDI LEARN")
+                    .color(egui::Color32::from_rgb(180, 100, 255))
+                    .strong();
+                if ui
+                    .button(text)
+                    .on_hover_text("Click to exit MIDI learn mode")
+                    .clicked()
+                {
+                    actions.session.midi_learn_toggle = true;
+                }
+            }
+            if data.keyboard_learn_active {
+                let text = egui::RichText::new("⌨ KB LEARN")
+                    .color(egui::Color32::from_rgb(255, 165, 0))
+                    .strong();
+                if ui
+                    .button(text)
+                    .on_hover_text("Click to exit keyboard learn mode")
+                    .clicked()
+                {
+                    actions.session.keyboard_learn_toggle = true;
+                }
+            }
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // BPM from unified clock (MIDI > OSC > Audio > --)
+                let bpm_text = if let Some(bpm) = data.clock_bpm {
+                    format!("{bpm:.0} BPM")
+                } else {
+                    "-- BPM".to_string()
+                };
+                if let Some(dev) = &data.clock_device_name {
+                    ui.label(egui::RichText::new(format!("({dev})")).weak().small());
+                }
+                // Clickable BPM label → opens clock source popover
+                let bpm_rich = if clock_is_live(data) {
+                    egui::RichText::new(&bpm_text).monospace()
+                } else {
+                    egui::RichText::new(&bpm_text).monospace().weak()
+                };
+                let bpm_response = ui
+                    .add(egui::Label::new(bpm_rich).sense(egui::Sense::click()))
+                    .on_hover_text(format!(
+                        "{} — {}. Click to select clock source",
+                        if data.clock_active {
+                            data.clock_source.as_str()
+                        } else {
+                            "No clock source"
+                        },
+                        followers_hint(data.clock_beat_followers, "the beat")
+                    ));
+                status_popover(&bpm_response, |ui| {
+                    render_clock_popover(ui, data, &mut actions);
+                });
 
                 ui.separator();
 
-                // Performance and Arrangement are two views of one scene, so the
-                // switch is a toggle rather than a mode people enter and leave.
-                // See /spec/arrangement.md § UI.
-                {
-                    let label = if data.arrangement_mode_open {
-                        "🎛 Perform"
-                    } else {
-                        "▤ Arrange"
-                    };
-                    let hover = if data.arrangement_mode_open {
-                        "Back to the mixer. The arrangement keeps driving decks either way."
-                    } else {
-                        "Lay decks out against show time"
-                    };
-                    if ui.button(label).on_hover_text(hover).clicked() {
-                        actions.session.toggle_arrangement_mode = true;
-                    }
-                }
+                // Show position sits beside the tempo it will eventually be
+                // able to drive: both answer "where are we?", one in bars
+                // and one in absolute time.
+                let transport_response = ui
+                    .add(
+                        egui::Label::new(
+                            egui::RichText::new(&data.transport.timecode)
+                                .monospace()
+                                .color(transport_color(data)),
+                        )
+                        .sense(egui::Sense::click()),
+                    )
+                    .on_hover_text(format!(
+                        "{} — {}. Click for transport controls",
+                        data.transport.status_label,
+                        followers_hint(data.transport.followers, "the transport")
+                    ));
+                status_popover(&transport_response, |ui| {
+                    render_transport_popover(ui, data, &mut actions);
+                });
 
-                // Learn mode indicators
-                if data.midi_learn_active {
-                    let text = egui::RichText::new("🎹 MIDI LEARN")
-                        .color(egui::Color32::from_rgb(180, 100, 255))
-                        .strong();
-                    if ui
-                        .button(text)
-                        .on_hover_text("Click to exit MIDI learn mode")
-                        .clicked()
-                    {
-                        actions.session.midi_learn_toggle = true;
-                    }
-                }
-                if data.keyboard_learn_active {
-                    let text = egui::RichText::new("⌨ KB LEARN")
-                        .color(egui::Color32::from_rgb(255, 165, 0))
-                        .strong();
-                    if ui
-                        .button(text)
-                        .on_hover_text("Click to exit keyboard learn mode")
-                        .clicked()
-                    {
-                        actions.session.keyboard_learn_toggle = true;
-                    }
-                }
+                record_button(ui, data, &mut actions);
 
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // BPM from unified clock (MIDI > OSC > Audio > --)
-                    let bpm_text = if let Some(bpm) = data.clock_bpm {
-                        format!("{bpm:.0} BPM")
-                    } else {
-                        "-- BPM".to_string()
-                    };
-                    if let Some(dev) = &data.clock_device_name {
-                        ui.label(egui::RichText::new(format!("({dev})")).weak().small());
-                    }
-                    // Clickable BPM label → opens clock source popover
-                    let bpm_rich = if clock_is_live(data) {
-                        egui::RichText::new(&bpm_text).monospace()
-                    } else {
-                        egui::RichText::new(&bpm_text).monospace().weak()
-                    };
-                    let bpm_response = ui
-                        .add(egui::Label::new(bpm_rich).sense(egui::Sense::click()))
-                        .on_hover_text(format!(
-                            "{} — {}. Click to select clock source",
-                            if data.clock_active {
-                                data.clock_source.as_str()
-                            } else {
-                                "No clock source"
-                            },
-                            followers_hint(data.clock_beat_followers, "the beat")
-                        ));
-                    status_popover(&bpm_response, |ui| {
-                        render_clock_popover(ui, data, &mut actions);
-                    });
+                ui.separator();
 
-                    ui.separator();
-
-                    // Show position sits beside the tempo it will eventually be
-                    // able to drive: both answer "where are we?", one in bars
-                    // and one in absolute time.
-                    let transport_response = ui
-                        .add(
-                            egui::Label::new(
-                                egui::RichText::new(&data.transport.timecode)
-                                    .monospace()
-                                    .color(transport_color(data)),
-                            )
+                // Resolution selector
+                let res_label = format!("📐 {}×{}", data.render_width, data.render_height);
+                let res_response = ui
+                    .add(
+                        egui::Label::new(egui::RichText::new(&res_label).monospace())
                             .sense(egui::Sense::click()),
-                        )
-                        .on_hover_text(format!(
-                            "{} — {}. Click for transport controls",
-                            data.transport.status_label,
-                            followers_hint(data.transport.followers, "the transport")
-                        ));
-                    status_popover(&transport_response, |ui| {
-                        render_transport_popover(ui, data, &mut actions);
-                    });
+                    )
+                    .on_hover_text("Click to change render resolution");
+                status_popover(&res_response, |ui| {
+                    render_resolution_popover(ui, data, &mut actions);
+                });
 
-                    record_button(ui, data, &mut actions);
+                ui.separator();
 
-                    ui.separator();
-
-                    // Resolution selector
-                    let res_label = format!("📐 {}×{}", data.render_width, data.render_height);
-                    let res_response = ui
-                        .add(
-                            egui::Label::new(egui::RichText::new(&res_label).monospace())
-                                .sense(egui::Sense::click()),
-                        )
-                        .on_hover_text("Click to change render resolution");
-                    status_popover(&res_response, |ui| {
-                        render_resolution_popover(ui, data, &mut actions);
-                    });
-
-                    ui.separator();
-
-                    // FPS target selector
-                    let fps_target_label = if data.target_fps == 0 {
-                        "🎯 Uncapped".to_string()
-                    } else {
-                        format!("🎯 {}fps", data.target_fps)
-                    };
-                    let fps_target_response = ui
-                        .add(
-                            egui::Label::new(egui::RichText::new(&fps_target_label).monospace())
-                                .sense(egui::Sense::click()),
-                        )
-                        .on_hover_text("Click to change target FPS");
-                    status_popover(&fps_target_response, |ui| {
-                        render_target_fps_popover(ui, data, &mut actions);
-                    });
+                // FPS target selector
+                let fps_target_label = if data.target_fps == 0 {
+                    "🎯 Uncapped".to_string()
+                } else {
+                    format!("🎯 {}fps", data.target_fps)
+                };
+                let fps_target_response = ui
+                    .add(
+                        egui::Label::new(egui::RichText::new(&fps_target_label).monospace())
+                            .sense(egui::Sense::click()),
+                    )
+                    .on_hover_text("Click to change target FPS");
+                status_popover(&fps_target_response, |ui| {
+                    render_target_fps_popover(ui, data, &mut actions);
                 });
             });
         });
+    });
 
     // === CENTRAL AREA: Decks as columns; macro controls live in the center
     // column (see mixer.rs) and their config shows in the bottom bar. ===
-    egui::CentralPanel::default().show_inside(ui, |ui| {
+    egui::CentralPanel::default().show(ui, |ui| {
         render_central_panel(ui, data, &mut actions);
     });
 

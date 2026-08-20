@@ -40,7 +40,7 @@ too_many_lines = "allow"
 
 [dependencies]
 # Graphics
-wgpu = "29.0"
+wgpu = "30.0"
 winit = "0.30"
 bytemuck = { version = "1.25", features = ["derive"] }
 half = "2.6"
@@ -48,16 +48,16 @@ half = "2.6"
 # Shader compilation (build-from-source ensures static linking — avoids
 # libshaderc_shared.dylib runtime errors when users have Homebrew shaderc)
 shaderc = { version = "0.10", features = ["build-from-source"] }
-naga = { version = "29.0", features = ["spv-in", "wgsl-out"] }
+naga = { version = "30.0", features = ["spv-in", "wgsl-out"] }
 
 # ISF metadata parsing
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # UI
-egui = "0.34"
-egui-wgpu = "0.34"
-egui-winit = { version = "0.34", features = ["accesskit"] }
+egui = "0.36"
+egui-wgpu = "0.36"
+egui-winit = { version = "0.36", features = ["accesskit"] }
 
 # File system
 notify = "8.2"
@@ -226,7 +226,7 @@ keyboard-types = ["dep:keyboard-types"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
-egui_kittest = { version = "0.34.2", features = ["wgpu", "snapshot"] }
+egui_kittest = { version = "0.36", features = ["wgpu", "snapshot"] }
 tempfile = "3.27.0"
 tower = { version = "0.5.3", features = ["util"] }
 proptest = "1.9"
@@ -262,6 +262,10 @@ harness = false
 
 [[bench]]
 name = "modulation_engine"
+harness = false
+
+[[bench]]
+name = "presentation"
 harness = false
 
 

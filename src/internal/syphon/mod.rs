@@ -685,6 +685,7 @@ impl SyphonManager {
                     height,
                     depth: 1,
                 },
+                None,
             )
         };
         let wgpu_texture = unsafe {
@@ -705,6 +706,7 @@ impl SyphonManager {
                         | wgpu::TextureUsages::TEXTURE_BINDING,
                     view_formats: &[],
                 },
+                wgpu::TextureUses::COLOR_TARGET,
             )
         };
         let view = wgpu_texture.create_view(&wgpu::TextureViewDescriptor::default());

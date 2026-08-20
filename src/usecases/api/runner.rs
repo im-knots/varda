@@ -195,6 +195,7 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::outputs::unassign_surface, routes::outputs::create_headless,
         routes::outputs::start, routes::outputs::stop,
         routes::outputs::set_calibration_mode, routes::outputs::set_target,
+        routes::outputs::set_presentation,
         routes::outputs::set_edge_blend, routes::outputs::set_edge_blend_mode,
         // Sequences
         routes::sequences::create, routes::sequences::delete,
@@ -1107,6 +1108,10 @@ pub fn build_router(shared: SharedState) -> Router {
         .route(
             "/api/outputs/{output_uuid}/target",
             axum::routing::put(routes::outputs::set_target),
+        )
+        .route(
+            "/api/outputs/{output_uuid}/presentation",
+            axum::routing::put(routes::outputs::set_presentation),
         )
         .route(
             "/api/outputs/{output_uuid}/edge-blend",

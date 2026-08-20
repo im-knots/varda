@@ -1151,7 +1151,7 @@ pub(super) fn render_selected_deck_detail(
                             ui.set_max_width(250.0);
                             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                             let max_h = (ui.available_height() - 8.0).max(100.0);
-                            egui::ScrollArea::vertical().id_salt(format!("deck_fx_scroll_{}_{}", deck.uuid, eff_uuid)).max_height(max_h).scroll_source(egui::scroll_area::ScrollSource { drag: false, scroll_bar: true, mouse_wheel: true }).show(ui, |ui| {
+                            egui::ScrollArea::vertical().id_salt(format!("deck_fx_scroll_{}_{}", deck.uuid, eff_uuid)).max_height(max_h).scroll_source(egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Never, scroll_bar: true, mouse_wheel: true }).show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     render_effect_drag_handle(ui, EffectDrag::Deck(deck.uuid.clone(), eff_idx));
                                     let mut enabled = *eff_enabled;

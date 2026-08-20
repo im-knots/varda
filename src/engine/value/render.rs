@@ -6,6 +6,253 @@
 //! (`context`, `tonemap`, `edge_blend`) `pub use` these to keep their existing
 //! call paths working, and attach any framework-specific inherent impls there.
 
+// ── SDR presentation precision ──────────────────────────────────────
+
+/// Requested and resolved SDR integer precision at an output boundary.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    utoipa::ToSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum PresentationDepth {
+    /// Eight-bit SDR presentation.
+    #[default]
+    Sdr8,
+    /// Ten-bit SDR presentation.
+    Sdr10,
+}
+
+impl PresentationDepth {
+    /// Values in user-facing order.
+    pub const ALL: [Self; 2] = [Self::Sdr8, Self::Sdr10];
+
+    /// Human-readable label.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Sdr8 => "8-bit SDR",
+            Self::Sdr10 => "10-bit SDR",
+        }
+    }
+}
+
+/// Framework-free pixel format selected for an output adapter.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PresentationPixelFormat {
+    /// Eight-bit RGBA.
+    Rgba8,
+    /// Eight-bit BGRA.
+    Bgra8,
+    /// Packed ten-bit RGB with two unused or alpha bits.
+    Rgb10A2,
+    /// Sixteen-bit RGBA storage used by alpha-capable adapters.
+    Rgba16,
+    /// Eight-bit packed 4:2:2 YUV.
+    Uyvy,
+    /// NDI high-bit 4:2:2 format.
+    P216,
+    /// Adapter-native encoded format not represented by a GPU texture enum.
+    EncoderNative(String),
+}
+
+impl std::fmt::Display for PresentationPixelFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Rgba8 => write!(f, "RGBA8"),
+            Self::Bgra8 => write!(f, "BGRA8"),
+            Self::Rgb10A2 => write!(f, "RGB10A2"),
+            Self::Rgba16 => write!(f, "RGBA16"),
+            Self::Uyvy => write!(f, "UYVY"),
+            Self::P216 => write!(f, "P216"),
+            Self::EncoderNative(name) => f.write_str(name),
+        }
+    }
+}
+
+/// Transfer, primaries, matrix, and range contract for presentation.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum PresentationColorProfile {
+    /// Full-range sRGB display presentation.
+    SrgbFull,
+    /// Limited-range Rec.709 video presentation.
+    Rec709Limited,
+    /// Full-range Rec.709 video presentation.
+    Rec709Full,
+}
+
+/// Alpha representation at the output boundary.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum AlphaMode {
+    /// Output does not preserve alpha.
+    Opaque,
+    /// RGB is premultiplied by alpha.
+    Premultiplied,
+    /// RGB and alpha are independent.
+    Straight,
+}
+
+/// Persisted precision and dithering request for one output.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
+)]
+pub struct PresentationRequest {
+    /// Requested SDR code precision.
+    #[serde(default, rename = "presentation_depth")]
+    pub depth: PresentationDepth,
+    /// Whether deterministic destination-aware dithering is enabled.
+    #[serde(default = "presentation_dither_default")]
+    pub dither: bool,
+}
+
+const fn presentation_dither_default() -> bool {
+    true
+}
+
+impl Default for PresentationRequest {
+    fn default() -> Self {
+        Self {
+            depth: PresentationDepth::default(),
+            dither: presentation_dither_default(),
+        }
+    }
+}
+
+/// One concrete format an adapter can present.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PresentationFormat {
+    /// Precision carried by the format.
+    pub depth: PresentationDepth,
+    /// Pixel or encoded storage format.
+    pub pixel_format: PresentationPixelFormat,
+    /// Transfer and range contract.
+    pub color_profile: PresentationColorProfile,
+    /// Alpha representation.
+    pub alpha_mode: AlphaMode,
+}
+
+/// Ordered formats and fallback explanation reported by an adapter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PresentationCapabilities {
+    formats: Vec<PresentationFormat>,
+    sdr10_unavailable_reason: Option<String>,
+}
+
+impl PresentationCapabilities {
+    /// Build capabilities in adapter preference order.
+    pub fn new(formats: Vec<PresentationFormat>, sdr10_unavailable_reason: Option<String>) -> Self {
+        Self {
+            formats,
+            sdr10_unavailable_reason,
+        }
+    }
+
+    /// Resolve a request without mutating the persisted requested precision.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PresentationResolveError::NoSupportedFormats`] when the adapter
+    /// reports no requested format and no valid eight-bit fallback.
+    pub fn resolve(
+        &self,
+        request: PresentationRequest,
+    ) -> Result<ResolvedPresentation, PresentationResolveError> {
+        let exact = self
+            .formats
+            .iter()
+            .find(|format| format.depth == request.depth);
+        let selected = exact.or_else(|| {
+            (request.depth == PresentationDepth::Sdr10)
+                .then(|| {
+                    self.formats
+                        .iter()
+                        .find(|format| format.depth == PresentationDepth::Sdr8)
+                })
+                .flatten()
+        });
+        let Some(selected) = selected else {
+            return Err(PresentationResolveError::NoSupportedFormats);
+        };
+        let fallback_reason = (selected.depth != request.depth).then(|| {
+            self.sdr10_unavailable_reason
+                .clone()
+                .unwrap_or_else(|| "10-bit SDR is unavailable for this output".to_string())
+        });
+
+        Ok(ResolvedPresentation {
+            requested: request.depth,
+            resolved: selected.depth,
+            pixel_format: selected.pixel_format.clone(),
+            color_profile: selected.color_profile,
+            alpha_mode: selected.alpha_mode,
+            dither: request.dither,
+            fallback_reason,
+        })
+    }
+}
+
+/// Runtime precision and concrete format selected for an output.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+pub struct ResolvedPresentation {
+    /// Persisted requested precision.
+    pub requested: PresentationDepth,
+    /// Precision the active path carries.
+    pub resolved: PresentationDepth,
+    /// Active pixel or encoded format.
+    pub pixel_format: PresentationPixelFormat,
+    /// Active color contract.
+    pub color_profile: PresentationColorProfile,
+    /// Active alpha representation.
+    pub alpha_mode: AlphaMode,
+    /// Whether presentation dithering is active.
+    pub dither: bool,
+    /// Explanation when requested and resolved precision differ.
+    pub fallback_reason: Option<String>,
+}
+
+impl Default for ResolvedPresentation {
+    fn default() -> Self {
+        Self {
+            requested: PresentationDepth::Sdr8,
+            resolved: PresentationDepth::Sdr8,
+            pixel_format: PresentationPixelFormat::Rgba8,
+            color_profile: PresentationColorProfile::SrgbFull,
+            alpha_mode: AlphaMode::Opaque,
+            dither: presentation_dither_default(),
+            fallback_reason: None,
+        }
+    }
+}
+
+/// Failure to find any usable presentation format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PresentationResolveError {
+    /// Adapter reported neither the requested format nor an eight-bit fallback.
+    NoSupportedFormats,
+}
+
+impl std::fmt::Display for PresentationResolveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoSupportedFormats => f.write_str("output has no supported presentation formats"),
+        }
+    }
+}
+
+impl std::error::Error for PresentationResolveError {}
+
 // ── Output rotation ──────────────────────────────────────────────────
 
 /// Per-output rotation applied at the final blit stage.
@@ -184,6 +431,9 @@ pub enum OutputTarget {
     RtmpStream {
         url: String,
         codec: StreamingCodec,
+        /// Receiver codec signaling contract. Legacy is the interoperable default.
+        #[serde(default)]
+        codec_contract: RtmpCodecContract,
         #[serde(default)]
         audio_device: Option<String>,
     },
@@ -343,6 +593,30 @@ impl std::fmt::Display for StreamingCodec {
             StreamingCodec::AV1 => write!(f, "AV1"),
         }
     }
+}
+
+/// Codec signaling contract declared by an RTMP/RTMPS endpoint.
+///
+/// URL scheme alone cannot establish Enhanced RTMP support, so this value is
+/// explicit and persisted with the target.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    utoipa::ToSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum RtmpCodecContract {
+    /// Legacy FLV signaling. Only interoperable H.264 is permitted.
+    #[default]
+    Legacy,
+    /// Enhanced RTMP signaling declared by the configured endpoint.
+    Enhanced,
 }
 
 // ── Tonemap ──────────────────────────────────────────────────────────
@@ -650,6 +924,28 @@ mod tests {
         );
     }
 
+    #[test]
+    fn rtmp_codec_contract_defaults_to_legacy_and_roundtrips_enhanced() {
+        let legacy: RtmpCodecContract = serde_json::from_str(r#""legacy""#).unwrap();
+        assert_eq!(legacy, RtmpCodecContract::Legacy);
+        assert_eq!(
+            serde_json::to_string(&RtmpCodecContract::Enhanced).unwrap(),
+            r#""enhanced""#
+        );
+
+        let target: OutputTarget = serde_json::from_str(
+            r#"{"RtmpStream":{"url":"rtmps://example/live","codec":"H264","audio_device":null}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            target,
+            OutputTarget::RtmpStream {
+                codec_contract: RtmpCodecContract::Legacy,
+                ..
+            }
+        ));
+    }
+
     // ── EdgeBlend ────────────────────────────────────────────────────
 
     #[test]
@@ -677,5 +973,166 @@ mod tests {
             }
             assert!(cfg.any_enabled(), "edge {pick} should register as enabled");
         }
+    }
+
+    // ── SDR presentation precision ──────────────────────────────────
+
+    fn sdr8_format() -> PresentationFormat {
+        PresentationFormat {
+            depth: PresentationDepth::Sdr8,
+            pixel_format: PresentationPixelFormat::Rgba8,
+            color_profile: PresentationColorProfile::SrgbFull,
+            alpha_mode: AlphaMode::Opaque,
+        }
+    }
+
+    fn sdr10_format() -> PresentationFormat {
+        PresentationFormat {
+            depth: PresentationDepth::Sdr10,
+            pixel_format: PresentationPixelFormat::Rgb10A2,
+            color_profile: PresentationColorProfile::SrgbFull,
+            alpha_mode: AlphaMode::Opaque,
+        }
+    }
+
+    #[test]
+    fn presentation_depth_labels_match_the_user_facing_order() {
+        assert_eq!(
+            PresentationDepth::ALL,
+            [PresentationDepth::Sdr8, PresentationDepth::Sdr10]
+        );
+        assert_eq!(PresentationDepth::Sdr8.label(), "8-bit SDR");
+        assert_eq!(PresentationDepth::Sdr10.label(), "10-bit SDR");
+    }
+
+    #[test]
+    fn pixel_format_display_covers_every_variant() {
+        assert_eq!(PresentationPixelFormat::Rgba8.to_string(), "RGBA8");
+        assert_eq!(PresentationPixelFormat::Bgra8.to_string(), "BGRA8");
+        assert_eq!(PresentationPixelFormat::Rgb10A2.to_string(), "RGB10A2");
+        assert_eq!(PresentationPixelFormat::Rgba16.to_string(), "RGBA16");
+        assert_eq!(PresentationPixelFormat::Uyvy.to_string(), "UYVY");
+        assert_eq!(PresentationPixelFormat::P216.to_string(), "P216");
+        assert_eq!(
+            PresentationPixelFormat::EncoderNative("yuv420p10le".into()).to_string(),
+            "yuv420p10le"
+        );
+    }
+
+    #[test]
+    fn presentation_request_defaults_to_sdr8_with_dither() {
+        assert_eq!(
+            PresentationRequest::default(),
+            PresentationRequest {
+                depth: PresentationDepth::Sdr8,
+                dither: true,
+            }
+        );
+    }
+
+    #[test]
+    fn presentation_request_uses_flat_stage_json_names() {
+        let request: PresentationRequest =
+            serde_json::from_str(r#"{"presentation_depth":"sdr10"}"#).unwrap();
+        assert_eq!(request.depth, PresentationDepth::Sdr10);
+        assert!(request.dither);
+
+        let json = serde_json::to_value(request).unwrap();
+        assert_eq!(json["presentation_depth"], "sdr10");
+        assert_eq!(json["dither"], true);
+
+        let without_dither: PresentationRequest =
+            serde_json::from_str(r#"{"presentation_depth":"sdr8"}"#).unwrap();
+        assert!(without_dither.dither);
+        let explicit: PresentationRequest =
+            serde_json::from_str(r#"{"presentation_depth":"sdr10","dither":false}"#).unwrap();
+        assert!(!explicit.dither);
+    }
+
+    #[test]
+    fn presentation_resolver_uses_requested_sdr10_format() {
+        let capabilities = PresentationCapabilities::new(vec![sdr10_format(), sdr8_format()], None);
+        let resolved = capabilities
+            .resolve(PresentationRequest {
+                depth: PresentationDepth::Sdr10,
+                dither: false,
+            })
+            .unwrap();
+
+        assert_eq!(resolved.resolved, PresentationDepth::Sdr10);
+        assert_eq!(resolved.pixel_format, PresentationPixelFormat::Rgb10A2);
+        assert!(!resolved.dither);
+        assert_eq!(resolved.fallback_reason, None);
+    }
+
+    #[test]
+    fn presentation_resolver_falls_back_without_rewriting_request() {
+        let capabilities = PresentationCapabilities::new(
+            vec![sdr8_format()],
+            Some("Syphon interoperability is limited to BGRA8".into()),
+        );
+        let resolved = capabilities
+            .resolve(PresentationRequest {
+                depth: PresentationDepth::Sdr10,
+                dither: true,
+            })
+            .unwrap();
+
+        assert_eq!(resolved.requested, PresentationDepth::Sdr10);
+        assert_eq!(resolved.resolved, PresentationDepth::Sdr8);
+        assert_eq!(
+            resolved.fallback_reason.as_deref(),
+            Some("Syphon interoperability is limited to BGRA8")
+        );
+    }
+
+    #[test]
+    fn presentation_resolver_rejects_empty_capabilities() {
+        let capabilities = PresentationCapabilities::new(Vec::new(), None);
+        assert_eq!(
+            capabilities.resolve(PresentationRequest::default()),
+            Err(PresentationResolveError::NoSupportedFormats)
+        );
+    }
+
+    #[test]
+    fn presentation_resolver_picks_matching_eight_bit_even_when_ten_bit_is_listed_first() {
+        let capabilities = PresentationCapabilities::new(vec![sdr10_format(), sdr8_format()], None);
+        let resolved = capabilities
+            .resolve(PresentationRequest::default())
+            .unwrap();
+
+        assert_eq!(resolved.requested, PresentationDepth::Sdr8);
+        assert_eq!(resolved.resolved, PresentationDepth::Sdr8);
+        assert_eq!(resolved.pixel_format, PresentationPixelFormat::Rgba8);
+        assert!(resolved.fallback_reason.is_none());
+    }
+
+    #[test]
+    fn presentation_resolver_rejects_eight_bit_request_when_only_ten_bit_exists() {
+        let capabilities = PresentationCapabilities::new(vec![sdr10_format()], None);
+        assert_eq!(
+            capabilities.resolve(PresentationRequest::default()),
+            Err(PresentationResolveError::NoSupportedFormats)
+        );
+    }
+
+    #[test]
+    fn presentation_resolver_uses_generic_reason_and_keeps_dither_on_fallback() {
+        let capabilities = PresentationCapabilities::new(vec![sdr8_format()], None);
+        let resolved = capabilities
+            .resolve(PresentationRequest {
+                depth: PresentationDepth::Sdr10,
+                dither: false,
+            })
+            .unwrap();
+
+        assert_eq!(resolved.requested, PresentationDepth::Sdr10);
+        assert_eq!(resolved.resolved, PresentationDepth::Sdr8);
+        assert!(!resolved.dither);
+        assert_eq!(
+            resolved.fallback_reason.as_deref(),
+            Some("10-bit SDR is unavailable for this output")
+        );
     }
 }
