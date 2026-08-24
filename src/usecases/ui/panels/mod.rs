@@ -391,20 +391,19 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
 
     // === KEYBOARD SHORTCUTS (data-driven via keymap) ===
     {
-        use crate::keymap::{collect_pressed_keys, ActionId, KeyCombo, KeyTarget};
-        let pressed = collect_pressed_keys(ui);
+        use crate::keymap::{ActionId, KeyTarget};
+        use crate::usecases::ui::keyboard::collect_pressed_keys;
+        let pressed = collect_pressed_keys(ui.ctx());
 
         if data.keyboard_learn_active {
             // In learn mode: intercept key presses for binding, don't dispatch normally
-            if let Some((key, mods)) = pressed.first() {
-                let combo = KeyCombo::from_egui(*key, mods);
-                actions.session.keyboard_learn_bind = Some(combo);
+            if let Some(combo) = pressed.first() {
+                actions.session.keyboard_learn_bind = Some(combo.clone());
             }
         } else {
             // Normal dispatch: look up each pressed key in the keymap
-            for (key, mods) in &pressed {
-                let combo = KeyCombo::from_egui(*key, mods);
-                if let Some(target) = data.keymap_bindings.get(&combo) {
+            for combo in &pressed {
+                if let Some(target) = data.keymap_bindings.get(combo) {
                     match target {
                         KeyTarget::Action(ActionId::Undo) => actions.session.undo_requested = true,
                         KeyTarget::Action(ActionId::Redo) => actions.session.redo_requested = true,

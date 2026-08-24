@@ -739,6 +739,156 @@ fn scaling_mode_from_value(value: f32) -> ScalingMode {
     }
 }
 
+/// Toggle a parameter between its two extremes (keyboard shortcut affordance).
+///
+/// Floats snap 0↔1. Bools invert. Mute/solo flip. Trigger forces opacity to 1.0.
+/// Modulation paths are rejected: those values are continuous, not two-state.
+///
+/// # Errors
+///
+/// Returns [`ParamRouteError::UnknownPath`] if `path` matches no toggle route,
+/// [`ParamRouteError::UnknownEntity`] if a UUID in the path does not resolve,
+/// [`ParamRouteError::UnknownParam`] if the named shader parameter does not exist,
+/// and [`ParamRouteError::WrongState`] for modulation paths that cannot toggle.
+pub fn toggle_param_by_path(mixer: &mut Mixer, path: &str) -> Result<(), ParamRouteError> {
+    let parts: Vec<&str> = path.split('/').collect();
+    match parts.as_slice() {
+        ["crossfader"] => {
+            let current = mixer.crossfader();
+            mixer.snap_crossfader(if current > 0.5 { 0.0 } else { 1.0 });
+            Ok(())
+        }
+        ["ch", ch_uuid, "opacity"] => {
+            let ch = mixer
+                .find_channel_by_uuid(ch_uuid)
+                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Channel, ch_uuid))?;
+            let channel = &mut mixer.channels_mut()[ch];
+            channel.opacity = if channel.opacity > 0.01 { 0.0 } else { 1.0 };
+            Ok(())
+        }
+        ["deck", uuid, "opacity"] => {
+            let (ch, dk) = mixer
+                .find_deck_by_uuid(uuid)
+                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
+            let slot = &mut mixer.channels_mut()[ch].decks[dk];
+            slot.opacity = if slot.opacity > 0.01 { 0.0 } else { 1.0 };
+            Ok(())
+        }
+        ["deck", uuid, "mute"] => {
+            let (ch, dk) = mixer
+                .find_deck_by_uuid(uuid)
+                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
+            let slot = &mut mixer.channels_mut()[ch].decks[dk];
+            slot.mute = !slot.mute;
+            Ok(())
+        }
+        ["deck", uuid, "solo"] => {
+            let (ch, dk) = mixer
+                .find_deck_by_uuid(uuid)
+                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
+            let slot = &mut mixer.channels_mut()[ch].decks[dk];
+            slot.solo = !slot.solo;
+            Ok(())
+        }
+        ["deck", uuid, "trigger"] => {
+            let (ch, dk) = mixer
+                .find_deck_by_uuid(uuid)
+                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
+            mixer.channels_mut()[ch].decks[dk].opacity = 1.0;
+            Ok(())
+        }
+        ["deck", uuid, "param", name] => {
+            let (ch, dk) = mixer
+                .find_deck_by_uuid(uuid)
+                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
+            let val = mixer.channels_mut()[ch].decks[dk]
+                .deck
+                .generator_params
+                .values
+                .get_mut(*name)
+                .ok_or_else(|| ParamRouteError::UnknownParam {
+                    scope: "deck",
+                    name: (*name).to_string(),
+                })?;
+            toggle_param_value(val);
+            Ok(())
+        }
+        ["deck", uuid, "effect", fx_uuid, "param", name] => {
+            let (ch, dk) = mixer
+                .find_deck_by_uuid(uuid)
+                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
+            let slot = &mut mixer.channels_mut()[ch].decks[dk];
+            let ek = slot
+                .deck
+                .effects
+                .iter()
+                .position(|e| e.uuid() == *fx_uuid)
+                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Effect, fx_uuid))?;
+            let val = slot.deck.effects[ek]
+                .params
+                .values
+                .get_mut(*name)
+                .ok_or_else(|| ParamRouteError::UnknownParam {
+                    scope: "effect",
+                    name: (*name).to_string(),
+                })?;
+            toggle_param_value(val);
+            Ok(())
+        }
+        ["ch", ch_uuid, "effect", fx_uuid, "param", name] => {
+            let ch = mixer
+                .find_channel_by_uuid(ch_uuid)
+                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Channel, ch_uuid))?;
+            let ek = mixer.channels_mut()[ch]
+                .effects
+                .iter()
+                .position(|e| e.uuid() == *fx_uuid)
+                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Effect, fx_uuid))?;
+            let val = mixer.channels_mut()[ch].effects[ek]
+                .params
+                .values
+                .get_mut(*name)
+                .ok_or_else(|| ParamRouteError::UnknownParam {
+                    scope: "effect",
+                    name: (*name).to_string(),
+                })?;
+            toggle_param_value(val);
+            Ok(())
+        }
+        ["master", "effect", fx_uuid, "param", name] => {
+            let effects = mixer.master_effects_mut();
+            let ek = effects
+                .iter()
+                .position(|e| e.uuid() == *fx_uuid)
+                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Effect, fx_uuid))?;
+            let val = effects[ek].params.values.get_mut(*name).ok_or_else(|| {
+                ParamRouteError::UnknownParam {
+                    scope: "effect",
+                    name: (*name).to_string(),
+                }
+            })?;
+            toggle_param_value(val);
+            Ok(())
+        }
+        ["mod", _, _] => Err(ParamRouteError::WrongState {
+            path: path.to_string(),
+            reason: "modulation params are continuous; keyboard toggle does not apply",
+        }),
+        _ => Err(ParamRouteError::UnknownPath {
+            path: path.to_string(),
+        }),
+    }
+}
+
+/// Floats snap between 0.0 and 1.0. Bools invert. Other variants are left as-is.
+fn toggle_param_value(val: &mut ParamValue) {
+    match val {
+        ParamValue::Float(v) => *v = if v.abs() > 0.01 { 0.0 } else { 1.0 },
+        ParamValue::Bool(b) => *b = !*b,
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -937,5 +1087,69 @@ mod tests {
             path: "foo/bar".to_string(),
         };
         assert_eq!(e.to_string(), "unknown parameter path: foo/bar");
+    }
+
+    fn maybe_mixer() -> Option<(crate::renderer::GpuContext, Mixer)> {
+        let gpu = crate::renderer::GpuContext::new_headless().ok()?;
+        Mixer::new(&gpu, 64, 64).ok().map(|mixer| (gpu, mixer))
+    }
+
+    #[test]
+    fn toggle_param_value_snaps_float_and_inverts_bool() {
+        let mut v = ParamValue::Float(0.8);
+        toggle_param_value(&mut v);
+        match v {
+            ParamValue::Float(x) => assert!(x.abs() < 1e-5),
+            other => panic!("expected Float(0), got {other:?}"),
+        }
+        toggle_param_value(&mut v);
+        match v {
+            ParamValue::Float(x) => assert!((x - 1.0).abs() < 1e-5),
+            other => panic!("expected Float(1), got {other:?}"),
+        }
+
+        let mut b = ParamValue::Bool(false);
+        toggle_param_value(&mut b);
+        assert!(matches!(b, ParamValue::Bool(true)));
+    }
+
+    #[test]
+    fn toggle_crossfader_snaps_between_extremes() {
+        let Some((_gpu, mut mixer)) = maybe_mixer() else {
+            return;
+        };
+        assert!(mixer.crossfader() < 0.01);
+        toggle_param_by_path(&mut mixer, "crossfader").unwrap();
+        assert!((mixer.crossfader() - 1.0).abs() < 1e-5);
+        toggle_param_by_path(&mut mixer, "crossfader").unwrap();
+        assert!(mixer.crossfader() < 1e-5);
+    }
+
+    #[test]
+    fn toggle_channel_opacity_snaps_between_extremes() {
+        let Some((_gpu, mut mixer)) = maybe_mixer() else {
+            return;
+        };
+        let uuid = mixer.channel(0).unwrap().uuid().to_string();
+        mixer.channels_mut()[0].opacity = 0.4;
+        toggle_param_by_path(&mut mixer, &format!("ch/{uuid}/opacity")).unwrap();
+        assert!(mixer.channels()[0].opacity.abs() < 1e-5);
+        toggle_param_by_path(&mut mixer, &format!("ch/{uuid}/opacity")).unwrap();
+        assert!((mixer.channels()[0].opacity - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn toggle_unknown_path_and_mod_path_error() {
+        let Some((_gpu, mut mixer)) = maybe_mixer() else {
+            return;
+        };
+        assert!(matches!(
+            toggle_param_by_path(&mut mixer, "no/such/path"),
+            Err(ParamRouteError::UnknownPath { .. })
+        ));
+        assert!(matches!(
+            toggle_param_by_path(&mut mixer, "mod/abc/frequency"),
+            Err(ParamRouteError::WrongState { .. })
+        ));
     }
 }

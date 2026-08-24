@@ -249,7 +249,7 @@ pub enum EngineCommand {
     },
     /// Toggle a parameter between its two extremes by path (keyboard-shortcut
     /// affordance): crossfader 0↔1, opacity 0↔1, mute/solo flip, etc. The
-    /// two-value logic lives in `keymap::apply_keyboard_toggle_param`.
+    /// two-value logic lives in `param_router::toggle_param_by_path`.
     ToggleParam {
         path: String,
     },

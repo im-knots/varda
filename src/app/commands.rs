@@ -348,7 +348,9 @@ impl VardaApp {
                 CommandResult::Ok
             }
             EngineCommand::ToggleParam { path } => {
-                crate::keymap::apply_keyboard_toggle_param(&mut self.mixer, &path);
+                if let Err(e) = crate::param_router::toggle_param_by_path(&mut self.mixer, &path) {
+                    log::debug!("ToggleParam {path}: {e}");
+                }
                 CommandResult::Ok
             }
 
