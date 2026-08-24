@@ -722,6 +722,8 @@ pub struct OutputUI {
     pub resolved_presentation: crate::engine::value::render::ResolvedPresentation,
     /// Audio passthrough health for an active ffmpeg output (None = video-only).
     pub audio_passthrough: Option<AudioPassthroughUI>,
+    /// ffmpeg video health (None = no subprocess on this output).
+    pub delivery: Option<DeliveryHealthUI>,
     /// Pixel size of the texture the output panel previews. A headless output
     /// is at the render resolution; a windowed one is at its (rotated) window
     /// size, which need not share the render aspect. The panel has to size the
@@ -743,6 +745,14 @@ pub struct AudioPassthroughUI {
     /// Samples of silence written in place of those drops. This, not the chunk
     /// count, is what the listener hears.
     pub silence_spliced: u64,
+}
+
+/// Live ffmpeg video health for an active recording or stream.
+#[derive(Clone)]
+pub struct DeliveryHealthUI {
+    pub frames_written: u64,
+    pub frames_dropped: u64,
+    pub frames_padded: u64,
 }
 
 /// Dome-mode UI actions (camera interaction, mode toggle, config changes).

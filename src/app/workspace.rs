@@ -3,6 +3,35 @@
 use super::VardaApp;
 use crate::usecases::ui::UILayoutState;
 
+/// Outcome of loading `.varda/`. Hard failures are listed so the command
+/// bus cannot report `Ok` when a file that exists could not be restored.
+/// Layout is still returned when stage.json loaded, even if scene.json failed.
+pub struct WorkspaceLoad {
+    pub layout: Option<UILayoutState>,
+    errors: Vec<String>,
+}
+
+impl WorkspaceLoad {
+    /// Whether every existing workspace file loaded.
+    #[must_use]
+    pub fn is_ok(&self) -> bool {
+        self.errors.is_empty()
+    }
+
+    /// Joined hard-failure messages, if any.
+    #[must_use]
+    pub fn error_message(&self) -> Option<String> {
+        if self.errors.is_empty() {
+            None
+        } else {
+            Some(format!(
+                "Failed to load workspace: {}",
+                self.errors.join("; ")
+            ))
+        }
+    }
+}
+
 fn duration_config_to_spec(
     config: &crate::scene::DurationSpecConfig,
 ) -> crate::channel::DurationSpec {
@@ -19,12 +48,21 @@ fn duration_config_to_spec(
 impl VardaApp {
     /// Save the entire workspace to `.varda/`.
     /// `layout` is UI-consumer-owned state persisted in stage.json.
-    pub fn save_workspace(&mut self, layout: &UILayoutState) {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `.varda/` cannot be created or if any workspace
+    /// file fails to write. Files that succeeded stay on disk; the error
+    /// lists every failure. The operator is toasted on failure.
+    pub fn save_workspace(&mut self, layout: &UILayoutState) -> anyhow::Result<()> {
         self.session.last_layout = layout.clone();
         if let Err(e) = self.session.workspace.ensure_dir() {
-            log::error!("Failed to create .varda directory: {e}");
-            return;
+            let msg = format!("Failed to create .varda directory: {e}");
+            log::error!("{msg}");
+            self.session.notifications.error(msg.clone());
+            return Err(anyhow::anyhow!("{msg}"));
         }
+        let mut errors: Vec<String> = Vec::new();
         {
             let scene = crate::persistence::snapshot_scene(
                 &self.mixer,
@@ -37,7 +75,10 @@ impl VardaApp {
                     "Saved scene to {}",
                     self.session.workspace.scene_path().display()
                 ),
-                Err(e) => log::error!("Failed to save scene: {e}"),
+                Err(e) => {
+                    log::error!("Failed to save scene: {e}");
+                    errors.push(format!("scene: {e}"));
+                }
             }
         }
         if let Some(midi) = &self.input.midi_devices {
@@ -50,7 +91,10 @@ impl VardaApp {
                     "Saved MIDI mappings to {}",
                     self.session.workspace.midi_path().display()
                 ),
-                Err(e) => log::error!("Failed to save MIDI config: {e}"),
+                Err(e) => {
+                    log::error!("Failed to save MIDI config: {e}");
+                    errors.push(format!("midi: {e}"));
+                }
             }
         }
         let mut stage = crate::persistence::snapshot_stage(
@@ -73,18 +117,22 @@ impl VardaApp {
                 "Saved stage to {}",
                 self.session.workspace.stage_path().display()
             ),
-            Err(e) => log::error!("Failed to save stage: {e}"),
+            Err(e) => {
+                log::error!("Failed to save stage: {e}");
+                errors.push(format!("stage: {e}"));
+            }
         }
-        // Save keyboard shortcuts
         let keymap_config = self.input.keymap.to_config();
         match keymap_config.save(self.session.workspace.keymap_path()) {
             Ok(()) => log::info!(
                 "Saved keymap to {}",
                 self.session.workspace.keymap_path().display()
             ),
-            Err(e) => log::error!("Failed to save keymap: {e}"),
+            Err(e) => {
+                log::error!("Failed to save keymap: {e}");
+                errors.push(format!("keymap: {e}"));
+            }
         }
-        // Save OSC config
         match self
             .input
             .osc_config
@@ -94,22 +142,37 @@ impl VardaApp {
                 "Saved OSC config to {}",
                 self.session.workspace.osc_path().display()
             ),
-            Err(e) => log::error!("Failed to save OSC config: {e}"),
+            Err(e) => {
+                log::error!("Failed to save OSC config: {e}");
+                errors.push(format!("osc: {e}"));
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            let msg = format!("Failed to save workspace: {}", errors.join("; "));
+            self.session.notifications.error(msg.clone());
+            Err(anyhow::anyhow!("{msg}"))
         }
     }
 
     /// Load workspace from `.varda/` if it exists.
     /// If a scene is found, replaces the default mixer with the restored one.
-    /// Returns layout preferences loaded from stage.json (if any).
-    pub fn load_workspace(&mut self) -> Option<UILayoutState> {
+    /// Returns layout preferences loaded from stage.json (if any), plus any
+    /// hard failures so the command bus cannot report success on a partial load.
+    pub fn load_workspace(&mut self) -> WorkspaceLoad {
         if !self.session.workspace.exists() {
             log::info!("No .varda/ directory found, starting fresh");
-            return None;
+            return WorkspaceLoad {
+                layout: None,
+                errors: Vec::new(),
+            };
         }
         // Loading a workspace replaces the live scene/stage, so the undo/redo
         // timeline (which references the previous state) must be cleared.
         self.session.history.clear();
         let mut loaded_layout: Option<UILayoutState> = None;
+        let mut errors: Vec<String> = Vec::new();
         if self.session.workspace.has_stage() {
             match crate::persistence::StagePrefs::load(self.session.workspace.stage_path()) {
                 Ok(prefs) => {
@@ -156,7 +219,10 @@ impl VardaApp {
                         self.ensure_domemaster();
                     }
                 }
-                Err(e) => log::warn!("Failed to load stage: {e}"),
+                Err(e) => {
+                    log::warn!("Failed to load stage: {e}");
+                    errors.push(format!("stage: {e}"));
+                }
             }
         }
         if self.session.workspace.has_scene() {
@@ -234,17 +300,13 @@ impl VardaApp {
                         }
                         Err(e) => {
                             log::error!("Failed to restore scene: {e}");
-                            self.session
-                                .notifications
-                                .error(format!("Failed to load scene: {e}"));
+                            errors.push(format!("scene: {e}"));
                         }
                     }
                 }
                 Err(e) => {
                     log::warn!("Failed to load scene file: {e}");
-                    self.session
-                        .notifications
-                        .warn(format!("Failed to load scene: {e}"));
+                    errors.push(format!("scene: {e}"));
                 }
             }
         }
@@ -262,7 +324,10 @@ impl VardaApp {
                         );
                     }
                 }
-                Err(e) => log::warn!("Failed to load MIDI config: {e}"),
+                Err(e) => {
+                    log::warn!("Failed to load MIDI config: {e}");
+                    errors.push(format!("midi: {e}"));
+                }
             }
         }
         // Load keyboard shortcuts
@@ -272,7 +337,10 @@ impl VardaApp {
                     self.input.keymap.load_config(&keymap_config);
                     log::info!("Loaded {} keyboard shortcuts", keymap_config.bindings.len());
                 }
-                Err(e) => log::warn!("Failed to load keymap config: {e}"),
+                Err(e) => {
+                    log::warn!("Failed to load keymap config: {e}");
+                    errors.push(format!("keymap: {e}"));
+                }
             }
         }
         // Load OSC config (already loaded in new(), but refresh feedback targets on workspace load)
@@ -295,13 +363,23 @@ impl VardaApp {
                         self.input.osc_config.feedback_targets.len()
                     );
                 }
-                Err(e) => log::warn!("Failed to load OSC config: {e}"),
+                Err(e) => {
+                    log::warn!("Failed to load OSC config: {e}");
+                    errors.push(format!("osc: {e}"));
+                }
             }
         }
         if let Some(layout) = &loaded_layout {
             self.session.last_layout = layout.clone();
         }
-        loaded_layout
+        if !errors.is_empty() {
+            let msg = format!("Failed to load workspace: {}", errors.join("; "));
+            self.session.notifications.error(msg);
+        }
+        WorkspaceLoad {
+            layout: loaded_layout,
+            errors,
+        }
     }
 
     /// Apply a scene diff: compare current mixer state to a target `SceneConfig`
@@ -1018,7 +1096,8 @@ mod tests {
         };
         // No .varda/ exists → load_workspace returns None
         let result = app.load_workspace();
-        assert!(result.is_none());
+        assert!(result.layout.is_none());
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -1030,7 +1109,8 @@ mod tests {
         let ch = app.mixer_snapshot().channels[0].uuid.clone();
         app.add_solid_color_deck(&ch, [1.0, 0.0, 0.0, 1.0]).unwrap();
         app.set_crossfader(0.6);
-        app.save_workspace(&UILayoutState::default());
+        app.save_workspace(&UILayoutState::default())
+            .expect("save workspace");
 
         let Some(mut app2) = headless_app_in(tmp.path()) else {
             return;
@@ -1054,7 +1134,8 @@ mod tests {
             "Test Surface",
             crate::renderer::context::OutputSource::Master,
         );
-        app.save_workspace(&UILayoutState::default());
+        app.save_workspace(&UILayoutState::default())
+            .expect("save workspace");
 
         let Some(mut app2) = headless_app_in(tmp.path()) else {
             return;
@@ -1096,7 +1177,8 @@ mod tests {
             }),
             CommandResult::Ok
         ));
-        app.save_workspace(&UILayoutState::default());
+        app.save_workspace(&UILayoutState::default())
+            .expect("save workspace");
 
         let stage: crate::persistence::StagePrefs = serde_json::from_str(
             &std::fs::read_to_string(tmp.path().join(".varda").join("stage.json")).unwrap(),
@@ -1119,11 +1201,17 @@ mod tests {
         let Some(mut app) = headless_app_in(tmp.path()) else {
             return;
         };
-        // Should not crash, should return None or gracefully handle
-        let _result = app.load_workspace();
-        // App should still function with default state
+        let result = app.load_workspace();
+        assert!(!result.is_ok(), "corrupt scene.json must be a load failure");
+        assert!(result.error_message().expect("error").contains("scene"));
         let snap = app.mixer_snapshot();
         assert_eq!(snap.channels.len(), 2);
+        assert!(
+            app.session.notifications.visible().iter().any(|n| n.level
+                == crate::notifications::NotificationLevel::Error
+                && n.message.contains("scene")),
+            "operator must see the load failure"
+        );
     }
 
     #[test]
@@ -1150,8 +1238,50 @@ mod tests {
         let Some(mut app) = headless_app_in(tmp.path()) else {
             return;
         };
-        app.save_workspace(&UILayoutState::default());
+        app.save_workspace(&UILayoutState::default())
+            .expect("save workspace");
         assert!(varda_dir.exists());
+    }
+
+    #[test]
+    fn save_failure_toasts_and_returns_err() {
+        let tmp = TempDir::new().unwrap();
+        let Some(mut app) = headless_app_in(tmp.path()) else {
+            return;
+        };
+        app.save_workspace(&UILayoutState::default())
+            .expect("save workspace");
+        let scene = tmp.path().join(".varda").join("scene.json");
+        std::fs::remove_file(&scene).unwrap();
+        std::fs::create_dir(&scene).unwrap();
+        let err = app
+            .save_workspace(&UILayoutState::default())
+            .expect_err("a directory named scene.json must fail the save");
+        assert!(err.to_string().contains("scene"));
+        assert!(
+            app.session.notifications.visible().iter().any(|n| n.level
+                == crate::notifications::NotificationLevel::Error
+                && n.message.contains("scene")),
+            "operator must see the save failure"
+        );
+    }
+
+    #[test]
+    fn load_workspace_command_returns_err_on_corrupt_scene() {
+        let tmp = TempDir::new().unwrap();
+        let varda_dir = tmp.path().join(".varda");
+        std::fs::create_dir_all(&varda_dir).unwrap();
+        std::fs::write(varda_dir.join("scene.json"), "not valid json {{{").unwrap();
+        let Some(mut app) = headless_app_in(tmp.path()) else {
+            return;
+        };
+        match app.execute_command(crate::engine::EngineCommand::LoadWorkspace) {
+            crate::engine::CommandResult::Err {
+                code: crate::engine::ErrorCode::InternalError,
+                message,
+            } => assert!(message.contains("scene")),
+            other => panic!("expected InternalError, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1165,14 +1295,14 @@ mod tests {
             library_panel_open: true,
             ..Default::default()
         };
-        app.save_workspace(&layout);
+        app.save_workspace(&layout).expect("save workspace");
 
         let Some(mut app2) = headless_app_in(tmp.path()) else {
             return;
         };
         let loaded = app2.load_workspace();
-        assert!(loaded.is_some(), "should return layout");
-        let loaded = loaded.unwrap();
+        assert!(loaded.is_ok(), "should load without hard errors");
+        let loaded = loaded.layout.expect("should return layout");
         assert!(loaded.stage_editor_open);
         assert!(loaded.library_panel_open);
     }
@@ -1189,18 +1319,19 @@ mod tests {
             stage_editor_open: true,
             library_panel_open: true,
             ..Default::default()
-        });
+        })
+        .expect("save workspace");
 
         let Some(mut app2) = headless_app_in(tmp.path()) else {
             return;
         };
-        app2.load_workspace();
+        let _ = app2.load_workspace();
         app2.execute_command(crate::engine::EngineCommand::SaveWorkspace);
 
         let Some(mut app3) = headless_app_in(tmp.path()) else {
             return;
         };
-        let reloaded = app3.load_workspace().expect("layout should survive");
+        let reloaded = app3.load_workspace().layout.expect("layout should survive");
         assert!(reloaded.stage_editor_open);
         assert!(reloaded.library_panel_open);
     }

@@ -262,6 +262,7 @@ pub(crate) mod tests {
                     resolved_presentation:
                         crate::engine::value::render::ResolvedPresentation::default(),
                     audio_passthrough: None,
+                    delivery: None,
                 }],
                 surfaces: vec![SurfaceSnapshot {
                     uuid: "srf-001".into(),
@@ -423,6 +424,11 @@ pub(crate) mod tests {
                 frames_written: 42,
                 frames_dropped: 1,
             }),
+            delivery: Some(crate::engine::types::DeliveryHealthSnapshot {
+                frames_written: 100,
+                frames_dropped: 3,
+                frames_padded: 2,
+            }),
         };
         let v = serde_json::to_value(&snap).unwrap();
         assert_eq!(v["target"]["Recording"]["audio_device"], "Scarlett 2i2");
@@ -430,5 +436,8 @@ pub(crate) mod tests {
         assert_eq!(v["audio_passthrough"]["device"], "Scarlett 2i2");
         assert_eq!(v["audio_passthrough"]["frames_written"], 42);
         assert_eq!(v["audio_passthrough"]["frames_dropped"], 1);
+        assert_eq!(v["delivery"]["frames_written"], 100);
+        assert_eq!(v["delivery"]["frames_dropped"], 3);
+        assert_eq!(v["delivery"]["frames_padded"], 2);
     }
 }

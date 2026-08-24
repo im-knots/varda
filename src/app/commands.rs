@@ -1671,13 +1671,21 @@ impl VardaApp {
                 // No layout travels with the command, so reuse the last one the
                 // engine saw rather than writing defaults over the user's panels.
                 let layout = self.session.last_layout.clone();
-                self.save_workspace(&layout);
-                CommandResult::Ok
+                match self.save_workspace(&layout) {
+                    Ok(()) => CommandResult::Ok,
+                    Err(e) => CommandResult::Err {
+                        code: ErrorCode::InternalError,
+                        message: e.to_string(),
+                    },
+                }
             }
-            EngineCommand::LoadWorkspace => {
-                let _ = self.load_workspace();
-                CommandResult::Ok
-            }
+            EngineCommand::LoadWorkspace => match self.load_workspace().error_message() {
+                None => CommandResult::Ok,
+                Some(message) => CommandResult::Err {
+                    code: ErrorCode::InternalError,
+                    message,
+                },
+            },
 
             // ── History ───────────────────────────────────────────
             // Restore is shared with the windowed runner via `history_undo` /

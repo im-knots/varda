@@ -271,7 +271,8 @@ impl UIRunner {
 
         // Load workspace (may replace default mixer with saved scene)
         log::info!("[STARTUP] Loading workspace...");
-        if let Some(loaded_layout) = varda.load_workspace() {
+        let loaded = varda.load_workspace();
+        if let Some(loaded_layout) = loaded.layout {
             self.layout = loaded_layout;
         }
         // `load_workspace` clears the engine-owned undo/redo timeline.
@@ -341,7 +342,9 @@ impl UIRunner {
                 .load(std::sync::atomic::Ordering::Relaxed)
         {
             log::info!("Shutdown requested, saving workspace and exiting...");
-            varda.save_workspace(&self.layout);
+            if let Err(e) = varda.save_workspace(&self.layout) {
+                log::error!("{e}");
+            }
             if let Some(api) = self.api_handle.take() {
                 api.shutdown();
             }
@@ -801,8 +804,7 @@ impl UIRunner {
                 self.layout.fixup_channel_removal(ch_idx);
             }
 
-            if ui_actions.session.save_requested {
-                varda.save_workspace(&self.layout);
+            if ui_actions.session.save_requested && varda.save_workspace(&self.layout).is_ok() {
                 varda.notify_info("💾 Workspace saved");
             }
 
