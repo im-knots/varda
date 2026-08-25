@@ -33,7 +33,11 @@ Define a sub-range of the clip to play:
 
 Click **Clear In/Out** to reset to the full clip duration.
 
-Play/pause, speed, seek, loop mode, in/out points, transport chase (Auto / Always / Never, offset, delay), and clear are all MIDI, OSC, keyboard mappable and modulatable except chase, which is authored on the clip. Loop mode uses **fader bucketing**: sweeping a fader/knob steps through Loop → Ping-Pong → One Shot → Hold Last. Enter learn mode and click any of these controls in the deck detail panel to bind it. See [Parameter Paths](06-control-surfaces.md#parameter-paths). Video chase is described in [Arrangement Mode](15-arrangement.md#chasing-a-clip-to-the-show).
+Play/pause, speed, seek, loop mode, in/out points, and clear are all MIDI, OSC, and keyboard mappable, and can be driven by a macro. Transport chase (Auto / Always / Never, offset, delay) is authored on the clip instead. Loop mode uses **fader bucketing**: sweeping a fader/knob steps through Loop → Ping-Pong → One Shot → Hold Last. Enter learn mode and click any of these controls in the deck detail panel to bind it. See [Parameter Paths](06-control-surfaces.md#parameter-paths). Video chase is described in [Arrangement Mode](15-arrangement.md#chasing-a-clip-to-the-show).
+
+Play, speed, seek, and loop mode are also **modulation targets**, so an LFO can time-warp a clip and an audio band can gate it. In and out points are not, because they define the region the playhead offset is measured against. See [Video Playback](05-modulation.md#video-playback) for what to expect from each, including the decode cost of modulating the playhead.
+
+A modulated playhead moves a **paused** clip too: pause stops the clip advancing on its own, it does not stop a modulator scrubbing it. That is the case where the effect reads most clearly, since the swing is centred on wherever you parked the playhead. It does mean a paused clip with a playhead assignment is decoding rather than idle, so the same seek costs apply as when it is playing.
 
 ### HAP Hardware Codecs
 

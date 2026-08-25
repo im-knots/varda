@@ -11,16 +11,70 @@ type MakeModAssign<'a> = &'a dyn Fn(&str, &str) -> EngineCommand;
 type MakeParamCommand<'a> = &'a dyn Fn(&str) -> EngineCommand;
 
 /// The commands the 〰 dropdown can emit. Bundled because only the caller knows
-/// how to build a parameter's full target path, and the three always travel
-/// together.
+/// how to build a parameter's full target path, and they always travel together.
 struct ModMenu<'a> {
     assign: MakeModAssign<'a>,
+    /// Detach one source, leaving any others on the parameter alone. Without it
+    /// the checklist could only ever be ticked, and un-ticking would have to go
+    /// through "Clear all" and lose the other sources with it.
+    unassign: MakeModAssign<'a>,
     remove: MakeParamCommand<'a>,
     automate: Option<MakeParamCommand<'a>>,
 }
 
-/// The 〰 dropdown on a modulatable parameter: assign a source, add an
-/// automation lane, or clear.
+/// One line of the 〰 checklist.
+struct ModRow<'a> {
+    /// Index in the *unfiltered* source list, which picks the modulator's colour
+    /// and number. Those have to match the modulation panel's cards.
+    idx: usize,
+    entry: &'a ModSourceUIEntry,
+    assigned: bool,
+}
+
+/// One entry of a 〰 checklist, in the modulator's own colour.
+///
+/// Shared with the mod-on-mod menu in the modulation panel so the two cannot
+/// disagree about what a tick looks like.
+pub fn mod_tick_label(assigned: bool, label: &str, color: egui::Color32) -> egui::RichText {
+    egui::RichText::new(format!("{} {label}", if assigned { "☑" } else { "☐" })).color(color)
+}
+
+/// Which sources the checklist lists, and which of them are ticked.
+///
+/// An automation curve belongs to the one parameter it was drawn for, so an
+/// unassigned one is not on offer: sharing a shape between parameters is copy
+/// and paste between lanes, which leaves each parameter its own curve to edit.
+/// See /spec/automation.md § One envelope per parameter. An *assigned* one is
+/// still listed, because a parameter driven by a lane would otherwise show an
+/// empty checklist under a coloured ghost, which is the confusion this list
+/// exists to remove.
+fn mod_rows<'a>(
+    modulation_sources: &'a [ModSourceUIEntry],
+    assignments: &[ModAssignmentUI],
+) -> Vec<ModRow<'a>> {
+    modulation_sources
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, entry)| {
+            let assigned = assignments.iter().any(|a| a.source_id == entry.uuid);
+            let offerable = !matches!(entry.source, ModSourceUI::Envelope { .. });
+            (offerable || assigned).then_some(ModRow {
+                idx,
+                entry,
+                assigned,
+            })
+        })
+        .collect()
+}
+
+/// The 〰 dropdown on a modulatable parameter: a checklist of every source, with
+/// the ones driving this parameter ticked, plus an automation lane and a clear.
+///
+/// A checklist rather than a list of assign actions because a parameter can have
+/// several sources stacked on it, and the affordances that hint at that only
+/// carry one: the ghost line and the coloured label both take the colour of the
+/// *first* assignment, so two sources and one source look identical. Ticks are
+/// the only place the whole set is visible.
 ///
 /// Shared by the deck and effect param renderers so the two cannot drift.
 fn modulation_dropdown(
@@ -28,44 +82,51 @@ fn modulation_dropdown(
     id_salt: String,
     param_name: &str,
     modulation_sources: &[ModSourceUIEntry],
+    assignments: &[ModAssignmentUI],
     menu: &ModMenu,
     commands: &mut Vec<EngineCommand>,
 ) {
     let ModMenu {
         assign: assign_fn,
+        unassign: unassign_fn,
         remove: remove_fn,
         automate: automate_fn,
     } = *menu;
-    // An automation curve belongs to the one parameter it was drawn for, so it
-    // is not on offer here. Sharing a shape between parameters is copy and paste
-    // between lanes, which leaves each parameter its own curve to edit. See
-    // /spec/automation.md § One envelope per parameter.
-    //
-    // Indices are kept from the unfiltered list: they pick the modulator's
-    // colour and number, which have to match the modulation panel's cards.
-    let assignable: Vec<(usize, &ModSourceUIEntry)> = modulation_sources
-        .iter()
-        .enumerate()
-        .filter(|(_, entry)| !matches!(entry.source, ModSourceUI::Envelope { .. }))
-        .collect();
+    let rows = mod_rows(modulation_sources, assignments);
     // Automation needs no existing source, so the menu is worth showing even
     // when nothing has been created yet.
-    if assignable.is_empty() && automate_fn.is_none() {
+    if rows.is_empty() && automate_fn.is_none() {
         return;
     }
-    egui::ComboBox::from_id_salt(id_salt)
+
+    let active: Vec<String> = rows
+        .iter()
+        .filter(|r| r.assigned)
+        .map(|r| r.entry.label(r.idx))
+        .collect();
+
+    let response = egui::ComboBox::from_id_salt(id_salt)
         .selected_text("〰")
         .width(30.0)
+        // Ticking one source should not dismiss the list. Stacking two sources
+        // is one decision, and closing after each would make it two visits.
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show_ui(ui, |ui| {
-            if !assignable.is_empty() {
-                ui.label(egui::RichText::new("Assign Modulation").small().strong());
-                for (src_idx, entry) in &assignable {
-                    let color = modulator_color(*src_idx);
-                    if ui
-                        .button(egui::RichText::new(entry.label(*src_idx)).color(color))
-                        .clicked()
-                    {
-                        commands.push(assign_fn(param_name, &entry.uuid));
+            if !rows.is_empty() {
+                ui.label(egui::RichText::new("Modulation").small().strong());
+                for ModRow {
+                    idx,
+                    entry,
+                    assigned,
+                } in &rows
+                {
+                    let text = mod_tick_label(*assigned, &entry.label(*idx), modulator_color(*idx));
+                    if ui.selectable_label(*assigned, text).clicked() {
+                        commands.push(if *assigned {
+                            unassign_fn(param_name, &entry.uuid)
+                        } else {
+                            assign_fn(param_name, &entry.uuid)
+                        });
                     }
                 }
                 ui.separator();
@@ -81,12 +142,25 @@ fn modulation_dropdown(
                 {
                     commands.push(automate(param_name));
                 }
+            }
+            // Only worth offering once there is something to clear, and it says
+            // "all" because a checklist makes single removal the obvious gesture.
+            if !active.is_empty() {
                 ui.separator();
+                if ui.button("Clear all").clicked() {
+                    commands.push(remove_fn(param_name));
+                }
             }
-            if ui.button("Clear").clicked() {
-                commands.push(remove_fn(param_name));
-            }
-        });
+        })
+        .response;
+
+    // Readable without opening anything, which is the case that matters on a
+    // dark stage. The colours cannot say how many; the names can.
+    response.on_hover_text(if active.is_empty() {
+        "No modulation assigned".to_string()
+    } else {
+        format!("Modulated by {}", active.join(", "))
+    });
 }
 
 /// The 〰 dropdown for a parameter that is a control of its own rather than one
@@ -94,17 +168,22 @@ fn modulation_dropdown(
 ///
 /// The fader panels have no `ParamUIInfo` to hang a menu off, so they name the
 /// key directly. See /spec/modulation.md § Parameter Addressing.
-pub fn modulation_menu_for_key(
+pub fn modulation_menu_for_key<S: std::hash::BuildHasher>(
     ui: &mut egui::Ui,
     id_salt: String,
     param_key: &str,
     modulation_sources: &[ModSourceUIEntry],
+    mod_assignments: &std::collections::HashMap<String, Vec<ModAssignmentUI>, S>,
     commands: &mut Vec<EngineCommand>,
 ) {
     let assign = |target: &str, source_id: &str| EngineCommand::AssignModulation {
         target: target.to_string(),
         source_id: source_id.to_string(),
         amount: 1.0,
+    };
+    let unassign = |target: &str, source_id: &str| EngineCommand::ClearModulationSource {
+        target: target.to_string(),
+        source_id: source_id.to_string(),
     };
     let remove = |target: &str| EngineCommand::ClearModulation {
         target: target.to_string(),
@@ -118,8 +197,10 @@ pub fn modulation_menu_for_key(
         id_salt,
         param_key,
         modulation_sources,
+        mod_assignments.get(param_key).map_or(&[], Vec::as_slice),
         &ModMenu {
             assign: &assign,
+            unassign: &unassign,
             remove: &remove,
             automate: Some(&automate),
         },
@@ -161,6 +242,7 @@ pub fn render_params<S: std::hash::BuildHasher>(
     modulation_sources: &[ModSourceUIEntry],
     make_update: &dyn Fn(&str, ParamValue) -> EngineCommand,
     make_mod_assign: Option<MakeModAssign>,
+    make_mod_unassign: Option<MakeModAssign>,
     make_mod_remove: Option<MakeParamCommand>,
     make_automation: Option<MakeParamCommand>,
     commands: &mut Vec<EngineCommand>,
@@ -290,14 +372,18 @@ pub fn render_params<S: std::hash::BuildHasher>(
                             );
                         }
                     }
-                    if let (Some(assign_fn), Some(remove_fn)) = (make_mod_assign, make_mod_remove) {
+                    if let (Some(assign_fn), Some(unassign_fn), Some(remove_fn)) =
+                        (make_mod_assign, make_mod_unassign, make_mod_remove)
+                    {
                         modulation_dropdown(
                             ui,
                             format!("mod_{}_{}", id_prefix, param.name),
                             &param.name,
                             modulation_sources,
+                            assignments.map_or(&[], Vec::as_slice),
                             &ModMenu {
                                 assign: assign_fn,
+                                unassign: unassign_fn,
                                 remove: remove_fn,
                                 automate: make_automation,
                             },
@@ -337,6 +423,7 @@ pub fn render_effect_params<S: std::hash::BuildHasher>(
     modulation_sources: &[ModSourceUIEntry],
     make_update: &dyn Fn(&str, ParamValue) -> EngineCommand,
     make_mod_assign: Option<MakeModAssign>,
+    make_mod_unassign: Option<MakeModAssign>,
     make_mod_remove: Option<MakeParamCommand>,
     make_automation: Option<MakeParamCommand>,
     commands: &mut Vec<EngineCommand>,
@@ -462,14 +549,18 @@ pub fn render_effect_params<S: std::hash::BuildHasher>(
                             );
                         }
                     }
-                    if let (Some(assign_fn), Some(remove_fn)) = (make_mod_assign, make_mod_remove) {
+                    if let (Some(assign_fn), Some(unassign_fn), Some(remove_fn)) =
+                        (make_mod_assign, make_mod_unassign, make_mod_remove)
+                    {
                         modulation_dropdown(
                             ui,
                             format!("mod_{}_{}", id_prefix, param.name),
                             &param.name,
                             modulation_sources,
+                            assignments.map_or(&[], Vec::as_slice),
                             &ModMenu {
                                 assign: assign_fn,
+                                unassign: unassign_fn,
                                 remove: remove_fn,
                                 automate: make_automation,
                             },
@@ -719,11 +810,19 @@ mod tests {
         }
     }
 
-    /// Drive the dropdown open and click `label`, returning what it emitted.
-    fn click_in_dropdown(
+    fn assigned_to(source_id: &str) -> ModAssignmentUI {
+        ModAssignmentUI {
+            source_id: source_id.to_string(),
+            amount: 1.0,
+        }
+    }
+
+    /// Open the dropdown and hand it to `act`, which drives the harness.
+    fn in_dropdown(
         sources: &[ModSourceUIEntry],
+        assignments: &[ModAssignmentUI],
         automate: bool,
-        label: &str,
+        act: &dyn Fn(&mut egui_kittest::Harness<'_>),
     ) -> Vec<EngineCommand> {
         let mut commands = Vec::new();
         {
@@ -731,6 +830,10 @@ mod tests {
                 target: name.to_string(),
                 source_id: uuid.to_string(),
                 amount: 1.0,
+            };
+            let unassign = |name: &str, uuid: &str| EngineCommand::ClearModulationSource {
+                target: name.to_string(),
+                source_id: uuid.to_string(),
             };
             let remove = |name: &str| EngineCommand::ClearModulation {
                 target: name.to_string(),
@@ -745,8 +848,10 @@ mod tests {
                     "test".to_string(),
                     "opacity",
                     sources,
+                    assignments,
                     &ModMenu {
                         assign: &assign,
+                        unassign: &unassign,
                         remove: &remove,
                         automate: if automate {
                             Some(&add_lane as MakeParamCommand)
@@ -760,15 +865,27 @@ mod tests {
             // A ComboBox exposes its selected text as AccessKit `value`, not `label`.
             harness.get_by_value("〰").click();
             harness.run();
-            harness.get_by_label(label).click();
-            harness.run();
+            act(&mut harness);
         }
         commands
     }
 
+    /// Drive the dropdown open and click `label`, returning what it emitted.
+    fn click_in_dropdown(
+        sources: &[ModSourceUIEntry],
+        assignments: &[ModAssignmentUI],
+        automate: bool,
+        label: &str,
+    ) -> Vec<EngineCommand> {
+        in_dropdown(sources, assignments, automate, &|harness| {
+            harness.get_by_label(label).click();
+            harness.run();
+        })
+    }
+
     #[test]
     fn the_automation_entry_creates_a_lane_for_this_parameter() {
-        let commands = click_in_dropdown(&[lfo_entry("lfo1")], true, "＋ Automation lane");
+        let commands = click_in_dropdown(&[lfo_entry("lfo1")], &[], true, "＋ Automation lane");
         assert!(
             commands.iter().any(|c| matches!(
                 c,
@@ -783,15 +900,15 @@ mod tests {
     /// scene that has never created a modulator.
     #[test]
     fn the_menu_opens_with_no_modulation_sources_at_all() {
-        let commands = click_in_dropdown(&[], true, "＋ Automation lane");
+        let commands = click_in_dropdown(&[], &[], true, "＋ Automation lane");
         assert!(commands
             .iter()
             .any(|c| matches!(c, EngineCommand::AddAutomationLane { .. })));
     }
 
     #[test]
-    fn picking_a_source_still_assigns_it() {
-        let commands = click_in_dropdown(&[lfo_entry("lfo1")], true, "LFO 1");
+    fn ticking_a_source_assigns_it() {
+        let commands = click_in_dropdown(&[lfo_entry("lfo1")], &[], true, "☐ LFO 1");
         assert!(commands.iter().any(|c| matches!(
             c,
             EngineCommand::AssignModulation { target, source_id, .. }
@@ -799,13 +916,74 @@ mod tests {
         )));
     }
 
+    /// The point of the checklist: a source already on the parameter reads as
+    /// ticked, so the set driving it is legible without opening anything else.
     #[test]
-    fn clearing_removes_the_assignment() {
-        let commands = click_in_dropdown(&[lfo_entry("lfo1")], true, "Clear");
+    fn an_assigned_source_reads_as_ticked() {
+        in_dropdown(
+            &[lfo_entry("lfo1"), lfo_entry("lfo2")],
+            &[assigned_to("lfo2")],
+            true,
+            &|harness| {
+                assert!(
+                    harness.query_by_label("☐ LFO 1").is_some(),
+                    "an unassigned source is offered unticked"
+                );
+                assert!(
+                    harness.query_by_label("☑ LFO 2").is_some(),
+                    "an assigned source is ticked"
+                );
+            },
+        );
+    }
+
+    /// Un-ticking detaches only that source. Two stacked modulators, and
+    /// removing one has to leave the other driving the parameter.
+    #[test]
+    fn unticking_a_source_detaches_only_that_one() {
+        let commands = click_in_dropdown(
+            &[lfo_entry("lfo1"), lfo_entry("lfo2")],
+            &[assigned_to("lfo1"), assigned_to("lfo2")],
+            true,
+            "☑ LFO 1",
+        );
+        assert!(
+            commands.iter().any(|c| matches!(
+                c,
+                EngineCommand::ClearModulationSource { target, source_id }
+                    if target == "opacity" && source_id == "lfo1"
+            )),
+            "expected only lfo1 detached, got {commands:?}"
+        );
+        assert!(
+            !commands
+                .iter()
+                .any(|c| matches!(c, EngineCommand::ClearModulation { .. })),
+            "un-ticking one source must not clear the whole parameter"
+        );
+    }
+
+    #[test]
+    fn clearing_removes_every_assignment() {
+        let commands = click_in_dropdown(
+            &[lfo_entry("lfo1")],
+            &[assigned_to("lfo1")],
+            true,
+            "Clear all",
+        );
         assert!(commands.iter().any(|c| matches!(
             c,
             EngineCommand::ClearModulation { target } if target == "opacity"
         )));
+    }
+
+    /// Nothing to clear, so the entry stays out of the way rather than sitting
+    /// there as a no-op under a list of empty boxes.
+    #[test]
+    fn an_unmodulated_parameter_offers_no_clear() {
+        in_dropdown(&[lfo_entry("lfo1")], &[], true, &|harness| {
+            assert!(harness.query_by_label("Clear all").is_none());
+        });
     }
 
     /// Envelopes are still named for the lanes and cards that list them, even
@@ -820,40 +998,35 @@ mod tests {
     /// silently rewrite the other.
     #[test]
     fn an_automation_curve_is_not_offered_as_a_source() {
-        let mut commands = Vec::new();
-        let assign = |name: &str, uuid: &str| EngineCommand::AssignModulation {
-            target: name.to_string(),
-            source_id: uuid.to_string(),
-            amount: 1.0,
-        };
-        let remove = |name: &str| EngineCommand::ClearModulation {
-            target: name.to_string(),
-        };
-        let sources = vec![lfo_entry("lfo1"), envelope_entry("env1")];
-        let mut harness = egui_kittest::Harness::new_ui(|ui| {
-            modulation_dropdown(
-                ui,
-                "test".to_string(),
-                "opacity",
-                &sources,
-                &ModMenu {
-                    assign: &assign,
-                    remove: &remove,
-                    automate: None,
-                },
-                &mut commands,
-            );
-        });
-        harness.get_by_value("〰").click();
-        harness.run();
-
-        assert!(
-            harness.query_by_label("LFO 1").is_some(),
-            "an ordinary modulator is still on offer"
+        in_dropdown(
+            &[lfo_entry("lfo1"), envelope_entry("env1")],
+            &[],
+            false,
+            &|harness| {
+                assert!(
+                    harness.query_by_label("☐ LFO 1").is_some(),
+                    "an ordinary modulator is still on offer"
+                );
+                assert!(
+                    harness.query_by_label("☐ Automation 2").is_none(),
+                    "a curve must not be assignable to a second parameter"
+                );
+            },
         );
-        assert!(
-            harness.query_by_label("Automation 2").is_none(),
-            "a curve must not be assignable to a second parameter"
+    }
+
+    /// A lane already drives this parameter, so it is listed even though an
+    /// unassigned one would not be. Leaving it out would show an empty checklist
+    /// under the coloured ghost the lane is drawing.
+    #[test]
+    fn an_assigned_curve_is_listed_so_the_ghost_has_an_owner() {
+        in_dropdown(
+            &[lfo_entry("lfo1"), envelope_entry("env1")],
+            &[assigned_to("env1")],
+            false,
+            &|harness| {
+                assert!(harness.query_by_label("☑ Automation 2").is_some());
+            },
         );
     }
 
@@ -861,7 +1034,8 @@ mod tests {
     /// curves, because drawing a new one has to stay reachable.
     #[test]
     fn a_scene_of_only_curves_still_offers_a_new_lane() {
-        let commands = click_in_dropdown(&[envelope_entry("env1")], true, "＋ Automation lane");
+        let commands =
+            click_in_dropdown(&[envelope_entry("env1")], &[], true, "＋ Automation lane");
         assert!(commands
             .iter()
             .any(|c| matches!(c, EngineCommand::AddAutomationLane { .. })));

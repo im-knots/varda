@@ -817,6 +817,18 @@ impl Deck {
         }
     }
 
+    /// Publish this frame's resolved playback modulation so the decode thread
+    /// can act on it. No-op for non-video decks.
+    /// See /spec/video-playback-modulation.md.
+    pub fn publish_video_modulation(&self, value: crate::video::PlaybackModulation) {
+        match &self.source {
+            DeckSource::Video { handle, .. } | DeckSource::HapVideo { handle, .. } => {
+                handle.publish_modulation(value);
+            }
+            _ => {}
+        }
+    }
+
     /// Set in-point on the video decode thread.
     pub fn video_set_in_point(&self, secs: f64) -> bool {
         self.video_send(VideoCommand::SetInPoint(secs))

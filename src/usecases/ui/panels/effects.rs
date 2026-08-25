@@ -63,6 +63,7 @@ pub(super) fn render_master_effect_detail(
                         data.master_effect_info.iter().enumerate()
                     {
                         let eff_uuid_master = eff_uuid.clone();
+                        let eff_uuid_master_unassign = eff_uuid.clone();
                         let eff_uuid_master_remove = eff_uuid.clone();
                         let eff_uuid_master_automate = eff_uuid.clone();
                         render_effect_drop_zone(ui, "master", eff_idx);
@@ -130,6 +131,14 @@ pub(super) fn render_master_effect_detail(
                                                             ),
                                                             source_id: source_uuid.to_string(),
                                                             amount: DEFAULT_ASSIGNMENT_AMOUNT,
+                                                        }
+                                                    }),
+                                                    Some(&|name: &str, source_uuid: &str| {
+                                                        EngineCommand::ClearModulationSource {
+                                                            target: format!(
+                                                                "fx_{eff_uuid_master_unassign}:{name}"
+                                                            ),
+                                                            source_id: source_uuid.to_string(),
                                                         }
                                                     }),
                                                     Some(&|name: &str| {
@@ -341,6 +350,7 @@ pub(super) fn render_channel_effect_detail(
                         ch.effects.iter().enumerate()
                     {
                         let eff_uuid_ch_assign = eff_uuid.clone();
+                        let eff_uuid_ch_unassign = eff_uuid.clone();
                         let eff_uuid_ch_remove = eff_uuid.clone();
                         let eff_uuid_ch_automate = eff_uuid.clone();
                         render_effect_drop_zone(ui, &ch_chain_key, eff_idx);
@@ -413,6 +423,14 @@ pub(super) fn render_channel_effect_detail(
                                                             ),
                                                             source_id: source_uuid.to_string(),
                                                             amount: DEFAULT_ASSIGNMENT_AMOUNT,
+                                                        }
+                                                    }),
+                                                    Some(&|name: &str, source_uuid: &str| {
+                                                        EngineCommand::ClearModulationSource {
+                                                            target: format!(
+                                                                "fx_{eff_uuid_ch_unassign}:{name}"
+                                                            ),
+                                                            source_id: source_uuid.to_string(),
                                                         }
                                                     }),
                                                     Some(&|name: &str| {

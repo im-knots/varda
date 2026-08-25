@@ -198,6 +198,89 @@ fn isf_params_are_declared_with_the_glsl_types_the_engine_writes() {
     );
 }
 
+/// Guard: no shader claims a parameter name the playback modulation targets
+/// have reserved. See `spec/video-playback-modulation.md` § Key naming.
+///
+/// Video playback keys live in the same `deck_<uuid>:<name>` namespace as a
+/// deck's ISF generator inputs, so a shader input called `video_speed` would
+/// resolve to the *same* modulation key as the clip's playback speed. One
+/// assignment would then drive both, and neither the UI nor the engine has any
+/// way to tell them apart: the map is keyed by string.
+///
+/// This cannot be caught downstream. The shader compiles, the pipeline builds,
+/// and the cross-wiring only shows when someone assigns a modulator to one of
+/// the two parameters on a deck that happens to have both.
+///
+/// Pure source analysis: no GPU, runs everywhere including CI.
+#[test]
+fn no_shader_input_claims_a_reserved_playback_modulation_name() {
+    // Taken from the engine rather than retyped, so renaming a target cannot
+    // leave this guard checking a name nothing uses any more.
+    use varda::video::modulation as vm;
+    let exact = [vm::SCALING_MODE];
+    let prefix = "video_";
+
+    let mut violations: Vec<String> = Vec::new();
+    let mut inputs_checked = 0usize;
+
+    for path in shader_files() {
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let src = std::fs::read_to_string(&path).expect("read shader");
+        let Some(hdr) = header(&src) else { continue };
+        let Ok(meta) = serde_json::from_str::<serde_json::Value>(hdr) else {
+            continue;
+        };
+        let Some(inputs) = meta.get("INPUTS").and_then(|i| i.as_array()) else {
+            continue;
+        };
+        for input in inputs {
+            let Some(pname) = input.get("NAME").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            inputs_checked += 1;
+            if pname.starts_with(prefix) || exact.contains(&pname) {
+                violations.push(format!(
+                    "{name}: input `{pname}` collides with a reserved playback \
+                     modulation target on the same deck key namespace — rename it"
+                ));
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "{} reserved-name collision(s):\n  {}",
+        violations.len(),
+        violations.join("\n  ")
+    );
+    // Guard the guard: a parsing change that stops finding inputs must fail
+    // here rather than pass vacuously.
+    assert!(
+        inputs_checked > 400,
+        "expected to check hundreds of inputs, only saw {inputs_checked}"
+    );
+}
+
+/// The reserved names must actually be distinct from each other, or two targets
+/// would share a key and silently drive one another.
+#[test]
+fn reserved_playback_modulation_names_are_unique() {
+    use varda::video::modulation as vm;
+    let names = [
+        vm::SPEED,
+        vm::POSITION,
+        vm::PLAY,
+        vm::LOOP_MODE,
+        vm::SCALING_MODE,
+    ];
+    let unique: std::collections::HashSet<&&str> = names.iter().collect();
+    assert_eq!(
+        unique.len(),
+        names.len(),
+        "reserved names collide: {names:?}"
+    );
+}
+
 /// Is `word` a whole identifier at `at`, rather than part of a longer one?
 fn is_word_boundary(src: &str, at: usize, len: usize) -> bool {
     let ident_char = |c: char| c.is_alphanumeric() || c == '_';

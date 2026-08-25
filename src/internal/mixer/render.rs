@@ -25,6 +25,28 @@ impl std::ops::Deref for CompositingOpacities {
     }
 }
 
+/// Resolve one deck-scoped modulation key, or `None` when nothing is assigned.
+///
+/// `scratch` is reused across every deck and every frame, so a pass over a scene
+/// full of video decks allocates nothing in the steady state. The
+/// `has_modulation` check comes first because the overwhelmingly common answer
+/// is "nothing", and answering it should not cost a resolve.
+fn resolve_deck_key(
+    modulation: &crate::modulation::ModulationEngine,
+    scratch: &mut String,
+    prefix: &str,
+    name: &str,
+) -> Option<crate::modulation::ResolvedModulation> {
+    scratch.clear();
+    scratch.push_str(prefix);
+    scratch.push(':');
+    scratch.push_str(name);
+    if !modulation.has_modulation(scratch) {
+        return None;
+    }
+    Some(modulation.resolve(scratch, None))
+}
+
 impl Mixer {
     /// Resolve every timebase for this frame.
     ///
@@ -91,6 +113,123 @@ impl Mixer {
         for (path, value) in writes {
             if let Err(e) = crate::param_router::apply_param_by_path(self, &path, value) {
                 log::debug!("macro modulation target '{path}' skipped: {e}");
+            }
+        }
+    }
+
+    /// Let modulation drive video playback.
+    ///
+    /// Speed and playhead go to the decode thread as levels, because they are
+    /// continuous and only the newest value matters. Play, loop mode, and
+    /// scaling mode are discrete, so they are written only when the option the
+    /// modulator points at differs from the one in force, which keeps a settled
+    /// modulator from generating any cross-thread traffic at all.
+    ///
+    /// Must run after [`crate::modulation::ModulationEngine::update`] and before
+    /// [`Self::publish_video_chase`], so a chasing clip weighs this frame's
+    /// modulation against this frame's transport rather than the next one's.
+    ///
+    /// See /spec/video-playback-modulation.md.
+    pub fn apply_video_modulation(&mut self, transport_running: bool) {
+        use crate::video::modulation as vm;
+
+        if !self.modulation.has_modulation_for_any() {
+            return;
+        }
+        // Disjoint field borrows: the engine is read while the decks it drives
+        // are written.
+        let modulation = &self.modulation;
+        let mut key = String::with_capacity(48);
+
+        for channel in &mut self.channels {
+            for slot in &mut channel.decks {
+                // A sleeping clip is frozen rather than played on silently, so
+                // nothing may drive it: the same show position has to look the
+                // same on the second run. See /spec/deck-residency.md.
+                let awake = slot.source_demand.wants_frames();
+                let mut scaling = None;
+
+                {
+                    let deck = &slot.deck;
+                    let prefix = deck.param_prefix();
+
+                    // Scaling is a property of any deck with a source texture,
+                    // not just a video one.
+                    if let (Some(current), Some(resolved)) = (
+                        deck.scaling_mode(),
+                        resolve_deck_key(modulation, &mut key, prefix, vm::SCALING_MODE),
+                    ) {
+                        let next = crate::param_router::scaling_mode_from_value(
+                            vm::discrete_value(&resolved),
+                        );
+                        if next != current {
+                            scaling = Some(next);
+                        }
+                    }
+
+                    if let Some(snap) = deck.playback_snapshot() {
+                        // The servo owns the timeline while chasing, so neither
+                        // rate nor playhead is a modulator's to hold there. See
+                        // /spec/video-playback-modulation.md § Authority.
+                        let chasing = deck
+                            .video_transport_sync()
+                            .is_some_and(|s| s.mode.is_chasing(transport_running));
+
+                        let speed = if chasing {
+                            None
+                        } else {
+                            resolve_deck_key(modulation, &mut key, prefix, vm::SPEED)
+                                .map(|r| vm::effective_speed(snap.speed, &r))
+                        };
+
+                        let position = if chasing {
+                            vm::PositionTarget::Free
+                        } else {
+                            resolve_deck_key(modulation, &mut key, prefix, vm::POSITION).map_or(
+                                vm::PositionTarget::Free,
+                                |r| {
+                                    vm::position_target(
+                                        &r,
+                                        snap.in_point,
+                                        snap.effective_out(),
+                                        snap.duration,
+                                    )
+                                },
+                            )
+                        };
+
+                        deck.publish_video_modulation(if awake {
+                            vm::PlaybackModulation { speed, position }
+                        } else {
+                            vm::PlaybackModulation::default()
+                        });
+
+                        if awake {
+                            if let Some(r) =
+                                resolve_deck_key(modulation, &mut key, prefix, vm::PLAY)
+                            {
+                                let want = vm::play_gate(&r, snap.playing);
+                                if want != snap.playing {
+                                    deck.video_set_playing(want);
+                                }
+                            }
+                            if let Some(r) =
+                                resolve_deck_key(modulation, &mut key, prefix, vm::LOOP_MODE)
+                            {
+                                let next = crate::param_router::loop_mode_from_value(
+                                    vm::discrete_value(&r),
+                                );
+                                if next != snap.loop_mode {
+                                    deck.video_set_loop_mode(next);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if let Some(mode) = scaling {
+                    slot.deck.set_scaling_mode(mode);
+                }
             }
         }
     }
@@ -400,6 +539,9 @@ impl Mixer {
         // macro fan-out on the same deck: a macro turn is a live gesture, and
         // taking a deck back from the show is what an override is for.
         self.apply_arrangement(transport, preview_channels);
+        // Last, because whether a clip is chasing decides whether a modulator
+        // may touch its playhead, and the arrangement is what puts it to sleep.
+        self.apply_video_modulation(transport.is_some_and(|t| t.running));
         let modulation_us = t_modulation.elapsed().as_micros();
 
         // Compute effective opacity per channel (stack-allocated for the common 2-channel case)

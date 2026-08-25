@@ -14,6 +14,81 @@ use crate::modulation::DEFAULT_ASSIGNMENT_AMOUNT;
 use crate::params::ParamValue;
 use crate::{BlendMode, ScalingMode};
 
+/// The `〰` dropdown for one of a video deck's playback controls.
+///
+/// Playback targets are keyed by reserved names on the deck's own modulation
+/// prefix rather than by a `ParamUIInfo` row, so they are addressed the way a
+/// channel fader is. See /spec/video-playback-modulation.md § Key naming.
+fn playback_mod_menu(
+    ui: &mut egui::Ui,
+    deck_uuid: &str,
+    name: &str,
+    data: &UIData,
+    actions: &mut UIActions,
+) {
+    widgets::modulation_menu_for_key(
+        ui,
+        format!("vidmod-{deck_uuid}-{name}"),
+        &format!("deck_{deck_uuid}:{name}"),
+        &data.modulation_sources,
+        &data.modulation_assignments,
+        &mut actions.commands,
+    );
+}
+
+/// The colour of the first modulator driving `name` on this deck, or `None` when
+/// nothing is assigned to it.
+///
+/// The colour has to match the card in the modulation panel, so the index comes
+/// from the unfiltered source list.
+fn playback_mod_color(deck_uuid: &str, name: &str, data: &UIData) -> Option<egui::Color32> {
+    let key = format!("deck_{deck_uuid}:{name}");
+    let first = data.modulation_assignments.get(&key)?.first()?;
+    let idx = data
+        .modulation_sources
+        .iter()
+        .position(|s| s.uuid == first.source_id)?;
+    Some(super::super::modulator_color(idx))
+}
+
+/// The track of a slider, excluding any value box drawn beside it.
+///
+/// egui returns one rect for the whole widget, so measuring a ghost against it
+/// stretches the scale across the number as well and pushes every reading
+/// right. A slider built with `show_value(false)` is already all track.
+fn slider_track(ui: &egui::Ui, rect: egui::Rect, shows_value: bool) -> egui::Rect {
+    if !shows_value {
+        return rect;
+    }
+    let width = ui.spacing().slider_width.min(rect.width());
+    egui::Rect::from_min_size(rect.min, egui::vec2(width, rect.height()))
+}
+
+/// Draw a ghost line at `value` on a slider whose track spans `range`.
+///
+/// Which of the two positions the ghost carries depends on the control: where
+/// the handle shows the performer's set point the ghost shows the live value,
+/// and where the handle already rides the live value it shows the set point the
+/// modulator is working from. Either way the pair is set point and actual.
+fn draw_slider_ghost(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    value: f32,
+    range: std::ops::RangeInclusive<f32>,
+    color: egui::Color32,
+) {
+    let span = range.end() - range.start();
+    if span <= 0.0 {
+        return;
+    }
+    let t = ((value - range.start()) / span).clamp(0.0, 1.0);
+    let x = rect.left() + t * rect.width();
+    ui.painter().line_segment(
+        [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+        egui::Stroke::new(2.0_f32, color),
+    );
+}
+
 /// Apply MIDI + keyboard learn affordances (glow + click-to-select) to a just-drawn
 /// control. `path` is the parameter-router path the control binds to. The two learn
 /// modes are mutually exclusive, so at most one overlay is active at a time.
@@ -567,15 +642,22 @@ pub(super) fn render_selected_deck_detail(
                         ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                             ui.label(egui::RichText::new("▶ Playback").strong());
 
-                            // Play/Pause button
-                            let play_label = if vp.playing { "⏸ Pause" } else { "▶ Play" };
-                            let play_resp = ui.button(play_label);
-                            if play_resp.clicked() {
-                                actions.commands.push(EngineCommand::VideoTogglePlay { deck_uuid: deck.uuid.clone() });
-                            }
-                            learn_overlay(ui, play_resp.rect, format!("deck/{}/video/play", deck.uuid), data, actions);
+                            let chasing_now = vp.transport_sync.mode.is_chasing(data.transport.running);
 
-                            // Position scrub bar
+                            // Play/Pause button
+                            ui.horizontal(|ui| {
+                                let play_label = if vp.playing { "⏸ Pause" } else { "▶ Play" };
+                                let play_resp = ui.button(play_label);
+                                if play_resp.clicked() {
+                                    actions.commands.push(EngineCommand::VideoTogglePlay { deck_uuid: deck.uuid.clone() });
+                                }
+                                learn_overlay(ui, play_resp.rect, format!("deck/{}/video/play", deck.uuid), data, actions);
+                                playback_mod_menu(ui, &deck.uuid, crate::video::modulation::PLAY, data, actions);
+                            });
+
+                            // Position scrub bar. The handle rides the live
+                            // playhead, so the ghost marks the opposite thing:
+                            // the point the modulator is swinging around.
                             let duration = vp.duration.max(0.001);
                             let mut pos = vp.position as f32;
                             ui.horizontal(|ui| {
@@ -587,8 +669,14 @@ pub(super) fn render_selected_deck_detail(
                                 if resp.changed() {
                                     actions.commands.push(EngineCommand::VideoSeek { deck_uuid: deck.uuid.clone(), position_secs: f64::from(pos) });
                                 }
+                                if let Some(color) = playback_mod_color(&deck.uuid, crate::video::modulation::POSITION, data) {
+                                    let anchor = vp.position - vp.position_offset;
+                                    let track = slider_track(ui, resp.rect, false);
+                                    draw_slider_ghost(ui, track, anchor as f32, 0.0..=duration as f32, color);
+                                }
                                 learn_overlay(ui, resp.rect, format!("deck/{}/video/seek", deck.uuid), data, actions);
                                 ui.label(format_time(duration));
+                                playback_mod_menu(ui, &deck.uuid, crate::video::modulation::POSITION, data, actions);
                             });
 
                             // Speed control
@@ -599,7 +687,14 @@ pub(super) fn render_selected_deck_detail(
                                 if resp.changed() {
                                     actions.commands.push(EngineCommand::VideoSetSpeed { deck_uuid: deck.uuid.clone(), speed: f64::from(speed) });
                                 }
+                                // The slider stays on the set point, so the
+                                // ghost is the only thing showing the live rate.
+                                if let Some(color) = playback_mod_color(&deck.uuid, crate::video::modulation::SPEED, data) {
+                                    let track = slider_track(ui, resp.rect, true);
+                                    draw_slider_ghost(ui, track, vp.effective_speed as f32, 0.1..=4.0, color);
+                                }
                                 learn_overlay(ui, resp.rect, format!("deck/{}/video/speed", deck.uuid), data, actions);
+                                playback_mod_menu(ui, &deck.uuid, crate::video::modulation::SPEED, data, actions);
                             });
 
                             // Loop mode
@@ -618,16 +713,38 @@ pub(super) fn render_selected_deck_detail(
                                         actions.commands.push(EngineCommand::VideoSetLoopMode { deck_uuid: deck.uuid.clone(), mode: *mode });
                                     }
                                 }
+                                playback_mod_menu(ui, &deck.uuid, crate::video::modulation::LOOP_MODE, data, actions);
                             });
                             learn_overlay(ui, loop_resp.response.rect, format!("deck/{}/video/loop_mode", deck.uuid), data, actions);
 
-                            let chasing_now = vp.transport_sync.mode.is_chasing(data.transport.running);
                             if chasing_now {
                                 ui.label(
                                     egui::RichText::new("Loop is ignored while chasing the transport")
                                         .small()
                                         .weak(),
                                 );
+                                // Two authorities on one value is the seek storm
+                                // this design avoids, so say which one wins
+                                // rather than letting it look broken.
+                                let held = [
+                                    ("Playhead", crate::video::modulation::POSITION),
+                                    ("Speed", crate::video::modulation::SPEED),
+                                ]
+                                .into_iter()
+                                .filter(|(_, name)| playback_mod_color(&deck.uuid, name, data).is_some())
+                                .map(|(label, _)| label)
+                                .collect::<Vec<_>>();
+                                if !held.is_empty() {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{} modulation is ignored while chasing — \
+                                             set Chase to Never to use it",
+                                            held.join(" and ")
+                                        ))
+                                        .small()
+                                        .weak(),
+                                    );
+                                }
                             }
 
                             ui.add_space(4.0);
@@ -998,6 +1115,7 @@ pub(super) fn render_selected_deck_detail(
                                                 }
                                             });
                                         learn_overlay(ui, combo.response.rect, format!("deck/{}/scaling_mode", deck.uuid), data, actions);
+                                        playback_mod_menu(ui, &deck.uuid, crate::video::modulation::SCALING_MODE, data, actions);
                                     });
                                     if selected_scaling != current_idx {
                                         let new_scaling = match selected_scaling {
@@ -1083,6 +1201,7 @@ pub(super) fn render_selected_deck_detail(
                                     let deck_uuid = deck.uuid.clone();
                                     let midi_path_prefix = format!("deck/{deck_uuid}");
                                     let deck_uuid_assign = deck_uuid.clone();
+                                    let deck_uuid_unassign = deck_uuid.clone();
                                     let deck_uuid_remove = deck_uuid.clone();
                                     let deck_uuid_automate = deck_uuid.clone();
                                     widgets::render_params(
@@ -1092,6 +1211,9 @@ pub(super) fn render_selected_deck_detail(
                                         &|name: &str, val: ParamValue| EngineCommand::SetGeneratorParam { deck_uuid: deck.uuid.clone(), name: name.to_string(), value: val },
                                         Some(&|name: &str, source_uuid: &str| EngineCommand::AssignModulation {
                                             target: format!("deck_{deck_uuid_assign}:{name}"), source_id: source_uuid.to_string(), amount: DEFAULT_ASSIGNMENT_AMOUNT,
+                                        }),
+                                        Some(&|name: &str, source_uuid: &str| EngineCommand::ClearModulationSource {
+                                            target: format!("deck_{deck_uuid_unassign}:{name}"), source_id: source_uuid.to_string(),
                                         }),
                                         Some(&|name: &str| EngineCommand::ClearModulation {
                                             target: format!("deck_{deck_uuid_remove}:{name}"),
@@ -1167,6 +1289,7 @@ pub(super) fn render_selected_deck_detail(
                                     let deck_uuid_eff = deck.uuid.clone();
                                     let eff_uuid_param = eff_uuid.clone();
                                     let eff_uuid_assign = eff_uuid.clone();
+                                    let eff_uuid_unassign = eff_uuid.clone();
                                     let eff_uuid_remove = eff_uuid.clone();
                                     let eff_uuid_automate = eff_uuid.clone();
                                     let eff_midi_prefix = format!("deck/{deck_uuid_eff}/effect/{eff_uuid}");
@@ -1177,6 +1300,9 @@ pub(super) fn render_selected_deck_detail(
                                         &|name: &str, val: ParamValue| EngineCommand::SetEffectParam { effect_uuid: eff_uuid_param.clone(), name: name.to_string(), value: val },
                                         Some(&|name: &str, source_uuid: &str| EngineCommand::AssignModulation {
                                             target: format!("fx_{eff_uuid_assign}:{name}"), source_id: source_uuid.to_string(), amount: DEFAULT_ASSIGNMENT_AMOUNT,
+                                        }),
+                                        Some(&|name: &str, source_uuid: &str| EngineCommand::ClearModulationSource {
+                                            target: format!("fx_{eff_uuid_unassign}:{name}"), source_id: source_uuid.to_string(),
                                         }),
                                         Some(&|name: &str| EngineCommand::ClearModulation {
                                             target: format!("fx_{eff_uuid_remove}:{name}"),

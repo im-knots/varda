@@ -330,7 +330,7 @@ Select a capture deck to get its controls in the deck detail panel (bottom bar):
 | **Cursor** | `deck/<deck_uuid>/capture/cursor` | Include the mouse pointer. Fixed when the capture opens on Wayland, and not available on X11 |
 | **Exclude Varda** | `deck/<deck_uuid>/capture/exclude_varda` | Omit Varda's own windows. Offered for display targets only, since for a window target it would do nothing. macOS only, see below |
 
-Every one of these is a real parameter path, so all of them are MIDI-learnable, OSC-addressable, and modulatable like any shader input. See [Parameter Paths](06-control-surfaces.md#parameter-paths).
+Every one of these is a real parameter path, so all of them are MIDI-learnable, OSC-addressable, and macro-drivable. They are not modulation targets: a parameter path makes a value writable on demand, while a modulation target is re-evaluated every frame, which each parameter has to opt into. Shader inputs, opacity, macro values, and [video playback](05-modulation.md#video-playback) do; the capture parameters do not, yet. A macro bridges the gap in the meantime: assign the modulator to a macro, and point the macro at the capture path. See [Parameter Paths](06-control-surfaces.md#parameter-paths).
 
 ### Capturing Varda itself
 

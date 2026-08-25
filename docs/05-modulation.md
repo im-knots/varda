@@ -173,23 +173,49 @@ Multiple modulation sources can share one running analyzer on a deck (it is refe
 
 Every modulatable parameter slider has a small **`〰`** button beside it. To wire up modulation:
 
-1. Click the **`〰`** button. A dropdown headed **"Assign Modulation"** opens.
-2. Pick a source from the list. Each entry is labeled by type and index and shown in the source's color — for example **LFO 1**, **Audio 20-250Hz**, **ADSR 1**, **StepSeq 1**, **Analyzer brightness 1**.
-3. The assignment is live immediately.
+1. Click the **`〰`** button. A **checklist** of every source opens, each labeled by type and index and shown in its own color — for example **LFO 1**, **Audio 20-250Hz**, **ADSR 1**, **StepSeq 1**, **Analyzer brightness 1**.
+2. **Tick** a source (`☐` → `☑`). The assignment is live immediately.
+3. Tick a second one to stack it. The list stays open, so wiring three sources into one parameter is one visit.
+
+The ticks are the only place the **whole set** driving a parameter is visible. The ghost line and the colored label both take the color of the first assignment, so one source and three sources look identical on the slider itself. Hovering the `〰` button names the active ones without opening anything, which is the case that matters on a dark stage.
+
+To **remove** one source, un-tick it (`☑` → `☐`); the others keep driving the parameter. **Clear all** at the bottom detaches everything at once, and only appears when there is something to clear.
 
 The same dropdown offers **＋ Automation lane**, which draws the parameter as a curve against show position instead — see [Automation Curves](#automation-curves).
 
-To **remove** an assignment, open the same `〰` dropdown and click **Clear**.
-
 #### Live Ghost Indicator
 
-Once a parameter is modulated, a thin **vertical line in the source's color** is drawn across the slider. It marks the *effective* value (base value + combined modulation offset) and moves in real time as the modulation evolves. With several sources on one parameter, the line shows their combined effect.
+Once a parameter is modulated, a thin **vertical line in the source's color** is drawn across the slider. It marks the *effective* value (base value + combined modulation offset) and moves in real time as the modulation evolves. With several sources on one parameter, the line shows their combined effect, in the color of the first one. Open the `〰` checklist to see which sources those are.
 
 > Behind the scenes, assignments map to the same parameter paths as MIDI/OSC (`deck/<uuid>/param/<name>`, `crossfader`, `ch/<uuid>/opacity`, `fx/<uuid>/param/<name>`, etc. — see [Parameter Paths](06-control-surfaces.md#parameter-paths)). The UI assigns each modulation at a sensible default depth; fine-grained per-assignment **amount** (a signed scale where negative inverts) is exposed through the [HTTP API](13-api.md) rather than the slider dropdown.
 
 **Channel faders** carry a `〰` of their own, so a whole channel can be swept by an LFO or ridden by a recorded curve without touching the decks inside it. The crossfader still cannot: it is mappable and macro-drivable but not a modulation target.
 
-Deck **video playback** (play, speed, seek, in/out points, loop mode) and **source scaling mode** are modulatable too, since they share the same parameter router. An LFO can scrub `seek`, an audio band can gate `play`, and discrete targets (`loop_mode`, `scaling_mode`) step through their options via fader bucketing. As with `mute`/`solo`, choose musically sensible sources for these.
+#### Video Playback
+
+A clip's **speed**, **playhead**, **play state**, and **loop mode**, plus any deck's **source scaling mode**, all carry a `〰` of their own. An LFO can time-warp a clip, an audio band can gate its play state, and a drawn curve can scrub its playhead.
+
+The two continuous ones behave differently enough to be worth knowing about:
+
+- **Speed** is a multiplier from 0.1× to 4×, and it is the cheap one. Position is the integral of speed, so a modulator on it produces smooth time-warping with no seeking at all. It never goes negative, so a modulator cannot reverse a clip; reverse belongs to Ping-Pong.
+- **Playhead** modulation is an offset from where the clip would have been, measured against the active loop region. On a four-bar loop an LFO wobbles within those four bars, so the same patch stays musical from clip to clip instead of swinging minutes on a long one. A **drawn curve** is the exception: it states where the playhead is rather than nudging it, so it reads against the whole clip, exactly like the scrub bar and a MIDI-mapped seek. Half-way up the lane is half-way through the clip. While a curve holds the playhead the loop and ping-pong transitions stand down, since the curve is saying where to be.
+
+Because the offset is measured from where the clip *would have been*, pausing changes what you get, and both readings are useful:
+
+- **Paused**, there is no natural advance underneath the offset, so it is measured from a fixed point. Park the playhead mid-clip, assign a bipolar LFO, and the playhead ping-pongs about that point within the amplitude you dial in. The scrub bar's ghost line marks the centre it is swinging around.
+- **Playing**, the clip marches on under its own loop, ping-pong, or one-shot rules and the modulator offsets from wherever that march has reached. The same LFO becomes a wobble riding forward through the clip rather than a swing about one spot.
+
+Speed does nothing while paused, which is arithmetic rather than a rule: speed scales the clip's own advance, and a paused clip has none.
+
+The playhead is the one to be thoughtful with. Video decoders run forward: a forward nudge is just a few extra frames decoded, but a backward one has to flush the decoder and seek. Gentle modulation costs nothing, and a hard square wave costs about what you would expect a hard square wave to cost. All-intra formats (**HAP**, ProRes) shrug this off; long-GOP H.264 is where you will notice it. The cost follows how violently you modulate, not your frame rate.
+
+**In and out points** stay off the list, along with **clear**. They define the loop region the playhead offset is measured against, so modulating them would leave position modulation redefining its own reference frame every frame. They remain MIDI-mappable, OSC-addressable, and macro-drivable; they are things you set, not things a modulator rides.
+
+Two more things worth knowing:
+
+- **Play, loop mode, and scaling mode are taken over, not nudged.** Assign a modulator to one and it decides, rather than adding to what you had. `play` uses a threshold with a deadband around the middle, so a source hovering there holds its state instead of stuttering. The discrete ones step through their options by [fader bucketing](04-performance.md#video-playback), so a continuous source strobes them; pick something musical.
+- **Chase wins over both speed and playhead.** A deck chasing the transport takes its whole timeline from the transport, so speed and playhead assignments are both ignored while it does, and the deck panel names whichever you have assigned. The speed *slider* still works, because a fixed rate is a stable relationship to the show ("this clip runs at twice show rate"); it is a rate that keeps moving that the transport cannot absorb, since the clip's position is computed from show position rather than nudged along. Set **Chase** to **Never** for audio-reactive time-warping. See [Arrangement](15-arrangement.md).
+- **Your hand wins over a curve.** Touching the scrub bar, speed slider, play button, loop buttons, or scaling combo takes that parameter back from whatever curve was driving it, with no confirmation. The automation row shows an amber dot while you hold it; click the dot to hand it back. This is the same behaviour deck and channel faders have, and it works whether the gesture came from the bottom bar, a MIDI controller, or the API. With **⏺** armed and the transport running, the gesture is recorded instead. See [Arrangement](15-arrangement.md).
 
 ### Stacking Multiple Sources
 
@@ -283,7 +309,7 @@ Each source type exposes modulatable parameters:
 | **ADSR** | attack, decay, sustain, release |
 | **Step Sequencer** | rate |
 
-To wire one source into another, use the **`〰`** button on the target source's parameter (the same gesture as parameter assignment). The dropdown is headed **"Modulate [parameter]"**; pick a source with the **+ [source name]** entry, or click **x Remove** (red) to detach it.
+To wire one source into another, use the **`〰`** button on the target source's parameter (the same gesture as parameter assignment). The checklist is headed **"Modulate [parameter]"** and works the same way: tick a source to attach it, un-tick to detach just that one, or **Clear all** to detach every source at once. A modulator is never listed against its own parameters, since nothing can modulate itself.
 
 ### Depth Limit
 

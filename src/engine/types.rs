@@ -475,7 +475,14 @@ pub struct VideoPlaybackSnapshot {
     pub playing: bool,
     pub position: f64,
     pub duration: f64,
+    /// The performer's set point, untouched by modulation.
     pub speed: f64,
+    /// The rate playback is actually running at, which differs from `speed` only
+    /// while a modulator holds it. See /spec/video-playback-modulation.md.
+    pub effective_speed: f64,
+    /// How far a modulator has carried the playhead from where the clip would
+    /// otherwise be. `position - position_offset` is the point it swings around.
+    pub position_offset: f64,
     pub loop_mode: LoopMode,
     pub in_point: f64,
     pub out_point: f64,

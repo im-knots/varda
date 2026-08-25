@@ -52,6 +52,8 @@ pub(crate) fn build_ui_data(
                         position: vp.position,
                         duration: vp.duration,
                         speed: vp.speed,
+                        effective_speed: vp.effective_speed,
+                        position_offset: vp.position_offset,
                         loop_mode: vp.loop_mode,
                         in_point: vp.in_point,
                         out_point: vp.out_point,

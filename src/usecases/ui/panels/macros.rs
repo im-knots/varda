@@ -807,6 +807,31 @@ fn collect_target_paths(data: &UIData) -> Vec<(String, String)> {
                     }
                 }
             }
+            // Video playback, for the same reason the 〰 dropdowns exist: a
+            // macro that can move a clip's rate and playhead is worth as much
+            // as one that can move a shader's. Only the continuous and
+            // bucketable controls; in/out points define the region a position
+            // offset is measured against.
+            // See /spec/video-playback-modulation.md.
+            if d.video_playback.is_some() {
+                for (label, leaf) in [
+                    ("speed", "speed"),
+                    ("playhead", "seek"),
+                    ("play", "play"),
+                    ("loop mode", "loop_mode"),
+                ] {
+                    out.push((
+                        format!("{} · {} · {label}", ch.name, d.name),
+                        format!("deck/{}/video/{leaf}", d.uuid),
+                    ));
+                }
+            }
+            if d.scaling_mode.is_some() {
+                out.push((
+                    format!("{} · {} · scaling", ch.name, d.name),
+                    format!("deck/{}/scaling_mode", d.uuid),
+                ));
+            }
         }
     }
 

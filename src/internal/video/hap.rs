@@ -322,7 +322,11 @@ impl HapPlayer {
     /// Returns an error if a HAP packet fails to decode, or if seeking (for
     /// reverse playback and loop wrap-around) fails.
     pub fn next_frame(&mut self) -> Result<Option<HapFrameResult<'_>>> {
-        if !self.playback.playing || self.playback.suspended {
+        // Only suspension is a hard stop. A paused clip still asks
+        // `advance_frame` what to do, because a modulator bound to the playhead
+        // can move it while it is parked; with nothing modulating it the answer
+        // is "no frames, no seek" and we hold on the line below as before.
+        if self.playback.suspended {
             return Ok(None);
         }
         let result = self.playback.advance_frame();

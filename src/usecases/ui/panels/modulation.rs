@@ -1227,9 +1227,12 @@ pub(super) fn render_mod_learn_slider(
 }
 
 /// Render a mod-on-mod assignment dropdown for a modulator's parameter.
-/// `target_idx` is the modulator whose parameter is being targeted.
+/// `target_uuid` is the modulator whose parameter is being targeted.
 /// `param_name` is the parameter name (e.g., "frequency", "amplitude", "phase").
-/// Shows a 🎛 combo listing all other modulators that can modulate this parameter.
+///
+/// A checklist for the same reason the parameter menus are one: the button's
+/// colour comes from the first assignment only, so several sources stacked on an
+/// LFO's frequency look exactly like one. See `widgets::modulation_dropdown`.
 pub(super) fn render_mod_on_mod_dropdown(
     ui: &mut egui::Ui,
     data: &UIData,
@@ -1238,61 +1241,77 @@ pub(super) fn render_mod_on_mod_dropdown(
     param_name: &str,
 ) {
     let key = format!("mod:{target_uuid}:{param_name}");
-    let has_assignment = data
+    let assignments = data
         .modulation_assignments
         .get(&key)
-        .is_some_and(|v| !v.is_empty());
-    let btn_text = "〰";
-    let btn_color = if has_assignment {
-        let source_id = data
-            .modulation_assignments
-            .get(&key)
-            .and_then(|v| v.first())
-            .map(|a| &a.source_id);
-        let color_idx = source_id
-            .and_then(|sid| data.modulation_sources.iter().position(|e| &e.uuid == sid))
+        .map_or(&[][..], Vec::as_slice);
+    // A modulator cannot modulate itself, and the index has to survive that skip
+    // because it picks the colour and number shown on the source's own card.
+    let rows: Vec<(usize, &crate::usecases::ui::ModSourceUIEntry, bool)> = data
+        .modulation_sources
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| entry.uuid != target_uuid)
+        .map(|(idx, entry)| {
+            let assigned = assignments.iter().any(|a| a.source_id == entry.uuid);
+            (idx, entry, assigned)
+        })
+        .collect();
+    let active: Vec<String> = rows
+        .iter()
+        .filter(|(_, _, assigned)| *assigned)
+        .map(|(idx, entry, _)| entry.label(*idx))
+        .collect();
+    // The first *assignment*, not the first assigned source in list order, so
+    // this agrees with the ghost lines and coloured labels elsewhere.
+    let btn_color = assignments.first().map_or(egui::Color32::GRAY, |a| {
+        let idx = data
+            .modulation_sources
+            .iter()
+            .position(|e| e.uuid == a.source_id)
             .unwrap_or(0);
-        modulator_color(color_idx)
-    } else {
-        egui::Color32::GRAY
-    };
+        modulator_color(idx)
+    });
 
-    egui::ComboBox::from_id_salt(format!("mom_{target_uuid}_{param_name}"))
-        .selected_text(egui::RichText::new(btn_text).color(btn_color).small())
+    let response = egui::ComboBox::from_id_salt(format!("mom_{target_uuid}_{param_name}"))
+        .selected_text(egui::RichText::new("〰").color(btn_color).small())
         .width(30.0)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show_ui(ui, |ui| {
             ui.label(
                 egui::RichText::new(format!("Modulate {param_name}"))
                     .small()
                     .strong(),
             );
-            for (src_idx, entry) in data.modulation_sources.iter().enumerate() {
-                if entry.uuid == target_uuid {
-                    continue;
-                } // can't modulate yourself
-                let color = modulator_color(src_idx);
-                let src_name = entry.label(src_idx);
-                if ui
-                    .button(
-                        egui::RichText::new(format!("+ {src_name}"))
-                            .color(color)
-                            .small(),
-                    )
-                    .clicked()
-                {
-                    actions.commands.push(EngineCommand::AssignModOnMod {
-                        target_source_id: target_uuid.to_string(),
-                        param_name: param_name.to_string(),
-                        modulator_id: entry.uuid.clone(),
-                        amount: 1.0,
+            for (src_idx, entry, assigned) in &rows {
+                let text = widgets::mod_tick_label(
+                    *assigned,
+                    &entry.label(*src_idx),
+                    modulator_color(*src_idx),
+                );
+                if ui.selectable_label(*assigned, text.small()).clicked() {
+                    actions.commands.push(if *assigned {
+                        // Per-source, so un-ticking one of two stacked
+                        // modulators leaves the other driving the parameter.
+                        EngineCommand::ClearModulationSource {
+                            target: key.clone(),
+                            source_id: entry.uuid.clone(),
+                        }
+                    } else {
+                        EngineCommand::AssignModOnMod {
+                            target_source_id: target_uuid.to_string(),
+                            param_name: param_name.to_string(),
+                            modulator_id: entry.uuid.clone(),
+                            amount: 1.0,
+                        }
                     });
                 }
             }
-            if has_assignment {
+            if !active.is_empty() {
                 ui.separator();
                 if ui
                     .button(
-                        egui::RichText::new("x Remove")
+                        egui::RichText::new("Clear all")
                             .small()
                             .color(egui::Color32::from_rgb(255, 100, 100)),
                     )
@@ -1304,7 +1323,14 @@ pub(super) fn render_mod_on_mod_dropdown(
                     });
                 }
             }
-        });
+        })
+        .response;
+
+    response.on_hover_text(if active.is_empty() {
+        format!("{param_name}: no modulation assigned")
+    } else {
+        format!("{param_name} modulated by {}", active.join(", "))
+    });
 }
 
 #[cfg(test)]

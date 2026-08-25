@@ -112,6 +112,9 @@ struct AutomationRow<'a> {
     param_key: &'a str,
     envelope_uuid: &'a str,
     breakpoints: &'a [Breakpoint],
+    /// Whether a performer has this parameter by hand. Drives the row's own
+    /// badge, which hands back this key rather than the lane's opacity.
+    overridden: bool,
 }
 
 impl AutomationRow<'_> {
@@ -359,6 +362,25 @@ fn deck_automation_rows<'a>(
     )
 }
 
+/// A display name for a parameter Varda reserves, or the key's own name.
+///
+/// Shader parameters are named by whoever wrote the shader, so they are shown as
+/// they are. The keys Varda defines itself are internal identifiers that happen
+/// to be addressable, and showing `video_loop_mode` next to a control the rest
+/// of the UI calls "Loop" makes the two look like different settings.
+fn reserved_param_label(name: &str) -> &str {
+    use crate::video::modulation as vm;
+    match name {
+        "opacity" => "Opacity",
+        vm::SPEED => "Speed",
+        vm::POSITION => "Playhead",
+        vm::PLAY => "Play",
+        vm::LOOP_MODE => "Loop mode",
+        vm::SCALING_MODE => "Scaling",
+        other => other,
+    }
+}
+
 /// The envelopes assigned to any parameter under `sources`, one row each.
 ///
 /// Derived from the modulation graph rather than from the lane, because an
@@ -391,6 +413,7 @@ fn automation_rows<'a>(
                 return None;
             };
             let name = param_key.rsplit_once(':').map_or(param_key, |(_, n)| n);
+            let name = reserved_param_label(name);
             Some(AutomationRow {
                 ch_idx,
                 owner,
@@ -401,6 +424,10 @@ fn automation_rows<'a>(
                 param_key,
                 envelope_uuid: &entry.uuid,
                 breakpoints,
+                overridden: data
+                    .arrangement
+                    .as_ref()
+                    .is_some_and(|a| a.overridden_params.iter().any(|k| k == param_key)),
             })
         })
         .collect();
@@ -1190,7 +1217,13 @@ fn render_lane_row(
         draw_collapse_caret(ui, header, lane, actions);
     }
     if lane.overridden {
-        draw_override_badge(ui, header, lane.uuid, actions);
+        draw_override_badge(
+            ui,
+            header,
+            lane.uuid,
+            crate::arrangement::opacity_param_key(lane.uuid),
+            actions,
+        );
     }
 }
 
@@ -1334,21 +1367,22 @@ fn draw_collapse_caret(
 /// A performer who grabbed a fader needs to see that the arrangement is no
 /// longer driving it, and needs somewhere to hand it back; without both, the
 /// only route back to automation is to quit and reload.
-fn draw_override_badge(
+/// `param_key` is what the badge hands back, and `id_salt` only has to be unique
+/// among the badges on screen. They are separate because a deck lane's badge
+/// stands for the lane's opacity while an automation row's stands for its own
+/// parameter, and both live on a header of the same shape.
+pub(super) fn draw_override_badge(
     ui: &mut egui::Ui,
     header: egui::Rect,
-    deck_uuid: &str,
+    id_salt: &str,
+    param_key: String,
     actions: &mut UIActions,
 ) {
     let dot = egui::Rect::from_center_size(
         header.right_center() - egui::vec2(12.0, 0.0),
         egui::vec2(14.0, 14.0),
     );
-    let response = ui.interact(
-        dot,
-        ui.id().with(("rearm", deck_uuid)),
-        egui::Sense::click(),
-    );
+    let response = ui.interact(dot, ui.id().with(("rearm", id_salt)), egui::Sense::click());
     // Custom-painted, so it needs an accessible name of its own or it is a dot
     // that only a mouse can find.
     response.widget_info(|| {
@@ -1365,7 +1399,7 @@ fn draw_override_badge(
         .clicked()
     {
         actions.commands.push(EngineCommand::RearmParam {
-            param_key: crate::arrangement::opacity_param_key(deck_uuid),
+            param_key,
             seconds: None,
         });
     }
@@ -2067,6 +2101,72 @@ mod tests {
         assert_eq!(flagged, vec![held.as_str()]);
     }
 
+    /// A held video parameter is not the lane's opacity, so the lane's badge
+    /// cannot stand for it. Its own row carries one that hands back its own key.
+    #[test]
+    fn an_automation_row_carries_its_own_override_badge() {
+        let mut data = fixture_with_arrangement();
+        let deck = data.channels[0].decks[0].uuid.clone();
+        let key = format!("deck_{deck}:{}", crate::video::modulation::POSITION);
+        push_envelope(&mut data, "env-playhead", &key);
+        data.arrangement.as_mut().unwrap().overridden_params = vec![key.clone()];
+
+        let held: Vec<(&str, bool)> = build_rows(&data)
+            .into_iter()
+            .filter_map(|r| match r {
+                Row::Automation(curve) => Some((curve.param_key, curve.overridden)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(held, vec![(key.as_str(), true)]);
+
+        // And the lane itself stays unflagged, because opacity is not held.
+        assert!(!build_rows(&data)
+            .into_iter()
+            .any(|r| matches!(r, Row::Lane(lane) if lane.overridden)));
+    }
+
+    /// The keys Varda reserves are internal identifiers. Showing `video_loop_mode`
+    /// beside a control the rest of the UI calls "Loop" makes them look like two
+    /// different settings.
+    #[test]
+    fn reserved_parameters_get_the_names_the_rest_of_the_ui_uses() {
+        let mut data = fixture_with_arrangement();
+        let deck = data.channels[0].decks[0].uuid.clone();
+        for (i, name) in [
+            crate::video::modulation::SPEED,
+            crate::video::modulation::POSITION,
+            crate::video::modulation::LOOP_MODE,
+            crate::video::modulation::SCALING_MODE,
+        ]
+        .iter()
+        .enumerate()
+        {
+            push_envelope(
+                &mut data,
+                &format!("env-{i}"),
+                &format!("deck_{deck}:{name}"),
+            );
+        }
+
+        let mut labels: Vec<String> = build_rows(&data)
+            .into_iter()
+            .filter_map(|r| match r {
+                Row::Automation(curve) => Some(curve.label().to_string()),
+                _ => None,
+            })
+            .collect();
+        labels.sort();
+        assert_eq!(labels, vec!["Loop mode", "Playhead", "Scaling", "Speed"]);
+    }
+
+    /// A shader author's parameter names are theirs, so they are shown verbatim.
+    #[test]
+    fn shader_parameter_names_are_left_alone() {
+        assert_eq!(reserved_param_label("iridescence"), "iridescence");
+        assert_eq!(reserved_param_label("speed"), "speed");
+    }
+
     /// An automated parameter gets its own row under the deck it belongs to.
     #[test]
     fn an_automated_parameter_gets_a_row() {
@@ -2554,7 +2654,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(rows, vec![(data.channels[0].ch_idx, "opacity".to_string())]);
+        assert_eq!(rows, vec![(data.channels[0].ch_idx, "Opacity".to_string())]);
     }
 
     /// A deck effect's curve belongs to the deck's lane, named for the effect so

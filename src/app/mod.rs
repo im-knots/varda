@@ -695,6 +695,15 @@ impl VardaApp {
         }
     }
 
+    /// A deck's playback state, or `None` if the UUID is stale or the deck has
+    /// no video source.
+    fn video_playback_snapshot(&self, deck_uuid: &str) -> Option<crate::video::PlaybackSnapshot> {
+        let (ch_idx, deck_idx) = self.mixer.find_deck_by_uuid(deck_uuid)?;
+        self.mixer.channels()[ch_idx].decks[deck_idx]
+            .deck
+            .playback_snapshot()
+    }
+
     /// Helper: update a modulation source by UUID.
     fn exec_modulation_update(
         &mut self,

@@ -115,11 +115,18 @@ fn ok_or_state(applied: bool, path: &str, reason: &'static str) -> Result<(), Pa
 /// Routes use slashes and the modulation graph uses `prefix:name`, so the live
 /// override (which arrives as a path from OSC, MIDI, or the API) needs a
 /// translation to find out whether it just landed on an automated parameter.
-/// Returns `None` for routes nothing can be assigned to, such as triggers and
-/// video transport.
+/// Returns `None` for routes nothing can be assigned to, such as triggers.
 ///
-/// See /spec/arrangement.md § Live override.
+/// The video arms map an action onto a state: the route `video/seek` means "seek
+/// to here", while the modulation target `video_position` means "the playhead is
+/// here". In and out points stay unassignable on purpose. They define the loop
+/// region that a position offset is scaled against, so modulating them would
+/// make position modulation depend on its own scaling reference.
+///
+/// See /spec/arrangement.md § Live override and
+/// /spec/video-playback-modulation.md § Router and Addressing.
 pub fn modulation_key_for_path(path: &str) -> Option<String> {
+    use crate::video::modulation as vm;
     let parts: Vec<&str> = path.split('/').collect();
     match parts.as_slice() {
         ["deck", uuid, "opacity"] => Some(format!("deck_{uuid}:opacity")),
@@ -127,6 +134,11 @@ pub fn modulation_key_for_path(path: &str) -> Option<String> {
         ["ch", uuid, "opacity"] => Some(format!("ch_{uuid}:opacity")),
         ["deck" | "ch", _, "effect", fx, "param", name]
         | ["master", "effect", fx, "param", name] => Some(format!("fx_{fx}:{name}")),
+        ["deck", uuid, "video", "speed"] => Some(format!("deck_{uuid}:{}", vm::SPEED)),
+        ["deck", uuid, "video", "seek"] => Some(format!("deck_{uuid}:{}", vm::POSITION)),
+        ["deck", uuid, "video", "play"] => Some(format!("deck_{uuid}:{}", vm::PLAY)),
+        ["deck", uuid, "video", "loop_mode"] => Some(format!("deck_{uuid}:{}", vm::LOOP_MODE)),
+        ["deck", uuid, "scaling_mode"] => Some(format!("deck_{uuid}:{}", vm::SCALING_MODE)),
         _ => None,
     }
 }
@@ -326,7 +338,13 @@ pub fn apply_param_by_path(
         }
         // Screen/window capture params. The deck holds the desired config and
         // the render loop pushes it to the capture manager, so every path here
-        // is MIDI-learnable, OSC-addressable, and modulatable for free.
+        // is MIDI-learnable, OSC-addressable, and macro-drivable.
+        //
+        // Not modulation targets: a route makes a value writable on demand,
+        // while a modulation target is re-evaluated every frame, which each
+        // consumer has to opt into (see `modulation_key_for_path`). Whether
+        // they should be is an open question in
+        // spec/video-playback-modulation.md.
         // See spec/screen-capture.md § Parameters and Router Paths.
         ["deck", uuid, "capture", name] => {
             let (ch, dk) = mixer
@@ -719,8 +737,57 @@ fn scale_to_duration(value: f32, duration: f64) -> f64 {
     f64::from(clamp_norm(value)) * duration.max(0.0)
 }
 
+/// The normalized value at the centre of bucket `index` of `n`.
+///
+/// Inverse of [`bucket_index`] in the only sense a bucketing has one: it returns
+/// a value that maps back to the same bucket, and picks the centre so rounding
+/// at either edge cannot land in a neighbour.
+fn bucket_center(index: usize, n: usize) -> f32 {
+    if n == 0 {
+        return 0.0;
+    }
+    (index.min(n - 1) as f32 + 0.5) / n as f32
+}
+
+/// Inverse of [`scale_speed`]: the normalized value a fader or curve would need
+/// to hold to produce `speed`.
+pub(crate) fn speed_to_norm(speed: f64) -> f32 {
+    clamp_norm(((speed - 0.1) / 3.9) as f32)
+}
+
+/// Inverse of [`scale_to_duration`]. A clip of unknown length has no meaningful
+/// normalized position, so it reports the start rather than dividing by zero.
+pub(crate) fn duration_to_norm(secs: f64, duration: f64) -> f32 {
+    if duration <= 0.0 {
+        return 0.0;
+    }
+    clamp_norm((secs / duration) as f32)
+}
+
+/// Inverse of [`loop_mode_from_value`].
+pub(crate) fn loop_mode_to_value(mode: LoopMode) -> f32 {
+    let index = match mode {
+        LoopMode::Loop => 0,
+        LoopMode::PingPong => 1,
+        LoopMode::OneShot => 2,
+        LoopMode::HoldLast => 3,
+    };
+    bucket_center(index, 4)
+}
+
+/// Inverse of [`scaling_mode_from_value`].
+pub(crate) fn scaling_mode_to_value(mode: ScalingMode) -> f32 {
+    let index = match mode {
+        ScalingMode::Fill => 0,
+        ScalingMode::Fit => 1,
+        ScalingMode::Stretch => 2,
+        ScalingMode::Center => 3,
+    };
+    bucket_center(index, 4)
+}
+
 /// Map a normalized value to a `LoopMode` via fader bucketing.
-fn loop_mode_from_value(value: f32) -> LoopMode {
+pub(crate) fn loop_mode_from_value(value: f32) -> LoopMode {
     match bucket_index(value, 4) {
         0 => LoopMode::Loop,
         1 => LoopMode::PingPong,
@@ -730,7 +797,7 @@ fn loop_mode_from_value(value: f32) -> LoopMode {
 }
 
 /// Map a normalized value to a `ScalingMode` via fader bucketing.
-fn scaling_mode_from_value(value: f32) -> ScalingMode {
+pub(crate) fn scaling_mode_from_value(value: f32) -> ScalingMode {
     match bucket_index(value, 4) {
         0 => ScalingMode::Fill,
         1 => ScalingMode::Fit,
@@ -907,6 +974,14 @@ mod tests {
                 "fx_f0000001:amount",
             ),
             ("master/effect/f0000001/param/amount", "fx_f0000001:amount"),
+            ("deck/d0000001/video/speed", "deck_d0000001:video_speed"),
+            ("deck/d0000001/video/seek", "deck_d0000001:video_position"),
+            ("deck/d0000001/video/play", "deck_d0000001:video_play"),
+            (
+                "deck/d0000001/video/loop_mode",
+                "deck_d0000001:video_loop_mode",
+            ),
+            ("deck/d0000001/scaling_mode", "deck_d0000001:scaling_mode"),
         ] {
             assert_eq!(
                 modulation_key_for_path(path).as_deref(),
@@ -916,14 +991,28 @@ mod tests {
         }
     }
 
-    /// The crossfader is routable but deliberately not a modulation target, and
-    /// a trigger is an event rather than a value.
+    /// A video playback key must not be able to collide with a shader input of
+    /// the same nickname on the same deck, which is what the reserved `video_`
+    /// prefix buys. `tests/shader_pipeline_guard.rs` holds the other half.
+    #[test]
+    fn a_shader_param_named_speed_is_not_the_video_speed_target() {
+        assert_ne!(
+            modulation_key_for_path("deck/d0000001/param/speed"),
+            modulation_key_for_path("deck/d0000001/video/speed")
+        );
+    }
+
+    /// The crossfader is routable but deliberately not a modulation target, a
+    /// trigger is an event rather than a value, and in/out points define the
+    /// region a position offset is measured against.
     #[test]
     fn a_path_that_names_nothing_automatable_has_no_key() {
         for path in [
             "crossfader",
             "deck/d0000001/trigger",
-            "deck/d0000001/video/play",
+            "deck/d0000001/video/in_point",
+            "deck/d0000001/video/out_point",
+            "deck/d0000001/video/clear",
             "macro/m0000001/value",
             "ch/c0000001",
         ] {
@@ -949,6 +1038,45 @@ mod tests {
         assert_eq!(bucket_index(2.0, 4), 3);
         assert_eq!(bucket_index(f32::NAN, 4), 0);
         assert_eq!(bucket_index(0.5, 0), 0);
+    }
+
+    #[test]
+    fn discrete_modes_round_trip_through_their_buckets() {
+        // The two directions are written out by hand, so a reordering of either
+        // match arm has to show up here rather than as a mode that silently
+        // becomes its neighbour when a live gesture is recorded.
+        for mode in [
+            LoopMode::Loop,
+            LoopMode::PingPong,
+            LoopMode::OneShot,
+            LoopMode::HoldLast,
+        ] {
+            assert_eq!(loop_mode_from_value(loop_mode_to_value(mode)), mode);
+        }
+        for mode in [
+            ScalingMode::Fill,
+            ScalingMode::Fit,
+            ScalingMode::Stretch,
+            ScalingMode::Center,
+        ] {
+            assert_eq!(scaling_mode_from_value(scaling_mode_to_value(mode)), mode);
+        }
+    }
+
+    #[test]
+    fn speed_and_position_round_trip_through_their_scales() {
+        for speed in [0.1_f64, 0.5, 1.0, 2.05, 4.0] {
+            assert!((scale_speed(speed_to_norm(speed)) - speed).abs() < 1e-6);
+        }
+        for secs in [0.0_f64, 7.5, 30.0] {
+            assert!((scale_to_duration(duration_to_norm(secs, 30.0), 30.0) - secs).abs() < 1e-4);
+        }
+    }
+
+    #[test]
+    fn a_clip_of_unknown_length_normalizes_to_the_start() {
+        assert_eq!(duration_to_norm(5.0, 0.0), 0.0);
+        assert_eq!(duration_to_norm(5.0, -2.0), 0.0);
     }
 
     #[test]

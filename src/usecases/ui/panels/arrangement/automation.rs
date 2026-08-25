@@ -99,6 +99,17 @@ pub(super) fn render_automation_row(
     );
 
     render_header(ui, data, actions, geom, row, is_selected);
+    // Before the track, so the badge takes the click rather than the curve
+    // editor underneath it.
+    if row.overridden {
+        super::draw_override_badge(
+            ui,
+            geom.header,
+            row.param_key,
+            row.param_key.to_string(),
+            actions,
+        );
+    }
     render_track(ui, data, actions, geom, row);
 }
 
