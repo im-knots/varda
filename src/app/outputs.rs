@@ -37,7 +37,7 @@ impl VardaApp {
         use winit::window::Window;
 
         let pending: Vec<crate::scene::OutputConfig> =
-            self.output.pending_output_creates.drain(..).collect();
+            std::mem::take(&mut self.output.pending_output_creates);
         for config in pending {
             // One-time migration: pre-8i.5 `.varda` files stored warp on the
             // assignment. Move it onto the surface (first assignment wins; an

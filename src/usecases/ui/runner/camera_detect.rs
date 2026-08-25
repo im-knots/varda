@@ -73,7 +73,7 @@ impl UIRunner {
     /// Apply the frame's queued camera-detection actions (enter, capture, accept,
     /// cancel), mutating the runner's mode and texture state.
     pub(super) fn apply_camera_detect_actions(&mut self, ui_actions: &mut ui::UIActions) {
-        let actions: Vec<_> = ui_actions.session.camera_detect_actions.drain(..).collect();
+        let actions = std::mem::take(&mut ui_actions.session.camera_detect_actions);
         for action in actions {
             match action {
                 ui::CameraDetectAction::Enter { camera_id } => {
@@ -133,9 +133,7 @@ impl UIRunner {
                         ref mut selected, ..
                     } = self.layout.camera_detect_mode
                     {
-                        for s in &mut *selected {
-                            *s = val;
-                        }
+                        selected.fill(val);
                     }
                 }
                 ui::CameraDetectAction::Accept => {

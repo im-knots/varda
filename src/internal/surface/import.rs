@@ -67,12 +67,11 @@ pub fn detect_from_rgba(
     }
     // Convert RGBA to grayscale using luminance formula
     let gray_pixels: Vec<u8> = rgba
-        .chunks_exact(4)
-        .map(|px| {
-            let r = f32::from(px[0]);
-            let g = f32::from(px[1]);
-            let b = f32::from(px[2]);
-            (0.299 * r + 0.587 * g + 0.114 * b) as u8
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|&[r, g, b, _]| {
+            (0.299 * f32::from(r) + 0.587 * f32::from(g) + 0.114 * f32::from(b)) as u8
         })
         .collect();
     let gray = image::GrayImage::from_raw(w, h, gray_pixels).ok_or_else(|| {

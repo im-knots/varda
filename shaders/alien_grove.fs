@@ -126,24 +126,9 @@ layout(set = 0, binding = 1) uniform UserParams {
 const float GRID = 4.0;
 const float MAX_DIST = 88.0;
 const vec3 MOON_DIR = vec3(0.0, 0.09, 1.0);
-// World size of the largest cell of the box fold carved into the landscape.
-// Detail continues down by thirds from here, so this sets the scale of the
-// biggest shelves and the trees are sized against it.
 const float FOLD_CELL = 1.15;
-// Applied between fold iterations so each level's grid sits at an angle to the
-// one above. Without it every level shares one axis-aligned lattice and the
-// landscape reads as a tiled floor rather than as eroded rock. A rotation is an
-// isometry, so it costs the distance bound nothing.
 const mat2 FOLD_ROT = mat2(0.936, 0.352, -0.352, 0.936);
-// How much wider than tall a fold cell is. Isotropic cells carve the landscape
-// into a field of uniform cubes, which reads as masonry; flattening them lays
-// the carve down as sedimentary banding instead.
 const float LAYER_ASPECT = 2.2;
-// Clearance a trunk's root is continued past the floor of its well, in world
-// units, so the trunk always passes through the floor rather than ending above
-// it. Held in world units rather than tree-local ones because the wells are cut
-// to one depth for the whole grove: a local-space drop would leave the smallest
-// trees hanging over their own openings.
 const float ROOT_CLEARANCE = 1.2;
 
 // Camera ground position, for the distance-based detail fade.
@@ -173,24 +158,11 @@ mat2 rot2(float a) {
     return mat2(c, s, -s, c);
 }
 
-// Rolling base for the landscape. Three cheap octaves only: the fractal
-// structure comes from the box fold below, not from stacking noise, which is
-// the whole reason this is affordable.
+
 float hillsAt(vec2 xz) {
     return vnoise(xz * 0.042) * 0.68 + vnoise(xz * 0.115) * 0.32;
 }
 
-// Quantise the height into strata. The flat shelves are what the box fold then
-// carves into, and they are load-bearing for the look: fold a smooth
-// heightfield and you get dented dunes, fold a terraced one and you get the
-// stacked sedimentary ledges the reference is built from. A little of the
-// unquantised height is left in so the strata tilt instead of reading as a
-// staircase of perfectly level plates.
-// A hard `floor` gives strata with vertical risers, and a heightfield with
-// vertical risers has an unbounded gradient, which forces the march to crawl to
-// avoid tearing through them. Ramping each riser over a fraction of a step
-// keeps the slope finite, which is what lets the step scale below run at 0.7
-// instead of 0.5.
 float terrace(float h, float steps, float riser) {
     float f = h * steps;
     float i = floor(f);
@@ -202,20 +174,12 @@ float terracedH(vec2 xz) {
     return mix(h, terrace(h, 9.0, 0.25), 0.85) * terrain_relief * 4.6;
 }
 
-// Ground height for seating a tree. Deliberately not `terracedH`: this runs
-// once per candidate cell per march step, four times over, and profiling put
-// the full height function at the top of the frame. One octave, quantised onto
-// the same strata, gets the tree onto the right shelf; the dropped octaves are
-// re-centred so the error is symmetric, and callers sink the trunk by more than
-// that error so a tree can never be left hovering.
+
 float footingAt(vec2 xz) {
     float h = vnoise(xz * 0.042) * 0.68 + 0.16;
     return mix(h, floor(h * 9.0) / 9.0, 0.8) * terrain_relief * 4.6;
 }
 
-// Reconstruct the nearest live tree from the same cell hash used by sceneMap.
-// This is called only after a surface hit, so the circuit shading can attach to
-// the generated geometry without carrying IDs through every march step.
 bool nearestTreeBase(
     vec2 xz,
     out vec2 base,
@@ -250,8 +214,6 @@ bool nearestTreeBase(
     return found;
 }
 
-// Full reconstruction is needed only when the visible material is vegetation.
-// Ground pixels stop at nearestTreeBase, avoiding a noise lookup per pixel.
 bool nearestTreeData(
     vec2 xz,
     out vec2 base,
@@ -270,19 +232,6 @@ bool nearestTreeData(
     return true;
 }
 
-// Where a trunk actually meets the ground.
-//
-// The sway shears the whole trunk sideways by `warp * amount`, and the tree is
-// seated with its origin sunk below the terrain, so the point where it emerges
-// is displaced from the cell anchor it was generated at by up to a metre and a
-// half, and that displacement moves as the drift phase advances. Centring the
-// circuit web on the anchor therefore leaves it sitting beside the trunk it is
-// supposed to feed. This reproduces the shear at the ground line so the web can
-// be centred on the trunk instead.
-//
-// `sceneMap` computes `sp.xz = tp.xz - (warp * amount + tp.y * lean)`, so the
-// trunk is wherever that vanishes: `tp.xz = warp * amount + tp.y * lean`, with
-// `tp.y` equal to the sink depth at the seated ground height by construction.
 vec2 trunkGroundXZ(vec2 base, float seed, float scale, bool primary, float drift) {
     float phase = seed * 6.2831853;
     float sink = primary ? 0.9 : 0.55;
@@ -465,13 +414,6 @@ int foldIters(vec2 xz) {
     return int(1.5 + clamp(terrain_detail, 0.0, 1.0) * 3.5 * lod);
 }
 
-// Menger box fold: intersect the solid with the complement of three
-// interlocking square tubes, then repeat at a third of the scale. Each
-// iteration multiplies the surface detail by three in every axis, which is
-// where the hard-edged self-similar shelves, notches and pits come from.
-//
-// It is also a true distance bound rather than a heightfield approximation, so
-// the march can take full-length steps through it.
 float mengerCarve(vec3 p, float d, int iters) {
     float s = 1.0;
     for (int i = 0; i < 5; i++) {
@@ -479,11 +421,6 @@ float mengerCarve(vec3 p, float d, int iters) {
         vec3 a = mod(p * s, 2.0) - 1.0;
         s *= 3.0;
         vec3 r = abs(1.0 - 3.0 * abs(a));
-        // 0.82 rather than the canonical 1.0 thins the carving tubes, so each
-        // level takes many small bites instead of a few deep ones. Full-width
-        // tubes excavate the landscape into scattered pits; thin ones leave a
-        // continuous surface that is rough everywhere, which is what reads as
-        // eroded rock rather than as rubble.
         float c = min(min(max(r.x, r.y), max(r.y, r.z)), max(r.z, r.x));
         d = max(d, (c - 0.82) / s);
         p.xz = FOLD_ROT * p.xz;

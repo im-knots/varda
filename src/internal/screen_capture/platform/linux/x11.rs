@@ -123,12 +123,12 @@ pub fn repack(data: &[u8], width: u32, height: u32, layout: ByteLayout) -> Vec<u
         ByteLayout::Bgrx => {
             let n = (pixels * 4).min(data.len());
             out[..n].copy_from_slice(&data[..n]);
-            for px in out.chunks_exact_mut(4) {
+            for px in out.as_chunks_mut::<4>().0 {
                 px[3] = 255;
             }
         }
         ByteLayout::Other { r, g, b } => {
-            for (i, px) in out.chunks_exact_mut(4).enumerate() {
+            for (i, px) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                 let base = i * 4;
                 if base + 3 >= data.len() {
                     break;
