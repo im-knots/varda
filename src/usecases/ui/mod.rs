@@ -7,6 +7,7 @@
 
 mod actions;
 mod data;
+pub(crate) mod keyboard;
 pub mod notifications;
 pub mod panels;
 pub mod runner;

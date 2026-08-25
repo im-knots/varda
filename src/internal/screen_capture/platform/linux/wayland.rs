@@ -448,7 +448,7 @@ fn repack_rows(src: &[u8], stride: usize, geometry: Geometry, opaque: bool) -> O
         out[row * row_bytes..(row + 1) * row_bytes].copy_from_slice(&src[from..from + row_bytes]);
     }
     if opaque {
-        for texel in out.chunks_exact_mut(4) {
+        for texel in out.as_chunks_mut::<4>().0 {
             texel[3] = 0xFF;
         }
     }
@@ -1149,7 +1149,7 @@ mod tests {
         let src = padded_frame(2, 2, 8);
         let out = repack_rows(&src, 8, rect(0, 0, 2, 2), true).expect("repack");
         assert!(
-            out.chunks_exact(4).all(|texel| texel[3] == 0xFF),
+            out.as_chunks::<4>().0.iter().all(|texel| texel[3] == 0xFF),
             "BGRx leaves the fourth byte undefined; a deck must not go transparent"
         );
     }
@@ -1158,7 +1158,7 @@ mod tests {
     fn repack_preserves_alpha_when_the_format_carries_it() {
         let src = padded_frame(2, 2, 8);
         let out = repack_rows(&src, 8, rect(0, 0, 2, 2), false).expect("repack");
-        assert!(out.chunks_exact(4).all(|texel| texel[3] == 0x00));
+        assert!(out.as_chunks::<4>().0.iter().all(|texel| texel[3] == 0x00));
     }
 
     #[test]

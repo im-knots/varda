@@ -21,6 +21,8 @@ pub(crate) mod state;
 mod surfaces;
 mod workspace;
 
+pub use workspace::WorkspaceLoad;
+
 /// Default render resolution for all decks and stage output (Full HD 1080p)
 pub const DEFAULT_RENDER_WIDTH: u32 = 1920;
 /// Default render resolution for all decks and stage output (Full HD 1080p)

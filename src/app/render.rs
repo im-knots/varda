@@ -2,6 +2,7 @@
 
 use super::VardaApp;
 use crate::mixer::Mixer;
+use crate::notifications::NotificationSystem;
 use crate::renderer::context::{OutputSource, SurfaceRenderInfo};
 use crate::surface::ContentMapping;
 
@@ -59,6 +60,20 @@ struct HeadlessDeliverySinks<'a> {
     /// reconnected stream would be timed differently from the one it replaced —
     /// and to declare the NDI sender's frame rate.
     encoder_fps: u32,
+}
+
+/// Deactivate a headless output and tell the operator. A log line alone is
+/// not enough: the gray inactive dot is easy to miss mid-show.
+fn stop_headless_output(
+    name: &str,
+    active: &mut bool,
+    notifications: &mut NotificationSystem,
+    reason: impl Into<String>,
+) {
+    let reason = reason.into();
+    log::error!("{reason}");
+    *active = false;
+    notifications.error(format!("Output '{name}' stopped: {reason}"));
 }
 
 impl VardaApp {
@@ -1039,8 +1054,12 @@ impl VardaApp {
                             dither: h.presentation_request.dither,
                         },
                     ) {
-                        log::error!("NDI P216 conversion failed for '{}': {error}", h.name);
-                        h.active = false;
+                        stop_headless_output(
+                            &h.name,
+                            &mut h.active,
+                            sinks.notifications,
+                            format!("NDI P216 conversion failed: {error}"),
+                        );
                     }
                 }
             } else if !is_syphon {
@@ -1058,8 +1077,12 @@ impl VardaApp {
                         h.height,
                         sinks.encoder_fps,
                     ) {
-                        log::error!("NDI P216 submission failed for '{}': {error}", h.name);
-                        h.active = false;
+                        stop_headless_output(
+                            &h.name,
+                            &mut h.active,
+                            sinks.notifications,
+                            format!("NDI P216 submission failed: {error}"),
+                        );
                     }
                 }
             }
@@ -1107,8 +1130,7 @@ impl VardaApp {
                     };
                     match delivery {
                         crate::renderer::context::DeliveryResult::Failed(msg) => {
-                            log::error!("{msg}");
-                            h.active = false;
+                            stop_headless_output(&h.name, &mut h.active, sinks.notifications, msg);
                         }
                         crate::renderer::context::DeliveryResult::SrtNeedsRestart => {
                             // The disconnected client's PCM tap is now stale; drop it,
@@ -1155,8 +1177,12 @@ impl VardaApp {
                                             .audio_manager
                                             .unsubscribe_pcm(pass.source_id, pass.token);
                                     }
-                                    log::error!("Failed to restart SRT listener for '{name}': {e}");
-                                    h.active = false;
+                                    stop_headless_output(
+                                        &name,
+                                        &mut h.active,
+                                        sinks.notifications,
+                                        format!("Failed to restart SRT listener: {e}"),
+                                    );
                                 }
                             }
                         }
@@ -1338,5 +1364,26 @@ mod tests {
             0,
             "counter must decrement even after panic"
         );
+    }
+
+    #[test]
+    fn stopping_a_headless_output_toasts_the_operator() {
+        let mut notifications = crate::notifications::NotificationSystem::new();
+        let mut active = true;
+        super::stop_headless_output(
+            "Show rec",
+            &mut active,
+            &mut notifications,
+            "Subprocess write failed for 'Show rec'",
+        );
+        assert!(!active);
+        let visible = notifications.visible();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(
+            visible[0].level,
+            crate::notifications::NotificationLevel::Error
+        );
+        assert!(visible[0].message.contains("Show rec"));
+        assert!(visible[0].message.contains("stopped"));
     }
 }

@@ -88,6 +88,22 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
                         ui.label(egui::RichText::new(text).small().color(color));
                     }
 
+                    if let Some(delivery) = &output.delivery {
+                        let color = if delivery.frames_dropped > 0 {
+                            egui::Color32::from_rgb(255, 200, 80)
+                        } else {
+                            egui::Color32::from_rgb(120, 200, 255)
+                        };
+                        let mut text = format!(
+                            "▸ {} sent, {} dropped",
+                            delivery.frames_written, delivery.frames_dropped
+                        );
+                        if delivery.frames_padded > 0 {
+                            let _ = write!(text, ", {} padded", delivery.frames_padded);
+                        }
+                        ui.label(egui::RichText::new(text).small().color(color));
+                    }
+
                     // Preview toggle + image
                     {
                         let preview_id = egui::Id::new("output_preview_toggle").with(&output.uuid);
@@ -1174,6 +1190,7 @@ mod tests {
             presentation_request: crate::engine::value::render::PresentationRequest::default(),
             resolved_presentation: resolved,
             audio_passthrough: None,
+            delivery: None,
             preview_width: 1920,
             preview_height: 1080,
         }

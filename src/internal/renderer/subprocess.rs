@@ -772,6 +772,9 @@ const MAX_PAD_FRAMES_PER_ARRIVAL: u64 = 30;
 struct FrameCounters {
     written: Arc<AtomicU64>,
     padded: Arc<AtomicU64>,
+    /// Frames the render thread offered while the writer channel was full.
+    /// Distinct from `padded`: a drop never entered the pipe.
+    dropped: Arc<AtomicU64>,
 }
 
 impl FrameCounters {
@@ -779,7 +782,32 @@ impl FrameCounters {
         Self {
             written: Arc::new(AtomicU64::new(0)),
             padded: Arc::new(AtomicU64::new(0)),
+            dropped: Arc::new(AtomicU64::new(0)),
         }
+    }
+}
+
+/// Offer one video frame to the writer without blocking.
+///
+/// `Ok` / `Full` both return true: the subprocess is still alive. `Full`
+/// increments `dropped` so the operator can see backpressure. `Disconnected`
+/// returns false.
+fn try_enqueue_frame(
+    tx: &mpsc::SyncSender<Vec<u8>>,
+    dropped: &AtomicU64,
+    label: &str,
+    rgba: &[u8],
+) -> bool {
+    match tx.try_send(rgba.to_vec()) {
+        Ok(()) => true,
+        Err(mpsc::TrySendError::Full(_)) => {
+            let n = dropped.fetch_add(1, Ordering::Relaxed) + 1;
+            if n == 1 || n.is_multiple_of(120) {
+                log::warn!("ffmpeg video backpressure on '{label}': dropped {n} frames");
+            }
+            true
+        }
+        Err(mpsc::TrySendError::Disconnected(_)) => false,
     }
 }
 
@@ -1843,14 +1871,11 @@ impl FfmpegSubprocess {
             return false;
         }
         if let Some(ref tx) = self.frame_tx {
-            match tx.try_send(rgba.to_vec()) {
-                // Full means the frame was dropped — ffmpeg can't keep up, but that's OK
-                Ok(()) | Err(mpsc::TrySendError::Full(_)) => true,
-                Err(mpsc::TrySendError::Disconnected(_)) => {
-                    // Writer thread exited (write error)
-                    self.drain_stderr();
-                    false
-                }
+            if try_enqueue_frame(tx, &self.counters.dropped, &self.label, rgba) {
+                true
+            } else {
+                self.drain_stderr();
+                false
             }
         } else {
             false
@@ -2057,6 +2082,12 @@ impl FfmpegSubprocess {
     /// in sync, but the visible result is a brief freeze.
     pub fn frames_padded(&self) -> u64 {
         self.counters.padded.load(Ordering::Relaxed)
+    }
+
+    /// Frames offered while the writer channel was full. The take continued;
+    /// those pixels never reached ffmpeg.
+    pub fn frames_dropped(&self) -> u64 {
+        self.counters.dropped.load(Ordering::Relaxed)
     }
 
     /// Samples of silence spliced into the audio to replace PCM lost to
@@ -2493,8 +2524,10 @@ mod tests {
         );
         let words: Vec<u16> = decoded
             .stdout
-            .chunks_exact(2)
-            .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|bytes| u16::from_le_bytes(*bytes))
             .collect();
         assert_eq!(words.len(), (WIDTH * HEIGHT * 4) as usize);
 
@@ -2905,6 +2938,29 @@ mod tests {
     fn frame_channel_capacity_is_bounded() {
         // Verify the channel capacity constant
         assert_eq!(FRAME_CHANNEL_CAPACITY, 2);
+    }
+
+    #[test]
+    fn full_channel_counts_as_a_drop_and_keeps_the_pipe_alive() {
+        let (tx, _rx) = mpsc::sync_channel(1);
+        tx.send(vec![0u8; 4]).unwrap();
+        let dropped = AtomicU64::new(0);
+        assert!(
+            try_enqueue_frame(&tx, &dropped, "test-rec", &[1, 2, 3, 4]),
+            "Full must not look like a dead subprocess"
+        );
+        assert_eq!(dropped.load(Ordering::Relaxed), 1);
+        assert!(try_enqueue_frame(&tx, &dropped, "test-rec", &[5, 6, 7, 8]));
+        assert_eq!(dropped.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn disconnected_channel_is_a_hard_failure() {
+        let (tx, rx) = mpsc::sync_channel(1);
+        drop(rx);
+        let dropped = AtomicU64::new(0);
+        assert!(!try_enqueue_frame(&tx, &dropped, "test-rec", &[1, 2, 3, 4]));
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
     }
 
     // ── Phase 19b: audio passthrough arg construction ──────────────

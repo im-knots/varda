@@ -371,6 +371,18 @@ pub(crate) fn build_ui_data(
                 }
                 crate::renderer::context::UnifiedOutput::Window(_) => None,
             };
+            let delivery = match o {
+                crate::renderer::context::UnifiedOutput::Headless(h) => {
+                    h.subprocess.as_deref().map(|sub| {
+                        crate::usecases::ui::DeliveryHealthUI {
+                            frames_written: sub.frames_written(),
+                            frames_dropped: sub.frames_dropped(),
+                            frames_padded: sub.frames_padded(),
+                        }
+                    })
+                }
+                crate::renderer::context::UnifiedOutput::Window(_) => None,
+            };
             OutputUI {
                 uuid: o.uuid().to_string(),
                 name: o.name().to_string(),
@@ -387,6 +399,7 @@ pub(crate) fn build_ui_data(
                 presentation_request: o.presentation_request(),
                 resolved_presentation: o.resolved_presentation().clone(),
                 audio_passthrough,
+                delivery,
                 preview_width,
                 preview_height,
             }

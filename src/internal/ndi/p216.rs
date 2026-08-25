@@ -484,9 +484,14 @@ mod tests {
 
         assert_eq!(first, second);
         assert_ne!(first, undithered);
-        for (plain, dithered) in undithered.chunks_exact(2).zip(first.chunks_exact(2)) {
-            let plain = i32::from(u16::from_le_bytes([plain[0], plain[1]]));
-            let dithered = i32::from(u16::from_le_bytes([dithered[0], dithered[1]]));
+        for (plain, dithered) in undithered
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .zip(first.as_chunks::<2>().0)
+        {
+            let plain = i32::from(u16::from_le_bytes(*plain));
+            let dithered = i32::from(u16::from_le_bytes(*dithered));
             assert!(
                 (plain - dithered).abs() <= 64,
                 "dither changed a component by more than one ten-bit LSB"

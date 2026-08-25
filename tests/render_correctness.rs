@@ -1028,7 +1028,7 @@ fn liquid_light_agitation_survives_being_automated() {
         deltas[deltas.len() / 2]
     };
 
-    let midpoint = (LOW + HIGH) * 0.5;
+    let midpoint = f32::midpoint(LOW, HIGH);
     let parked = run(&|_| midpoint);
     let automated = run(&|frame: usize| {
         let phase = (frame % PERIOD) as f32 / PERIOD as f32;

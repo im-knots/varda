@@ -56,7 +56,8 @@ fn save_load_empty_workspace() {
     let Some(mut app) = headless_app_in(tmp.path()) else {
         return;
     };
-    app.save_workspace(&UILayoutState::default());
+    app.save_workspace(&UILayoutState::default())
+        .expect("save workspace");
     // Reload
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
@@ -80,7 +81,8 @@ fn save_load_with_decks() {
             color: [1.0, 0.0, 0.0, 1.0],
         },
     );
-    app.save_workspace(&UILayoutState::default());
+    app.save_workspace(&UILayoutState::default())
+        .expect("save workspace");
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
     };
@@ -99,7 +101,8 @@ fn save_load_crossfader_position() {
         return;
     };
     fire(&mut app, EngineCommand::SetCrossfader(0.75));
-    app.save_workspace(&UILayoutState::default());
+    app.save_workspace(&UILayoutState::default())
+        .expect("save workspace");
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
     };
@@ -121,7 +124,8 @@ fn save_load_modulation_sources() {
             frequency: 2.0,
         },
     );
-    app.save_workspace(&UILayoutState::default());
+    app.save_workspace(&UILayoutState::default())
+        .expect("save workspace");
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
     };
@@ -156,7 +160,8 @@ fn save_load_modulation_timebase() {
             timebase: Timebase::Beat,
         },
     );
-    app.save_workspace(&UILayoutState::default());
+    app.save_workspace(&UILayoutState::default())
+        .expect("save workspace");
 
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
@@ -217,7 +222,8 @@ fn save_load_automation_envelope() {
             breakpoints: drawn.clone(),
         },
     );
-    app.save_workspace(&UILayoutState::default());
+    app.save_workspace(&UILayoutState::default())
+        .expect("save workspace");
 
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
@@ -293,7 +299,8 @@ fn save_load_arrangement_edits() {
             collapsed: true,
         },
     );
-    app.save_workspace(&UILayoutState::default());
+    app.save_workspace(&UILayoutState::default())
+        .expect("save workspace");
 
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
@@ -335,7 +342,8 @@ fn save_load_cue_points() {
             name: "Drop".to_string(),
         },
     );
-    app.save_workspace(&UILayoutState::default());
+    app.save_workspace(&UILayoutState::default())
+        .expect("save workspace");
 
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
@@ -366,7 +374,8 @@ fn save_load_render_resolution() {
             height: 720,
         },
     );
-    app.save_workspace(&UILayoutState::default());
+    app.save_workspace(&UILayoutState::default())
+        .expect("save workspace");
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
     };
@@ -389,7 +398,8 @@ fn save_load_timecode_preference() {
             preference: varda::timecode::TimecodePreference::Off,
         },
     );
-    app.save_workspace(&UILayoutState::default());
+    app.save_workspace(&UILayoutState::default())
+        .expect("save workspace");
 
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
@@ -426,7 +436,8 @@ fn save_load_ltc_patch_by_interface_name() {
             input: Some(patched),
         },
     );
-    app.save_workspace(&UILayoutState::default());
+    app.save_workspace(&UILayoutState::default())
+        .expect("save workspace");
 
     let stage: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(tmp.path().join(".varda").join("stage.json"))
@@ -492,7 +503,8 @@ fn save_load_domemaster_resolution() {
             resolution: varda::renderer::dome::DomemasterResolution::R4K,
         },
     );
-    app.save_workspace(&UILayoutState::default());
+    app.save_workspace(&UILayoutState::default())
+        .expect("save workspace");
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
     };
@@ -511,7 +523,8 @@ fn save_load_multiple_channels() {
         return;
     };
     fire(&mut app, EngineCommand::AddChannel);
-    app.save_workspace(&UILayoutState::default());
+    app.save_workspace(&UILayoutState::default())
+        .expect("save workspace");
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
     };
@@ -549,7 +562,8 @@ fn save_load_svg_image_deck() {
         matches!(result, CommandResult::OkWithId { .. }),
         "adding an SVG deck should succeed, got {result:?}"
     );
-    app.save_workspace(&UILayoutState::default());
+    app.save_workspace(&UILayoutState::default())
+        .expect("save workspace");
 
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
@@ -578,7 +592,8 @@ fn load_missing_assets_graceful() {
             path: std::path::PathBuf::from("/nonexistent/path/video.mp4"),
         },
     );
-    app.save_workspace(&UILayoutState::default());
+    app.save_workspace(&UILayoutState::default())
+        .expect("save workspace");
     // Reload — should not crash
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
@@ -594,7 +609,8 @@ fn save_creates_varda_directory() {
     let Some(mut app) = headless_app_in(tmp.path()) else {
         return;
     };
-    app.save_workspace(&UILayoutState::default());
+    app.save_workspace(&UILayoutState::default())
+        .expect("save workspace");
     assert!(varda_dir.exists());
 }
 
@@ -604,7 +620,8 @@ fn scene_json_valid_format() {
     let Some(mut app) = headless_app_in(tmp.path()) else {
         return;
     };
-    app.save_workspace(&UILayoutState::default());
+    app.save_workspace(&UILayoutState::default())
+        .expect("save workspace");
     let scene_path = tmp.path().join(".varda").join("scene.json");
     let content = std::fs::read_to_string(scene_path).expect("scene.json should exist");
     let parsed: serde_json::Value = serde_json::from_str(&content).expect("should be valid JSON");
@@ -653,7 +670,8 @@ fn save_load_deck_fidelity_opacity_transparent_blend() {
             mode: BlendMode::Multiply,
         },
     );
-    app.save_workspace(&UILayoutState::default());
+    app.save_workspace(&UILayoutState::default())
+        .expect("save workspace");
 
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
@@ -705,7 +723,8 @@ fn save_load_deck_effect_survives() {
         // Effect shader unavailable in this build — nothing to assert.
         _ => return,
     };
-    app.save_workspace(&UILayoutState::default());
+    app.save_workspace(&UILayoutState::default())
+        .expect("save workspace");
 
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
@@ -739,7 +758,8 @@ fn save_load_channel_opacity() {
             opacity: 0.5,
         },
     );
-    app.save_workspace(&UILayoutState::default());
+    app.save_workspace(&UILayoutState::default())
+        .expect("save workspace");
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
     };

@@ -2,9 +2,84 @@
 //!
 //! Mirrors the MIDI mapping architecture: a data-driven keymap with learn mode,
 //! persistence to `.varda/keymap.json`, and default bindings that can be overridden.
+//! This module is framework-free. egui conversion lives in `usecases::ui::keyboard`.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+/// Key names persisted in `.varda/keymap.json` (`egui::Key` Debug spellings).
+pub const SUPPORTED_KEY_NAMES: &[&str] = &[
+    "A",
+    "B",
+    "C",
+    "D",
+    "E",
+    "F",
+    "G",
+    "H",
+    "I",
+    "J",
+    "K",
+    "L",
+    "M",
+    "N",
+    "O",
+    "P",
+    "Q",
+    "R",
+    "S",
+    "T",
+    "U",
+    "V",
+    "W",
+    "X",
+    "Y",
+    "Z",
+    "Num0",
+    "Num1",
+    "Num2",
+    "Num3",
+    "Num4",
+    "Num5",
+    "Num6",
+    "Num7",
+    "Num8",
+    "Num9",
+    "F1",
+    "F2",
+    "F3",
+    "F4",
+    "F5",
+    "F6",
+    "F7",
+    "F8",
+    "F9",
+    "F10",
+    "F11",
+    "F12",
+    "ArrowUp",
+    "ArrowDown",
+    "ArrowLeft",
+    "ArrowRight",
+    "Home",
+    "End",
+    "PageUp",
+    "PageDown",
+    "Insert",
+    "Delete",
+    "Backspace",
+    "Enter",
+    "Tab",
+    "Space",
+    "Escape",
+    "Minus",
+    "Plus",
+];
+
+/// Whether `name` is a persistable key identity.
+pub fn is_supported_key_name(name: &str) -> bool {
+    SUPPORTED_KEY_NAMES.contains(&name)
+}
 
 /// A key combination: a key + modifier state.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -13,23 +88,6 @@ pub struct KeyCombo {
     pub command: bool,
     pub shift: bool,
     pub alt: bool,
-}
-
-impl KeyCombo {
-    /// Create a `KeyCombo` from egui key + modifiers.
-    pub fn from_egui(key: egui::Key, modifiers: &egui::Modifiers) -> Self {
-        Self {
-            key: egui_key_to_string(key),
-            command: modifiers.command,
-            shift: modifiers.shift,
-            alt: modifiers.alt,
-        }
-    }
-
-    /// Convert back to `egui::Key` (returns None if string doesn't map).
-    pub fn to_egui_key(&self) -> Option<egui::Key> {
-        string_to_egui_key(&self.key)
-    }
 }
 
 /// What a key binding targets.
@@ -277,12 +335,6 @@ impl KeymapStore {
         self.bindings.get(combo)
     }
 
-    /// Convenience: look up from egui types.
-    pub fn lookup_egui(&self, key: egui::Key, modifiers: &egui::Modifiers) -> Option<&KeyTarget> {
-        let combo = KeyCombo::from_egui(key, modifiers);
-        self.bindings.get(&combo)
-    }
-
     /// Toggle learn mode on/off.
     pub fn toggle_learn(&mut self) {
         self.learn_mode = !self.learn_mode;
@@ -350,12 +402,7 @@ impl KeymapStore {
                 shift: binding.shift,
                 alt: binding.alt,
             };
-            // Only load if the key string is valid
-            if combo.to_egui_key().is_some()
-                || binding.key == "Delete"
-                || binding.key == "Backspace"
-                || binding.key == "Escape"
-            {
+            if is_supported_key_name(&binding.key) {
                 self.bindings.insert(combo, binding.target.clone());
             } else {
                 log::warn!("Keymap: skipping unknown key '{}'", binding.key);
@@ -367,13 +414,6 @@ impl KeymapStore {
     pub fn reset_to_defaults(&mut self) {
         self.bindings = Self::defaults();
         log::info!("Keyboard shortcuts reset to defaults");
-    }
-
-    /// Sorted bindings for UI display.
-    pub fn sorted_bindings(&self) -> Vec<(&KeyCombo, &KeyTarget)> {
-        let mut list: Vec<_> = self.bindings.iter().collect();
-        list.sort_by(|a, b| a.0.key.cmp(&b.0.key));
-        list
     }
 }
 
@@ -462,105 +502,6 @@ impl KeymapConfig {
     }
 }
 
-// ── egui::Key ↔ String conversion ──────────────────────────────────
-
-/// Convert an `egui::Key` to a stable string name for serialization.
-pub fn egui_key_to_string(key: egui::Key) -> String {
-    format!("{key:?}")
-}
-
-/// Convert a string name back to `egui::Key`.
-pub fn string_to_egui_key(s: &str) -> Option<egui::Key> {
-    match s {
-        "A" => Some(egui::Key::A),
-        "B" => Some(egui::Key::B),
-        "C" => Some(egui::Key::C),
-        "D" => Some(egui::Key::D),
-        "E" => Some(egui::Key::E),
-        "F" => Some(egui::Key::F),
-        "G" => Some(egui::Key::G),
-        "H" => Some(egui::Key::H),
-        "I" => Some(egui::Key::I),
-        "J" => Some(egui::Key::J),
-        "K" => Some(egui::Key::K),
-        "L" => Some(egui::Key::L),
-        "M" => Some(egui::Key::M),
-        "N" => Some(egui::Key::N),
-        "O" => Some(egui::Key::O),
-        "P" => Some(egui::Key::P),
-        "Q" => Some(egui::Key::Q),
-        "R" => Some(egui::Key::R),
-        "S" => Some(egui::Key::S),
-        "T" => Some(egui::Key::T),
-        "U" => Some(egui::Key::U),
-        "V" => Some(egui::Key::V),
-        "W" => Some(egui::Key::W),
-        "X" => Some(egui::Key::X),
-        "Y" => Some(egui::Key::Y),
-        "Z" => Some(egui::Key::Z),
-        "Num0" => Some(egui::Key::Num0),
-        "Num1" => Some(egui::Key::Num1),
-        "Num2" => Some(egui::Key::Num2),
-        "Num3" => Some(egui::Key::Num3),
-        "Num4" => Some(egui::Key::Num4),
-        "Num5" => Some(egui::Key::Num5),
-        "Num6" => Some(egui::Key::Num6),
-        "Num7" => Some(egui::Key::Num7),
-        "Num8" => Some(egui::Key::Num8),
-        "Num9" => Some(egui::Key::Num9),
-        "F1" => Some(egui::Key::F1),
-        "F2" => Some(egui::Key::F2),
-        "F3" => Some(egui::Key::F3),
-        "F4" => Some(egui::Key::F4),
-        "F5" => Some(egui::Key::F5),
-        "F6" => Some(egui::Key::F6),
-        "F7" => Some(egui::Key::F7),
-        "F8" => Some(egui::Key::F8),
-        "F9" => Some(egui::Key::F9),
-        "F10" => Some(egui::Key::F10),
-        "F11" => Some(egui::Key::F11),
-        "F12" => Some(egui::Key::F12),
-        "ArrowUp" => Some(egui::Key::ArrowUp),
-        "ArrowDown" => Some(egui::Key::ArrowDown),
-        "ArrowLeft" => Some(egui::Key::ArrowLeft),
-        "ArrowRight" => Some(egui::Key::ArrowRight),
-        "Home" => Some(egui::Key::Home),
-        "End" => Some(egui::Key::End),
-        "PageUp" => Some(egui::Key::PageUp),
-        "PageDown" => Some(egui::Key::PageDown),
-        "Insert" => Some(egui::Key::Insert),
-        "Delete" => Some(egui::Key::Delete),
-        "Backspace" => Some(egui::Key::Backspace),
-        "Enter" => Some(egui::Key::Enter),
-        "Tab" => Some(egui::Key::Tab),
-        "Space" => Some(egui::Key::Space),
-        "Escape" => Some(egui::Key::Escape),
-        "Minus" => Some(egui::Key::Minus),
-        "Plus" => Some(egui::Key::Plus),
-        _ => None,
-    }
-}
-
-/// Collect all keys pressed this frame from egui input.
-pub fn collect_pressed_keys(ctx: &egui::Context) -> Vec<(egui::Key, egui::Modifiers)> {
-    ctx.input(|i| {
-        let mut pressed = Vec::new();
-        let mods = i.modifiers;
-        for event in &i.events {
-            if let egui::Event::Key {
-                key,
-                pressed: true,
-                repeat: false,
-                ..
-            } = event
-            {
-                pressed.push((*key, mods));
-            }
-        }
-        pressed
-    })
-}
-
 /// Display a `KeyCombo` as a user-friendly string (e.g. "Cmd+Shift+Z").
 impl std::fmt::Display for KeyCombo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -584,143 +525,6 @@ impl std::fmt::Display for KeyTarget {
             KeyTarget::Action(id) => write!(f, "{id:?}"),
             KeyTarget::ParamPath(path) => write!(f, "{path}"),
         }
-    }
-}
-
-// ── Keyboard param toggle ───────────────────────────────────────────
-
-/// Toggle a parameter via keyboard shortcut.
-/// Float params: toggle between current value and 0.0.
-/// Bool params: toggle true/false.
-pub fn apply_keyboard_toggle_param(mixer: &mut crate::mixer::Mixer, path: &str) -> bool {
-    let parts: Vec<&str> = path.split('/').collect();
-    match parts.as_slice() {
-        // crossfader — toggle between 0.0 and 1.0
-        ["crossfader"] => {
-            let current = mixer.crossfader();
-            mixer.snap_crossfader(if current > 0.5 { 0.0 } else { 1.0 });
-            true
-        }
-        // ch/<uuid>/opacity
-        ["ch", ch_uuid, "opacity"] => {
-            if let Some(ch) = mixer.find_channel_by_uuid(ch_uuid) {
-                let channel = &mut mixer.channels_mut()[ch];
-                channel.opacity = if channel.opacity > 0.01 { 0.0 } else { 1.0 };
-                return true;
-            }
-            false
-        }
-        // deck/<uuid>/opacity
-        ["deck", uuid, "opacity"] => {
-            if let Some((ch, dk)) = mixer.find_deck_by_uuid(uuid) {
-                let slot = &mut mixer.channels_mut()[ch].decks[dk];
-                slot.opacity = if slot.opacity > 0.01 { 0.0 } else { 1.0 };
-                return true;
-            }
-            false
-        }
-        // deck/<uuid>/mute — toggle mute
-        ["deck", uuid, "mute"] => {
-            if let Some((ch, dk)) = mixer.find_deck_by_uuid(uuid) {
-                let m = mixer.channels_mut()[ch].decks[dk].mute;
-                mixer.channels_mut()[ch].decks[dk].mute = !m;
-                return true;
-            }
-            false
-        }
-        // deck/<uuid>/solo — toggle solo
-        ["deck", uuid, "solo"] => {
-            if let Some((ch, dk)) = mixer.find_deck_by_uuid(uuid) {
-                let s = mixer.channels_mut()[ch].decks[dk].solo;
-                mixer.channels_mut()[ch].decks[dk].solo = !s;
-                return true;
-            }
-            false
-        }
-        // deck/<uuid>/trigger — set deck opacity to 1.0
-        ["deck", uuid, "trigger"] => {
-            if let Some((ch, dk)) = mixer.find_deck_by_uuid(uuid) {
-                mixer.channels_mut()[ch].decks[dk].opacity = 1.0;
-                return true;
-            }
-            false
-        }
-        // deck/<uuid>/param/<name>
-        ["deck", uuid, "param", name] => {
-            if let Some((ch, dk)) = mixer.find_deck_by_uuid(uuid) {
-                if let Some(val) = mixer.channels_mut()[ch].decks[dk]
-                    .deck
-                    .generator_params
-                    .values
-                    .get_mut(*name)
-                {
-                    toggle_param_value(val);
-                    return true;
-                }
-            }
-            false
-        }
-        // deck/<uuid>/effect/<effect_uuid>/param/<name>
-        ["deck", uuid, "effect", fx_uuid, "param", name] => {
-            if let Some((ch, dk)) = mixer.find_deck_by_uuid(uuid) {
-                let slot = &mut mixer.channels_mut()[ch].decks[dk];
-                if let Some(ek) = slot.deck.effects.iter().position(|e| e.uuid() == *fx_uuid) {
-                    if let Some(val) = slot.deck.effects[ek].params.values.get_mut(*name) {
-                        toggle_param_value(val);
-                        return true;
-                    }
-                }
-            }
-            false
-        }
-        // ch/<uuid>/effect/<effect_uuid>/param/<name>
-        ["ch", ch_uuid, "effect", fx_uuid, "param", name] => {
-            if let Some(ch) = mixer.find_channel_by_uuid(ch_uuid) {
-                if let Some(ek) = mixer.channels_mut()[ch]
-                    .effects
-                    .iter()
-                    .position(|e| e.uuid() == *fx_uuid)
-                {
-                    if let Some(val) = mixer.channels_mut()[ch].effects[ek]
-                        .params
-                        .values
-                        .get_mut(*name)
-                    {
-                        toggle_param_value(val);
-                        return true;
-                    }
-                }
-            }
-            false
-        }
-        // master/effect/<effect_uuid>/param/<name>
-        ["master", "effect", fx_uuid, "param", name] => {
-            let effects = mixer.master_effects_mut();
-            if let Some(ek) = effects.iter().position(|e| e.uuid() == *fx_uuid) {
-                if let Some(val) = effects[ek].params.values.get_mut(*name) {
-                    toggle_param_value(val);
-                    return true;
-                }
-            }
-            false
-        }
-        // mod/<mod_uuid>/<param> — modulation source params (toggle float between 0 and 1)
-        ["mod", _mod_uuid, _param] => {
-            // Modulation params are continuous values; keyboard toggle doesn't apply well.
-            // Fall through to default.
-            false
-        }
-        _ => false,
-    }
-}
-
-/// Toggle a param value: float toggles between 0.0 and 1.0, bool inverts.
-fn toggle_param_value(val: &mut crate::params::ParamValue) {
-    use crate::params::ParamValue;
-    match val {
-        ParamValue::Float(v) => *v = if v.abs() > 0.01 { 0.0 } else { 1.0 },
-        ParamValue::Bool(b) => *b = !*b,
-        _ => {}
     }
 }
 
@@ -825,19 +629,37 @@ mod tests {
     }
 
     #[test]
-    fn test_egui_key_roundtrip() {
-        let keys = [
-            egui::Key::Z,
-            egui::Key::S,
-            egui::Key::Delete,
-            egui::Key::F1,
-            egui::Key::Space,
-        ];
-        for key in keys {
-            let s = egui_key_to_string(key);
-            let back = string_to_egui_key(&s);
-            assert_eq!(back, Some(key), "Roundtrip failed for {key:?} -> {s}");
+    fn default_bindings_use_supported_key_names() {
+        for combo in KeymapStore::defaults().keys() {
+            assert!(
+                is_supported_key_name(&combo.key),
+                "default binding uses unsupported key {}",
+                combo.key
+            );
         }
+        assert!(is_supported_key_name("Z"));
+        assert!(is_supported_key_name("Delete"));
+        assert!(is_supported_key_name("F1"));
+        assert!(!is_supported_key_name("NotAKey"));
+        assert!(!is_supported_key_name("z"));
+    }
+
+    #[test]
+    fn load_config_skips_unknown_key_names() {
+        let mut store = KeymapStore::with_defaults();
+        let before = store.bindings.len();
+        store.load_config(&KeymapConfig {
+            version: 1,
+            bindings: vec![KeyBinding {
+                key: "NotAKey".into(),
+                command: false,
+                shift: false,
+                alt: false,
+                target: KeyTarget::Action(ActionId::Save),
+            }],
+        });
+        assert_eq!(store.bindings.len(), before);
+        assert!(store.get(&combo("NotAKey", false, false, false)).is_none());
     }
 
     #[test]

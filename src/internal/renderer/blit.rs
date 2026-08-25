@@ -2008,7 +2008,7 @@ mod tests {
         let mapped = readback.slice(..).get_mapped_range().unwrap();
         let words = bytemuck::cast_slice::<u8, u16>(&mapped[..(WIDTH * 8) as usize]);
 
-        for (x, pixel) in words.chunks_exact(4).enumerate() {
+        for (x, pixel) in words.as_chunks::<4>().0.iter().enumerate() {
             assert_eq!(pixel[0], 0);
             assert!(pixel[1].abs_diff(32_768) < 64, "green code {}", pixel[1]);
             assert_eq!(pixel[2], u16::MAX);

@@ -653,6 +653,9 @@ pub struct OutputWindowSnapshot {
     pub resolved_presentation: crate::engine::value::render::ResolvedPresentation,
     /// Live audio passthrough health for an active ffmpeg output (None = video-only).
     pub audio_passthrough: Option<AudioPassthroughSnapshot>,
+    /// Live ffmpeg video health (None = this output has no subprocess).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<DeliveryHealthSnapshot>,
 }
 
 #[derive(Clone, Serialize)]
@@ -663,6 +666,17 @@ pub struct AudioPassthroughSnapshot {
     pub frames_written: u64,
     /// PCM chunks dropped on backpressure.
     pub frames_dropped: u64,
+}
+
+/// Video frames offered to an ffmpeg subprocess, split by fate.
+#[derive(Clone, Serialize)]
+pub struct DeliveryHealthSnapshot {
+    /// Frames the writer actually put down the pipe from the renderer.
+    pub frames_written: u64,
+    /// Frames dropped because the writer channel was full.
+    pub frames_dropped: u64,
+    /// Repeated frames inserted to cover renderer gaps.
+    pub frames_padded: u64,
 }
 
 #[derive(Clone, Serialize)]

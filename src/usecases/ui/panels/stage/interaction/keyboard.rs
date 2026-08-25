@@ -11,11 +11,11 @@ pub(super) fn handle(
     actions: &mut UIActions,
     state: &mut StageEditorState,
 ) {
-    use crate::keymap::{collect_pressed_keys, ActionId, KeyCombo, KeyTarget};
+    use crate::keymap::{ActionId, KeyTarget};
+    use crate::usecases::ui::keyboard::collect_pressed_keys;
     let pressed = collect_pressed_keys(ui.ctx());
-    for (key, mods) in &pressed {
-        let combo = KeyCombo::from_egui(*key, mods);
-        if let Some(target) = data.keymap_bindings.get(&combo) {
+    for combo in &pressed {
+        if let Some(target) = data.keymap_bindings.get(combo) {
             match target {
                 KeyTarget::Action(ActionId::ToolSelect) => state.tool = DrawingTool::Select,
                 KeyTarget::Action(ActionId::ToolRectangle) => {

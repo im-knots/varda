@@ -14,6 +14,7 @@ Shaders are classified automatically by type:
 | Shader | Description |
 |--------|-------------|
 | `abstract_field.fs` | Abstract generative field — flowing organic patterns |
+| `alien_grove.fs` | Raymarched night forest flythrough of lacy umbel trees rising out of circular wells cut in the terrain, with smaller Menger crystal lattices and recursive fern-corals grown between them; RGB energy pulses run along circuit traces etched into the rock, which meander with it, ring the lip of every well, converge on webs centred under each trunk, climb the trunks and spars, and color their terminal auras beneath a cratered moon and log-periodic fractal halo |
 | `apollonian_glow.fs` | Raymarched Kali-fold + Apollonian fractal tunnel lit entirely by an accumulated glow trail, with reflection pass |
 | `aurora_borealis.fs` | Northern lights — fake-volumetric raymarch through folded noise sheets, green-to-violet curtains with starfield |
 | `bars.fs` | Animated bars/stripes generator |

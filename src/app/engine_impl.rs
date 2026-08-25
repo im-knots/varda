@@ -12,10 +12,11 @@ use crate::engine::traits::{
 use crate::engine::types::{
     AnalyzerScalarInfo, AnalyzerTypeInfo, AudioBandPreset, AudioDeviceSnapshot,
     AudioPassthroughSnapshot, AudioSnapshot, AudioSourceId, BlendMode, CameraId, ContentMapping,
-    CrossfadeEasing, EffectTarget, LFOWaveform, MixerSnapshot, ModulationAssignmentSnapshot,
-    ModulationSnapshot, ModulationSourceSnapshot, ModulationSourceSnapshotEntry, MonitorSnapshot,
-    OutputSnapshot, OutputSource, OutputWindowSnapshot, ParamValue, ScalingMode,
-    SurfaceAssignmentSnapshot, SurfaceOutputType, SurfaceSnapshot,
+    CrossfadeEasing, DeliveryHealthSnapshot, EffectTarget, LFOWaveform, MixerSnapshot,
+    ModulationAssignmentSnapshot, ModulationSnapshot, ModulationSourceSnapshot,
+    ModulationSourceSnapshotEntry, MonitorSnapshot, OutputSnapshot, OutputSource,
+    OutputWindowSnapshot, ParamValue, ScalingMode, SurfaceAssignmentSnapshot, SurfaceOutputType,
+    SurfaceSnapshot,
 };
 use crate::modulation::ModulationSource;
 
@@ -1263,13 +1264,14 @@ impl OutputQueries for VardaApp {
                             }
                         })
                         .collect();
-                    let (target, is_on_display, is_active, calibration_mode, audio_passthrough) =
+                    let (target, is_on_display, is_active, calibration_mode, audio_passthrough, delivery) =
                         match o {
                             UnifiedOutput::Window(w) => (
                                 w.target.clone(),
                                 matches!(w.target, OutputTarget::Display { .. }),
                                 false,
                                 w.calibration_mode,
+                                None,
                                 None,
                             ),
                             UnifiedOutput::Headless(h) => {
@@ -1289,12 +1291,20 @@ impl OutputQueries for VardaApp {
                                             .dropped
                                             .load(std::sync::atomic::Ordering::Relaxed),
                                     });
+                                let delivery = h.subprocess.as_deref().map(|sub| {
+                                    DeliveryHealthSnapshot {
+                                        frames_written: sub.frames_written(),
+                                        frames_dropped: sub.frames_dropped(),
+                                        frames_padded: sub.frames_padded(),
+                                    }
+                                });
                                 (
                                     h.target.clone(),
                                     false,
                                     h.active,
                                     crate::renderer::context::CalibrationMode::Off,
                                     audio,
+                                    delivery,
                                 )
                             }
                         };
@@ -1310,6 +1320,7 @@ impl OutputQueries for VardaApp {
                         presentation_request: o.presentation_request(),
                         resolved_presentation: o.resolved_presentation().clone(),
                         audio_passthrough,
+                        delivery,
                     }
                 })
                 .collect(),
