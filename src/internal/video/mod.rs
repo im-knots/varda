@@ -7,6 +7,7 @@
 
 pub mod chase;
 pub mod hap;
+pub mod modulation;
 
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -25,6 +26,9 @@ use ffmpeg::util::frame::video::Video;
 /// `crate::video::LoopMode` call sites keep working.
 pub use crate::engine::value::video::{DeckTransportSync, LoopMode, TransportSyncMode};
 pub use chase::{ChaseInbox, VideoChaseBroadcast};
+pub use modulation::{
+    PlaybackModulation, PlaybackModulationInbox, PositionTarget as ModulatedPosition,
+};
 
 /// Result of advancing playback state.
 pub struct AdvanceResult {
@@ -32,6 +36,17 @@ pub struct AdvanceResult {
     pub needs_seek: bool,
     /// Number of video frames to decode (0 = hold current frame, 1+ = decode new frames).
     pub frames_to_decode: u32,
+}
+
+/// One tick's playhead movement, split into the clip's own advance and the part
+/// modulation asked for. See [`PlaybackState::modulated_position_step`].
+struct ModulatedPositionStep {
+    /// Total change to apply to `position`.
+    delta: f64,
+    /// Forward clip time from the clip's own advance, for the frame accumulator.
+    natural_secs: f64,
+    /// What the decoder must do about the modulated part.
+    decode: modulation::OffsetStep,
 }
 
 /// Shared playback state for all video sources (ffmpeg and HAP).
@@ -79,6 +94,17 @@ pub struct PlaybackState {
     last_transport_position: Option<f64>,
     /// True for the duration of a chase tick. Decode EOS paths hold instead of wrapping.
     pub chasing: bool,
+    /// This frame's resolved playback modulation. Held rather than consumed, so
+    /// a decode tick that arrives between render frames keeps the last level.
+    /// See /spec/video-playback-modulation.md.
+    modulation: modulation::PlaybackModulation,
+    /// How much modulated offset is already baked into `position`.
+    ///
+    /// Offsets are held as "how far from where the clip would be", so the
+    /// playhead only has to move when the offset *changes*. A steady offset
+    /// therefore costs nothing after it has been reached, which is what keeps a
+    /// slow LFO on the playhead from seeking on every frame.
+    applied_position_offset: f64,
 }
 
 impl PlaybackState {
@@ -102,6 +128,8 @@ impl PlaybackState {
             chase_transport: None,
             last_transport_position: None,
             chasing: false,
+            modulation: modulation::PlaybackModulation::default(),
+            applied_position_offset: 0.0,
         }
     }
 
@@ -119,6 +147,18 @@ impl PlaybackState {
         self.chase_transport = Some(sample);
     }
 
+    /// Bind this frame's resolved modulation before [`Self::advance_frame`].
+    pub fn set_modulation(&mut self, value: modulation::PlaybackModulation) {
+        self.modulation = value;
+    }
+
+    /// The rate playback actually runs at: the stored speed unless a modulator
+    /// is holding it. `speed` stays the performer's set point either way, which
+    /// is what lets the UI slider keep showing where they left it.
+    pub fn effective_speed(&self) -> f64 {
+        self.modulation.speed.unwrap_or(self.speed)
+    }
+
     /// Advance playback position using real wall-clock time.
     /// Returns how many video frames to decode and whether a seek is needed.
     pub fn advance_frame(&mut self) -> AdvanceResult {
@@ -126,10 +166,7 @@ impl PlaybackState {
         if !self.playing {
             self.last_advance = std::time::Instant::now();
             self.chasing = false;
-            return AdvanceResult {
-                needs_seek: false,
-                frames_to_decode: 0,
-            };
+            return self.paused_modulation_step();
         }
 
         if let Some(transport) = self.chase_transport.take() {
@@ -146,14 +183,39 @@ impl PlaybackState {
         // Clamp dt to avoid huge jumps after pauses/stalls
         let dt = wall_dt.min(0.1);
 
-        let delta = dt * self.speed.abs() * if self.reverse { -1.0 } else { 1.0 };
-        self.position += delta;
+        let frame_time = 1.0 / self.frame_rate;
+        let speed = self.effective_speed().abs();
+        let step = self.modulated_position_step(dt, speed, frame_time);
+        self.position += step.delta;
 
         // Accumulate frames: how many video frames does this time step cover?
-        let frame_time = 1.0 / self.frame_rate;
-        self.frame_accumulator += dt * self.speed.abs();
+        // The clip's own advance plus whatever forward travel modulation asked
+        // for, since both are frames the decoder has to walk through.
+        self.frame_accumulator += step.natural_secs + step.decode.walk_secs;
         let frames_to_decode = (self.frame_accumulator / frame_time).floor() as u32;
         self.frame_accumulator -= f64::from(frames_to_decode) * frame_time;
+
+        // An absolute source is the authority on position, so the loop region
+        // does not fence it in and the boundary transitions stand down. They are
+        // part of the clip's own marching, which an absolute value replaces; left
+        // active they would yank the playhead to the in-point every frame the
+        // curve reads past the out-point, and the curve would put it straight
+        // back. The clip's bounds still apply, because there is no picture
+        // outside them.
+        if let modulation::PositionTarget::Absolute(_) = self.modulation.position {
+            self.position = self.position.clamp(0.0, self.duration.max(0.0));
+            if step.decode.needs_seek {
+                self.frame_accumulator = 0.0;
+                return AdvanceResult {
+                    needs_seek: true,
+                    frames_to_decode: 1,
+                };
+            }
+            return AdvanceResult {
+                needs_seek: false,
+                frames_to_decode,
+            };
+        }
 
         let in_pt = self.in_point;
         let out_pt = self.effective_out();
@@ -197,9 +259,113 @@ impl PlaybackState {
                 }
             }
         }
+        if step.decode.needs_seek {
+            self.frame_accumulator = 0.0;
+            return AdvanceResult {
+                needs_seek: true,
+                frames_to_decode: 1,
+            };
+        }
         AdvanceResult {
             needs_seek: false,
             frames_to_decode,
+        }
+    }
+
+    /// Move a paused clip's playhead if (and only if) modulation asks for it.
+    ///
+    /// Pause means the clip does not advance on its own, not that it refuses to
+    /// be moved: scrubbing a paused clip by hand already works, and a modulator
+    /// bound to the playhead is a scrub. This is also the case where an offset
+    /// reads most clearly, because with no natural advance underneath it the
+    /// playhead swings around where it was parked instead of drifting through
+    /// the clip. Suspension is a separate matter and still freezes everything.
+    fn paused_modulation_step(&mut self) -> AdvanceResult {
+        let frame_time = 1.0 / self.frame_rate;
+        let step = self.modulated_position_step(0.0, 0.0, frame_time);
+        if step.delta == 0.0 {
+            return AdvanceResult {
+                needs_seek: false,
+                frames_to_decode: 0,
+            };
+        }
+
+        // Clamp instead of looping: a paused clip has not reached its out-point,
+        // it was carried there, so wrapping would be an event nobody asked for.
+        // Which span it clamps against follows the span the movement was
+        // measured in, so an absolute curve can park the playhead anywhere in
+        // the clip while an offset stays inside the loop region.
+        let (floor, ceiling) =
+            if let modulation::PositionTarget::Absolute(_) = self.modulation.position {
+                (0.0, self.duration.max(0.0))
+            } else {
+                let floor = self.in_point;
+                (floor, self.effective_out().max(floor))
+            };
+        self.position = (self.position + step.delta).clamp(floor, ceiling);
+
+        if step.decode.needs_seek {
+            self.frame_accumulator = 0.0;
+            return AdvanceResult {
+                needs_seek: true,
+                frames_to_decode: 1,
+            };
+        }
+        self.frame_accumulator += step.decode.walk_secs;
+        let frames_to_decode = (self.frame_accumulator / frame_time).floor() as u32;
+        self.frame_accumulator -= f64::from(frames_to_decode) * frame_time;
+        AdvanceResult {
+            needs_seek: false,
+            frames_to_decode,
+        }
+    }
+
+    /// This tick's playhead movement, and what the decoder must do to take it.
+    ///
+    /// The clip's own advance and the modulated offset are separated because the
+    /// decoder treats them differently: ordinary advance walks forward through
+    /// the stream, while an offset that moves backward can only be reached by
+    /// seeking. Keeping them apart is also what stops ping-pong's reverse from
+    /// being mistaken for a modulated backward step.
+    fn modulated_position_step(
+        &mut self,
+        dt: f64,
+        speed: f64,
+        frame_time: f64,
+    ) -> ModulatedPositionStep {
+        let natural = dt * speed;
+        let signed_natural = natural * if self.reverse { -1.0 } else { 1.0 };
+
+        let offset_delta = match self.modulation.position {
+            // An absolute source replaces the value rather than nudging it (the
+            // same rule automation envelopes follow elsewhere), so the clip's
+            // own advance stands down for the frame.
+            modulation::PositionTarget::Absolute(target) => {
+                self.applied_position_offset = 0.0;
+                return ModulatedPositionStep {
+                    delta: target - self.position,
+                    natural_secs: 0.0,
+                    decode: modulation::offset_step(target - self.position, frame_time),
+                };
+            }
+            modulation::PositionTarget::Offset(offset) => {
+                let delta = offset - self.applied_position_offset;
+                self.applied_position_offset = offset;
+                delta
+            }
+            // Letting go hands back whatever offset is still applied, so the
+            // playhead lands where the clip would have been all along.
+            modulation::PositionTarget::Free => {
+                let delta = -self.applied_position_offset;
+                self.applied_position_offset = 0.0;
+                delta
+            }
+        };
+
+        ModulatedPositionStep {
+            delta: signed_natural + offset_delta,
+            natural_secs: natural,
+            decode: modulation::offset_step(offset_delta, frame_time),
         }
     }
 
@@ -207,6 +373,12 @@ impl PlaybackState {
         self.chasing = true;
         self.reverse = false;
         self.last_advance = std::time::Instant::now();
+        // The servo owns the whole timeline while chasing, so a modulated offset
+        // has no authority here and must not be left half-applied for the tick
+        // the clip stops chasing. Modulated speed has none either; see the
+        // `base_speed` note below.
+        // See /spec/video-playback-modulation.md § Authority.
+        self.applied_position_offset = 0.0;
 
         let transport_dt = if transport.running {
             self.last_transport_position
@@ -222,6 +394,16 @@ impl PlaybackState {
             in_point: self.in_point,
             out_point: self.effective_out(),
             frame_rate: self.frame_rate,
+            // The performer's stored speed, never the modulated one. This is a
+            // coefficient on absolute elapsed transport time
+            // (`desired = in_point + elapsed * base_speed`), not an incremental
+            // rate, so a value that moves rewrites where the clip should have
+            // been for the whole show up to now. A wobble of 0.01 a minute in
+            // moves the target 0.6 s, past `SEEK_THRESHOLD_SECS`, and the error
+            // grows with elapsed time without bound. The render pass suppresses
+            // speed modulation while chasing; this keeps the servo's map stable
+            // even for the frame after a chase engages, when the inbox may still
+            // hold a modulated level.
             base_speed: self.speed,
             transport_position: transport.position,
             transport_dt,
@@ -354,7 +536,16 @@ pub struct PlaybackSnapshot {
     pub playing: bool,
     pub position: f64,
     pub duration: f64,
+    /// The performer's set point, untouched by modulation, so the UI slider
+    /// keeps showing where they left it.
     pub speed: f64,
+    /// The rate playback is actually running at. Equals `speed` unless a
+    /// modulator is holding it, which is what the ghost indicator draws.
+    pub effective_speed: f64,
+    /// How far a modulator has carried the playhead from where the clip would
+    /// otherwise be. Subtracting it from `position` gives the point the
+    /// modulator is swinging around, which is what the scrub bar's ghost marks.
+    pub position_offset: f64,
     pub loop_mode: LoopMode,
     pub in_point: f64,
     pub out_point: f64,
@@ -367,6 +558,16 @@ pub struct PlaybackSnapshot {
 }
 
 impl PlaybackSnapshot {
+    /// Effective out-point (uses duration if `out_point` is 0), mirroring
+    /// [`PlaybackState::effective_out`] for readers that only have a snapshot.
+    pub fn effective_out(&self) -> f64 {
+        if self.out_point > 0.0 {
+            self.out_point
+        } else {
+            self.duration
+        }
+    }
+
     /// Create a snapshot from a `PlaybackState`. The `pingpong_cache_truncated`
     /// flag defaults to false here and is set by the ffmpeg decode thread.
     pub fn from_state(ps: &PlaybackState) -> Self {
@@ -375,6 +576,8 @@ impl PlaybackSnapshot {
             position: ps.position,
             duration: ps.duration,
             speed: ps.speed,
+            effective_speed: ps.effective_speed(),
+            position_offset: ps.applied_position_offset,
             loop_mode: ps.loop_mode,
             in_point: ps.in_point,
             out_point: ps.out_point,
@@ -384,6 +587,18 @@ impl PlaybackSnapshot {
             pingpong_cache_truncated: false,
         }
     }
+}
+
+/// The render thread's mailboxes into a decode thread.
+///
+/// Both hold levels rather than events: the newest value wins, and a value the
+/// decode thread never got round to reading is simply superseded. That is why
+/// they are cells rather than queues, and why they are bundled: they are read
+/// together at the top of every decode tick.
+#[derive(Default)]
+pub struct DecodeInboxes {
+    pub chase: ChaseInbox,
+    pub modulation: modulation::PlaybackModulationInbox,
 }
 
 /// Main-thread handle to a background video decode thread.
@@ -403,8 +618,9 @@ pub struct VideoDecodeHandle {
     /// Last suspension state sent to the decode thread, so the per-frame call
     /// from the renderer only sends on a change. See [`Self::set_suspended`].
     suspended: AtomicBool,
-    /// Render-thread publish / decode-thread consume of the show transport.
-    chase: Arc<ChaseInbox>,
+    /// Render-thread publish / decode-thread consume of the show transport and
+    /// this frame's resolved playback modulation.
+    inboxes: Arc<DecodeInboxes>,
     /// Last sync config applied from the main thread (for save/UI).
     transport_sync: Mutex<DeckTransportSync>,
     thread: Option<std::thread::JoinHandle<()>>,
@@ -433,14 +649,14 @@ impl VideoDecodeHandle {
 
         let frame_pool: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
         let output_fps = Arc::new(AtomicU32::new(0));
-        let chase = Arc::new(ChaseInbox::new());
+        let inboxes = Arc::new(DecodeInboxes::default());
 
         let fd = frame_data.clone();
         let ss = snapshot.clone();
         let sf = stop_flag.clone();
         let fp = frame_pool.clone();
         let ofps = output_fps.clone();
-        let ch = chase.clone();
+        let ch = inboxes.clone();
 
         let thread = std::thread::Builder::new()
             .name("video-decode".into())
@@ -457,7 +673,7 @@ impl VideoDecodeHandle {
             frame_pool,
             output_fps,
             suspended: AtomicBool::new(false),
-            chase,
+            inboxes,
             transport_sync: Mutex::new(DeckTransportSync::default()),
             thread: Some(thread),
             width,
@@ -485,14 +701,14 @@ impl VideoDecodeHandle {
 
         let frame_pool: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
         let output_fps = Arc::new(AtomicU32::new(0));
-        let chase = Arc::new(ChaseInbox::new());
+        let inboxes = Arc::new(DecodeInboxes::default());
 
         let fd = frame_data.clone();
         let ss = snapshot.clone();
         let sf = stop_flag.clone();
         let fp = frame_pool.clone();
         let ofps = output_fps.clone();
-        let ch = chase.clone();
+        let ch = inboxes.clone();
 
         let thread = std::thread::Builder::new()
             .name("hap-decode".into())
@@ -509,7 +725,7 @@ impl VideoDecodeHandle {
             frame_pool,
             output_fps,
             suspended: AtomicBool::new(false),
-            chase,
+            inboxes,
             transport_sync: Mutex::new(DeckTransportSync::default()),
             thread: Some(thread),
             width,
@@ -533,7 +749,12 @@ impl VideoDecodeHandle {
 
     /// Publish this frame's transport to the decode thread.
     pub fn publish_chase(&self, sample: VideoChaseBroadcast, discontinuity: bool) {
-        self.chase.publish(sample, discontinuity);
+        self.inboxes.chase.publish(sample, discontinuity);
+    }
+
+    /// Publish this frame's resolved playback modulation to the decode thread.
+    pub fn publish_modulation(&self, value: modulation::PlaybackModulation) {
+        self.inboxes.modulation.publish(value);
     }
 
     pub fn set_transport_sync(&self, sync: DeckTransportSync) {
@@ -594,6 +815,8 @@ impl VideoDecodeHandle {
                 position: 0.0,
                 duration: 0.0,
                 speed: 1.0,
+                effective_speed: 1.0,
+                position_offset: 0.0,
                 loop_mode: LoopMode::Loop,
                 in_point: 0.0,
                 out_point: 0.0,
@@ -732,7 +955,7 @@ fn video_decode_thread(
     frame_pool: &Mutex<Vec<Vec<u8>>>,
     fps: f64,
     output_fps: &AtomicU32,
-    chase: &ChaseInbox,
+    inboxes: &DecodeInboxes,
 ) {
     let mut interval = decode_interval(fps, output_fps);
     let mut next_frame_at = std::time::Instant::now() + interval;
@@ -766,7 +989,10 @@ fn video_decode_thread(
         }
         let woke = was_suspended && !player.playback.suspended;
         was_suspended = player.playback.suspended;
-        player.playback.set_chase_transport(chase.take(woke));
+        player
+            .playback
+            .set_chase_transport(inboxes.chase.take(woke));
+        player.playback.set_modulation(inboxes.modulation.take());
 
         // Decode next frame
         match player.next_frame() {
@@ -840,7 +1066,7 @@ fn hap_decode_thread(
     frame_pool: &Mutex<Vec<Vec<u8>>>,
     fps: f64,
     output_fps: &AtomicU32,
-    chase: &ChaseInbox,
+    inboxes: &DecodeInboxes,
 ) {
     let mut interval = decode_interval(fps, output_fps);
     let mut next_frame_at = std::time::Instant::now() + interval;
@@ -874,7 +1100,10 @@ fn hap_decode_thread(
         }
         let woke = was_suspended && !player.playback.suspended;
         was_suspended = player.playback.suspended;
-        player.playback.set_chase_transport(chase.take(woke));
+        player
+            .playback
+            .set_chase_transport(inboxes.chase.take(woke));
+        player.playback.set_modulation(inboxes.modulation.take());
 
         // Decode next frame
         match player.next_frame() {
@@ -1108,8 +1337,11 @@ impl VideoPlayer {
     pub fn next_frame(&mut self) -> Result<Option<&[u8]>> {
         // Suspension freezes position as well as decode: a clip nobody can see
         // must not drift on wall-clock time, or the same show position shows a
-        // different frame depending on when the app was launched.
-        if !self.playback.playing || self.playback.suspended {
+        // different frame depending on when the app was launched. Pause is not a
+        // hard stop in the same way, because a modulator bound to the playhead
+        // can move a parked clip; unmodulated, `advance_frame` reports nothing
+        // to do and we hold the current frame just below.
+        if self.playback.suspended {
             return Ok(None);
         }
         let was_reverse = self.playback.reverse;
@@ -1142,8 +1374,10 @@ impl VideoPlayer {
             self.seek(self.playback.position)?;
         }
 
-        // Reverse playback: serve frames from cache
-        if self.playback.reverse {
+        // Reverse playback: serve frames from cache. Cache walking tracks the
+        // clip's own backward march, so it cannot land on a position modulation
+        // put us at; a clip parked mid-ping-pong seeks instead.
+        if self.playback.reverse && self.playback.playing {
             // Skip frames for speed > 1.0 in reverse
             let skip = result.frames_to_decode.max(1) as usize;
             if self.cache_read_idx >= skip {
@@ -1895,6 +2129,495 @@ mod tests {
         let result = ps.advance_frame();
         assert!(result.needs_seek);
         assert!((ps.position - 4.0).abs() < 1e-9);
+    }
+
+    // ── playback modulation ────────────────────────────────────────────
+    // See /spec/video-playback-modulation.md.
+
+    /// Wall-clock advance needs a real elapsed interval to measure.
+    fn tick(ps: &mut PlaybackState) -> AdvanceResult {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        ps.advance_frame()
+    }
+
+    fn free_running_clip() -> PlaybackState {
+        let mut ps = PlaybackState::new(10.0, 30.0);
+        ps.transport_sync.mode = TransportSyncMode::Never;
+        ps
+    }
+
+    #[test]
+    fn modulated_speed_moves_the_playhead_faster_without_seeking() {
+        let mut fast = free_running_clip();
+        fast.set_modulation(PlaybackModulation {
+            speed: Some(4.0),
+            position: ModulatedPosition::Free,
+        });
+        let mut plain = free_running_clip();
+
+        let fast_result = tick(&mut fast);
+        let plain_result = tick(&mut plain);
+
+        assert!(!fast_result.needs_seek, "a rate change never needs a seek");
+        assert!(!plain_result.needs_seek);
+        assert!(
+            fast.position > plain.position,
+            "modulated speed did not advance the playhead: {} vs {}",
+            fast.position,
+            plain.position
+        );
+    }
+
+    #[test]
+    fn modulated_speed_leaves_the_stored_set_point_alone() {
+        // The slider has to keep showing where the performer left it, which is
+        // what makes the ghost indicator meaningful.
+        let mut ps = free_running_clip();
+        ps.speed = 1.0;
+        ps.set_modulation(PlaybackModulation {
+            speed: Some(3.0),
+            position: ModulatedPosition::Free,
+        });
+        let _ = tick(&mut ps);
+        assert!((ps.speed - 1.0).abs() < 1e-9);
+        assert!((ps.effective_speed() - 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn unmodulated_speed_falls_back_to_the_stored_speed() {
+        let mut ps = free_running_clip();
+        ps.speed = 2.5;
+        assert!((ps.effective_speed() - 2.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_forward_offset_walks_the_playhead_rather_than_seeking() {
+        let mut ps = free_running_clip();
+        ps.position = 1.0;
+        ps.set_modulation(PlaybackModulation {
+            speed: None,
+            position: ModulatedPosition::Offset(0.2),
+        });
+        let result = tick(&mut ps);
+        assert!(!result.needs_seek, "a short forward step should walk");
+        assert!(
+            result.frames_to_decode >= 6,
+            "walked frames were not decoded: {}",
+            result.frames_to_decode
+        );
+        assert!(ps.position > 1.2);
+    }
+
+    #[test]
+    fn a_backward_offset_seeks_because_ffmpeg_cannot_walk_back() {
+        let mut ps = free_running_clip();
+        ps.position = 4.0;
+        ps.set_modulation(PlaybackModulation {
+            speed: None,
+            position: ModulatedPosition::Offset(-0.2),
+        });
+        let result = tick(&mut ps);
+        assert!(result.needs_seek);
+        assert!(ps.position < 4.0);
+    }
+
+    #[test]
+    fn a_steady_offset_costs_nothing_after_it_has_been_reached() {
+        // The offset is held as a distance from where the clip would be, so a
+        // modulator sitting still must not seek on every frame. This is what
+        // keeps a slow LFO on the playhead cheap.
+        let mut ps = free_running_clip();
+        ps.position = 2.0;
+        let held = PlaybackModulation {
+            speed: None,
+            position: ModulatedPosition::Offset(0.3),
+        };
+        ps.set_modulation(held);
+        let _ = tick(&mut ps); // reaching the offset may walk or seek
+        for _ in 0..10 {
+            ps.set_modulation(held);
+            assert!(
+                !tick(&mut ps).needs_seek,
+                "a settled offset kept seeking every frame"
+            );
+        }
+    }
+
+    #[test]
+    fn letting_go_of_the_offset_hands_the_playhead_back() {
+        let mut ps = free_running_clip();
+        ps.position = 5.0;
+        ps.set_modulation(PlaybackModulation {
+            speed: None,
+            position: ModulatedPosition::Offset(0.4),
+        });
+        // No sleep between ticks, so the clip's own advance stays far below the
+        // tolerance and what is left is the offset being applied and released.
+        let _ = ps.advance_frame();
+        assert!(
+            (ps.position - 5.4).abs() < 0.01,
+            "offset was not applied: {}",
+            ps.position
+        );
+
+        ps.set_modulation(PlaybackModulation::default());
+        let _ = ps.advance_frame();
+        assert!(
+            (ps.position - 5.0).abs() < 0.01,
+            "offset was not handed back: {}",
+            ps.position
+        );
+    }
+
+    #[test]
+    fn an_absolute_position_replaces_rather_than_nudges() {
+        // Matches how automation envelopes behave on every other parameter: an
+        // absolute source sets the value, so the clip's own advance stands down.
+        let mut ps = free_running_clip();
+        ps.position = 1.0;
+        ps.set_modulation(PlaybackModulation {
+            speed: None,
+            position: ModulatedPosition::Absolute(7.0),
+        });
+        let _ = tick(&mut ps);
+        assert!(
+            (ps.position - 7.0).abs() < 1e-9,
+            "absolute target not taken: {}",
+            ps.position
+        );
+    }
+
+    #[test]
+    fn an_absolute_position_past_the_out_point_does_not_trip_the_loop() {
+        // The boundary transitions are part of the clip's own marching, which an
+        // absolute value replaces. Left active they would pull the playhead to
+        // the in-point and the curve would put it straight back, every frame.
+        let mut ps = free_running_clip();
+        ps.loop_mode = LoopMode::Loop;
+        ps.in_point = 2.0;
+        ps.out_point = 4.0;
+        ps.position = 3.0;
+        ps.set_modulation(PlaybackModulation {
+            speed: None,
+            position: ModulatedPosition::Absolute(8.0),
+        });
+        let _ = tick(&mut ps);
+        assert!(
+            (ps.position - 8.0).abs() < 1e-9,
+            "the loop fought the curve: {}",
+            ps.position
+        );
+        assert!(
+            !ps.reached_end,
+            "an absolute curve reported reaching the end"
+        );
+    }
+
+    #[test]
+    fn an_absolute_position_cannot_leave_the_clip() {
+        let mut ps = free_running_clip();
+        ps.position = 1.0;
+        ps.set_modulation(PlaybackModulation {
+            speed: None,
+            position: ModulatedPosition::Absolute(999.0),
+        });
+        let _ = tick(&mut ps);
+        assert!((ps.position - ps.duration).abs() < 1e-9);
+    }
+
+    #[test]
+    fn an_absolute_position_that_holds_still_stops_seeking() {
+        let mut ps = free_running_clip();
+        ps.position = 1.0;
+        let held = PlaybackModulation {
+            speed: None,
+            position: ModulatedPosition::Absolute(7.0),
+        };
+        ps.set_modulation(held);
+        let _ = tick(&mut ps);
+        ps.set_modulation(held);
+        assert!(!tick(&mut ps).needs_seek);
+    }
+
+    #[test]
+    fn a_modulated_speed_cannot_move_the_chase_map() {
+        // The servo maps transport time onto clip time with base_speed as the
+        // coefficient on *absolute elapsed* transport time, so a speed that
+        // moves rewrites where the clip should have been for the whole show up
+        // to now. The stored speed is used instead, and the map stays put.
+        let mut ps = PlaybackState::new(100.0, 30.0);
+        ps.transport_sync.mode = TransportSyncMode::Always;
+        ps.speed = 1.0;
+        ps.set_modulation(PlaybackModulation {
+            speed: Some(2.0),
+            position: ModulatedPosition::Free,
+        });
+        ps.set_chase_transport(chase::ChaseTransport {
+            position: 4.0,
+            running: true,
+            discontinuity: true,
+            fps: 30.0,
+        });
+        let _ = ps.advance_frame();
+        assert!(ps.chasing);
+        assert!(
+            (ps.position - 4.0).abs() < 1e-9,
+            "a modulator scaled the chase map: {}",
+            ps.position
+        );
+    }
+
+    #[test]
+    fn the_stored_speed_still_scales_the_chase_map() {
+        // Suppressing the modulator must not cost the setting. A clip set to 2x
+        // is still a clip running at twice show rate, which is a stable map.
+        let mut ps = PlaybackState::new(100.0, 30.0);
+        ps.transport_sync.mode = TransportSyncMode::Always;
+        ps.speed = 2.0;
+        ps.set_chase_transport(chase::ChaseTransport {
+            position: 4.0,
+            running: true,
+            discontinuity: true,
+            fps: 30.0,
+        });
+        let _ = ps.advance_frame();
+        assert!(ps.chasing);
+        assert!(
+            (ps.position - 8.0).abs() < 1e-9,
+            "the stored speed stopped scaling the map: {}",
+            ps.position
+        );
+    }
+
+    /// The artifact this rule exists to prevent, at the scale a show hits it.
+    #[test]
+    fn a_speed_wobble_a_minute_into_a_show_does_not_throw_the_playhead() {
+        let mut ps = PlaybackState::new(600.0, 30.0);
+        ps.transport_sync.mode = TransportSyncMode::Always;
+        ps.speed = 1.0;
+        ps.set_chase_transport(chase::ChaseTransport {
+            position: 60.0,
+            running: true,
+            discontinuity: true,
+            fps: 30.0,
+        });
+        let _ = ps.advance_frame();
+        let settled = ps.position;
+
+        // An audio band nudging the rate by a hundredth would have moved the
+        // mapped target by 0.6 s, past the servo's half-second seek threshold.
+        for speed in [1.01, 0.99, 1.4, 0.6] {
+            ps.set_modulation(PlaybackModulation {
+                speed: Some(speed),
+                position: ModulatedPosition::Free,
+            });
+            ps.set_chase_transport(chase::ChaseTransport {
+                position: 60.0,
+                running: true,
+                discontinuity: false,
+                fps: 30.0,
+            });
+            let _ = ps.advance_frame();
+            assert!(
+                (ps.position - settled).abs() < 0.1,
+                "speed {speed} threw the chased playhead from {settled} to {}",
+                ps.position
+            );
+        }
+    }
+
+    #[test]
+    fn a_modulated_playhead_has_no_authority_while_chasing() {
+        // The servo's whole job is to make position a function of transport
+        // position. Two authorities on one value is the seek storm this design
+        // exists to avoid, so the offset is dropped rather than fought.
+        let mut ps = PlaybackState::new(100.0, 30.0);
+        ps.transport_sync.mode = TransportSyncMode::Always;
+        ps.set_modulation(PlaybackModulation {
+            speed: None,
+            position: ModulatedPosition::Offset(5.0),
+        });
+        ps.set_chase_transport(chase::ChaseTransport {
+            position: 4.0,
+            running: true,
+            discontinuity: true,
+            fps: 30.0,
+        });
+        let _ = ps.advance_frame();
+        assert!(ps.chasing);
+        assert!(
+            (ps.position - 4.0).abs() < 1e-9,
+            "a modulator moved a chasing playhead: {}",
+            ps.position
+        );
+    }
+
+    #[test]
+    fn an_offset_applied_before_a_chase_does_not_survive_into_it() {
+        let mut ps = PlaybackState::new(100.0, 30.0);
+        ps.transport_sync.mode = TransportSyncMode::Auto;
+        ps.position = 2.0;
+        ps.playing = true;
+        ps.set_modulation(PlaybackModulation {
+            speed: None,
+            position: ModulatedPosition::Offset(1.0),
+        });
+        let _ = ps.advance_frame();
+
+        // Now the transport starts and the clip begins chasing.
+        ps.set_chase_transport(chase::ChaseTransport {
+            position: 10.0,
+            running: true,
+            discontinuity: true,
+            fps: 30.0,
+        });
+        let _ = ps.advance_frame();
+        assert!(ps.chasing);
+        assert!((ps.position - 10.0).abs() < 1e-9);
+
+        // And when it stops chasing, the stale offset is not handed back.
+        ps.set_modulation(PlaybackModulation::default());
+        ps.set_chase_transport(chase::ChaseTransport {
+            position: 10.0,
+            running: false,
+            discontinuity: false,
+            fps: 30.0,
+        });
+        let before = ps.position;
+        let _ = ps.advance_frame();
+        assert!(
+            ps.position >= before,
+            "a stale offset pulled the playhead back: {before} -> {}",
+            ps.position
+        );
+    }
+
+    #[test]
+    fn a_paused_clip_still_follows_a_modulated_playhead() {
+        // Pause stops the clip advancing on its own; it does not make the clip
+        // refuse to be moved. Scrubbing a paused clip by hand already works.
+        let mut ps = free_running_clip();
+        ps.playing = false;
+        ps.position = 3.0;
+        ps.set_modulation(PlaybackModulation {
+            speed: None,
+            position: ModulatedPosition::Offset(2.0),
+        });
+        let result = tick(&mut ps);
+        assert!(
+            (ps.position - 5.0).abs() < 1e-9,
+            "a paused playhead ignored its modulator: {}",
+            ps.position
+        );
+        assert!(
+            result.needs_seek || result.frames_to_decode > 0,
+            "the move never reached the decoder, so the picture would not change"
+        );
+    }
+
+    #[test]
+    fn a_paused_clip_swings_around_where_it_was_parked() {
+        // The bipolar case. With no natural advance underneath it the offset is
+        // measured from a fixed point, so the playhead ping-pongs about the
+        // parked position instead of drifting through the clip -- and the anchor
+        // stays recoverable for the scrub bar's ghost to mark.
+        let mut ps = free_running_clip();
+        ps.playing = false;
+        ps.position = 5.0;
+        for offset in [1.0, 2.0, 0.0, -1.5, -2.0, 0.0] {
+            ps.set_modulation(PlaybackModulation {
+                speed: None,
+                position: ModulatedPosition::Offset(offset),
+            });
+            let _ = tick(&mut ps);
+            assert!(
+                (ps.position - (5.0 + offset)).abs() < 1e-9,
+                "offset {offset} put the playhead at {}",
+                ps.position
+            );
+            assert!(
+                (ps.position - ps.applied_position_offset - 5.0).abs() < 1e-9,
+                "the anchor drifted to {}",
+                ps.position - ps.applied_position_offset
+            );
+        }
+    }
+
+    #[test]
+    fn a_paused_clip_ignores_modulated_speed() {
+        // Speed scales the clip's own advance, and a paused clip has none.
+        let mut ps = free_running_clip();
+        ps.playing = false;
+        ps.position = 3.0;
+        ps.set_modulation(PlaybackModulation {
+            speed: Some(4.0),
+            position: ModulatedPosition::Free,
+        });
+        let result = tick(&mut ps);
+        assert_eq!(result.frames_to_decode, 0);
+        assert!(!result.needs_seek);
+        assert!((ps.position - 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_paused_clip_carried_to_the_out_point_clamps_instead_of_looping() {
+        // It did not reach the end, it was carried there, so wrapping would fire
+        // a loop nobody asked for.
+        let mut ps = free_running_clip();
+        ps.playing = false;
+        ps.loop_mode = LoopMode::Loop;
+        ps.position = 9.0;
+        ps.set_modulation(PlaybackModulation {
+            speed: None,
+            position: ModulatedPosition::Offset(5.0),
+        });
+        let _ = tick(&mut ps);
+        assert!(
+            (ps.position - ps.effective_out()).abs() < 1e-9,
+            "clamp missed the out-point: {}",
+            ps.position
+        );
+        assert!(
+            !ps.reached_end,
+            "a carried playhead reported reaching the end"
+        );
+    }
+
+    #[test]
+    fn a_playing_clip_offsets_from_its_own_march() {
+        // The other half of the design: playing, the clip marches under its loop
+        // and shot rules and the modulator offsets from wherever that took it.
+        let mut ps = free_running_clip();
+        ps.position = 1.0;
+        let _ = tick(&mut ps);
+        let marched = ps.position;
+        assert!(marched > 1.0, "the clip did not march on its own");
+
+        ps.set_modulation(PlaybackModulation {
+            speed: None,
+            position: ModulatedPosition::Offset(2.0),
+        });
+        let _ = tick(&mut ps);
+        assert!(
+            ps.position > marched + 2.0,
+            "the offset replaced the march instead of riding on it: {} vs {marched}",
+            ps.position
+        );
+    }
+
+    #[test]
+    fn an_offset_still_respects_the_loop_boundary() {
+        let mut ps = free_running_clip();
+        ps.loop_mode = LoopMode::Loop;
+        ps.position = 9.0;
+        ps.set_modulation(PlaybackModulation {
+            speed: None,
+            position: ModulatedPosition::Offset(2.0),
+        });
+        let result = tick(&mut ps);
+        assert!(result.needs_seek);
+        assert!((ps.position - ps.in_point).abs() < 1e-9);
+        assert!(ps.reached_end);
     }
 
     #[test]

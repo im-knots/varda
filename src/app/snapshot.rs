@@ -57,6 +57,8 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                                 position: ps.position,
                                 duration: ps.duration,
                                 speed: ps.speed,
+                                effective_speed: ps.effective_speed,
+                                position_offset: ps.position_offset,
                                 loop_mode: ps.loop_mode,
                                 in_point: ps.in_point,
                                 out_point: ps.out_point,

@@ -177,6 +177,56 @@ fn snapshot_bottom_bar_deck_detail() {
     harness.snapshot("bottom_bar_deck_detail");
 }
 
+/// The video playback column, with a modulator on the speed slider and another
+/// carrying the playhead away from its anchor.
+///
+/// The shared fixture has no video deck, so without this the whole playback
+/// column (and every `〰` dropdown and ghost on it) would render in no snapshot
+/// at all. See /spec/video-playback-modulation.md § UI.
+#[test]
+fn snapshot_bottom_bar_video_playback() {
+    let mut data = UIData::test_fixture();
+    data.selected_deck = Some((0, 0));
+    data.selected_channel = None;
+    data.selected_master = false;
+
+    let uuid = data.channels[0].decks[0].uuid.clone();
+    data.channels[0].decks[0].video_playback = Some(varda::usecases::ui::VideoPlaybackUI {
+        playing: true,
+        position: 4.25,
+        duration: 30.0,
+        // Set point and live rate differ, which is the whole point of the ghost:
+        // a golden with them equal would not show whether it is drawn.
+        speed: 1.0,
+        effective_speed: 2.4,
+        // Non-zero so the scrub bar's ghost sits away from the handle, where a
+        // golden can tell the two apart.
+        position_offset: -3.0,
+        loop_mode: varda::video::LoopMode::Loop,
+        in_point: 0.0,
+        out_point: 0.0,
+        frame_rate: 30.0,
+        transport_sync: varda::video::DeckTransportSync::default(),
+    });
+    for name in [
+        varda::video::modulation::SPEED,
+        varda::video::modulation::POSITION,
+    ] {
+        data.modulation_assignments.insert(
+            format!("deck_{uuid}:{name}"),
+            vec![varda::usecases::ui::ModAssignmentUI {
+                source_id: "mod00001".to_string(),
+                amount: 0.5,
+            }],
+        );
+    }
+
+    let Some(mut harness) = snapshot_harness(data) else {
+        return;
+    };
+    harness.snapshot("bottom_bar_video_playback");
+}
+
 #[test]
 fn snapshot_bottom_bar_channel_fx() {
     let mut data = UIData::test_fixture();

@@ -289,7 +289,17 @@ impl VardaApp {
                 Err(e) => not_found(&e),
             },
             EngineCommand::SetDeckScalingMode { deck_uuid, mode } => {
-                wire(self.set_deck_scaling_mode(&deck_uuid, mode))
+                let result = wire(self.set_deck_scaling_mode(&deck_uuid, mode));
+                // Scaling belongs to any deck with a source texture, not just a
+                // video one, but it is modulatable on the same terms.
+                if matches!(result, CommandResult::Ok) {
+                    self.note_live_video_write(
+                        &deck_uuid,
+                        crate::video::modulation::SCALING_MODE,
+                        crate::param_router::scaling_mode_to_value(mode),
+                    );
+                }
+                result
             }
             EngineCommand::SetDeckTransparent {
                 deck_uuid,
@@ -653,18 +663,65 @@ impl VardaApp {
             }
 
             // ── Video Playback ────────────────────────────────
+            // The four playback commands below take their lane back from the
+            // show, the same way a hand on a deck fader does. Each records the
+            // normalized value a curve would need to hold to reproduce the
+            // gesture, because that is the space the override ramp and the
+            // recorder both work in.
             EngineCommand::VideoTogglePlay { deck_uuid } => {
-                self.exec_on_deck(&deck_uuid, |d| d.video_toggle_play())
+                // Read before the toggle: it sends a command to the decode
+                // thread, so the snapshot still reports the old state after.
+                let was_playing = self
+                    .video_playback_snapshot(&deck_uuid)
+                    .is_some_and(|s| s.playing);
+                let result = self.exec_on_deck(&deck_uuid, |d| d.video_toggle_play());
+                if matches!(result, CommandResult::Ok) {
+                    self.note_live_video_write(
+                        &deck_uuid,
+                        crate::video::modulation::PLAY,
+                        f32::from(u8::from(!was_playing)),
+                    );
+                }
+                result
             }
             EngineCommand::VideoSeek {
                 deck_uuid,
                 position_secs,
-            } => self.exec_on_deck(&deck_uuid, |d| d.video_seek(position_secs)),
+            } => {
+                let duration = self
+                    .video_playback_snapshot(&deck_uuid)
+                    .map_or(0.0, |s| s.duration);
+                let result = self.exec_on_deck(&deck_uuid, |d| d.video_seek(position_secs));
+                if matches!(result, CommandResult::Ok) {
+                    self.note_live_video_write(
+                        &deck_uuid,
+                        crate::video::modulation::POSITION,
+                        crate::param_router::duration_to_norm(position_secs, duration),
+                    );
+                }
+                result
+            }
             EngineCommand::VideoSetSpeed { deck_uuid, speed } => {
-                self.exec_on_deck(&deck_uuid, |d| d.video_set_speed(speed))
+                let result = self.exec_on_deck(&deck_uuid, |d| d.video_set_speed(speed));
+                if matches!(result, CommandResult::Ok) {
+                    self.note_live_video_write(
+                        &deck_uuid,
+                        crate::video::modulation::SPEED,
+                        crate::param_router::speed_to_norm(speed),
+                    );
+                }
+                result
             }
             EngineCommand::VideoSetLoopMode { deck_uuid, mode } => {
-                self.exec_on_deck(&deck_uuid, |d| d.video_set_loop_mode(mode))
+                let result = self.exec_on_deck(&deck_uuid, |d| d.video_set_loop_mode(mode));
+                if matches!(result, CommandResult::Ok) {
+                    self.note_live_video_write(
+                        &deck_uuid,
+                        crate::video::modulation::LOOP_MODE,
+                        crate::param_router::loop_mode_to_value(mode),
+                    );
+                }
+                result
             }
             EngineCommand::VideoSetInPoint { deck_uuid, secs } => {
                 self.exec_on_deck(&deck_uuid, |d| d.video_set_in_point(secs))

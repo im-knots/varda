@@ -607,6 +607,90 @@ fn a_curve_on_a_channel_fader_drives_the_composite() {
     );
 }
 
+/// A hand on a video playback control has to take its lane back too, or the
+/// curve keeps driving the parameter the performer just grabbed. MIDI and OSC
+/// get this from the router; a bottom-bar gesture never touches the router, so
+/// the command has to report the write itself.
+///
+/// Scaling mode is the one playback parameter that applies to any deck with a
+/// source texture, so it is the one this can prove without a video file.
+#[test]
+fn a_hand_on_a_playback_control_takes_its_lane_back() {
+    use varda::modulation::Breakpoint;
+    let Some((mut app, deck)) = app_with_one_region(0.0, 30.0) else {
+        return;
+    };
+    let target = format!("deck_{deck}:{}", varda::video::modulation::SCALING_MODE);
+    let envelope = new_uuid(send_cmd(
+        &mut app,
+        EngineCommand::AddAutomationLane {
+            target: target.clone(),
+            timebase: Timebase::Transport,
+        },
+    ));
+    fire(
+        &mut app,
+        EngineCommand::SetEnvelopeBreakpoints {
+            uuid: envelope,
+            breakpoints: vec![Breakpoint::new(0.0, 0.1), Breakpoint::new(10.0, 0.1)],
+        },
+    );
+    run_from(&mut app, 5.0);
+
+    assert!(
+        !app.build_engine_state()
+            .arrangement
+            .expect("arrangement")
+            .overridden_params
+            .contains(&target),
+        "nothing is held before the performer touches anything"
+    );
+
+    fire(
+        &mut app,
+        EngineCommand::SetDeckScalingMode {
+            deck_uuid: deck.clone(),
+            mode: varda::deck::ScalingMode::Center,
+        },
+    );
+    step(&mut app);
+
+    assert!(
+        app.build_engine_state()
+            .arrangement
+            .expect("arrangement")
+            .overridden_params
+            .contains(&target),
+        "the grabbed control should be reported so the UI can offer a re-arm"
+    );
+}
+
+/// A stale deck UUID must not open a take on a key that names nothing.
+#[test]
+fn a_playback_gesture_on_a_missing_deck_holds_nothing() {
+    let Some((mut app, _deck)) = app_with_one_region(0.0, 30.0) else {
+        return;
+    };
+    run_from(&mut app, 5.0);
+    fire(
+        &mut app,
+        EngineCommand::SetDeckScalingMode {
+            deck_uuid: "no-such-deck".to_string(),
+            mode: varda::deck::ScalingMode::Center,
+        },
+    );
+    step(&mut app);
+
+    assert!(
+        app.build_engine_state()
+            .arrangement
+            .expect("arrangement")
+            .overridden_params
+            .is_empty(),
+        "a command that failed must not report a live write"
+    );
+}
+
 /// A key that can never resolve again would be persisted and reloaded as dead
 /// weight, so the fader's curves leave with the channel.
 #[test]

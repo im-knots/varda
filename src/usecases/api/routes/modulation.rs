@@ -250,7 +250,9 @@ pub async fn update_timebase(
 
 #[derive(Deserialize, ToSchema)]
 pub struct AddAutomationLaneBody {
-    /// Dot-separated path of the parameter to automate.
+    /// Modulation key of the parameter to automate, not a router path:
+    /// `deck_<uuid>:opacity`, `deck_<uuid>:video_speed`, `fx_<uuid>:amount`.
+    /// See /spec/modulation.md § Internal key scheme.
     pub target: String,
     /// Timebase the curve is drawn against. Defaults to `Transport`, which is
     /// what an arrangement-authored lane uses.

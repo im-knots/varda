@@ -152,7 +152,14 @@ pub struct VideoPlaybackUI {
     pub playing: bool,
     pub position: f64,
     pub duration: f64,
+    /// The performer's set point, which is what the slider shows.
     pub speed: f64,
+    /// The rate playback is actually running at, which is what the ghost
+    /// indicator draws. See /spec/video-playback-modulation.md.
+    pub effective_speed: f64,
+    /// How far a modulator has carried the playhead. The scrub bar's ghost sits
+    /// at `position - position_offset`, the point the swing is centred on.
+    pub position_offset: f64,
     pub loop_mode: crate::video::LoopMode,
     pub in_point: f64,
     pub out_point: f64,

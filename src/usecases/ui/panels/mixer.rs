@@ -295,6 +295,7 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                             format!("ch_mod_{ch_idx}"),
                             &crate::arrangement::channel_opacity_param_key(&ch.uuid),
                             &data.modulation_sources,
+                            &data.modulation_assignments,
                             &mut actions.commands,
                         );
                         // Render slider — disabled in learn mode
