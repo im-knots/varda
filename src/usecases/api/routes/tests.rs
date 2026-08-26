@@ -749,6 +749,43 @@ mod tests {
         assert_eq!(json["status"], "ok");
     }
 
+    #[tokio::test]
+    async fn test_randomize_generator_params() {
+        let (status, json) = post_json(
+            router_with_mock_engine(),
+            "/api/decks/dk-001/params/randomize",
+            serde_json::json!({"group": "Formula", "seed": 42}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_randomize_generator_params_defaults_every_field() {
+        // An empty body is the common case from a script: no group, no seed.
+        let (status, json) = post_json(
+            router_with_mock_engine(),
+            "/api/decks/dk-001/params/randomize",
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_mutate_generator_params() {
+        let (status, json) = post_json(
+            router_with_mock_engine(),
+            "/api/decks/dk-001/params/mutate",
+            serde_json::json!({"amount": 0.25, "seed": 7}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
     // ── Write: Effects routes ───────────────────────────────────
 
     #[tokio::test]

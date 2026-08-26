@@ -212,4 +212,33 @@ Presets are stored in `.varda/presets/decks/` and `.varda/presets/channels/` as 
 
 ---
 
+## Finding a Look: Random and Mutate
+
+A generative shader with dozens of parameters is rarely designed one slider at a time. It is found by
+perturbing something that already looks like something. The params column of the deck detail panel has
+three buttons for that, under the parameter list:
+
+- **Reset** puts every parameter back to the shader's declared defaults.
+- **Random** draws every parameter afresh from its declared range. Use it to escape a look entirely.
+- **Mutate** nudges every parameter by a fraction of its range, set by the **by** drag beside it
+  (0.10 by default). Use it to take small steps away from something that is nearly right.
+
+Both are single undo steps, so one Ctrl/Cmd+Z restores the previous look no matter how many parameters
+moved. The workflow is: mutate, look, **Save Preset** if it is good, undo if it is not.
+
+If the shader [groups its parameters](12-isf-authoring.md), a second row carries a scope selector.
+Leave it on **Everything** to roll the whole image, or pick a section to hunt a formula while a
+lighting setup and grade you already like hold still.
+
+Two kinds of parameter are deliberately left alone by both buttons: colours, because random colour
+reliably produces mud and a palette is a deliberate choice, and any parameter whose shader declares no
+minimum and maximum, because there is no range to draw from. Enum menus and checkboxes are fair game.
+
+Both are also available over the HTTP API, at `POST /api/decks/{uuid}/params/randomize` and
+`/params/mutate`. Each call takes an optional `group`, an optional `seed`, and (for mutate) an
+`amount`. A given seed always produces the same values, so a look found this way can be reproduced
+rather than only saved.
+
+---
+
 [← Prev: Library Panel](03-library-panel.md) · [Home](README.md) · [Next: Modulation & Audio Reactivity →](05-modulation.md)

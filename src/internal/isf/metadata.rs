@@ -162,6 +162,50 @@ pub struct ISFInput {
     /// Identity value (for image inputs)
     #[serde(rename = "IDENTITY")]
     pub identity: Option<bool>,
+
+    /// Inspector section this input belongs to. A Varda extension, optional and
+    /// ignorable: inputs without one form a single unnamed group rendered first,
+    /// which is how every shader behaved before groups existed.
+    /// See /spec/parameter-inspector.md.
+    #[serde(rename = "GROUP")]
+    pub group: Option<String>,
+}
+
+impl ISFInput {
+    /// The selectable options of a `long` input, as `(value, label)` pairs.
+    ///
+    /// Returned as one list so the two halves cannot disagree on length, which
+    /// `VALUES` and `LABELS` are free to do. `LABELS` alone is enough (the index
+    /// becomes the value), and a value with no label falls back to its integer.
+    /// Empty for every other input type.
+    pub fn choices(&self) -> Vec<(i32, String)> {
+        if self.input_type != "long" {
+            return Vec::new();
+        }
+        let count = match (self.values.as_ref(), self.labels.as_ref()) {
+            (Some(values), _) => values.len(),
+            (None, Some(labels)) => labels.len(),
+            (None, None) => return Vec::new(),
+        };
+        (0..count)
+            .map(|i| {
+                let index = i32::try_from(i).unwrap_or(i32::MAX);
+                let value = self
+                    .values
+                    .as_ref()
+                    .and_then(|v| v.get(i))
+                    .and_then(serde_json::Value::as_i64)
+                    .map_or(index, |n| n as i32);
+                let label = self
+                    .labels
+                    .as_ref()
+                    .and_then(|l| l.get(i))
+                    .cloned()
+                    .unwrap_or_else(|| value.to_string());
+                (value, label)
+            })
+            .collect()
+    }
 }
 
 /// ISF pass definition for multi-pass rendering
@@ -301,6 +345,94 @@ impl ISFMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn long_input(values: Option<&str>, labels: Option<&str>) -> ISFInput {
+        let json = format!(
+            r#"{{"NAME": "mode", "TYPE": "long"{}{}}}"#,
+            values.map_or(String::new(), |v| format!(r#", "VALUES": {v}"#)),
+            labels.map_or(String::new(), |l| format!(r#", "LABELS": {l}"#)),
+        );
+        serde_json::from_str(&json).unwrap()
+    }
+
+    #[test]
+    fn group_is_optional_and_absent_by_default() {
+        let json = r#"{
+            "INPUTS": [
+                {"NAME": "speed", "TYPE": "float"},
+                {"NAME": "fold", "TYPE": "float", "GROUP": "Formula"}
+            ]
+        }"#;
+        let meta: ISFMetadata = serde_json::from_str(json).unwrap();
+        let inputs = meta.inputs.unwrap();
+        assert!(
+            inputs[0].group.is_none(),
+            "an input without GROUP must stay ungrouped, which is how every \
+             community ISF shader renders"
+        );
+        assert_eq!(inputs[1].group.as_deref(), Some("Formula"));
+    }
+
+    #[test]
+    fn choices_pairs_values_with_labels() {
+        let input = long_input(Some("[0, 1, 2]"), Some(r#"["Off", "Soft", "Hard"]"#));
+        assert_eq!(
+            input.choices(),
+            vec![
+                (0, "Off".to_string()),
+                (1, "Soft".to_string()),
+                (2, "Hard".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn choices_uses_declared_values_not_indices() {
+        let input = long_input(Some("[10, 20]"), Some(r#"["Ten", "Twenty"]"#));
+        assert_eq!(
+            input.choices(),
+            vec![(10, "Ten".to_string()), (20, "Twenty".to_string())],
+            "the GPU receives VALUES, so the combo must select from them"
+        );
+    }
+
+    #[test]
+    fn choices_falls_back_to_the_integer_when_a_label_is_missing() {
+        let input = long_input(Some("[0, 1, 2]"), Some(r#"["Off"]"#));
+        assert_eq!(
+            input.choices(),
+            vec![
+                (0, "Off".to_string()),
+                (1, "1".to_string()),
+                (2, "2".to_string()),
+            ],
+            "a short LABELS array must not truncate the selectable values"
+        );
+    }
+
+    #[test]
+    fn choices_treats_labels_alone_as_an_index_list() {
+        let input = long_input(None, Some(r#"["First", "Second"]"#));
+        assert_eq!(
+            input.choices(),
+            vec![(0, "First".to_string()), (1, "Second".to_string())]
+        );
+    }
+
+    #[test]
+    fn choices_is_empty_without_options_or_for_other_types() {
+        assert!(
+            long_input(None, None).choices().is_empty(),
+            "a long with no options falls back to a stepper, not an empty combo"
+        );
+        let float: ISFInput =
+            serde_json::from_str(r#"{"NAME": "speed", "TYPE": "float", "VALUES": [1, 2]}"#)
+                .unwrap();
+        assert!(
+            float.choices().is_empty(),
+            "only long inputs are enums, whatever else declares VALUES"
+        );
+    }
 
     #[test]
     fn parse_phase_inputs_from_json() {

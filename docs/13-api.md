@@ -647,6 +647,8 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 
 | Method | Path | Description |
 |---|---|---|
+| `POST` | `/api/decks/{deck_uuid}/params/mutate` | Nudge a deck's generator parameters by `amount` as a fraction of each declared range, keeping the |
+| `POST` | `/api/decks/{deck_uuid}/params/randomize` | Draw a deck's generator parameters afresh from their declared ranges. A given seed always |
 | `POST` | `/api/decks/{deck_uuid}/params/reset` |  |
 | `PUT` | `/api/params` |  |
 

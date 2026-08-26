@@ -1180,6 +1180,22 @@ pub enum EngineCommand {
     ResetGeneratorParamsToDefaults {
         deck_uuid: String,
     },
+    /// Draw the deck's generator params afresh from their declared ranges.
+    /// `group` scopes to one inspector section, `None` covers all of them.
+    /// See /spec/parameter-exploration.md.
+    RandomizeGeneratorParams {
+        deck_uuid: String,
+        group: Option<String>,
+        seed: u64,
+    },
+    /// Nudge the deck's generator params by `amount` of their declared ranges.
+    /// See /spec/parameter-exploration.md.
+    MutateGeneratorParams {
+        deck_uuid: String,
+        group: Option<String>,
+        amount: f32,
+        seed: u64,
+    },
 
     // ── Resolution ─────────────────────────────────────────────
     SetRenderResolution {

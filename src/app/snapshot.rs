@@ -323,6 +323,14 @@ fn build_shader_params(
                 value: *value,
                 min: def.and_then(|d| d.min),
                 max: def.and_then(|d| d.max),
+                group: def.and_then(|d| d.group.clone()),
+                choices: def.map(crate::isf::ISFInput::choices).and_then(|c| {
+                    (!c.is_empty()).then(|| {
+                        c.into_iter()
+                            .map(|(value, label)| crate::engine::ParamChoice { value, label })
+                            .collect()
+                    })
+                }),
             })
         })
         .collect();

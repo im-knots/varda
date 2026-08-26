@@ -468,6 +468,18 @@ pub struct ParamSnapshot {
     pub value: ParamValue,
     pub min: Option<f32>,
     pub max: Option<f32>,
+    /// Inspector section, from the shader's `GROUP` key. `None` groups with the
+    /// other ungrouped params. See /spec/parameter-inspector.md.
+    pub group: Option<String>,
+    /// Selectable values for a `long` input, paired with their labels.
+    pub choices: Option<Vec<ParamChoice>>,
+}
+
+/// One option of a `long` (enum) parameter.
+#[derive(Clone, Serialize)]
+pub struct ParamChoice {
+    pub value: i32,
+    pub label: String,
 }
 
 #[derive(Clone, Serialize)]

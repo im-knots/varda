@@ -1548,6 +1548,7 @@ mod tests {
             values: None,
             labels: None,
             identity: None,
+            group: None,
         }
     }
 
