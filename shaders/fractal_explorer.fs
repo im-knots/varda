@@ -50,9 +50,10 @@
         {"NAME": "cam_dist", "TYPE": "float", "GROUP": "Camera", "DEFAULT": 4.2, "MIN": 0.6, "MAX": 12.0, "LABEL": "Distance"},
         {"NAME": "cam_azim", "TYPE": "float", "GROUP": "Camera", "DEFAULT": 0.0, "MIN": -3.14159, "MAX": 3.14159, "LABEL": "Azimuth"},
         {"NAME": "cam_elev", "TYPE": "float", "GROUP": "Camera", "DEFAULT": 0.2, "MIN": -1.4, "MAX": 1.4, "LABEL": "Elevation"},
-        {"NAME": "fly_depth", "TYPE": "float", "GROUP": "Camera", "DEFAULT": 0.35, "MIN": 0.0, "MAX": 0.95, "LABEL": "Approach Depth"},
+        {"NAME": "zoom_cycle", "TYPE": "float", "GROUP": "Camera", "DEFAULT": 8.0, "MIN": 1.0, "MAX": 24.0, "LABEL": "Zoom Cycle"},
         {"NAME": "look_x", "TYPE": "float", "GROUP": "Camera", "DEFAULT": 0.0, "MIN": -1.5, "MAX": 1.5, "LABEL": "Aim X"},
         {"NAME": "look_y", "TYPE": "float", "GROUP": "Camera", "DEFAULT": 0.0, "MIN": -1.5, "MAX": 1.5, "LABEL": "Aim Y"},
+        {"NAME": "look_z", "TYPE": "float", "GROUP": "Camera", "DEFAULT": 0.0, "MIN": -1.5, "MAX": 1.5, "LABEL": "Aim Z"},
         {"NAME": "fov", "TYPE": "float", "GROUP": "Camera", "DEFAULT": 0.85, "MIN": 0.35, "MAX": 1.8, "LABEL": "FOV"},
         {"NAME": "sway_amount", "TYPE": "float", "GROUP": "Camera", "DEFAULT": 0.08, "MIN": 0.0, "MAX": 1.0, "LABEL": "Sway Amount"},
 
@@ -187,9 +188,10 @@ layout(std140, set = 0, binding = 3) uniform UserParams {
     float cam_dist;
     float cam_azim;
     float cam_elev;
-    float fly_depth;
+    float zoom_cycle;
     float look_x;
     float look_y;
+    float look_z;
     float fov;
     float sway_amount;
 
@@ -250,10 +252,14 @@ const float BOUND_R = 6.0;
 // The `Detail` default, which the march threshold is expressed against so that
 // the default converges at exactly one pixel footprint. See `renderScene`.
 const float DETAIL_REF = 0.0015;
-// How far the dive travels, in natural logs of distance, at full approach depth.
-// 4.6 is two decades: the near end of the dive sits a hundred times closer than
-// the far end.
-const float ZOOM_SPAN = 4.6;
+const float TAU = 6.2831853;
+// The radius the scene's absolute lengths were authored against. Zoom is measured
+// from here rather than from `cam_dist`, which is what makes closing `Distance` by
+// hand buy the same tightened thresholds and the same extra folds that the dive
+// does. Measured against `cam_dist` the two cancelled — `viewScale` is
+// `cam_dist * exp(-descent)` — so the whole scale apparatus was blind to how close
+// the camera actually was and only ever responded to the animation.
+const float REF_DIST = 4.2;
 
 // ── Scale ────────────────────────────────────────────────────────────────────
 //
@@ -286,16 +292,43 @@ const float ZOOM_SPAN = 4.6;
 // reached full density within a fraction of a unit, so everything but the one
 // body the camera was diving at washed out to flat fog and the dive appeared to
 // arrive in an empty room. Atmosphere is measured through the world.
-float viewScale() {
-    float dive = 0.5 - 0.5 * cos(PHASE_TIME_0);
-    return max(cam_dist * exp(-dive * fly_depth * ZOOM_SPAN), 1e-4);
+// How far the descent has travelled, in natural logs of distance.
+//
+// Monotonic and wrapping, where this used to be `0.5 - 0.5 * cos(PHASE_TIME_0)`:
+// a dive that breathed in and back out, bottoming out at seventy-nine times closer
+// and then reversing. That is a dolly, not a zoom, and it cannot produce the
+// effect this is for. The whole reason a fractal dive reads as endless is that the
+// camera keeps closing and the structure keeps opening, and a camera that turns
+// around at a fixed depth is instead guaranteed to arrive at the same lump every
+// cycle.
+//
+// It wraps rather than running forever, and the wrap is the interesting part. A
+// self-similar structure repeats under scaling by its own fold scale, so cutting
+// the descent after a whole number of those steps lands on geometry that matches
+// where it started as closely as the formula allows. `Zoom Cycle` is that whole
+// number: eight steps of a scale-2 stack is a descent of two hundred and
+// fifty-six, wrapping to a frame that should read as continuous. Higher is a
+// longer fall before the seam.
+//
+// Bounding the descent this way also keeps float32 honest. A dive aimed at a
+// general point in space is limited by how precisely that point can be written
+// down, which caps a single-precision descent at a few tens of thousands; a cycle
+// is far shorter than that, so precision never enters into it.
+float diveLog() {
+    float stepLog = log(max(abs(scale), 1.2));
+    return fract(PHASE_TIME_0 / TAU) * zoom_cycle * stepLog;
 }
 
-// 1.0 at the orbit's outer radius, rising as the dive proceeds. Dividing a world
-// distance by this converts it to "the same fraction of the view as it was when
-// the camera sat still", which is what every inherited absolute wants to mean.
+float viewScale() {
+    return max(cam_dist * exp(-diveLog()), 1e-5);
+}
+
+// 1.0 at the authored radius, rising as the camera closes, whether it closes by
+// diving or because `Distance` was pulled in. Dividing a world distance by this
+// converts it to "the same fraction of the view as it was at the authored
+// radius", which is what every inherited absolute wants to mean.
 float viewZoom() {
-    return max(cam_dist, 1e-3) / viewScale();
+    return max(REF_DIST / viewScale(), 1.0);
 }
 
 // The depth channel, logarithmic in distance.
@@ -324,8 +357,8 @@ float depthEncode(float t) {
 }
 
 // Cached per pixel by the pass entry points. The estimator is called upward of a
-// hundred times per pixel and `viewScale` costs a cosine and an exponential, so
-// recomputing it in there would be paid for on every march step.
+// hundred times per pixel and `viewScale` costs a logarithm and an exponential,
+// so recomputing it in there would be paid for on every march step.
 float g_zoom = 1.0;
 float g_foldBoost = 0.0;
 
@@ -841,13 +874,66 @@ float softShadow(vec3 origin, vec3 dir, float tmax, DeLod lod) {
 // where the key light falls in frame to put its bright side on the same side the
 // shading lit, and a second copy of this arithmetic would drift out of step with
 // this one the first time either was touched.
-void cameraBasis(out vec3 ro, out vec3 fw, out vec3 ri, out vec3 upv) {
-    float az = cam_azim + PHASE_TIME_2;
-    float el = clamp(cam_elev + sin(PHASE_TIME_3 * 0.31) * sway_amount * 0.2, -1.45, 1.45);
-    ro = viewScale() * vec3(cos(az) * cos(el), sin(el), sin(az) * cos(el));
+// The direction the eye sits in from the point it is diving at.
+vec3 orbitDir(float azOffset, float elOffset) {
+    float az = cam_azim + azOffset;
+    float el = clamp(cam_elev + elOffset, -1.45, 1.45);
+    return vec3(cos(az) * cos(el), sin(el), sin(az) * cos(el));
+}
 
-    vec3 target = vec3(look_x, look_y, 0.0) * 0.5;
-    fw = normalize(target - ro);
+// Where the descent converges.
+//
+// This is the change that makes an endless zoom possible at all, and the bug it
+// fixes is the same one that made a deep dive arrive at a blob. The eye position
+// used to be `viewScale() * orbitDir`, which converges on the world origin no
+// matter what is authored, and the origin is the symmetry centre of every folding
+// formula in the stack. So every dive on every structure fell toward the same
+// mirror-symmetric point and bottomed out on the same kaleidoscopic lump, and
+// `Aim` could not help because it only rotated the view. Julius' cathedrals are
+// off-centre boundary points, where the folds are not mirrored about the axis of
+// travel.
+//
+// The target has to sit on the boundary. Inside the solid the descent ends buried;
+// out in open space it ends in nothing. So it is not authored directly: a probe
+// ray is cast from the parked eye toward the aim point and the target is the first
+// surface it meets, which is on the boundary by construction. `Aim` steers that
+// probe, so it is both the automatic behaviour and the manual override, and there
+// is no combination of settings that produces an invalid target.
+//
+// Two details matter. The probe starts from `cam_dist` and from `cam_azim`
+// and `cam_elev` *without* the orbit or the sway, so the target holds still while
+// the camera revolves around it and descends toward it — a target recomputed from
+// the live eye would chase itself. And the probe carries no per-pixel jitter and a
+// fixed coarse footprint, so every pixel in the frame agrees on where it is.
+vec3 diveTarget() {
+    vec3 ro0 = cam_dist * orbitDir(0.0, 0.0);
+    vec3 aim = vec3(look_x, look_y, look_z) * 0.5;
+    vec3 rd0 = aim - ro0;
+    float len = length(rd0);
+    if (len < 1e-5) return aim;
+    rd0 /= len;
+
+    float eps = max(cam_dist, 0.1) * 0.002;
+    DeLod lod = DeLod(eps * 4.0, eps, 0.0);
+    float t = 0.0;
+    for (int i = 0; i < 48; i++) {
+        float d = stackDist(ro0 + rd0 * t, lod);
+        if (d < eps) return ro0 + rd0 * t;
+        t += d;
+        if (t > MAX_DIST) break;
+    }
+    // The probe found nothing. Falling back to the aim point keeps the frame
+    // sensible rather than parking the camera at an arbitrary distance.
+    return aim;
+}
+
+// The basis alone, which needs no target: the eye sits along `orbitDir` from the
+// target and looks straight back down it, so forward is that direction negated.
+// Pass 1 wants only the basis, to find where the key light falls in frame, and
+// keeping the target out of here is what stops the composite paying for a probe
+// march it has no use for.
+void cameraBasis(out vec3 fw, out vec3 ri, out vec3 upv) {
+    fw = -orbitDir(PHASE_TIME_2, sin(PHASE_TIME_3 * 0.31) * sway_amount * 0.2);
     vec3 cx = cross(vec3(0.0, 1.0, 0.0), fw);
     ri = (length(cx) > 1e-4) ? normalize(cx) : vec3(1.0, 0.0, 0.0);
     upv = cross(fw, ri);
@@ -1057,21 +1143,25 @@ vec4 renderScene() {
     screen.x *= RENDERSIZE.x / max(RENDERSIZE.y, 1.0);
     screen += swayOffset();
 
-    // An orbit that breathes in and out, rather than an absolute position. The
-    // structure stays framed by construction, which is what makes a randomize
-    // land on something worth looking at instead of on the inside of a wall.
-    vec3 ro, fw, ri, upv;
-    cameraBasis(ro, fw, ri, upv);
-    vec3 rd = normalize(fw + (screen.x * ri + screen.y * upv) * fov);
-
-    vec3 keyDir = keyDirection();
-
+    // The zoom is established before anything else, because the probe march that
+    // finds the dive target runs the estimator and the estimator reads the fold
+    // budget this sets.
     g_zoom = viewZoom();
     // Dithered per pixel, for the reason the level-of-detail cutoff is: the floor
     // is a step function of time shared by every pixel, so the whole frame gained
     // a fold at one instant. Offsetting the hash keeps this decorrelated from the
     // cutoff's own jitter, which is drawn from the same coordinate.
     g_foldBoost = floor(log2(max(g_zoom, 1.0)) + hash12(uv * RENDERSIZE + 61.3));
+
+    // An orbit around the point being dived at, rather than around the origin.
+    // The structure stays framed by construction, which is what makes a randomize
+    // land on something worth looking at instead of on the inside of a wall.
+    vec3 fw, ri, upv;
+    cameraBasis(fw, ri, upv);
+    vec3 ro = diveTarget() - fw * viewScale();
+    vec3 rd = normalize(fw + (screen.x * ri + screen.y * upv) * fov);
+
+    vec3 keyDir = keyDirection();
 
     float pixel = 2.0 * fov / max(RENDERSIZE.y, 1.0);
     // 180 rather than 120, which is nearly free and not a coincidence: the march
@@ -1609,8 +1699,8 @@ vec4 cinematicPost() {
     // *between* the camera and the source. Laid over lit geometry it reads
     // immediately as a filter, which is why the reference workflow mattes it.
     if (shafts > 0.0) {
-        vec3 ro, fw, ri, upv;
-        cameraBasis(ro, fw, ri, upv);
+        vec3 fw, ri, upv;
+        cameraBasis(fw, ri, upv);
         vec3 kd = keyDirection();
         float ahead = dot(kd, fw);
         // Behind the camera there is nothing to converge on, and the projection
@@ -1699,8 +1789,8 @@ vec4 cinematicPost() {
     // around the frame as the camera orbits, so it reads as a light in the scene
     // instead of a gradient laid over the lens.
     if (light_side > 0.0) {
-        vec3 ro, fw, ri, upv;
-        cameraBasis(ro, fw, ri, upv);
+        vec3 fw, ri, upv;
+        cameraBasis(fw, ri, upv);
         vec3 kd = keyDirection();
         // `uv` runs downward here while the ray basis has up positive, hence the
         // flip. Only the direction matters, so this is normalised rather than
