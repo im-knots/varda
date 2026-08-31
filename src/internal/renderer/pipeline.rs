@@ -82,7 +82,9 @@ impl UnifiedPipeline {
     /// - `has_input_image`: true for filters (binding for inputImage texture)
     /// - `num_pass_buffers`: number of persistent/pass buffer textures
     /// - `num_imported_textures`: number of ISF IMPORTED image textures
-    /// - `num_preprocessor_textures`: number of preprocessor texture bindings
+    /// - `preprocessor_filterable`: one entry per preprocessor texture binding,
+    ///   false for raw-float data payloads the shader reads with `texelFetch`
+    ///   only (`FORMAT: "rgba32float"`), which are not filterable formats
     /// - `surface_format`: target texture format — always `COLOR_PATH_FORMAT`
     ///
     /// # Errors
@@ -98,8 +100,9 @@ impl UnifiedPipeline {
         has_input_image: bool,
         num_pass_buffers: usize,
         num_imported_textures: usize,
-        num_preprocessor_textures: usize,
+        preprocessor_filterable: &[bool],
     ) -> Result<Self> {
+        let num_preprocessor_textures = preprocessor_filterable.len();
         // Convert SPIR-V to WGSL using naga
         let spirv_bytes: Vec<u8> = spirv.iter().flat_map(|word| word.to_le_bytes()).collect();
 
@@ -232,15 +235,23 @@ impl UnifiedPipeline {
             next_binding += 1;
         }
 
-        // Preprocessor texture bindings (after imported, before user params)
-        for _ in 0..num_preprocessor_textures {
+        // Preprocessor texture bindings (after imported, before user params).
+        //
+        // A non-filterable entry is legal next to the filtering sampler above
+        // as long as the shader never pairs the two: naga lowers `texelFetch`
+        // to a sampler-free image load, so a data payload declared
+        // `FORMAT: "rgba32float"` and read only with `texelFetch` never forms
+        // the pairing wgpu would reject.
+        for filterable in preprocessor_filterable {
             layout_entries.push(wgpu::BindGroupLayoutEntry {
                 binding: next_binding,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Texture {
                     multisampled: false,
                     view_dimension: wgpu::TextureViewDimension::D2,
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    sample_type: wgpu::TextureSampleType::Float {
+                        filterable: *filterable,
+                    },
                 },
                 count: None,
             });

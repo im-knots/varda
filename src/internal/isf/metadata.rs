@@ -122,6 +122,28 @@ pub struct ISFPreprocessor {
     /// Options passed to the analyzer when starting it
     #[serde(rename = "OPTIONS", default)]
     pub options: serde_json::Value,
+
+    /// Analyzer value name to live shader parameter name.
+    #[serde(rename = "PARAM_BINDINGS", default)]
+    pub param_bindings: HashMap<String, String>,
+
+    /// Analyzer value name to engine phase-accumulator index.
+    #[serde(rename = "PHASE_BINDINGS", default)]
+    pub phase_bindings: HashMap<String, usize>,
+
+    /// Texture format the shader consumes this preprocessor's payload in.
+    ///
+    /// `"rgba8unorm"` (the default) binds filterable and suits anything the
+    /// shader samples. `"rgba32float"` binds as a non-filterable data texture
+    /// — one `texelFetch` returns four raw floats with no byte unpacking —
+    /// and is only legal for shaders that read the texture exclusively with
+    /// `texelFetch`/`textureSize`, never `texture()`.
+    #[serde(rename = "FORMAT", default = "default_preprocessor_format")]
+    pub format: String,
+}
+
+fn default_preprocessor_format() -> String {
+    "rgba8unorm".into()
 }
 
 /// ISF input definition
@@ -500,7 +522,9 @@ mod tests {
                 {
                     "NAME": "depth",
                     "TYPE": "depth_estimate",
-                    "OPTIONS": { "resolution": "half" }
+                    "OPTIONS": { "resolution": "half" },
+                    "PARAM_BINDINGS": { "threshold": "edge_threshold" },
+                    "PHASE_BINDINGS": { "orbit_phase": 2 }
                 },
                 {
                     "NAME": "edges",
@@ -512,8 +536,18 @@ mod tests {
         assert_eq!(meta.preprocessors.len(), 2);
         assert_eq!(meta.preprocessors[0].name, "depth");
         assert_eq!(meta.preprocessors[0].preprocessor_type, "depth_estimate");
+        assert_eq!(
+            meta.preprocessors[0].param_bindings.get("threshold"),
+            Some(&"edge_threshold".to_string())
+        );
+        assert_eq!(
+            meta.preprocessors[0].phase_bindings.get("orbit_phase"),
+            Some(&2)
+        );
         assert_eq!(meta.preprocessors[1].name, "edges");
         assert_eq!(meta.preprocessors[1].options, serde_json::Value::Null);
+        assert!(meta.preprocessors[1].param_bindings.is_empty());
+        assert!(meta.preprocessors[1].phase_bindings.is_empty());
     }
 
     #[test]

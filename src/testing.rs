@@ -72,6 +72,93 @@ pub fn headless_config() -> crate::app::AppConfig {
     ])
 }
 
+/// Run the reference-orbit kernel without analyzer-thread or texture-packing
+/// overhead. Criterion uses this to isolate host arithmetic.
+#[doc(hidden)]
+pub fn benchmark_fractal_reference_orbit(iterations: usize) -> usize {
+    crate::internal::analyzer::fractal_reference_orbit::benchmark_reference_orbit(iterations)
+}
+
+/// Run the deterministic 15-ray outward-rounded directional fixture set.
+#[doc(hidden)]
+pub fn benchmark_fractal_directional_certificates() -> usize {
+    use crate::internal::analyzer::fractal_certification::segment::{
+        certify_directional_ray_segment, DirectionalCertificateResult,
+    };
+    use crate::internal::analyzer::fractal_reference_orbit::StackParams;
+
+    let params = StackParams {
+        formulas: [5, 0, 0, 0],
+        rates: [1, 0, 0, 0],
+        power: 2.5,
+        bailout: 0.1,
+        max_iters: 1,
+        refine: false,
+        ..StackParams::default()
+    };
+    (0..15)
+        .filter(|index| {
+            let offset = f64::from(*index) * 0.002;
+            let origin = [0.8 + offset, 0.6 - offset * 0.5, 0.4 + offset * 0.25];
+            let direction = [0.2, -0.1 + offset * 0.1, 0.15];
+            matches!(
+                certify_directional_ray_segment(
+                    &params,
+                    &origin.map(|value| value.to_string()),
+                    direction,
+                    1,
+                    1.0 / 64.0,
+                    128,
+                ),
+                DirectionalCertificateResult::Certified(_)
+            )
+        })
+        .count()
+}
+
+/// Readiness and host-side diagnostics for the fractal reference-orbit
+/// preprocessor.
+///
+/// This deliberately exposes values rather than analyzer implementation types,
+/// keeping benchmarks independent of the internal worker and snapshot APIs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FractalPreprocessorMetrics {
+    pub payload_ready: bool,
+    pub boundary_ready: bool,
+    pub boundary_reason: u8,
+    pub boundary_runtime_ms: f32,
+    pub segment_ready: bool,
+    pub segment_coverage: f32,
+    /// True while the published orbit is the shallow provisional stand-in.
+    pub payload_provisional: bool,
+}
+
+/// Return the latest fractal preprocessor metrics for `deck`.
+///
+/// `None` means the declared preprocessor has not been started (or its worker
+/// has already exited).
+#[doc(hidden)]
+pub fn fractal_preprocessor_metrics(
+    deck: &crate::deck::Deck,
+) -> Option<FractalPreprocessorMetrics> {
+    let snapshot = deck.analyzers.latest_snapshot("fractal_reference_orbit")?;
+    Some(fractal_metrics_from_snapshot(&snapshot))
+}
+
+fn fractal_metrics_from_snapshot(
+    snapshot: &crate::internal::analyzer::traits::AnalyzerSnapshot,
+) -> FractalPreprocessorMetrics {
+    FractalPreprocessorMetrics {
+        payload_ready: snapshot.textures.contains_key("refOrbit"),
+        boundary_ready: snapshot.scalar("boundary_ready") >= 1.0,
+        boundary_reason: snapshot.scalar("boundary_reason").clamp(0.0, 255.0) as u8,
+        boundary_runtime_ms: snapshot.scalar("boundary_runtime_ms"),
+        segment_ready: snapshot.scalar("segment_ready") >= 1.0,
+        segment_coverage: snapshot.scalar("segment_coverage"),
+        payload_provisional: snapshot.scalar("payload_provisional") >= 0.5,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,5 +197,49 @@ mod tests {
             root.display()
         );
         assert!(root.is_dir());
+    }
+
+    #[test]
+    fn fractal_metrics_preserve_readiness_and_host_diagnostics() {
+        use std::collections::HashMap;
+
+        let snapshot = crate::internal::analyzer::traits::AnalyzerSnapshot {
+            scalars: HashMap::from([
+                ("boundary_ready".into(), 1.0),
+                ("boundary_reason".into(), 7.0),
+                ("boundary_runtime_ms".into(), 123.5),
+                ("segment_ready".into(), 1.0),
+                ("segment_coverage".into(), 0.625),
+            ]),
+            textures: HashMap::from([(
+                "refOrbit".into(),
+                crate::internal::analyzer::traits::TextureData {
+                    generation: 1,
+                    width: 1,
+                    height: 1,
+                    format: "rgba8unorm".into(),
+                    data: vec![0; 4].into(),
+                },
+            )]),
+            timestamp: std::time::Instant::now(),
+        };
+
+        assert_eq!(
+            fractal_metrics_from_snapshot(&snapshot),
+            FractalPreprocessorMetrics {
+                payload_ready: true,
+                boundary_ready: true,
+                boundary_reason: 7,
+                boundary_runtime_ms: 123.5,
+                segment_ready: true,
+                segment_coverage: 0.625,
+                payload_provisional: false,
+            }
+        );
+    }
+
+    #[test]
+    fn directional_benchmark_fixture_set_is_fully_certified() {
+        assert_eq!(benchmark_fractal_directional_certificates(), 15);
     }
 }

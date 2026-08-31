@@ -32,7 +32,7 @@ use varda::{
     deck::Deck,
     isf::ISFShader,
     mixer::{FrameInputs, Mixer},
-    modulation::{AnalyzerValues, AudioValues},
+    modulation::{AnalyzerValues, AudioValues, ModulationEngine},
     params::ShaderParams,
     renderer::context::GpuContext,
 };
@@ -72,6 +72,17 @@ struct Options {
     output: String,
     width: u32,
     height: u32,
+    /// Extra frames rendered before the timed sequence, each followed by a short
+    /// sleep, so CPU preprocessor workers have time to publish a first snapshot.
+    warmup: u32,
+    settle: u64,
+    /// Seconds to block for a declared CPU preprocessor to publish a *ready*
+    /// payload before the timed frames. A fixed warmup cannot do this job: the
+    /// arbitrary-precision path takes seconds and varies with depth, so a
+    /// warmup long enough at one zoom silently captures the fallback at
+    /// another, and a fallback capture is indistinguishable from a working one
+    /// that happens to look wrong.
+    payload_wait: u64,
     frame: u32,
     overrides: Vec<(String, f32)>,
     across: Option<Sweep>,
@@ -91,6 +102,9 @@ fn parse_args() -> Result<Options> {
         output,
         width: 960,
         height: 540,
+        warmup: 0,
+        settle: 8,
+        payload_wait: 180,
         frame: 90,
         overrides: Vec::new(),
         across: None,
@@ -105,6 +119,22 @@ fn parse_args() -> Result<Options> {
                 let (w, h) = spec.split_once('x').context("--size wants WxH")?;
                 opts.width = w.parse().context("bad width")?;
                 opts.height = h.parse().context("bad height")?;
+            }
+            "--payload-wait" => {
+                opts.payload_wait = args
+                    .next()
+                    .context("--payload-wait wants seconds")?
+                    .parse()
+                    .context("bad payload wait")?;
+            }
+            "--warmup" => {
+                opts.warmup = args.next().context("--warmup wants a number")?.parse()?;
+            }
+            "--settle" => {
+                opts.settle = args
+                    .next()
+                    .context("--settle wants milliseconds")?
+                    .parse()?;
             }
             "--frame" => {
                 opts.frame = args.next().context("--frame wants a number")?.parse()?;
@@ -233,6 +263,103 @@ fn encode_srgb(value: f32) -> u8 {
 /// Render one shot to linear-light RGB. A fresh deck and mixer per call, because
 /// phase accumulators integrate: a fly-through only arrives at frame N by having
 /// flown there, so a contact sheet cell cannot resume from its neighbour.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the standalone preview shot has seven independent CLI dimensions plus its GPU context"
+)]
+/// Block until a declared CPU preprocessor reports a payload the shader will
+/// actually accept, or give up loudly.
+///
+/// The fractal path publishes twice: a provisional shallow payload within
+/// milliseconds and the requested depth seconds later, after an
+/// arbitrary-precision anchor search. Rendering between the two captures a
+/// frame drawn from a reference orbit that does not belong to the requested
+/// zoom, and nothing in the image says so. Waiting on the analyzer's own
+/// readiness scalars is the only honest way to know which payload a capture
+/// used, so a timeout here is reported as a failure rather than smoothed over
+/// with more warmup frames.
+fn wait_for_ready_payload(context: &GpuContext, deck: &mut Deck, seconds: u64) -> Result<()> {
+    if seconds == 0 {
+        return Ok(());
+    }
+    let modulation = ModulationEngine::new();
+    let audio = AudioData::default();
+    let mut pump = |deck: &mut Deck| -> Result<()> {
+        let mut buffers = Vec::new();
+        deck.render(context, &audio, &modulation, 0, &mut buffers)?;
+        if !buffers.is_empty() {
+            let submission = context.queue.submit(buffers);
+            let _ = context.device.poll(wgpu::PollType::Wait {
+                submission_index: Some(submission),
+                timeout: None,
+            });
+        }
+        Ok(())
+    };
+    // One frame publishes the effective shader parameters to the analyzer, which
+    // is what tells it which depth to prove.
+    pump(deck)?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+    let mut saw_metrics = false;
+    loop {
+        if let Some(metrics) = varda::testing::fractal_preprocessor_metrics(deck) {
+            saw_metrics = true;
+            if metrics.payload_ready && metrics.boundary_ready && !metrics.payload_provisional {
+                // Upload the published payload before anything is captured.
+                pump(deck)?;
+                eprintln!(
+                    "full-depth payload ready after {:.1} ms of host work \
+                     (segment_ready={}, coverage={:.3})",
+                    metrics.boundary_runtime_ms, metrics.segment_ready, metrics.segment_coverage
+                );
+                return Ok(());
+            }
+            if metrics.boundary_reason != 0 {
+                bail!(
+                    "host preprocessor rejected generation (boundary reason {}) after {:.1} ms",
+                    metrics.boundary_reason,
+                    metrics.boundary_runtime_ms
+                );
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            if !saw_metrics {
+                // No fractal preprocessor in this shader: nothing to wait for.
+                return Ok(());
+            }
+            bail!("host preprocessor published no ready payload within {seconds}s");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        pump(deck)?;
+    }
+}
+
+/// Mean absolute Laplacian of the luminance, the cheapest honest answer to
+/// "does this frame contain anything". Near zero is a flat field however bright
+/// it is; single digits is soft structure; tens is a frame carrying detail.
+fn frame_detail(image: &image::RgbImage) -> f64 {
+    let (w, h) = (image.width() as i64, image.height() as i64);
+    if w < 3 || h < 3 {
+        return 0.0;
+    }
+    let luma = |x: i64, y: i64| -> f64 {
+        let p = image.get_pixel(x as u32, y as u32);
+        (f64::from(p[0]) + f64::from(p[1]) + f64::from(p[2])) / 3.0
+    };
+    let mut total = 0.0;
+    for y in 1..h - 1 {
+        for x in 1..w - 1 {
+            total += (4.0 * luma(x, y)
+                - luma(x - 1, y)
+                - luma(x + 1, y)
+                - luma(x, y - 1)
+                - luma(x, y + 1))
+            .abs();
+        }
+    }
+    total / ((w - 2) * (h - 2)) as f64
+}
+
 fn render_shot(
     context: &GpuContext,
     shader_path: &str,
@@ -240,12 +367,21 @@ fn render_shot(
     width: u32,
     height: u32,
     frame: u32,
+    warmup: u32,
+    settle: u64,
+    payload_wait: u64,
 ) -> Result<Vec<[f32; 3]>> {
     let shader = ISFShader::from_file(shader_path)?;
     let mut deck = Deck::new(context, shader, width, height)?;
     for (name, value) in overrides {
         apply_override(&mut deck.generator_params, name, *value)?;
     }
+    // Start whatever the shader declares in its PREPROCESSORS block. Without
+    // this the preprocessor textures stay unbound and read as zero, and a shader
+    // that depends on one renders a plausible-looking but wrong frame, which is
+    // the hardest kind of failure to attribute from a still image.
+    deck.start_declared_preprocessors();
+    wait_for_ready_payload(context, &mut deck, payload_wait)?;
 
     let mut mixer = Mixer::new(context, width, height)?;
     mixer
@@ -259,6 +395,44 @@ fn render_shot(
     };
     let analyzer_values = AnalyzerValues::default();
 
+    // CPU preprocessors run on worker threads and publish asynchronously, so the
+    // first frames render before any snapshot exists. These extra frames give a
+    // worker time to produce one and the deck time to upload it; the sleep is
+    // what makes the wait a wait rather than a spin.
+    //
+    // The default pause suits a preprocessor that costs milliseconds. One that
+    // runs an arbitrary-precision proof costs seconds, and the warmup then
+    // finishes first: every frame renders the fallback path, and the capture is
+    // indistinguishable from a capture of a working payload that happens to look
+    // wrong. That produced three "identical" measurements of paths that were
+    // never exercised, so the wait is now stated rather than assumed.
+    for _ in 0..warmup {
+        let inputs = FrameInputs {
+            audio_data: &audio,
+            audio_values: &audio_values,
+            analyzer_values: &analyzer_values,
+            beat_time: None,
+            transport: None,
+            free_run_time: Some(0.0),
+        };
+        mixer.render(context, &inputs, 60, &[])?;
+        let _ = context.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+        std::thread::sleep(std::time::Duration::from_millis(settle));
+    }
+
+    // Timed here rather than around the whole process.
+    //
+    // Host preprocessor work runs before this loop and varies by seconds
+    // between runs, so a wall clock around the process measures the anchor
+    // search as much as the shader. Differencing two runs of different frame
+    // counts does not remove it either, because each run pays its own
+    // independent draw from that distribution - measured, the same
+    // configuration returned 446 ms and minus 3957 ms per frame on consecutive
+    // attempts. The loop below is the only part that is per-frame.
+    let started = std::time::Instant::now();
     for step in 0..=frame {
         let inputs = FrameInputs {
             audio_data: &audio,
@@ -274,11 +448,21 @@ fn render_shot(
             timeout: None,
         });
     }
+    let elapsed = started.elapsed().as_secs_f64() * 1000.0;
+    eprintln!(
+        "render {} frames in {elapsed:.0} ms ({:.1} ms/frame)",
+        frame + 1,
+        elapsed / f64::from(frame + 1)
+    );
 
     Ok(read_composite(context, &mixer, width, height))
 }
 
 fn main() -> Result<()> {
+    // Preprocessors report why they published nothing through the log, and
+    // without a sink those reports are lost: a missing payload then looks
+    // identical to a payload that rendered badly.
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let opts = parse_args()?;
     let context = GpuContext::new_headless().context("no headless GPU adapter")?;
 
@@ -317,6 +501,9 @@ fn main() -> Result<()> {
                 cell_w,
                 cell_h,
                 opts.frame,
+                opts.warmup,
+                opts.settle,
+                opts.payload_wait,
             )?;
             for y in 0..cell_h {
                 for x in 0..cell_w {
@@ -341,6 +528,12 @@ fn main() -> Result<()> {
     }
 
     image.save(&opts.output)?;
+    // Reported on every capture, because luminance alone cannot tell an empty
+    // frame from a full one. A uniform grey field and a frame packed with
+    // structure can share a mean; only a high-pass statistic separates them,
+    // and mistaking the first for the second has invalidated whole rounds of
+    // timing on this shader.
+    println!("frame detail (mean Laplacian) {:.2}", frame_detail(&image));
     println!(
         "wrote {} ({}x{})",
         opts.output,

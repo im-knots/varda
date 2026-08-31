@@ -275,6 +275,31 @@ impl ShaderParams {
         }
     }
 
+    /// Get one parameter exactly as it is uploaded this frame.
+    ///
+    /// Frameless preprocessors use this instead of copying the whole uniform
+    /// block. The returned value retains its declared type.
+    pub(crate) fn get_modulated(
+        &mut self,
+        name: &str,
+        modulation: &ModulationEngine,
+        param_prefix: Option<&str>,
+    ) -> Option<ParamValue> {
+        let base = self.values.get(name)?;
+        self.mod_key_scratch.clear();
+        if let Some(prefix) = param_prefix {
+            self.mod_key_scratch.push_str(prefix);
+            self.mod_key_scratch.push(':');
+        }
+        self.mod_key_scratch.push_str(name);
+        Some(Self::apply_modulation_to_value_with_key(
+            &self.mod_key_scratch,
+            base,
+            modulation,
+            self.definitions.get(name),
+        ))
+    }
+
     /// Express a value as a 0.0–1.0 fraction of its declared range.
     ///
     /// Used by the arrangement's live override, whose re-arm ramp starts from

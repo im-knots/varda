@@ -168,6 +168,7 @@ mod tests {
             width,
             height,
             timestamp: Instant::now(),
+            state: crate::analyzer::AnalyzerStateSnapshot::default(),
         }
     }
 

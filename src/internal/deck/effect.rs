@@ -50,7 +50,10 @@ impl Effect {
             .preprocessors
             .iter()
             .map(|pp| {
-                // Create a 1×1 placeholder texture (will be resized when analyzer provides data)
+                // Create a 1×1 placeholder texture (will be resized when analyzer provides data).
+                // Data texture (packed analyzer output) — NOT part of the
+                // color path. The declared FORMAT is the encoding contract.
+                let format = crate::deck::preprocessor_texture_format(&pp.format);
                 let texture = context.device.create_texture(&wgpu::TextureDescriptor {
                     label: Some(&format!("Preprocessor: {}", pp.name)),
                     size: wgpu::Extent3d {
@@ -61,9 +64,7 @@ impl Effect {
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
-                    // Data texture (packed analyzer output) — NOT part of the
-                    // color path. Format is the encoding; do not make this float.
-                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    format,
                     usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
                 });
@@ -72,12 +73,20 @@ impl Effect {
                     name: pp.name.clone(),
                     analyzer_type: pp.preprocessor_type.clone(),
                     options: pp.options.clone(),
+                    param_bindings: pp.param_bindings.clone(),
+                    phase_bindings: pp.phase_bindings.clone(),
                     texture,
                     view,
+                    format,
+                    last_uploaded_generation: None,
                 }
             })
             .collect();
 
+        let preprocessor_filterable: Vec<bool> = preprocessor_textures
+            .iter()
+            .map(|slot| slot.format != wgpu::TextureFormat::Rgba32Float)
+            .collect();
         let pipeline = UnifiedPipeline::new(
             &context.device,
             &spirv,
@@ -85,7 +94,7 @@ impl Effect {
             true, // has_input_image — it's a filter
             num_passes,
             imported_textures.len(),
-            preprocessor_textures.len(),
+            &preprocessor_filterable,
         )
         .context("Failed to create effect pipeline")?;
 
