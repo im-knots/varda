@@ -93,6 +93,11 @@ pub(crate) struct TextureData {
 
 /// Process-wide texture generation, so restarting an analyzer cannot collide
 /// with a generation already resident in its deck slot.
+///
+/// Part of the preprocessor texture contract, with no in-tree consumer at
+/// present: the deck's upload path skips a slot whose generation is unchanged,
+/// so any analyzer publishing a texture needs this to have its updates seen.
+#[allow(dead_code)]
 pub(crate) fn next_texture_generation() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     NEXT.fetch_add(1, Ordering::Relaxed)
@@ -223,6 +228,10 @@ pub(crate) struct AnalyzerStateSnapshot {
 }
 
 impl AnalyzerStateSnapshot {
+    /// Typed reads of the bound values. No in-tree analyzer binds parameters
+    /// at present, so these are unused; they are the accessor half of the
+    /// preprocessor parameter-binding contract and are kept with it.
+    #[allow(dead_code)]
     pub(crate) fn float(&self, name: &str) -> Option<f32> {
         match self.values.get(name) {
             Some(ParamValue::Float(value)) => Some(*value),
@@ -230,6 +239,7 @@ impl AnalyzerStateSnapshot {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn long(&self, name: &str) -> Option<i32> {
         match self.values.get(name) {
             Some(ParamValue::Long(value)) => Some(*value),
