@@ -1685,6 +1685,40 @@ impl VardaApp {
                     Err(e) => e.into(),
                 }
             }
+            EngineCommand::RandomizeGeneratorParams {
+                deck_uuid,
+                group,
+                seed,
+            } => match self.resolve_deck(&deck_uuid) {
+                Ok((ch_idx, dk_idx)) => {
+                    if let Some(ch) = self.mixer.channel_mut(ch_idx) {
+                        ch.decks[dk_idx]
+                            .deck
+                            .generator_params
+                            .randomize(group.as_deref(), seed);
+                    }
+                    CommandResult::Ok
+                }
+                Err(e) => e.into(),
+            },
+            EngineCommand::MutateGeneratorParams {
+                deck_uuid,
+                group,
+                amount,
+                seed,
+            } => match self.resolve_deck(&deck_uuid) {
+                Ok((ch_idx, dk_idx)) => {
+                    if let Some(ch) = self.mixer.channel_mut(ch_idx) {
+                        ch.decks[dk_idx].deck.generator_params.mutate(
+                            group.as_deref(),
+                            amount,
+                            seed,
+                        );
+                    }
+                    CommandResult::Ok
+                }
+                Err(e) => e.into(),
+            },
 
             // ── Resolution ────────────────────────────────────────
             EngineCommand::SetRenderResolution { width, height } => {
@@ -2189,6 +2223,92 @@ mod tests {
             outcome,
             CommandOutcome::Plain(CommandResult::Err { .. })
         ));
+    }
+
+    // ── Parameter exploration ───────────────────────────────────
+
+    /// Exploring is what the find-then-name loop does most of, and the "if it is
+    /// not good" half of that loop is undo. See /spec/parameter-exploration.md.
+    #[test]
+    fn exploring_a_deck_is_an_undoable_edit() {
+        for cmd in [
+            C::RandomizeGeneratorParams {
+                deck_uuid: "d0".into(),
+                group: None,
+                seed: 1,
+            },
+            C::MutateGeneratorParams {
+                deck_uuid: "d0".into(),
+                group: None,
+                amount: 0.1,
+                seed: 1,
+            },
+        ] {
+            assert!(command_is_undoable(&cmd), "{cmd:?} must record history");
+        }
+    }
+
+    /// And the whole loop over the bus: randomize moves the shader, undo puts it
+    /// back. `plasma` declares one ranged float and two colours, so this also
+    /// pins the colour exclusion — a randomize must not repaint the palette.
+    #[test]
+    fn randomizing_over_the_bus_is_one_undo_from_the_prior_look() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        let channel_uuid = app.mixer_ref().channels()[0].uuid().to_string();
+        let CommandResult::OkWithId { uuid } = app.execute_command(C::AddDeck {
+            channel_uuid,
+            shader_name: "plasma".into(),
+        }) else {
+            return;
+        };
+
+        // Speed and the palette, the ranged float and an excluded colour.
+        let look = |app: &super::VardaApp| {
+            let (ch, dk) = app.mixer_ref().find_deck_by_uuid(&uuid).expect("the deck");
+            let params = &app.mixer_ref().channels()[ch].decks[dk]
+                .deck
+                .generator_params;
+            let color = match params.values.get("color1") {
+                Some(crate::params::ParamValue::Color(c)) => Some(*c),
+                _ => None,
+            };
+            (params.get_float("speed"), color)
+        };
+        let before = look(&app);
+
+        app.command_sender()
+            .send((
+                C::RandomizeGeneratorParams {
+                    deck_uuid: uuid.clone(),
+                    group: None,
+                    // Any seed but the one that happens to redraw 1.0.
+                    seed: 0x5eed,
+                },
+                None,
+            ))
+            .expect("the receiver is in the app");
+        app.process_commands();
+
+        let after = look(&app);
+        assert_ne!(after.0, before.0, "a ranged float is what randomize is for");
+        assert_eq!(
+            after.1, before.1,
+            "colours are excluded: a palette is chosen, not stumbled upon"
+        );
+
+        let layout = crate::usecases::ui::UILayoutState::default();
+        assert!(
+            app.history_can_undo(),
+            "one command, one history entry, so one undo undoes the whole draw"
+        );
+        app.history_gui(&layout, true);
+        assert_eq!(
+            look(&app).0,
+            before.0,
+            "undo must restore the look that was there before"
+        );
     }
 
     // ── Timecode ────────────────────────────────────────────────

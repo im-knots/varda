@@ -68,6 +68,8 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::decks::add_html_deck, routes::decks::reload_html_deck,
         routes::decks::set_html_interactive,
         routes::decks::reset_generator_params,
+        routes::decks::randomize_generator_params,
+        routes::decks::mutate_generator_params,
         // Video
         routes::decks::video_toggle_play, routes::decks::video_seek,
         routes::decks::video_set_speed, routes::decks::video_set_loop_mode,
@@ -1293,6 +1295,14 @@ pub fn build_router(shared: SharedState) -> Router {
         .route(
             "/api/decks/{deck_uuid}/params/reset",
             axum::routing::post(routes::decks::reset_generator_params),
+        )
+        .route(
+            "/api/decks/{deck_uuid}/params/randomize",
+            axum::routing::post(routes::decks::randomize_generator_params),
+        )
+        .route(
+            "/api/decks/{deck_uuid}/params/mutate",
+            axum::routing::post(routes::decks::mutate_generator_params),
         )
         // ── Write: Generic ─────────────────────────────────────
         .route(

@@ -1159,6 +1159,69 @@ pub async fn reset_generator_params(
     }
 }
 
+/// Body for randomize and mutate. See /spec/parameter-exploration.md.
+#[derive(Deserialize, ToSchema)]
+pub struct ExploreParamsBody {
+    /// Inspector group to scope to. Omit to cover every eligible parameter.
+    #[serde(default)]
+    pub group: Option<String>,
+    /// Fraction of each parameter's range to move by. Mutate only, default 0.1.
+    #[serde(default)]
+    pub amount: Option<f32>,
+    /// Omit for a time-derived seed. The same seed reproduces the same values.
+    #[serde(default)]
+    pub seed: Option<u64>,
+}
+
+impl ExploreParamsBody {
+    fn seed(&self) -> u64 {
+        self.seed.unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos() as u64)
+        })
+    }
+}
+
+/// Draw a deck's generator parameters afresh from their declared ranges. A given seed always
+/// produces the same values, so a look found this way can be reproduced rather than only saved.
+#[utoipa::path(post, path = "/api/decks/{deck_uuid}/params/randomize", params(("deck_uuid" = String, Path, description = "Deck UUID")), request_body = ExploreParamsBody, responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Params")]
+pub async fn randomize_generator_params(
+    State(s): State<SharedState>,
+    Path(deck_uuid): Path<String>,
+    Json(body): Json<ExploreParamsBody>,
+) -> impl IntoResponse {
+    let cmd = EngineCommand::RandomizeGeneratorParams {
+        deck_uuid,
+        group: body.group.clone(),
+        seed: body.seed(),
+    };
+    match s.send_command(cmd).await {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+/// Nudge a deck's generator parameters by `amount` as a fraction of each declared range, keeping the
+/// current look. The small step of the find-then-name loop, where randomize is the large one.
+#[utoipa::path(post, path = "/api/decks/{deck_uuid}/params/mutate", params(("deck_uuid" = String, Path, description = "Deck UUID")), request_body = ExploreParamsBody, responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Params")]
+pub async fn mutate_generator_params(
+    State(s): State<SharedState>,
+    Path(deck_uuid): Path<String>,
+    Json(body): Json<ExploreParamsBody>,
+) -> impl IntoResponse {
+    let cmd = EngineCommand::MutateGeneratorParams {
+        deck_uuid,
+        group: body.group.clone(),
+        amount: body.amount.unwrap_or(0.1),
+        seed: body.seed(),
+    };
+    match s.send_command(cmd).await {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
 #[derive(Deserialize, ToSchema)]
 pub struct RequestAnalyzerBody {
     /// Analyzer type to request (e.g. "`face_detect`", "brightness").

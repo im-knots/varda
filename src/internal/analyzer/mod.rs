@@ -16,7 +16,7 @@ use std::time::Duration;
 use arc_swap::ArcSwap;
 use crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError};
 
-use traits::{Analyzer, AnalyzerInput, AnalyzerSchema, AnalyzerSnapshot};
+use traits::{Analyzer, AnalyzerInput, AnalyzerSchema, AnalyzerSnapshot, AnalyzerStateSnapshot};
 
 // ── Registry ────────────────────────────────────────────────────────────────
 
@@ -129,6 +129,9 @@ impl AnalyzerRegistry {
 
 struct AnalyzerInstance {
     refcount: usize,
+    /// Whether this analyzer reads the deck's pixels. Captured at creation
+    /// because the analyzer itself moves onto its worker thread.
+    needs_frames: bool,
     thread: Option<JoinHandle<()>>,
     latest: Arc<ArcSwap<AnalyzerSnapshot>>,
     stop: Arc<AtomicBool>,
@@ -179,6 +182,7 @@ impl DeckAnalyzers {
         // Schema is static and does not require init(), so we can build the
         // initial default snapshot before the worker thread runs.
         let schema = analyzer.output_schema();
+        let needs_frames = analyzer.needs_frame_input();
         let initial = AnalyzerSnapshot::from_defaults(&schema);
         let latest = Arc::new(ArcSwap::from_pointee(initial));
         let stop = Arc::new(AtomicBool::new(false));
@@ -215,6 +219,7 @@ impl DeckAnalyzers {
             analyzer_type.to_owned(),
             AnalyzerInstance {
                 refcount: 1,
+                needs_frames,
                 thread: Some(thread),
                 latest,
                 stop,
@@ -261,9 +266,15 @@ impl DeckAnalyzers {
     }
 
     /// Send a frame to all running analyzers (non-blocking, drops if full).
-    pub(crate) fn send_frame(&self, input: &AnalyzerInput) {
+    pub(crate) fn send_frame(
+        &self,
+        input: &AnalyzerInput,
+        states: &HashMap<String, AnalyzerStateSnapshot>,
+    ) {
         for (name, inst) in &self.instances {
-            match inst.frame_tx.try_send(input.clone()) {
+            let mut payload = input.clone();
+            payload.state = states.get(name).cloned().unwrap_or_default();
+            match inst.frame_tx.try_send(payload) {
                 Ok(()) | Err(TrySendError::Full(_)) => {}
                 Err(TrySendError::Disconnected(_)) => {
                     log::warn!("Analyzer '{name}' channel disconnected");
@@ -303,22 +314,71 @@ impl DeckAnalyzers {
         &mut self,
         device: &wgpu::Device,
         source_texture: &wgpu::Texture,
+        states: &HashMap<String, AnalyzerStateSnapshot>,
     ) -> Option<wgpu::CommandBuffer> {
         self.prune_dead();
         if self.instances.is_empty() {
             return None;
         }
 
+        // Analyzers that produce output from their options alone do not want the
+        // frame, and reading it for them is worse than wasteful. The readback
+        // stalls the pipeline for milliseconds, and it assumes eight-bit RGBA
+        // while a deck's texture is in the linear-light colour-path format, so
+        // the copy fails validation. That error is contained by the deck rather
+        // than raised, and the visible result is a black frame with no message,
+        // which is how this went unnoticed: no shader had ever attached a
+        // frameless CPU analyzer to a float deck.
+        //
+        // They still receive source dimensions because geometry-only analyzers
+        // may certify camera packets against the render aspect without reading
+        // pixels.
+        if !self.instances.values().any(|i| i.needs_frames) {
+            let placeholder = AnalyzerInput {
+                frame: Vec::new(),
+                width: source_texture.width(),
+                height: source_texture.height(),
+                timestamp: std::time::Instant::now(),
+                state: AnalyzerStateSnapshot::default(),
+            };
+            self.send_frame(&placeholder, states);
+            return None;
+        }
+
         let tex_width = source_texture.width();
         let tex_height = source_texture.height();
 
-        // Create or recreate readback buffer if dimensions changed
-        if self.readback.is_none() || self.readback_size != (tex_width, tex_height) {
+        // Read back in the texture's own format.
+        //
+        // This used to be hard-coded to eight-bit RGBA while a deck's texture
+        // is `COLOR_PATH_FORMAT`, four half-floats, so the copy asked for half
+        // the bytes a row actually holds and wgpu rejected the encoder with
+        // "number of bytes per row is less than the number of bytes in a
+        // complete row". The whole deck was then quarantined, which is how a
+        // camera with an analyzer-backed effect on it died outright.
+        let Some(readback_format) = readback_format_for(source_texture.format()) else {
+            log::warn!(
+                "no analyzer readback for texture format {:?}; frame-consuming \
+                 analyzers on this deck will not receive pixels",
+                source_texture.format()
+            );
+            return None;
+        };
+
+        // Create or recreate readback buffer if dimensions or format changed
+        if self.readback.is_none()
+            || self.readback_size != (tex_width, tex_height)
+            || self
+                .readback
+                .as_ref()
+                .map(crate::renderer::ReadbackBuffer::format)
+                != Some(readback_format)
+        {
             self.readback = Some(crate::renderer::ReadbackBuffer::new(
                 device,
                 tex_width,
                 tex_height,
-                crate::renderer::ReadbackFormat::Rgba8,
+                readback_format,
             ));
             self.readback_size = (tex_width, tex_height);
         }
@@ -329,12 +389,37 @@ impl DeckAnalyzers {
         // Deliver previous frame data to analyzer threads
         if let Some(rgba_data) = prev_frame {
             let input = AnalyzerInput {
-                frame: rgba_data.into_bytes(),
+                // Analyzers are promised eight-bit RGBA whatever the deck's
+                // own format is.
+                frame: frame_to_rgba8(&rgba_data),
                 width: self.readback_size.0,
                 height: self.readback_size.1,
                 timestamp: std::time::Instant::now(),
+                state: AnalyzerStateSnapshot::default(),
             };
-            self.send_frame(&input);
+            for (name, inst) in &self.instances {
+                // A frameless analyzer sharing a deck with a frame-consuming one
+                // is still ticked, but with nothing it might mistake for pixels.
+                let payload = if inst.needs_frames {
+                    input.clone()
+                } else {
+                    AnalyzerInput {
+                        frame: Vec::new(),
+                        width: input.width,
+                        height: input.height,
+                        timestamp: input.timestamp,
+                        state: states.get(name).cloned().unwrap_or_default(),
+                    }
+                };
+                let mut payload = payload;
+                payload.state = states.get(name).cloned().unwrap_or_default();
+                match inst.frame_tx.try_send(payload) {
+                    Ok(()) | Err(TrySendError::Full(_)) => {}
+                    Err(TrySendError::Disconnected(_)) => {
+                        log::warn!("Analyzer '{name}' channel disconnected");
+                    }
+                }
+            }
         }
 
         // Enqueue copy for THIS frame (will be read next frame)
@@ -434,6 +519,98 @@ fn stop_instance(mut inst: AnalyzerInstance, type_name: &str, suffix: &str) {
 
 // ── Default Registry ────────────────────────────────────────────────────────
 
+/// The readback format that matches a deck texture, if analyzers can read it.
+fn readback_format_for(format: wgpu::TextureFormat) -> Option<crate::renderer::ReadbackFormat> {
+    use crate::renderer::ReadbackFormat as R;
+    use wgpu::TextureFormat as F;
+    Some(match format {
+        F::Rgba8Unorm | F::Rgba8UnormSrgb => R::Rgba8,
+        F::Bgra8Unorm | F::Bgra8UnormSrgb => R::Bgra8,
+        F::Rgb10a2Unorm => R::Rgb10A2,
+        F::Rgba16Float => R::Rgba16Float,
+        F::Rgba16Unorm => R::Rgba16Unorm,
+        _ => return None,
+    })
+}
+
+/// One linear-light channel as an eight-bit sRGB sample.
+///
+/// The colour path is linear, and analyzers were written against the
+/// display-encoded frame a deck used to hand them, so handing them linear
+/// values unchanged would silently darken every brightness and face result.
+fn linear_to_srgb8(value: f32) -> u8 {
+    let v = value.clamp(0.0, 1.0);
+    let encoded = if v <= 0.003_130_8 {
+        v * 12.92
+    } else {
+        1.055 * v.powf(1.0 / 2.4) - 0.055
+    };
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    {
+        (encoded * 255.0).round() as u8
+    }
+}
+
+/// Convert a readback frame to the eight-bit RGBA the analyzer contract states.
+fn frame_to_rgba8(frame: &crate::renderer::ReadbackFrame) -> Vec<u8> {
+    use crate::renderer::ReadbackFormat as R;
+    let bytes = frame.bytes();
+    match frame.format() {
+        R::Rgba8 => bytes.to_vec(),
+        R::Bgra8 => {
+            let mut out = bytes.to_vec();
+            for pixel in out.as_chunks_mut::<4>().0 {
+                pixel.swap(0, 2);
+            }
+            out
+        }
+        R::Rgba16Float => {
+            let mut out = Vec::with_capacity(bytes.len() / 2);
+            for pixel in bytes.as_chunks::<8>().0 {
+                for channel in 0..4 {
+                    let raw = u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]);
+                    let value = f32::from(half::f16::from_bits(raw));
+                    // Alpha is already display-linear; only colour is encoded.
+                    out.push(if channel == 3 {
+                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                        {
+                            (value.clamp(0.0, 1.0) * 255.0).round() as u8
+                        }
+                    } else {
+                        linear_to_srgb8(value)
+                    });
+                }
+            }
+            out
+        }
+        R::Rgba16Unorm => {
+            let mut out = Vec::with_capacity(bytes.len() / 2);
+            for pixel in bytes.as_chunks::<8>().0 {
+                for channel in 0..4 {
+                    let raw = u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]);
+                    out.push((raw >> 8) as u8);
+                }
+            }
+            out
+        }
+        R::Rgb10A2 => {
+            let mut out = Vec::with_capacity(bytes.len());
+            for pixel in bytes.as_chunks::<4>().0 {
+                let word = u32::from_le_bytes([pixel[0], pixel[1], pixel[2], pixel[3]]);
+                out.push(((word & 0x3ff) >> 2) as u8);
+                out.push((((word >> 10) & 0x3ff) >> 2) as u8);
+                out.push((((word >> 20) & 0x3ff) >> 2) as u8);
+                let alpha = ((word >> 30) & 0x3) as u8;
+                out.push(alpha * 85);
+            }
+            out
+        }
+        // Video layouts never reach a deck texture; the format gate above
+        // refuses them before a buffer is ever built.
+        R::Uyvy | R::P216 => Vec::new(),
+    }
+}
+
 /// Build the default analyzer registry with all built-in analyzers.
 pub(crate) fn default_registry() -> AnalyzerRegistry {
     #[allow(unused_mut)]
@@ -462,6 +639,65 @@ pub(crate) fn default_registry() -> AnalyzerRegistry {
 mod tests {
     use super::*;
     use std::time::Instant;
+
+    /// A frame-consuming analyzer on a colour-path deck must encode a legal copy.
+    ///
+    /// The readback asked for eight-bit rows while the deck texture holds four
+    /// half-floats, so wgpu rejected the encoder and quarantined the whole
+    /// deck: a camera with an analyzer-backed effect on it went black with
+    /// "number of bytes per row is less than the number of bytes in a complete
+    /// row". Submitting the encoder is the assertion, because that is where
+    /// validation runs.
+    #[test]
+    fn colour_path_deck_readback_encodes_a_legal_copy() {
+        let Ok(context) = crate::renderer::context::GpuContext::new_headless() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let texture = context.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("colour path deck"),
+            size: wgpu::Extent3d {
+                width: 64,
+                height: 36,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: crate::renderer::context::COLOR_PATH_FORMAT,
+            usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+
+        let registry = default_registry();
+        let mut deck = DeckAnalyzers::new();
+        deck.request("brightness", &registry, &serde_json::Value::Null)
+            .expect("brightness analyzer starts");
+
+        let command = deck
+            .capture_frame(&context.device, &texture, &HashMap::new())
+            .expect("a frame-consuming analyzer encodes a readback");
+        context.queue.submit(std::iter::once(command));
+        let _ = context.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+    }
+
+    /// Whatever the deck's format, analyzers receive eight-bit RGBA.
+    #[test]
+    fn half_float_frames_convert_to_eight_bit_rgba() {
+        assert_eq!(
+            readback_format_for(crate::renderer::context::COLOR_PATH_FORMAT),
+            Some(crate::renderer::ReadbackFormat::Rgba16Float)
+        );
+        // Linear light is display-encoded on the way out: mid-grey in linear is
+        // well above mid-grey once encoded, and analyzers were written against
+        // the encoded frame.
+        assert_eq!(linear_to_srgb8(0.0), 0);
+        assert_eq!(linear_to_srgb8(1.0), 255);
+        assert!(linear_to_srgb8(0.5) > 180, "linear 0.5 encodes bright");
+    }
 
     #[test]
     fn registry_builder_pattern() {
@@ -516,8 +752,9 @@ mod tests {
             width: 4,
             height: 4,
             timestamp: Instant::now(),
+            state: AnalyzerStateSnapshot::default(),
         };
-        deck.send_frame(&input);
+        deck.send_frame(&input, &HashMap::new());
         std::thread::sleep(Duration::from_millis(200));
 
         let snapshot = deck

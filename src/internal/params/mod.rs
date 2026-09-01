@@ -123,6 +123,62 @@ impl ParamValue {
     }
 }
 
+/// The declared range of an input, falling back to the unit interval.
+fn bounds(def: &ISFInput) -> (f32, f32) {
+    (def.min.unwrap_or(0.0), def.max.unwrap_or(1.0))
+}
+
+/// Uniform integer in `[lo, hi]`.
+fn pick_int(rng: &mut Rng, lo: i32, hi: i32) -> i32 {
+    let span = hi.saturating_sub(lo).saturating_add(1).max(1);
+    let step = i32::try_from(pick_index(rng, span as usize)).unwrap_or(0);
+    lo.saturating_add(step)
+}
+
+/// Uniform index in `[0, len)`. `len` of zero yields zero.
+fn pick_index(rng: &mut Rng, len: usize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    ((rng.unit() * len as f32) as usize).min(len - 1)
+}
+
+/// `SplitMix64`.
+///
+/// Written out rather than pulled from `rand` because /spec/parameter-exploration.md
+/// promises that a seed reproduces a configuration, and `rand`'s generators make no
+/// value-stability guarantee across versions. A performer returning to a seed a year
+/// later should get the same look.
+struct Rng(u64);
+
+impl Rng {
+    fn new(seed: u64) -> Self {
+        Self(seed)
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// Uniform in `[0, 1)`, from the top 24 bits so every result is exactly
+    /// representable as an `f32`.
+    fn unit(&mut self) -> f32 {
+        (self.next_u64() >> 40) as f32 / 16_777_216.0
+    }
+
+    /// Approximately standard normal, summing six uniforms. Bounded at three
+    /// sigma, which suits a mutation: an unbounded tail would occasionally throw a
+    /// parameter to its limit and read as a randomize rather than a nudge.
+    fn normal(&mut self) -> f32 {
+        let sum: f32 = (0..6).map(|_| self.unit()).sum();
+        (sum - 3.0) * std::f32::consts::SQRT_2
+    }
+}
+
 /// Shader parameters - stores current values and GPU buffer
 pub struct ShaderParams {
     /// Parameter names in order (for consistent buffer layout)
@@ -217,6 +273,31 @@ impl ShaderParams {
             ParamValue::Float(v) => Some(v),
             _ => None,
         }
+    }
+
+    /// Get one parameter exactly as it is uploaded this frame.
+    ///
+    /// Frameless preprocessors use this instead of copying the whole uniform
+    /// block. The returned value retains its declared type.
+    pub(crate) fn get_modulated(
+        &mut self,
+        name: &str,
+        modulation: &ModulationEngine,
+        param_prefix: Option<&str>,
+    ) -> Option<ParamValue> {
+        let base = self.values.get(name)?;
+        self.mod_key_scratch.clear();
+        if let Some(prefix) = param_prefix {
+            self.mod_key_scratch.push_str(prefix);
+            self.mod_key_scratch.push(':');
+        }
+        self.mod_key_scratch.push_str(name);
+        Some(Self::apply_modulation_to_value_with_key(
+            &self.mod_key_scratch,
+            base,
+            modulation,
+            self.definitions.get(name),
+        ))
     }
 
     /// Express a value as a 0.0–1.0 fraction of its declared range.
@@ -428,6 +509,140 @@ impl ShaderParams {
         self.dirty = true;
     }
 
+    /// Whether a parameter belongs to the group this operation is scoped to.
+    /// `None` scope means every parameter.
+    fn in_scope(&self, name: &str, scope: Option<&str>) -> bool {
+        match scope {
+            None => true,
+            Some(group) => {
+                self.definitions.get(name).and_then(|d| d.group.as_deref()) == Some(group)
+            }
+        }
+    }
+
+    /// Whether exploration may touch this parameter.
+    ///
+    /// A parameter with no declared range has no distribution to draw from, and a
+    /// colour is held back because randomised colour reliably produces mud while
+    /// palette choices are deliberate. See /spec/parameter-exploration.md.
+    fn is_explorable(&self, name: &str) -> bool {
+        let Some(def) = self.definitions.get(name) else {
+            return false;
+        };
+        let bounded = def.min.is_some() && def.max.is_some();
+        match self.values.get(name) {
+            Some(ParamValue::Bool(_)) => true,
+            Some(ParamValue::Long(_)) => bounded || !def.choices().is_empty(),
+            Some(ParamValue::Float(_) | ParamValue::Point2D(_)) => bounded,
+            Some(ParamValue::Color(_)) | None => false,
+        }
+    }
+
+    /// Draw every in-scope parameter afresh from its declared range.
+    ///
+    /// For escaping a look entirely. `seed` makes the result reproducible, so a
+    /// configuration can be returned to after being discarded.
+    /// See /spec/parameter-exploration.md.
+    pub fn randomize(&mut self, scope: Option<&str>, seed: u64) {
+        self.explore(scope, seed, |rng, def, current| match current {
+            ParamValue::Float(_) => {
+                let (lo, hi) = bounds(def);
+                ParamValue::Float(lo + rng.unit() * (hi - lo))
+            }
+            ParamValue::Bool(_) => ParamValue::Bool(rng.unit() < 0.5),
+            ParamValue::Long(_) => {
+                let choices = def.choices();
+                if choices.is_empty() {
+                    let (lo, hi) = bounds(def);
+                    ParamValue::Long(pick_int(rng, lo as i32, hi as i32))
+                } else {
+                    ParamValue::Long(choices[pick_index(rng, choices.len())].0)
+                }
+            }
+            ParamValue::Point2D(_) => {
+                let (lo, hi) = bounds(def);
+                ParamValue::Point2D([lo + rng.unit() * (hi - lo), lo + rng.unit() * (hi - lo)])
+            }
+            other @ ParamValue::Color(_) => other,
+        });
+    }
+
+    /// Nudge every in-scope parameter by a fraction of its range.
+    ///
+    /// The more useful of the two in practice: it takes small steps away from a
+    /// configuration that already works rather than starting over. `amount` is a
+    /// fraction of each parameter's declared range, clamped to that range.
+    /// See /spec/parameter-exploration.md.
+    pub fn mutate(&mut self, scope: Option<&str>, amount: f32, seed: u64) {
+        let amount = amount.clamp(0.0, 1.0);
+        self.explore(scope, seed, |rng, def, current| match current {
+            ParamValue::Float(v) => {
+                let (lo, hi) = bounds(def);
+                ParamValue::Float((v + amount * (hi - lo) * rng.normal()).clamp(lo, hi))
+            }
+            ParamValue::Bool(v) => ParamValue::Bool(if rng.unit() < amount { !v } else { v }),
+            ParamValue::Long(v) => {
+                if rng.unit() >= amount {
+                    return ParamValue::Long(v);
+                }
+                // A step to a neighbour, not a jump anywhere, so a mutation stays a
+                // small move through formula space the way it does through a range.
+                let down = rng.unit() < 0.5;
+                let choices = def.choices();
+                if choices.is_empty() {
+                    let (lo, hi) = bounds(def);
+                    let step = if down { -1 } else { 1 };
+                    ParamValue::Long(v.saturating_add(step).clamp(lo as i32, hi as i32))
+                } else {
+                    let at = choices.iter().position(|c| c.0 == v).unwrap_or(0);
+                    let next = if down {
+                        at.saturating_sub(1)
+                    } else {
+                        (at + 1).min(choices.len() - 1)
+                    };
+                    ParamValue::Long(choices[next].0)
+                }
+            }
+            ParamValue::Point2D(p) => {
+                let (lo, hi) = bounds(def);
+                let span = amount * (hi - lo);
+                ParamValue::Point2D([
+                    (p[0] + span * rng.normal()).clamp(lo, hi),
+                    (p[1] + span * rng.normal()).clamp(lo, hi),
+                ])
+            }
+            other @ ParamValue::Color(_) => other,
+        });
+    }
+
+    /// Walk the parameters in buffer order, applying `draw` to each one that is in
+    /// scope and explorable.
+    ///
+    /// Order matters: the generator is consumed in `param_order`, so the same seed
+    /// and the same shader reproduce the same values.
+    fn explore<F>(&mut self, scope: Option<&str>, seed: u64, draw: F)
+    where
+        F: Fn(&mut Rng, &ISFInput, ParamValue) -> ParamValue,
+    {
+        let mut rng = Rng::new(seed);
+        let order = std::mem::take(&mut self.param_order);
+        for name in &order {
+            if !self.in_scope(name, scope) || !self.is_explorable(name) {
+                continue;
+            }
+            let Some(def) = self.definitions.get(name) else {
+                continue;
+            };
+            let Some(current) = self.values.get(name).copied() else {
+                continue;
+            };
+            let next = draw(&mut rng, def, current);
+            self.values.insert(name.clone(), next);
+        }
+        self.param_order = order;
+        self.dirty = true;
+    }
+
     /// Serialize parameter values with modulation applied into the reusable scratch buffer.
     /// Returns a slice valid until the next `build_*` or mutable call.
     pub fn build_modulated_buffer_data(
@@ -567,6 +782,7 @@ mod tests {
             values: None,
             labels: None,
             identity: None,
+            group: None,
         }
     }
 
@@ -581,6 +797,7 @@ mod tests {
             values: None,
             labels: None,
             identity: None,
+            group: None,
         }
     }
 
@@ -595,6 +812,7 @@ mod tests {
             values: None,
             labels: None,
             identity: None,
+            group: None,
         }
     }
 
@@ -613,6 +831,7 @@ mod tests {
             ]),
             labels: Some(vec!["A".into(), "B".into(), "C".into()]),
             identity: None,
+            group: None,
         }
     }
 
@@ -627,6 +846,7 @@ mod tests {
             values: None,
             labels: None,
             identity: None,
+            group: None,
         }
     }
 
@@ -749,6 +969,7 @@ mod tests {
                 values: None,
                 labels: None,
                 identity: None,
+                group: None,
             },
         ];
         let params = ShaderParams::from_inputs(&inputs);
@@ -861,6 +1082,174 @@ mod tests {
     fn shader_params_empty() {
         let params = ShaderParams::from_inputs(&[]);
         assert!(params.is_empty());
+    }
+
+    // ── Parameter exploration ────────────────────────────────────────
+
+    fn grouped_float(name: &str, group: &str, default: f64, min: f32, max: f32) -> ISFInput {
+        let mut input = make_float_input(name, default, min, max);
+        input.group = Some(group.to_string());
+        input
+    }
+
+    fn explorable_params() -> ShaderParams {
+        ShaderParams::from_inputs(&[
+            grouped_float("fold", "Formula", 2.0, 1.0, 4.0),
+            grouped_float("iters", "Formula", 8.0, 1.0, 16.0),
+            grouped_float("fog", "Grade", 0.3, 0.0, 1.0),
+        ])
+    }
+
+    #[test]
+    fn randomize_is_reproducible_from_its_seed() {
+        let mut a = explorable_params();
+        let mut b = explorable_params();
+        a.randomize(None, 42);
+        b.randomize(None, 42);
+        for name in ["fold", "iters", "fog"] {
+            assert!(
+                (a.get_float(name).unwrap() - b.get_float(name).unwrap()).abs() < 1e-6,
+                "{name} must reproduce, or a performer cannot return to a seed"
+            );
+        }
+    }
+
+    #[test]
+    fn different_seeds_give_different_configurations() {
+        let mut a = explorable_params();
+        let mut b = explorable_params();
+        a.randomize(None, 1);
+        b.randomize(None, 2);
+        assert!(
+            (a.get_float("fold").unwrap() - b.get_float("fold").unwrap()).abs() > 1e-6,
+            "two seeds landing on the same value would make hunting pointless"
+        );
+    }
+
+    #[test]
+    fn randomize_stays_inside_the_declared_range() {
+        for seed in 0..64 {
+            let mut params = explorable_params();
+            params.randomize(None, seed);
+            let fold = params.get_float("fold").unwrap();
+            assert!(
+                (1.0..=4.0).contains(&fold),
+                "seed {seed} produced {fold}, outside the declared MIN/MAX"
+            );
+        }
+    }
+
+    #[test]
+    fn scope_leaves_other_groups_untouched() {
+        let mut params = explorable_params();
+        params.randomize(Some("Formula"), 7);
+        assert!(
+            (params.get_float("fog").unwrap() - 0.3).abs() < 1e-6,
+            "a scoped randomize must not reach outside its group, which is the \
+             whole point of being able to hunt the formula while the grade holds"
+        );
+        assert!((params.get_float("fold").unwrap() - 2.0).abs() > 1e-6);
+    }
+
+    #[test]
+    fn mutate_clamps_at_the_bounds() {
+        let mut params = explorable_params();
+        params.set_float("fold", 4.0);
+        for seed in 0..64 {
+            let mut probe =
+                ShaderParams::from_inputs(&[grouped_float("fold", "Formula", 4.0, 1.0, 4.0)]);
+            probe.mutate(None, 1.0, seed);
+            let v = probe.get_float("fold").unwrap();
+            assert!(
+                (1.0..=4.0).contains(&v),
+                "seed {seed} mutated a parameter sitting on its maximum to {v}"
+            );
+        }
+    }
+
+    #[test]
+    fn mutate_of_zero_amount_changes_nothing() {
+        let mut params = explorable_params();
+        params.mutate(None, 0.0, 9);
+        assert!((params.get_float("fold").unwrap() - 2.0).abs() < 1e-6);
+        assert!((params.get_float("fog").unwrap() - 0.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn mutate_stays_nearer_than_randomize() {
+        // The distinction the two operations exist for: a nudge from a working
+        // configuration versus a fresh draw.
+        let mut nudged = explorable_params();
+        let mut redrawn = explorable_params();
+        nudged.mutate(None, 0.05, 3);
+        redrawn.randomize(None, 3);
+        let near = (nudged.get_float("iters").unwrap() - 8.0).abs();
+        let far = (redrawn.get_float("iters").unwrap() - 8.0).abs();
+        assert!(
+            near < far,
+            "a 5% mutation moved {near} while a randomize moved {far}"
+        );
+    }
+
+    #[test]
+    fn colors_and_unbounded_params_are_left_alone() {
+        let mut params = ShaderParams::from_inputs(&[
+            make_color_input("tint"),
+            make_bool_input("invert", false),
+            // No MIN or MAX, so there is no range to draw from.
+            ISFInput {
+                name: "gain".to_string(),
+                input_type: "float".to_string(),
+                default: Some(serde_json::json!(0.5)),
+                min: None,
+                max: None,
+                label: None,
+                values: None,
+                labels: None,
+                identity: None,
+                group: None,
+            },
+        ]);
+        params.randomize(None, 5);
+        assert!(
+            (params.get_float("gain").unwrap() - 0.5).abs() < 1e-6,
+            "a parameter with no declared range has no distribution to draw from"
+        );
+        match params.values.get("tint") {
+            Some(ParamValue::Color(c)) => assert!(
+                (c[0] - 1.0).abs() < 1e-6 && (c[1] - 0.0).abs() < 1e-6,
+                "colour is deliberate, so exploration leaves the palette alone"
+            ),
+            other => panic!("expected Color, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn randomize_picks_only_declared_enum_values() {
+        let inputs = vec![make_long_input("mode", 0)];
+        for seed in 0..32 {
+            let mut params = ShaderParams::from_inputs(&inputs);
+            params.randomize(None, seed);
+            let v = params.get_long("mode").unwrap();
+            assert!(
+                (0..=2).contains(&v),
+                "seed {seed} chose {v}, which is not one of the declared VALUES"
+            );
+        }
+    }
+
+    #[test]
+    fn mutate_steps_an_enum_to_a_neighbour() {
+        let inputs = vec![make_long_input("mode", 1)];
+        for seed in 0..32 {
+            let mut params = ShaderParams::from_inputs(&inputs);
+            params.mutate(None, 1.0, seed);
+            let v = params.get_long("mode").unwrap();
+            assert!(
+                (0..=2).contains(&v) && (v - 1).abs() <= 1,
+                "seed {seed} jumped from 1 to {v} instead of stepping"
+            );
+        }
     }
 
     #[test]

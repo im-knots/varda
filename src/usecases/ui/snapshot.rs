@@ -782,6 +782,16 @@ fn params_snapshot_to_ui(snap: &ShaderParamsSnapshot) -> ShaderParamsUI {
                 value: p.value,
                 min: p.min,
                 max: p.max,
+                group: p.group.clone(),
+                choices: p
+                    .choices
+                    .iter()
+                    .flatten()
+                    .map(|c| crate::usecases::ui::data::ParamChoiceUI {
+                        value: c.value,
+                        label: c.label.clone(),
+                    })
+                    .collect(),
             })
             .collect(),
     }

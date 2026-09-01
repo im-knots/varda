@@ -23,6 +23,18 @@ pub struct ParamUIInfo {
     pub value: ParamValue,
     pub min: Option<f32>,
     pub max: Option<f32>,
+    /// Inspector section. `None` groups with the other ungrouped params, which
+    /// render first and unheaded. See /spec/parameter-inspector.md.
+    pub group: Option<String>,
+    /// Options for a `long` param, empty for every other type.
+    pub choices: Vec<ParamChoiceUI>,
+}
+
+/// One option of a `long` (enum) parameter.
+#[derive(Clone)]
+pub struct ParamChoiceUI {
+    pub value: i32,
+    pub label: String,
 }
 
 /// Shader parameters info for UI (generator or effect)

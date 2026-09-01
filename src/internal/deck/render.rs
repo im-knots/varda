@@ -3,12 +3,12 @@
 use super::{
     Deck, DeckSource, Effect, ExternalSourceKind, PassBuffer, PreprocessorSlot, ScalingMode,
 };
-use crate::analyzer::traits::TextureData;
+use crate::analyzer::traits::{AnalyzerStateSnapshot, TextureData};
 use crate::analyzer::{AnalyzerRegistry, DeckAnalyzers, PreprocessorCategory};
 use crate::audio::AudioData;
 use crate::isf::{ISFPass, PhaseInput};
 use crate::modulation::ModulationEngine;
-use crate::params::ShaderParams;
+use crate::params::{ParamValue, ShaderParams};
 use crate::renderer::BlitPipeline;
 use crate::renderer::{GpuContext, ISFUniforms, UnifiedPipeline};
 use anyhow::Result;
@@ -27,6 +27,27 @@ fn upload_texture_to_slot(
     if tex_data.width == 0 || tex_data.height == 0 || tex_data.data.is_empty() {
         return;
     }
+    if tex_data.generation != 0 && slot.last_uploaded_generation == Some(tex_data.generation) {
+        return;
+    }
+    // The slot's format is the shader's declared contract, fixed for the
+    // slot's lifetime because the pipeline layout's filterability was derived
+    // from it. An analyzer publishing a different encoding cannot be honored
+    // by recreating the texture — the bytes would be reinterpreted wrongly —
+    // so the mismatch is refused loudly instead of rendered plausibly.
+    if super::preprocessor_texture_format(&tex_data.format) != slot.format {
+        log::warn!(
+            "Preprocessor '{}' published '{}' but the shader declared {:?}; dropping upload",
+            slot.name,
+            tex_data.format,
+            slot.format
+        );
+        return;
+    }
+    let bytes_per_texel = match slot.format {
+        wgpu::TextureFormat::Rgba32Float => 16,
+        _ => 4,
+    };
 
     let current_size = slot.texture.size();
     if current_size.width != tex_data.width || current_size.height != tex_data.height {
@@ -42,8 +63,8 @@ fn upload_texture_to_slot(
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             // Data texture (packed analyzer output) — NOT part of the color path.
-            // Format is the encoding; do not make this float.
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            // Format is the encoding contract the shader declared.
+            format: slot.format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -61,7 +82,7 @@ fn upload_texture_to_slot(
         &tex_data.data,
         wgpu::TexelCopyBufferLayout {
             offset: 0,
-            bytes_per_row: Some(4 * tex_data.width),
+            bytes_per_row: Some(bytes_per_texel * tex_data.width),
             rows_per_image: Some(tex_data.height),
         },
         wgpu::Extent3d {
@@ -70,6 +91,7 @@ fn upload_texture_to_slot(
             depth_or_array_layers: 1,
         },
     );
+    slot.last_uploaded_generation = (tex_data.generation != 0).then_some(tex_data.generation);
 }
 
 /// Accumulate phase times: for each `PhaseInput`, adds
@@ -102,6 +124,39 @@ fn accumulate_phase_times(
                     .unwrap_or(1.0);
             }
             accumulators[pi.index] += dt * rate * pi.scale;
+        }
+    }
+}
+
+fn collect_preprocessor_state(
+    slots: &[PreprocessorSlot],
+    params: &mut ShaderParams,
+    phases: [f32; 4],
+    modulation: &ModulationEngine,
+    param_prefix: &str,
+    states: &mut HashMap<String, AnalyzerStateSnapshot>,
+) {
+    for slot in slots {
+        if slot.param_bindings.is_empty() && slot.phase_bindings.is_empty() {
+            continue;
+        }
+        let state = states.entry(slot.analyzer_type.clone()).or_default();
+        state.values.reserve(
+            slot.param_bindings
+                .len()
+                .saturating_add(slot.phase_bindings.len()),
+        );
+        for (local_name, param_name) in &slot.param_bindings {
+            if let Some(value) = params.get_modulated(param_name, modulation, Some(param_prefix)) {
+                state.values.insert(local_name.clone(), value);
+            }
+        }
+        for (local_name, index) in &slot.phase_bindings {
+            if let Some(value) = phases.get(*index) {
+                state
+                    .values
+                    .insert(local_name.clone(), ParamValue::Float(*value));
+            }
         }
     }
 }
@@ -196,6 +251,23 @@ impl Deck {
     ) -> Result<()> {
         let prefix = format!("deck{deck_idx}");
         self.render_with_prefix(context, audio_data, modulation, &prefix, cmd_buffers, None)
+    }
+
+    /// Start the analyzers this deck's shader declares, using the built-in
+    /// registry.
+    ///
+    /// The app owns a registry and drives this through
+    /// [`Self::ensure_preprocessor_analyzers`], but an embedder that only wants
+    /// to render a deck has no way to reach either, so a shader declaring a
+    /// `PREPROCESSORS` block would silently render with unbound preprocessor
+    /// textures. That is a difficult failure to attribute from the outside: the
+    /// frame renders, it is just wrong. This is the one-call version for those
+    /// callers, including `examples/shader_preview`.
+    ///
+    /// Idempotent, and safe to call when the shader declares nothing.
+    pub fn start_declared_preprocessors(&mut self) {
+        let registry = crate::analyzer::default_registry();
+        self.ensure_preprocessor_analyzers(&registry);
     }
 
     /// Ensure analyzers are running for all preprocessor slots that need them.
@@ -841,8 +913,40 @@ impl Deck {
             read_from_b = !read_from_b;
         }
 
-        // Capture frame for analyzer pipeline (non-blocking, one-frame latency)
-        if let Some(readback_cmd) = self.analyzers.capture_frame(&context.device, &self.texture) {
+        // Capture frame and the exact live values declared by each analyzer.
+        // The state is immutable once it crosses the worker channel, so an
+        // asynchronous result can sign the map it actually evaluated.
+        let mut analyzer_states = HashMap::new();
+        if self.analyzers.has_active_instances() {
+            if let DeckSource::Shader {
+                preprocessor_textures,
+                ..
+            } = &self.source
+            {
+                collect_preprocessor_state(
+                    preprocessor_textures,
+                    &mut self.generator_params,
+                    generator_phase_times,
+                    modulation,
+                    param_prefix,
+                    &mut analyzer_states,
+                );
+            }
+            for effect in &mut self.effects {
+                collect_preprocessor_state(
+                    &effect.preprocessor_textures,
+                    &mut effect.params,
+                    effect.phase_accumulators,
+                    modulation,
+                    &effect.param_prefix,
+                    &mut analyzer_states,
+                );
+            }
+        }
+        if let Some(readback_cmd) =
+            self.analyzers
+                .capture_frame(&context.device, &self.texture, &analyzer_states)
+        {
             cmd_buffers.push(readback_cmd);
         }
 
@@ -1548,6 +1652,7 @@ mod tests {
             values: None,
             labels: None,
             identity: None,
+            group: None,
         }
     }
 

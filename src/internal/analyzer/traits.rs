@@ -6,7 +6,11 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
+
+use crate::params::ParamValue;
 
 // ── Output definitions ──────────────────────────────────────────────────────
 
@@ -51,6 +55,9 @@ pub(crate) fn texture_format_from_str(format: &str) -> Option<wgpu::TextureForma
         "rg16float" => wgpu::TextureFormat::Rg16Float,
         "rgba8unorm" => wgpu::TextureFormat::Rgba8Unorm,
         "rgba16float" => wgpu::TextureFormat::Rgba16Float,
+        // Raw-float data payloads. Not filterable: only legal for shaders
+        // that read with `texelFetch`.
+        "rgba32float" => wgpu::TextureFormat::Rgba32Float,
         "color_path" => crate::renderer::context::COLOR_PATH_FORMAT,
         _ => return None,
     })
@@ -71,6 +78,9 @@ pub(crate) struct AnalyzerSchema {
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // Fields used when runtime texture injection is wired up
 pub(crate) struct TextureData {
+    /// Monotonic content generation. Zero asks consumers to upload every
+    /// snapshot; non-zero generations may be skipped when already resident.
+    pub generation: u64,
     /// Texture width in pixels.
     pub width: u32,
     /// Texture height in pixels.
@@ -78,7 +88,19 @@ pub(crate) struct TextureData {
     /// Format string matching [`TextureOutputDef::format`].
     pub format: String,
     /// Raw pixel data in the specified format.
-    pub data: Vec<u8>,
+    pub data: Arc<[u8]>,
+}
+
+/// Process-wide texture generation, so restarting an analyzer cannot collide
+/// with a generation already resident in its deck slot.
+///
+/// Part of the preprocessor texture contract, with no in-tree consumer at
+/// present: the deck's upload path skips a slot whose generation is unchanged,
+/// so any analyzer publishing a texture needs this to have its updates seen.
+#[allow(dead_code)]
+pub(crate) fn next_texture_generation() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 /// Immutable snapshot of analyzer results, published lock-free via `ArcSwap`.
@@ -198,6 +220,34 @@ mod tests {
 
 // ── Input ────────────────────────────────────────────────────────────────────
 
+/// Immutable live values explicitly bound by one preprocessor declaration.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct AnalyzerStateSnapshot {
+    /// Analyzer-local names mapped to effective shader parameter values or phases.
+    pub values: HashMap<String, ParamValue>,
+}
+
+impl AnalyzerStateSnapshot {
+    /// Typed reads of the bound values. No in-tree analyzer binds parameters
+    /// at present, so these are unused; they are the accessor half of the
+    /// preprocessor parameter-binding contract and are kept with it.
+    #[allow(dead_code)]
+    pub(crate) fn float(&self, name: &str) -> Option<f32> {
+        match self.values.get(name) {
+            Some(ParamValue::Float(value)) => Some(*value),
+            _ => None,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn long(&self, name: &str) -> Option<i32> {
+        match self.values.get(name) {
+            Some(ParamValue::Long(value)) => Some(*value),
+            _ => None,
+        }
+    }
+}
+
 /// Input frame delivered to an analyzer for processing.
 #[derive(Debug, Clone)]
 pub(crate) struct AnalyzerInput {
@@ -209,6 +259,8 @@ pub(crate) struct AnalyzerInput {
     pub height: u32,
     /// When the source frame was captured.
     pub timestamp: Instant,
+    /// Live parameter and phase values declared by this preprocessor.
+    pub state: AnalyzerStateSnapshot,
 }
 
 // ── Trait ─────────────────────────────────────────────────────────────────────
@@ -233,7 +285,26 @@ pub(crate) trait Analyzer: Send + 'static {
     /// Called once before analysis begins.
     fn init(&mut self, options: &serde_json::Value) -> anyhow::Result<()>;
 
+    /// Whether this analyzer reads the deck's pixels.
+    ///
+    /// Most do, and for those the deck reads its own frame back from the GPU
+    /// each frame and hands it over. Some produce output from their options and
+    /// parameters alone, and for those the readback is pure cost: it stalls the
+    /// pipeline for milliseconds and, because the deck's texture is in the
+    /// linear-light colour-path format rather than eight-bit RGBA, it is also
+    /// a format mismatch that fails validation.
+    ///
+    /// Returning `false` means "tick me, but do not read the frame". Such an
+    /// analyzer still has `analyze` called on its own thread, with a placeholder
+    /// input it is expected to ignore.
+    fn needs_frame_input(&self) -> bool {
+        true
+    }
+
     /// Analyze a single frame. Called on the analyzer's dedicated thread.
+    ///
+    /// When [`Self::needs_frame_input`] is `false`, `input` is a placeholder and
+    /// its pixels must not be read.
     fn analyze(&mut self, input: &AnalyzerInput) -> anyhow::Result<AnalyzerSnapshot>;
 
     /// Cleanup when analyzer is stopped. Default is no-op.

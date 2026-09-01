@@ -72,6 +72,8 @@ impl UIData {
                     value: crate::params::ParamValue::Float(1.0),
                     min: Some(0.0),
                     max: Some(5.0),
+                    group: None,
+                    choices: Vec::new(),
                 }],
             },
             effects: vec![(
@@ -86,6 +88,8 @@ impl UIData {
                         value: crate::params::ParamValue::Float(0.5),
                         min: Some(0.0),
                         max: Some(1.0),
+                        group: None,
+                        choices: Vec::new(),
                     }],
                 },
             )],

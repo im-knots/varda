@@ -155,8 +155,17 @@ fn envelope_breakpoints<'a>(data: &'a UIData, envelope_uuid: &str) -> Option<&'a
 ///
 /// Intersection, not containment: a transition that begins a hair before the
 /// drag is still "this clip transition" and has to count.
+///
+/// An empty span overlaps nothing, and saying so here is what keeps a degenerate
+/// selection from reaching the cut. Without the first test a drag that begins and
+/// ends on the same beat reads as containing every region it lands inside, and
+/// `region_slice` then hands back a selected piece whose start equals its end: a
+/// zero-span region, which `RegionConfig::is_valid` rejects and which the cut,
+/// copy and move paths would go on to emit as an `AddRegion`. Splitting a region
+/// at a point is a coherent thing to want, but it is a different operation from
+/// selecting a span, and a zero-width drag is not a request for it.
 fn intersects(region: &RegionConfig, start: f64, end: f64) -> bool {
-    region.start < end && region.end > start
+    end > start && region.start < end && region.end > start
 }
 
 /// The index of every region on `regions` that the span touches.
@@ -679,6 +688,16 @@ mod tests {
     fn a_region_touching_the_boundary_is_not_a_member() {
         let regions = vec![RegionConfig::new(0.0, 4.0), RegionConfig::new(4.0, 8.0)];
         assert_eq!(regions_in_span(&regions, 4.0, 8.0), vec![1]);
+    }
+
+    /// A drag that begins and ends on the same beat selects nothing, even where
+    /// it lands inside a region. Cutting on it used to produce a piece whose
+    /// start equalled its end.
+    #[test]
+    fn a_zero_width_selection_touches_nothing() {
+        let regions = vec![RegionConfig::new(0.0, 5.0), RegionConfig::new(8.0, 12.0)];
+        assert!(regions_in_span(&regions, 3.0, 3.0).is_empty());
+        assert!(region_slice(&regions[0], 3.0, 3.0).is_none());
     }
 
     #[test]
@@ -1406,7 +1425,9 @@ mod tests {
 
         /// Region membership is attacked with overlapping, nested, reversed,
         /// zero-width, and out-of-order spans. It must remain exactly equivalent
-        /// to the strict intersection rule and never duplicate an index.
+        /// to the strict intersection rule and never duplicate an index — where
+        /// that rule includes the requirement that the span have width at all,
+        /// since an empty span overlaps nothing.
         #[test]
         fn chaos_hostile_region_geometry_has_deterministic_membership(
             raw in prop::collection::vec((any::<u16>(), any::<u16>()), 0..200),
@@ -1426,7 +1447,7 @@ mod tests {
             let expected: Vec<usize> = regions
                 .iter()
                 .enumerate()
-                .filter(|(_, region)| region.start < end && region.end > start)
+                .filter(|(_, region)| end > start && region.start < end && region.end > start)
                 .map(|(index, _)| index)
                 .collect();
 

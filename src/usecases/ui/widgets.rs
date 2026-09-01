@@ -232,6 +232,146 @@ fn is_hidden(name: &str, hidden: &[String]) -> bool {
     hidden.iter().any(|prefix| name.starts_with(prefix))
 }
 
+/// The named groups of a parameter list, in the order their first member appears.
+///
+/// First appearance is the only ordering rule, so an author controls section order
+/// by ordering `INPUTS` and there is no second mechanism to disagree with it.
+fn named_group_order<'a>(params: &[&'a ParamUIInfo]) -> Vec<&'a str> {
+    let mut groups: Vec<&str> = Vec::new();
+    for name in params.iter().filter_map(|p| p.group.as_deref()) {
+        if !groups.contains(&name) {
+            groups.push(name);
+        }
+    }
+    groups
+}
+
+/// The section headers a parameter list will render, for callers that need to name
+/// a group rather than draw it — the exploration controls scope a randomize or a
+/// mutate to one of these. See /spec/parameter-exploration.md.
+pub fn param_groups(params: &[ParamUIInfo]) -> Vec<&str> {
+    let hidden = hidden_prefixes(params);
+    let visible: Vec<&ParamUIInfo> = params
+        .iter()
+        .filter(|p| !is_hidden(&p.name, &hidden))
+        .collect();
+    named_group_order(&visible)
+}
+
+/// Section a parameter list by the shader's `GROUP` keys, calling `row` for each
+/// visible parameter.
+///
+/// Ungrouped parameters come first with no header and no collapse, so a shader can
+/// keep its performance controls permanently in view. Named groups follow in
+/// first-appearance order, the first open and the rest closed, which is what keeps
+/// a fifty-parameter shader scannable. A shader declaring no groups renders as one
+/// flat list, exactly as every shader did before groups existed.
+/// See /spec/parameter-inspector.md.
+fn render_grouped(
+    ui: &mut egui::Ui,
+    params: &[ParamUIInfo],
+    id_prefix: &str,
+    row: &mut dyn FnMut(&mut egui::Ui, &ParamUIInfo),
+) {
+    let hidden = hidden_prefixes(params);
+    let visible: Vec<&ParamUIInfo> = params
+        .iter()
+        .filter(|p| !is_hidden(&p.name, &hidden))
+        .collect();
+
+    for param in visible.iter().filter(|p| p.group.is_none()) {
+        row(ui, param);
+    }
+
+    let groups = named_group_order(&visible);
+    for (idx, name) in groups.iter().enumerate() {
+        egui::CollapsingHeader::new(egui::RichText::new(*name).small().strong())
+            .id_salt(format!("paramgroup_{id_prefix}_{name}"))
+            .default_open(idx == 0)
+            .show(ui, |ui| {
+                for param in visible.iter().filter(|p| p.group.as_deref() == Some(*name)) {
+                    row(ui, param);
+                }
+            });
+    }
+}
+
+/// A `long` (enum) parameter: a combo over its declared `LABELS`, or a stepper when
+/// the shader declares no options. Without this the input is invisible in the
+/// inspector even though its value reaches the GPU.
+/// See /spec/parameter-inspector.md.
+fn render_long_row(
+    ui: &mut egui::Ui,
+    param: &ParamUIInfo,
+    label: egui::RichText,
+    current: i32,
+    id_prefix: &str,
+    make_update: &dyn Fn(&str, ParamValue) -> EngineCommand,
+    commands: &mut Vec<EngineCommand>,
+) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        let mut selected = current;
+        if param.choices.is_empty() {
+            let mut drag = egui::DragValue::new(&mut selected).speed(1.0);
+            if let (Some(lo), Some(hi)) = (param.min, param.max) {
+                drag = drag.range(lo as i32..=hi as i32);
+            }
+            ui.add(drag);
+        } else {
+            let text = param
+                .choices
+                .iter()
+                .find(|c| c.value == current)
+                .map_or_else(|| current.to_string(), |c| c.label.clone());
+            egui::ComboBox::from_id_salt(format!("long_{id_prefix}_{}", param.name))
+                .selected_text(egui::RichText::new(text).small())
+                .width(90.0)
+                .show_ui(ui, |ui| {
+                    for choice in &param.choices {
+                        ui.selectable_value(
+                            &mut selected,
+                            choice.value,
+                            egui::RichText::new(&choice.label).small(),
+                        );
+                    }
+                });
+        }
+        if selected != current {
+            commands.push(make_update(&param.name, ParamValue::Long(selected)));
+        }
+    });
+}
+
+/// A `point2D` parameter as paired numeric drags. ISF declares one `MIN` and `MAX`
+/// for the input rather than one per axis, so both axes share an extent and this is
+/// deliberately not an XY pad. See /spec/parameter-inspector.md.
+fn render_point2d_row(
+    ui: &mut egui::Ui,
+    param: &ParamUIInfo,
+    label: egui::RichText,
+    current: [f32; 2],
+    make_update: &dyn Fn(&str, ParamValue) -> EngineCommand,
+    commands: &mut Vec<EngineCommand>,
+) {
+    let mut xy = current;
+    let lo = param.min.unwrap_or(0.0);
+    let hi = param.max.unwrap_or(1.0);
+    let speed = f64::from(hi - lo) * 0.005;
+    ui.horizontal(|ui| {
+        ui.label(label);
+        let mut changed = false;
+        for axis in &mut xy {
+            changed |= ui
+                .add(egui::DragValue::new(axis).speed(speed).range(lo..=hi))
+                .changed();
+        }
+        if changed {
+            commands.push(make_update(&param.name, ParamValue::Point2D(xy)));
+        }
+    });
+}
+
 /// Render parameter controls (sliders, checkboxes, color pickers) for a list of params.
 /// Returns any param updates generated by user interaction.
 // UI render fn taking many independent egui state/handle args; no shared invariant to bundle.
@@ -259,11 +399,7 @@ pub fn render_params<S: std::hash::BuildHasher>(
     keyboard_learn_select: &mut Option<crate::keymap::KeyTarget>,
     keyboard_learn_target: Option<&str>,
 ) {
-    let hidden = hidden_prefixes(params);
-    for param in params {
-        if is_hidden(&param.name, &hidden) {
-            continue;
-        }
+    render_grouped(ui, params, id_prefix, &mut |ui, param| {
         let label = param.label.as_ref().unwrap_or(&param.name);
         // Check if this param is modulated and get color info
         let mod_key = format!("{}:{}", mod_param_prefix, param.name);
@@ -409,9 +545,25 @@ pub fn render_params<S: std::hash::BuildHasher>(
                     }
                 });
             }
-            _ => {} // Long, Point2D — not yet handled
+            ParamValue::Long(v) => render_long_row(
+                ui,
+                param,
+                egui::RichText::new(label).small(),
+                v,
+                id_prefix,
+                make_update,
+                commands,
+            ),
+            ParamValue::Point2D(p) => render_point2d_row(
+                ui,
+                param,
+                egui::RichText::new(label).small(),
+                p,
+                make_update,
+                commands,
+            ),
         }
-    }
+    });
 }
 
 /// Render effect parameter controls with optional modulation assignment
@@ -440,11 +592,7 @@ pub fn render_effect_params<S: std::hash::BuildHasher>(
     keyboard_learn_select: &mut Option<crate::keymap::KeyTarget>,
     keyboard_learn_target: Option<&str>,
 ) {
-    let hidden = hidden_prefixes(params);
-    for param in params {
-        if is_hidden(&param.name, &hidden) {
-            continue;
-        }
+    render_grouped(ui, params, id_prefix, &mut |ui, param| {
         let label = param.label.as_ref().unwrap_or(&param.name);
         let mod_key = format!("{}:{}", mod_param_prefix, param.name);
         let assignments = mod_assignments.get(&mod_key);
@@ -586,9 +734,25 @@ pub fn render_effect_params<S: std::hash::BuildHasher>(
                     }
                 });
             }
-            _ => {}
+            ParamValue::Long(v) => render_long_row(
+                ui,
+                param,
+                egui::RichText::new(label).small().weak(),
+                v,
+                id_prefix,
+                make_update,
+                commands,
+            ),
+            ParamValue::Point2D(p) => render_point2d_row(
+                ui,
+                param,
+                egui::RichText::new(label).small().weak(),
+                p,
+                make_update,
+                commands,
+            ),
         }
-    }
+    });
 }
 
 /// Render audio level bars
@@ -815,6 +979,119 @@ mod tests {
             source_id: source_id.to_string(),
             amount: 1.0,
         }
+    }
+
+    fn param_in(name: &str, group: Option<&str>) -> ParamUIInfo {
+        ParamUIInfo {
+            name: name.to_string(),
+            label: None,
+            value: ParamValue::Float(0.0),
+            min: Some(0.0),
+            max: Some(1.0),
+            group: group.map(str::to_string),
+            choices: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn group_order_follows_first_appearance() {
+        let params = [
+            param_in("a", Some("Look")),
+            param_in("b", Some("Formula")),
+            param_in("c", Some("Look")),
+            param_in("d", Some("Camera")),
+        ];
+        let refs: Vec<&ParamUIInfo> = params.iter().collect();
+        assert_eq!(
+            named_group_order(&refs),
+            vec!["Look", "Formula", "Camera"],
+            "a group sits where its first member appears, so INPUTS order is the \
+             only thing an author has to reason about"
+        );
+    }
+
+    #[test]
+    fn ungrouped_params_produce_no_named_group() {
+        let params = [param_in("a", None), param_in("b", None)];
+        let refs: Vec<&ParamUIInfo> = params.iter().collect();
+        assert!(
+            named_group_order(&refs).is_empty(),
+            "a shader that declares no groups must render as one flat list"
+        );
+    }
+
+    #[test]
+    fn group_order_ignores_hidden_params() {
+        // Grouping filters by the `_mode` convention before ordering, so a group
+        // whose only members are hidden must not leave an empty header behind —
+        // nor a scope in the exploration controls that addresses nothing.
+        let mut toggle = param_in("detail_mode", None);
+        toggle.value = ParamValue::Bool(false);
+        let params = [
+            param_in("visible", Some("Look")),
+            toggle,
+            param_in("detail_shape", Some("Detail")),
+        ];
+        assert_eq!(param_groups(&params), vec!["Look"]);
+    }
+
+    /// Render `params` through `render_grouped`, each row a bare label so a query
+    /// for a parameter's name answers "is this control in view".
+    fn grouped_harness(params: Vec<ParamUIInfo>) -> egui_kittest::Harness<'static> {
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(300.0, 600.0))
+            .build_ui(move |ui| {
+                render_grouped(ui, &params, "test", &mut |ui, param| {
+                    ui.label(&param.name);
+                });
+            });
+        harness.run();
+        harness
+    }
+
+    #[test]
+    fn grouped_params_open_the_first_group_and_close_the_rest() {
+        let harness = grouped_harness(vec![
+            param_in("brightness", None),
+            param_in("fold_scale", Some("Formula")),
+            param_in("saturation", Some("Grade")),
+        ]);
+
+        assert!(
+            harness.query_by_label("brightness").is_some(),
+            "an ungrouped parameter stays in view with no header to open"
+        );
+        assert!(
+            harness.query_by_label("Formula").is_some()
+                && harness.query_by_label("Grade").is_some(),
+            "every named group contributes a header, open or not"
+        );
+        assert!(
+            harness.query_by_label("fold_scale").is_some(),
+            "the first named group opens, so a shader does not present as headers alone"
+        );
+        assert!(
+            harness.query_by_label("saturation").is_none(),
+            "later groups start closed, which is what keeps a long shader scannable"
+        );
+    }
+
+    #[test]
+    fn clicking_a_closed_group_header_reveals_its_params() {
+        let mut harness = grouped_harness(vec![
+            param_in("fold_scale", Some("Formula")),
+            param_in("saturation", Some("Grade")),
+        ]);
+
+        harness.get_by_label("Grade").click();
+        // Collapsing headers animate open, so settle before querying.
+        harness.run();
+        harness.run();
+
+        assert!(
+            harness.query_by_label("saturation").is_some(),
+            "a closed group must be one click from its contents"
+        );
     }
 
     /// Open the dropdown and hand it to `act`, which drives the harness.

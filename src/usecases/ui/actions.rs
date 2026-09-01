@@ -147,6 +147,13 @@ pub fn collect_params(params: &ShaderParams) -> Vec<ParamUIInfo> {
                 value: *value,
                 min: def.and_then(|d| d.min),
                 max: def.and_then(|d| d.max),
+                group: def.and_then(|d| d.group.clone()),
+                choices: def
+                    .map(crate::isf::ISFInput::choices)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(value, label)| crate::usecases::ui::data::ParamChoiceUI { value, label })
+                    .collect(),
             })
         })
         .collect()

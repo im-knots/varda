@@ -1,8 +1,8 @@
 //! Deck detail: the bottom-bar mode shown when a deck is selected.
 
 use super::super::{
-    widgets, DeckUIInfo, DepthPreproUI, EffectDrag, LibraryDrag, PointCloudUI, ScreenCaptureUI,
-    TapUI, UIActions, UIData,
+    widgets, DeckUIInfo, DepthPreproUI, EffectDrag, LibraryDrag, ParamUIInfo, PointCloudUI,
+    ScreenCaptureUI, TapUI, UIActions, UIData,
 };
 use super::utils::{
     channel_color, format_time, render_collapsed_column, render_effect_drag_ghost,
@@ -451,6 +451,118 @@ fn render_capture_controls(
                 data,
                 actions,
             );
+        }
+    });
+}
+
+/// A seed nobody has to choose.
+fn fresh_seed() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos() as u64)
+}
+
+/// Reset, randomize, and mutate for a deck's generator parameters.
+///
+/// Randomize and mutate only produce candidates. Deck presets are what name and
+/// keep one, so the loop is: mutate, look, save a preset if it is good, undo if it
+/// is not. See spec/parameter-exploration.md.
+fn render_exploration_controls(
+    ui: &mut egui::Ui,
+    deck_uuid: &str,
+    params: &[ParamUIInfo],
+    commands: &mut Vec<EngineCommand>,
+) {
+    let amount_id = ui.id().with(("mutate_amount", deck_uuid));
+    let scope_id = ui.id().with(("explore_scope", deck_uuid));
+    let mut amount = ui.data_mut(|d| d.get_temp::<f32>(amount_id)).unwrap_or(0.1);
+
+    // A group that has since gone (a different shader, or a `_mode` toggle that
+    // hid its section) must not leave a scope selected that no longer exists.
+    let groups = widgets::param_groups(params);
+    let mut scope = ui
+        .data_mut(|d| d.get_temp::<String>(scope_id))
+        .filter(|s| groups.contains(&s.as_str()));
+
+    ui.horizontal(|ui| {
+        if ui.button("Reset").clicked() {
+            commands.push(EngineCommand::ResetGeneratorParamsToDefaults {
+                deck_uuid: deck_uuid.to_string(),
+            });
+        }
+        if ui
+            .button("Random")
+            .on_hover_text("Draw the parameters in scope afresh from their ranges")
+            .clicked()
+        {
+            commands.push(EngineCommand::RandomizeGeneratorParams {
+                deck_uuid: deck_uuid.to_string(),
+                group: scope.clone(),
+                seed: fresh_seed(),
+            });
+        }
+        if ui
+            .button("Mutate")
+            .on_hover_text("Nudge the parameters in scope, keeping the current look")
+            .clicked()
+        {
+            commands.push(EngineCommand::MutateGeneratorParams {
+                deck_uuid: deck_uuid.to_string(),
+                group: scope.clone(),
+                amount,
+                seed: fresh_seed(),
+            });
+        }
+    });
+
+    ui.horizontal(|ui| {
+        if ui
+            .add(
+                egui::DragValue::new(&mut amount)
+                    .speed(0.01)
+                    .range(0.01..=1.0)
+                    .prefix("by "),
+            )
+            .on_hover_text("Mutation size, as a fraction of each parameter's range")
+            .changed()
+        {
+            ui.data_mut(|d| d.insert_temp(amount_id, amount));
+        }
+        // Scoping is what makes exploration usable on a shader with fifty
+        // parameters: hunt a formula without disturbing a grade that already works.
+        if !groups.is_empty() {
+            let before = scope.clone();
+            egui::ComboBox::from_id_salt(("explore_scope_combo", deck_uuid))
+                .selected_text(
+                    egui::RichText::new(scope.as_deref().unwrap_or("Everything")).small(),
+                )
+                .width(100.0)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut scope,
+                        None,
+                        egui::RichText::new("Everything").small(),
+                    );
+                    for name in &groups {
+                        ui.selectable_value(
+                            &mut scope,
+                            Some((*name).to_string()),
+                            egui::RichText::new(*name).small(),
+                        );
+                    }
+                })
+                .response
+                .on_hover_text("Which section a random or a mutation touches");
+            if scope != before {
+                ui.data_mut(|d| match &scope {
+                    Some(name) => {
+                        d.insert_temp(scope_id, name.clone());
+                    }
+                    None => {
+                        d.remove_temp::<String>(scope_id);
+                    }
+                });
+            }
         }
     });
 }
@@ -1237,9 +1349,7 @@ pub(super) fn render_selected_deck_detail(
                                         data.keyboard_learn_target.as_deref(),
                                     );
                                     ui.add_space(4.0);
-                                    if ui.button("Reset").clicked() {
-                                        actions.commands.push(EngineCommand::ResetGeneratorParamsToDefaults { deck_uuid: deck.uuid.clone() });
-                                    }
+                                    render_exploration_controls(ui, &deck.uuid, &gen_params.params, &mut actions.commands);
                                 }
                             });
                             });

@@ -618,10 +618,11 @@ impl FaceDetectAnalyzer {
         }
 
         TextureData {
+            generation: 0,
             width: OVERLAY_SIZE,
             height: OVERLAY_SIZE,
             format: "rgba8unorm".into(),
-            data: self.landmark_tex_buffer.clone(),
+            data: self.landmark_tex_buffer.clone().into(),
         }
     }
 
@@ -660,10 +661,11 @@ impl FaceDetectAnalyzer {
         }
 
         TextureData {
+            generation: 0,
             width: FACE_DATA_W as u32,
             height: MAX_FACES as u32,
             format: "rgba8unorm".into(),
-            data: self.face_data_buffer.clone(),
+            data: self.face_data_buffer.clone().into(),
         }
     }
 
@@ -708,10 +710,11 @@ impl FaceDetectAnalyzer {
         }
 
         TextureData {
+            generation: 0,
             width: DOSSIER_TEX_W as u32,
             height: MAX_FACES as u32,
             format: "rgba8unorm".into(),
-            data: self.dossier_text_buffer.clone(),
+            data: self.dossier_text_buffer.clone().into(),
         }
     }
 
@@ -1251,6 +1254,7 @@ mod tests {
             width: 64,
             height: 64,
             timestamp: Instant::now(),
+            state: crate::analyzer::AnalyzerStateSnapshot::default(),
         };
         let tensor = analyzer.preprocess(&input);
         assert_eq!(tensor.shape(), &[1, 3, 128, 128]);
@@ -1363,6 +1367,7 @@ mod tests {
             width: 64,
             height: 64,
             timestamp: Instant::now(),
+            state: crate::analyzer::AnalyzerStateSnapshot::default(),
         };
         let bbox = [0.2, 0.2, 0.8, 0.8];
         let tensor = analyzer.preprocess_face_crop(&input, &bbox);

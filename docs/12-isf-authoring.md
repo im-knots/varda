@@ -39,10 +39,16 @@ Every ISF shader starts with a JSON block in a block comment:
 | `bool` | `uint` | DEFAULT (true/false) | Toggle switch |
 | `long` | `int` | VALUES, LABELS, DEFAULT | Dropdown / enum selector |
 | `color` | `vec4` | DEFAULT [R,G,B,A] | Color picker (0.0–1.0 per channel) |
-| `point2D` | `vec2` | DEFAULT [x,y] | 2D position picker (0.0–1.0) |
+| `point2D` | `vec2` | DEFAULT [x,y] | Paired X and Y number drags, bounded by MIN and MAX |
 | `image` | texture2D | — | Input texture (filters and transitions) |
 
-All numeric parameters (float, color components, point2D axes) are MIDI/OSC-mappable and modulatable.
+Every input also accepts an optional `GROUP`, which sections it in the inspector. See
+[Grouping parameters](#grouping-parameters).
+
+The engine modulates every numeric parameter, including individual color channels and point2D axes,
+and all of them are reachable over OSC and the HTTP API. The inspector's modulation and learn
+affordances are currently attached to `float` sliders only, so assigning a modulator to a point2D
+axis or a color channel has to be done through the API rather than from the deck panel.
 
 ### Example: Float Parameter
 
@@ -55,6 +61,39 @@ All numeric parameters (float, color components, point2D axes) are MIDI/OSC-mapp
 ```json
 { "NAME": "mode", "TYPE": "long", "DEFAULT": 0, "VALUES": [0, 1, 2], "LABELS": ["Normal", "Mirror", "Tile"] }
 ```
+
+`VALUES` are what the shader receives, and `LABELS` are what the performer reads. Declaring `LABELS`
+alone is allowed, and the index becomes the value. Declaring neither leaves the input as a plain
+number stepper, since there is nothing to put in a list.
+
+### Grouping parameters
+
+A shader with more than a dozen parameters becomes hard to work with as one flat column. Give an
+input a `GROUP` and the inspector sections it:
+
+```json
+"INPUTS": [
+    { "NAME": "brightness", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 2.0 },
+    { "NAME": "fold_scale", "TYPE": "float", "GROUP": "Formula", "DEFAULT": 2.0, "MIN": 1.0, "MAX": 4.0 },
+    { "NAME": "iterations", "TYPE": "float", "GROUP": "Formula", "DEFAULT": 8.0, "MIN": 1.0, "MAX": 24.0 },
+    { "NAME": "fog", "TYPE": "float", "GROUP": "Grade", "DEFAULT": 0.3, "MIN": 0.0, "MAX": 1.0 }
+]
+```
+
+Three rules, and no other knobs:
+
+- **Ungrouped inputs come first**, with no header and no way to collapse them. Put the handful of
+  controls you want a performer reaching for mid-set here and they stay in view.
+- **Named groups follow in first-appearance order.** A group sits where its first member appears in
+  `INPUTS`, so ordering `INPUTS` is the only thing you have to think about.
+- **The first named group is open, the rest start closed.** Opening a fifty-parameter shader shows a
+  short list of section headers instead of a long scroll.
+
+`GROUP` is presentation only. It does not change parameter names, modulation keys, MIDI or OSC paths,
+or anything that gets persisted, so adding groups to an existing shader is safe and invisible to any
+scene or preset already using it. It is also optional: a shader that declares no groups renders as
+one flat list, which is how every shader behaved before groups existed, and a shader carrying `GROUP`
+still loads in other ISF hosts because they ignore metadata keys they do not recognise.
 
 ## Built-in Uniforms
 
@@ -451,6 +490,95 @@ Design for it: drive state changes from `TIMEDELTA`, or rate-limit against `FRAM
 vec2 texel = 1.0 / RENDERSIZE;
 vec2 snapped = (floor(uv * RENDERSIZE) + 0.5) * texel;
 ```
+
+### Beauty pass plus cinematic post
+
+A raymarched generator can carry its own compositing chain instead of relying on downstream
+effect decks, which is what `fractal_explorer.fs` does. Two non-persistent passes:
+
+```json
+"PASSES": [
+    { "TARGET": "sceneBuffer", "FLOAT": true },
+    {}
+]
+```
+
+Pass 0 marches the scene and writes **HDR colour in rgb and normalized depth in alpha**. Pass 1
+reads that one buffer and does depth of field, threshold bloom, chromatic aberration, radial blur
+and the grade. Points worth knowing before copying the pattern:
+
+- **Alpha is free real estate in an intermediate pass.** A generator's *final* alpha is deck
+  coverage and must be 1.0, but a pass buffer's alpha is yours. Packing depth there is what lets a
+  single-buffer post pass do focus and haze work without a second target. Normalize by a constant
+  the shader also uses to convert a world-space focus parameter, so the two agree.
+- **Every pass buffer is `Rgba16Float`** regardless of `FLOAT: true`, because all pass targets use
+  the compositing format. That is enough range for HDR emission and linear depth, and it is why
+  bloom can threshold above 1.0 and still find something there.
+- **Keep the post pass unclamped and linear.** Varda tonemaps the composite downstream, so a grade
+  that clamps to 1.0 throws away exactly the highlight headroom the tonemap wants. Put the
+  saturation and contrast in the shader; leave the display transform alone.
+- **Sampling is nearest**, per the note above, so post taps land where you put them. Offsets in uv
+  need dividing by the aspect ratio or radial effects come out elliptical.
+
+
+### Raymarch and post traps
+
+Every one of these cost real debugging time and none announces itself:
+
+- **The hit threshold must exceed any level-of-detail floor the map puts under `d`.** If the map
+  ends with `d = max(d, g_pix * 0.2)` and the loop tests `d < detail * exp(k * t)`, then once the
+  pixel footprint outgrows `detail` no ray can ever register a hit: it creeps along the surface at
+  the floor value until the step budget runs out and is reported as a *miss*. A fractal estimator
+  hides this by overshooting to a negative distance now and then. An exact analytic surface
+  converges to zero from above and never does, so the symptom only appears when you add designed
+  geometry. Derive the threshold from the same footprint: `max(detail * exp(k * t), g_pix * 0.35)`.
+- **`calcNormal` and `softShadow` re-enter the map and clobber its output globals.** Capture the
+  orbit trap *and* the material id immediately after the march, before taking a normal. Reading them
+  afterwards shades every surface as whatever the last normal probe happened to land on, which looks
+  like flat facets that slide around as the camera moves.
+- **Escape iteration count is nearly constant on the surface you are shading.** It is the obvious
+  palette input and it renders flat: a point on the boundary is by definition one whose orbit does
+  *not* escape, so the count sits at the iteration cap across almost the whole visible surface. What
+  varies point to point is how hard the map magnified the neighbourhood, so key the palette off
+  `log2(dr)` instead. Orbit traps are the other option, but they fail on a stack of conformal folds —
+  dividing the trap minimum by a derivative that grows like scale-to-the-iteration drives it to zero
+  and it stops describing the structure.
+- **Normalize the depth channel to the depth range the subject occupies, not to the march limit.**
+  Dividing by a generous `MAX_DIST` crams every surface into the bottom fifth of the channel, and a
+  depth-of-field pass reading it then has almost no dynamic range to separate anything, so it reads
+  as "DoF does nothing" no matter how the aperture is set.
+- **For a moving camera, soften monotonically with depth instead of modelling a focus plane.** A focus
+  plane is bidirectional (everything nearer than it blurs too) and has to be placed, which is a losing
+  fight on a generator whose camera moves: a constant focus distance drifts off the subject within
+  seconds, and autofocusing on frame centre replaces drift with pumping. Sampling more central pixels
+  does not fix that, because the middle of frame cannot know about something close in a corner. Ramp
+  the blur with distance instead — near always crisp, far always soft — and there is no plane to place,
+  none to drift, and nothing to pump, while the aliasing and jitter on fine distant geometry that the
+  pass exists to bury still gets buried. Measured on `fractal_explorer.fs` across one flight, this beat
+  a centre-cluster autofocus on both counts: sharpness variation 1.32x vs 1.33x, and mean frame
+  sharpness 40% higher.
+- **Once blur is monotonic in depth, one comparison keeps a gather honest.** A tap should contribute
+  only if it is at least as far away as the pixel gathering it, otherwise crisp near geometry smears
+  outward and halos over what is behind it. With a monotonic ramp, "is behind" and "is at least as
+  soft" are the same test, so `step(depth - eps, tapDepth)` is the whole guard.
+- **`pow(col, 1.3)` is not a contrast control, it is a darkener.** It pins 1.0 and drags everything
+  below it down, which can take an authored atmosphere value to a thousandth of itself and put pure
+  black in frame. Apply contrast about a mid-grey pivot: `P * pow(col / P, g)` with `P` around 0.18.
+
+### Previewing while you author
+
+`examples/shader_preview.rs` renders a shader headless and writes a PNG, which is the fastest way
+to iterate on a generator without launching the app:
+
+```sh
+LIBRARY_PATH="/opt/homebrew/lib:${LIBRARY_PATH:-}" cargo run --release --example shader_preview -- \
+    shaders/fractal_explorer.fs /tmp/frame.png --size 960x540 --frame 300 --set stack_cap=18
+```
+
+It steps a fixed 60 fps clock up to `--frame`, so phase accumulators integrate exactly as they
+would live and a frame index is reproducible between runs. `--set NAME=VALUE` overrides any float,
+bool or long input. The frame comes off the mixer composite, so it has been through the real
+compositing and tonemap path rather than a preview approximation.
 
 ## Compute Shaders
 

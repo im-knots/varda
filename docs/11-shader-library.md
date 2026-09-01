@@ -11,12 +11,29 @@ Shaders are classified automatically by type:
 
 ## Generators
 
+### Perturbation Zoom Showcase
+
+The production `fractal_explorer.fs` contract is **IN PROGRESS**. It requires host-reference
+perturbation with fixed camera and aim, manual `dz_zoom_exp`, a looping maximum-depth flight, and a
+static four-slot formula stack. It does not expose direct, split, lockstep, manual anchor, orbit,
+sway, field-of-view animation, distance animation, or formula evolution. Compatible beauty and
+post-processing remain available.
+
+Unsupported long-lived anchors fail closed with an explicit `payload unavailable` diagnostic.
+Development-saved `.varda/` parameters for removed experimental controls are intentionally
+unsupported. Acceptance requires absolute 720p and 1080p cost, depth scaling, certificate coverage,
+and accepted fixed-camera zoom-6 and zoom-12 captures. Direct comparison is not an acceptance gate.
+
+The older `fractal_explorer.fs` catalog description in the table below is retained as
+**SUPERSEDED HISTORICAL MATERIAL**. It does not describe the accepted production controls or
+acceptance criteria.
+
 | Shader | Description |
 |--------|-------------|
-| `abstract_field.fs` | Abstract generative field — flowing organic patterns |
+| `abstract_field.fs` | Abstract generative field: flowing organic patterns |
 | `alien_grove.fs` | Raymarched night forest flythrough of lacy umbel trees rising out of circular wells cut in the terrain, with smaller Menger crystal lattices and recursive fern-corals grown between them; RGB energy pulses run along circuit traces etched into the rock, which meander with it, ring the lip of every well, converge on webs centred under each trunk, climb the trunks and spars, and color their terminal auras beneath a cratered moon and log-periodic fractal halo |
 | `apollonian_glow.fs` | Raymarched Kali-fold + Apollonian fractal tunnel lit entirely by an accumulated glow trail, with reflection pass |
-| `aurora_borealis.fs` | Northern lights — fake-volumetric raymarch through folded noise sheets, green-to-violet curtains with starfield |
+| `aurora_borealis.fs` | Northern lights: fake-volumetric raymarch through folded noise sheets, green-to-violet curtains with starfield |
 | `bars.fs` | Animated bars/stripes generator |
 | `bicycle_day.fs` | Raymarched "Amazing Surface" fractal tunnel shaded by normals + dark edge lines, low sun, procedural rainbow trail, with fractal trees lining the roadside |
 | `big_bang.fs` | Cyclical cosmic evolution with fluid-sim galaxy dust, stellar lifecycle, expansion/crunch |
@@ -29,23 +46,21 @@ Shaders are classified automatically by type:
 | `cymatics.fs` | Chladni plate and Faraday wave vibration pattern generator |
 | `dark_matter.fs` | Cosmic web filament network (neuro noise) |
 | `digital_brain.fs` | Glowing voronoi-noise plasma with drifting camera and pulsing "moving electrons" octaves |
-| `eyes.fs` | Tiled grid of procedural cartoon eyes — autonomous blink, drifting gaze, IQ cosine-palette irises |
-| `eyes_depth.fs` | The same eyes, tracking people seen by a Kinect: the gaze follows the motion-weighted centroid of whoever is in view, lids wake as someone approaches, pupils dilate on sudden movement. **Requires an attached depth sensor** — see [ISF authoring § `depth_sensor`](12-isf-authoring.md#depth_sensor--live-depth-camera) |
+| `eyes.fs` | Tiled grid of procedural cartoon eyes: autonomous blink, drifting gaze, IQ cosine-palette irises |
+| `eyes_depth.fs` | The same eyes, tracking people seen by a Kinect: the gaze follows the motion-weighted centroid of whoever is in view, lids wake as someone approaches, pupils dilate on sudden movement. **Requires an attached depth sensor**. See [ISF authoring § `depth_sensor`](12-isf-authoring.md#depth_sensor--live-depth-camera) |
 | `fire.fs` | Procedural animated fire effect |
 | `fractal.fs` | Mandelbrot / Julia set generator |
-| `fractal_mandelbox.fs` | Raymarched 3D Mandelbox explorer with flythrough camera and orbit-trap coloring |
-| `fractal_mandelbulb.fs` | Raymarched 3D Mandelbulb explorer with flythrough camera and orbit-trap coloring |
-| `fractal_menger.fs` | Raymarched 3D Menger sponge explorer with flythrough camera and orbit-trap coloring |
-| `game_of_life.fs` | Conway's Game of Life — cellular automaton with persistent state |
+| `fractal_explorer.fs` | Raymarched 3D fractal explorer built on a four-slot formula stack. Each slot picks a distance estimator (Mandelbox, Amazing Box, Menger, Sierpinski, Mandelbulb, Pseudo-Kleinian, lin-combine, rotate, co-cube, 4D rotate, or off) and takes a weighted share of the iteration budget; the slots interleave, so order matters, and `Slot Order` permutes them without retyping the dropdowns. The camera approaches geometrically rather than linearly, with the detail threshold, depth range and fold count all scaling with it, so a dive keeps resolving new structure instead of arriving at a blob. The descent runs one way and wraps rather than breathing in and back out: `Zoom Cycle` sets how many factors of the stack's own fold scale it falls through before starting over (eight steps of a scale-2 stack is a descent of two hundred and fifty-six), and because a self-similar structure repeats under exactly that scaling, the wrap costs no more change than an ordinary frame of motion. It converges on a point on the surface rather than on the world origin, which is the symmetry centre every folding formula shares and the reason deep dives used to bottom out on the same mirrored lump. A probe ray cast from the parked camera picks that point automatically, and `Aim X/Y/Z` steers the probe when you want a particular feature; taking the aim off the formula's mirror planes, which usually means giving `Aim Z` a nudge, is what buys an off-centre asymmetric approach instead of a kaleidoscope. `Distance` zooms as well as dollies, so pulling it in tightens thresholds and buys folds exactly the way the dive does. Two kinds of atmosphere: distance haze, and fog keyed to the fold count at each point in space (`Atmosphere` group), which hangs in the space and pools in the troughs. `Fog Iteration` places the shell that band picks out, and it is the whole look: below about four every point in open space qualifies and the fog floods the frame, six or seven hangs it in the space, and by nine it has gone. Finished in a second pass with distance softening off the marched Z, selective highlight bloom, chromatic aberration, twin ghost reflections with a matte-box flare, key-aligned light shafts and a look grade. The `Composition` group exists to break the tonal evenness a fractal has by construction: a bright side and a fallen-away side placed where the key light actually is, a dark foreground against a lifted background, and local contrast rather than global. The palette is banded in view depth rather than fixed, so near and far parts of the structure take different hues and each shifts as it comes toward camera — `Depth Colour Shift` in the `Palette` group, at zero for the fixed three-colour scheme. `Julia Seed` swaps the sample point for a fixed seed in the folding formulas, which is a whole second family of shapes and the axis to animate when you want the structure itself to move. Ships with the fractal parked and only the camera moving, since a shot reads best with one degree of freedom in motion: `Formula / Energy Speed` is the beat you bring in, and `Evolve Target` picks the single parameter it drives (fold scale by default, since every folding formula reads it). The march converges to a pixel rather than to an absolute distance, so `Detail` reads as pixels of convergence: one at the default, down to a third for a sharper and slower march, up to nearly three for a softer and faster one. It therefore means the same thing at every distance, zoom and output resolution, and the march no longer chases structure finer than the frame can hold, which is what used to leave stripes on a pulled-back camera and torn holes of background through solid geometry up close. The fold cutoff crossfades across one fold instead of switching at one, so the surface slides between levels of detail as the camera moves rather than snapping between them. The sky defaults near black with a star field rather than a lifted haze, which is what projection and dome output need — raise `Atmosphere Lift` to trade that for flat-screen depth staging. `Horizon Mirror` folds the sky back on itself below the waterline; because a fractal is usually already symmetric there, the frame reads as a mirror-flat lake. Mutate the `Stack` group to hunt looks — see [Finding a Look](04-performance.md#finding-a-look-random-and-mutate) |
+| `game_of_life.fs` | Conway's Game of Life: cellular automaton with persistent state |
 | `generative_feedback.fs` | Evolving patterns using a persistent feedback buffer |
-| `gradient.fs` | Color gradient generator — linear, radial, or angular |
+| `gradient.fs` | Color gradient generator: linear, radial, or angular |
 | `graph_network.fs` | Physics-driven floating nodes that connect by proximity |
 | `grid.fs` | Dot/point grid generator |
 | `hilbert_curve.fs` | Space-filling fractal growing outward from center |
 | `lagrangian.fs` | Standard Model Lagrangian typed terminal-style with parallax layers |
 | `lines.fs` | Animated geometric lines generator |
-| `liquid_light.fs` | 1960s liquid light show — oil/water/dye overhead projector psychedelia |
-| `liquid_light_depth.fs` | The same look driven by a live Kinect: bodies in the sensor's view push a real advected fluid and read as flowing dye outlines. **Requires an attached depth sensor** — see [ISF authoring § `depth_sensor`](12-isf-authoring.md#depth_sensor--live-depth-camera) |
+| `liquid_light.fs` | 1960s liquid light show: oil/water/dye overhead projector psychedelia |
+| `liquid_light_depth.fs` | The same look driven by a live Kinect: bodies in the sensor's view push a real advected fluid and read as flowing dye outlines. **Requires an attached depth sensor**. See [ISF authoring § `depth_sensor`](12-isf-authoring.md#depth_sensor--live-depth-camera) |
 | `noise.fs` | Procedural simplex-style animated noise |
 | `oscilloscope.fs` | Audio-reactive waveform and shape visualizer with 2D/3D modes |
 | `particle.fs` | Procedural particle field generator |
@@ -56,7 +71,7 @@ Shaders are classified automatically by type:
 | `radar.fs` | Radar sweep generator |
 | `rings.fs` | Concentric animated rings generator |
 | `sacred_geometry.fs` | Flower of Life, Metatron's Cube, Sri Yantra, Fibonacci spiral, and more |
-| `shaper.fs` | Geometric shape generator — circle, triangle, square, star, polygon |
+| `shaper.fs` | Geometric shape generator: circle, triangle, square, star, polygon |
 | `solid_color.fs` | Solid color fill generator |
 | `star_nest.fs` | Volumetric raymarched star-field/nebula tunnel via an iterated absolute-inversion fractal, with look_at camera rotation |
 | `starfield.fs` | Classic parallax star tunnel |
@@ -75,7 +90,7 @@ Shaders are classified automatically by type:
 |--------|-------------|
 | `add_subtract.fs` | Add/subtract RGB values |
 | `ascii_art.fs` | Renders image using real font glyph atlases |
-| `big_brother.fs` | Surveillance overlay — face detection with dossier info boxes |
+| `big_brother.fs` | Surveillance overlay: face detection with dossier info boxes |
 | `block_distort.fs` | Scrambles image in blocky chunks |
 | `blur.fs` | Gaussian blur |
 | `brightness_contrast.fs` | Brightness and contrast adjustment |
@@ -147,7 +162,7 @@ Shaders are classified automatically by type:
 |--------|-------------|
 | `transition_dissolve.fs` | Smooth crossfade dissolve between two sources |
 | `transition_iris.fs` | Circular reveal from center |
-| `transition_luma_key.fs` | Luma-based transition — brighter areas transition first |
+| `transition_luma_key.fs` | Luma-based transition: brighter areas transition first |
 | `transition_push.fs` | Slides one image, pushing the other off |
 | `transition_wipe_down.fs` | Vertical wipe from top to bottom |
 | `transition_wipe_left.fs` | Horizontal wipe from left to right |
@@ -161,7 +176,7 @@ Shaders are classified automatically by type:
 |--------|-------------|
 | `black_hole_sim.comp` | N-body black hole with 65,536 persistent shell particles, Schwarzschild lensing, accretion disk, Hawking glow |
 | `compute_gradient.comp` | Simple animated gradient (compute shader) |
-| `cosmic_web.comp` | Dark matter cosmic web via the Zel'dovich approximation — analytic Fourier mode synthesis from a CDM power spectrum, cloud-in-cell density deposit, growth-factor collapse |
+| `cosmic_web.comp` | Dark matter cosmic web via the Zel'dovich approximation: analytic Fourier mode synthesis from a CDM power spectrum, cloud-in-cell density deposit, growth-factor collapse |
 
 > The catalog grows over time. The authoritative list is whatever sits in your workspace `shaders/` directory.
 
