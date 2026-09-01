@@ -368,7 +368,10 @@ impl DeckAnalyzers {
         // Create or recreate readback buffer if dimensions or format changed
         if self.readback.is_none()
             || self.readback_size != (tex_width, tex_height)
-            || self.readback.as_ref().map(crate::renderer::ReadbackBuffer::format)
+            || self
+                .readback
+                .as_ref()
+                .map(crate::renderer::ReadbackBuffer::format)
                 != Some(readback_format)
         {
             self.readback = Some(crate::renderer::ReadbackBuffer::new(
@@ -556,14 +559,14 @@ fn frame_to_rgba8(frame: &crate::renderer::ReadbackFrame) -> Vec<u8> {
         R::Rgba8 => bytes.to_vec(),
         R::Bgra8 => {
             let mut out = bytes.to_vec();
-            for pixel in out.chunks_exact_mut(4) {
+            for pixel in out.as_chunks_mut::<4>().0 {
                 pixel.swap(0, 2);
             }
             out
         }
         R::Rgba16Float => {
             let mut out = Vec::with_capacity(bytes.len() / 2);
-            for pixel in bytes.chunks_exact(8) {
+            for pixel in bytes.as_chunks::<8>().0 {
                 for channel in 0..4 {
                     let raw = u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]);
                     let value = f32::from(half::f16::from_bits(raw));
@@ -582,7 +585,7 @@ fn frame_to_rgba8(frame: &crate::renderer::ReadbackFrame) -> Vec<u8> {
         }
         R::Rgba16Unorm => {
             let mut out = Vec::with_capacity(bytes.len() / 2);
-            for pixel in bytes.chunks_exact(8) {
+            for pixel in bytes.as_chunks::<8>().0 {
                 for channel in 0..4 {
                     let raw = u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]);
                     out.push((raw >> 8) as u8);
@@ -592,7 +595,7 @@ fn frame_to_rgba8(frame: &crate::renderer::ReadbackFrame) -> Vec<u8> {
         }
         R::Rgb10A2 => {
             let mut out = Vec::with_capacity(bytes.len());
-            for pixel in bytes.chunks_exact(4) {
+            for pixel in bytes.as_chunks::<4>().0 {
                 let word = u32::from_le_bytes([pixel[0], pixel[1], pixel[2], pixel[3]]);
                 out.push(((word & 0x3ff) >> 2) as u8);
                 out.push((((word >> 10) & 0x3ff) >> 2) as u8);
@@ -611,10 +614,9 @@ fn frame_to_rgba8(frame: &crate::renderer::ReadbackFrame) -> Vec<u8> {
 /// Build the default analyzer registry with all built-in analyzers.
 pub(crate) fn default_registry() -> AnalyzerRegistry {
     #[allow(unused_mut)]
-    let mut registry = AnalyzerRegistry::new()
-        .register("brightness", || {
-            Box::new(brightness::BrightnessAnalyzer::new())
-        });
+    let mut registry = AnalyzerRegistry::new().register("brightness", || {
+        Box::new(brightness::BrightnessAnalyzer::new())
+    });
     #[cfg(feature = "face-detection")]
     {
         registry = registry.register("face_detect", || {

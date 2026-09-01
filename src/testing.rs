@@ -111,5 +111,4 @@ mod tests {
         );
         assert!(root.is_dir());
     }
-
 }
