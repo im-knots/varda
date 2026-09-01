@@ -5,8 +5,6 @@
 pub(crate) mod brightness;
 #[cfg(feature = "face-detection")]
 pub(crate) mod face_detect;
-pub(crate) mod fractal_certification;
-pub(crate) mod fractal_reference_orbit;
 pub(crate) mod traits;
 
 use std::collections::HashMap;
@@ -614,9 +612,6 @@ fn frame_to_rgba8(frame: &crate::renderer::ReadbackFrame) -> Vec<u8> {
 pub(crate) fn default_registry() -> AnalyzerRegistry {
     #[allow(unused_mut)]
     let mut registry = AnalyzerRegistry::new()
-        .register("fractal_reference_orbit", || {
-            Box::new(fractal_reference_orbit::FractalReferenceOrbitAnalyzer::new())
-        })
         .register("brightness", || {
             Box::new(brightness::BrightnessAnalyzer::new())
         });

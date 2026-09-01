@@ -55,8 +55,8 @@ pub(crate) fn texture_format_from_str(format: &str) -> Option<wgpu::TextureForma
         "rg16float" => wgpu::TextureFormat::Rg16Float,
         "rgba8unorm" => wgpu::TextureFormat::Rgba8Unorm,
         "rgba16float" => wgpu::TextureFormat::Rgba16Float,
-        // Raw-float data payloads (e.g. the fractal reference orbit). Not
-        // filterable: only legal for shaders that read with `texelFetch`.
+        // Raw-float data payloads. Not filterable: only legal for shaders
+        // that read with `texelFetch`.
         "rgba32float" => wgpu::TextureFormat::Rgba32Float,
         "color_path" => crate::renderer::context::COLOR_PATH_FORMAT,
         _ => return None,

@@ -269,10 +269,6 @@ harness = false
 name = "presentation"
 harness = false
 
-[[bench]]
-name = "fractal_deep_zoom"
-harness = false
-
 
 [profile.release]
 opt-level = 3
