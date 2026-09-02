@@ -580,8 +580,7 @@ pub fn param_value_to_norm_f32(value: &ParamValue) -> f32 {
 /// range (matching the fader path). `Color` and `Point2D` keep their full
 /// channel data.
 ///
-/// The coercion is load-bearing, not cosmetic. [`ParamValue`] is
-/// `#[serde(untagged)]` with `Float` listed first, so every JSON number an API
+/// [`ParamValue`] is `#[serde(untagged)]` with `Float` listed first, so every JSON number an API
 /// client sends deserializes as `Float` whatever the param really is. Writing
 /// that straight into a `long` leaves the shader reading a float's bit pattern
 /// as an integer: `2.0` arrives as 1073741824, no `mode ==` branch matches, and
