@@ -165,7 +165,18 @@ pub trait MixerCommands {
     /// `luts/` directory or cannot be parsed as a supported LUT file.
     fn load_lut(&mut self, filename: &str) -> Result<()>;
     fn unload_lut(&mut self);
-    fn set_param(&mut self, path: &str, value: ParamValue);
+    /// Apply a typed value to the parameter at `path`.
+    ///
+    /// # Errors
+    /// Returns a [`crate::param_router::ParamRouteError`] if the path matches no
+    /// route, names an entity or parameter that does not resolve, or aims a
+    /// value at a parameter that cannot accept it. Consumers surface this rather
+    /// than reporting a write that never landed as a success.
+    fn set_param(
+        &mut self,
+        path: &str,
+        value: ParamValue,
+    ) -> std::result::Result<(), crate::param_router::ParamRouteError>;
 }
 
 /// Read-only queries for mixer state.
