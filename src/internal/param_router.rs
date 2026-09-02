@@ -516,8 +516,7 @@ pub fn apply_typed_param_by_path(
                 &mut mixer.channels_mut()[ch].decks[dk].deck.generator_params,
                 name,
                 value,
-            );
-            Ok(())
+            )
         }
         ["deck", uuid, "effect", fx_uuid, "param", name] => {
             let (ch, dk) = mixer
@@ -528,8 +527,7 @@ pub fn apply_typed_param_by_path(
                 .iter()
                 .position(|e| e.uuid() == *fx_uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Effect, fx_uuid))?;
-            apply_typed_param(&mut effects[ek].params, name, value);
-            Ok(())
+            apply_typed_param(&mut effects[ek].params, name, value)
         }
         ["ch", ch_uuid, "effect", fx_uuid, "param", name] => {
             let ch = mixer
@@ -540,8 +538,7 @@ pub fn apply_typed_param_by_path(
                 .iter()
                 .position(|e| e.uuid() == *fx_uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Effect, fx_uuid))?;
-            apply_typed_param(&mut effects[ek].params, name, value);
-            Ok(())
+            apply_typed_param(&mut effects[ek].params, name, value)
         }
         ["master", "effect", fx_uuid, "param", name] => {
             let effects = mixer.master_effects_mut();
@@ -549,8 +546,7 @@ pub fn apply_typed_param_by_path(
                 .iter()
                 .position(|e| e.uuid() == *fx_uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Effect, fx_uuid))?;
-            apply_typed_param(&mut effects[ek].params, name, value);
-            Ok(())
+            apply_typed_param(&mut effects[ek].params, name, value)
         }
         // Inherently-scalar paths (opacity, crossfader, video, mod, …): flatten.
         _ => apply_param_by_path(mixer, path, param_value_to_norm_f32(&value)),
@@ -576,13 +572,91 @@ pub fn param_value_to_norm_f32(value: &ParamValue) -> f32 {
     }
 }
 
-/// Set a typed value on a shader param: `Float` is normalized-scaled against the
-/// param definition (matching the fader path); every other variant is written
-/// as-is so colors and 2D points keep their type and full channel data.
-fn apply_typed_param(params: &mut crate::ShaderParams, name: &str, value: ParamValue) {
+/// Set a typed value on a shader param, coerced to the param's declared ISF type.
+///
+/// The stored value's variant *is* the declared type, and it decides how the
+/// incoming value applies: a `long` takes a discrete choice index, a `bool` a
+/// flag, a `float` a normalized 0.0–1.0 fraction scaled against the param's
+/// range (matching the fader path). `Color` and `Point2D` keep their full
+/// channel data.
+///
+/// [`ParamValue`] is `#[serde(untagged)]` with `Float` listed first, so every JSON number an API
+/// client sends deserializes as `Float` whatever the param really is. Writing
+/// that straight into a `long` leaves the shader reading a float's bit pattern
+/// as an integer: `2.0` arrives as 1073741824, no `mode ==` branch matches, and
+/// the effect silently passes its input through. Only index 0 ever worked,
+/// because `0.0f32` and `0i32` share a bit pattern.
+///
+/// # Errors
+///
+/// Returns [`ParamRouteError::UnknownParam`] if the shader has no param by that
+/// name, and [`ParamRouteError::WrongState`] if a scalar is aimed at a `color`
+/// or `point2D` param, rather than dropping either write silently.
+fn apply_typed_param(
+    params: &mut crate::ShaderParams,
+    name: &str,
+    value: ParamValue,
+) -> Result<(), ParamRouteError> {
+    let Some(declared) = params.values.get(name) else {
+        return Err(ParamRouteError::UnknownParam {
+            scope: "shader",
+            name: name.to_string(),
+        });
+    };
+    match declared {
+        ParamValue::Long(_) => params.set(name, ParamValue::Long(param_value_to_index(&value))),
+        ParamValue::Bool(_) => params.set(name, ParamValue::Bool(param_value_to_bool(&value))),
+        ParamValue::Float(_) => {
+            apply_float_param_scaled(params, name, param_value_to_norm_f32(&value));
+        }
+        // Color and point params carry per-channel data of a fixed width, so
+        // only the matching variant is written: a scalar cannot describe one,
+        // and a 4-channel color is not a 2-channel point.
+        ParamValue::Color(_) => {
+            let ParamValue::Color(c) = value else {
+                return Err(ParamRouteError::WrongState {
+                    path: name.to_string(),
+                    reason: "only a color value can set a color parameter",
+                });
+            };
+            params.set(name, ParamValue::Color(c));
+        }
+        ParamValue::Point2D(_) => {
+            let ParamValue::Point2D(p) = value else {
+                return Err(ParamRouteError::WrongState {
+                    path: name.to_string(),
+                    reason: "only a point2D value can set a point2D parameter",
+                });
+            };
+            params.set(name, ParamValue::Point2D(p));
+        }
+    }
+    Ok(())
+}
+
+/// Flatten a [`ParamValue`] to the discrete index a `long` param stores.
+/// Floats round to nearest so a fader landing on 1.999 still selects variant 2.
+fn param_value_to_index(value: &ParamValue) -> i32 {
     match value {
-        ParamValue::Float(v) => apply_float_param_scaled(params, name, v),
-        other => params.set(name, other),
+        ParamValue::Long(i) => *i,
+        ParamValue::Bool(b) => i32::from(*b),
+        ParamValue::Float(v) => {
+            if v.is_finite() {
+                v.round() as i32
+            } else {
+                0
+            }
+        }
+        ParamValue::Color(c) => c[0] as i32,
+        ParamValue::Point2D(p) => p[0] as i32,
+    }
+}
+
+/// Flatten a [`ParamValue`] to the flag a `bool` param stores.
+fn param_value_to_bool(value: &ParamValue) -> bool {
+    match value {
+        ParamValue::Bool(b) => *b,
+        other => param_value_to_norm_f32(other) >= 0.5,
     }
 }
 
@@ -1176,13 +1250,125 @@ mod tests {
     #[test]
     fn typed_param_preserves_color_channels() {
         let mut params = color_params();
-        apply_typed_param(&mut params, "tint", ParamValue::Color([0.1, 0.2, 0.3, 0.4]));
+        apply_typed_param(&mut params, "tint", ParamValue::Color([0.1, 0.2, 0.3, 0.4])).unwrap();
         match params.values.get("tint") {
             Some(ParamValue::Color(c)) => {
                 assert_eq!(*c, [0.1, 0.2, 0.3, 0.4], "all channels must survive");
             }
             other => panic!("expected Color, got {other:?}"),
         }
+    }
+
+    // ── Declared-type coercion for typed param writes ─────────────────
+
+    fn params_from(json: serde_json::Value) -> crate::ShaderParams {
+        let input: crate::isf::ISFInput = serde_json::from_value(json).unwrap();
+        crate::ShaderParams::from_inputs(&[input])
+    }
+
+    fn mode_params() -> crate::ShaderParams {
+        params_from(serde_json::json!({
+            "NAME": "mode", "TYPE": "long", "DEFAULT": 0,
+            "VALUES": [0, 1, 2, 3, 4],
+            "LABELS": ["Horizontal", "Vertical", "Quad", "Diagonal", "Radial"],
+        }))
+    }
+
+    #[test]
+    fn long_param_survives_a_json_number_arriving_as_float() {
+        // Regression: `ParamValue` is `#[serde(untagged)]` with `Float` first, so
+        // `{"value": 2}` from the HTTP API deserializes as `Float(2.0)`. Writing
+        // that into a `long` left the shader reading 2.0f32's bit pattern as an
+        // int (1073741824), matching no branch, so mirror/blend/mode-style
+        // effects silently passed their input through for every index but 0.
+        let mut params = mode_params();
+        apply_typed_param(&mut params, "mode", ParamValue::Float(2.0)).unwrap();
+        assert!(
+            matches!(params.values.get("mode"), Some(ParamValue::Long(2))),
+            "expected Long(2), got {:?}",
+            params.values.get("mode")
+        );
+    }
+
+    #[test]
+    fn long_param_accepts_a_typed_long_unchanged() {
+        // The GUI sends `ParamValue::Long(index)`; the API must land identically.
+        let mut params = mode_params();
+        apply_typed_param(&mut params, "mode", ParamValue::Long(4)).unwrap();
+        assert!(matches!(
+            params.values.get("mode"),
+            Some(ParamValue::Long(4))
+        ));
+    }
+
+    #[test]
+    fn long_param_is_never_normalized_against_a_range() {
+        // A choice index is discrete: 3 means variant 3, not 3% of a range.
+        let mut params = mode_params();
+        for idx in 0u8..=4 {
+            apply_typed_param(&mut params, "mode", ParamValue::Float(f32::from(idx))).unwrap();
+            assert!(
+                matches!(params.values.get("mode"), Some(ParamValue::Long(v)) if *v == i32::from(idx)),
+                "index {idx} did not round-trip"
+            );
+        }
+    }
+
+    #[test]
+    fn bool_param_coerces_from_a_number() {
+        let mut params = params_from(serde_json::json!({
+            "NAME": "flip_side", "TYPE": "bool", "DEFAULT": false,
+        }));
+        apply_typed_param(&mut params, "flip_side", ParamValue::Float(1.0)).unwrap();
+        assert!(matches!(
+            params.values.get("flip_side"),
+            Some(ParamValue::Bool(true))
+        ));
+        apply_typed_param(&mut params, "flip_side", ParamValue::Float(0.0)).unwrap();
+        assert!(matches!(
+            params.values.get("flip_side"),
+            Some(ParamValue::Bool(false))
+        ));
+    }
+
+    #[test]
+    fn float_param_still_normalizes_against_its_range() {
+        // Guard the fader contract the coercion must not disturb.
+        let mut params = params_from(serde_json::json!({
+            "NAME": "fly_speed", "TYPE": "float",
+            "DEFAULT": 0.35, "MIN": 0.0, "MAX": 3.0,
+        }));
+        apply_typed_param(&mut params, "fly_speed", ParamValue::Float(0.5)).unwrap();
+        match params.values.get("fly_speed") {
+            Some(ParamValue::Float(v)) => assert!((v - 1.5).abs() < 1e-5, "got {v}"),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unknown_shader_param_is_reported_not_dropped() {
+        let mut params = mode_params();
+        assert!(matches!(
+            apply_typed_param(&mut params, "no_such_param", ParamValue::Float(1.0)),
+            Err(ParamRouteError::UnknownParam {
+                scope: "shader",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn scalar_aimed_at_a_color_param_is_refused() {
+        let mut params = color_params();
+        assert!(matches!(
+            apply_typed_param(&mut params, "tint", ParamValue::Float(0.5)),
+            Err(ParamRouteError::WrongState { .. })
+        ));
+        // The original colour must survive the refused write.
+        assert!(matches!(
+            params.values.get("tint"),
+            Some(ParamValue::Color([0.0, 0.0, 0.0, 1.0]))
+        ));
     }
 
     #[test]

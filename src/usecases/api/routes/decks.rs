@@ -344,9 +344,19 @@ pub struct SetTransitionBody {
 
 #[derive(Deserialize, ToSchema)]
 pub struct SetParamBody {
-    /// Dot-separated path identifying the parameter.
+    /// Slash-separated path identifying the parameter, e.g.
+    /// `deck/<deck_uuid>/param/<name>`,
+    /// `deck/<deck_uuid>/effect/<fx_uuid>/param/<name>`, or `deck/<uuid>/opacity`.
     pub path: String,
-    /// New value for the parameter.
+    /// New value, interpreted against the parameter's declared ISF type.
+    ///
+    /// A `float` parameter takes a **normalized 0.0-1.0 fraction**, scaled to the
+    /// parameter's declared MIN/MAX range: on a param with `MIN 0.0, MAX 3.0`,
+    /// send `0.5` to get `1.5`. This matches the MIDI, OSC, and fader paths, and
+    /// is why `GET /api/scene` reports a raw value while this route takes a
+    /// normalized one. A `long` takes a **discrete choice index** (`2` selects the
+    /// third entry in its VALUES list, not 2% of a range), a `bool` takes a flag,
+    /// and `color` / `point2D` take their full arrays.
     pub value: crate::internal::params::ParamValue,
 }
 

@@ -800,7 +800,11 @@ impl MixerCommands for VardaApp {
         self.mixer.unload_lut();
     }
 
-    fn set_param(&mut self, path: &str, value: ParamValue) {
+    fn set_param(
+        &mut self,
+        path: &str,
+        value: ParamValue,
+    ) -> std::result::Result<(), crate::param_router::ParamRouteError> {
         // Typed routing preserves Color/Point2D for shader/effect params; scalar
         // paths flatten internally. OSC feedback stays a scalar f32.
         let feedback_value = crate::param_router::param_value_to_norm_f32(&value);
@@ -813,8 +817,12 @@ impl MixerCommands for VardaApp {
                         sender.send_param(path, feedback_value);
                     }
                 }
+                Ok(())
             }
-            Err(e) => log::warn!("API set_param route failed ({path}): {e}"),
+            Err(e) => {
+                log::warn!("set_param route failed ({path}): {e}");
+                Err(e)
+            }
         }
     }
 }
@@ -2027,11 +2035,16 @@ mod tests {
     }
 
     #[test]
-    fn set_param_invalid_path() {
+    fn set_param_invalid_path_is_reported() {
         let Some(mut app) = headless_app() else {
             return;
         };
-        // Non-existent param path → silent failure
-        app.set_param("ch99/deck99/nonexistent_param", ParamValue::Float(0.5));
+        // A path that matches no route must surface, not fail silently: the HTTP
+        // API turns this into a 404 rather than reporting a write that never
+        // landed as `{"status": "ok"}`.
+        assert!(matches!(
+            app.set_param("ch99/deck99/nonexistent_param", ParamValue::Float(0.5)),
+            Err(crate::param_router::ParamRouteError::UnknownPath { .. })
+        ));
     }
 }

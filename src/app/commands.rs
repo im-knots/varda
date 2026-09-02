@@ -49,6 +49,19 @@ fn not_found(err: &UnknownEntity) -> CommandResult {
     }
 }
 
+/// Classify a parameter-routing failure for the wire. A path, entity, or param
+/// name that does not resolve is `NotFound` (the caller's view is stale); a
+/// value the resolved parameter cannot accept is `InvalidInput`.
+fn param_route_error_code(err: &crate::param_router::ParamRouteError) -> ErrorCode {
+    use crate::param_router::ParamRouteError as E;
+    match err {
+        E::UnknownPath { .. } | E::UnknownEntity { .. } | E::UnknownParam { .. } => {
+            ErrorCode::NotFound
+        }
+        E::IndexOutOfRange { .. } | E::WrongState { .. } => ErrorCode::InvalidInput,
+    }
+}
+
 /// Wire result for a transport operation the current source disallows, so a
 /// caller learns why rather than watching nothing happen.
 /// See /spec/transport.md § Legibility.
@@ -353,10 +366,13 @@ impl VardaApp {
                     },
                 }
             }
-            EngineCommand::SetParam { path, value } => {
-                self.set_param(&path, value);
-                CommandResult::Ok
-            }
+            EngineCommand::SetParam { path, value } => match self.set_param(&path, value) {
+                Ok(()) => CommandResult::Ok,
+                Err(e) => CommandResult::Err {
+                    code: param_route_error_code(&e),
+                    message: e.to_string(),
+                },
+            },
             EngineCommand::ToggleParam { path } => {
                 if let Err(e) = crate::param_router::toggle_param_by_path(&mut self.mixer, &path) {
                     log::debug!("ToggleParam {path}: {e}");
