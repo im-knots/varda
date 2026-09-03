@@ -220,9 +220,25 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: write
+      # Provenance attestation: `id-token` mints the OIDC token the attestation
+      # is signed with, `attestations` writes it to the repository's store.
+      id-token: write
+      attestations: write
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v5
+
+      # Binds each released artifact to the commit and workflow that produced it,
+      # verifiable with `gh attestation verify <file> --repo im-knots/varda`.
+      # Varda is not code-signed: this attests what was built rather than who paid
+      # a vendor to vouch for it. See /spec/release-strategy.md.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            linux-tarball/Varda-Linux-x86_64.tar.gz
+            macos-dmg/Varda-macOS-universal.dmg
+            windows-zip/Varda-Windows-x64.zip
 
       - name: Determine tag
         id: tag
