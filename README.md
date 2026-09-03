@@ -1,8 +1,8 @@
 # Varda VJ
 
-An open source, Linux first, VJ and visual performance tool with broadcast style routing. Built for VJs, installation artists, and anyone who wants to throw pixels at things.
+An open source VJ and visual performance tool with broadcast style routing. Built for VJs, installation artists, and anyone who wants to throw pixels at things.
 
-Also supports MacOS (Intel and Apple chipsets), and Windows
+Supports Linux, MacOS (Intel and Apple chipsets), and Windows
 
 **Come hang out:** Join channel #varda on the [Libera.Chat](https://web.libera.chat/#varda) IRC Network
 
