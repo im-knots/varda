@@ -25,8 +25,8 @@ pub(crate) use event_loop::WindowHost;
 
 use preview::PreviewEncoder;
 
-use deck_load::{apply_deck_texture_outcomes, register_deck_preview_texture, DeckLoadTargets};
-use detect::{spawn_detect_thread, DetectRequest, DetectResponse};
+use deck_load::{DeckLoadTargets, apply_deck_texture_outcomes, register_deck_preview_texture};
+use detect::{DetectRequest, DetectResponse, spawn_detect_thread};
 
 pub struct UIRunner {
     // ── Session config (CLI flags + workspace defaults) ──────────────
@@ -423,38 +423,38 @@ impl UIRunner {
         }
 
         // 3b. Render dome preview if open (either dome_preview_open or dome_mode_active)
-        if self.layout.dome_preview_open || self.layout.dome_mode_active {
-            if let (Some(renderer), Some(varda)) = (&mut self.dome_preview_renderer, &self.varda) {
-                let context = varda.gpu_context();
+        if (self.layout.dome_preview_open || self.layout.dome_mode_active)
+            && let (Some(renderer), Some(varda)) = (&mut self.dome_preview_renderer, &self.varda)
+        {
+            let context = varda.gpu_context();
 
-                // Update slice overlays when in dome mode
-                if self.layout.dome_mode_active {
-                    let setup = self
-                        .layout
-                        .dome_preset
-                        .to_setup_with_geometry(self.layout.dome_geometry);
-                    renderer.set_slice_overlays(&context.device, &setup);
-                } else {
-                    renderer.clear_slice_overlays();
-                }
-
-                // Use domemaster output if available, otherwise fall back to mixer composite
-                let source_view = varda
-                    .domemaster_view()
-                    .unwrap_or_else(|| varda.mixer_ref().composite_view());
-                let c_az = self
+            // Update slice overlays when in dome mode
+            if self.layout.dome_mode_active {
+                let setup = self
                     .layout
-                    .dome_geometry
-                    .content_azimuth_degrees
-                    .to_radians();
-                let c_el = self
-                    .layout
-                    .dome_geometry
-                    .content_elevation_degrees
-                    .to_radians();
-                let c_roll = self.layout.dome_geometry.content_roll_degrees.to_radians();
-                renderer.render(context, source_view, c_az, c_el, c_roll);
+                    .dome_preset
+                    .to_setup_with_geometry(self.layout.dome_geometry);
+                renderer.set_slice_overlays(&context.device, &setup);
+            } else {
+                renderer.clear_slice_overlays();
             }
+
+            // Use domemaster output if available, otherwise fall back to mixer composite
+            let source_view = varda
+                .domemaster_view()
+                .unwrap_or_else(|| varda.mixer_ref().composite_view());
+            let c_az = self
+                .layout
+                .dome_geometry
+                .content_azimuth_degrees
+                .to_radians();
+            let c_el = self
+                .layout
+                .dome_geometry
+                .content_elevation_degrees
+                .to_radians();
+            let c_roll = self.layout.dome_geometry.content_roll_degrees.to_radians();
+            renderer.render(context, source_view, c_az, c_el, c_roll);
         }
 
         self.sync_camera_detect_capture();
@@ -506,20 +506,18 @@ impl UIRunner {
             camera_id,
             ref params,
         } = self.layout.camera_detect_mode
+            && !self.detect_in_flight
+            && let Some(frame) = varda_ref.camera_manager().snapshot_frame(camera_id)
         {
-            if !self.detect_in_flight {
-                if let Some(frame) = varda_ref.camera_manager().snapshot_frame(camera_id) {
-                    let _ = self.detect_req_tx.send(DetectRequest {
-                        rgba: frame.0,
-                        w: frame.1,
-                        h: frame.2,
-                        params: params.clone(),
-                        is_capture: false,
-                        camera_id,
-                    });
-                    self.detect_in_flight = true;
-                }
-            }
+            let _ = self.detect_req_tx.send(DetectRequest {
+                rgba: frame.0,
+                w: frame.1,
+                h: frame.2,
+                params: params.clone(),
+                is_capture: false,
+                camera_id,
+            });
+            self.detect_in_flight = true;
         }
 
         ui_data
@@ -644,21 +642,21 @@ impl UIRunner {
             }
 
             // Intercept shader_to_add: resolve and route to background loading
-            if let Some((channel_uuid, gen_idx)) = ui_actions.session.shader_to_add.take() {
-                if let Some(shader) = varda.resolve_generator(gen_idx) {
-                    let token = self.deck_load_targets.record(channel_uuid);
-                    let context = varda.gpu_context();
-                    VardaApp::spawn_deck_loads(
-                        &self.deck_load_tx,
-                        context,
-                        &self.pending_deck_loads,
-                        varda.render_width(),
-                        varda.render_height(),
-                        Vec::new(),
-                        Vec::new(),
-                        vec![(token, shader)],
-                    );
-                }
+            if let Some((channel_uuid, gen_idx)) = ui_actions.session.shader_to_add.take()
+                && let Some(shader) = varda.resolve_generator(gen_idx)
+            {
+                let token = self.deck_load_targets.record(channel_uuid);
+                let context = varda.gpu_context();
+                VardaApp::spawn_deck_loads(
+                    &self.deck_load_tx,
+                    context,
+                    &self.pending_deck_loads,
+                    varda.render_width(),
+                    varda.render_height(),
+                    Vec::new(),
+                    Vec::new(),
+                    vec![(token, shader)],
+                );
             }
 
             let engine_outcome = varda.apply_engine_actions(&mut ui_actions);

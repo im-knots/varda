@@ -14,7 +14,7 @@
 //! exactly the dead uniforms the compiler is entitled to strip. See
 //! [/spec/phase-accumulators.md](/spec/phase-accumulators.md).
 
-use varda::isf::{compile_glsl_compute_to_spirv, compile_glsl_to_spirv, ISFShader};
+use varda::isf::{ISFShader, compile_glsl_compute_to_spirv, compile_glsl_to_spirv};
 use varda::params::ShaderParams;
 
 fn shader_paths() -> Vec<std::path::PathBuf> {

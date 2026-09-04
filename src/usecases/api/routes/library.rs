@@ -1,15 +1,15 @@
 //! Library routes: GET /api/library/*
 
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::Json;
 
+use crate::usecases::api::SharedState;
 use crate::usecases::api::projection::{
     self, CameraEntry, DepthSensorEntry, MonitorEntry, NdiSourceEntry, ShaderEntry, StateReadError,
     SyphonSourceEntry, TransitionEntry,
 };
-use crate::usecases::api::SharedState;
 
 fn read_or_error(
     state: &SharedState,

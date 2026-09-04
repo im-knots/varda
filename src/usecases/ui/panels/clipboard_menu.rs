@@ -85,11 +85,11 @@ pub(crate) fn items(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions, s
             || "Copy something first".to_string(),
             |summary| format!("A {} does not go here", noun(summary.kind)),
         ));
-    if let Some(target) = target {
-        if paste.clicked() {
-            actions.commands.push(EngineCommand::Paste { target });
-            ui.close();
-        }
+    if let Some(target) = target
+        && paste.clicked()
+    {
+        actions.commands.push(EngineCommand::Paste { target });
+        ui.close();
     }
 }
 

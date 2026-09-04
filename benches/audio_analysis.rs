@@ -6,7 +6,7 @@
 ///
 /// Both currently clone + full-sort their input to compute a median.
 /// Benchmarks measure per-invocation cost at realistic window sizes.
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use varda::audio::{compute_onset_threshold, estimate_bpm};
 
 /// Realistic spectral flux values (positive, varying magnitude)

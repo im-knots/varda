@@ -151,10 +151,10 @@ impl AutoMapEngine {
 
         // Register new devices with auto_map profiles
         for (id, info) in &mgr.devices {
-            if !self.devices.contains_key(id) {
-                if let Some(profile) = &info.profile {
-                    self.register_device(*id, Arc::clone(profile));
-                }
+            if !self.devices.contains_key(id)
+                && let Some(profile) = &info.profile
+            {
+                self.register_device(*id, Arc::clone(profile));
             }
         }
     }
@@ -210,20 +210,20 @@ impl AutoMapEngine {
             }
 
             // Grid note → tap/hold for mute/solo (only if we saw the note-on)
-            if state.is_grid_note(note) {
-                if let Some(press_time) = state.press_times.remove(&note) {
-                    let duration = press_time.elapsed();
-                    let threshold = Duration::from_millis(state.config.tap_hold_threshold_ms);
-                    let (ch_idx, dk_idx) =
-                        grid_note_to_channel_deck(note, state.page_offset, state.config.columns);
+            if state.is_grid_note(note)
+                && let Some(press_time) = state.press_times.remove(&note)
+            {
+                let duration = press_time.elapsed();
+                let threshold = Duration::from_millis(state.config.tap_hold_threshold_ms);
+                let (ch_idx, dk_idx) =
+                    grid_note_to_channel_deck(note, state.page_offset, state.config.columns);
 
-                    if duration < threshold {
-                        // Tap → mute/solo based on tap_action
-                        Self::apply_action(&state.config.tap_action, mixer, ch_idx, dk_idx);
-                    } else {
-                        // Hold → mute/solo based on hold_action
-                        Self::apply_action(&state.config.hold_action, mixer, ch_idx, dk_idx);
-                    }
+                if duration < threshold {
+                    // Tap → mute/solo based on tap_action
+                    Self::apply_action(&state.config.tap_action, mixer, ch_idx, dk_idx);
+                } else {
+                    // Hold → mute/solo based on hold_action
+                    Self::apply_action(&state.config.hold_action, mixer, ch_idx, dk_idx);
                 }
             }
         }
@@ -270,19 +270,19 @@ impl AutoMapEngine {
     }
 
     fn apply_action(action: &str, mixer: &mut Mixer, ch_idx: usize, dk_idx: usize) {
-        if let Some(ch) = mixer.channel_mut(ch_idx) {
-            if dk_idx < ch.deck_count() {
-                match action {
-                    "mute" => {
-                        let current = ch.decks[dk_idx].mute;
-                        ch.set_deck_mute(dk_idx, !current);
-                    }
-                    "solo" => {
-                        let current = ch.decks[dk_idx].solo;
-                        ch.set_deck_solo(dk_idx, !current);
-                    }
-                    _ => {}
+        if let Some(ch) = mixer.channel_mut(ch_idx)
+            && dk_idx < ch.deck_count()
+        {
+            match action {
+                "mute" => {
+                    let current = ch.decks[dk_idx].mute;
+                    ch.set_deck_mute(dk_idx, !current);
                 }
+                "solo" => {
+                    let current = ch.decks[dk_idx].solo;
+                    ch.set_deck_solo(dk_idx, !current);
+                }
+                _ => {}
             }
         }
     }
@@ -354,7 +354,7 @@ impl AutoMapEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::internal::midi::controller_profile::{builtin_apc_mini, AutoMapLedRules};
+    use crate::internal::midi::controller_profile::{AutoMapLedRules, builtin_apc_mini};
 
     fn test_config() -> AutoMapConfig {
         AutoMapConfig {

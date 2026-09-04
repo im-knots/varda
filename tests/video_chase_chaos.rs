@@ -8,8 +8,8 @@
 //! See /spec/timecode.md § Consumer 2.
 
 use proptest::prelude::*;
-use varda::video::chase::{step_chase, ChaseInput};
 use varda::video::DeckTransportSync;
+use varda::video::chase::{ChaseInput, step_chase};
 
 fn assert_sane_step(input: ChaseInput) -> Result<(), TestCaseError> {
     let out = step_chase(input);

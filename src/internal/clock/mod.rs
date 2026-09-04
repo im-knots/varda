@@ -402,10 +402,10 @@ impl ClockManager {
                     .map(|(&id, _)| id)
                     .next();
 
-                if let Some(dev_id) = best_midi {
-                    if self.resolve_midi_device(now, dev_id) {
-                        return;
-                    }
+                if let Some(dev_id) = best_midi
+                    && self.resolve_midi_device(now, dev_id)
+                {
+                    return;
                 }
 
                 if self.resolve_osc(now) {
@@ -436,20 +436,18 @@ impl ClockManager {
         if let Some(dev) = self.midi_devices.get(&device_id) {
             // Don't require `running` — free-running clocks send ticks without 0xFA.
             let fresh = now.duration_since(dev.last_tick).as_secs_f32() < STALE_TIMEOUT_SECS;
-            if fresh {
-                if let Some(bpm) = dev.bpm {
-                    self.state = ClockState {
-                        bpm,
-                        beat_phase: dev.beat_phase,
-                        beat_time: self.beat_time,
-                        source: ClockSource::MidiClock {
-                            device_id,
-                            device_name: dev.device_name.clone(),
-                        },
-                        active: true,
-                    };
-                    return true;
-                }
+            if fresh && let Some(bpm) = dev.bpm {
+                self.state = ClockState {
+                    bpm,
+                    beat_phase: dev.beat_phase,
+                    beat_time: self.beat_time,
+                    source: ClockSource::MidiClock {
+                        device_id,
+                        device_name: dev.device_name.clone(),
+                    },
+                    active: true,
+                };
+                return true;
             }
         }
         false
@@ -459,17 +457,15 @@ impl ClockManager {
         let osc_fresh = self
             .osc_last_message
             .is_some_and(|t| now.duration_since(t).as_secs_f32() < STALE_TIMEOUT_SECS);
-        if osc_fresh {
-            if let Some(osc_bpm) = self.osc_bpm {
-                self.state = ClockState {
-                    bpm: osc_bpm,
-                    beat_phase: self.osc_beat_phase.unwrap_or(0.0),
-                    beat_time: self.beat_time,
-                    source: ClockSource::OscClock,
-                    active: true,
-                };
-                return true;
-            }
+        if osc_fresh && let Some(osc_bpm) = self.osc_bpm {
+            self.state = ClockState {
+                bpm: osc_bpm,
+                beat_phase: self.osc_beat_phase.unwrap_or(0.0),
+                beat_time: self.beat_time,
+                source: ClockSource::OscClock,
+                active: true,
+            };
+            return true;
         }
         false
     }

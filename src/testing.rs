@@ -5,8 +5,8 @@
 //! self-referential `varda` dependency.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// A fresh, isolated workspace root for one `VardaApp`.
 ///

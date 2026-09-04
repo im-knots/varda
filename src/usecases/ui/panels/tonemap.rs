@@ -128,10 +128,12 @@ mod tests {
             harness.run();
         }
 
-        assert!(actions
-            .commands
-            .iter()
-            .any(|c| matches!(c, EngineCommand::SetTonemapMode(TonemapMode::AgX))));
+        assert!(
+            actions
+                .commands
+                .iter()
+                .any(|c| matches!(c, EngineCommand::SetTonemapMode(TonemapMode::AgX)))
+        );
     }
 
     /// Re-picking the active mode must not churn the engine with a no-op.

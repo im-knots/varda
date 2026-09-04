@@ -52,10 +52,10 @@ impl super::VardaApp {
         match kind {
             Some(Some(ExternalSourceKind::Html(html_idx))) => {
                 // Already showing this deck → no-op.
-                if let Some(win) = &self.interactive.window {
-                    if win.target.deck_uuid == deck_uuid {
-                        return CommandResult::Ok;
-                    }
+                if let Some(win) = &self.interactive.window
+                    && win.target.deck_uuid == deck_uuid
+                {
+                    return CommandResult::Ok;
                 }
                 let (width, height) = self
                     .external_io
@@ -194,14 +194,13 @@ impl super::VardaApp {
     /// Blit the current HTML texture into the interactive window (per frame).
     /// Call after `html_manager.update()` so the texture is fresh.
     pub(crate) fn render_interactive(&self) {
-        if let Some(win) = &self.interactive.window {
-            if let Some(view) = self
+        if let Some(win) = &self.interactive.window
+            && let Some(view) = self
                 .external_io
                 .html_manager
                 .texture_view(win.target.html_idx)
-            {
-                win.render(&self.context, view);
-            }
+        {
+            win.render(&self.context, view);
         }
     }
 }

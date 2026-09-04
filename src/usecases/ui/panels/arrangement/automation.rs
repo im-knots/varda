@@ -11,7 +11,7 @@
 
 use super::super::super::{ModSourceUI, UIActions, UIData};
 use super::super::utils::channel_color;
-use super::{snap_seconds, AutomationRow, Owner, RowGeometry};
+use super::{AutomationRow, Owner, RowGeometry, snap_seconds};
 use crate::engine::EngineCommand;
 use crate::modulation::{Breakpoint, CurveKind};
 
@@ -192,15 +192,13 @@ fn render_track(
         super::selection::clear(ui.ctx());
     }
 
-    if response.hovered() {
-        if let Some(pos) = ui.ctx().pointer_latest_pos() {
-            if point_at(row.breakpoints, geom, pos).is_none()
-                && (bendable_segment_at(row.breakpoints, geom, pos).is_some()
-                    || flat_run_at(row.breakpoints, geom, pos).is_some())
-            {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
-            }
-        }
+    if response.hovered()
+        && let Some(pos) = ui.ctx().pointer_latest_pos()
+        && point_at(row.breakpoints, geom, pos).is_none()
+        && (bendable_segment_at(row.breakpoints, geom, pos).is_some()
+            || flat_run_at(row.breakpoints, geom, pos).is_some())
+    {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
     }
 
     let grabbed_id = id.with("grabbed");
@@ -292,17 +290,18 @@ fn render_track(
             .memory_mut(|mem| mem.data.remove::<Option<CurveDrag>>(grabbed_id));
     }
 
-    if !shift && response.double_clicked() {
-        if let Some(pos) = response.interact_pointer_pos() {
-            let position = snap_seconds(data, geom.axis.seconds(pos.x));
-            let points = match point_at(row.breakpoints, geom, pos) {
-                // A double click on a point removes it, which is the gesture
-                // every curve editor uses and saves a trip to the menu.
-                Some(index) => without_point(row.breakpoints, index),
-                None => with_point_added(row.breakpoints, position, value_at(geom.track, pos.y)),
-            };
-            push_points(actions, row.envelope_uuid, points);
-        }
+    if !shift
+        && response.double_clicked()
+        && let Some(pos) = response.interact_pointer_pos()
+    {
+        let position = snap_seconds(data, geom.axis.seconds(pos.x));
+        let points = match point_at(row.breakpoints, geom, pos) {
+            // A double click on a point removes it, which is the gesture
+            // every curve editor uses and saves a trip to the menu.
+            Some(index) => without_point(row.breakpoints, index),
+            None => with_point_added(row.breakpoints, position, value_at(geom.track, pos.y)),
+        };
+        push_points(actions, row.envelope_uuid, points);
     }
 
     draw_points(ui, geom, row);
@@ -379,15 +378,15 @@ fn point_context_menu(
     actions: &mut UIActions,
 ) {
     let subject_id = ui.id().with(("curve_menu_subject", row.envelope_uuid));
-    if response.secondary_clicked() {
-        if let Some(pos) = response.interact_pointer_pos() {
-            let subject = MenuSubject {
-                point: point_at(row.breakpoints, geom, pos),
-                at: snap_seconds(data, geom.axis.seconds(pos.x).max(0.0)),
-            };
-            ui.ctx()
-                .memory_mut(|mem| mem.data.insert_temp(subject_id, subject));
-        }
+    if response.secondary_clicked()
+        && let Some(pos) = response.interact_pointer_pos()
+    {
+        let subject = MenuSubject {
+            point: point_at(row.breakpoints, geom, pos),
+            at: snap_seconds(data, geom.axis.seconds(pos.x).max(0.0)),
+        };
+        ui.ctx()
+            .memory_mut(|mem| mem.data.insert_temp(subject_id, subject));
     }
     let Some(subject): Option<MenuSubject> = ui.ctx().memory(|mem| mem.data.get_temp(subject_id))
     else {

@@ -14,13 +14,13 @@
 use std::sync::mpsc;
 
 use varda::{
+    BlendMode,
     audio::AudioData,
     deck::Deck,
     mixer::Mixer,
     modulation::{AnalyzerValues, AudioValues},
     renderer::context::GpuContext,
     renderer::tonemap::TonemapMode,
-    BlendMode,
 };
 
 /// Small target — solid-colour compositing is per-pixel uniform, so a tiny
@@ -41,11 +41,7 @@ fn f16_to_f32(bits: u16) -> f32 {
     let mag = if exp == 0 {
         f32::from(frac) * 2f32.powi(-24) // subnormal
     } else if exp == 0x1f {
-        if frac == 0 {
-            f32::INFINITY
-        } else {
-            f32::NAN
-        }
+        if frac == 0 { f32::INFINITY } else { f32::NAN }
     } else {
         (1.0 + f32::from(frac) / 1024.0) * 2f32.powi(i32::from(exp) - 15)
     };

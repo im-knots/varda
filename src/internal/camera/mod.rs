@@ -8,15 +8,15 @@
 //! MJPEG frames (common on Linux V4L2) use nokhwa's built-in mozjpeg decoder.
 
 use anyhow::{Context, Result};
+use nokhwa::Camera;
 use nokhwa::pixel_format::RgbAFormat;
 use nokhwa::utils::{CameraIndex, FrameFormat, RequestedFormat, RequestedFormatType};
-use nokhwa::Camera;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use yuvutils_rs::{
-    yuv_nv12_to_rgba, yuyv422_to_rgba, YuvBiPlanarImage, YuvConversionMode, YuvPackedImage,
-    YuvRange, YuvStandardMatrix,
+    YuvBiPlanarImage, YuvConversionMode, YuvPackedImage, YuvRange, YuvStandardMatrix,
+    yuv_nv12_to_rgba, yuyv422_to_rgba,
 };
 
 /// Opaque camera identifier (matches the OS-assigned index).

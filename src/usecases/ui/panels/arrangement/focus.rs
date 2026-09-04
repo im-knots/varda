@@ -12,7 +12,7 @@
 use super::super::super::state::FocusRange;
 use super::super::super::{UIActions, UIData};
 use super::regions::press_origin;
-use super::{min_span, snap_seconds, TimeAxis};
+use super::{TimeAxis, min_span, snap_seconds};
 use crate::engine::EngineCommand;
 use crate::transport::LoopRegion;
 
@@ -95,12 +95,12 @@ fn handle_create(
         .on_hover_text("Drag to mark the stretch you are working on, then right-click it to loop");
 
     let anchor_id = id.with("anchor");
-    if response.drag_started() {
-        if let Some(pos) = press_origin(&response) {
-            let anchor = snap_seconds(data, axis.seconds(pos.x));
-            ui.ctx()
-                .memory_mut(|mem| mem.data.insert_temp(anchor_id, anchor));
-        }
+    if response.drag_started()
+        && let Some(pos) = press_origin(&response)
+    {
+        let anchor = snap_seconds(data, axis.seconds(pos.x));
+        ui.ctx()
+            .memory_mut(|mem| mem.data.insert_temp(anchor_id, anchor));
     }
 
     let anchor: Option<f64> = ui.ctx().memory(|mem| mem.data.get_temp(anchor_id));
@@ -138,24 +138,24 @@ fn handle_edit(
     response
         .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Focus area"));
 
-    if response.hovered() {
-        if let Some(pos) = ui.ctx().pointer_latest_pos() {
-            ui.ctx().set_cursor_icon(match grab_at(bar, pos.x) {
-                Grab::Move => egui::CursorIcon::Grab,
-                Grab::ResizeStart | Grab::ResizeEnd => egui::CursorIcon::ResizeHorizontal,
-            });
-        }
+    if response.hovered()
+        && let Some(pos) = ui.ctx().pointer_latest_pos()
+    {
+        ui.ctx().set_cursor_icon(match grab_at(bar, pos.x) {
+            Grab::Move => egui::CursorIcon::Grab,
+            Grab::ResizeStart | Grab::ResizeEnd => egui::CursorIcon::ResizeHorizontal,
+        });
     }
 
-    if response.drag_started() {
-        if let Some(pos) = press_origin(&response) {
-            let drag = Drag {
-                grab: grab_at(bar, pos.x),
-                origin: range,
-                at: axis.seconds(pos.x),
-            };
-            ui.ctx().memory_mut(|mem| mem.data.insert_temp(id, drag));
-        }
+    if response.drag_started()
+        && let Some(pos) = press_origin(&response)
+    {
+        let drag = Drag {
+            grab: grab_at(bar, pos.x),
+            origin: range,
+            at: axis.seconds(pos.x),
+        };
+        ui.ctx().memory_mut(|mem| mem.data.insert_temp(id, drag));
     }
 
     if response.dragged() {
@@ -498,10 +498,12 @@ mod tests {
         drop(harness);
 
         assert!(actions.session.clear_arrangement_focus);
-        assert!(actions
-            .commands
-            .iter()
-            .any(|c| matches!(c, EngineCommand::SetTransportLoop { region: None })));
+        assert!(
+            actions
+                .commands
+                .iter()
+                .any(|c| matches!(c, EngineCommand::SetTransportLoop { region: None }))
+        );
     }
 
     /// While a loop is on, the bar and the loop are meant to be one object, so

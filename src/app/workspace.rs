@@ -196,12 +196,12 @@ impl VardaApp {
                     for output_config in &prefs.outputs {
                         // Migrate legacy target_display field to new target config
                         let mut config = output_config.clone();
-                        if matches!(config.target, crate::scene::OutputTargetConfig::Windowed) {
-                            if let Some(ref display_name) = config.target_display {
-                                config.target = crate::scene::OutputTargetConfig::Display {
-                                    name: display_name.clone(),
-                                };
-                            }
+                        if matches!(config.target, crate::scene::OutputTargetConfig::Windowed)
+                            && let Some(ref display_name) = config.target_display
+                        {
+                            config.target = crate::scene::OutputTargetConfig::Display {
+                                name: display_name.clone(),
+                            };
                         }
                         self.output.pending_output_creates.push(config);
                     }
@@ -231,12 +231,12 @@ impl VardaApp {
                     // Apply render resolution from scene if present
                     if let (Some(w), Some(h)) =
                         (scene_config.render_width, scene_config.render_height)
+                        && w > 0
+                        && h > 0
                     {
-                        if w > 0 && h > 0 {
-                            self.render_width = w;
-                            self.render_height = h;
-                            log::info!("Scene render resolution: {w}×{h}");
-                        }
+                        self.render_width = w;
+                        self.render_height = h;
+                        log::info!("Scene render resolution: {w}×{h}");
                     }
                     match crate::persistence::restore_scene(
                         &scene_config,
@@ -912,17 +912,16 @@ impl VardaApp {
                 match output.set_presentation_request(&self.context, cfg.presentation) {
                     Ok(()) => {
                         if let crate::renderer::context::UnifiedOutput::Headless(headless) = output
-                        {
-                            if matches!(
+                            && matches!(
                                 &headless.target,
                                 crate::renderer::context::OutputTarget::NdiSend { .. }
-                            ) {
-                                let resolved = self
-                                    .external_io
-                                    .ndi_manager
-                                    .resolve_presentation(cfg.presentation);
-                                headless.set_resolved_presentation(&self.context.device, resolved);
-                            }
+                            )
+                        {
+                            let resolved = self
+                                .external_io
+                                .ndi_manager
+                                .resolve_presentation(cfg.presentation);
+                            headless.set_resolved_presentation(&self.context.device, resolved);
                         }
                         restored_output_indices.push(idx);
                     }
@@ -997,18 +996,14 @@ impl VardaApp {
                     .transition_effect
                     .as_ref()
                     .is_none_or(|te| te.shader.name() != *shader_name);
-                if needs_compile {
-                    if let Some(shader) = registry
+                if needs_compile
+                    && let Some(shader) = registry
                         .transitions()
                         .iter()
                         .find(|s| s.name() == *shader_name)
-                    {
-                        if let Err(e) = slot.set_transition_shader(context, (*shader).clone()) {
-                            log::warn!(
-                                "Failed to restore deck transition shader '{shader_name}': {e}"
-                            );
-                        }
-                    }
+                    && let Err(e) = slot.set_transition_shader(context, (*shader).clone())
+                {
+                    log::warn!("Failed to restore deck transition shader '{shader_name}': {e}");
                 }
             } else {
                 slot.transition_effect = None;

@@ -19,7 +19,7 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread::{self, JoinHandle, Thread};
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use euclid::Box2D;
 use servo::{
     DevicePoint, DeviceVector2D, ImeEvent, InputEvent, KeyboardEvent, LoadStatus, MouseButton,
@@ -371,10 +371,10 @@ fn run_servo_thread(rx: &Receiver<HtmlCommand>) {
             let frame_ready = entry.ready.replace(false);
             if loading || animating || frame_ready {
                 active = true;
-                if let Some(frame) = entry.paint_and_read() {
-                    if let Ok(mut guard) = entry.slot.lock() {
-                        *guard = Some(frame);
-                    }
+                if let Some(frame) = entry.paint_and_read()
+                    && let Ok(mut guard) = entry.slot.lock()
+                {
+                    *guard = Some(frame);
                 }
             }
         }

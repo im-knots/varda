@@ -8,8 +8,8 @@
 
 use std::rc::Rc;
 
-use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use varda::engine::EngineCommand;
 use varda::usecases::ui::panels::render_ui;
 use varda::usecases::ui::{UIActions, UIData};
@@ -274,19 +274,15 @@ fn make_live_harness(data: UIData) -> Harness<'static, AccActions> {
                         index,
                         region,
                     } = cmd
+                        && let Some(arrangement) = live.arrangement.as_mut()
+                        && let Some(lane) = arrangement
+                            .config
+                            .lanes
+                            .iter_mut()
+                            .find(|l| l.deck_uuid == *deck_uuid)
+                        && let Some(slot) = lane.regions.get_mut(*index)
                     {
-                        if let Some(arrangement) = live.arrangement.as_mut() {
-                            if let Some(lane) = arrangement
-                                .config
-                                .lanes
-                                .iter_mut()
-                                .find(|l| l.deck_uuid == *deck_uuid)
-                            {
-                                if let Some(slot) = lane.regions.get_mut(*index) {
-                                    *slot = *region;
-                                }
-                            }
-                        }
+                        *slot = *region;
                     }
                 }
             },
@@ -394,8 +390,7 @@ fn double_click(harness: &mut Harness<'static, AccActions>, pos: egui::Pos2) {
 // the UI during a resize). Long stream URLs used to do exactly this. The fix is
 // the button-first `right_to_left` + truncating-label layout in
 // `stream_row`; this test guards that layout against regressions.
-const LONG_URL: &str =
-    "https://very-long-cdn-hostname.example.com/live/premium/channel/12345/master-playlist-with-a-really-long-query.m3u8?token=abcdefghijklmnopqrstuvwxyz0123456789";
+const LONG_URL: &str = "https://very-long-cdn-hostname.example.com/live/premium/channel/12345/master-playlist-with-a-really-long-query.m3u8?token=abcdefghijklmnopqrstuvwxyz0123456789";
 
 const PANEL_DEFAULT_WIDTH: f32 = 220.0;
 
@@ -1031,7 +1026,7 @@ fn dragging_a_region_moves_it_along_the_timeline() {
 /// Show seconds to window x for the arranged fixture's lane, so a resize test
 /// can aim at a region's drawn edge rather than at its widget rect (which
 /// deliberately extends past the edge to catch near misses).
-fn timeline_x(harness: &mut Harness<'static, AccActions>, pps: f32) -> impl Fn(f64) -> f32 {
+fn timeline_x(harness: &mut Harness<'static, AccActions>, pps: f32) -> impl Fn(f64) -> f32 + use<> {
     let track = harness
         .get_by_label("test_generator_a timeline track")
         .rect();
@@ -1990,8 +1985,8 @@ fn click_add_sequence() {
 
 #[test]
 fn click_remove_channel_with_three_channels() {
-    use varda::usecases::ui::ChannelUIInfo;
     use varda::BlendMode;
+    use varda::usecases::ui::ChannelUIInfo;
 
     let mut data = UIData::test_fixture();
     // Add a third channel so the "x" remove button appears

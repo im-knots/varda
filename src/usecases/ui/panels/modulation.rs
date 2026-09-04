@@ -1,6 +1,6 @@
 //! Modulation sources panel.
 
-use super::super::{modulator_color, widgets, ModSourceUI, UIActions, UIData};
+use super::super::{ModSourceUI, UIActions, UIData, modulator_color, widgets};
 use crate::engine::EngineCommand;
 use crate::modulation::{LFOWaveform, StepInterpolation};
 use crate::timebase::Timebase;
@@ -1069,11 +1069,7 @@ fn render_step_sequencer_controls(
             .and_then(|pos| {
                 let local_x = pos.x - rect.left();
                 let s = (local_x / step_w).floor() as usize;
-                if s < num_steps {
-                    Some(s)
-                } else {
-                    None
-                }
+                if s < num_steps { Some(s) } else { None }
             })
     } else {
         None
@@ -1111,20 +1107,21 @@ fn render_step_sequencer_controls(
 
     // Click/drag to set step values
     let any_learn = data.midi_learn_active || data.keyboard_learn_active;
-    if !any_learn && (response.clicked() || response.dragged()) {
-        if let (Some(pos), Some(step_idx)) = (
+    if !any_learn
+        && (response.clicked() || response.dragged())
+        && let (Some(pos), Some(step_idx)) = (
             response
                 .hover_pos()
                 .or_else(|| response.interact_pointer_pos()),
             hover_step,
-        ) {
-            let val = 1.0 - ((pos.y - rect.top()) / rect.height()).clamp(0.0, 1.0);
-            actions.commands.push(EngineCommand::UpdateStepSeqValue {
-                uuid: sid.to_string(),
-                step_idx,
-                value: val,
-            });
-        }
+        )
+    {
+        let val = 1.0 - ((pos.y - rect.top()) / rect.height()).clamp(0.0, 1.0);
+        actions.commands.push(EngineCommand::UpdateStepSeqValue {
+            uuid: sid.to_string(),
+            step_idx,
+            value: val,
+        });
     }
 
     // MIDI/keyboard learn overlays on step bars

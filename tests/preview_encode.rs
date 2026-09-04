@@ -11,7 +11,7 @@
 //! Skips cleanly with no GPU adapter.
 
 use std::sync::mpsc;
-use varda::renderer::{context::GpuContext, BlitPipeline, COLOR_PATH_FORMAT};
+use varda::renderer::{BlitPipeline, COLOR_PATH_FORMAT, context::GpuContext};
 
 const W: u32 = 16;
 const H: u32 = 16;

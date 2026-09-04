@@ -10,7 +10,7 @@ mod sources;
 pub use audio::{AnalyzerValues, AudioSourceValues, AudioValues};
 pub use engine::{ModulationEngine, ResolvedModulation};
 pub use envelope::{
-    active_between as envelope_active_between, evaluate as evaluate_envelope, Breakpoint, CurveKind,
+    Breakpoint, CurveKind, active_between as envelope_active_between, evaluate as evaluate_envelope,
 };
 pub use sources::ModulationSource;
 

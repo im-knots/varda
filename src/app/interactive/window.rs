@@ -12,7 +12,7 @@ use winit::event::WindowEvent;
 use winit::keyboard::ModifiersState;
 use winit::window::Window;
 
-use super::{input, InteractiveTarget};
+use super::{InteractiveTarget, input};
 use crate::html::HtmlInputEvent;
 use crate::renderer::blit::BlitPipeline;
 use crate::renderer::context::GpuContext;

@@ -8,8 +8,8 @@
 //! `Arc<Mutex<Option<Vec<u8>>>>`, main thread uploads to GPU each frame.
 
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
 };
 use std::thread::JoinHandle;
 
@@ -232,30 +232,30 @@ impl StreamManager {
     /// Upload latest frames from all receivers to GPU.
     pub fn update(&self, queue: &wgpu::Queue) {
         for (i, receiver) in self.receivers.iter().enumerate() {
-            if let Ok(mut guard) = receiver.frame_data.try_lock() {
-                if let Some(frame) = guard.take() {
-                    let expected = (receiver.width * receiver.height * 4) as usize;
-                    if frame.len() >= expected {
-                        queue.write_texture(
-                            wgpu::TexelCopyTextureInfo {
-                                texture: &self.textures[i].0,
-                                mip_level: 0,
-                                origin: wgpu::Origin3d::ZERO,
-                                aspect: wgpu::TextureAspect::All,
-                            },
-                            &frame[..expected],
-                            wgpu::TexelCopyBufferLayout {
-                                offset: 0,
-                                bytes_per_row: Some(receiver.width * 4),
-                                rows_per_image: Some(receiver.height),
-                            },
-                            wgpu::Extent3d {
-                                width: receiver.width,
-                                height: receiver.height,
-                                depth_or_array_layers: 1,
-                            },
-                        );
-                    }
+            if let Ok(mut guard) = receiver.frame_data.try_lock()
+                && let Some(frame) = guard.take()
+            {
+                let expected = (receiver.width * receiver.height * 4) as usize;
+                if frame.len() >= expected {
+                    queue.write_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &self.textures[i].0,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        &frame[..expected],
+                        wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(receiver.width * 4),
+                            rows_per_image: Some(receiver.height),
+                        },
+                        wgpu::Extent3d {
+                            width: receiver.width,
+                            height: receiver.height,
+                            depth_or_array_layers: 1,
+                        },
+                    );
                 }
             }
         }

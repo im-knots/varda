@@ -10,7 +10,7 @@
 /// The (`empty_mod` − `no_mod`) gap is the per-param allocation cost paid even
 /// when nothing is modulated. Multiply by params × decks × effects to
 /// estimate the per-frame floor for a full scene.
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use varda::{
     isf::ISFInput,
     modulation::{AudioValues, LFOWaveform, ModulationEngine, ModulationSource},

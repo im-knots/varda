@@ -316,12 +316,12 @@ fn render_timeline_strip(
         );
 
         // Click to select step
-        if interactive && response.clicked() {
-            if let Some(pos) = response.interact_pointer_pos() {
-                if block_rect.contains(pos) {
-                    clicked_step = Some(i);
-                }
-            }
+        if interactive
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+            && block_rect.contains(pos)
+        {
+            clicked_step = Some(i);
         }
 
         x += block_w;
@@ -914,14 +914,14 @@ pub(super) fn render_sequence_detail(
                     .get(1)
                     .or_else(|| data.channels.first())
                     .map(|c| c.uuid.clone());
-                if let (Some(from_ch), Some(to_ch)) = (from_uuid, to_uuid) {
-                    if ui.small_button("+Fade").clicked() {
-                        actions.commands.push(EngineCommand::AddFadeStep {
-                            sequence_uuid: seq.uuid.clone(),
-                            from_channel_uuid: from_ch,
-                            to_channel_uuid: to_ch,
-                        });
-                    }
+                if let (Some(from_ch), Some(to_ch)) = (from_uuid, to_uuid)
+                    && ui.small_button("+Fade").clicked()
+                {
+                    actions.commands.push(EngineCommand::AddFadeStep {
+                        sequence_uuid: seq.uuid.clone(),
+                        from_channel_uuid: from_ch,
+                        to_channel_uuid: to_ch,
+                    });
                 }
                 if ui.small_button("+Wait").clicked() {
                     actions.commands.push(EngineCommand::AddWaitStep {

@@ -1,6 +1,6 @@
 //! Master and channel effect detail panels.
 
-use super::super::{widgets, EffectDrag, LibraryDrag, UIActions, UIData};
+use super::super::{EffectDrag, LibraryDrag, UIActions, UIData, widgets};
 use super::clipboard_menu;
 use super::utils::{
     channel_color, render_effect_drag_ghost, render_effect_drag_handle, render_effect_drop_zone,

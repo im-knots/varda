@@ -122,13 +122,12 @@ pub(super) fn render_effect_drop_zone(ui: &mut egui::Ui, chain_key: &str, positi
         mem.data.insert_temp(key, dz.rect);
     });
     // Visual highlight: check if pointer is actually over this zone
-    if has_drag {
-        if let Some(pos) = ui.ctx().input(|i| i.pointer.interact_pos()) {
-            if dz.rect.contains(pos) {
-                ui.painter()
-                    .rect_filled(dz.rect, 2.0, egui::Color32::from_rgb(100, 200, 255));
-            }
-        }
+    if has_drag
+        && let Some(pos) = ui.ctx().input(|i| i.pointer.interact_pos())
+        && dz.rect.contains(pos)
+    {
+        ui.painter()
+            .rect_filled(dz.rect, 2.0, egui::Color32::from_rgb(100, 200, 255));
     }
 }
 

@@ -155,10 +155,10 @@ impl ApplicationHandler for UIRunner {
             return;
         };
         if self.main_window_id == Some(window_id) {
-            if let (Some(window), Some(egui_state)) = (self.window, &mut self.egui_state) {
-                if egui_state.on_window_event(window, &event).consumed {
-                    return;
-                }
+            if let (Some(window), Some(egui_state)) = (self.window, &mut self.egui_state)
+                && egui_state.on_window_event(window, &event).consumed
+            {
+                return;
             }
             match event {
                 WindowEvent::CloseRequested => {
@@ -240,12 +240,12 @@ impl ApplicationHandler for UIRunner {
 
         if self.config.headless {
             // Headless: adaptive sleep-based pacing
-            if target_fps > 0 {
-                if let Some(deadline) = self.cadence_anchor {
-                    let now = std::time::Instant::now();
-                    if deadline > now {
-                        std::thread::sleep(deadline - now);
-                    }
+            if target_fps > 0
+                && let Some(deadline) = self.cadence_anchor
+            {
+                let now = std::time::Instant::now();
+                if deadline > now {
+                    std::thread::sleep(deadline - now);
                 }
             }
             self.render_headless(event_loop);

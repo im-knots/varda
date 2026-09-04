@@ -58,11 +58,13 @@ fn surface_add_and_remove_roundtrip() {
     );
     assert!(matches!(r, CommandResult::Ok));
     let state = app.build_engine_state();
-    assert!(state
-        .outputs
-        .surfaces
-        .iter()
-        .any(|s| s.name == "Test Surface"));
+    assert!(
+        state
+            .outputs
+            .surfaces
+            .iter()
+            .any(|s| s.name == "Test Surface")
+    );
     let uuid = state
         .outputs
         .surfaces
@@ -74,11 +76,13 @@ fn surface_add_and_remove_roundtrip() {
     let r = send_cmd(&mut app, EngineCommand::RemoveSurface { uuid });
     assert!(matches!(r, CommandResult::Ok));
     let state = app.build_engine_state();
-    assert!(!state
-        .outputs
-        .surfaces
-        .iter()
-        .any(|s| s.name == "Test Surface"));
+    assert!(
+        !state
+            .outputs
+            .surfaces
+            .iter()
+            .any(|s| s.name == "Test Surface")
+    );
 }
 
 #[test]

@@ -1,12 +1,12 @@
 //! Read-only runtime state routes: GET /api/state/*
 
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::Json;
 
-use crate::usecases::api::projection::{self, StateReadError};
 use crate::usecases::api::SharedState;
+use crate::usecases::api::projection::{self, StateReadError};
 
 /// Helper: read state or return appropriate HTTP error.
 fn read_or_error(

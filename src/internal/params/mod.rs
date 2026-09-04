@@ -1538,12 +1538,16 @@ mod tests {
         let inputs = vec![make_bool_input("invert", true)];
         let mut params = ShaderParams::from_inputs(&inputs);
         let engine = ModulationEngine::new();
-        assert!(params
-            .get_float_modulated("invert", &engine, Some("deck0"))
-            .is_none());
-        assert!(params
-            .get_float_modulated("missing", &engine, Some("deck0"))
-            .is_none());
+        assert!(
+            params
+                .get_float_modulated("invert", &engine, Some("deck0"))
+                .is_none()
+        );
+        assert!(
+            params
+                .get_float_modulated("missing", &engine, Some("deck0"))
+                .is_none()
+        );
     }
 
     #[test]

@@ -172,7 +172,7 @@ impl Deck {
     /// are a no-op. The `Result` is kept so callers stay source-compatible if
     /// staging-buffer allocation becomes fallible.
     pub fn update_video_frame(&mut self, encoder: &mut wgpu::CommandEncoder) -> Result<()> {
-        match &mut self.source {
+        match self.source {
             DeckSource::Video {
                 ref handle,
                 ref texture,
@@ -203,10 +203,9 @@ impl Deck {
                         frame.alpha_data.as_ref(),
                         frame.alpha_format,
                         alpha_texture.as_ref(),
-                    ) {
-                        if let Some(ref mut a_staging) = alpha_staging {
-                            a_staging.upload(alpha_data, alpha_tex, width, height, encoder);
-                        }
+                    ) && let Some(a_staging) = alpha_staging
+                    {
+                        a_staging.upload(alpha_data, alpha_tex, width, height, encoder);
                     }
                     handle.recycle(frame);
                 }
@@ -219,16 +218,14 @@ impl Deck {
     /// Request re-mapping of staging buffers after `queue.submit()`.
     pub fn request_video_remap(&mut self) {
         match &mut self.source {
-            DeckSource::Video {
-                ref mut staging, ..
-            } => staging.request_remap(),
+            DeckSource::Video { staging, .. } => staging.request_remap(),
             DeckSource::HapVideo {
-                ref mut staging,
-                ref mut alpha_staging,
+                staging,
+                alpha_staging,
                 ..
             } => {
                 staging.request_remap();
-                if let Some(ref mut a) = alpha_staging {
+                if let Some(a) = alpha_staging {
                     a.request_remap();
                 }
             }
@@ -542,12 +539,12 @@ impl Deck {
                 }
             }
 
-            DeckSource::Video {
+            &mut DeckSource::Video {
                 ref texture_view,
                 ref blit_pipeline,
-                source_width,
-                source_height,
-                scaling_mode,
+                ref mut source_width,
+                ref mut source_height,
+                ref mut scaling_mode,
                 ..
             } => {
                 let (uv_scale, uv_offset) = scaling_mode.compute_uv_transform(
@@ -586,16 +583,16 @@ impl Deck {
                 }
                 cmd_buffers.push(encoder.finish());
             }
-            DeckSource::HapVideo {
+            &mut DeckSource::HapVideo {
                 ref texture_view,
                 ref alpha_texture_view,
                 ref dummy_alpha_view,
                 ref convert_pipeline,
                 ref hap_format,
                 ref handle,
-                source_width,
-                source_height,
-                scaling_mode,
+                ref mut source_width,
+                ref mut source_height,
+                ref mut scaling_mode,
                 ..
             } => {
                 let needs_ycocg = hap_format.needs_ycocg_convert();
@@ -615,7 +612,7 @@ impl Deck {
                     uv_offset,
                 );
 
-                let alpha_view = if let Some(ref av) = alpha_texture_view {
+                let alpha_view = if let Some(av) = alpha_texture_view {
                     av
                 } else {
                     dummy_alpha_view
@@ -735,24 +732,24 @@ impl Deck {
             } => {
                 // DepthSensor decks were already reprojected above via the
                 // point-cloud pass; the plain blit only applies to flat sources.
-                if !matches!(kind, ExternalSourceKind::DepthSensor(_)) {
-                    if let Some(ext_view) = &self.external_source_view {
-                        Self::blit_external_source(
-                            context,
-                            blit_pipeline,
-                            blit_pipeline_over_black,
-                            self.transparent,
-                            ext_view,
-                            *source_width,
-                            *source_height,
-                            self.texture.width(),
-                            self.texture.height(),
-                            *scaling_mode,
-                            generator_target,
-                            kind.label(),
-                            cmd_buffers,
-                        );
-                    }
+                if !matches!(kind, ExternalSourceKind::DepthSensor(_))
+                    && let Some(ext_view) = &self.external_source_view
+                {
+                    Self::blit_external_source(
+                        context,
+                        blit_pipeline,
+                        blit_pipeline_over_black,
+                        self.transparent,
+                        ext_view,
+                        *source_width,
+                        *source_height,
+                        self.texture.width(),
+                        self.texture.height(),
+                        *scaling_mode,
+                        generator_target,
+                        kind.label(),
+                        cmd_buffers,
+                    );
                 }
             }
             DeckSource::ComputeShader { pipeline, .. } => {
@@ -982,20 +979,20 @@ impl Deck {
         } = source
         {
             for slot in preprocessor_textures.iter_mut() {
-                if let Some(snapshot) = analyzers.latest_snapshot(&slot.analyzer_type) {
-                    if let Some(tex_data) = snapshot.textures.get(&slot.name) {
-                        upload_texture_to_slot(device, queue, slot, tex_data);
-                    }
+                if let Some(snapshot) = analyzers.latest_snapshot(&slot.analyzer_type)
+                    && let Some(tex_data) = snapshot.textures.get(&slot.name)
+                {
+                    upload_texture_to_slot(device, queue, slot, tex_data);
                 }
             }
         }
 
         for effect in effects.iter_mut() {
             for slot in &mut effect.preprocessor_textures {
-                if let Some(snapshot) = analyzers.latest_snapshot(&slot.analyzer_type) {
-                    if let Some(tex_data) = snapshot.textures.get(&slot.name) {
-                        upload_texture_to_slot(device, queue, slot, tex_data);
-                    }
+                if let Some(snapshot) = analyzers.latest_snapshot(&slot.analyzer_type)
+                    && let Some(tex_data) = snapshot.textures.get(&slot.name)
+                {
+                    upload_texture_to_slot(device, queue, slot, tex_data);
                 }
             }
         }

@@ -1,16 +1,16 @@
 //! Stage state routes: GET /api/stage/* and POST /api/stage/detect/*
 
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::Json;
 use serde::Deserialize;
 use utoipa::ToSchema;
 
 use crate::engine::{CommandResult, EngineCommand};
 use crate::internal::surface::detect::{DetectedContour, DetectionParams};
 use crate::usecases::api::projection::{self, StateReadError};
-use crate::usecases::api::{command_response, SharedState};
+use crate::usecases::api::{SharedState, command_response};
 
 fn read_or_error(
     state: &SharedState,

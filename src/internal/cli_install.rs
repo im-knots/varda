@@ -61,10 +61,10 @@ fn install_macos(exe: &Path) -> Result<(), String> {
     let wrapper = Path::new("/usr/local/bin/varda");
     if wrapper.exists() {
         // Check if existing wrapper points to this .app
-        if let Ok(contents) = std::fs::read_to_string(wrapper) {
-            if contents.contains(&exe.to_string_lossy().to_string()) {
-                return Ok(()); // already installed for this .app
-            }
+        if let Ok(contents) = std::fs::read_to_string(wrapper)
+            && contents.contains(&exe.to_string_lossy().to_string())
+        {
+            return Ok(()); // already installed for this .app
         }
         // Different install or not our wrapper — leave it alone
         return Err("existing /usr/local/bin/varda not managed by this install".into());

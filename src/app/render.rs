@@ -404,12 +404,12 @@ impl VardaApp {
                         ExternalSourceKind::ScreenCapture(id) => {
                             // Router/UI edits land on the deck; push them down
                             // to the capture thread here, once, when they change.
-                            if let Some(state) = &mut slot.deck.screen_capture {
-                                if state.config_dirty {
-                                    self.screen_capture_manager
-                                        .set_config(id, state.config.clone());
-                                    state.config_dirty = false;
-                                }
+                            if let Some(state) = &mut slot.deck.screen_capture
+                                && state.config_dirty
+                            {
+                                self.screen_capture_manager
+                                    .set_config(id, state.config.clone());
+                                state.config_dirty = false;
                             }
                             // A crop or target resize reallocates the shared
                             // texture, so the deck's source dimensions are
@@ -609,10 +609,10 @@ impl VardaApp {
             let mut channel_indices: Vec<usize> = Vec::new();
             let mut seen = std::collections::HashSet::new();
             for surface in &self.output.surface_manager.surfaces {
-                if let OutputSource::Channel(idx) = &surface.source {
-                    if seen.insert(*idx) {
-                        channel_indices.push(*idx);
-                    }
+                if let OutputSource::Channel(idx) = &surface.source
+                    && seen.insert(*idx)
+                {
+                    channel_indices.push(*idx);
                 }
             }
             if !channel_indices.is_empty() {
@@ -1041,8 +1041,8 @@ impl VardaApp {
                 )
             );
             if is_ndi_p216 {
-                if let crate::renderer::context::OutputTarget::NdiSend { sender_name } = &h.target {
-                    if let Err(error) = sinks.ndi_manager.begin_p216_frame(
+                if let crate::renderer::context::OutputTarget::NdiSend { sender_name } = &h.target
+                    && let Err(error) = sinks.ndi_manager.begin_p216_frame(
                         sender_name,
                         crate::ndi::P216FrameConversion {
                             device: &context.device,
@@ -1053,14 +1053,14 @@ impl VardaApp {
                             height: h.height,
                             dither: h.presentation_request.dither,
                         },
-                    ) {
-                        stop_headless_output(
-                            &h.name,
-                            &mut h.active,
-                            sinks.notifications,
-                            format!("NDI P216 conversion failed: {error}"),
-                        );
-                    }
+                    )
+                {
+                    stop_headless_output(
+                        &h.name,
+                        &mut h.active,
+                        sinks.notifications,
+                        format!("NDI P216 conversion failed: {error}"),
+                    );
                 }
             } else if !is_syphon {
                 // Enqueue readback copy from the now-rendered texture
@@ -1068,23 +1068,22 @@ impl VardaApp {
             }
             context.submit(std::iter::once(encoder.finish()));
 
-            if is_ndi_p216 {
-                if let crate::renderer::context::OutputTarget::NdiSend { sender_name } = &h.target {
-                    if let Err(error) = sinks.ndi_manager.try_send_p216(
-                        sender_name,
-                        &context.device,
-                        h.width,
-                        h.height,
-                        sinks.encoder_fps,
-                    ) {
-                        stop_headless_output(
-                            &h.name,
-                            &mut h.active,
-                            sinks.notifications,
-                            format!("NDI P216 submission failed: {error}"),
-                        );
-                    }
-                }
+            if is_ndi_p216
+                && let crate::renderer::context::OutputTarget::NdiSend { sender_name } = &h.target
+                && let Err(error) = sinks.ndi_manager.try_send_p216(
+                    sender_name,
+                    &context.device,
+                    h.width,
+                    h.height,
+                    sinks.encoder_fps,
+                )
+            {
+                stop_headless_output(
+                    &h.name,
+                    &mut h.active,
+                    sinks.notifications,
+                    format!("NDI P216 submission failed: {error}"),
+                );
             }
 
             #[cfg(target_os = "macos")]
@@ -1101,93 +1100,94 @@ impl VardaApp {
             }
 
             // Deliver previous frame's readback data to target
-            if !is_syphon && !is_ndi_p216 {
-                if let Some(frame_data) = h.readback.try_read(&context.device) {
-                    let delivery = if h.subprocess.is_some() {
-                        if h.subprocess
-                            .as_mut()
-                            .is_some_and(|subprocess| !subprocess.feed_readback_frame(&frame_data))
-                        {
-                            if let Some(mut subprocess) = h.subprocess.take() {
-                                subprocess.stop();
-                            }
-                            if matches!(
-                                h.target,
-                                crate::renderer::context::OutputTarget::SrtStream { .. }
-                            ) {
-                                crate::renderer::context::DeliveryResult::SrtNeedsRestart
-                            } else {
-                                crate::renderer::context::DeliveryResult::Failed(format!(
-                                    "FFmpeg frame contract failed for '{}'",
-                                    h.name
-                                ))
-                            }
+            if !is_syphon
+                && !is_ndi_p216
+                && let Some(frame_data) = h.readback.try_read(&context.device)
+            {
+                let delivery = if h.subprocess.is_some() {
+                    if h.subprocess
+                        .as_mut()
+                        .is_some_and(|subprocess| !subprocess.feed_readback_frame(&frame_data))
+                    {
+                        if let Some(mut subprocess) = h.subprocess.take() {
+                            subprocess.stop();
+                        }
+                        if matches!(
+                            h.target,
+                            crate::renderer::context::OutputTarget::SrtStream { .. }
+                        ) {
+                            crate::renderer::context::DeliveryResult::SrtNeedsRestart
                         } else {
-                            crate::renderer::context::DeliveryResult::Ok
+                            crate::renderer::context::DeliveryResult::Failed(format!(
+                                "FFmpeg frame contract failed for '{}'",
+                                h.name
+                            ))
                         }
                     } else {
-                        h.deliver_frame(frame_data.bytes(), sinks.ndi_manager, sinks.encoder_fps)
-                    };
-                    match delivery {
-                        crate::renderer::context::DeliveryResult::Failed(msg) => {
-                            stop_headless_output(&h.name, &mut h.active, sinks.notifications, msg);
-                        }
-                        crate::renderer::context::DeliveryResult::SrtNeedsRestart => {
-                            // The disconnected client's PCM tap is now stale; drop it,
-                            // then respawn the listener with a fresh audio tap so the
-                            // reconnecting client gets audio again (parity with start).
-                            if let Some(stale) = h.audio_pcm.take() {
-                                sinks
-                                    .audio_manager
-                                    .unsubscribe_pcm(stale.source_id, stale.token);
-                            }
-                            let (url, codec) = match &h.target {
-                                crate::renderer::context::OutputTarget::SrtStream {
-                                    url,
-                                    codec,
-                                    ..
-                                } => (url.clone(), codec.clone()),
-                                _ => continue,
-                            };
-                            let device = h.target.audio_device().map(str::to_string);
-                            let name = h.name.clone();
-                            let (audio_input, passthrough) = super::state::resolve_output_audio(
-                                sinks.audio_manager,
-                                sinks.notifications,
-                                device.as_deref(),
-                                &name,
-                            );
-                            match crate::renderer::FfmpegSubprocess::spawn_srt(
-                                &url,
-                                &codec,
-                                h.presentation_request,
-                                h.width,
-                                h.height,
-                                sinks.encoder_fps,
-                                audio_input,
-                            ) {
-                                Ok(new_sub) => {
-                                    h.subprocess = Some(Box::new(new_sub));
-                                    h.audio_pcm = passthrough.map(Box::new);
-                                    log::info!("SRT restarted for '{name}'");
-                                }
-                                Err(e) => {
-                                    if let Some(pass) = passthrough {
-                                        sinks
-                                            .audio_manager
-                                            .unsubscribe_pcm(pass.source_id, pass.token);
-                                    }
-                                    stop_headless_output(
-                                        &name,
-                                        &mut h.active,
-                                        sinks.notifications,
-                                        format!("Failed to restart SRT listener: {e}"),
-                                    );
-                                }
-                            }
-                        }
-                        crate::renderer::context::DeliveryResult::Ok => {}
+                        crate::renderer::context::DeliveryResult::Ok
                     }
+                } else {
+                    h.deliver_frame(frame_data.bytes(), sinks.ndi_manager, sinks.encoder_fps)
+                };
+                match delivery {
+                    crate::renderer::context::DeliveryResult::Failed(msg) => {
+                        stop_headless_output(&h.name, &mut h.active, sinks.notifications, msg);
+                    }
+                    crate::renderer::context::DeliveryResult::SrtNeedsRestart => {
+                        // The disconnected client's PCM tap is now stale; drop it,
+                        // then respawn the listener with a fresh audio tap so the
+                        // reconnecting client gets audio again (parity with start).
+                        if let Some(stale) = h.audio_pcm.take() {
+                            sinks
+                                .audio_manager
+                                .unsubscribe_pcm(stale.source_id, stale.token);
+                        }
+                        let (url, codec) = match &h.target {
+                            crate::renderer::context::OutputTarget::SrtStream {
+                                url,
+                                codec,
+                                ..
+                            } => (url.clone(), codec.clone()),
+                            _ => continue,
+                        };
+                        let device = h.target.audio_device().map(str::to_string);
+                        let name = h.name.clone();
+                        let (audio_input, passthrough) = super::state::resolve_output_audio(
+                            sinks.audio_manager,
+                            sinks.notifications,
+                            device.as_deref(),
+                            &name,
+                        );
+                        match crate::renderer::FfmpegSubprocess::spawn_srt(
+                            &url,
+                            &codec,
+                            h.presentation_request,
+                            h.width,
+                            h.height,
+                            sinks.encoder_fps,
+                            audio_input,
+                        ) {
+                            Ok(new_sub) => {
+                                h.subprocess = Some(Box::new(new_sub));
+                                h.audio_pcm = passthrough.map(Box::new);
+                                log::info!("SRT restarted for '{name}'");
+                            }
+                            Err(e) => {
+                                if let Some(pass) = passthrough {
+                                    sinks
+                                        .audio_manager
+                                        .unsubscribe_pcm(pass.source_id, pass.token);
+                                }
+                                stop_headless_output(
+                                    &name,
+                                    &mut h.active,
+                                    sinks.notifications,
+                                    format!("Failed to restart SRT listener: {e}"),
+                                );
+                            }
+                        }
+                    }
+                    crate::renderer::context::DeliveryResult::Ok => {}
                 }
             }
         }
@@ -1214,14 +1214,14 @@ impl VardaApp {
                 FileDialogKind::Video => rfd::FileDialog::new()
                     .add_filter("Video", &["mov", "mp4", "avi", "mkv", "webm", "gif"]),
             };
-            if let Some(paths) = dialog.pick_files() {
-                if !paths.is_empty() {
-                    let _ = tx.send(FileDialogResult {
-                        kind,
-                        channel_uuid,
-                        paths,
-                    });
-                }
+            if let Some(paths) = dialog.pick_files()
+                && !paths.is_empty()
+            {
+                let _ = tx.send(FileDialogResult {
+                    kind,
+                    channel_uuid,
+                    paths,
+                });
             }
         });
     }

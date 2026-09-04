@@ -183,7 +183,7 @@ impl NdiSdk {
     unsafe fn resolve_symbols(lib: Library) -> Option<Self> {
         macro_rules! load_fn {
             ($lib:expr, $name:expr, $ty:ty) => {{
-                let sym: Symbol<$ty> = match $lib.get($name) {
+                let sym: Symbol<$ty> = match unsafe { $lib.get($name) } {
                     Ok(s) => s,
                     Err(e) => {
                         log::warn!(
@@ -194,7 +194,7 @@ impl NdiSdk {
                         return None;
                     }
                 };
-                *sym.into_raw()
+                *unsafe { sym.into_raw() }
             }};
         }
 
@@ -226,11 +226,11 @@ impl NdiSdk {
             unsafe extern "C" fn(NDIlib_send_instance_t, *const NDIlib_video_frame_v2_t);
 
         let version_fn = load_fn!(lib, b"NDIlib_version\0", FnVersion);
-        let version_ptr = version_fn();
+        let version_ptr = unsafe { version_fn() };
         let runtime_version = if version_ptr.is_null() {
             String::new()
         } else {
-            std::ffi::CStr::from_ptr(version_ptr)
+            unsafe { std::ffi::CStr::from_ptr(version_ptr) }
                 .to_string_lossy()
                 .into_owned()
         };
@@ -261,7 +261,7 @@ impl NdiSdk {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_runtime_major, NdiSendCapability};
+    use super::{NdiSendCapability, parse_runtime_major};
 
     #[test]
     fn runtime_major_accepts_vendor_version_strings() {
@@ -295,9 +295,11 @@ mod tests {
         let capability = NdiSendCapability::from_runtime_evidence(None, false);
 
         assert!(!capability.p216_confirmed());
-        assert!(capability
-            .p216_unavailable_reason()
-            .contains("runtime version is unavailable"));
+        assert!(
+            capability
+                .p216_unavailable_reason()
+                .contains("runtime version is unavailable")
+        );
     }
 
     #[test]
@@ -305,8 +307,10 @@ mod tests {
         let capability = NdiSendCapability::from_runtime_evidence(Some("NDI SDK 6.3.1"), false);
 
         assert!(!capability.p216_confirmed());
-        assert!(capability
-            .p216_unavailable_reason()
-            .contains("NDIlib_send_send_video_v2"));
+        assert!(
+            capability
+                .p216_unavailable_reason()
+                .contains("NDIlib_send_send_video_v2")
+        );
     }
 }

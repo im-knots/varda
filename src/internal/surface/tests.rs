@@ -955,7 +955,7 @@ fn set_warp_corner_ignored_out_of_range() {
 
 #[test]
 fn set_warp_subdivisions_makes_mesh_and_clamps() {
-    use crate::renderer::warp::{WarpMode, MAX_WARP_SUBDIVISIONS};
+    use crate::renderer::warp::{MAX_WARP_SUBDIVISIONS, WarpMode};
     let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 1.0, 1.0, master_source());
     s.set_warp_subdivisions(1, 1000);
     match s.warp {

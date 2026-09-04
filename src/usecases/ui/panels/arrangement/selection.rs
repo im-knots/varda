@@ -15,7 +15,7 @@
 use super::super::super::{ModSourceUI, UIData};
 use crate::arrangement::RegionConfig;
 use crate::engine::EngineCommand;
-use crate::modulation::{evaluate_envelope, Breakpoint, CurveKind};
+use crate::modulation::{Breakpoint, CurveKind, evaluate_envelope};
 
 /// The active arrangement selection: a time × lanes rectangle over the
 /// timeline's whole stack of rows, channel boundaries included.

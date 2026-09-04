@@ -1,6 +1,6 @@
 //! Final SDR presentation-pass benchmarks for eight-bit and RGB10A2 outputs.
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use varda::engine::value::render::{
     AlphaMode, PresentationColorProfile, PresentationDepth, PresentationPixelFormat,
     ResolvedPresentation,

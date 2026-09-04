@@ -10,8 +10,8 @@
 //! which build many headless contexts across threads, cannot see each other's
 //! submits.
 
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Counts `queue.submit()` calls against one GPU context.
 ///

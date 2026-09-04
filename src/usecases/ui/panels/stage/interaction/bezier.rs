@@ -107,38 +107,39 @@ pub(super) fn handle(
     }
 
     // Click an edge to toggle line <-> cubic.
-    if resp.clicked() {
-        if let Some(pos) = resp.interact_pointer_pos() {
-            let [nx, ny] = geom.to_norm_raw(pos);
-            if hit_handle(nx, ny).is_none() && hit_anchor(nx, ny).is_none() {
-                if let Some((uuid, edge_idx, is_cubic)) = hit_edge(nx, ny) {
-                    actions.commands.push(EngineCommand::ConvertSurfaceEdge {
-                        uuid: uuid.clone(),
-                        edge_idx,
-                        to_cubic: !is_cubic,
-                    });
-                    state.selected_surfaces.clear();
-                    state.selected_surfaces.insert(uuid);
-                }
-            }
+    if resp.clicked()
+        && let Some(pos) = resp.interact_pointer_pos()
+    {
+        let [nx, ny] = geom.to_norm_raw(pos);
+        if hit_handle(nx, ny).is_none()
+            && hit_anchor(nx, ny).is_none()
+            && let Some((uuid, edge_idx, is_cubic)) = hit_edge(nx, ny)
+        {
+            actions.commands.push(EngineCommand::ConvertSurfaceEdge {
+                uuid: uuid.clone(),
+                edge_idx,
+                to_cubic: !is_cubic,
+            });
+            state.selected_surfaces.clear();
+            state.selected_surfaces.insert(uuid);
         }
     }
 
     // Begin dragging a control handle or an anchor.
-    if resp.drag_started() {
-        if let Some(pos) = resp.interact_pointer_pos() {
-            let [nx, ny] = geom.to_norm_raw(pos);
-            if let Some((uuid, si, handle)) = hit_handle(nx, ny) {
-                state.selected_surfaces.clear();
-                state.selected_surfaces.insert(uuid.clone());
-                state.dragging_handle = Some((uuid, si, handle));
-                state.dragging_anchor = None;
-            } else if let Some((uuid, ai)) = hit_anchor(nx, ny) {
-                state.selected_surfaces.clear();
-                state.selected_surfaces.insert(uuid.clone());
-                state.dragging_anchor = Some((uuid, ai));
-                state.dragging_handle = None;
-            }
+    if resp.drag_started()
+        && let Some(pos) = resp.interact_pointer_pos()
+    {
+        let [nx, ny] = geom.to_norm_raw(pos);
+        if let Some((uuid, si, handle)) = hit_handle(nx, ny) {
+            state.selected_surfaces.clear();
+            state.selected_surfaces.insert(uuid.clone());
+            state.dragging_handle = Some((uuid, si, handle));
+            state.dragging_anchor = None;
+        } else if let Some((uuid, ai)) = hit_anchor(nx, ny) {
+            state.selected_surfaces.clear();
+            state.selected_surfaces.insert(uuid.clone());
+            state.dragging_anchor = Some((uuid, ai));
+            state.dragging_handle = None;
         }
     }
 

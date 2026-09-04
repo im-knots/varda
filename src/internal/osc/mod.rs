@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::net::{SocketAddrV4, UdpSocket};
 use std::path::Path;
 use std::str::FromStr;
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 
 // ── OscConfig ────────────────────────────────────────────────────────

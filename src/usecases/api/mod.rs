@@ -44,9 +44,9 @@ impl SharedState {
 
 /// Map a `CommandResult` to an axum HTTP response.
 pub fn command_response(result: CommandResult) -> axum::response::Response {
+    use axum::Json;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
-    use axum::Json;
 
     match result {
         CommandResult::Ok => {

@@ -544,22 +544,30 @@ mod tests {
     #[test]
     fn test_default_bindings_complete() {
         let store = KeymapStore::with_defaults();
-        assert!(store
-            .bindings
-            .values()
-            .any(|t| *t == KeyTarget::Action(ActionId::Undo)));
-        assert!(store
-            .bindings
-            .values()
-            .any(|t| *t == KeyTarget::Action(ActionId::Save)));
-        assert!(store
-            .bindings
-            .values()
-            .any(|t| *t == KeyTarget::Action(ActionId::ToggleLibrary)));
-        assert!(store
-            .bindings
-            .values()
-            .any(|t| *t == KeyTarget::Action(ActionId::ToolSelect)));
+        assert!(
+            store
+                .bindings
+                .values()
+                .any(|t| *t == KeyTarget::Action(ActionId::Undo))
+        );
+        assert!(
+            store
+                .bindings
+                .values()
+                .any(|t| *t == KeyTarget::Action(ActionId::Save))
+        );
+        assert!(
+            store
+                .bindings
+                .values()
+                .any(|t| *t == KeyTarget::Action(ActionId::ToggleLibrary))
+        );
+        assert!(
+            store
+                .bindings
+                .values()
+                .any(|t| *t == KeyTarget::Action(ActionId::ToolSelect))
+        );
     }
 
     #[test]

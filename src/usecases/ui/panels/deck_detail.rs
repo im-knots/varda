@@ -1,8 +1,8 @@
 //! Deck detail: the bottom-bar mode shown when a deck is selected.
 
 use super::super::{
-    widgets, DeckUIInfo, DepthPreproUI, EffectDrag, LibraryDrag, ParamUIInfo, PointCloudUI,
-    ScreenCaptureUI, TapUI, UIActions, UIData,
+    DeckUIInfo, DepthPreproUI, EffectDrag, LibraryDrag, ParamUIInfo, PointCloudUI, ScreenCaptureUI,
+    TapUI, UIActions, UIData, widgets,
 };
 use super::utils::{
     channel_color, format_time, render_collapsed_column, render_effect_drag_ghost,
@@ -1021,8 +1021,8 @@ pub(super) fn render_selected_deck_detail(
                                     }
                                 });
 
-                                if let Some(ref at) = deck.auto_transition {
-                                    if at.enabled {
+                                if let Some(ref at) = deck.auto_transition
+                                    && at.enabled {
                                         ui.horizontal(|ui| {
                                             ui.label("Trigger:");
                                             let mut clip_end = at.trigger_is_clip_end;
@@ -1148,7 +1148,6 @@ pub(super) fn render_selected_deck_detail(
                                                 });
                                         });
                                     }
-                                }
                             });
                         });
                 } else {

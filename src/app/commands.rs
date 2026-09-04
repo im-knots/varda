@@ -4,8 +4,8 @@
 //! variant that cross-thread consumers (HTTP API, WebSocket, CLI) drive through
 //! the command channel.
 
-use super::resolve::UnknownEntity;
 use super::VardaApp;
+use super::resolve::UnknownEntity;
 use crate::engine::{CommandOutcome, CommandResult, DomeLayoutFields, EngineCommand, ErrorCode};
 
 /// Classify an engine error for the wire. An unresolvable UUID is `NotFound` —
@@ -1066,11 +1066,7 @@ impl VardaApp {
             // ── Modulation Updates ────────────────────────────────
             EngineCommand::UpdateLfoFrequency { uuid, frequency } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::LFO {
-                        frequency: ref mut f,
-                        ..
-                    } = s
-                    {
+                    if let ModulationSource::LFO { frequency: f, .. } = s {
                         *f = frequency;
                     }
                 })
@@ -1167,53 +1163,35 @@ impl VardaApp {
             }
             EngineCommand::UpdateLfoWaveform { uuid, waveform } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::LFO {
-                        waveform: ref mut w,
-                        ..
-                    } = s
-                    {
+                    if let ModulationSource::LFO { waveform: w, .. } = s {
                         *w = waveform;
                     }
                 })
             }
             EngineCommand::UpdateLfoPhase { uuid, phase } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::LFO {
-                        phase: ref mut p, ..
-                    } = s
-                    {
+                    if let ModulationSource::LFO { phase: p, .. } = s {
                         *p = phase;
                     }
                 })
             }
             EngineCommand::UpdateLfoAmplitude { uuid, amplitude } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::LFO {
-                        amplitude: ref mut a,
-                        ..
-                    } = s
-                    {
+                    if let ModulationSource::LFO { amplitude: a, .. } = s {
                         *a = amplitude;
                     }
                 })
             }
             EngineCommand::UpdateLfoBipolar { uuid, bipolar } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::LFO {
-                        bipolar: ref mut b, ..
-                    } = s
-                    {
+                    if let ModulationSource::LFO { bipolar: b, .. } = s {
                         *b = bipolar;
                     }
                 })
             }
             EngineCommand::UpdateAudioSmoothing { uuid, smoothing } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::AudioBand {
-                        smoothing: ref mut sm,
-                        ..
-                    } = s
-                    {
+                    if let ModulationSource::AudioBand { smoothing: sm, .. } = s {
                         *sm = smoothing;
                     }
                 })
@@ -1224,8 +1202,8 @@ impl VardaApp {
                 freq_high,
             } => self.exec_modulation_update(&uuid, |s| {
                 if let ModulationSource::AudioBand {
-                    freq_low: ref mut fl,
-                    freq_high: ref mut fh,
+                    freq_low: fl,
+                    freq_high: fh,
                     ..
                 } = s
                 {
@@ -1235,10 +1213,7 @@ impl VardaApp {
             }),
             EngineCommand::UpdateAudioGain { uuid, gain } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::AudioBand {
-                        gain: ref mut g, ..
-                    } = s
-                    {
+                    if let ModulationSource::AudioBand { gain: g, .. } = s {
                         *g = gain;
                     }
                 })
@@ -1247,8 +1222,8 @@ impl VardaApp {
                 let (lo, hi) = preset.freq_range();
                 self.exec_modulation_update(&uuid, |s| {
                     if let ModulationSource::AudioBand {
-                        freq_low: ref mut fl,
-                        freq_high: ref mut fh,
+                        freq_low: fl,
+                        freq_high: fh,
                         ..
                     } = s
                     {
@@ -1259,51 +1234,35 @@ impl VardaApp {
             }
             EngineCommand::UpdateAudioMode { uuid, mode } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::AudioBand {
-                        mode: ref mut m, ..
-                    } = s
-                    {
+                    if let ModulationSource::AudioBand { mode: m, .. } = s {
                         *m = mode;
                     }
                 })
             }
             EngineCommand::UpdateAdsrAttack { uuid, attack } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::ADSR {
-                        attack: ref mut a, ..
-                    } = s
-                    {
+                    if let ModulationSource::ADSR { attack: a, .. } = s {
                         *a = attack;
                     }
                 })
             }
             EngineCommand::UpdateAdsrDecay { uuid, decay } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::ADSR {
-                        decay: ref mut d, ..
-                    } = s
-                    {
+                    if let ModulationSource::ADSR { decay: d, .. } = s {
                         *d = decay;
                     }
                 })
             }
             EngineCommand::UpdateAdsrSustain { uuid, sustain } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::ADSR {
-                        sustain: ref mut su,
-                        ..
-                    } = s
-                    {
+                    if let ModulationSource::ADSR { sustain: su, .. } = s {
                         *su = sustain;
                     }
                 })
             }
             EngineCommand::UpdateAdsrRelease { uuid, release } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::ADSR {
-                        release: ref mut r, ..
-                    } = s
-                    {
+                    if let ModulationSource::ADSR { release: r, .. } = s {
                         *r = release;
                     }
                 })
@@ -1318,20 +1277,14 @@ impl VardaApp {
             }
             EngineCommand::UpdateStepSeqSteps { uuid, steps } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::StepSequencer {
-                        steps: ref mut st, ..
-                    } = s
-                    {
+                    if let ModulationSource::StepSequencer { steps: st, .. } = s {
                         *st = steps;
                     }
                 })
             }
             EngineCommand::UpdateStepSeqRate { uuid, rate } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::StepSequencer {
-                        rate: ref mut r, ..
-                    } = s
-                    {
+                    if let ModulationSource::StepSequencer { rate: r, .. } = s {
                         *r = rate;
                     }
                 })
@@ -1341,8 +1294,7 @@ impl VardaApp {
                 interpolation,
             } => self.exec_modulation_update(&uuid, |s| {
                 if let ModulationSource::StepSequencer {
-                    interpolation: ref mut i,
-                    ..
+                    interpolation: i, ..
                 } = s
                 {
                     *i = interpolation;
@@ -1350,10 +1302,7 @@ impl VardaApp {
             }),
             EngineCommand::UpdateStepSeqBipolar { uuid, bipolar } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::StepSequencer {
-                        bipolar: ref mut b, ..
-                    } = s
-                    {
+                    if let ModulationSource::StepSequencer { bipolar: b, .. } = s {
                         *b = bipolar;
                     }
                 })
@@ -1371,30 +1320,22 @@ impl VardaApp {
                 step_idx,
                 value,
             } => self.exec_modulation_update(&uuid, |s| {
-                if let ModulationSource::StepSequencer { steps, .. } = s {
-                    if step_idx < steps.len() {
-                        steps[step_idx] = value;
-                    }
+                if let ModulationSource::StepSequencer { steps, .. } = s
+                    && step_idx < steps.len()
+                {
+                    steps[step_idx] = value;
                 }
             }),
             EngineCommand::UpdateAudioFreqLow { uuid, freq_low } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::AudioBand {
-                        freq_low: ref mut fl,
-                        ..
-                    } = s
-                    {
+                    if let ModulationSource::AudioBand { freq_low: fl, .. } = s {
                         *fl = freq_low;
                     }
                 })
             }
             EngineCommand::UpdateAudioFreqHigh { uuid, freq_high } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::AudioBand {
-                        freq_high: ref mut fh,
-                        ..
-                    } = s
-                    {
+                    if let ModulationSource::AudioBand { freq_high: fh, .. } = s {
                         *fh = freq_high;
                     }
                 })
@@ -1404,22 +1345,14 @@ impl VardaApp {
                 // reconcile opens the new device and closes the old one when it is
                 // no longer referenced (see /spec/audio-capture-lifecycle.md).
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::AudioBand {
-                        source_id: ref mut sid,
-                        ..
-                    } = s
-                    {
+                    if let ModulationSource::AudioBand { source_id: sid, .. } = s {
                         *sid = source_id;
                     }
                 })
             }
             EngineCommand::UpdateAudioNoiseGate { uuid, noise_gate } => self
                 .exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::AudioBand {
-                        noise_gate: ref mut ng,
-                        ..
-                    } = s
-                    {
+                    if let ModulationSource::AudioBand { noise_gate: ng, .. } = s {
                         *ng = noise_gate;
                     }
                 }),
@@ -2048,7 +1981,7 @@ mod tests {
     // (api-addressing.md) is that an unresolvable UUID becomes `NotFound`, while
     // any other error is `InvalidInput`.
 
-    use super::{classify, not_found, wire, wire_id, UnknownEntity};
+    use super::{UnknownEntity, classify, not_found, wire, wire_id};
     use crate::engine::ErrorCode;
 
     fn unknown() -> UnknownEntity {

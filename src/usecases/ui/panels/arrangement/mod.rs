@@ -750,12 +750,12 @@ fn render_vertical_scrollbar(
 
     // Both a drag on the thumb and a click on the track put the pointer where
     // it asked to be, which is the same arithmetic either way.
-    if response.is_pointer_button_down_on() {
-        if let Some(pointer) = ui.ctx().pointer_latest_pos() {
-            let wanted = pointer.y - track.top() - thumb_height / 2.0;
-            let fraction = if travel > 0.0 { wanted / travel } else { 0.0 };
-            actions.session.set_arrangement_scroll_y = Some((fraction * limit).clamp(0.0, limit));
-        }
+    if response.is_pointer_button_down_on()
+        && let Some(pointer) = ui.ctx().pointer_latest_pos()
+    {
+        let wanted = pointer.y - track.top() - thumb_height / 2.0;
+        let fraction = if travel > 0.0 { wanted / travel } else { 0.0 };
+        actions.session.set_arrangement_scroll_y = Some((fraction * limit).clamp(0.0, limit));
     }
 }
 
@@ -838,23 +838,23 @@ fn render_ruler(
     }
 
     // Click and drag both locate, because scrubbing is the same gesture held.
-    if response.clicked() || response.dragged() {
-        if let Some(pos) = response.interact_pointer_pos() {
-            actions.commands.push(EngineCommand::TransportLocate {
-                position: axis.seconds(pos.x).max(0.0),
-            });
-        }
+    if (response.clicked() || response.dragged())
+        && let Some(pos) = response.interact_pointer_pos()
+    {
+        actions.commands.push(EngineCommand::TransportLocate {
+            position: axis.seconds(pos.x).max(0.0),
+        });
     }
 
     // The double-click also located, on its first click. Landing the playhead on
     // the cue it just made is what someone marking a moment wanted anyway.
-    if response.double_clicked() {
-        if let Some(pos) = response.interact_pointer_pos() {
-            actions.commands.push(EngineCommand::AddCue {
-                at: snap_seconds(data, axis.seconds(pos.x)),
-                name: String::new(),
-            });
-        }
+    if response.double_clicked()
+        && let Some(pos) = response.interact_pointer_pos()
+    {
+        actions.commands.push(EngineCommand::AddCue {
+            at: snap_seconds(data, axis.seconds(pos.x)),
+            name: String::new(),
+        });
     }
 }
 
@@ -1318,11 +1318,7 @@ fn handle_lane_reorder(
 /// one of the two directions, which is exactly the kind of bug that survives a
 /// quick try in the app.
 fn reorder_target(from: usize, gap: usize) -> usize {
-    if from < gap {
-        gap - 1
-    } else {
-        gap
-    }
+    if from < gap { gap - 1 } else { gap }
 }
 
 /// The fold control for a lane's automation rows.
@@ -1460,12 +1456,12 @@ fn handle_marquee(ui: &egui::Ui, rows: &[Row<'_>], layout: Layout) {
         )
     });
 
-    if pressed && shift {
-        if let Some(origin) = press_origin.or(pointer) {
-            if area.contains(origin) {
-                ctx.memory_mut(|mem| mem.data.insert_temp(anchor_id, origin));
-            }
-        }
+    if pressed
+        && shift
+        && let Some(origin) = press_origin.or(pointer)
+        && area.contains(origin)
+    {
+        ctx.memory_mut(|mem| mem.data.insert_temp(anchor_id, origin));
     }
 
     let Some(anchor): Option<egui::Pos2> = ctx.memory(|mem| mem.data.get_temp(anchor_id)) else {
@@ -1655,18 +1651,18 @@ fn handle_selection_drag(
         )
     });
 
-    if pressed && !shift {
-        if let (Some(armed), Some(origin)) = (selection::load(ctx), press_origin.or(pointer)) {
-            if selection_hit(rows, layout, &armed, origin) {
-                let drag = SelectionDrag {
-                    grab: layout.axis.seconds(origin.x),
-                    grab_lane: nearest_deck_lane(rows, layout, origin.y),
-                    duplicate: alt,
-                    origin: armed,
-                };
-                ctx.memory_mut(|mem| mem.data.insert_temp(drag_id, drag));
-            }
-        }
+    if pressed
+        && !shift
+        && let (Some(armed), Some(origin)) = (selection::load(ctx), press_origin.or(pointer))
+        && selection_hit(rows, layout, &armed, origin)
+    {
+        let drag = SelectionDrag {
+            grab: layout.axis.seconds(origin.x),
+            grab_lane: nearest_deck_lane(rows, layout, origin.y),
+            duplicate: alt,
+            origin: armed,
+        };
+        ctx.memory_mut(|mem| mem.data.insert_temp(drag_id, drag));
     }
 
     let Some(drag): Option<SelectionDrag> = ctx.memory(|mem| mem.data.get_temp(drag_id)) else {
@@ -1906,15 +1902,14 @@ fn paste_target_fallback(
     data: &UIData,
     anchor: f64,
 ) -> Option<(selection::PasteTarget, f64)> {
-    if let Some((ch_idx, deck_idx)) = data.selected_deck {
-        if let Some(uuid) = data
+    if let Some((ch_idx, deck_idx)) = data.selected_deck
+        && let Some(uuid) = data
             .channels
             .get(ch_idx)
             .and_then(|ch| ch.decks.get(deck_idx))
             .map(|deck| deck.uuid.clone())
-        {
-            return Some((selection::PasteTarget::Deck(uuid), anchor));
-        }
+    {
+        return Some((selection::PasteTarget::Deck(uuid), anchor));
     }
     automation::selected_envelope(ui.ctx())
         .map(|uuid| (selection::PasteTarget::Envelope(uuid), anchor))
@@ -2121,9 +2116,11 @@ mod tests {
         assert_eq!(held, vec![(key.as_str(), true)]);
 
         // And the lane itself stays unflagged, because opacity is not held.
-        assert!(!build_rows(&data)
-            .into_iter()
-            .any(|r| matches!(r, Row::Lane(lane) if lane.overridden)));
+        assert!(
+            !build_rows(&data)
+                .into_iter()
+                .any(|r| matches!(r, Row::Lane(lane) if lane.overridden))
+        );
     }
 
     /// The keys Varda reserves are internal identifiers. Showing `video_loop_mode`

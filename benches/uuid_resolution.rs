@@ -17,7 +17,7 @@
 ///
 /// The per-frame `tick_sequence` fade resolution is the same channel scan, so
 /// `resolve_channel` bounds it: multiply by 2 (from + to) per playing sequence.
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use varda::{
     deck::{Deck, Effect},
     isf::ISFShader,

@@ -130,10 +130,10 @@ impl AppConfig {
             return ws.to_path_buf();
         }
         // Tier 2: CWD has .varda/
-        if let Some(cwd) = cwd {
-            if cwd.join(".varda").is_dir() {
-                return cwd.to_path_buf();
-            }
+        if let Some(cwd) = cwd
+            && cwd.join(".varda").is_dir()
+        {
+            return cwd.to_path_buf();
         }
         // Tier 3: home directory (workspace data lives at ~/.varda/)
         if let Some(home) = home {
@@ -373,29 +373,29 @@ impl VardaApp {
         // 4. Platform user dir (global user shader collection)
         // 5. Any --shader-dir flags (added last, override built-ins by name)
         let mut registry = ShaderRegistry::new();
-        if let Some(bundled) = crate::registry::get_bundled_shader_path() {
-            if let Err(e) = registry.add_library_path(&bundled) {
-                log::warn!("Failed to add bundled shaders path: {e}");
-            }
+        if let Some(bundled) = crate::registry::get_bundled_shader_path()
+            && let Err(e) = registry.add_library_path(&bundled)
+        {
+            log::warn!("Failed to add bundled shaders path: {e}");
         }
         if let Err(e) = registry.add_library_path("shaders") {
             log::warn!("Failed to add shaders path: {e}");
         }
         let ws_shaders = workspace.shaders_dir();
-        if ws_shaders.is_dir() {
-            if let Err(e) = registry.add_library_path(&ws_shaders) {
-                log::warn!("Failed to add workspace shaders path: {e}");
-            }
+        if ws_shaders.is_dir()
+            && let Err(e) = registry.add_library_path(&ws_shaders)
+        {
+            log::warn!("Failed to add workspace shaders path: {e}");
         }
         for path in crate::registry::get_default_library_paths() {
-            if path.is_dir() {
-                if let Err(e) = registry.add_library_path(&path) {
-                    log::warn!(
-                        "Failed to add user shader library path {}: {}",
-                        path.display(),
-                        e
-                    );
-                }
+            if path.is_dir()
+                && let Err(e) = registry.add_library_path(&path)
+            {
+                log::warn!(
+                    "Failed to add user shader library path {}: {}",
+                    path.display(),
+                    e
+                );
             }
         }
         for path in &config.shader_dirs {
@@ -657,7 +657,7 @@ impl VardaApp {
                 return CommandResult::Err {
                     code: ErrorCode::NotFound,
                     message: e.to_string(),
-                }
+                };
             }
         };
         let slot = &mut self.mixer.channels_mut()[ch_idx].decks[deck_idx];
@@ -682,7 +682,7 @@ impl VardaApp {
                 return CommandResult::Err {
                     code: ErrorCode::NotFound,
                     message: e.to_string(),
-                }
+                };
             }
         };
         if f(&mut self.mixer.channels_mut()[ch_idx].decks[deck_idx].deck) {
@@ -983,11 +983,11 @@ impl VardaApp {
         new_size: winit::dpi::PhysicalSize<u32>,
     ) {
         for o in &mut self.output.outputs {
-            if let UnifiedOutput::Window(w) = o {
-                if w.window.id() == window_id {
-                    w.resize(&self.context.device, new_size);
-                    return;
-                }
+            if let UnifiedOutput::Window(w) = o
+                && w.window.id() == window_id
+            {
+                w.resize(&self.context.device, new_size);
+                return;
             }
         }
     }

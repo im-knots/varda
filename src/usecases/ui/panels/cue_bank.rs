@@ -6,7 +6,7 @@
 //! needs no reconciliation. See /spec/arrangement.md § The cue bank in
 //! Performance mode.
 
-use super::super::{widgets, UIActions, UIData};
+use super::super::{UIActions, UIData, widgets};
 use crate::arrangement::Cue;
 use crate::engine::EngineCommand;
 use crate::transport::TransportSource;

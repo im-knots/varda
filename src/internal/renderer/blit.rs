@@ -1,6 +1,6 @@
 use super::edge_blend::SurfaceOverlapZones;
 /// Simple blit pipeline for copying textures to the screen
-use crate::surface::mask::{bake_hole_mask, DEFAULT_MASK_RES};
+use crate::surface::mask::{DEFAULT_MASK_RES, bake_hole_mask};
 use anyhow::Result;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -1602,7 +1602,8 @@ impl PolygonBlitPipeline {
         if cols < 2 || rows < 2 || mesh.points.len() != cols * rows {
             log::warn!(
                 "Invalid mesh: cols={cols}, rows={rows}, points={} (expected {}). Returning empty mesh.",
-                mesh.points.len(), cols * rows
+                mesh.points.len(),
+                cols * rows
             );
             return Vec::new();
         }

@@ -10,7 +10,7 @@
 //! The UI is a pure view over `UIData.macros`: it reads the snapshot and emits
 //! `EngineCommand`s / selection actions. All state mutation happens in the engine.
 
-use super::super::{modulator_color, widgets, ModSourceUI, UIActions, UIData};
+use super::super::{ModSourceUI, UIActions, UIData, modulator_color, widgets};
 use crate::engine::EngineCommand;
 use crate::macros::{ButtonBehavior, GlobalAction, Macro, MacroCurve, MacroKind, TriggerAction};
 use crate::modulation::DEFAULT_ASSIGNMENT_AMOUNT;
@@ -485,21 +485,21 @@ fn render_macro_modulation(ui: &mut egui::Ui, m: &Macro, data: &UIData, actions:
 /// macro is currently fanning out (`base → effective`).
 fn macro_value_text(m: &Macro, data: &UIData) -> egui::RichText {
     let key = Macro::value_mod_key(&m.uuid);
-    if let Some(list) = data.modulation_assignments.get(&key) {
-        if !list.is_empty() {
-            let offset: f32 = list
-                .iter()
-                .map(|a| {
-                    data.modulation_current_values
-                        .get(&a.source_id)
-                        .copied()
-                        .unwrap_or(0.0)
-                        * a.amount
-                })
-                .sum();
-            let effective = (m.value + offset).clamp(0.0, 1.0);
-            return egui::RichText::new(format!("value {:.2} → {:.2}", m.value, effective)).small();
-        }
+    if let Some(list) = data.modulation_assignments.get(&key)
+        && !list.is_empty()
+    {
+        let offset: f32 = list
+            .iter()
+            .map(|a| {
+                data.modulation_current_values
+                    .get(&a.source_id)
+                    .copied()
+                    .unwrap_or(0.0)
+                    * a.amount
+            })
+            .sum();
+        let effective = (m.value + offset).clamp(0.0, 1.0);
+        return egui::RichText::new(format!("value {:.2} → {:.2}", m.value, effective)).small();
     }
     egui::RichText::new(format!("value {:.2}", m.value)).small()
 }

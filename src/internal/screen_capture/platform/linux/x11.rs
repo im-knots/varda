@@ -37,7 +37,7 @@ use crate::screen_capture::backend::{
     CaptureConfig, CaptureError, CaptureFrame, CapturePixelFormat, CaptureTargetInfo,
     CaptureTargetKind, ScreenCaptureBackend,
 };
-use crate::screen_capture::resample::{downscale, Geometry};
+use crate::screen_capture::resample::{Geometry, downscale};
 
 pub const BACKEND_NAME: &str = "X11";
 

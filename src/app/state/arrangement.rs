@@ -7,7 +7,7 @@
 //!
 //! See /spec/arrangement.md.
 
-use crate::arrangement::{Authority, LaneConfig, RegionConfig, DEFAULT_REARM_SECONDS};
+use crate::arrangement::{Authority, DEFAULT_REARM_SECONDS, LaneConfig, RegionConfig};
 use crate::engine::{CommandResult, ErrorCode};
 
 use super::super::VardaApp;
@@ -173,10 +173,10 @@ impl VardaApp {
         &mut self,
         idle: crate::arrangement::IdleBehaviour,
     ) -> CommandResult {
-        if let crate::arrangement::IdleBehaviour::ShowDeck { deck_uuid } = &idle {
-            if !self.deck_exists(deck_uuid) {
-                return Self::no_such_deck(deck_uuid);
-            }
+        if let crate::arrangement::IdleBehaviour::ShowDeck { deck_uuid } = &idle
+            && !self.deck_exists(deck_uuid)
+        {
+            return Self::no_such_deck(deck_uuid);
         }
         self.mixer.arrangement_mut().idle = idle;
         CommandResult::Ok

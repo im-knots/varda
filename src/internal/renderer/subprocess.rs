@@ -7,9 +7,9 @@
 use std::io::Write;
 use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
 
 use crate::audio::PcmChunk;
 use crate::engine::value::render::{
@@ -2229,12 +2229,13 @@ mod tests {
         assert_eq!(plan.resolved.resolved, PresentationDepth::Sdr8);
         assert_eq!(plan.input_pixel_format, "rgba");
         assert_eq!(plan.output_pixel_format, "yuv420p");
-        assert!(plan
-            .resolved
-            .fallback_reason
-            .as_deref()
-            .unwrap()
-            .contains("H.264"));
+        assert!(
+            plan.resolved
+                .fallback_reason
+                .as_deref()
+                .unwrap()
+                .contains("H.264")
+        );
     }
 
     #[test]
@@ -2287,12 +2288,13 @@ mod tests {
         );
 
         assert_eq!(plan.resolved.resolved, PresentationDepth::Sdr8);
-        assert!(plan
-            .resolved
-            .fallback_reason
-            .as_deref()
-            .unwrap()
-            .contains("does not support yuv420p10le"));
+        assert!(
+            plan.resolved
+                .fallback_reason
+                .as_deref()
+                .unwrap()
+                .contains("does not support yuv420p10le")
+        );
     }
 
     #[test]
@@ -2355,12 +2357,13 @@ mod tests {
             None,
         );
         assert_eq!(plan.resolved.resolved, PresentationDepth::Sdr8);
-        assert!(plan
-            .resolved
-            .fallback_reason
-            .as_deref()
-            .unwrap()
-            .contains("unavailable"));
+        assert!(
+            plan.resolved
+                .fallback_reason
+                .as_deref()
+                .unwrap()
+                .contains("unavailable")
+        );
     }
 
     #[test]
@@ -2397,12 +2400,13 @@ mod tests {
         );
 
         assert_eq!(plan.resolved.resolved, PresentationDepth::Sdr8);
-        assert!(plan
-            .resolved
-            .fallback_reason
-            .as_deref()
-            .unwrap()
-            .contains("integer RGBA16"));
+        assert!(
+            plan.resolved
+                .fallback_reason
+                .as_deref()
+                .unwrap()
+                .contains("integer RGBA16")
+        );
     }
 
     #[test]
@@ -2416,12 +2420,13 @@ mod tests {
 
         assert_eq!(plan.resolved.requested, PresentationDepth::Sdr10);
         assert_eq!(plan.resolved.resolved, PresentationDepth::Sdr8);
-        assert!(plan
-            .resolved
-            .fallback_reason
-            .as_deref()
-            .unwrap()
-            .contains("GPU does not support"));
+        assert!(
+            plan.resolved
+                .fallback_reason
+                .as_deref()
+                .unwrap()
+                .contains("GPU does not support")
+        );
     }
 
     #[test]
@@ -2434,12 +2439,13 @@ mod tests {
         );
 
         assert_eq!(plan.resolved.resolved, PresentationDepth::Sdr8);
-        assert!(plan
-            .resolved
-            .fallback_reason
-            .as_deref()
-            .unwrap()
-            .contains("does not support yuva444p10le"));
+        assert!(
+            plan.resolved
+                .fallback_reason
+                .as_deref()
+                .unwrap()
+                .contains("does not support yuva444p10le")
+        );
     }
 
     #[test]
@@ -2651,12 +2657,13 @@ mod tests {
         assert_eq!(plan.resolved.requested, PresentationDepth::Sdr10);
         assert_eq!(plan.resolved.resolved, PresentationDepth::Sdr8);
         assert_eq!(plan.expected_readback, ReadbackFormat::Rgba8);
-        assert!(plan
-            .resolved
-            .fallback_reason
-            .as_deref()
-            .unwrap()
-            .contains("legacy RTMP"));
+        assert!(
+            plan.resolved
+                .fallback_reason
+                .as_deref()
+                .unwrap()
+                .contains("legacy RTMP")
+        );
         assert!(has_pair(&plan.video_args, "-c:v", "libx264"));
         assert!(has_pair(&plan.video_args, "-pix_fmt", "yuv420p"));
         assert!(has_pair(&plan.muxer_args, "-f", "flv"));
@@ -2676,12 +2683,14 @@ mod tests {
             missing,
         );
         assert_eq!(fallback.resolved.resolved, PresentationDepth::Sdr8);
-        assert!(fallback
-            .resolved
-            .fallback_reason
-            .as_deref()
-            .unwrap()
-            .contains("Enhanced RTMP"));
+        assert!(
+            fallback
+                .resolved
+                .fallback_reason
+                .as_deref()
+                .unwrap()
+                .contains("Enhanced RTMP")
+        );
 
         let supported = StreamingPlan::resolve(
             StreamingProtocol::Rtmp(RtmpCodecContract::Enhanced),
@@ -2707,12 +2716,13 @@ mod tests {
             StreamingCapabilities::default(),
         );
         assert_eq!(plan.resolved.resolved, PresentationDepth::Sdr8);
-        assert!(plan
-            .resolved
-            .fallback_reason
-            .as_deref()
-            .unwrap()
-            .contains("AV1 10-bit"));
+        assert!(
+            plan.resolved
+                .fallback_reason
+                .as_deref()
+                .unwrap()
+                .contains("AV1 10-bit")
+        );
     }
 
     #[test]

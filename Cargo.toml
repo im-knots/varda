@@ -1,7 +1,7 @@
 [package]
 name = "varda"
 version = "0.5.0"
-edition = "2021"
+edition = "2024"
 authors = ["Varda Contributors"]
 description = "Linux, MacOS, and Windows VJ software"
 license = "MIT"

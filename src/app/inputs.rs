@@ -374,13 +374,12 @@ impl VardaApp {
         self.publish_timecode();
 
         // Broadcast changed parameters to OSC feedback targets
-        if !changed_params.is_empty() {
-            if let Some(ref sender) = self.input.osc_feedback {
-                if sender.has_targets() {
-                    for (path, value) in &changed_params {
-                        sender.send_param(path, *value);
-                    }
-                }
+        if !changed_params.is_empty()
+            && let Some(ref sender) = self.input.osc_feedback
+            && sender.has_targets()
+        {
+            for (path, value) in &changed_params {
+                sender.send_param(path, *value);
             }
         }
     }
@@ -503,7 +502,7 @@ impl VardaApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{fired_cue, VardaApp};
+    use super::{VardaApp, fired_cue};
     use crate::engine::{EngineCommand as C, MixerQueries};
     use crate::midi::{MidiDeviceManager, MidiKey, MidiMessage};
     use crate::osc::{OscInput, OscReceiver};

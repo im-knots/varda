@@ -43,7 +43,7 @@ pub fn collect_pressed_keys(ctx: &egui::Context) -> Vec<KeyCombo> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::keymap::{is_supported_key_name, SUPPORTED_KEY_NAMES};
+    use crate::keymap::{SUPPORTED_KEY_NAMES, is_supported_key_name};
 
     #[test]
     fn from_egui_uses_debug_names_and_modifiers() {

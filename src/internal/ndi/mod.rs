@@ -11,8 +11,8 @@ pub mod sdk;
 
 use std::collections::HashMap;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
 };
 
 use crate::engine::value::render::{
@@ -921,11 +921,13 @@ mod tests {
 
         assert_eq!(resolved.resolved, PresentationDepth::Sdr8);
         assert_eq!(resolved.pixel_format, PresentationPixelFormat::Uyvy);
-        assert!(resolved
-            .fallback_reason
-            .as_deref()
-            .unwrap()
-            .contains("predates"));
+        assert!(
+            resolved
+                .fallback_reason
+                .as_deref()
+                .unwrap()
+                .contains("predates")
+        );
     }
 
     #[test]
@@ -1093,7 +1095,7 @@ mod tests {
         uyvy[1] = 200; // Y0
         uyvy[2] = 128; // V
         uyvy[3] = 200; // Y1
-                       // Bytes 4-7 are padding
+        // Bytes 4-7 are padding
 
         let mut rgba = vec![0u8; 2 * 4];
         uyvy_to_rgba(&uyvy, &mut rgba, w, h, stride);

@@ -9,9 +9,9 @@ pub mod auto_map;
 pub mod controller_profile;
 
 use std::collections::HashMap;
-use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 
 use anyhow::Context as _;
 use midir::{MidiInput, MidiOutput};
@@ -83,7 +83,7 @@ impl MidiMessage {
                 return Some(MidiMessage::MtcQuarterFrame {
                     device_id,
                     data: data[1],
-                })
+                });
             }
             _ => {}
         }
@@ -551,10 +551,10 @@ impl MidiDeviceManager {
             match self.receiver.try_recv() {
                 Ok(msg) => {
                     let dev_id = msg.device_id();
-                    if let Some(info) = self.devices.get(&dev_id) {
-                        if info.enabled {
-                            return Some(msg);
-                        }
+                    if let Some(info) = self.devices.get(&dev_id)
+                        && info.enabled
+                    {
+                        return Some(msg);
                     }
                     // Device disabled or unknown — skip
                 }
@@ -571,12 +571,11 @@ impl MidiDeviceManager {
 
     /// Send raw MIDI bytes to a specific device.
     pub fn send_raw(&self, device_id: DeviceId, bytes: &[u8]) {
-        if let Some(conn_mutex) = self.output_connections.get(&device_id) {
-            if let Ok(mut conn) = conn_mutex.lock() {
-                if let Err(e) = conn.send(bytes) {
-                    log::warn!("Failed to send MIDI to device {device_id}: {e}");
-                }
-            }
+        if let Some(conn_mutex) = self.output_connections.get(&device_id)
+            && let Ok(mut conn) = conn_mutex.lock()
+            && let Err(e) = conn.send(bytes)
+        {
+            log::warn!("Failed to send MIDI to device {device_id}: {e}");
         }
     }
 
@@ -1146,10 +1145,12 @@ mod tests {
             number: 0,
             param_path: "ch/aabbccdd/opacity".into(),
         };
-        assert!(entry
-            .validate("m[0]")
-            .iter()
-            .any(|e| e.contains("device_name")));
+        assert!(
+            entry
+                .validate("m[0]")
+                .iter()
+                .any(|e| e.contains("device_name"))
+        );
     }
 
     #[test]
@@ -1161,10 +1162,12 @@ mod tests {
             number: 0,
             param_path: "ch/aabbccdd/opacity".into(),
         };
-        assert!(entry
-            .validate("m[0]")
-            .iter()
-            .any(|e| e.contains("msg_type")));
+        assert!(
+            entry
+                .validate("m[0]")
+                .iter()
+                .any(|e| e.contains("msg_type"))
+        );
     }
 
     #[test]
@@ -1188,10 +1191,12 @@ mod tests {
             number: 0,
             param_path: String::new(),
         };
-        assert!(entry
-            .validate("m[0]")
-            .iter()
-            .any(|e| e.contains("param_path")));
+        assert!(
+            entry
+                .validate("m[0]")
+                .iter()
+                .any(|e| e.contains("param_path"))
+        );
     }
 
     // ── Helper for building an AutoMapEngine with a registered device ──

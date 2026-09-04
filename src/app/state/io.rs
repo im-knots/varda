@@ -67,17 +67,16 @@ impl VardaApp {
             // reconnect, and our own reconcile may also bind it — both must
             // converge to a single deck, not stack duplicates.
             let display_name = format!("🔗 {server_name}");
-            if let Some(ch) = self.mixer.channels().get(channel_idx) {
-                if ch
+            if let Some(ch) = self.mixer.channels().get(channel_idx)
+                && ch
                     .decks
                     .iter()
                     .any(|s| s.deck.source_name() == display_name)
-                {
-                    log::debug!(
-                        "Syphon deck '{server_name}' already present on channel {channel_idx}; add is a no-op"
-                    );
-                    return CommandResult::Ok;
-                }
+            {
+                log::debug!(
+                    "Syphon deck '{server_name}' already present on channel {channel_idx}; add is a no-op"
+                );
+                return CommandResult::Ok;
             }
             match self
                 .external_io
@@ -557,20 +556,18 @@ impl VardaApp {
                     // Re-apply the persisted slot props onto the deck we just bound
                     // (matched by name so an idempotent no-op doesn't mis-target).
                     let display_name = format!("🔗 {server_name}");
-                    if let Ok(ch_idx) = self.resolve_channel(&channel_uuid) {
-                        if let Some(ch) = self.mixer.channel_mut(ch_idx) {
-                            if let Some(slot) = ch
-                                .decks
-                                .iter_mut()
-                                .find(|s| s.deck.source_name() == display_name)
-                            {
-                                slot.opacity = p.config.opacity;
-                                slot.blend_mode = p.config.blend_mode.into();
-                                slot.mute = p.config.mute;
-                                slot.solo = p.config.solo;
-                                slot.z_index = p.config.z_index;
-                            }
-                        }
+                    if let Ok(ch_idx) = self.resolve_channel(&channel_uuid)
+                        && let Some(ch) = self.mixer.channel_mut(ch_idx)
+                        && let Some(slot) = ch
+                            .decks
+                            .iter_mut()
+                            .find(|s| s.deck.source_name() == display_name)
+                    {
+                        slot.opacity = p.config.opacity;
+                        slot.blend_mode = p.config.blend_mode.into();
+                        slot.mute = p.config.mute;
+                        slot.solo = p.config.solo;
+                        slot.z_index = p.config.z_index;
                     }
                     log::info!("Syphon deck '{server_name}' late-bound to channel {channel_uuid}");
                 }

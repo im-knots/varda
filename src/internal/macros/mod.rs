@@ -238,17 +238,15 @@ impl Macro {
                         }
                     }
                     ButtonBehavior::Trigger => {
-                        if rising {
-                            if let Some(spec) = &self.button {
-                                for act in &spec.trigger {
-                                    match act {
-                                        TriggerAction::Param { path, value } => {
-                                            if !Self::is_macro_str(path) {
-                                                out.params.push((path.clone(), *value));
-                                            }
+                        if rising && let Some(spec) = &self.button {
+                            for act in &spec.trigger {
+                                match act {
+                                    TriggerAction::Param { path, value } => {
+                                        if !Self::is_macro_str(path) {
+                                            out.params.push((path.clone(), *value));
                                         }
-                                        TriggerAction::Global(g) => out.actions.push(*g),
                                     }
+                                    TriggerAction::Global(g) => out.actions.push(*g),
                                 }
                             }
                         }

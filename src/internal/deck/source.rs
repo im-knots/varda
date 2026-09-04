@@ -1,14 +1,14 @@
 //! Deck constructors — creating decks from shaders, videos, images, cameras, and solid colors.
 
 use super::{
-    svg, Deck, DeckSource, Effect, ExternalSourceKind, PassBuffer, ScalingMode, VideoStagingBuffers,
+    Deck, DeckSource, Effect, ExternalSourceKind, PassBuffer, ScalingMode, VideoStagingBuffers, svg,
 };
-use crate::isf::{compile_glsl_compute_to_spirv, compile_glsl_to_spirv, ISFMetadata, ISFShader};
+use crate::isf::{ISFMetadata, ISFShader, compile_glsl_compute_to_spirv, compile_glsl_to_spirv};
 use crate::params::ShaderParams;
 use crate::renderer::{
     BlitPipeline, ComputePipeline, DispatchMode, GpuContext, HapConvertPipeline, UnifiedPipeline,
 };
-use crate::video::{hap::HapPlayer, HapTextureFormat, VideoDecodeHandle, VideoPlayer};
+use crate::video::{HapTextureFormat, VideoDecodeHandle, VideoPlayer, hap::HapPlayer};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::Path;

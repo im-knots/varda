@@ -849,7 +849,7 @@ mod tests {
         assert!((z0.zones[0].uv_rect[3] - 1.0).abs() < 1e-4);
         assert_eq!(z0.zones[0].ramp_x, 0.0); // no horizontal ramp (same x center)
         assert_eq!(z0.zones[0].ramp_y, 1.0); // fade toward bottom
-                                             // Output 1: overlap at top (v_min ≈ 0.0), ramp toward top
+        // Output 1: overlap at top (v_min ≈ 0.0), ramp toward top
         assert!((z1.zones[0].uv_rect[1]).abs() < 1e-4);
         assert_eq!(z1.zones[0].ramp_x, 0.0);
         assert_eq!(z1.zones[0].ramp_y, -1.0); // fade toward top
@@ -1015,7 +1015,7 @@ mod tests {
         assert!(r[1] > 0.5); // v_min well past midpoint
         assert!((r[2] - 1.0).abs() < 1e-4); // u_max = 1.0
         assert!((r[3] - 1.0).abs() < 1e-4); // v_max = 1.0
-                                            // Ramp toward bottom-right (B is below and to the right of A)
+        // Ramp toward bottom-right (B is below and to the right of A)
         assert_eq!(z0.zones[0].ramp_x, 1.0);
         assert_eq!(z0.zones[0].ramp_y, 1.0);
     }
@@ -1098,7 +1098,10 @@ mod tests {
             None => {} // circles don't actually touch — correct
             Some(r) => {
                 let poly_area = r[2] * r[3];
-                assert!(poly_area < aabb_area, "polygon overlap area ({poly_area}) should be less than AABB overlap area ({aabb_area})");
+                assert!(
+                    poly_area < aabb_area,
+                    "polygon overlap area ({poly_area}) should be less than AABB overlap area ({aabb_area})"
+                );
             }
         }
     }

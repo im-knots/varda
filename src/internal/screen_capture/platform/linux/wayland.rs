@@ -42,7 +42,7 @@
 
 use std::os::fd::OwnedFd;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -58,7 +58,7 @@ use crate::screen_capture::backend::{
     CaptureConfig, CaptureError, CaptureFrame, CapturePixelFormat, CaptureTargetInfo,
     CaptureTargetKind, ScreenCaptureBackend,
 };
-use crate::screen_capture::resample::{downscale, Geometry};
+use crate::screen_capture::resample::{Geometry, downscale};
 
 /// Reported by the Linux dispatcher when the session is Wayland.
 pub const BACKEND_NAME: &str = "PipeWire";

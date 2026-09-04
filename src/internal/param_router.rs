@@ -680,7 +680,7 @@ fn apply_mod_param(
                 return Err(ParamRouteError::UnknownParam {
                     scope: "LFO",
                     name: param_name.to_string(),
-                })
+                });
             }
         },
         ModulationSource::AudioBand {
@@ -701,7 +701,7 @@ fn apply_mod_param(
                 return Err(ParamRouteError::UnknownParam {
                     scope: "Audio",
                     name: param_name.to_string(),
-                })
+                });
             }
         },
         ModulationSource::ADSR {
@@ -726,7 +726,7 @@ fn apply_mod_param(
                 return Err(ParamRouteError::UnknownParam {
                     scope: "ADSR",
                     name: param_name.to_string(),
-                })
+                });
             }
         },
         ModulationSource::StepSequencer { rate, .. } => match param_name {
@@ -735,7 +735,7 @@ fn apply_mod_param(
                 return Err(ParamRouteError::UnknownParam {
                     scope: "StepSeq",
                     name: param_name.to_string(),
-                })
+                });
             }
         },
         ModulationSource::Analyzer { smoothing, .. } => match param_name {
@@ -744,7 +744,7 @@ fn apply_mod_param(
                 return Err(ParamRouteError::UnknownParam {
                     scope: "Analyzer",
                     name: param_name.to_string(),
-                })
+                });
             }
         },
         // An envelope's shape is its breakpoints, which are edited as a curve
@@ -755,7 +755,7 @@ fn apply_mod_param(
             return Err(ParamRouteError::UnknownParam {
                 scope: "Envelope",
                 name: param_name.to_string(),
-            })
+            });
         }
     }
     Ok(())

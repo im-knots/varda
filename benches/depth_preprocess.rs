@@ -18,7 +18,7 @@
 //! the passes are gated on the sensor's upload counter, so a 30 Hz Kinect
 //! driving a 60 Hz deck runs them on half the frames.
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use varda::depth::preprocess::{DepthPreprocessParams, DepthPreprocessPipeline};
 use varda::renderer::context::GpuContext;
 
