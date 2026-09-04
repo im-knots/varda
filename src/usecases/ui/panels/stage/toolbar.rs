@@ -106,13 +106,12 @@ pub(super) fn render(
                 "Select exactly one surface to cut it out of the one beneath it",
             )
             .clicked()
+            && let Some(source_uuid) = state.selected_surfaces.iter().next().cloned()
         {
-            if let Some(source_uuid) = state.selected_surfaces.iter().next().cloned() {
-                actions
-                    .commands
-                    .push(EngineCommand::PunchSurfaceHole { source_uuid });
-                state.selected_surfaces.clear();
-            }
+            actions
+                .commands
+                .push(EngineCommand::PunchSurfaceHole { source_uuid });
+            state.selected_surfaces.clear();
         }
 
         ui.separator();
@@ -293,18 +292,17 @@ pub(super) fn render(
         });
 
         // Import from file
-        if ui.button("📁 Import").clicked() {
-            if let Some(path) = rfd::FileDialog::new()
+        if ui.button("📁 Import").clicked()
+            && let Some(path) = rfd::FileDialog::new()
                 .add_filter("Stage Plans", &["png", "jpg", "jpeg", "svg", "dxf"])
                 .add_filter("Images", &["png", "jpg", "jpeg", "bmp", "webp"])
                 .add_filter("SVG", &["svg"])
                 .add_filter("DXF", &["dxf"])
                 .pick_file()
-            {
-                actions
-                    .commands
-                    .push(EngineCommand::ImportSurfacesFromFile { path });
-            }
+        {
+            actions
+                .commands
+                .push(EngineCommand::ImportSurfacesFromFile { path });
         }
 
         // Camera detect button — 0 cameras: hidden; 1: direct click; N: dropdown

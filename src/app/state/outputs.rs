@@ -186,7 +186,7 @@ impl VardaApp {
                     return CommandResult::Err {
                         code: ErrorCode::NotFound,
                         message: "Output not found or not headless".into(),
-                    }
+                    };
                 }
             };
         if let OutputTarget::Recording { codec, .. } = &target {

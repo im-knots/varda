@@ -51,7 +51,7 @@ impl VardaApp {
                 return CommandResult::Err {
                     code: ErrorCode::NotFound,
                     message: format!("Surface {source_uuid} not found"),
-                }
+                };
             }
         };
         let Some(target_uuid) = self.output.surface_manager.resolve_hole_target(source_uuid) else {

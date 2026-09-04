@@ -1126,15 +1126,15 @@ impl SceneConfig {
                 self.crossfader
             ));
         }
-        if let Some(w) = self.render_width {
-            if w == 0 {
-                errors.push("render_width is 0".into());
-            }
+        if let Some(w) = self.render_width
+            && w == 0
+        {
+            errors.push("render_width is 0".into());
         }
-        if let Some(h) = self.render_height {
-            if h == 0 {
-                errors.push("render_height is 0".into());
-            }
+        if let Some(h) = self.render_height
+            && h == 0
+        {
+            errors.push("render_height is 0".into());
         }
         for (i, ch) in self.channels.iter().enumerate() {
             errors.extend(ch.validate(&format!("channels[{i}]")));

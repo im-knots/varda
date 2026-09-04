@@ -24,7 +24,7 @@
 //!                               at offset 0 every frame exposes its WAR stall
 //!                               here (the regression triple-buffering fixes).
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use varda::renderer::{
     blit::{PolygonBlitPipeline, PolygonDrawDesc},
     context::GpuContext,

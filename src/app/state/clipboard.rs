@@ -7,9 +7,9 @@
 //! UUID reidentified so the copy is a second entity rather than a second name
 //! for the first. See /spec/clipboard.md.
 
-use super::presets::{apply_modulation_recipes, extract_modulation_recipes, Identity};
-use crate::app::resolve::EffectChain;
+use super::presets::{Identity, apply_modulation_recipes, extract_modulation_recipes};
 use crate::app::VardaApp;
+use crate::app::resolve::EffectChain;
 use crate::arrangement::RegionConfig;
 use crate::engine::{
     ClipboardKind, ClipboardSource, ClipboardSummary, CommandResult, ErrorCode, MixerCommands,
@@ -329,7 +329,7 @@ impl VardaApp {
                 return CommandResult::Err {
                     code: ErrorCode::InternalError,
                     message: e.to_string(),
-                }
+                };
             }
         };
         let uuid = effect.uuid().to_owned();
@@ -361,7 +361,7 @@ impl VardaApp {
                 return CommandResult::Err {
                     code: ErrorCode::InvalidInput,
                     message: e.to_string(),
-                }
+                };
             }
         };
         let Ok(channel_idx) = self.resolve_channel(&uuid) else {

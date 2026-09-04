@@ -207,130 +207,129 @@ pub(crate) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
     let drag_id = ui.id().with("surface_drag");
     let _drag_state = ui.memory(|mem| mem.data.get_temp::<SurfaceDragState>(drag_id));
 
-    if canvas_response.drag_started() {
-        if let Some(pos) = canvas_response.interact_pointer_pos() {
-            let nx = (pos.x - canvas_rect.left()) / canvas_width;
-            let ny = (pos.y - canvas_rect.top()) / canvas_height;
+    if canvas_response.drag_started()
+        && let Some(pos) = canvas_response.interact_pointer_pos()
+    {
+        let nx = (pos.x - canvas_rect.left()) / canvas_width;
+        let ny = (pos.y - canvas_rect.top()) / canvas_height;
 
-            // Check if near a vertex (drag vertex) or inside a surface (move whole shape)
-            // Use pixel-space distance for correct hit detection on non-square canvas
-            let vertex_threshold_px = 14.0;
-            let mut found_vertex = None;
-            let mut found_surface = None;
+        // Check if near a vertex (drag vertex) or inside a surface (move whole shape)
+        // Use pixel-space distance for correct hit detection on non-square canvas
+        let vertex_threshold_px = 14.0;
+        let mut found_vertex = None;
+        let mut found_surface = None;
 
-            for (i, surface) in data.surfaces.iter().enumerate().rev() {
-                if let Some(vert_idx) = surface
-                    .vertices
-                    .iter()
-                    .enumerate()
-                    .map(|(vi, v)| {
-                        let dx_px = (nx - v[0]) * canvas_width;
-                        let dy_px = (ny - v[1]) * canvas_height;
-                        (vi, (dx_px * dx_px + dy_px * dy_px).sqrt())
-                    })
-                    .filter(|(_, d)| *d < vertex_threshold_px)
-                    .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-                    .map(|(vi, _)| vi)
-                {
-                    found_vertex = Some((i, vert_idx));
-                    break;
-                }
-                // Point-in-polygon test for move
-                if found_surface.is_none() {
-                    let verts = &surface.vertices;
-                    let n = verts.len();
-                    if n >= 3 {
-                        let mut inside = false;
-                        let mut j = n - 1;
-                        for k in 0..n {
-                            let (xi, yi) = (verts[k][0], verts[k][1]);
-                            let (xj, yj) = (verts[j][0], verts[j][1]);
-                            if ((yi > ny) != (yj > ny))
-                                && (nx < (xj - xi) * (ny - yi) / (yj - yi) + xi)
-                            {
-                                inside = !inside;
-                            }
-                            j = k;
+        for (i, surface) in data.surfaces.iter().enumerate().rev() {
+            if let Some(vert_idx) = surface
+                .vertices
+                .iter()
+                .enumerate()
+                .map(|(vi, v)| {
+                    let dx_px = (nx - v[0]) * canvas_width;
+                    let dy_px = (ny - v[1]) * canvas_height;
+                    (vi, (dx_px * dx_px + dy_px * dy_px).sqrt())
+                })
+                .filter(|(_, d)| *d < vertex_threshold_px)
+                .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(vi, _)| vi)
+            {
+                found_vertex = Some((i, vert_idx));
+                break;
+            }
+            // Point-in-polygon test for move
+            if found_surface.is_none() {
+                let verts = &surface.vertices;
+                let n = verts.len();
+                if n >= 3 {
+                    let mut inside = false;
+                    let mut j = n - 1;
+                    for k in 0..n {
+                        let (xi, yi) = (verts[k][0], verts[k][1]);
+                        let (xj, yj) = (verts[j][0], verts[j][1]);
+                        if ((yi > ny) != (yj > ny)) && (nx < (xj - xi) * (ny - yi) / (yj - yi) + xi)
+                        {
+                            inside = !inside;
                         }
-                        if inside {
-                            found_surface = Some((i, nx, ny));
-                        }
+                        j = k;
+                    }
+                    if inside {
+                        found_surface = Some((i, nx, ny));
                     }
                 }
             }
-
-            let state = if let Some((surf_idx, vert_idx)) = found_vertex {
-                let uuid = data.surfaces[surf_idx].uuid.clone();
-                SurfaceDragState::DraggingVertex { uuid, vert_idx }
-            } else if let Some((surf_idx, start_x, start_y)) = found_surface {
-                let uuid = data.surfaces[surf_idx].uuid.clone();
-                SurfaceDragState::Moving {
-                    uuid,
-                    last_x: start_x,
-                    last_y: start_y,
-                }
-            } else {
-                SurfaceDragState::None
-            };
-
-            ui.memory_mut(|mem| mem.data.insert_temp(drag_id, state));
         }
+
+        let state = if let Some((surf_idx, vert_idx)) = found_vertex {
+            let uuid = data.surfaces[surf_idx].uuid.clone();
+            SurfaceDragState::DraggingVertex { uuid, vert_idx }
+        } else if let Some((surf_idx, start_x, start_y)) = found_surface {
+            let uuid = data.surfaces[surf_idx].uuid.clone();
+            SurfaceDragState::Moving {
+                uuid,
+                last_x: start_x,
+                last_y: start_y,
+            }
+        } else {
+            SurfaceDragState::None
+        };
+
+        ui.memory_mut(|mem| mem.data.insert_temp(drag_id, state));
     }
 
-    if canvas_response.dragged() {
-        if let Some(pos) = canvas_response.interact_pointer_pos() {
-            let nx = ((pos.x - canvas_rect.left()) / canvas_width).clamp(0.0, 1.0);
-            let ny = ((pos.y - canvas_rect.top()) / canvas_height).clamp(0.0, 1.0);
+    if canvas_response.dragged()
+        && let Some(pos) = canvas_response.interact_pointer_pos()
+    {
+        let nx = ((pos.x - canvas_rect.left()) / canvas_width).clamp(0.0, 1.0);
+        let ny = ((pos.y - canvas_rect.top()) / canvas_height).clamp(0.0, 1.0);
 
-            let state = ui.memory(|mem| {
-                mem.data
-                    .get_temp::<SurfaceDragState>(drag_id)
-                    .unwrap_or(SurfaceDragState::None)
-            });
+        let state = ui.memory(|mem| {
+            mem.data
+                .get_temp::<SurfaceDragState>(drag_id)
+                .unwrap_or(SurfaceDragState::None)
+        });
 
-            match state {
-                SurfaceDragState::Moving {
-                    ref uuid,
-                    last_x,
-                    last_y,
-                } => {
-                    if data.surfaces.iter().any(|s| s.uuid == *uuid) {
-                        let dx = nx - last_x;
-                        let dy = ny - last_y;
-                        actions.commands.push(EngineCommand::MoveSurface {
-                            uuid: uuid.clone(),
-                            dx,
-                            dy,
-                        });
-                        ui.memory_mut(|mem| {
-                            mem.data.insert_temp(
-                                drag_id,
-                                SurfaceDragState::Moving {
-                                    uuid: uuid.clone(),
-                                    last_x: nx,
-                                    last_y: ny,
-                                },
-                            )
-                        });
-                    }
+        match state {
+            SurfaceDragState::Moving {
+                ref uuid,
+                last_x,
+                last_y,
+            } => {
+                if data.surfaces.iter().any(|s| s.uuid == *uuid) {
+                    let dx = nx - last_x;
+                    let dy = ny - last_y;
+                    actions.commands.push(EngineCommand::MoveSurface {
+                        uuid: uuid.clone(),
+                        dx,
+                        dy,
+                    });
+                    ui.memory_mut(|mem| {
+                        mem.data.insert_temp(
+                            drag_id,
+                            SurfaceDragState::Moving {
+                                uuid: uuid.clone(),
+                                last_x: nx,
+                                last_y: ny,
+                            },
+                        )
+                    });
                 }
-                SurfaceDragState::DraggingVertex { ref uuid, vert_idx } => {
-                    if let Some(surface) = data.surfaces.iter().find(|s| s.uuid == *uuid) {
-                        let mut new_verts = surface.vertices.clone();
-                        if vert_idx < new_verts.len() {
-                            new_verts[vert_idx] = [nx, ny];
-                            actions
-                                .commands
-                                .push(EngineCommand::UpdateSurfaceContourVertices {
-                                    uuid: uuid.clone(),
-                                    contour: 0,
-                                    vertices: new_verts,
-                                });
-                        }
-                    }
-                }
-                SurfaceDragState::None => {}
             }
+            SurfaceDragState::DraggingVertex { ref uuid, vert_idx } => {
+                if let Some(surface) = data.surfaces.iter().find(|s| s.uuid == *uuid) {
+                    let mut new_verts = surface.vertices.clone();
+                    if vert_idx < new_verts.len() {
+                        new_verts[vert_idx] = [nx, ny];
+                        actions
+                            .commands
+                            .push(EngineCommand::UpdateSurfaceContourVertices {
+                                uuid: uuid.clone(),
+                                contour: 0,
+                                vertices: new_verts,
+                            });
+                    }
+                }
+            }
+            SurfaceDragState::None => {}
         }
     }
 

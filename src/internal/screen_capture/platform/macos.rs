@@ -29,7 +29,7 @@ use block2::{DynBlock, RcBlock};
 use dispatch2::DispatchQueue;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2::{define_class, msg_send, AllocAnyThread, DefinedClass};
+use objc2::{AllocAnyThread, DefinedClass, define_class, msg_send};
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess};
 use objc2_core_media::{CMSampleBuffer, CMTime};
@@ -257,10 +257,10 @@ define_class!(
             if kind != SCStreamOutputType::Screen {
                 return;
             }
-            if let Some(frame) = unsafe { frame_from_sample_buffer(sample_buffer) } {
-                if let Ok(mut slot) = self.ivars().slot.lock() {
-                    *slot = Some(frame);
-                }
+            if let Some(frame) = unsafe { frame_from_sample_buffer(sample_buffer) }
+                && let Ok(mut slot) = self.ivars().slot.lock()
+            {
+                *slot = Some(frame);
             }
         }
     }
@@ -317,7 +317,7 @@ unsafe fn frame_from_sample_buffer(sample_buffer: &CMSampleBuffer) -> Option<Cap
     if !unsafe { frame_is_complete(sample_buffer) } {
         return None;
     }
-    let pixel_buffer = sample_buffer.image_buffer()?;
+    let pixel_buffer = unsafe { sample_buffer.image_buffer() }?;
     let pixel_buffer = &*pixel_buffer;
 
     let lock = CVPixelBufferLockFlags::ReadOnly;

@@ -12,7 +12,7 @@
 //!
 //! See /spec/deck-residency.md.
 
-use crate::modulation::{envelope_active_between, Breakpoint};
+use crate::modulation::{Breakpoint, envelope_active_between};
 
 /// How far ahead of the playhead a deck must start decoding.
 ///

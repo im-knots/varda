@@ -362,10 +362,11 @@ pub fn compile_regions(regions: &[RegionConfig]) -> Vec<Breakpoint> {
     // An envelope holds its first value backwards forever, so a lane whose
     // first region starts hard-on (no fade) would show the deck from the
     // beginning of time without an explicit zero in front of it.
-    if let Some(first) = out.first() {
-        if first.value > 0.0 && first.position > 0.0 {
-            out.insert(0, Breakpoint::new(0.0, 0.0).with_curve(CurveKind::Step));
-        }
+    if let Some(first) = out.first()
+        && first.value > 0.0
+        && first.position > 0.0
+    {
+        out.insert(0, Breakpoint::new(0.0, 0.0).with_curve(CurveKind::Step));
     }
 
     out

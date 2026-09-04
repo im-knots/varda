@@ -334,7 +334,7 @@ impl ReadbackBuffer {
 
 #[cfg(test)]
 mod tests {
-    use super::{row_layout, ReadbackFormat, ReadbackFrame};
+    use super::{ReadbackFormat, ReadbackFrame, row_layout};
     use crate::engine::value::render::{AlphaMode, PresentationColorProfile};
 
     #[test]

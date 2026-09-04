@@ -1278,8 +1278,8 @@ mod tests {
     fn postprocess_extracts_detections() {
         let shape = [1i64, 2, 16];
         let mut data = vec![0.0f32; 32]; // 2 faces * 16 values
-                                         // Face 1: raw = [ymin=0.1, xmin=0.2, ymax=0.5, xmax=0.6]
-                                         //  → bbox = [xmin=0.2, ymin=0.1, xmax=0.6, ymax=0.5]
+        // Face 1: raw = [ymin=0.1, xmin=0.2, ymax=0.5, xmax=0.6]
+        //  → bbox = [xmin=0.2, ymin=0.1, xmax=0.6, ymax=0.5]
         data[0] = 0.1;
         data[1] = 0.2;
         data[2] = 0.5;

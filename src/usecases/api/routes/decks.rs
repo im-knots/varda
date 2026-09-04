@@ -5,15 +5,15 @@
 //! creation (no deck UUID exists yet) and for reorder (the ordinals are scoped
 //! to one channel).
 
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use axum::Json;
 use serde::Deserialize;
 use utoipa::ToSchema;
 
 use crate::channel::DeckRenderFps;
 use crate::engine::{CommandResult, EngineCommand};
-use crate::usecases::api::{command_response, SharedState};
+use crate::usecases::api::{SharedState, command_response};
 
 /// Strip `..` components from a path to prevent directory traversal attacks.
 /// If the path can be canonicalized (i.e. it exists), use the canonical form;

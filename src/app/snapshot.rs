@@ -737,14 +737,13 @@ fn build_stream_receiver_snapshots(
         if let (Some(url), Some(mode)) = (
             app.external_io.stream_manager.receiver_url(i),
             app.external_io.stream_manager.receiver_mode(i),
-        ) {
-            if !result.iter().any(|r| r.url == url) {
-                result.push(crate::engine::types::StreamReceiverSnapshot {
-                    url: url.to_string(),
-                    mode: format!("{mode}").to_lowercase(),
-                    connected: app.external_io.stream_manager.is_connected(i),
-                });
-            }
+        ) && !result.iter().any(|r| r.url == url)
+        {
+            result.push(crate::engine::types::StreamReceiverSnapshot {
+                url: url.to_string(),
+                mode: format!("{mode}").to_lowercase(),
+                connected: app.external_io.stream_manager.is_connected(i),
+            });
         }
     }
 

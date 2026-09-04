@@ -317,16 +317,14 @@ impl Mixer {
                 // "Run this loop until the schedule starts" is a normal
                 // installation requirement, so the pre-show state needs
                 // something to *be* rather than something to fail at.
-                if outside_range {
-                    if let Some((ch, dk)) = self.find_deck_by_uuid(deck_uuid) {
-                        self.channels[ch].decks[dk].opacity = 1.0;
-                        self.channels[ch].decks[dk].arrangement_authority = true;
-                        // The one deck on screen before the show starts, which
-                        // its own lane may have just called idle.
-                        self.channels[ch].decks[dk].source_demand =
-                            crate::arrangement::SourceDemand::Unscheduled;
-                        visible += 1;
-                    }
+                if outside_range && let Some((ch, dk)) = self.find_deck_by_uuid(deck_uuid) {
+                    self.channels[ch].decks[dk].opacity = 1.0;
+                    self.channels[ch].decks[dk].arrangement_authority = true;
+                    // The one deck on screen before the show starts, which
+                    // its own lane may have just called idle.
+                    self.channels[ch].decks[dk].source_demand =
+                        crate::arrangement::SourceDemand::Unscheduled;
+                    visible += 1;
                 }
             }
 
@@ -477,36 +475,36 @@ impl Mixer {
         let ready_idx = self
             .staging_mapped_idx
             .load(std::sync::atomic::Ordering::Acquire);
-        if ready_idx != usize::MAX {
-            if let Some(ref staging) = self.staging_buffers {
-                let buf = &staging[ready_idx];
-                {
-                    let slice = buf.slice(..);
-                    let mapped = slice
-                        .get_mapped_range()
-                        .expect("timestamp staging callback only marks mapped buffers ready");
-                    let timestamps: &[u64] = bytemuck::cast_slice(&mapped);
-                    let period_us = self.timestamp_period / 1000.0; // ns → µs
-                    self.last_frame_gpu_times.clear();
-                    for &(ch_idx, deck_idx, begin, end) in &self.prev_timing_allocations {
-                        if (end as usize) < timestamps.len() {
-                            let begin_ts = timestamps[begin as usize];
-                            let end_ts = timestamps[end as usize];
-                            if end_ts > begin_ts {
-                                let gpu_us = (end_ts - begin_ts) as f32 * period_us;
-                                self.last_frame_gpu_times.insert((ch_idx, deck_idx), gpu_us);
-                            }
+        if ready_idx != usize::MAX
+            && let Some(ref staging) = self.staging_buffers
+        {
+            let buf = &staging[ready_idx];
+            {
+                let slice = buf.slice(..);
+                let mapped = slice
+                    .get_mapped_range()
+                    .expect("timestamp staging callback only marks mapped buffers ready");
+                let timestamps: &[u64] = bytemuck::cast_slice(&mapped);
+                let period_us = self.timestamp_period / 1000.0; // ns → µs
+                self.last_frame_gpu_times.clear();
+                for &(ch_idx, deck_idx, begin, end) in &self.prev_timing_allocations {
+                    if (end as usize) < timestamps.len() {
+                        let begin_ts = timestamps[begin as usize];
+                        let end_ts = timestamps[end as usize];
+                        if end_ts > begin_ts {
+                            let gpu_us = (end_ts - begin_ts) as f32 * period_us;
+                            self.last_frame_gpu_times.insert((ch_idx, deck_idx), gpu_us);
                         }
                     }
-                    drop(mapped);
                 }
-                buf.unmap();
-                self.staging_mapped_idx
-                    .store(usize::MAX, std::sync::atomic::Ordering::Release);
-                // The map has been consumed and the buffer unmapped — clear the
-                // in-flight guard so the resolve path may issue the next map.
-                self.timing_map_inflight = false;
+                drop(mapped);
             }
+            buf.unmap();
+            self.staging_mapped_idx
+                .store(usize::MAX, std::sync::atomic::Ordering::Release);
+            // The map has been consumed and the buffer unmapped — clear the
+            // in-flight guard so the resolve path may issue the next map.
+            self.timing_map_inflight = false;
         }
 
         // Apply GPU timing results to deck slots (EMA smoothing)
@@ -723,54 +721,45 @@ impl Mixer {
         // second map_async be issued on the other buffer, leaving one buffer
         // permanently mapped and crashing the next submit with "still mapped".
         // Dropping an occasional measurement is harmless; a stuck map is fatal.
-        if !self.timing_map_inflight {
-            if let (Some(ref qs), Some(ref resolve_buf), Some(ref staging)) =
+        if !self.timing_map_inflight
+            && let (Some(qs), Some(resolve_buf), Some(staging)) =
                 (&self.query_set, &self.resolve_buffer, &self.staging_buffers)
-            {
-                if let Some(ref timing) = timing_frame {
-                    let query_count = timing.query_count();
-                    if query_count > 0 {
-                        let mut enc = context.device.create_command_encoder(
-                            &wgpu::CommandEncoderDescriptor {
-                                label: Some("GPU Timing Resolve"),
-                            },
-                        );
-                        enc.resolve_query_set(qs, 0..query_count, resolve_buf, 0);
-                        let byte_count = u64::from(query_count) * 8;
-                        let write_idx = self.staging_index;
-                        enc.copy_buffer_to_buffer(
-                            resolve_buf,
-                            0,
-                            &staging[write_idx],
-                            0,
-                            byte_count,
-                        );
-                        context.submit(std::iter::once(enc.finish()));
+            && let Some(ref timing) = timing_frame
+        {
+            let query_count = timing.query_count();
+            if query_count > 0 {
+                let mut enc =
+                    context
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("GPU Timing Resolve"),
+                        });
+                enc.resolve_query_set(qs, 0..query_count, resolve_buf, 0);
+                let byte_count = u64::from(query_count) * 8;
+                let write_idx = self.staging_index;
+                enc.copy_buffer_to_buffer(resolve_buf, 0, &staging[write_idx], 0, byte_count);
+                context.submit(std::iter::once(enc.finish()));
 
-                        // Map the staging buffer for reading next frame.
-                        // The callback stores the buffer index so the read
-                        // path knows exactly which buffer to unmap.
-                        let mapped_flag = self.staging_mapped_idx.clone();
-                        staging[write_idx].slice(..).map_async(
-                            wgpu::MapMode::Read,
-                            move |result| {
-                                if result.is_ok() {
-                                    mapped_flag
-                                        .store(write_idx, std::sync::atomic::Ordering::Release);
-                                }
-                            },
-                        );
+                // Map the staging buffer for reading next frame.
+                // The callback stores the buffer index so the read
+                // path knows exactly which buffer to unmap.
+                let mapped_flag = self.staging_mapped_idx.clone();
+                staging[write_idx]
+                    .slice(..)
+                    .map_async(wgpu::MapMode::Read, move |result| {
+                        if result.is_ok() {
+                            mapped_flag.store(write_idx, std::sync::atomic::Ordering::Release);
+                        }
+                    });
 
-                        // Mark the map in flight from the moment it is issued so
-                        // no second map_async can be started before the read path
-                        // consumes and unmaps this buffer.
-                        self.timing_map_inflight = true;
+                // Mark the map in flight from the moment it is issued so
+                // no second map_async can be started before the read path
+                // consumes and unmaps this buffer.
+                self.timing_map_inflight = true;
 
-                        // Save allocations for readback next frame
-                        self.prev_timing_allocations.clone_from(&timing.allocations);
-                        self.staging_index = 1 - self.staging_index;
-                    }
-                }
+                // Save allocations for readback next frame
+                self.prev_timing_allocations.clone_from(&timing.allocations);
+                self.staging_index = 1 - self.staging_index;
             }
         }
 
@@ -790,16 +779,16 @@ impl Mixer {
         // skipping for the first moments after they come back.
         let mixer_cpu_us = channels_us + mixer_composite_us + master_fx_us;
         let (deck_gpu_us, deck_encode_us) = self.active_deck_costs();
-        if mixer_cpu_us > 100 {
-            if let Some(raw_ratio) = raw_gpu_load_ratio(
+        if mixer_cpu_us > 100
+            && let Some(raw_ratio) = raw_gpu_load_ratio(
                 deck_gpu_us,
                 deck_encode_us,
                 actual_frame_us,
                 frame_budget_us,
-            ) {
-                // EMA smoothing (α = 0.15) — responsive but not jittery
-                self.gpu_load_ratio = 0.15 * raw_ratio + 0.85 * self.gpu_load_ratio;
-            }
+            )
+        {
+            // EMA smoothing (α = 0.15) — responsive but not jittery
+            self.gpu_load_ratio = 0.15 * raw_ratio + 0.85 * self.gpu_load_ratio;
         }
 
         // Update GPU utilization %: sum of per-deck GPU costs / frame budget.
@@ -912,39 +901,39 @@ impl Mixer {
         }
 
         // If we have exactly 2 channels and a transition shader is active, use it
-        if channel_count == 2 {
-            if let Some(transition) = &mut self.active_transition {
-                let width = self.composite_texture.width();
-                let height = self.composite_texture.height();
+        if channel_count == 2
+            && let Some(transition) = &mut self.active_transition
+        {
+            let width = self.composite_texture.width();
+            let height = self.composite_texture.height();
 
-                let uniforms = ISFUniforms {
-                    time: self.start_time.elapsed().as_secs_f32(),
-                    time_delta: 1.0 / 60.0,
-                    frame_index: self.frame_count,
-                    pass_index: 0,
-                    render_size: [width as f32, height as f32],
-                    phase_times: [0.0; 4],
-                    ..Default::default()
-                };
+            let uniforms = ISFUniforms {
+                time: self.start_time.elapsed().as_secs_f32(),
+                time_delta: 1.0 / 60.0,
+                frame_index: self.frame_count,
+                pass_index: 0,
+                render_size: [width as f32, height as f32],
+                phase_times: [0.0; 4],
+                ..Default::default()
+            };
 
-                transition.params.build_buffer_data();
-                if let Some(buf) = transition.params.buffer() {
-                    context
-                        .queue
-                        .write_buffer(buf, 0, transition.params.scratch());
-                }
-
-                transition.pipeline.render_to(
-                    context,
-                    &self.channels[0].composite_view,
-                    &self.channels[1].composite_view,
-                    &self.composite_view,
-                    &uniforms,
-                    transition.params.buffer(),
-                );
-
-                return Vec::new();
+            transition.params.build_buffer_data();
+            if let Some(buf) = transition.params.buffer() {
+                context
+                    .queue
+                    .write_buffer(buf, 0, transition.params.scratch());
             }
+
+            transition.pipeline.render_to(
+                context,
+                &self.channels[0].composite_view,
+                &self.channels[1].composite_view,
+                &self.composite_view,
+                &uniforms,
+                transition.params.buffer(),
+            );
+
+            return Vec::new();
         }
 
         // Fallback: opacity-based crossfade
@@ -1657,7 +1646,7 @@ fn apply_lut_in_place(
 
 #[cfg(test)]
 mod gpu_load_ratio_tests {
-    use super::{raw_gpu_load_ratio, MAX_GPU_LOAD_RATIO};
+    use super::{MAX_GPU_LOAD_RATIO, raw_gpu_load_ratio};
 
     const BUDGET_60FPS: f32 = 1_000_000.0 / 60.0;
 

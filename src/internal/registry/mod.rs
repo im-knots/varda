@@ -204,10 +204,10 @@ impl ShaderRegistry {
         };
 
         // Check if we got disconnected
-        if let Some(receiver) = &self.change_receiver {
-            if receiver.try_recv().is_err() {
-                // Don't clear on Empty, only on Disconnected
-            }
+        if let Some(receiver) = &self.change_receiver
+            && receiver.try_recv().is_err()
+        {
+            // Don't clear on Empty, only on Disconnected
         }
 
         // Now process the collected events with mutable self access
@@ -278,11 +278,11 @@ impl ShaderRegistry {
 
         // If this file previously provided a different name (its NAME field was
         // edited), stop attributing it to the old name and re-resolve that one.
-        if let Some(old_name) = self.path_to_name.get(path).cloned() {
-            if old_name != name {
-                self.forget_provider(&old_name, path);
-                self.resolve_winner(&old_name);
-            }
+        if let Some(old_name) = self.path_to_name.get(path).cloned()
+            && old_name != name
+        {
+            self.forget_provider(&old_name, path);
+            self.resolve_winner(&old_name);
         }
 
         self.path_to_name.insert(path.to_path_buf(), name.clone());

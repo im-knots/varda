@@ -70,10 +70,11 @@ impl WarpMesh {
     /// indices are ignored. UV (source mapping) is preserved.
     pub fn set_point(&mut self, row: usize, col: usize, position: [f32; 2]) {
         let cols = self.cols as usize;
-        if row < self.rows as usize && col < cols {
-            if let Some(p) = self.points.get_mut(row * cols + col) {
-                p.position = position;
-            }
+        if row < self.rows as usize
+            && col < cols
+            && let Some(p) = self.points.get_mut(row * cols + col)
+        {
+            p.position = position;
         }
     }
 

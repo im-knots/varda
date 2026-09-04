@@ -28,7 +28,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use windows::core::{Interface, BOOL};
 use windows::Foundation::TypedEventHandler;
 use windows::Graphics::Capture::{
     Direct3D11CaptureFramePool, GraphicsCaptureItem, GraphicsCaptureSession,
@@ -38,11 +37,11 @@ use windows::Graphics::DirectX::DirectXPixelFormat;
 use windows::Win32::Foundation::{HMODULE, HWND, LPARAM, RECT};
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP};
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_BOX,
-    D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAPPED_SUBRESOURCE,
-    D3D11_MAP_READ, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
+    D3D11_BOX, D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAP_READ,
+    D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
+    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
 };
-use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::Win32::Graphics::Gdi::{
@@ -50,19 +49,20 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::Com::CoIncrementMTAUsage;
 use windows::Win32::System::Threading::{
-    GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
-    PROCESS_QUERY_LIMITED_INFORMATION,
+    GetCurrentProcessId, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    QueryFullProcessImageNameW,
 };
 use windows::Win32::System::WinRT::Direct3D11::{
     CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess,
 };
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
-    GetWindowThreadProcessId, IsWindowVisible, GWL_EXSTYLE, WS_EX_TOOLWINDOW,
+    EnumWindows, GWL_EXSTYLE, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
+    GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible, WS_EX_TOOLWINDOW,
 };
+use windows::core::{BOOL, Interface};
 
-use crate::screen_capture::resample::{downscale, Geometry};
+use crate::screen_capture::resample::{Geometry, downscale};
 
 use crate::screen_capture::backend::{
     CaptureConfig, CaptureError, CaptureFrame, CapturePixelFormat, CaptureTargetInfo,
@@ -491,10 +491,10 @@ fn create_d3d_device() -> Result<(ID3D11Device, ID3D11DeviceContext), CaptureErr
                 Some(&raw mut context),
             )
         };
-        if hr.is_ok() {
-            if let (Some(device), Some(context)) = (device, context) {
-                return Ok((device, context));
-            }
+        if hr.is_ok()
+            && let (Some(device), Some(context)) = (device, context)
+        {
+            return Ok((device, context));
         }
     }
     Err(CaptureError::Backend(
@@ -539,10 +539,10 @@ fn on_frame_arrived(
             return;
         };
         let now = Instant::now();
-        if let Some(prev) = *last {
-            if now.duration_since(prev) < *min_interval {
-                return;
-            }
+        if let Some(prev) = *last
+            && now.duration_since(prev) < *min_interval
+        {
+            return;
         }
         *last = Some(now);
     }
@@ -560,10 +560,10 @@ fn on_frame_arrived(
         return;
     };
 
-    if let Some(captured) = read_back(context, &texture, geometry) {
-        if let Ok(mut slot) = state.slot.lock() {
-            *slot = Some(captured);
-        }
+    if let Some(captured) = read_back(context, &texture, geometry)
+        && let Ok(mut slot) = state.slot.lock()
+    {
+        *slot = Some(captured);
     }
 }
 

@@ -205,19 +205,19 @@ impl ControllerProfileData {
                     am.fader_control
                 ));
             }
-            if let Some(ref sc) = am.shift_control {
-                if !control_names.contains(&sc.as_str()) {
-                    errors.push(format!(
-                        "auto_map.shift_control '{sc}' does not match any control name"
-                    ));
-                }
+            if let Some(ref sc) = am.shift_control
+                && !control_names.contains(&sc.as_str())
+            {
+                errors.push(format!(
+                    "auto_map.shift_control '{sc}' does not match any control name"
+                ));
             }
-            if let Some(ref pb) = am.page_buttons_control {
-                if !control_names.contains(&pb.as_str()) {
-                    errors.push(format!(
-                        "auto_map.page_buttons_control '{pb}' does not match any control name"
-                    ));
-                }
+            if let Some(ref pb) = am.page_buttons_control
+                && !control_names.contains(&pb.as_str())
+            {
+                errors.push(format!(
+                    "auto_map.page_buttons_control '{pb}' does not match any control name"
+                ));
             }
             if !VALID_ACTIONS.contains(&am.tap_action.as_str()) {
                 errors.push(format!(
@@ -562,13 +562,12 @@ impl ControllerLedManager {
                 }
 
                 // MIDI learn target blinks red
-                if midi_learn_active {
-                    if let Some(target) = midi_learn_target {
-                        if path == target {
-                            leds.set_led(mgr, device_id, number, "red_blink");
-                            continue;
-                        }
-                    }
+                if midi_learn_active
+                    && let Some(target) = midi_learn_target
+                    && path == target
+                {
+                    leds.set_led(mgr, device_id, number, "red_blink");
+                    continue;
                 }
 
                 let value = read_param_value(mixer, path);

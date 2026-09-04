@@ -4,8 +4,8 @@
 //! Detection itself runs on the worker in [`super::detect`]; this module owns the
 //! mode's lifecycle and its egui texture.
 
-use super::detect::DetectRequest;
 use super::UIRunner;
+use super::detect::DetectRequest;
 use crate::usecases::ui;
 
 impl UIRunner {
@@ -102,30 +102,27 @@ impl UIRunner {
                         camera_id,
                         ref params,
                     } = self.layout.camera_detect_mode
+                        && let Some(varda) = &self.varda
+                        && let Some(frame) = varda.camera_manager().snapshot_frame(camera_id)
                     {
-                        if let Some(varda) = &self.varda {
-                            if let Some(frame) = varda.camera_manager().snapshot_frame(camera_id) {
-                                let _ = self.detect_req_tx.send(DetectRequest {
-                                    rgba: frame.0,
-                                    w: frame.1,
-                                    h: frame.2,
-                                    params: params.clone(),
-                                    is_capture: true,
-                                    camera_id,
-                                });
-                                self.detect_in_flight = true;
-                            }
-                        }
+                        let _ = self.detect_req_tx.send(DetectRequest {
+                            rgba: frame.0,
+                            w: frame.1,
+                            h: frame.2,
+                            params: params.clone(),
+                            is_capture: true,
+                            camera_id,
+                        });
+                        self.detect_in_flight = true;
                     }
                 }
                 ui::CameraDetectAction::ToggleContour(idx) => {
                     if let ui::CameraDetectMode::Preview {
                         ref mut selected, ..
                     } = self.layout.camera_detect_mode
+                        && let Some(s) = selected.get_mut(idx)
                     {
-                        if let Some(s) = selected.get_mut(idx) {
-                            *s = !*s;
-                        }
+                        *s = !*s;
                     }
                 }
                 ui::CameraDetectAction::SelectAll(val) => {
@@ -146,7 +143,7 @@ impl UIRunner {
                         let chosen: Vec<_> = contours
                             .iter()
                             .zip(selected.iter())
-                            .filter(|(_, &s)| s)
+                            .filter(|&(_, &s)| s)
                             .map(|(c, _)| c.clone())
                             .collect();
                         if !chosen.is_empty() {

@@ -4,7 +4,7 @@
 
 use super::super::super::super::SurfaceUI;
 use super::super::super::super::{UIActions, UIData};
-use super::super::gizmo::{try_begin_gizmo_drag, RotateDrag, ScaleDrag};
+use super::super::gizmo::{RotateDrag, ScaleDrag, try_begin_gizmo_drag};
 use super::super::hit_test::CanvasGeometry;
 use super::super::state::HitTestResult;
 use super::super::state::StageEditorState;
@@ -101,12 +101,12 @@ pub(super) fn handle(
             }
 
             // Standard edge detection (narrow threshold, works from outside)
-            if !is_path && found_edge.is_none() {
-                if let Some((ci, ei, proj, _d)) =
+            if !is_path
+                && found_edge.is_none()
+                && let Some((ci, ei, proj, _d)) =
                     find_closest_edge(nx, ny, surface, edge_threshold_px)
-                {
-                    found_edge = Some((uid.clone(), ci, ei, proj));
-                }
+            {
+                found_edge = Some((uid.clone(), ci, ei, proj));
             }
 
             // Point-in-polygon (any contour)
@@ -134,12 +134,12 @@ pub(super) fn handle(
                     found_surface = Some((uid.clone(), nx, ny));
                     // If cursor is inside the surface but no edge found yet,
                     // try again with a wider threshold to catch edges from inside.
-                    if !is_path && found_edge.is_none() {
-                        if let Some((ci, ei, proj, _d)) =
+                    if !is_path
+                        && found_edge.is_none()
+                        && let Some((ci, ei, proj, _d)) =
                             find_closest_edge(nx, ny, surface, edge_inner_threshold_px)
-                        {
-                            found_edge = Some((uid.clone(), ci, ei, proj));
-                        }
+                    {
+                        found_edge = Some((uid.clone(), ci, ei, proj));
                     }
                 }
             }
@@ -165,109 +165,137 @@ pub(super) fn handle(
     let shift_held = ui.input(|i| i.modifiers.shift);
 
     // Click to select (without drag)
-    if resp.clicked() {
-        if let Some(pos) = resp.interact_pointer_pos() {
-            let [nx, ny] = geom.to_norm_raw(pos);
-            let (found_vertex, _found_edge, found_surface) = hit_test(nx, ny);
-            if let Some((si, _ci, _vi)) = found_vertex {
-                if shift_held {
-                    // Toggle selection with shift
-                    if !state.selected_surfaces.remove(&si) {
-                        state.selected_surfaces.insert(si);
-                    }
-                } else {
-                    state.selected_surfaces.clear();
+    if resp.clicked()
+        && let Some(pos) = resp.interact_pointer_pos()
+    {
+        let [nx, ny] = geom.to_norm_raw(pos);
+        let (found_vertex, _found_edge, found_surface) = hit_test(nx, ny);
+        if let Some((si, _ci, _vi)) = found_vertex {
+            if shift_held {
+                // Toggle selection with shift
+                if !state.selected_surfaces.remove(&si) {
                     state.selected_surfaces.insert(si);
                 }
-            } else if let Some((si, _lx, _ly)) = found_surface {
-                if shift_held {
-                    if !state.selected_surfaces.remove(&si) {
-                        state.selected_surfaces.insert(si);
-                    }
-                } else {
-                    state.selected_surfaces.clear();
-                    state.selected_surfaces.insert(si);
-                }
-            } else if !shift_held {
+            } else {
                 state.selected_surfaces.clear();
+                state.selected_surfaces.insert(si);
             }
+        } else if let Some((si, _lx, _ly)) = found_surface {
+            if shift_held {
+                if !state.selected_surfaces.remove(&si) {
+                    state.selected_surfaces.insert(si);
+                }
+            } else {
+                state.selected_surfaces.clear();
+                state.selected_surfaces.insert(si);
+            }
+        } else if !shift_held {
+            state.selected_surfaces.clear();
         }
     }
 
     // Double-click on edge to insert vertex
-    if resp.double_clicked() {
-        if let Some(pos) = resp.interact_pointer_pos() {
-            let [nx, ny] = geom.to_norm_raw(pos);
-            let (_found_vertex, found_edge, _found_surface) = hit_test(nx, ny);
-            if let Some((uuid, _ci, ei, snap_pos)) = found_edge {
-                let snapped = [geom.snap(snap_pos[0]), geom.snap(snap_pos[1])];
-                actions.commands.push(EngineCommand::InsertSurfaceVertex {
-                    uuid: uuid.clone(),
-                    after_vert_idx: ei,
-                    position: snapped,
-                });
-                state.selected_surfaces.clear();
-                state.selected_surfaces.insert(uuid);
-            }
+    if resp.double_clicked()
+        && let Some(pos) = resp.interact_pointer_pos()
+    {
+        let [nx, ny] = geom.to_norm_raw(pos);
+        let (_found_vertex, found_edge, _found_surface) = hit_test(nx, ny);
+        if let Some((uuid, _ci, ei, snap_pos)) = found_edge {
+            let snapped = [geom.snap(snap_pos[0]), geom.snap(snap_pos[1])];
+            actions.commands.push(EngineCommand::InsertSurfaceVertex {
+                uuid: uuid.clone(),
+                after_vert_idx: ei,
+                position: snapped,
+            });
+            state.selected_surfaces.clear();
+            state.selected_surfaces.insert(uuid);
         }
     }
 
     // Drag start: begin radius drag, vertex drag, surface move, or marquee selection
-    if resp.drag_started() {
-        if let Some(pos) = resp.interact_pointer_pos() {
-            let [nx, ny] = geom.to_norm(pos);
-            // Raw cursor for hit-testing; off-grid vertices/edges (e.g.
-            // after a gizmo scale/rotate) stay grabbable. Placement and
-            // drag-reference math below stay in snapped space.
-            let [rnx, rny] = geom.to_norm_raw(pos);
+    if resp.drag_started()
+        && let Some(pos) = resp.interact_pointer_pos()
+    {
+        let [nx, ny] = geom.to_norm(pos);
+        // Raw cursor for hit-testing; off-grid vertices/edges (e.g.
+        // after a gizmo scale/rotate) stay grabbable. Placement and
+        // drag-reference math below stay in snapped space.
+        let [rnx, rny] = geom.to_norm_raw(pos);
 
-            // Transform gizmo handles take priority over vertex/edge/body.
-            // The gizmo hit-tests in raw pixels; nx,ny only seed the
-            // rotate start angle (kept snapped to match the drag loop).
-            let gizmo_consumed = try_begin_gizmo_drag(
-                state,
-                &data.surfaces,
-                pos,
-                nx,
-                ny,
-                geom.rect,
-                geom.width,
-                geom.height,
-            );
+        // Transform gizmo handles take priority over vertex/edge/body.
+        // The gizmo hit-tests in raw pixels; nx,ny only seed the
+        // rotate start angle (kept snapped to match the drag loop).
+        let gizmo_consumed = try_begin_gizmo_drag(
+            state,
+            &data.surfaces,
+            pos,
+            nx,
+            ny,
+            geom.rect,
+            geom.width,
+            geom.height,
+        );
 
-            if !gizmo_consumed {
-                // Check for radius handle hit on selected circles first
-                let mut found_radius_handle = None;
-                for sel_uuid in &state.selected_surfaces {
-                    if let Some(surface) = data.surfaces.iter().find(|s| s.uuid == *sel_uuid) {
-                        if let Some(hint) = &surface.circle_hint {
-                            let hx = hint.center[0] + hint.radius;
-                            let hy = hint.center[1];
-                            if pixel_dist(rnx, rny, hx, hy) < 14.0 {
-                                found_radius_handle = Some(sel_uuid.clone());
-                                break;
-                            }
-                        }
+        if !gizmo_consumed {
+            // Check for radius handle hit on selected circles first
+            let mut found_radius_handle = None;
+            for sel_uuid in &state.selected_surfaces {
+                if let Some(surface) = data.surfaces.iter().find(|s| s.uuid == *sel_uuid)
+                    && let Some(hint) = &surface.circle_hint
+                {
+                    let hx = hint.center[0] + hint.radius;
+                    let hy = hint.center[1];
+                    if pixel_dist(rnx, rny, hx, hy) < 14.0 {
+                        found_radius_handle = Some(sel_uuid.clone());
+                        break;
                     }
                 }
+            }
 
-                if let Some(uuid) = found_radius_handle {
-                    state.dragging_radius = Some(uuid);
-                    state.dragging_vertex = None;
+            if let Some(uuid) = found_radius_handle {
+                state.dragging_radius = Some(uuid);
+                state.dragging_vertex = None;
+                state.moving_surface = None;
+                state.selection_rect_start = None;
+                state.dragging_edge = None;
+            } else {
+                let (found_vertex, found_edge, found_surface) = hit_test(rnx, rny);
+
+                if let Some((uuid, ci, vi)) = found_vertex {
+                    // If vertex drag on a circle, auto-convert to polygon first
+                    if data
+                        .surfaces
+                        .iter()
+                        .find(|s| s.uuid == uuid)
+                        .is_some_and(|s| s.circle_hint.is_some())
+                    {
+                        actions
+                            .commands
+                            .push(EngineCommand::ConvertSurfaceToPolygon { uuid: uuid.clone() });
+                    }
+                    if !shift_held {
+                        state.selected_surfaces.clear();
+                    }
+                    state.selected_surfaces.insert(uuid.clone());
+                    state.dragging_vertex = Some((uuid, ci, vi));
                     state.moving_surface = None;
                     state.selection_rect_start = None;
                     state.dragging_edge = None;
-                } else {
-                    let (found_vertex, found_edge, found_surface) = hit_test(rnx, rny);
-
-                    if let Some((uuid, ci, vi)) = found_vertex {
-                        // If vertex drag on a circle, auto-convert to polygon first
-                        if data
-                            .surfaces
-                            .iter()
-                            .find(|s| s.uuid == uuid)
-                            .is_some_and(|s| s.circle_hint.is_some())
-                        {
+                } else if let Some((uuid, ci, ei, _proj)) = found_edge {
+                    // Edge drag: store original edge endpoints + grab point.
+                    // Grab point is the snapped cursor so the drag loop
+                    // (also snapped) starts with a zero delta — no jump.
+                    if let Some(surface) = data.surfaces.iter().find(|s| s.uuid == uuid) {
+                        let verts = if ci == 0 {
+                            &surface.vertices
+                        } else {
+                            &surface.extra_contours[ci - 1]
+                        };
+                        let ej = (ei + 1) % verts.len();
+                        let v0 = verts[ei];
+                        let v1 = verts[ej];
+                        // Auto-convert circle to polygon before edge drag
+                        if surface.circle_hint.is_some() {
                             actions
                                 .commands
                                 .push(EngineCommand::ConvertSurfaceToPolygon {
@@ -278,60 +306,30 @@ pub(super) fn handle(
                             state.selected_surfaces.clear();
                         }
                         state.selected_surfaces.insert(uuid.clone());
-                        state.dragging_vertex = Some((uuid, ci, vi));
-                        state.moving_surface = None;
-                        state.selection_rect_start = None;
-                        state.dragging_edge = None;
-                    } else if let Some((uuid, ci, ei, _proj)) = found_edge {
-                        // Edge drag: store original edge endpoints + grab point.
-                        // Grab point is the snapped cursor so the drag loop
-                        // (also snapped) starts with a zero delta — no jump.
-                        if let Some(surface) = data.surfaces.iter().find(|s| s.uuid == uuid) {
-                            let verts = if ci == 0 {
-                                &surface.vertices
-                            } else {
-                                &surface.extra_contours[ci - 1]
-                            };
-                            let ej = (ei + 1) % verts.len();
-                            let v0 = verts[ei];
-                            let v1 = verts[ej];
-                            // Auto-convert circle to polygon before edge drag
-                            if surface.circle_hint.is_some() {
-                                actions
-                                    .commands
-                                    .push(EngineCommand::ConvertSurfaceToPolygon {
-                                        uuid: uuid.clone(),
-                                    });
-                            }
-                            if !shift_held {
-                                state.selected_surfaces.clear();
-                            }
-                            state.selected_surfaces.insert(uuid.clone());
-                            state.dragging_edge = Some((uuid, ci, ei, v0, v1, [nx, ny]));
-                            state.dragging_vertex = None;
-                            state.moving_surface = None;
-                            state.selection_rect_start = None;
-                        }
-                    } else if let Some((uuid, _rx, _ry)) = found_surface {
-                        if !shift_held && !state.selected_surfaces.contains(&uuid) {
-                            state.selected_surfaces.clear();
-                        }
-                        state.selected_surfaces.insert(uuid.clone());
-                        // Store the snapped grab point so the move loop
-                        // (snapped) starts with a zero delta — no jump.
-                        state.moving_surface = Some((uuid, nx, ny));
-                        state.dragging_vertex = None;
-                        state.selection_rect_start = None;
-                        state.dragging_edge = None;
-                    } else {
-                        if !shift_held {
-                            state.selected_surfaces.clear();
-                        }
-                        state.selection_rect_start = Some([nx, ny]);
+                        state.dragging_edge = Some((uuid, ci, ei, v0, v1, [nx, ny]));
                         state.dragging_vertex = None;
                         state.moving_surface = None;
-                        state.dragging_edge = None;
+                        state.selection_rect_start = None;
                     }
+                } else if let Some((uuid, _rx, _ry)) = found_surface {
+                    if !shift_held && !state.selected_surfaces.contains(&uuid) {
+                        state.selected_surfaces.clear();
+                    }
+                    state.selected_surfaces.insert(uuid.clone());
+                    // Store the snapped grab point so the move loop
+                    // (snapped) starts with a zero delta — no jump.
+                    state.moving_surface = Some((uuid, nx, ny));
+                    state.dragging_vertex = None;
+                    state.selection_rect_start = None;
+                    state.dragging_edge = None;
+                } else {
+                    if !shift_held {
+                        state.selected_surfaces.clear();
+                    }
+                    state.selection_rect_start = Some([nx, ny]);
+                    state.dragging_vertex = None;
+                    state.moving_surface = None;
+                    state.dragging_edge = None;
                 }
             }
         }
@@ -423,16 +421,16 @@ pub(super) fn handle(
                 });
             } else if let Some(ref uuid) = state.dragging_radius {
                 // Compute new radius from cursor distance to circle center
-                if let Some(surface) = data.surfaces.iter().find(|s| s.uuid == *uuid) {
-                    if let Some(hint) = &surface.circle_hint {
-                        let dx = nx - hint.center[0];
-                        let dy = ny - hint.center[1];
-                        let new_radius = (dx * dx + dy * dy).sqrt().max(0.01);
-                        actions.commands.push(EngineCommand::SetCircleRadius {
-                            uuid: uuid.clone(),
-                            radius: new_radius,
-                        });
-                    }
+                if let Some(surface) = data.surfaces.iter().find(|s| s.uuid == *uuid)
+                    && let Some(hint) = &surface.circle_hint
+                {
+                    let dx = nx - hint.center[0];
+                    let dy = ny - hint.center[1];
+                    let new_radius = (dx * dx + dy * dy).sqrt().max(0.01);
+                    actions.commands.push(EngineCommand::SetCircleRadius {
+                        uuid: uuid.clone(),
+                        radius: new_radius,
+                    });
                 }
             } else if let Some((ref uuid, ci, vi)) = state.dragging_vertex {
                 if let Some(surface) = data.surfaces.iter().find(|s| s.uuid == *uuid) {
@@ -525,32 +523,32 @@ pub(super) fn handle(
 
     if resp.drag_stopped() {
         // Finish marquee selection: select all surfaces that intersect the rect
-        if let Some(start) = state.selection_rect_start {
-            if let Some(pos) = resp.interact_pointer_pos() {
-                let [nx, ny] = geom.to_norm(pos);
-                let sel_min_x = start[0].min(nx);
-                let sel_max_x = start[0].max(nx);
-                let sel_min_y = start[1].min(ny);
-                let sel_max_y = start[1].max(ny);
+        if let Some(start) = state.selection_rect_start
+            && let Some(pos) = resp.interact_pointer_pos()
+        {
+            let [nx, ny] = geom.to_norm(pos);
+            let sel_min_x = start[0].min(nx);
+            let sel_max_x = start[0].max(nx);
+            let sel_min_y = start[1].min(ny);
+            let sel_max_y = start[1].max(ny);
 
-                for surface in &data.surfaces {
-                    // Compute bounding box of surface vertices
-                    let (mut bb_min_x, mut bb_min_y) = (f32::MAX, f32::MAX);
-                    let (mut bb_max_x, mut bb_max_y) = (f32::MIN, f32::MIN);
-                    for v in &surface.vertices {
-                        bb_min_x = bb_min_x.min(v[0]);
-                        bb_min_y = bb_min_y.min(v[1]);
-                        bb_max_x = bb_max_x.max(v[0]);
-                        bb_max_y = bb_max_y.max(v[1]);
-                    }
-                    // Check if surface bounding box overlaps the selection rect
-                    let intersects = bb_min_x < sel_max_x
-                        && bb_max_x > sel_min_x
-                        && bb_min_y < sel_max_y
-                        && bb_max_y > sel_min_y;
-                    if intersects {
-                        state.selected_surfaces.insert(surface.uuid.clone());
-                    }
+            for surface in &data.surfaces {
+                // Compute bounding box of surface vertices
+                let (mut bb_min_x, mut bb_min_y) = (f32::MAX, f32::MAX);
+                let (mut bb_max_x, mut bb_max_y) = (f32::MIN, f32::MIN);
+                for v in &surface.vertices {
+                    bb_min_x = bb_min_x.min(v[0]);
+                    bb_min_y = bb_min_y.min(v[1]);
+                    bb_max_x = bb_max_x.max(v[0]);
+                    bb_max_y = bb_max_y.max(v[1]);
+                }
+                // Check if surface bounding box overlaps the selection rect
+                let intersects = bb_min_x < sel_max_x
+                    && bb_max_x > sel_min_x
+                    && bb_min_y < sel_max_y
+                    && bb_max_y > sel_min_y;
+                if intersects {
+                    state.selected_surfaces.insert(surface.uuid.clone());
                 }
             }
         }

@@ -1,5 +1,5 @@
 use super::{
-    modulator_color, AudioUIData, ModAssignmentUI, ModSourceUI, ModSourceUIEntry, ParamUIInfo,
+    AudioUIData, ModAssignmentUI, ModSourceUI, ModSourceUIEntry, ParamUIInfo, modulator_color,
 };
 use crate::engine::EngineCommand;
 use crate::params::ParamValue;
@@ -131,17 +131,16 @@ fn modulation_dropdown(
                 }
                 ui.separator();
             }
-            if let Some(automate) = automate_fn {
-                if ui
+            if let Some(automate) = automate_fn
+                && ui
                     .button("＋ Automation lane")
                     .on_hover_text(
                         "Draw this parameter as a curve against the show position.\n\
                          The curve sets the value outright, so it plays back the same every run.",
                     )
                     .clicked()
-                {
-                    commands.push(automate(param_name));
-                }
+            {
+                commands.push(automate(param_name));
             }
             // Only worth offering once there is something to clear, and it says
             // "all" because a checklist makes single removal the obvious gesture.
@@ -214,10 +213,10 @@ pub fn modulation_menu_for_key<S: std::hash::BuildHasher>(
 fn hidden_prefixes(params: &[ParamUIInfo]) -> Vec<String> {
     let mut prefixes = Vec::new();
     for p in params {
-        if let Some(stem) = p.name.strip_suffix("_mode") {
-            if let ParamValue::Bool(false) = p.value {
-                prefixes.push(format!("{stem}_"));
-            }
+        if let Some(stem) = p.name.strip_suffix("_mode")
+            && let ParamValue::Bool(false) = p.value
+        {
+            prefixes.push(format!("{stem}_"));
         }
     }
     prefixes
@@ -446,67 +445,59 @@ pub fn render_params<S: std::hash::BuildHasher>(
                         slider_response.rect
                     };
                     // MIDI learn mode: glow + click overlay on the (now-enabled) outer ui
-                    if midi_learn_active {
-                        if let Some(prefix) = midi_learn_path_prefix {
-                            let path = format!("{}/param/{}", prefix, param.name);
-                            let is_target = midi_learn_target.is_some_and(|t| t == path);
-                            if is_target {
-                                draw_midi_learn_selected(ui, slider_rect);
-                            } else {
-                                draw_midi_learn_glow(ui, slider_rect);
-                            }
-                            let click_id = ui.id().with(("midi_learn_param", &param.name));
-                            let click_resp =
-                                ui.interact(slider_rect, click_id, egui::Sense::click());
-                            if click_resp.clicked() {
-                                *midi_learn_select = Some(path);
-                            }
+                    if midi_learn_active && let Some(prefix) = midi_learn_path_prefix {
+                        let path = format!("{}/param/{}", prefix, param.name);
+                        let is_target = midi_learn_target.is_some_and(|t| t == path);
+                        if is_target {
+                            draw_midi_learn_selected(ui, slider_rect);
+                        } else {
+                            draw_midi_learn_glow(ui, slider_rect);
+                        }
+                        let click_id = ui.id().with(("midi_learn_param", &param.name));
+                        let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
+                        if click_resp.clicked() {
+                            *midi_learn_select = Some(path);
                         }
                     }
                     // Keyboard learn mode: orange glow + click overlay
-                    if keyboard_learn_active {
-                        if let Some(prefix) = midi_learn_path_prefix {
-                            let path = format!("{}/param/{}", prefix, param.name);
-                            let is_target = keyboard_learn_target.is_some_and(|t| t == path);
-                            if is_target {
-                                draw_keyboard_learn_selected(ui, slider_rect);
-                            } else {
-                                draw_keyboard_learn_glow(ui, slider_rect);
-                            }
-                            let click_id = ui.id().with(("kb_learn_param", &param.name));
-                            let click_resp =
-                                ui.interact(slider_rect, click_id, egui::Sense::click());
-                            if click_resp.clicked() {
-                                *keyboard_learn_select =
-                                    Some(crate::keymap::KeyTarget::ParamPath(path));
-                            }
+                    if keyboard_learn_active && let Some(prefix) = midi_learn_path_prefix {
+                        let path = format!("{}/param/{}", prefix, param.name);
+                        let is_target = keyboard_learn_target.is_some_and(|t| t == path);
+                        if is_target {
+                            draw_keyboard_learn_selected(ui, slider_rect);
+                        } else {
+                            draw_keyboard_learn_glow(ui, slider_rect);
+                        }
+                        let click_id = ui.id().with(("kb_learn_param", &param.name));
+                        let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
+                        if click_resp.clicked() {
+                            *keyboard_learn_select =
+                                Some(crate::keymap::KeyTarget::ParamPath(path));
                         }
                     }
                     // Draw modulation ghost indicator on top of slider
-                    if is_modulated {
-                        if let Some(assigns) = assignments {
-                            let mut total_offset = 0.0f32;
-                            for a in assigns {
-                                total_offset +=
-                                    mod_current_values.get(&a.source_id).copied().unwrap_or(0.0)
-                                        * a.amount;
-                            }
-                            // Scale by param range to match GPU-side modulation
-                            let range = max - min;
-                            let modulated_val = (v + total_offset * range).clamp(min, max);
-                            let frac = (modulated_val - min) / (max - min);
-                            let x = slider_rect.left() + frac * slider_rect.width();
-                            let color = mod_label_color.unwrap_or(egui::Color32::YELLOW);
-                            let painter = ui.painter();
-                            // Vertical line at modulated value position
-                            painter.line_segment(
-                                [
-                                    egui::pos2(x, slider_rect.top()),
-                                    egui::pos2(x, slider_rect.bottom()),
-                                ],
-                                egui::Stroke::new(2.0_f32, color),
-                            );
+                    if is_modulated && let Some(assigns) = assignments {
+                        let mut total_offset = 0.0f32;
+                        for a in assigns {
+                            total_offset +=
+                                mod_current_values.get(&a.source_id).copied().unwrap_or(0.0)
+                                    * a.amount;
                         }
+                        // Scale by param range to match GPU-side modulation
+                        let range = max - min;
+                        let modulated_val = (v + total_offset * range).clamp(min, max);
+                        let frac = (modulated_val - min) / (max - min);
+                        let x = slider_rect.left() + frac * slider_rect.width();
+                        let color = mod_label_color.unwrap_or(egui::Color32::YELLOW);
+                        let painter = ui.painter();
+                        // Vertical line at modulated value position
+                        painter.line_segment(
+                            [
+                                egui::pos2(x, slider_rect.top()),
+                                egui::pos2(x, slider_rect.bottom()),
+                            ],
+                            egui::Stroke::new(2.0_f32, color),
+                        );
                     }
                     if let (Some(assign_fn), Some(unassign_fn), Some(remove_fn)) =
                         (make_mod_assign, make_mod_unassign, make_mod_remove)
@@ -636,66 +627,58 @@ pub fn render_effect_params<S: std::hash::BuildHasher>(
                         slider_resp.rect
                     };
                     // MIDI learn mode: glow + click overlay
-                    if midi_learn_active {
-                        if let Some(prefix) = midi_learn_path_prefix {
-                            let path = format!("{}/param/{}", prefix, param.name);
-                            let is_target = midi_learn_target.is_some_and(|t| t == path);
-                            if is_target {
-                                draw_midi_learn_selected(ui, slider_rect);
-                            } else {
-                                draw_midi_learn_glow(ui, slider_rect);
-                            }
-                            let click_id = ui.id().with(("midi_learn_fx_param", &param.name));
-                            let click_resp =
-                                ui.interact(slider_rect, click_id, egui::Sense::click());
-                            if click_resp.clicked() {
-                                *midi_learn_select = Some(path);
-                            }
+                    if midi_learn_active && let Some(prefix) = midi_learn_path_prefix {
+                        let path = format!("{}/param/{}", prefix, param.name);
+                        let is_target = midi_learn_target.is_some_and(|t| t == path);
+                        if is_target {
+                            draw_midi_learn_selected(ui, slider_rect);
+                        } else {
+                            draw_midi_learn_glow(ui, slider_rect);
+                        }
+                        let click_id = ui.id().with(("midi_learn_fx_param", &param.name));
+                        let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
+                        if click_resp.clicked() {
+                            *midi_learn_select = Some(path);
                         }
                     }
                     // Keyboard learn mode: orange glow + click overlay
-                    if keyboard_learn_active {
-                        if let Some(prefix) = midi_learn_path_prefix {
-                            let path = format!("{}/param/{}", prefix, param.name);
-                            let is_target = keyboard_learn_target.is_some_and(|t| t == path);
-                            if is_target {
-                                draw_keyboard_learn_selected(ui, slider_rect);
-                            } else {
-                                draw_keyboard_learn_glow(ui, slider_rect);
-                            }
-                            let click_id = ui.id().with(("kb_learn_fx_param", &param.name));
-                            let click_resp =
-                                ui.interact(slider_rect, click_id, egui::Sense::click());
-                            if click_resp.clicked() {
-                                *keyboard_learn_select =
-                                    Some(crate::keymap::KeyTarget::ParamPath(path));
-                            }
+                    if keyboard_learn_active && let Some(prefix) = midi_learn_path_prefix {
+                        let path = format!("{}/param/{}", prefix, param.name);
+                        let is_target = keyboard_learn_target.is_some_and(|t| t == path);
+                        if is_target {
+                            draw_keyboard_learn_selected(ui, slider_rect);
+                        } else {
+                            draw_keyboard_learn_glow(ui, slider_rect);
+                        }
+                        let click_id = ui.id().with(("kb_learn_fx_param", &param.name));
+                        let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
+                        if click_resp.clicked() {
+                            *keyboard_learn_select =
+                                Some(crate::keymap::KeyTarget::ParamPath(path));
                         }
                     }
                     // Draw modulation ghost indicator
-                    if is_modulated {
-                        if let Some(assigns) = assignments {
-                            let mut total_offset = 0.0f32;
-                            for a in assigns {
-                                total_offset +=
-                                    mod_current_values.get(&a.source_id).copied().unwrap_or(0.0)
-                                        * a.amount;
-                            }
-                            // Scale by param range to match GPU-side modulation
-                            let range = max - min;
-                            let modulated_val = (v + total_offset * range).clamp(min, max);
-                            let frac = (modulated_val - min) / (max - min);
-                            let x = slider_rect.left() + frac * slider_rect.width();
-                            let color = mod_label_color.unwrap_or(egui::Color32::YELLOW);
-                            let painter = ui.painter();
-                            painter.line_segment(
-                                [
-                                    egui::pos2(x, slider_rect.top()),
-                                    egui::pos2(x, slider_rect.bottom()),
-                                ],
-                                egui::Stroke::new(2.0_f32, color),
-                            );
+                    if is_modulated && let Some(assigns) = assignments {
+                        let mut total_offset = 0.0f32;
+                        for a in assigns {
+                            total_offset +=
+                                mod_current_values.get(&a.source_id).copied().unwrap_or(0.0)
+                                    * a.amount;
                         }
+                        // Scale by param range to match GPU-side modulation
+                        let range = max - min;
+                        let modulated_val = (v + total_offset * range).clamp(min, max);
+                        let frac = (modulated_val - min) / (max - min);
+                        let x = slider_rect.left() + frac * slider_rect.width();
+                        let color = mod_label_color.unwrap_or(egui::Color32::YELLOW);
+                        let painter = ui.painter();
+                        painter.line_segment(
+                            [
+                                egui::pos2(x, slider_rect.top()),
+                                egui::pos2(x, slider_rect.bottom()),
+                            ],
+                            egui::Stroke::new(2.0_f32, color),
+                        );
                     }
                     if let (Some(assign_fn), Some(unassign_fn), Some(remove_fn)) =
                         (make_mod_assign, make_mod_unassign, make_mod_remove)
@@ -1178,9 +1161,11 @@ mod tests {
     #[test]
     fn the_menu_opens_with_no_modulation_sources_at_all() {
         let commands = click_in_dropdown(&[], &[], true, "＋ Automation lane");
-        assert!(commands
-            .iter()
-            .any(|c| matches!(c, EngineCommand::AddAutomationLane { .. })));
+        assert!(
+            commands
+                .iter()
+                .any(|c| matches!(c, EngineCommand::AddAutomationLane { .. }))
+        );
     }
 
     #[test]
@@ -1313,8 +1298,10 @@ mod tests {
     fn a_scene_of_only_curves_still_offers_a_new_lane() {
         let commands =
             click_in_dropdown(&[envelope_entry("env1")], &[], true, "＋ Automation lane");
-        assert!(commands
-            .iter()
-            .any(|c| matches!(c, EngineCommand::AddAutomationLane { .. })));
+        assert!(
+            commands
+                .iter()
+                .any(|c| matches!(c, EngineCommand::AddAutomationLane { .. }))
+        );
     }
 }

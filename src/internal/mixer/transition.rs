@@ -1,7 +1,7 @@
 //! Crossfade, transition, and sequence types + Mixer transition control methods.
 
 use super::Mixer;
-use crate::isf::{compile_glsl_to_spirv, ISFShader};
+use crate::isf::{ISFShader, compile_glsl_to_spirv};
 use crate::params::ShaderParams;
 use crate::renderer::{GpuContext, TransitionPipeline};
 use anyhow::{Context as _, Result};

@@ -1,7 +1,7 @@
 //! LUT file parsing and GPU pipeline — supports .cube (Resolve/Adobe) and .3dl (broadcast) formats.
 //! Produces a common `ParsedLut` structure and uploads it to the GPU for post-process application.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::num::NonZeroU64;
 use std::path::Path;
 use wgpu::util::DeviceExt;

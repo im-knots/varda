@@ -383,7 +383,9 @@ impl GpuContext {
             required_features |= wgpu::Features::TEXTURE_COMPRESSION_BC;
             log::info!("GPU supports BC texture compression (HAP video enabled)");
         } else {
-            log::warn!("GPU does not support BC texture compression — HAP video will fall back to ffmpeg CPU decode");
+            log::warn!(
+                "GPU does not support BC texture compression — HAP video will fall back to ffmpeg CPU decode"
+            );
         }
 
         let rgba16_features = wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
@@ -410,13 +412,17 @@ impl GpuContext {
                 .features()
                 .contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS)
             {
-                log::warn!("GPU supports TIMESTAMP_QUERY but not TIMESTAMP_QUERY_INSIDE_ENCODERS — GPU timing disabled");
+                log::warn!(
+                    "GPU supports TIMESTAMP_QUERY but not TIMESTAMP_QUERY_INSIDE_ENCODERS — GPU timing disabled"
+                );
             } else if encoder_timestamps_are_trustworthy(adapter) {
                 required_features |= wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
                 timestamp_supported = true;
                 log::info!("GPU supports timestamp queries inside encoders (GPU timing enabled)");
             } else {
-                log::warn!("Apple GPU: encoder timestamps are not implementable on this hardware — GPU timing disabled");
+                log::warn!(
+                    "Apple GPU: encoder timestamps are not implementable on this hardware — GPU timing disabled"
+                );
             }
         }
 
@@ -1591,34 +1597,34 @@ impl HeadlessOutput {
             | OutputTarget::HlsStream { .. }
             | OutputTarget::DashStream { .. }
             | OutputTarget::RtmpStream { .. } => {
-                if let Some(sub) = &mut self.subprocess {
-                    if !sub.feed_frame(frame_data) {
-                        if let Some(mut sub) = self.subprocess.take() {
-                            sub.stop();
-                        }
-                        return DeliveryResult::Failed(format!(
-                            "Subprocess write failed for '{}'",
-                            self.name
-                        ));
+                if let Some(sub) = &mut self.subprocess
+                    && !sub.feed_frame(frame_data)
+                {
+                    if let Some(mut sub) = self.subprocess.take() {
+                        sub.stop();
                     }
+                    return DeliveryResult::Failed(format!(
+                        "Subprocess write failed for '{}'",
+                        self.name
+                    ));
                 }
                 DeliveryResult::Ok
             }
             OutputTarget::SrtStream { .. } => {
-                if let Some(sub) = &mut self.subprocess {
-                    if !sub.feed_frame(frame_data) {
-                        // Client disconnected. Tear down the dead listener and
-                        // hand the respawn back to the caller, which re-subscribes
-                        // audio passthrough (this method has no AudioManager).
-                        if let Some(mut sub) = self.subprocess.take() {
-                            sub.stop();
-                        }
-                        return DeliveryResult::SrtNeedsRestart;
+                if let Some(sub) = &mut self.subprocess
+                    && !sub.feed_frame(frame_data)
+                {
+                    // Client disconnected. Tear down the dead listener and
+                    // hand the respawn back to the caller, which re-subscribes
+                    // audio passthrough (this method has no AudioManager).
+                    if let Some(mut sub) = self.subprocess.take() {
+                        sub.stop();
                     }
+                    return DeliveryResult::SrtNeedsRestart;
                 }
                 DeliveryResult::Ok
             }
-            OutputTarget::NdiSend { ref sender_name } => {
+            &mut OutputTarget::NdiSend { ref sender_name } => {
                 ndi_manager.send_frame(sender_name, frame_data, self.width, self.height, fps);
                 DeliveryResult::Ok
             }
@@ -1984,8 +1990,8 @@ impl UnifiedOutput {
 #[cfg(test)]
 mod tests {
     use super::{
-        aspect_fit_rect, resolve_headless_presentation, select_surface_presentation,
-        HeadlessOutput, OutputRotation, OutputTarget, OutputWindow,
+        HeadlessOutput, OutputRotation, OutputTarget, OutputWindow, aspect_fit_rect,
+        resolve_headless_presentation, select_surface_presentation,
     };
     use crate::engine::value::render::{
         AlphaMode, PresentationColorProfile, PresentationDepth, PresentationPixelFormat,
@@ -2046,12 +2052,14 @@ mod tests {
         assert_eq!(selected.format, wgpu::TextureFormat::Bgra8UnormSrgb);
         assert_eq!(selected.color_space, wgpu::SurfaceColorSpace::Auto);
         assert_eq!(selected.resolved.resolved, PresentationDepth::Sdr8);
-        assert!(selected
-            .resolved
-            .fallback_reason
-            .as_deref()
-            .unwrap()
-            .contains("not with an sRGB"));
+        assert!(
+            selected
+                .resolved
+                .fallback_reason
+                .as_deref()
+                .unwrap()
+                .contains("not with an sRGB")
+        );
     }
 
     #[test]

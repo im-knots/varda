@@ -329,41 +329,42 @@ fn render_surface_warp_editor(
         }
     }
 
-    if resp.drag_started() && !bound {
-        if let Some(p) = resp.interact_pointer_pos() {
-            let mut best: Option<(usize, usize, f32)> = None;
-            for &(row, col, position) in &handles {
-                let d = p.distance(to_screen(position[0], position[1]));
-                if d < 18.0 && best.is_none_or(|(_, _, bd)| d < bd) {
-                    best = Some((row, col, d));
-                }
+    if resp.drag_started()
+        && !bound
+        && let Some(p) = resp.interact_pointer_pos()
+    {
+        let mut best: Option<(usize, usize, f32)> = None;
+        for &(row, col, position) in &handles {
+            let d = p.distance(to_screen(position[0], position[1]));
+            if d < 18.0 && best.is_none_or(|(_, _, bd)| d < bd) {
+                best = Some((row, col, d));
             }
-            if let Some((row, col, _)) = best {
-                dragging = Some((row, col));
-            }
+        }
+        if let Some((row, col, _)) = best {
+            dragging = Some((row, col));
         }
     }
 
-    if let Some((row, col)) = dragging {
-        if resp.dragged() {
-            // Warp point drag is one undo gesture.
-            actions.session.gesture_active = true;
-            if let Some(p) = resp.interact_pointer_pos() {
-                let np = from_screen(p);
-                if is_mesh {
-                    actions.commands.push(EngineCommand::SetWarpMeshPoint {
-                        surface_uuid: uuid.clone(),
-                        row,
-                        col,
-                        position: np,
-                    });
-                } else {
-                    actions.commands.push(EngineCommand::SetWarpCorner {
-                        surface_uuid: uuid.clone(),
-                        corner_idx: rc_to_corner(row, col),
-                        position: np,
-                    });
-                }
+    if let Some((row, col)) = dragging
+        && resp.dragged()
+    {
+        // Warp point drag is one undo gesture.
+        actions.session.gesture_active = true;
+        if let Some(p) = resp.interact_pointer_pos() {
+            let np = from_screen(p);
+            if is_mesh {
+                actions.commands.push(EngineCommand::SetWarpMeshPoint {
+                    surface_uuid: uuid.clone(),
+                    row,
+                    col,
+                    position: np,
+                });
+            } else {
+                actions.commands.push(EngineCommand::SetWarpCorner {
+                    surface_uuid: uuid.clone(),
+                    corner_idx: rc_to_corner(row, col),
+                    position: np,
+                });
             }
         }
     }
@@ -542,58 +543,59 @@ fn render_bezier_canvas(
     let mut drag: Option<BezDrag> = ui
         .memory(|m| m.data.get_temp::<Option<BezDrag>>(state_id))
         .flatten();
-    if resp.drag_started() && !bound {
-        if let Some(p) = resp.interact_pointer_pos() {
-            let mut best: Option<(BezDrag, f32)> = None;
-            for (t, pos) in handles.iter().copied() {
-                let d = p.distance(to_screen(pos));
-                if d < 16.0 && best.is_none_or(|(_, bd)| d < bd) {
-                    best = Some((t, d));
-                }
-            }
-            for r in 0..ar {
-                for c in 0..ac {
-                    let d = p.distance(to_screen(b.anchor(r, c)));
-                    if d < 16.0 && best.is_none_or(|(_, bd)| d < bd) {
-                        best = Some((BezDrag::Anchor { r, c }, d));
-                    }
-                }
-            }
-            if let Some((t, _)) = best {
-                drag = Some(t);
+    if resp.drag_started()
+        && !bound
+        && let Some(p) = resp.interact_pointer_pos()
+    {
+        let mut best: Option<(BezDrag, f32)> = None;
+        for (t, pos) in handles.iter().copied() {
+            let d = p.distance(to_screen(pos));
+            if d < 16.0 && best.is_none_or(|(_, bd)| d < bd) {
+                best = Some((t, d));
             }
         }
+        for r in 0..ar {
+            for c in 0..ac {
+                let d = p.distance(to_screen(b.anchor(r, c)));
+                if d < 16.0 && best.is_none_or(|(_, bd)| d < bd) {
+                    best = Some((BezDrag::Anchor { r, c }, d));
+                }
+            }
+        }
+        if let Some((t, _)) = best {
+            drag = Some(t);
+        }
     }
-    if let Some(t) = drag {
-        if resp.dragged() {
-            // Bezier warp cage drag is one undo gesture.
-            actions.session.gesture_active = true;
-            if let Some(p) = resp.interact_pointer_pos() {
-                let np = from_screen(p);
-                match t {
-                    BezDrag::Anchor { r, c } => {
-                        actions.commands.push(EngineCommand::MoveWarpAnchor {
-                            surface_uuid: uuid.to_string(),
-                            row: r,
-                            col: c,
-                            position: np,
-                        });
-                    }
-                    BezDrag::Handle {
+    if let Some(t) = drag
+        && resp.dragged()
+    {
+        // Bezier warp cage drag is one undo gesture.
+        actions.session.gesture_active = true;
+        if let Some(p) = resp.interact_pointer_pos() {
+            let np = from_screen(p);
+            match t {
+                BezDrag::Anchor { r, c } => {
+                    actions.commands.push(EngineCommand::MoveWarpAnchor {
+                        surface_uuid: uuid.to_string(),
+                        row: r,
+                        col: c,
+                        position: np,
+                    });
+                }
+                BezDrag::Handle {
+                    horizontal,
+                    r,
+                    c,
+                    which,
+                } => {
+                    actions.commands.push(EngineCommand::MoveWarpHandle {
+                        surface_uuid: uuid.to_string(),
                         horizontal,
-                        r,
-                        c,
+                        row: r,
+                        col: c,
                         which,
-                    } => {
-                        actions.commands.push(EngineCommand::MoveWarpHandle {
-                            surface_uuid: uuid.to_string(),
-                            horizontal,
-                            row: r,
-                            col: c,
-                            which,
-                            position: np,
-                        });
-                    }
+                        position: np,
+                    });
                 }
             }
         }

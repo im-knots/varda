@@ -1,8 +1,8 @@
 //! Surface management write routes.
 
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use axum::Json;
 use serde::Deserialize;
 use utoipa::ToSchema;
 
@@ -11,7 +11,7 @@ use crate::internal::renderer::context::OutputSource;
 use crate::internal::surface::{
     ContentMapping, CubicHandle, SurfaceOutputType, SurfacePath, SurfaceReorderOp,
 };
-use crate::usecases::api::{command_response, SharedState};
+use crate::usecases::api::{SharedState, command_response};
 
 #[derive(Deserialize, ToSchema)]
 pub struct AddRectSurfaceBody {

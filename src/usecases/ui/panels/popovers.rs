@@ -15,27 +15,27 @@ pub(super) fn handle_midi_learn_popup(ctx: &egui::Context, data: &UIData, action
     let popup_pos: Option<egui::Pos2> = ctx.memory(|mem| mem.data.get_temp(popup_id));
     let popup_fresh: bool = ctx.memory(|mem| mem.data.get_temp(popup_fresh_id).unwrap_or(false));
 
-    if ctx.input(|i| i.pointer.secondary_clicked()) {
-        if let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) {
-            if popup_pos.is_some() {
-                ctx.memory_mut(|mem| {
-                    mem.data.remove::<egui::Pos2>(popup_id);
-                    mem.data.remove::<bool>(popup_fresh_id);
-                });
-            } else if !egui::Popup::is_any_open(ctx)
-                && ctx
-                    .layer_id_at(pos)
-                    .is_none_or(|layer| layer.order == egui::Order::Background)
-            {
-                // A widget with its own context menu keeps the click, and so does
-                // anything already floating above the layout. This popup is drawn
-                // last, so opening it on the same right-click would cover that
-                // menu and eat every press aimed at its items.
-                ctx.memory_mut(|mem| {
-                    mem.data.insert_temp(popup_id, pos);
-                    mem.data.insert_temp(popup_fresh_id, true);
-                });
-            }
+    if ctx.input(|i| i.pointer.secondary_clicked())
+        && let Some(pos) = ctx.input(|i| i.pointer.interact_pos())
+    {
+        if popup_pos.is_some() {
+            ctx.memory_mut(|mem| {
+                mem.data.remove::<egui::Pos2>(popup_id);
+                mem.data.remove::<bool>(popup_fresh_id);
+            });
+        } else if !egui::Popup::is_any_open(ctx)
+            && ctx
+                .layer_id_at(pos)
+                .is_none_or(|layer| layer.order == egui::Order::Background)
+        {
+            // A widget with its own context menu keeps the click, and so does
+            // anything already floating above the layout. This popup is drawn
+            // last, so opening it on the same right-click would cover that
+            // menu and eat every press aimed at its items.
+            ctx.memory_mut(|mem| {
+                mem.data.insert_temp(popup_id, pos);
+                mem.data.insert_temp(popup_fresh_id, true);
+            });
         }
     }
 
@@ -82,13 +82,13 @@ pub(super) fn handle_midi_learn_popup(ctx: &egui::Context, data: &UIData, action
         } else if ctx.input(|i| i.pointer.primary_clicked()) {
             let popup_rect = area_resp.response.rect;
             let click_pos = ctx.input(|i| i.pointer.interact_pos());
-            if let Some(click) = click_pos {
-                if !popup_rect.contains(click) {
-                    ctx.memory_mut(|mem| {
-                        mem.data.remove::<egui::Pos2>(popup_id);
-                        mem.data.remove::<bool>(popup_fresh_id);
-                    });
-                }
+            if let Some(click) = click_pos
+                && !popup_rect.contains(click)
+            {
+                ctx.memory_mut(|mem| {
+                    mem.data.remove::<egui::Pos2>(popup_id);
+                    mem.data.remove::<bool>(popup_fresh_id);
+                });
             }
         }
     }

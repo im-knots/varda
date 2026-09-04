@@ -22,15 +22,15 @@
 /// decks/1, divided by 7) is computed from fresh samples and printed.
 use std::time::Instant;
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use varda::{
+    BlendMode,
     audio::AudioData,
     deck::Deck,
     isf::ISFShader,
     mixer::{FrameInputs, Mixer},
     modulation::{AnalyzerValues, AudioValues},
     renderer::context::GpuContext,
-    BlendMode,
 };
 
 /// Silent audio, no modulation, no clock: the benchmark measures compositing,

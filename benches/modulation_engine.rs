@@ -13,7 +13,7 @@
 /// handful of modulators, but an arrangement produces one automation envelope
 /// per automated parameter, so the engine has to stay flat at that scale
 /// (/spec/modulation-engine-perf.md, /spec/automation.md § Performance).
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::collections::HashMap;
 use varda::audio::AudioSourceId;
 use varda::modulation::{

@@ -366,11 +366,7 @@ impl ModulationSource {
                     }
                 };
                 let scaled = raw * *amplitude;
-                if *bipolar {
-                    scaled
-                } else {
-                    scaled * 0.5 + 0.5
-                }
+                if *bipolar { scaled } else { scaled * 0.5 + 0.5 }
             }
             ModulationSource::AudioBand {
                 source_id,
@@ -412,11 +408,7 @@ impl ModulationSource {
                             let speed = (1.0 - *smoothing * 0.9) * 4.0;
                             let step = raw * dt * speed;
                             let next = prev_value + step;
-                            if next >= 1.0 {
-                                next - 1.0
-                            } else {
-                                next
-                            }
+                            if next >= 1.0 { next - 1.0 } else { next }
                         }
                     }
                     AudioReactMode::Decrease => {
@@ -426,11 +418,7 @@ impl ModulationSource {
                             let speed = (1.0 - *smoothing * 0.9) * 4.0;
                             let step = raw * dt * speed;
                             let next = prev_value - step;
-                            if next <= 0.0 {
-                                next + 1.0
-                            } else {
-                                next
-                            }
+                            if next <= 0.0 { next + 1.0 } else { next }
                         }
                     }
                 }
@@ -527,11 +515,7 @@ impl ModulationSource {
                         steps[current_idx] * (1.0 - t) + steps[next_idx] * t
                     }
                 };
-                if *bipolar {
-                    raw * 2.0 - 1.0
-                } else {
-                    raw
-                }
+                if *bipolar { raw * 2.0 - 1.0 } else { raw }
             }
             ModulationSource::Analyzer {
                 deck_id,

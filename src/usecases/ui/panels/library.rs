@@ -174,10 +174,10 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                             });
                         }
                         // Fallback: double-click adds to first channel
-                        if resp.double_clicked() {
-                            if let Some(ch) = data.channels.first() {
-                                actions.session.shader_to_add = Some((ch.uuid.clone(), *gen_idx));
-                            }
+                        if resp.double_clicked()
+                            && let Some(ch) = data.channels.first()
+                        {
+                            actions.session.shader_to_add = Some((ch.uuid.clone(), *gen_idx));
                         }
                         resp.on_hover_text(
                             "Drag to a channel to create a deck, or double-click to add to Ch 0",
@@ -1026,13 +1026,13 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                     );
                                 });
                             }
-                            if resp.double_clicked() {
-                                if let Some(ch) = data.channels.first() {
-                                    actions.commands.push(EngineCommand::LoadDeckPreset {
-                                        channel_uuid: ch.uuid.clone(),
-                                        preset_name: name.clone(),
-                                    });
-                                }
+                            if resp.double_clicked()
+                                && let Some(ch) = data.channels.first()
+                            {
+                                actions.commands.push(EngineCommand::LoadDeckPreset {
+                                    channel_uuid: ch.uuid.clone(),
+                                    preset_name: name.clone(),
+                                });
                             }
                             resp.on_hover_text("Drag to a channel to load this deck preset");
                         }

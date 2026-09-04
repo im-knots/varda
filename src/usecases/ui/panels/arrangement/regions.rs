@@ -12,7 +12,7 @@
 
 use super::super::super::{UIActions, UIData};
 use super::super::utils::channel_color;
-use super::{min_span, selection, snap_seconds, LaneRow, RowGeometry, TimeAxis};
+use super::{LaneRow, RowGeometry, TimeAxis, min_span, selection, snap_seconds};
 use crate::arrangement::RegionConfig;
 use crate::engine::EngineCommand;
 
@@ -88,17 +88,18 @@ fn handle_create(
     let shift = ui.ctx().input(|i| i.modifiers.shift);
 
     let anchor_id = id.with("anchor");
-    if !shift && response.drag_started() {
-        if let Some(pos) = press_origin(&response) {
-            let at = geom.axis.seconds(pos.x);
-            // Empty track inside an armed selection belongs to the selection's
-            // own move, so a drag there rearranges rather than authoring a
-            // region on top of what is being dragged.
-            if !selection::owns_deck_press(ui.ctx(), lane.uuid, at) {
-                let anchor = snap_seconds(data, at);
-                ui.ctx()
-                    .memory_mut(|mem| mem.data.insert_temp(anchor_id, anchor));
-            }
+    if !shift
+        && response.drag_started()
+        && let Some(pos) = press_origin(&response)
+    {
+        let at = geom.axis.seconds(pos.x);
+        // Empty track inside an armed selection belongs to the selection's
+        // own move, so a drag there rearranges rather than authoring a
+        // region on top of what is being dragged.
+        if !selection::owns_deck_press(ui.ctx(), lane.uuid, at) {
+            let anchor = snap_seconds(data, at);
+            ui.ctx()
+                .memory_mut(|mem| mem.data.insert_temp(anchor_id, anchor));
         }
     }
 
@@ -136,26 +137,27 @@ fn handle_create(
 
     // Creating on a single click would put a region under every attempt to
     // select a lane, so the bare click selects and the double click authors.
-    if !shift && response.double_clicked() {
-        if let Some(pos) = response.interact_pointer_pos() {
-            let start = snap_seconds(data, geom.axis.seconds(pos.x));
-            actions.commands.push(EngineCommand::AddRegion {
-                deck_uuid: lane.uuid.to_string(),
-                region: RegionConfig::new(start, start + DEFAULT_REGION_SECONDS),
-            });
-        }
+    if !shift
+        && response.double_clicked()
+        && let Some(pos) = response.interact_pointer_pos()
+    {
+        let start = snap_seconds(data, geom.axis.seconds(pos.x));
+        actions.commands.push(EngineCommand::AddRegion {
+            deck_uuid: lane.uuid.to_string(),
+            region: RegionConfig::new(start, start + DEFAULT_REGION_SECONDS),
+        });
     }
 
     // Paste a copied slice's regions onto this lane, landing at the time the
     // menu was opened over. Frozen at open so the anchor does not chase the
     // pointer while the menu is up. See /spec/arrangement-selection.md § Paste.
     let paste_anchor_id = id.with("paste_anchor");
-    if response.secondary_clicked() {
-        if let Some(pos) = response.interact_pointer_pos() {
-            let at = snap_seconds(data, geom.axis.seconds(pos.x));
-            ui.ctx()
-                .memory_mut(|mem| mem.data.insert_temp(paste_anchor_id, at));
-        }
+    if response.secondary_clicked()
+        && let Some(pos) = response.interact_pointer_pos()
+    {
+        let at = snap_seconds(data, geom.axis.seconds(pos.x));
+        ui.ctx()
+            .memory_mut(|mem| mem.data.insert_temp(paste_anchor_id, at));
     }
     response.context_menu(|ui| {
         let anchor: f64 = ui
@@ -211,34 +213,35 @@ fn handle_region_edit(
         )
     });
 
-    if response.hovered() {
-        if let Some(pos) = ui.ctx().pointer_latest_pos() {
-            ui.ctx()
-                .set_cursor_icon(cursor_for(hit_kind(region, geom.axis, pos, body)));
-        }
+    if response.hovered()
+        && let Some(pos) = ui.ctx().pointer_latest_pos()
+    {
+        ui.ctx()
+            .set_cursor_icon(cursor_for(hit_kind(region, geom.axis, pos, body)));
     }
 
     // A Shift+drag over a region is a marquee, not a move, so the region under
     // the press stays put while the selection is drawn.
     let shift = ui.ctx().input(|i| i.modifiers.shift);
-    if !shift && response.drag_started() {
-        if let Some(pos) = press_origin(&response) {
-            let kind = hit_kind(region, geom.axis, pos, body);
-            let at = geom.axis.seconds(pos.x);
-            // Inside an armed selection the body's move gives way to the
-            // selection's own move. The edge and fade handles keep their grab
-            // zones, so a single clicked region still resizes and fades exactly
-            // as it does with nothing selected.
-            let owned_by_selection =
-                kind == DragKind::Move && selection::owns_deck_press(ui.ctx(), lane.uuid, at);
-            if !owned_by_selection {
-                let drag = RegionDrag {
-                    kind,
-                    origin: *region,
-                    grab: at,
-                };
-                ui.ctx().memory_mut(|mem| mem.data.insert_temp(id, drag));
-            }
+    if !shift
+        && response.drag_started()
+        && let Some(pos) = press_origin(&response)
+    {
+        let kind = hit_kind(region, geom.axis, pos, body);
+        let at = geom.axis.seconds(pos.x);
+        // Inside an armed selection the body's move gives way to the
+        // selection's own move. The edge and fade handles keep their grab
+        // zones, so a single clicked region still resizes and fades exactly
+        // as it does with nothing selected.
+        let owned_by_selection =
+            kind == DragKind::Move && selection::owns_deck_press(ui.ctx(), lane.uuid, at);
+        if !owned_by_selection {
+            let drag = RegionDrag {
+                kind,
+                origin: *region,
+                grab: at,
+            };
+            ui.ctx().memory_mut(|mem| mem.data.insert_temp(id, drag));
         }
     }
 

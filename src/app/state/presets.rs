@@ -211,10 +211,10 @@ impl VardaApp {
         ) {
             Ok(()) => {
                 // Update the deck's display name to match the saved preset name.
-                if let Some(ch) = mixer.channel_mut(channel_idx) {
-                    if let Some(slot) = ch.decks.get_mut(deck_idx) {
-                        slot.deck.set_source_name(name.to_string());
-                    }
+                if let Some(ch) = mixer.channel_mut(channel_idx)
+                    && let Some(slot) = ch.decks.get_mut(deck_idx)
+                {
+                    slot.deck.set_source_name(name.to_string());
                 }
                 self.session.preset_library.refresh(&self.session.workspace);
                 self.session

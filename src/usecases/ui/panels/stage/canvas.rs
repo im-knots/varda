@@ -8,7 +8,7 @@
 use super::super::super::UIData;
 use super::geometry::polygon_shape;
 use super::gizmo::{
-    gizmo_scale_handles, selection_bounds, GIZMO_MARGIN_PX, GIZMO_ROTATE_OFFSET_PX,
+    GIZMO_MARGIN_PX, GIZMO_ROTATE_OFFSET_PX, gizmo_scale_handles, selection_bounds,
 };
 use super::hit_test::CanvasGeometry;
 use super::state::{DrawingTool, StageEditorState};
@@ -233,38 +233,36 @@ pub(super) fn paint(
     }
 
     // ── Transform gizmo (Select tool, non-empty selection) ───────────
-    if state.tool == DrawingTool::Select {
-        if let Some((bx, by, bw, bh)) = selection_bounds(&data.surfaces, &state.selected_surfaces) {
-            let mx = GIZMO_MARGIN_PX / geom.width;
-            let my = GIZMO_MARGIN_PX / geom.height;
-            let (gx, gy, gw, gh) = (bx - mx, by - my, bw + 2.0 * mx, bh + 2.0 * my);
-            let gcolor = egui::Color32::from_rgb(90, 200, 255);
-            let box_rect = egui::Rect::from_two_pos(
-                geom.to_screen([gx, gy]),
-                geom.to_screen([gx + gw, gy + gh]),
-            );
+    if state.tool == DrawingTool::Select
+        && let Some((bx, by, bw, bh)) = selection_bounds(&data.surfaces, &state.selected_surfaces)
+    {
+        let mx = GIZMO_MARGIN_PX / geom.width;
+        let my = GIZMO_MARGIN_PX / geom.height;
+        let (gx, gy, gw, gh) = (bx - mx, by - my, bw + 2.0 * mx, bh + 2.0 * my);
+        let gcolor = egui::Color32::from_rgb(90, 200, 255);
+        let box_rect =
+            egui::Rect::from_two_pos(geom.to_screen([gx, gy]), geom.to_screen([gx + gw, gy + gh]));
+        painter.rect_stroke(
+            box_rect,
+            0.0,
+            egui::Stroke::new(1.0_f32, gcolor),
+            egui::StrokeKind::Outside,
+        );
+        for (handle, _pivot, _ax, _ay) in gizmo_scale_handles(gx, gy, gw, gh) {
+            let hr = egui::Rect::from_center_size(geom.to_screen(handle), egui::vec2(8.0, 8.0));
+            painter.rect_filled(hr, 1.0, gcolor);
             painter.rect_stroke(
-                box_rect,
-                0.0,
-                egui::Stroke::new(1.0_f32, gcolor),
+                hr,
+                1.0,
+                egui::Stroke::new(1.0_f32, egui::Color32::BLACK),
                 egui::StrokeKind::Outside,
             );
-            for (handle, _pivot, _ax, _ay) in gizmo_scale_handles(gx, gy, gw, gh) {
-                let hr = egui::Rect::from_center_size(geom.to_screen(handle), egui::vec2(8.0, 8.0));
-                painter.rect_filled(hr, 1.0, gcolor);
-                painter.rect_stroke(
-                    hr,
-                    1.0,
-                    egui::Stroke::new(1.0_f32, egui::Color32::BLACK),
-                    egui::StrokeKind::Outside,
-                );
-            }
-            let top_mid = geom.to_screen([gx + gw * 0.5, gy]);
-            let knob = egui::pos2(top_mid.x, top_mid.y - GIZMO_ROTATE_OFFSET_PX);
-            painter.line_segment([top_mid, knob], egui::Stroke::new(1.0_f32, gcolor));
-            painter.circle_filled(knob, 5.0, gcolor);
-            painter.circle_stroke(knob, 5.0, egui::Stroke::new(1.0_f32, egui::Color32::BLACK));
         }
+        let top_mid = geom.to_screen([gx + gw * 0.5, gy]);
+        let knob = egui::pos2(top_mid.x, top_mid.y - GIZMO_ROTATE_OFFSET_PX);
+        painter.line_segment([top_mid, knob], egui::Stroke::new(1.0_f32, gcolor));
+        painter.circle_filled(knob, 5.0, gcolor);
+        painter.circle_stroke(knob, 5.0, egui::Stroke::new(1.0_f32, egui::Color32::BLACK));
     }
 
     // Draw in-progress polygon
@@ -286,16 +284,16 @@ pub(super) fn paint(
             );
         }
         // Draw line from last vertex to cursor
-        if let Some(pos) = resp.hover_pos() {
-            if let Some(last) = pixel_verts.last() {
-                painter.line_segment(
-                    [*last, pos],
-                    egui::Stroke::new(
-                        1.0_f32,
-                        egui::Color32::from_rgba_premultiplied(255, 255, 0, 128),
-                    ),
-                );
-            }
+        if let Some(pos) = resp.hover_pos()
+            && let Some(last) = pixel_verts.last()
+        {
+            painter.line_segment(
+                [*last, pos],
+                egui::Stroke::new(
+                    1.0_f32,
+                    egui::Color32::from_rgba_premultiplied(255, 255, 0, 128),
+                ),
+            );
         }
         for v in &pixel_verts {
             let handle_rect = egui::Rect::from_center_size(*v, egui::vec2(8.0, 8.0));
@@ -329,45 +327,43 @@ pub(super) fn paint(
     }
 
     // Draw in-progress rectangle preview
-    if let Some(start) = state.rect_start {
-        if state.tool == DrawingTool::Rectangle {
-            if let Some(pos) = resp.hover_pos() {
-                let end_x = (pos.x - geom.rect.left()) / geom.width;
-                let end_y = (pos.y - geom.rect.top()) / geom.height;
-                let (sx, sy) = (start[0], start[1]);
-                let preview_rect = egui::Rect::from_two_pos(
-                    egui::pos2(
-                        geom.rect.left() + sx * geom.width,
-                        geom.rect.top() + sy * geom.height,
-                    ),
-                    egui::pos2(
-                        geom.rect.left() + end_x * geom.width,
-                        geom.rect.top() + end_y * geom.height,
-                    ),
-                );
-                painter.rect_stroke(
-                    preview_rect,
-                    0.0,
-                    egui::Stroke::new(2.0_f32, egui::Color32::YELLOW),
-                    egui::StrokeKind::Outside,
-                );
-            }
-        }
+    if let Some(start) = state.rect_start
+        && state.tool == DrawingTool::Rectangle
+        && let Some(pos) = resp.hover_pos()
+    {
+        let end_x = (pos.x - geom.rect.left()) / geom.width;
+        let end_y = (pos.y - geom.rect.top()) / geom.height;
+        let (sx, sy) = (start[0], start[1]);
+        let preview_rect = egui::Rect::from_two_pos(
+            egui::pos2(
+                geom.rect.left() + sx * geom.width,
+                geom.rect.top() + sy * geom.height,
+            ),
+            egui::pos2(
+                geom.rect.left() + end_x * geom.width,
+                geom.rect.top() + end_y * geom.height,
+            ),
+        );
+        painter.rect_stroke(
+            preview_rect,
+            0.0,
+            egui::Stroke::new(2.0_f32, egui::Color32::YELLOW),
+            egui::StrokeKind::Outside,
+        );
     }
 
     // Draw in-progress circle preview
-    if let Some(center) = state.circle_center {
-        if state.tool == DrawingTool::Circle {
-            if let Some(pos) = resp.hover_pos() {
-                let cx_px = geom.rect.left() + center[0] * geom.width;
-                let cy_px = geom.rect.top() + center[1] * geom.height;
-                let radius = ((pos.x - cx_px).powi(2) + (pos.y - cy_px).powi(2)).sqrt();
-                painter.circle_stroke(
-                    egui::pos2(cx_px, cy_px),
-                    radius,
-                    egui::Stroke::new(2.0_f32, egui::Color32::YELLOW),
-                );
-            }
-        }
+    if let Some(center) = state.circle_center
+        && state.tool == DrawingTool::Circle
+        && let Some(pos) = resp.hover_pos()
+    {
+        let cx_px = geom.rect.left() + center[0] * geom.width;
+        let cy_px = geom.rect.top() + center[1] * geom.height;
+        let radius = ((pos.x - cx_px).powi(2) + (pos.y - cy_px).powi(2)).sqrt();
+        painter.circle_stroke(
+            egui::pos2(cx_px, cy_px),
+            radius,
+            egui::Stroke::new(2.0_f32, egui::Color32::YELLOW),
+        );
     }
 }

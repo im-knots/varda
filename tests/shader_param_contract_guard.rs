@@ -118,10 +118,10 @@ fn declared_types(src: &str) -> HashMap<String, String> {
             let line = line.split("//").next().unwrap_or("").trim();
             let line = line.strip_suffix(';').unwrap_or(line);
             let mut it = line.split_whitespace();
-            if let (Some(ty), Some(name)) = (it.next(), it.next()) {
-                if it.next().is_none() {
-                    out.insert(name.to_string(), ty.to_string());
-                }
+            if let (Some(ty), Some(name)) = (it.next(), it.next())
+                && it.next().is_none()
+            {
+                out.insert(name.to_string(), ty.to_string());
             }
         }
         rest = &rest[close..];

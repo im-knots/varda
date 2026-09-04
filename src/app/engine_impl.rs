@@ -1,7 +1,7 @@
 //! Engine trait implementations for `VardaApp`.
 
-use super::resolve::EffectChain;
 use super::VardaApp;
+use super::resolve::EffectChain;
 use crate::deck::{Deck, Effect};
 use crate::depth::preprocess::{AcquiredSensor, DepthPreprocessParams};
 use crate::engine::traits::{
@@ -400,31 +400,31 @@ impl MixerCommands for VardaApp {
     fn remove_deck(&mut self, deck_uuid: &str) -> Result<()> {
         let (channel_idx, deck_idx) = self.resolve_deck(deck_uuid)?;
         // Release external resources before removal
-        if let Some(ch) = self.mixer.channels().get(channel_idx) {
-            if let Some(slot) = ch.decks.get(deck_idx) {
-                if let Some(cam_id) = slot.deck.camera_id() {
-                    self.camera_manager.release_camera(cam_id);
-                }
-                // Depth sensors were missing from this teardown, so the capture
-                // thread and USB handle outlived the last deck that used them.
-                // Covers both point-cloud sources and shader preprocessors.
-                // See spec/depth-sensors.md § Known defect.
-                for sensor_id in slot.deck.held_depth_sensors() {
-                    self.depth_manager.release(sensor_id);
-                }
-                if let Some(capture_id) = slot.deck.screen_capture_id() {
-                    self.screen_capture_manager.release(capture_id);
-                }
-                if let Some(idx) = slot.deck.srt_receiver_idx() {
-                    self.external_io.stream_manager.stop_receive(idx);
-                }
-                if let Some(idx) = slot.deck.ndi_receiver_idx() {
-                    self.external_io.ndi_manager.stop_receive(idx);
-                }
-                #[cfg(target_os = "macos")]
-                if let Some(idx) = slot.deck.syphon_client_idx() {
-                    self.external_io.syphon_manager.stop_receive(idx);
-                }
+        if let Some(ch) = self.mixer.channels().get(channel_idx)
+            && let Some(slot) = ch.decks.get(deck_idx)
+        {
+            if let Some(cam_id) = slot.deck.camera_id() {
+                self.camera_manager.release_camera(cam_id);
+            }
+            // Depth sensors were missing from this teardown, so the capture
+            // thread and USB handle outlived the last deck that used them.
+            // Covers both point-cloud sources and shader preprocessors.
+            // See spec/depth-sensors.md § Known defect.
+            for sensor_id in slot.deck.held_depth_sensors() {
+                self.depth_manager.release(sensor_id);
+            }
+            if let Some(capture_id) = slot.deck.screen_capture_id() {
+                self.screen_capture_manager.release(capture_id);
+            }
+            if let Some(idx) = slot.deck.srt_receiver_idx() {
+                self.external_io.stream_manager.stop_receive(idx);
+            }
+            if let Some(idx) = slot.deck.ndi_receiver_idx() {
+                self.external_io.ndi_manager.stop_receive(idx);
+            }
+            #[cfg(target_os = "macos")]
+            if let Some(idx) = slot.deck.syphon_client_idx() {
+                self.external_io.syphon_manager.stop_receive(idx);
             }
         }
         let ch = self
@@ -812,10 +812,10 @@ impl MixerCommands for VardaApp {
             Ok(()) => {
                 self.note_live_route_write(path, feedback_value);
                 // Broadcast to OSC feedback targets
-                if let Some(ref sender) = self.input.osc_feedback {
-                    if sender.has_targets() {
-                        sender.send_param(path, feedback_value);
-                    }
+                if let Some(ref sender) = self.input.osc_feedback
+                    && sender.has_targets()
+                {
+                    sender.send_param(path, feedback_value);
                 }
                 Ok(())
             }
@@ -1004,10 +1004,10 @@ impl MacroCommands for VardaApp {
     }
 
     fn remove_macro_target(&mut self, uuid: &str, target_idx: usize) {
-        if let Some(m) = self.mixer.macros_mut().find_mut(uuid) {
-            if target_idx < m.targets.len() {
-                m.targets.remove(target_idx);
-            }
+        if let Some(m) = self.mixer.macros_mut().find_mut(uuid)
+            && target_idx < m.targets.len()
+        {
+            m.targets.remove(target_idx);
         }
     }
 
@@ -1020,13 +1020,13 @@ impl MacroCommands for VardaApp {
         curve: crate::macros::MacroCurve,
         invert: bool,
     ) {
-        if let Some(m) = self.mixer.macros_mut().find_mut(uuid) {
-            if let Some(t) = m.targets.get_mut(target_idx) {
-                t.min = min;
-                t.max = max;
-                t.curve = curve;
-                t.invert = invert;
-            }
+        if let Some(m) = self.mixer.macros_mut().find_mut(uuid)
+            && let Some(t) = m.targets.get_mut(target_idx)
+        {
+            t.min = min;
+            t.max = max;
+            t.curve = curve;
+            t.invert = invert;
         }
     }
 
@@ -1207,10 +1207,9 @@ impl OutputCommands for VardaApp {
         let name = self.output.outputs[idx].name().to_string();
         // Stop active subprocess before removing to release ports/resources
         if let crate::renderer::context::UnifiedOutput::Headless(h) = &mut self.output.outputs[idx]
+            && let Some(mut sub) = h.subprocess.take()
         {
-            if let Some(mut sub) = h.subprocess.take() {
-                sub.stop();
-            }
+            sub.stop();
         }
         let removed = self.output.outputs.remove(idx);
         if let crate::renderer::context::UnifiedOutput::Window(w) = removed {
@@ -1706,10 +1705,10 @@ impl AnalyzerCommands for VardaApp {
     }
 
     fn release_analyzer(&mut self, deck_id: &str, analyzer_type: &str) {
-        if let Some((ch, dk)) = self.mixer.find_deck_by_uuid(deck_id) {
-            if let Some(slot) = self.mixer.channel_mut(ch).and_then(|c| c.decks.get_mut(dk)) {
-                slot.deck.analyzers.release(analyzer_type);
-            }
+        if let Some((ch, dk)) = self.mixer.find_deck_by_uuid(deck_id)
+            && let Some(slot) = self.mixer.channel_mut(ch).and_then(|c| c.decks.get_mut(dk))
+        {
+            slot.deck.analyzers.release(analyzer_type);
         }
     }
 }

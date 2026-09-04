@@ -121,10 +121,10 @@ impl LtcDecoder {
             }
             self.high = !self.high;
             let interval = std::mem::take(&mut self.samples_since_transition);
-            if let Some(bit) = self.bit_from(interval) {
-                if let Some(frame) = self.push(bit) {
-                    on_frame(frame);
-                }
+            if let Some(bit) = self.bit_from(interval)
+                && let Some(frame) = self.push(bit)
+            {
+                on_frame(frame);
             }
         }
     }

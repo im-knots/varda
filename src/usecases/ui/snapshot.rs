@@ -819,11 +819,7 @@ fn list_available_luts(workspace: &crate::persistence::Workspace) -> Vec<String>
             let is_lut = std::path::Path::new(&name).extension().is_some_and(|ext| {
                 ext.eq_ignore_ascii_case("cube") || ext.eq_ignore_ascii_case("3dl")
             });
-            if is_lut {
-                Some(name)
-            } else {
-                None
-            }
+            if is_lut { Some(name) } else { None }
         })
         .collect();
     files.sort();

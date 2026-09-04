@@ -358,66 +358,65 @@ fn render_headless_controls(
         ref codec,
         ref audio_device,
     } = output.target
+        && !output.is_active
     {
-        if !output.is_active {
-            // Codec selector
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Codec:").small());
-                let codec_id = egui::Id::new(format!("rec_codec_{output_uuid}"));
-                egui::ComboBox::from_id_salt(codec_id)
-                    .selected_text(egui::RichText::new(codec.to_string()).small())
-                    .width(120.0)
-                    .show_ui(ui, |ui| {
-                        for c in &[
-                            RecordingCodec::H264,
-                            RecordingCodec::H265,
-                            RecordingCodec::AV1,
-                            RecordingCodec::ProRes,
-                            RecordingCodec::ProRes4444,
-                            RecordingCodec::Hap,
-                            RecordingCodec::HapAlpha,
-                            RecordingCodec::HapQ,
-                        ] {
-                            if ui.selectable_label(*codec == *c, c.to_string()).clicked() {
-                                actions.commands.push(EngineCommand::SetOutputTarget {
-                                    output_uuid: output_uuid.to_string(),
-                                    target: OutputTarget::Recording {
-                                        path: path.clone(),
-                                        codec: c.clone(),
-                                        audio_device: audio_device.clone(),
-                                    },
-                                });
-                            }
+        // Codec selector
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Codec:").small());
+            let codec_id = egui::Id::new(format!("rec_codec_{output_uuid}"));
+            egui::ComboBox::from_id_salt(codec_id)
+                .selected_text(egui::RichText::new(codec.to_string()).small())
+                .width(120.0)
+                .show_ui(ui, |ui| {
+                    for c in &[
+                        RecordingCodec::H264,
+                        RecordingCodec::H265,
+                        RecordingCodec::AV1,
+                        RecordingCodec::ProRes,
+                        RecordingCodec::ProRes4444,
+                        RecordingCodec::Hap,
+                        RecordingCodec::HapAlpha,
+                        RecordingCodec::HapQ,
+                    ] {
+                        if ui.selectable_label(*codec == *c, c.to_string()).clicked() {
+                            actions.commands.push(EngineCommand::SetOutputTarget {
+                                output_uuid: output_uuid.to_string(),
+                                target: OutputTarget::Recording {
+                                    path: path.clone(),
+                                    codec: c.clone(),
+                                    audio_device: audio_device.clone(),
+                                },
+                            });
                         }
-                    });
-            });
-            // File path input
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("File:").small());
-                let path_id = egui::Id::new(format!("rec_path_{output_uuid}"));
-                let mut current_path: String = ui
-                    .data(|d| d.get_temp(path_id))
-                    .unwrap_or_else(|| path.clone());
-                let response = ui.add(
-                    egui::TextEdit::singleline(&mut current_path)
-                        .desired_width(160.0)
-                        .font(egui::TextStyle::Small),
-                );
-                if response.lost_focus() || response.changed() {
-                    ui.data_mut(|d| d.insert_temp(path_id, current_path.clone()));
-                    if response.lost_focus() {
-                        actions.commands.push(EngineCommand::SetOutputTarget {
-                            output_uuid: output_uuid.to_string(),
-                            target: OutputTarget::Recording {
-                                path: current_path,
-                                codec: codec.clone(),
-                                audio_device: audio_device.clone(),
-                            },
-                        });
                     }
+                });
+        });
+        // File path input
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("File:").small());
+            let path_id = egui::Id::new(format!("rec_path_{output_uuid}"));
+            let mut current_path: String = ui
+                .data(|d| d.get_temp(path_id))
+                .unwrap_or_else(|| path.clone());
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut current_path)
+                    .desired_width(160.0)
+                    .font(egui::TextStyle::Small),
+            );
+            if response.lost_focus() || response.changed() {
+                ui.data_mut(|d| d.insert_temp(path_id, current_path.clone()));
+                if response.lost_focus() {
+                    actions.commands.push(EngineCommand::SetOutputTarget {
+                        output_uuid: output_uuid.to_string(),
+                        target: OutputTarget::Recording {
+                            path: current_path,
+                            codec: codec.clone(),
+                            audio_device: audio_device.clone(),
+                        },
+                    });
                 }
-            });
-        }
+            }
+        });
     }
 
     // Unified stream config (SRT, HLS, DASH, RTMP, NDI, Syphon)
@@ -662,9 +661,9 @@ fn render_stream_config(
     // Protocol-specific config
     match &output.target {
         OutputTarget::SrtStream {
-            ref url,
-            ref codec,
-            ref audio_device,
+            url,
+            codec,
+            audio_device,
         } => {
             if !output.is_active {
                 ui.horizontal(|ui| {
@@ -715,10 +714,10 @@ fn render_stream_config(
             }
         }
         OutputTarget::HlsStream {
-            ref name,
-            ref codec,
+            name,
+            codec,
             low_latency,
-            ref audio_device,
+            audio_device,
         } => {
             render_hls_dash_name_codec(
                 ui,
@@ -760,9 +759,9 @@ fn render_stream_config(
             render_copyable_url(ui, "🌐", &manifest_url, 9.0, actions);
         }
         OutputTarget::DashStream {
-            ref name,
-            ref codec,
-            ref audio_device,
+            name,
+            codec,
+            audio_device,
         } => {
             render_hls_dash_name_codec(
                 ui,
@@ -784,10 +783,10 @@ fn render_stream_config(
             render_copyable_url(ui, "🌐", &manifest_url, 9.0, actions);
         }
         OutputTarget::RtmpStream {
-            ref url,
-            ref codec,
+            url,
+            codec,
             codec_contract,
-            ref audio_device,
+            audio_device,
         } => {
             if !output.is_active {
                 ui.horizontal(|ui| {
@@ -872,7 +871,7 @@ fn render_stream_config(
                 });
             }
         }
-        OutputTarget::NdiSend { ref sender_name } if !output.is_active => {
+        OutputTarget::NdiSend { sender_name } if !output.is_active => {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Name:").small());
                 let name_id = egui::Id::new(format!("ndi_name_{output_uuid}"));
@@ -897,7 +896,7 @@ fn render_stream_config(
                 }
             });
         }
-        OutputTarget::SyphonServer { ref server_name } if !output.is_active => {
+        OutputTarget::SyphonServer { server_name } if !output.is_active => {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Name:").small());
                 let name_id = egui::Id::new(format!("syphon_name_{output_uuid}"));

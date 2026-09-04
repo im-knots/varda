@@ -4,7 +4,7 @@
 //! Built once per frame by [`super::build_ui_data`]. Panels read this and never
 //! touch the engine directly (/spec/ui-engine-boundary.md).
 
-use super::{panels, CameraDetectMode};
+use super::{CameraDetectMode, panels};
 use crate::audio::AudioSourceId;
 use crate::channel::DeckRenderFps;
 use crate::modulation::{ADSRStage, AudioReactMode, LFOWaveform, StepInterpolation};

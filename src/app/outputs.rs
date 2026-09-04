@@ -43,16 +43,14 @@ impl VardaApp {
             // assignment. Move it onto the surface (first assignment wins; an
             // existing surface warp — e.g. dome mesh — takes precedence).
             for a in &config.surface_assignments {
-                if let Some(warp) = &a.legacy_warp_mode {
-                    if let Some((_, surface)) = self
+                if let Some(warp) = &a.legacy_warp_mode
+                    && let Some((_, surface)) = self
                         .output
                         .surface_manager
                         .find_by_uuid_mut(&a.surface_uuid)
-                    {
-                        if surface.warp.is_none() {
-                            surface.warp = Some(warp.clone());
-                        }
-                    }
+                    && surface.warp.is_none()
+                {
+                    surface.warp = Some(warp.clone());
                 }
             }
             let idx = self.output.outputs.len() + 1;
@@ -126,7 +124,8 @@ impl VardaApp {
                                     } else {
                                         log::warn!(
                                             "Monitor '{}' not available for output '{}' — falling back to windowed",
-                                            name, output.name,
+                                            name,
+                                            output.name,
                                         );
                                         self.session.notifications.warn(format!(
                                             "Monitor '{}' not connected — output '{}' opened as window",
@@ -206,8 +205,8 @@ impl VardaApp {
     /// Recompute per-surface edge blend for all Auto-mode outputs based on surface topology.
     pub fn recompute_auto_edge_blend(&mut self) {
         use crate::renderer::edge_blend::{
-            compute_auto_edge_blend, EdgeBlendMode, MappedRegion, OutputSurfaceInfo,
-            SurfaceOverlapZones,
+            EdgeBlendMode, MappedRegion, OutputSurfaceInfo, SurfaceOverlapZones,
+            compute_auto_edge_blend,
         };
 
         // Check if any output is in Auto mode — early exit if none.

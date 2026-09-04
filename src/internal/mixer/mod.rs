@@ -1108,7 +1108,7 @@ mod tests {
     fn auto_crossfade_with_easing() {
         let mut ac = AutoCrossfade::new(0.0, 1.0, 2.0, CrossfadeEasing::EaseInOut);
         let val = ac.tick(1.0).unwrap(); // 50% through with ease-in-out
-                                         // Smoothstep at 0.5 = 0.5
+        // Smoothstep at 0.5 = 0.5
         assert!((val - 0.5).abs() < 1e-5);
     }
 
@@ -1338,7 +1338,7 @@ mod tests {
     #[test]
     fn param_router_addresses_modulator_by_uuid_after_reorder() {
         use crate::modulation::ModulationSource;
-        use crate::param_router::{apply_param_by_path, EntityKind, ParamRouteError};
+        use crate::param_router::{EntityKind, ParamRouteError, apply_param_by_path};
 
         let gpu = headless_gpu();
         let mut mixer = Mixer::new(&gpu, 64, 64).unwrap();
@@ -1383,7 +1383,7 @@ mod tests {
     #[test]
     fn macro_value_fans_out_to_multiple_targets() {
         use crate::macros::{MacroKind, MacroTarget};
-        use crate::param_router::{apply_param_by_path, EntityKind, ParamRouteError};
+        use crate::param_router::{EntityKind, ParamRouteError, apply_param_by_path};
 
         let gpu = headless_gpu();
         let mut mixer = Mixer::new(&gpu, 64, 64).unwrap();

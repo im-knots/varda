@@ -5,14 +5,14 @@
 //! that is already dialled in, paste it, then address the copy by the UUID that
 //! comes back. See `/spec/clipboard.md`.
 
+use axum::Json;
 use axum::extract::State;
 use axum::response::IntoResponse;
-use axum::Json;
 use serde::Deserialize;
 use utoipa::ToSchema;
 
 use crate::engine::{ClipboardSource, CommandResult, EngineCommand, PasteTarget};
-use crate::usecases::api::{command_response, SharedState};
+use crate::usecases::api::{SharedState, command_response};
 
 #[derive(Deserialize, ToSchema)]
 pub struct CopyBody {

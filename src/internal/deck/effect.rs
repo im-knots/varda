@@ -2,7 +2,7 @@
 
 use super::source::load_imported_textures;
 use super::{Deck, Effect, PassBuffer};
-use crate::isf::{compile_glsl_to_spirv, ISFPass, ISFShader};
+use crate::isf::{ISFPass, ISFShader, compile_glsl_to_spirv};
 use crate::params::ShaderParams;
 use crate::renderer::{GpuContext, ISFUniforms, UnifiedPipeline};
 use anyhow::{Context, Result};

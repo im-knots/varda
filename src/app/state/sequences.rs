@@ -23,7 +23,7 @@ impl VardaApp {
                 return CommandResult::Err {
                     code: ErrorCode::NotFound,
                     message: e.to_string(),
-                }
+                };
             }
         };
         f(&mut self.mixer.transition_sequences_mut()[idx]);
@@ -44,7 +44,7 @@ impl VardaApp {
                 return CommandResult::Err {
                     code: ErrorCode::NotFound,
                     message: e.to_string(),
-                }
+                };
             }
         };
         match self.mixer.transition_sequences_mut()[idx]
@@ -209,7 +209,7 @@ impl VardaApp {
                 return CommandResult::Err {
                     code: ErrorCode::NotFound,
                     message: e.to_string(),
-                }
+                };
             }
         };
         let steps = &mut self.mixer.transition_sequences_mut()[idx].steps;
@@ -281,7 +281,7 @@ impl VardaApp {
                 return CommandResult::Err {
                     code: ErrorCode::NotFound,
                     message: e.to_string(),
-                }
+                };
             }
         };
         let steps = &mut self.mixer.transition_sequences_mut()[idx].steps;

@@ -12,11 +12,11 @@ pub mod modulation;
 use anyhow::{Context, Result};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 
 extern crate ffmpeg_next as ffmpeg;
 
-use ffmpeg::format::{input, Pixel};
+use ffmpeg::format::{Pixel, input};
 use ffmpeg::media::Type;
 use ffmpeg::software::scaling::{context::Context as Scaler, flag::Flags};
 use ffmpeg::util::frame::video::Video;
@@ -169,10 +169,10 @@ impl PlaybackState {
             return self.paused_modulation_step();
         }
 
-        if let Some(transport) = self.chase_transport.take() {
-            if self.transport_sync.mode.is_chasing(transport.running) {
-                return self.advance_chase(transport);
-            }
+        if let Some(transport) = self.chase_transport.take()
+            && self.transport_sync.mode.is_chasing(transport.running)
+        {
+            return self.advance_chase(transport);
         }
         self.chasing = false;
         self.last_transport_position = None;
@@ -877,10 +877,10 @@ fn pool_take(pool: &Mutex<Vec<Vec<u8>>>) -> Vec<u8> {
 
 /// Return a buffer to the pool for reuse, dropping it if the pool is at capacity.
 fn pool_return(pool: &Mutex<Vec<Vec<u8>>>, buf: Vec<u8>) {
-    if let Ok(mut p) = pool.lock() {
-        if p.len() < FRAME_POOL_CAP {
-            p.push(buf);
-        }
+    if let Ok(mut p) = pool.lock()
+        && p.len() < FRAME_POOL_CAP
+    {
+        p.push(buf);
     }
 }
 
@@ -975,10 +975,10 @@ fn video_decode_thread(
         }
 
         // Process seek if any
-        if let Some(t) = had_seek {
-            if let Err(e) = player.seek_and_reset(t) {
-                log::warn!("Video seek error: {e}");
-            }
+        if let Some(t) = had_seek
+            && let Err(e) = player.seek_and_reset(t)
+        {
+            log::warn!("Video seek error: {e}");
         }
 
         // Waking from suspension restarts the frame schedule, so the first
@@ -1086,10 +1086,10 @@ fn hap_decode_thread(
         }
 
         // Process seek if any
-        if let Some(t) = had_seek {
-            if let Err(e) = player.seek(t) {
-                log::warn!("HAP seek error: {e}");
-            }
+        if let Some(t) = had_seek
+            && let Err(e) = player.seek(t)
+        {
+            log::warn!("HAP seek error: {e}");
         }
 
         // Waking from suspension restarts the frame schedule, so the first
@@ -1430,9 +1430,11 @@ impl VideoPlayer {
                             self.cache_overflowed = true;
                             if !self.cache_overflow_warned {
                                 self.cache_overflow_warned = true;
-                                log::warn!("Ping-pong frame cache full ({} frames, {} MB) — reverse will cover partial clip",
+                                log::warn!(
+                                    "Ping-pong frame cache full ({} frames, {} MB) — reverse will cover partial clip",
                                     self.frame_cache.len(),
-                                    self.frame_cache.len() * self.frame_byte_size / (1024 * 1024));
+                                    self.frame_cache.len() * self.frame_byte_size / (1024 * 1024)
+                                );
                             }
                         }
                     }
@@ -1795,7 +1797,7 @@ mod tests {
     fn test_playback_state_loop_restart() {
         let mut ps = PlaybackState::new(1.0, 30.0);
         ps.position = 1.1; // already past out-point
-                           // Ensure some dt elapses
+        // Ensure some dt elapses
         std::thread::sleep(std::time::Duration::from_millis(5));
         let result = ps.advance_frame();
         assert!(result.needs_seek);

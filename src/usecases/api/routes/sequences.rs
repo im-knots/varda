@@ -3,14 +3,14 @@
 //! Sequences are addressed by UUID. Steps are positional within their sequence,
 //! so `step_idx` stays an ordinal — see `/spec/api-addressing.md`.
 
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use axum::Json;
 use serde::Deserialize;
 use utoipa::ToSchema;
 
 use crate::engine::{CommandResult, EngineCommand};
-use crate::usecases::api::{command_response, SharedState};
+use crate::usecases::api::{SharedState, command_response};
 
 #[utoipa::path(post, path = "/api/sequences", responses((status = 200, body = CommandResult)), tag = "Sequences")]
 pub async fn create(State(s): State<SharedState>) -> impl IntoResponse {

@@ -626,11 +626,11 @@ impl TimecodeManager {
                 device_id: id,
                 device_name,
             } = &mut input.source
+                && *id == device_id
+                && device_name != name
             {
-                if *id == device_id && device_name != name {
-                    device_name.clear();
-                    device_name.push_str(name);
-                }
+                device_name.clear();
+                device_name.push_str(name);
             }
         }
     }

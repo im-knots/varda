@@ -630,14 +630,14 @@ fn capture_loop(
     while !stop.load(Ordering::Relaxed) {
         let tick = std::time::Instant::now();
 
-        if let Ok(current) = config.lock() {
-            if *current != applied {
-                applied = current.clone();
-                interval = poll_interval(applied.frame_interval(), self_paced);
-                drop(current);
-                if let Err(e) = session.set_config(&applied) {
-                    log::warn!("Screen capture {id}: config change rejected: {e}");
-                }
+        if let Ok(current) = config.lock()
+            && *current != applied
+        {
+            applied = current.clone();
+            interval = poll_interval(applied.frame_interval(), self_paced);
+            drop(current);
+            if let Err(e) = session.set_config(&applied) {
+                log::warn!("Screen capture {id}: config change rejected: {e}");
             }
         }
 
@@ -662,8 +662,8 @@ fn capture_loop(
 
 #[cfg(test)]
 mod tests {
-    use super::backend::{mock_targets, CaptureConfig, CaptureError, CropRect, TargetIdentity};
-    use super::{poll_interval, ScreenCaptureManager, SELF_PACED_MAX_POLL, SELF_PACED_MIN_POLL};
+    use super::backend::{CaptureConfig, CaptureError, CropRect, TargetIdentity, mock_targets};
+    use super::{SELF_PACED_MAX_POLL, SELF_PACED_MIN_POLL, ScreenCaptureManager, poll_interval};
     use std::time::Duration;
 
     // ── Capture-thread pacing ───────────────────────────────────────

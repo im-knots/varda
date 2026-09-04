@@ -1,7 +1,7 @@
 //! HAP video codec decoder — demuxes with ffmpeg, parses HAP frames,
 //! Snappy-decompresses `BCn` texture blocks for direct GPU upload.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::path::Path;
 extern crate ffmpeg_next as ffmpeg;
 use super::{HapTextureFormat, LoopMode, PlaybackState};

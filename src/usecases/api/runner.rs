@@ -5,8 +5,8 @@
 //! For headless operation this is the primary consumer.
 
 use crate::engine::{CommandEnvelope, EngineState};
-use crate::usecases::api::routes;
 use crate::usecases::api::SharedState;
+use crate::usecases::api::routes;
 
 use axum::Router;
 use std::sync::{Arc, RwLock};

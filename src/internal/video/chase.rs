@@ -132,11 +132,7 @@ pub fn desired_position(
     } else {
         in_point + elapsed * base_speed
     };
-    if mapped.is_nan() {
-        in_point
-    } else {
-        mapped
-    }
+    if mapped.is_nan() { in_point } else { mapped }
 }
 
 /// One servo step. Loop mode is not consulted: hold the in/out bounds.
@@ -221,11 +217,7 @@ pub fn step_chase(input: ChaseInput) -> ChaseStep {
 }
 
 fn finite_or(value: f64, fallback: f64) -> f64 {
-    if value.is_finite() {
-        value
-    } else {
-        fallback
-    }
+    if value.is_finite() { value } else { fallback }
 }
 
 fn finite_non_negative(value: f64, fallback: f64) -> f64 {

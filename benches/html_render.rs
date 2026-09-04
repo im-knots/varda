@@ -16,7 +16,7 @@
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use varda::{html::HtmlManager, renderer::context::GpuContext};
 
 /// 720p — a common output resolution and a balance between realism and the cost

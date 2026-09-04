@@ -429,17 +429,17 @@ impl ModulationEngine {
 
         let mut deps: Vec<Vec<usize>> = vec![Vec::new(); n];
         for (key, mods) in &self.assignments {
-            if let Some(target_uuid) = Self::parse_mod_target(key) {
-                if let Some(&target_idx) = self.uuid_to_idx.get(target_uuid) {
-                    if target_idx < n {
-                        self.has_mod_on_mod[target_idx] = true;
-                    }
-                    for m in mods {
-                        if let Some(&src_idx) = self.uuid_to_idx.get(&m.source_id) {
-                            if src_idx != target_idx {
-                                deps[target_idx].push(src_idx);
-                            }
-                        }
+            if let Some(target_uuid) = Self::parse_mod_target(key)
+                && let Some(&target_idx) = self.uuid_to_idx.get(target_uuid)
+            {
+                if target_idx < n {
+                    self.has_mod_on_mod[target_idx] = true;
+                }
+                for m in mods {
+                    if let Some(&src_idx) = self.uuid_to_idx.get(&m.source_id)
+                        && src_idx != target_idx
+                    {
+                        deps[target_idx].push(src_idx);
                     }
                 }
             }

@@ -3,14 +3,14 @@
 //! The transport is a singleton, so these routes take no identifier.
 //! See `/spec/transport.md`.
 
+use axum::Json;
 use axum::extract::State;
 use axum::response::IntoResponse;
-use axum::Json;
 use serde::Deserialize;
 use utoipa::ToSchema;
 
 use crate::engine::{CommandResult, EngineCommand};
-use crate::usecases::api::{command_response, SharedState};
+use crate::usecases::api::{SharedState, command_response};
 
 #[derive(Deserialize, ToSchema)]
 pub struct PositionBody {

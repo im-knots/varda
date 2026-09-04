@@ -4,7 +4,7 @@
 //! line, so a cue reads as an instant across every deck rather than as a mark on
 //! the ruler alone. See /spec/arrangement.md § Cue points.
 
-use super::{snap_seconds, TimeAxis};
+use super::{TimeAxis, snap_seconds};
 use crate::engine::EngineCommand;
 use crate::usecases::ui::{UIActions, UIData};
 
@@ -90,18 +90,18 @@ fn handle(
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
     }
 
-    if response.dragged() {
-        if let Some(pos) = response.interact_pointer_pos() {
-            // One undo entry for the whole drag, not one per frame.
-            actions.session.gesture_active = true;
-            let at = snap_seconds(data, axis.seconds(pos.x).max(0.0));
-            if (at - cue.at).abs() > f64::EPSILON {
-                actions.commands.push(EngineCommand::UpdateCue {
-                    uuid: cue.uuid.clone(),
-                    at: Some(at),
-                    name: None,
-                });
-            }
+    if response.dragged()
+        && let Some(pos) = response.interact_pointer_pos()
+    {
+        // One undo entry for the whole drag, not one per frame.
+        actions.session.gesture_active = true;
+        let at = snap_seconds(data, axis.seconds(pos.x).max(0.0));
+        if (at - cue.at).abs() > f64::EPSILON {
+            actions.commands.push(EngineCommand::UpdateCue {
+                uuid: cue.uuid.clone(),
+                at: Some(at),
+                name: None,
+            });
         }
     }
 

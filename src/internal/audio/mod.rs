@@ -2,13 +2,13 @@
 
 use anyhow::{Context, Result};
 use arc_swap::ArcSwap;
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::Sample;
-use crossbeam_channel::{bounded, Receiver, Sender};
-use rustfft::{num_complex::Complex, FftPlanner};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use crossbeam_channel::{Receiver, Sender, bounded};
+use rustfft::{FftPlanner, num_complex::Complex};
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 /// Opaque audio source identifier.
@@ -333,10 +333,10 @@ impl AudioManager {
         default_name: Option<&str>,
         devices: &[AudioDeviceInfo],
     ) -> Option<AudioSourceId> {
-        if let Some(name) = default_name {
-            if let Some(dev) = devices.iter().find(|d| d.name == name) {
-                return Some(dev.id);
-            }
+        if let Some(name) = default_name
+            && let Some(dev) = devices.iter().find(|d| d.name == name)
+        {
+            return Some(dev.id);
         }
         devices.first().map(|d| d.id)
     }
@@ -485,11 +485,11 @@ impl AudioManager {
     /// clock, keeping analysis and passthrough coherent. Returns `None` if the
     /// source can't be opened.
     pub fn subscribe_pcm(&mut self, id: AudioSourceId) -> Option<PcmSubscription> {
-        if !self.active.contains_key(&id) {
-            if let Err(e) = self.ensure_open(id) {
-                log::warn!("subscribe_pcm: failed to open audio source {id}: {e}");
-                return None;
-            }
+        if !self.active.contains_key(&id)
+            && let Err(e) = self.ensure_open(id)
+        {
+            log::warn!("subscribe_pcm: failed to open audio source {id}: {e}");
+            return None;
         }
         let source = self.active.get(&id)?;
         let format = AudioFormat {
@@ -588,11 +588,11 @@ impl AudioManager {
         }
         // Devices entering the modulation set: register the ref, then ensure open.
         for &id in needed {
-            if self.mod_refs.insert(id) || !self.active.contains_key(&id) {
-                if let Err(e) = self.ensure_open(id) {
-                    log::warn!("set_modulation_refs: failed to open audio source {id}: {e}");
-                    self.mod_refs.remove(&id);
-                }
+            if (self.mod_refs.insert(id) || !self.active.contains_key(&id))
+                && let Err(e) = self.ensure_open(id)
+            {
+                log::warn!("set_modulation_refs: failed to open audio source {id}: {e}");
+                self.mod_refs.remove(&id);
             }
         }
     }
@@ -734,11 +734,7 @@ impl AudioManager {
                         .iter()
                         .map(|c: &Complex<f32>| {
                             let mag = c.norm() * scale;
-                            if mag < NOISE_FLOOR {
-                                0.0
-                            } else {
-                                mag
-                            }
+                            if mag < NOISE_FLOOR { 0.0 } else { mag }
                         })
                         .collect();
 

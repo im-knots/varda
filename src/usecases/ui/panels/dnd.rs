@@ -155,11 +155,11 @@ pub(super) fn handle_library_dnd(ui: &egui::Ui, data: &UIData, actions: &mut UIA
             let mut found_ch: Option<usize> = None;
             for ch_idx in 0..data.channels.len() {
                 let key = egui::Id::new("ch_drop_rect").with(ch_idx);
-                if let Some(rect) = ctx.memory(|mem| mem.data.get_temp::<egui::Rect>(key)) {
-                    if rect.contains(pos) {
-                        found_ch = Some(ch_idx);
-                        break;
-                    }
+                if let Some(rect) = ctx.memory(|mem| mem.data.get_temp::<egui::Rect>(key))
+                    && rect.contains(pos)
+                {
+                    found_ch = Some(ch_idx);
+                    break;
                 }
             }
 
@@ -168,11 +168,11 @@ pub(super) fn handle_library_dnd(ui: &egui::Ui, data: &UIData, actions: &mut UIA
             if found_ch.is_none() {
                 for side in 0..2 {
                     let key = egui::Id::new("new_ch_drop_rect").with(side);
-                    if let Some(rect) = ctx.memory(|mem| mem.data.get_temp::<egui::Rect>(key)) {
-                        if rect.contains(pos) {
-                            on_new_ch = true;
-                            break;
-                        }
+                    if let Some(rect) = ctx.memory(|mem| mem.data.get_temp::<egui::Rect>(key))
+                        && rect.contains(pos)
+                    {
+                        on_new_ch = true;
+                        break;
                     }
                 }
             }
@@ -406,30 +406,30 @@ pub(super) fn handle_library_dnd(ui: &egui::Ui, data: &UIData, actions: &mut UIA
             if let Some(hover) = hover_fx {
                 let fx_key = egui::Id::new("__lib_dnd_fx_idx");
                 let filter_idx: Option<usize> = ctx.memory(|mem| mem.data.get_temp(fx_key));
-                if let Some(filter_idx) = filter_idx {
-                    if let Some(shader_name) = resolve_filter_name(data, filter_idx) {
-                        let (target, select) = match hover {
-                            FxHover::Deck {
-                                uuid,
-                                ch_idx,
-                                deck_idx,
-                            } => (EffectTarget::Deck(uuid), FxSelect::Deck(ch_idx, deck_idx)),
-                            FxHover::Channel { uuid, ch_idx } => {
-                                (EffectTarget::Channel(uuid), FxSelect::Channel(ch_idx))
-                            }
-                            FxHover::Master => (EffectTarget::Master, FxSelect::Master),
-                        };
-                        log::info!("Library drop (deferred): effect {filter_idx} -> {target:?}");
-                        match select {
-                            FxSelect::Deck(ch, dk) => actions.session.select_deck = Some((ch, dk)),
-                            FxSelect::Channel(ch) => actions.session.select_channel = Some(ch),
-                            FxSelect::Master => actions.session.select_master = true,
+                if let Some(filter_idx) = filter_idx
+                    && let Some(shader_name) = resolve_filter_name(data, filter_idx)
+                {
+                    let (target, select) = match hover {
+                        FxHover::Deck {
+                            uuid,
+                            ch_idx,
+                            deck_idx,
+                        } => (EffectTarget::Deck(uuid), FxSelect::Deck(ch_idx, deck_idx)),
+                        FxHover::Channel { uuid, ch_idx } => {
+                            (EffectTarget::Channel(uuid), FxSelect::Channel(ch_idx))
                         }
-                        actions.commands.push(EngineCommand::AddEffect {
-                            target,
-                            shader_name,
-                        });
+                        FxHover::Master => (EffectTarget::Master, FxSelect::Master),
+                    };
+                    log::info!("Library drop (deferred): effect {filter_idx} -> {target:?}");
+                    match select {
+                        FxSelect::Deck(ch, dk) => actions.session.select_deck = Some((ch, dk)),
+                        FxSelect::Channel(ch) => actions.session.select_channel = Some(ch),
+                        FxSelect::Master => actions.session.select_master = true,
                     }
+                    actions.commands.push(EngineCommand::AddEffect {
+                        target,
+                        shader_name,
+                    });
                 }
             }
 
@@ -504,22 +504,21 @@ pub(super) fn handle_effect_dnd(ui: &egui::Ui, data: &UIData, actions: &mut UIAc
                 let count: usize = ctx.memory(|mem| mem.data.get_temp(count_key).unwrap_or(0));
                 for p in 0..count {
                     let rk = egui::Id::new("eff_dz_rect").with((chain_key.to_string(), p));
-                    if let Some(rect) = ctx.memory(|mem| mem.data.get_temp::<egui::Rect>(rk)) {
-                        if rect.contains(pos) {
-                            return Some((chain_key.to_string(), p));
-                        }
+                    if let Some(rect) = ctx.memory(|mem| mem.data.get_temp::<egui::Rect>(rk))
+                        && rect.contains(pos)
+                    {
+                        return Some((chain_key.to_string(), p));
                     }
                 }
                 None
             };
 
-            if found_dz.is_none() {
-                if let Some(deck) = data
+            if found_dz.is_none()
+                && let Some(deck) = data
                     .selected_deck
                     .and_then(|(ch, dk)| data.channels.get(ch)?.decks.get(dk))
-                {
-                    found_dz = check_chain(&format!("deck_{}", deck.uuid), ctx, pos);
-                }
+            {
+                found_dz = check_chain(&format!("deck_{}", deck.uuid), ctx, pos);
             }
             if found_dz.is_none() {
                 found_dz = check_chain("master", ctx, pos);
@@ -665,8 +664,8 @@ pub(super) fn handle_sequence_step_dnd(ui: &egui::Ui, _data: &UIData, actions: &
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_fx_from_surfaces, FxHover};
-    use egui::{pos2, Rect};
+    use super::{FxHover, resolve_fx_from_surfaces};
+    use egui::{Rect, pos2};
 
     fn rect(min_x: f32, min_y: f32, max_x: f32, max_y: f32) -> Rect {
         Rect::from_min_max(pos2(min_x, min_y), pos2(max_x, max_y))

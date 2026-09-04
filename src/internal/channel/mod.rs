@@ -208,10 +208,10 @@ impl DurationSpec {
     /// Set the numeric value, preserving the unit.
     pub fn set_value(&mut self, v: f64) {
         match self {
-            DurationSpec::Beats(ref mut b) => *b = v,
-            DurationSpec::Seconds(ref mut s) => *s = v,
-            DurationSpec::Minutes(ref mut m) => *m = v,
-            DurationSpec::Hours(ref mut h) => *h = v,
+            DurationSpec::Beats(b) => *b = v,
+            DurationSpec::Seconds(s) => *s = v,
+            DurationSpec::Minutes(m) => *m = v,
+            DurationSpec::Hours(h) => *h = v,
         }
     }
 }
@@ -1475,10 +1475,10 @@ impl Channel {
         if all_done && any_at {
             // Reset all AT decks to Inactive, then immediately activate the first one
             for slot in &mut self.decks {
-                if let Some(at) = &mut slot.auto_transition {
-                    if at.enabled {
-                        at.phase = DeckTransitionPhase::Inactive;
-                    }
+                if let Some(at) = &mut slot.auto_transition
+                    && at.enabled
+                {
+                    at.phase = DeckTransitionPhase::Inactive;
                 }
             }
             for slot in &mut self.decks {

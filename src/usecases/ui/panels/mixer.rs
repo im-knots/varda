@@ -1,15 +1,15 @@
 //! Central panel, mixer box, channel columns, deck thumbnails.
 
-use super::super::{widgets, ChannelUIInfo, DeckDrag, DeckUIInfo, LibraryDrag, UIActions, UIData};
+use super::super::{ChannelUIInfo, DeckDrag, DeckUIInfo, LibraryDrag, UIActions, UIData, widgets};
 use super::clipboard_menu;
 use super::dnd::{publish_channel_surface_fx, publish_deck_surface_fx};
 use super::macros::render_macro_column;
 use super::sequence::render_sequence_builder;
 use super::stage::render_stage_editor;
 use super::utils::channel_color;
+use crate::BlendMode;
 use crate::engine::EngineCommand;
 use crate::mixer::CrossfadeEasing;
-use crate::BlendMode;
 
 fn effect_drag_active(ctx: &egui::Context) -> bool {
     egui::DragAndDrop::payload::<LibraryDrag>(ctx)
@@ -749,14 +749,14 @@ pub(super) fn render_channel_column(
                                 let last = ch.decks.len() - 1;
                                 let from_idx =
                                     ch.decks.iter().position(|d| d.uuid == payload.deck_uuid);
-                                if let Some(from_idx) = from_idx {
-                                    if from_idx != last {
-                                        actions.commands.push(EngineCommand::ReorderDeck {
-                                            channel_uuid: ch.uuid.clone(),
-                                            from_idx,
-                                            to_idx: last,
-                                        });
-                                    }
+                                if let Some(from_idx) = from_idx
+                                    && from_idx != last
+                                {
+                                    actions.commands.push(EngineCommand::ReorderDeck {
+                                        channel_uuid: ch.uuid.clone(),
+                                        from_idx,
+                                        to_idx: last,
+                                    });
                                 }
                             }
                         }
@@ -788,13 +788,13 @@ pub(super) fn render_channel_column(
                             )
                         });
                         drop_resp.context_menu(|ui| channel_context_menu(ui, data, actions, ch));
-                        if let Some(payload) = drop_resp.dnd_release_payload::<DeckDrag>() {
-                            if !ch.decks.iter().any(|d| d.uuid == payload.deck_uuid) {
-                                actions.commands.push(EngineCommand::MoveDeck {
-                                    deck_uuid: payload.deck_uuid.clone(),
-                                    dst_channel_uuid: ch.uuid.clone(),
-                                });
-                            }
+                        if let Some(payload) = drop_resp.dnd_release_payload::<DeckDrag>()
+                            && !ch.decks.iter().any(|d| d.uuid == payload.deck_uuid)
+                        {
+                            actions.commands.push(EngineCommand::MoveDeck {
+                                deck_uuid: payload.deck_uuid.clone(),
+                                dst_channel_uuid: ch.uuid.clone(),
+                            });
                         }
 
                         // Channel FX chain (compact) — clickable to select channel
@@ -1077,25 +1077,24 @@ pub(super) fn render_deck_thumbnail(
         }
 
         // While dragging, show a translucent ghost at the cursor
-        if card_resp.dragged() {
-            if let Some(pointer_pos) = ui.ctx().pointer_interact_pos() {
-                let ghost_rect = egui::Rect::from_center_size(pointer_pos, card_size);
-                let layer =
-                    egui::LayerId::new(egui::Order::Tooltip, ui.id().with("deck_drag_ghost"));
-                let painter = ui.ctx().layer_painter(layer);
-                painter.rect_filled(
-                    ghost_rect,
-                    4.0,
-                    egui::Color32::from_rgba_unmultiplied(80, 120, 200, 120),
-                );
-                painter.text(
-                    ghost_rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    &deck.name,
-                    egui::FontId::proportional(11.0),
-                    egui::Color32::WHITE,
-                );
-            }
+        if card_resp.dragged()
+            && let Some(pointer_pos) = ui.ctx().pointer_interact_pos()
+        {
+            let ghost_rect = egui::Rect::from_center_size(pointer_pos, card_size);
+            let layer = egui::LayerId::new(egui::Order::Tooltip, ui.id().with("deck_drag_ghost"));
+            let painter = ui.ctx().layer_painter(layer);
+            painter.rect_filled(
+                ghost_rect,
+                4.0,
+                egui::Color32::from_rgba_unmultiplied(80, 120, 200, 120),
+            );
+            painter.text(
+                ghost_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                &deck.name,
+                egui::FontId::proportional(11.0),
+                egui::Color32::WHITE,
+            );
         }
 
         // Draw card background + border
@@ -1168,54 +1167,51 @@ pub(super) fn render_deck_thumbnail(
         }
 
         // Auto-transition indicator overlay on preview
-        if let Some(ref at) = deck.auto_transition {
-            if at.enabled {
-                let (icon, color) = match at.phase {
-                    crate::channel::DeckTransitionPhase::Inactive => ("⏹", egui::Color32::GRAY),
-                    crate::channel::DeckTransitionPhase::Playing { .. } => {
-                        ("▶", egui::Color32::from_rgb(80, 200, 80))
-                    }
-                    crate::channel::DeckTransitionPhase::Transitioning { .. } => {
-                        ("🔄", egui::Color32::from_rgb(200, 160, 40))
-                    }
-                    crate::channel::DeckTransitionPhase::Done => {
-                        ("✓", egui::Color32::from_rgb(100, 100, 100))
-                    }
-                };
-                // Small badge in top-right of preview
-                ui.painter().text(
-                    egui::pos2(preview_rect.max.x - 2.0, preview_rect.min.y + 2.0),
-                    egui::Align2::RIGHT_TOP,
-                    icon,
-                    egui::FontId::proportional(10.0),
-                    color,
+        if let Some(ref at) = deck.auto_transition
+            && at.enabled
+        {
+            let (icon, color) = match at.phase {
+                crate::channel::DeckTransitionPhase::Inactive => ("⏹", egui::Color32::GRAY),
+                crate::channel::DeckTransitionPhase::Playing { .. } => {
+                    ("▶", egui::Color32::from_rgb(80, 200, 80))
+                }
+                crate::channel::DeckTransitionPhase::Transitioning { .. } => {
+                    ("🔄", egui::Color32::from_rgb(200, 160, 40))
+                }
+                crate::channel::DeckTransitionPhase::Done => {
+                    ("✓", egui::Color32::from_rgb(100, 100, 100))
+                }
+            };
+            // Small badge in top-right of preview
+            ui.painter().text(
+                egui::pos2(preview_rect.max.x - 2.0, preview_rect.min.y + 2.0),
+                egui::Align2::RIGHT_TOP,
+                icon,
+                egui::FontId::proportional(10.0),
+                color,
+            );
+            // Progress bar at bottom of preview during transition
+            if let crate::channel::DeckTransitionPhase::Transitioning { progress } = at.phase {
+                let bar_h = 3.0;
+                let bar_rect = egui::Rect::from_min_size(
+                    egui::pos2(preview_rect.min.x, preview_rect.max.y - bar_h),
+                    egui::vec2(preview_rect.width() * progress as f32, bar_h),
                 );
-                // Progress bar at bottom of preview during transition
-                if let crate::channel::DeckTransitionPhase::Transitioning { progress } = at.phase {
+                ui.painter()
+                    .rect_filled(bar_rect, 0.0, egui::Color32::from_rgb(200, 160, 40));
+            }
+            // Countdown bar during playing phase
+            if let crate::channel::DeckTransitionPhase::Playing { elapsed } = at.phase {
+                let total = at.play_duration_value;
+                if total > 0.0 {
+                    let frac = (elapsed / total).min(1.0) as f32;
                     let bar_h = 3.0;
                     let bar_rect = egui::Rect::from_min_size(
                         egui::pos2(preview_rect.min.x, preview_rect.max.y - bar_h),
-                        egui::vec2(preview_rect.width() * progress as f32, bar_h),
+                        egui::vec2(preview_rect.width() * frac, bar_h),
                     );
                     ui.painter()
-                        .rect_filled(bar_rect, 0.0, egui::Color32::from_rgb(200, 160, 40));
-                }
-                // Countdown bar during playing phase
-                if let crate::channel::DeckTransitionPhase::Playing { elapsed } = at.phase {
-                    let total = at.play_duration_value;
-                    if total > 0.0 {
-                        let frac = (elapsed / total).min(1.0) as f32;
-                        let bar_h = 3.0;
-                        let bar_rect = egui::Rect::from_min_size(
-                            egui::pos2(preview_rect.min.x, preview_rect.max.y - bar_h),
-                            egui::vec2(preview_rect.width() * frac, bar_h),
-                        );
-                        ui.painter().rect_filled(
-                            bar_rect,
-                            0.0,
-                            egui::Color32::from_rgb(80, 200, 80),
-                        );
-                    }
+                        .rect_filled(bar_rect, 0.0, egui::Color32::from_rgb(80, 200, 80));
                 }
             }
         }

@@ -8,8 +8,8 @@ pub(crate) mod face_detect;
 pub(crate) mod traits;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -239,10 +239,8 @@ impl DeckAnalyzers {
             false
         };
 
-        if should_remove {
-            if let Some(inst) = self.instances.remove(analyzer_type) {
-                stop_instance(inst, analyzer_type, "");
-            }
+        if should_remove && let Some(inst) = self.instances.remove(analyzer_type) {
+            stop_instance(inst, analyzer_type, "");
         }
     }
 

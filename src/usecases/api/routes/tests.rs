@@ -9,8 +9,8 @@ mod tests {
     use tower::ServiceExt;
 
     use crate::engine::CommandResult;
-    use crate::usecases::api::projection::tests::make_test_state;
     use crate::usecases::api::SharedState;
+    use crate::usecases::api::projection::tests::make_test_state;
 
     /// Create a router with populated state and a mock command processor
     /// that auto-replies `CommandResult::Ok` to every command.

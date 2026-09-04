@@ -14,14 +14,14 @@
 
 use std::collections::HashMap;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, Mutex, OnceLock,
+    atomic::{AtomicBool, Ordering},
 };
 use std::thread::JoinHandle;
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{extern_class, msg_send, AnyThread, ClassType};
+use objc2::{AnyThread, ClassType, extern_class, msg_send};
 use objc2_foundation::{NSArray, NSDictionary, NSPoint, NSRect, NSSize, NSString};
 use objc2_metal::{
     MTLCommandBuffer, MTLCommandQueue, MTLCreateSystemDefaultDevice, MTLDevice, MTLOrigin,

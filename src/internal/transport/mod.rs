@@ -515,12 +515,12 @@ impl Transport {
         self.position += dt * self.rate;
         self.has_run = true;
 
-        if let Some(region) = self.loop_region {
-            if self.position >= region.end {
-                let overshoot = (self.position - region.end) % region.span();
-                self.position = region.start + overshoot;
-                self.discontinuity = true;
-            }
+        if let Some(region) = self.loop_region
+            && self.position >= region.end
+        {
+            let overshoot = (self.position - region.end) % region.span();
+            self.position = region.start + overshoot;
+            self.discontinuity = true;
         }
     }
 }

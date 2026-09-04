@@ -248,7 +248,7 @@ impl Surface {
     /// bbox), so the shape is preserved. No-op if the warp is already bezier.
     /// Meaningful only while unbound (manual editing); the caller ensures that.
     pub fn convert_warp_to_bezier(&mut self) {
-        use crate::renderer::warp::{BezierWarp, WarpMode, DEFAULT_BEZIER_TESS};
+        use crate::renderer::warp::{BezierWarp, DEFAULT_BEZIER_TESS, WarpMode};
         let base = self.warp_or_identity();
         if matches!(base, WarpMode::Bezier(_)) {
             return;

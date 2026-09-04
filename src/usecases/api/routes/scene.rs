@@ -1,12 +1,12 @@
 //! Scene state routes: GET /api/scene/*
 
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::Json;
 
-use crate::usecases::api::projection::{self, StateReadError};
 use crate::usecases::api::SharedState;
+use crate::usecases::api::projection::{self, StateReadError};
 
 fn read_or_error(
     state: &SharedState,

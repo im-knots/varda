@@ -4,10 +4,10 @@ use std::io::Cursor;
 
 use usvg::tiny_skia_path;
 
-use super::curve::{quad_to_cubic, PathSegment, SurfacePath};
+use super::curve::{PathSegment, SurfacePath, quad_to_cubic};
 use super::detect::{
-    check_circularity, detect_contours, shoelace_area, suggest_name, DetectedContour,
-    DetectionParams, DetectionResult,
+    DetectedContour, DetectionParams, DetectionResult, check_circularity, detect_contours,
+    shoelace_area, suggest_name,
 };
 
 // ── Error type ─────────────────────────────────────────────────────
@@ -243,8 +243,8 @@ pub fn detect_from_svg(svg_data: &[u8]) -> Result<DetectionResult, ImportError> 
 fn walk_svg_group(group: &usvg::Group, acc: usvg::Transform, out: &mut Vec<SurfacePath>) {
     for node in group.children() {
         match node {
-            usvg::Node::Group(ref g) => walk_svg_group(g, acc.pre_concat(g.transform()), out),
-            usvg::Node::Path(ref p) => {
+            usvg::Node::Group(g) => walk_svg_group(g, acc.pre_concat(g.transform()), out),
+            usvg::Node::Path(p) => {
                 let transformed = if acc.is_identity() {
                     None
                 } else {
@@ -926,18 +926,26 @@ mod tests {
             .iter()
             .map(|c| c.suggested_name.as_str())
             .collect();
-        assert!(names
-            .iter()
-            .any(|n| n.contains("top") && n.contains("left")));
-        assert!(names
-            .iter()
-            .any(|n| n.contains("top") && n.contains("right")));
-        assert!(names
-            .iter()
-            .any(|n| n.contains("bottom") && n.contains("left")));
-        assert!(names
-            .iter()
-            .any(|n| n.contains("bottom") && n.contains("right")));
+        assert!(
+            names
+                .iter()
+                .any(|n| n.contains("top") && n.contains("left"))
+        );
+        assert!(
+            names
+                .iter()
+                .any(|n| n.contains("top") && n.contains("right"))
+        );
+        assert!(
+            names
+                .iter()
+                .any(|n| n.contains("bottom") && n.contains("left"))
+        );
+        assert!(
+            names
+                .iter()
+                .any(|n| n.contains("bottom") && n.contains("right"))
+        );
     }
 
     #[test]
