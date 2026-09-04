@@ -373,10 +373,10 @@ impl CastState {
             return false;
         };
         let now = Instant::now();
-        if let Some(prev) = *last {
-            if now.duration_since(prev) < *min_interval {
-                return false;
-            }
+        if let Some(prev) = *last
+            && now.duration_since(prev) < *min_interval
+        {
+            return false;
         }
         *last = Some(now);
         true

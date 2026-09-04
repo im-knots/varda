@@ -491,10 +491,10 @@ fn create_d3d_device() -> Result<(ID3D11Device, ID3D11DeviceContext), CaptureErr
                 Some(&raw mut context),
             )
         };
-        if hr.is_ok() {
-            if let (Some(device), Some(context)) = (device, context) {
-                return Ok((device, context));
-            }
+        if hr.is_ok()
+            && let (Some(device), Some(context)) = (device, context)
+        {
+            return Ok((device, context));
         }
     }
     Err(CaptureError::Backend(
@@ -539,10 +539,10 @@ fn on_frame_arrived(
             return;
         };
         let now = Instant::now();
-        if let Some(prev) = *last {
-            if now.duration_since(prev) < *min_interval {
-                return;
-            }
+        if let Some(prev) = *last
+            && now.duration_since(prev) < *min_interval
+        {
+            return;
         }
         *last = Some(now);
     }
@@ -560,10 +560,10 @@ fn on_frame_arrived(
         return;
     };
 
-    if let Some(captured) = read_back(context, &texture, geometry) {
-        if let Ok(mut slot) = state.slot.lock() {
-            *slot = Some(captured);
-        }
+    if let Some(captured) = read_back(context, &texture, geometry)
+        && let Ok(mut slot) = state.slot.lock()
+    {
+        *slot = Some(captured);
     }
 }
 

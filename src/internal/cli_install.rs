@@ -140,10 +140,10 @@ fn install_linux(exe: &Path) -> Result<(), String> {
 
     if link_path.exists() {
         // Check if symlink already points to this AppImage
-        if let Ok(target) = std::fs::read_link(&link_path) {
-            if target == appimage_path {
-                return Ok(()); // already installed
-            }
+        if let Ok(target) = std::fs::read_link(&link_path)
+            && target == appimage_path
+        {
+            return Ok(()); // already installed
         }
         return Err("existing ~/.local/bin/varda not managed by this install".into());
     }
@@ -193,8 +193,12 @@ mod tests {
     #[test]
     #[cfg(target_os = "linux")]
     fn linux_rejects_non_appimage() {
-        // Ensure APPIMAGE is not set
-        std::env::remove_var("APPIMAGE");
+        // Ensure APPIMAGE is not set.
+        // SAFETY: no other test reads or writes APPIMAGE, so this cannot race
+        // another thread in the harness pool.
+        unsafe {
+            std::env::remove_var("APPIMAGE");
+        }
         let exe = std::env::current_exe().unwrap();
         let result = install_linux(&exe);
         assert!(result.is_err());
