@@ -5,19 +5,19 @@
     "CATEGORIES": ["Generator", "Generative"],
     "INPUTS": [
         {"NAME": "speed",          "TYPE": "float", "DEFAULT": 0.5,  "MIN": 0.0,  "MAX": 3.0,  "LABEL": "Speed"},
-        {"NAME": "rotation",       "TYPE": "float", "DEFAULT": 0.0,  "MIN": 0.0,  "MAX": 1.0,  "LABEL": "Rotation"},
-        {"NAME": "zoom",           "TYPE": "float", "DEFAULT": 1.0,  "MIN": 0.3,  "MAX": 3.0,  "LABEL": "Zoom"},
-        {"NAME": "tracking",       "TYPE": "float", "DEFAULT": 0.0,  "MIN": 0.0,  "MAX": 1.0,  "LABEL": "Cluster Tracking"},
+        {"NAME": "rotation",       "TYPE": "float", "GROUP": "Camera", "DEFAULT": 0.0,  "MIN": 0.0,  "MAX": 1.0,  "LABEL": "Rotation"},
+        {"NAME": "zoom",           "TYPE": "float", "GROUP": "Camera", "DEFAULT": 1.0,  "MIN": 0.3,  "MAX": 3.0,  "LABEL": "Zoom"},
+        {"NAME": "tracking",       "TYPE": "float", "GROUP": "Camera", "DEFAULT": 0.0,  "MIN": 0.0,  "MAX": 1.0,  "LABEL": "Cluster Tracking"},
         {"NAME": "node_count",     "TYPE": "float", "DEFAULT": 32.0, "MIN": 3.0,  "MAX": 48.0, "LABEL": "Node Count"},
-        {"NAME": "connect_dist",   "TYPE": "float", "DEFAULT": 0.5,  "MIN": 0.1,  "MAX": 1.5,  "LABEL": "Connect Distance"},
-        {"NAME": "max_connections","TYPE": "float", "DEFAULT": 6.0,  "MIN": 1.0,  "MAX": 20.0, "LABEL": "Max Connections"},
-        {"NAME": "stickiness",     "TYPE": "float", "DEFAULT": 0.5,  "MIN": 0.0,  "MAX": 1.0,  "LABEL": "Stickiness"},
-        {"NAME": "attraction",     "TYPE": "float", "DEFAULT": 0.5,  "MIN": 0.0,  "MAX": 2.0,  "LABEL": "Attraction"},
+        {"NAME": "connect_dist",   "TYPE": "float", "GROUP": "Form", "DEFAULT": 0.5,  "MIN": 0.1,  "MAX": 1.5,  "LABEL": "Connect Distance"},
+        {"NAME": "max_connections","TYPE": "float", "GROUP": "Form", "DEFAULT": 6.0,  "MIN": 1.0,  "MAX": 20.0, "LABEL": "Max Connections"},
+        {"NAME": "stickiness",     "TYPE": "float", "GROUP": "Form", "DEFAULT": 0.5,  "MIN": 0.0,  "MAX": 1.0,  "LABEL": "Stickiness"},
+        {"NAME": "attraction",     "TYPE": "float", "GROUP": "Form", "DEFAULT": 0.5,  "MIN": 0.0,  "MAX": 2.0,  "LABEL": "Attraction"},
         {"NAME": "node_size",      "TYPE": "float", "DEFAULT": 0.015,"MIN": 0.004,"MAX": 0.05, "LABEL": "Node Size"},
-        {"NAME": "edge_width",     "TYPE": "float", "DEFAULT": 0.003,"MIN": 0.001,"MAX": 0.01, "LABEL": "Edge Width"},
-        {"NAME": "hue_shift",      "TYPE": "float", "DEFAULT": 0.05, "MIN": 0.0,  "MAX": 0.3,  "LABEL": "Edge Hue Shift"},
-        {"NAME": "color_base",     "TYPE": "color", "DEFAULT": [0.0, 1.0, 0.8, 1.0], "LABEL": "Base Color"},
-        {"NAME": "bg_color",       "TYPE": "color", "DEFAULT": [0.02, 0.03, 0.06, 1.0], "LABEL": "Background"}
+        {"NAME": "edge_width",     "TYPE": "float", "GROUP": "Form", "DEFAULT": 0.003,"MIN": 0.001,"MAX": 0.01, "LABEL": "Edge Width"},
+        {"NAME": "hue_shift",      "TYPE": "float", "GROUP": "Palette", "DEFAULT": 0.05, "MIN": 0.0,  "MAX": 0.3,  "LABEL": "Edge Hue Shift"},
+        {"NAME": "color_base",     "TYPE": "color", "GROUP": "Palette", "DEFAULT": [0.0, 1.0, 0.8, 1.0], "LABEL": "Base Color"},
+        {"NAME": "bg_color",       "TYPE": "color", "GROUP": "Palette", "DEFAULT": [0.02, 0.03, 0.06, 1.0], "LABEL": "Background"}
     ],
     "PASSES": [
         {"TARGET": "stateBuffer", "PERSISTENT": true, "FLOAT": true, "WIDTH": "64", "HEIGHT": "1"}

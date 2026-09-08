@@ -89,6 +89,31 @@ Three rules, and no other knobs:
 - **The first named group is open, the rest start closed.** Opening a fifty-parameter shader shows a
   short list of section headers instead of a long scroll.
 
+### Group names in the shipped library
+
+`GROUP` accepts any string, so a shader you write or download can name its sections whatever it
+likes. The shaders Varda ships stick to a fixed vocabulary, because group names also fill the Random
+and Mutate scope selector and a performer should not have to relearn them per shader:
+
+`Camera`, `Motion`, `Form`, `Detail`, `Lighting`, `Palette`, `Grade`, `Mask`, `Audio`.
+
+`Form` is the geometry or formula that decides what the thing is, `Detail` is the quality and
+stability knobs (ray steps, iteration caps, epsilon), and `Grade` is the post treatment (brightness,
+contrast, saturation, bloom, vignette). Most shaders use four to six of the nine. Follow the same
+list in your own shaders and they will read like the built-in ones; ignore it and nothing breaks.
+
+Three habits go with it, and `tests/shader_param_grouping_guard.rs` holds the shipped library to
+them:
+
+- **A shader with fourteen or more parameters declares groups.** Below that, a flat list is fine.
+- **Leave two to five parameters ungrouped.** They render first and cannot be collapsed, so that is
+  your mid-set row. A shader with nothing ungrouped puts every control behind a triangle.
+- **No group with a single member.** A header over one row costs a click and saves nothing.
+
+One rule is not stylistic. If you use the `<prefix>_mode` hide convention, **put the gate bool in the
+same group as the parameters it hides.** Otherwise the performer gets a section that will not open
+and the switch that opens it is somewhere else.
+
 `GROUP` is presentation only. It does not change parameter names, modulation keys, MIDI or OSC paths,
 or anything that gets persisted, so adding groups to an existing shader is safe and invisible to any
 scene or preset already using it. It is also optional: a shader that declares no groups renders as

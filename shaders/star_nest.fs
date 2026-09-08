@@ -5,19 +5,19 @@
     "CATEGORIES": ["Generator", "Generative"],
     "INPUTS": [
         {"NAME": "speed", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 3.0, "LABEL": "Speed"},
-        {"NAME": "iterations", "TYPE": "float", "DEFAULT": 17.0, "MIN": 4.0, "MAX": 24.0, "LABEL": "Fractal Iterations"},
-        {"NAME": "formuparam", "TYPE": "float", "DEFAULT": 0.53, "MIN": 0.3, "MAX": 0.9, "LABEL": "Fractal Detail"},
-        {"NAME": "volsteps", "TYPE": "float", "DEFAULT": 20.0, "MIN": 8.0, "MAX": 40.0, "LABEL": "Volume Steps"},
-        {"NAME": "stepsize", "TYPE": "float", "DEFAULT": 0.1, "MIN": 0.02, "MAX": 0.3, "LABEL": "Step Size"},
-        {"NAME": "zoom", "TYPE": "float", "DEFAULT": 0.8, "MIN": 0.2, "MAX": 2.0, "LABEL": "Zoom"},
-        {"NAME": "tile", "TYPE": "float", "DEFAULT": 0.85, "MIN": 0.3, "MAX": 1.5, "LABEL": "Tiling"},
-        {"NAME": "drift_speed", "TYPE": "float", "DEFAULT": 0.01, "MIN": 0.0, "MAX": 0.05, "LABEL": "Drift Speed"},
+        {"NAME": "iterations", "TYPE": "float", "GROUP": "Form", "DEFAULT": 17.0, "MIN": 4.0, "MAX": 24.0, "LABEL": "Fractal Iterations"},
+        {"NAME": "formuparam", "TYPE": "float", "GROUP": "Form", "DEFAULT": 0.53, "MIN": 0.3, "MAX": 0.9, "LABEL": "Fractal Detail"},
+        {"NAME": "volsteps", "TYPE": "float", "GROUP": "Detail", "DEFAULT": 20.0, "MIN": 8.0, "MAX": 40.0, "LABEL": "Volume Steps"},
+        {"NAME": "stepsize", "TYPE": "float", "GROUP": "Detail", "DEFAULT": 0.1, "MIN": 0.02, "MAX": 0.3, "LABEL": "Step Size"},
+        {"NAME": "zoom", "TYPE": "float", "GROUP": "Camera", "DEFAULT": 0.8, "MIN": 0.2, "MAX": 2.0, "LABEL": "Zoom"},
+        {"NAME": "tile", "TYPE": "float", "GROUP": "Form", "DEFAULT": 0.85, "MIN": 0.3, "MAX": 1.5, "LABEL": "Tiling"},
+        {"NAME": "drift_speed", "TYPE": "float", "GROUP": "Camera", "DEFAULT": 0.01, "MIN": 0.0, "MAX": 0.05, "LABEL": "Drift Speed"},
         {"NAME": "brightness", "TYPE": "float", "DEFAULT": 0.0015, "MIN": 0.0005, "MAX": 0.005, "LABEL": "Brightness"},
         {"NAME": "darkmatter", "TYPE": "float", "DEFAULT": 0.3, "MIN": 0.0, "MAX": 1.0, "LABEL": "Dark Matter"},
-        {"NAME": "distfading", "TYPE": "float", "DEFAULT": 0.73, "MIN": 0.3, "MAX": 0.95, "LABEL": "Distance Fading"},
-        {"NAME": "saturation", "TYPE": "float", "DEFAULT": 0.85, "MIN": 0.0, "MAX": 2.0, "LABEL": "Saturation"},
-        {"NAME": "look_at", "TYPE": "point2D", "DEFAULT": [0.0, 0.0], "LABEL": "Look At"},
-        {"NAME": "tint", "TYPE": "color", "DEFAULT": [1.0, 1.0, 1.0, 1.0], "LABEL": "Tint"}
+        {"NAME": "distfading", "TYPE": "float", "GROUP": "Grade", "DEFAULT": 0.73, "MIN": 0.3, "MAX": 0.95, "LABEL": "Distance Fading"},
+        {"NAME": "saturation", "TYPE": "float", "GROUP": "Grade", "DEFAULT": 0.85, "MIN": 0.0, "MAX": 2.0, "LABEL": "Saturation"},
+        {"NAME": "look_at", "TYPE": "point2D", "GROUP": "Camera", "DEFAULT": [0.0, 0.0], "LABEL": "Look At"},
+        {"NAME": "tint", "TYPE": "color", "GROUP": "Grade", "DEFAULT": [1.0, 1.0, 1.0, 1.0], "LABEL": "Tint"}
     ],
     "PHASE_INPUTS": [{"PARAM": "speed", "MULTIPLY_BY": "drift_speed", "INDEX": 0, "SCALE": 1.0}]
 }*/
