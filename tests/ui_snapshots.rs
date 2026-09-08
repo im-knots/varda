@@ -17,6 +17,7 @@
 use std::rc::Rc;
 
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use varda::usecases::ui::panels::render_ui;
 use varda::usecases::ui::{UIActions, UIData};
 
@@ -225,6 +226,128 @@ fn snapshot_bottom_bar_video_playback() {
         return;
     };
     harness.snapshot("bottom_bar_video_playback");
+}
+
+/// Drag the bottom panel to its maximum height.
+///
+/// It defaults to 180 points, which fits the shared fixture's single parameter
+/// and nothing else: a grouped list renders below the fold and both goldens
+/// come out identical. Seeding the stored panel state is the only way to reach
+/// the size from a headless harness, since the alternative is synthesising a
+/// drag on the resize separator.
+fn expand_bottom_panel(harness: &mut Harness<'static, UIActions>) {
+    const PANEL_MAX: f32 = 400.0;
+    harness.ctx.data_mut(|d| {
+        d.insert_persisted(
+            egui::Id::new("bottom_panel"),
+            egui::PanelState {
+                outer_rect: egui::Rect::from_min_size(
+                    egui::pos2(0.0, SIZE.y - PANEL_MAX),
+                    egui::vec2(SIZE.x, PANEL_MAX),
+                ),
+            },
+        );
+    });
+    harness.run();
+}
+
+/// A grouped shader in the params column, with `long` and `point2D` rows.
+///
+/// The shared fixture's deck declares one ungrouped float, so without this no
+/// golden covers a section header, the first-group-open rule, or the two widget
+/// types that `render_params` only learned to draw when groups landed. Shaped
+/// after `shaders/fractal_mandelbulb.fs`, which is what the rule actually meets
+/// in the shipped library. See /spec/parameter-inspector.md.
+fn grouped_param_fixture() -> UIData {
+    use varda::params::ParamValue;
+    use varda::usecases::ui::{ParamChoiceUI, ParamUIInfo};
+
+    let param = |name: &str, group: Option<&str>, value: ParamValue| ParamUIInfo {
+        name: name.to_string(),
+        label: Some(
+            name.split('_')
+                .map(|w| {
+                    let mut c = w.chars();
+                    c.next().map_or_else(String::new, |f| {
+                        f.to_uppercase().collect::<String>() + c.as_str()
+                    })
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
+        ),
+        value,
+        min: Some(0.0),
+        max: Some(10.0),
+        group: group.map(ToString::to_string),
+        choices: Vec::new(),
+    };
+
+    let mut data = UIData::test_fixture();
+    data.selected_deck = Some((0, 0));
+    data.selected_channel = None;
+    data.selected_master = false;
+
+    let mut params = vec![
+        param("iterations", None, ParamValue::Float(8.0)),
+        param("fly_speed", None, ParamValue::Float(0.4)),
+        param("power", Some("Form"), ParamValue::Float(8.0)),
+        param("bailout", Some("Form"), ParamValue::Float(4.0)),
+        param("cam_x", Some("Camera"), ParamValue::Float(0.0)),
+        param("fov", Some("Camera"), ParamValue::Float(1.0)),
+        param("look_at", Some("Camera"), ParamValue::Point2D([0.25, -0.5])),
+        param("ao_strength", Some("Lighting"), ParamValue::Float(0.7)),
+        param("sun_elev", Some("Lighting"), ParamValue::Float(0.6)),
+        param(
+            "color1",
+            Some("Palette"),
+            ParamValue::Color([0.0, 0.8, 1.0, 1.0]),
+        ),
+        param("shadows", Some("Lighting"), ParamValue::Bool(true)),
+    ];
+    let mut color_mode = param("color_mode", Some("Palette"), ParamValue::Long(1));
+    color_mode.choices = vec![
+        ParamChoiceUI {
+            value: 0,
+            label: "Orbit Trap".to_string(),
+        },
+        ParamChoiceUI {
+            value: 1,
+            label: "Normal".to_string(),
+        },
+        ParamChoiceUI {
+            value: 2,
+            label: "Depth".to_string(),
+        },
+    ];
+    params.push(color_mode);
+
+    data.channels[0].decks[0].generator.params = params;
+    data
+}
+
+/// Default state: ungrouped rows in view, Form open because it appears first,
+/// every other section closed.
+#[test]
+fn snapshot_bottom_bar_param_groups() {
+    let Some(mut harness) = snapshot_harness(grouped_param_fixture()) else {
+        return;
+    };
+    expand_bottom_panel(&mut harness);
+    harness.snapshot("bottom_bar_param_groups");
+}
+
+/// Every section closed, which is what a fifty-parameter shader is supposed to
+/// be able to look like. Reached by closing Form, the one group that opens by
+/// default.
+#[test]
+fn snapshot_bottom_bar_param_groups_collapsed() {
+    let Some(mut harness) = snapshot_harness(grouped_param_fixture()) else {
+        return;
+    };
+    expand_bottom_panel(&mut harness);
+    harness.get_by_label("Form").click();
+    harness.run();
+    harness.snapshot("bottom_bar_param_groups_collapsed");
 }
 
 #[test]
