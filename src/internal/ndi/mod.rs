@@ -152,10 +152,28 @@ impl NdiManager {
         Self::resolve_presentation_for_capability(request, self.send_capability)
     }
 
+    /// Every mode with the reason this sender cannot deliver it, from the live
+    /// send capability.
+    ///
+    /// NDI is the one headless target whose capability is not derivable from the
+    /// target alone: it depends on the runtime the SDK loaded. So this comes from
+    /// here, exactly as `resolved_presentation` already does.
+    /// See /spec/presentation-mode-offering.md.
+    #[must_use]
+    pub fn mode_availability(&self) -> Vec<crate::engine::value::render::ModeAvailability> {
+        Self::capabilities_for(self.send_capability).mode_availability()
+    }
+
     fn resolve_presentation_for_capability(
         request: PresentationRequest,
         capability: sdk::NdiSendCapability,
     ) -> ResolvedPresentation {
+        Self::capabilities_for(capability)
+            .resolve(request)
+            .expect("NDI always provides the UYVY fallback")
+    }
+
+    fn capabilities_for(capability: sdk::NdiSendCapability) -> PresentationCapabilities {
         let mut formats = Vec::with_capacity(2);
         if capability.p216_confirmed() {
             formats.push(PresentationFormat {
@@ -175,8 +193,6 @@ impl NdiManager {
         });
 
         PresentationCapabilities::new(formats, Some(capability.p216_unavailable_reason()))
-            .resolve(request)
-            .expect("NDI always provides the UYVY fallback")
     }
 
     pub fn sources(&self) -> &[NdiSource] {

@@ -359,9 +359,7 @@ impl VardaApp {
 
         // Update Syphon client frames
         #[cfg(target_os = "macos")]
-        self.external_io
-            .syphon_manager
-            .update(&self.context.device, &self.context.queue);
+        self.external_io.syphon_manager.update(&self.context.device);
 
         // Update stream receiver frames
         self.external_io.stream_manager.update(&self.context.queue);

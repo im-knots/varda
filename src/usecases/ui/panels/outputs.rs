@@ -166,7 +166,27 @@ fn render_presentation_controls(
     };
 
     let request = output.presentation_request;
-    let current_mode = request.mode();
+    let requested_mode = request.mode();
+    // Every mode is listed; the ones this output cannot deliver are disabled and
+    // name their obstacle on hover, which is usually a codec set elsewhere on this
+    // same card. Hiding them was honest but silent, and left a user who knows
+    // their protocol carries HDR with no idea what to change.
+    //
+    // When a stored request is not deliverable, because the target or codec
+    // changed under it, the delivered mode is shown as the selection and the
+    // request is left alone, so it comes back the moment the output can carry it
+    // again. See /spec/presentation-mode-offering.md.
+    let availability = &output.mode_availability;
+    let deliverable = |mode: PresentationMode| {
+        availability
+            .iter()
+            .any(|entry| entry.mode == mode && entry.is_available())
+    };
+    let current_mode = if deliverable(requested_mode) {
+        requested_mode
+    } else {
+        output.resolved_presentation.mode()
+    };
 
     ui.add_space(2.0);
     ui.horizontal(|ui| {
@@ -175,8 +195,17 @@ fn render_presentation_controls(
             .selected_text(egui::RichText::new(current_mode.label()).small())
             .width(100.0)
             .show_ui(ui, |ui| {
-                for mode in PresentationMode::ALL {
-                    if ui
+                for entry in availability {
+                    let mode = entry.mode;
+                    if let Some(reason) = &entry.blocked {
+                        // Disabled rather than absent: it cannot be selected into a
+                        // wrong state, and it says what to change.
+                        ui.add_enabled(false, egui::Button::selectable(false, mode.label()))
+                            .on_disabled_hover_text(format!(
+                                "{}\n\nUnavailable: {reason}",
+                                mode.description()
+                            ));
+                    } else if ui
                         .selectable_label(current_mode == mode, mode.label())
                         .on_hover_text(mode.description())
                         .clicked()
@@ -1379,6 +1408,16 @@ mod tests {
             rotation: crate::renderer::context::OutputRotation::default(),
             presentation_request: crate::engine::value::render::PresentationRequest::default(),
             resolved_presentation: resolved,
+            // Existing cases exercise the fallback line rather than the picker, so
+            // they keep an "everything deliverable" shape. The picker's own tests
+            // below override this.
+            mode_availability: crate::engine::value::render::PresentationMode::ALL
+                .into_iter()
+                .map(|mode| crate::engine::value::render::ModeAvailability {
+                    mode,
+                    blocked: None,
+                })
+                .collect(),
             tonemap_override: None,
             audio_passthrough: None,
             delivery: None,
@@ -1459,6 +1498,109 @@ mod tests {
         harness.run();
         harness.get_by_label("Delivering 8-bit SDR · BGRA8");
         harness.get_by_label("10-bit fallback: Syphon interoperability is limited to BGRA8");
+    }
+
+    // ── the offered set (/spec/presentation-mode-offering.md) ────────
+
+    /// An eight-bit-only output, with every other mode blocked and explained.
+    fn only_eight_bit_is_deliverable() -> Vec<crate::engine::value::render::ModeAvailability> {
+        use crate::engine::value::render::{ModeAvailability, PresentationMode};
+        PresentationMode::ALL
+            .into_iter()
+            .map(|mode| ModeAvailability {
+                mode,
+                blocked: (mode != PresentationMode::Sdr8)
+                    .then(|| "this codec is eight-bit".to_string()),
+            })
+            .collect()
+    }
+
+    /// The case that motivated this change, and its correction after the second
+    /// field report. An eight-bit-only output must not let you *select* HDR10,
+    /// but it must still show it and say why, because the obstacle is usually a
+    /// codec set elsewhere on the same card and hiding it teaches nothing.
+    #[test]
+    fn a_blocked_mode_is_shown_with_its_reason_but_cannot_be_selected() {
+        use crate::engine::value::render::PresentationMode;
+        let mut output =
+            sample_output(crate::engine::value::render::ResolvedPresentation::default());
+        output.mode_availability = only_eight_bit_is_deliverable();
+
+        let mut data = UIData::test_fixture();
+        data.outputs.push(output);
+        let mut actions = UIActions::new();
+        {
+            let mut harness = egui_kittest::Harness::builder()
+                .with_size(egui::vec2(420.0, 640.0))
+                .build_ui(|ui| {
+                    render_output_section(ui, &data, &mut actions);
+                });
+            harness.run();
+            // A ComboBox exposes its selected text as AccessKit `value`, not
+            // `label`, and its list renders only while open.
+            harness.get_by_value(PresentationMode::Sdr8.label()).click();
+            harness.run();
+
+            // Visible, so the user can see what they are missing...
+            let blocked = harness
+                .query_by_label(PresentationMode::Hdr10.label())
+                .expect("a blocked mode must still be listed, not hidden");
+            // ...and inert, so it cannot be selected into a state that would only
+            // produce a warning.
+            blocked.click();
+            harness.run();
+        }
+        assert!(
+            !actions.commands.iter().any(|command| matches!(
+                command,
+                EngineCommand::SetOutputPresentation { request, .. }
+                    if request.mode() == PresentationMode::Hdr10
+            )),
+            "clicking a blocked mode must not change the output's request"
+        );
+    }
+
+    /// A request the output can no longer carry is kept rather than clamped, and
+    /// the picker shows what is actually being delivered instead of a mode the
+    /// output is not producing.
+    #[test]
+    fn an_undeliverable_request_is_retained_and_the_delivered_mode_is_shown() {
+        use crate::engine::value::render::{
+            PresentationDepth, PresentationMode, PresentationRequest, PresentationTransfer,
+            ResolvedPresentation,
+        };
+        let mut output = sample_output(ResolvedPresentation {
+            requested: PresentationDepth::Sdr10,
+            resolved: PresentationDepth::Sdr8,
+            requested_transfer: PresentationTransfer::Hdr10Pq,
+            transfer: PresentationTransfer::Sdr,
+            fallback_reason: Some("this codec is eight-bit".into()),
+            ..ResolvedPresentation::default()
+        });
+        // The operator asked for HDR10 before the codec changed underneath them.
+        output.presentation_request =
+            PresentationRequest::default().with_mode(PresentationMode::Hdr10);
+        output.mode_availability = only_eight_bit_is_deliverable();
+
+        assert_eq!(
+            output.presentation_request.mode(),
+            PresentationMode::Hdr10,
+            "the stored request must survive so it returns when the output can carry it again"
+        );
+
+        let mut data = UIData::test_fixture();
+        data.outputs.push(output);
+        let mut actions = UIActions::new();
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(420.0, 640.0))
+            .build_ui(|ui| {
+                render_output_section(ui, &data, &mut actions);
+            });
+        harness.run();
+        // Selected text is the delivered mode, not the undeliverable request.
+        harness.get_by_value(PresentationMode::Sdr8.label());
+        // And the card still explains the difference, which is what the warning is for.
+        harness.get_by_label("HDR10 fallback: this codec is eight-bit");
     }
 
     #[test]

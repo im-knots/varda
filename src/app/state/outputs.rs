@@ -10,14 +10,20 @@ use crate::renderer::edge_blend::EdgeBlendMode;
 impl VardaApp {
     /// Set the output target for a windowed or headless output.
     pub fn cmd_set_output_target(&mut self, idx: usize, target: OutputTarget) -> CommandResult {
-        let ndi_resolution = matches!(&target, OutputTarget::NdiSend { .. }).then(|| {
+        // NDI capability comes from the loaded runtime rather than the target, so
+        // both its resolved presentation and its offered set are fetched here.
+        // See /spec/presentation-mode-offering.md.
+        let ndi_presentation = matches!(&target, OutputTarget::NdiSend { .. }).then(|| {
             let request = self
                 .output
                 .outputs
                 .get(idx)
                 .map(UnifiedOutput::presentation_request)
                 .unwrap_or_default();
-            self.external_io.ndi_manager.resolve_presentation(request)
+            (
+                self.external_io.ndi_manager.resolve_presentation(request),
+                self.external_io.ndi_manager.mode_availability(),
+            )
         });
         {
             let Some(output) = self.output.outputs.get_mut(idx) else {
@@ -66,8 +72,9 @@ impl VardaApp {
                         }
                         h.target = target;
                         h.set_presentation_request(&self.context.device, h.presentation_request);
-                        if let Some(resolved) = ndi_resolution {
+                        if let Some((resolved, availability)) = ndi_presentation {
                             h.set_resolved_presentation(&self.context.device, resolved);
+                            h.mode_availability = availability;
                         }
                     }
                 }
@@ -96,6 +103,7 @@ impl VardaApp {
                 .ndi_manager
                 .resolve_presentation(headless.presentation_request);
             headless.set_resolved_presentation(&self.context.device, resolved);
+            headless.mode_availability = self.external_io.ndi_manager.mode_availability();
         }
         log::info!("Created headless output '{name}'");
         self.output.outputs.push(UnifiedOutput::Headless(headless));

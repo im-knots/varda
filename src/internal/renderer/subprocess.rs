@@ -89,8 +89,17 @@ impl RecordingPlan {
             .transfer
             .is_hdr()
             .then(|| {
-                (!codec_supports_hdr10(codec))
-                    .then(|| format!("{codec} cannot carry HDR10; HEVC or AV1 is required"))
+                // EDR is display monitoring, not a delivery contract. Checked
+                // before the codec, because no codec makes it deliverable and
+                // "HEVC is required" would be a misleading answer.
+                (!request.transfer.is_deliverable())
+                    .then(|| {
+                        "EDR is a display monitoring contract and cannot be recorded".to_string()
+                    })
+                    .or_else(|| {
+                        (!codec_supports_hdr10(codec))
+                            .then(|| format!("{codec} cannot carry HDR10; HEVC or AV1 is required"))
+                    })
             })
             .flatten();
 
@@ -605,7 +614,11 @@ impl StreamingPlan {
         request: PresentationRequest,
         capabilities: StreamingCapabilities,
     ) -> Self {
-        let unavailable = if request.depth == PresentationDepth::Sdr10 {
+        let edr_blocked = (!request.transfer.is_deliverable())
+            .then(|| "EDR is a display monitoring contract and cannot be streamed".to_string());
+        let unavailable = if edr_blocked.is_some() {
+            edr_blocked
+        } else if request.depth == PresentationDepth::Sdr10 {
             match (protocol, &configured_codec) {
                 (_, StreamingCodec::H264) => {
                     Some("H.264 streaming is limited to eight-bit SDR".to_string())
@@ -644,8 +657,9 @@ impl StreamingPlan {
         };
         let use_ten_bit = request.depth == PresentationDepth::Sdr10 && unavailable.is_none();
         // HDR is a ten-bit contract, so whatever blocks ten bits blocks HDR and
-        // the reason above already names the real obstacle.
-        let use_hdr = request.transfer.is_hdr() && use_ten_bit;
+        // the reason above already names the real obstacle. EDR is excluded
+        // separately: it satisfies `is_hdr` but nothing can carry it.
+        let use_hdr = request.transfer.is_hdr() && request.transfer.is_deliverable() && use_ten_bit;
         let resolved_transfer = if use_hdr {
             request.transfer
         } else {

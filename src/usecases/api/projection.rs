@@ -263,6 +263,10 @@ pub(crate) mod tests {
                     tonemap_override: None,
                     resolved_presentation:
                         crate::engine::value::render::ResolvedPresentation::default(),
+                    mode_availability: vec![crate::engine::value::render::ModeAvailability {
+                        mode: crate::engine::value::render::PresentationMode::Sdr8,
+                        blocked: None,
+                    }],
                     audio_passthrough: None,
                     delivery: None,
                 }],
@@ -421,6 +425,10 @@ pub(crate) mod tests {
             calibration_mode: crate::renderer::context::CalibrationMode::Off,
             presentation_request: crate::engine::value::render::PresentationRequest::default(),
             resolved_presentation: crate::engine::value::render::ResolvedPresentation::default(),
+            mode_availability: vec![crate::engine::value::render::ModeAvailability {
+                mode: crate::engine::value::render::PresentationMode::Sdr8,
+                blocked: None,
+            }],
             tonemap_override: None,
             audio_passthrough: Some(AudioPassthroughSnapshot {
                 device: "Scarlett 2i2".into(),

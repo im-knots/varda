@@ -400,6 +400,7 @@ pub(crate) fn build_ui_data(
                 rotation: o.rotation(),
                 presentation_request: o.presentation_request(),
                 resolved_presentation: o.resolved_presentation().clone(),
+                mode_availability: o.mode_availability().to_vec(),
                 tonemap_override: o.tonemap_override(),
                 audio_passthrough,
                 delivery,

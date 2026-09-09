@@ -4584,3 +4584,78 @@ fn chaos_create_close_presentation_cycle() {
     app.render_mixer_frame();
     assert!(app.build_engine_state().outputs.windows.is_empty());
 }
+
+/// Reported from the field: a stream output offered only 8-bit even for protocols
+/// that carry HDR. Drives the real command path end to end, because the pure
+/// resolver already agreed and the question was whether the engine kept the
+/// offered set current when the codec changed.
+///
+/// See /spec/presentation-mode-offering.md.
+#[test]
+fn a_stream_outputs_offered_modes_track_its_codec_through_the_engine() {
+    use varda::engine::value::render::{PresentationMode, StreamingCodec};
+    use varda::renderer::context::OutputTarget;
+
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::CreateHeadlessOutput {
+            target: OutputTarget::HlsStream {
+                name: "offer-test".into(),
+                codec: StreamingCodec::H264,
+                short_segments: false,
+                audio_device: None,
+            },
+        },
+    );
+    let output_uuid = last_output_uuid(&mut app);
+
+    let offered = |app: &mut VardaApp| -> Vec<PresentationMode> {
+        app.build_engine_state()
+            .outputs
+            .windows
+            .iter()
+            .find(|o| o.uuid == output_uuid)
+            .expect("output present")
+            .mode_availability
+            .iter()
+            .filter(|entry| entry.is_available())
+            .map(|entry| entry.mode)
+            .collect()
+    };
+
+    // H.264 is eight-bit, so one mode is the correct answer here.
+    assert_eq!(
+        offered(&mut app),
+        vec![PresentationMode::Sdr8],
+        "H.264 HLS carries eight-bit only"
+    );
+
+    assert!(matches!(
+        send_cmd(
+            &mut app,
+            EngineCommand::SetOutputTarget {
+                output_uuid: output_uuid.clone(),
+                target: OutputTarget::HlsStream {
+                    name: "offer-test".into(),
+                    codec: StreamingCodec::H265,
+                    short_segments: false,
+                    audio_device: None,
+                },
+            },
+        ),
+        CommandResult::Ok
+    ));
+
+    let after = offered(&mut app);
+    assert!(
+        after.contains(&PresentationMode::Sdr10) && after.contains(&PresentationMode::Hdr10),
+        "switching HLS to HEVC must open up ten-bit and HDR10, got {after:?}"
+    );
+    assert!(
+        !after.contains(&PresentationMode::Edr),
+        "EDR is display monitoring and is never deliverable over HLS: {after:?}"
+    );
+}

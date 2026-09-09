@@ -14,7 +14,7 @@ Varda applies broadcast video workflows to live visuals. Sources (video, cameras
 
 - **Routing matrix**: Sources > Decks > Channels > Mixer > Surfaces > Outputs. Any source to any output, split, branch, or sub-mix at every junction
 - **Two views of one scene**: **Performance mode** is the mixer, played by hand with live performance controls. **Arrangement mode** is the same scene with a show timeline: regions say when each deck is up, automation curves draw any parameter over the timeline, cue points mark the moments worth jumping to, and the transport can chase SMPTE timecode. An edit in either view appears immediately in the other
-- **Sources**: video (HAP GPU-native + ffmpeg), cameras, GLSL shaders (generators/filters, ISF-style metadata), NDI, SRT, HLS, DASH, RTMP/RTMPS, Syphon (macOS receive), screen and window capture, program taps of Varda's own output, images, and html/css/js sources (Servo)
+- **Sources**: video (HAP GPU-native + ffmpeg), cameras, GLSL shaders (generators/filters, ISF-style metadata, compute shaders), NDI, SRT, HLS, DASH, RTMP/RTMPS, Syphon (macOS receive), screen and window capture, program taps of Varda's own output, images, and html/css/js sources (Servo)
 - **Mixing**: N-channel compositing, A/B crossfader, per-deck opacity, 15 blend modes, 16-bit float linear-light pipeline from deck to output
 - **Color**: 9 tonemap presets (ACES, AgX, Reinhard, Hable, etc.) selectable per output, two 3D LUT slots (.cube/.3dl) for a scene-referred look and per-display calibration, and 8-bit SDR / 10-bit SDR / HDR10 / HLG / EDR chosen per output.
 - **Transitions**: ISF shader transitions between channels, deck auto-transitions (timer/clip-end triggers), multi-channel transition sequencer with beat-synced or timed triggers (seconds, minutes, hours). Allowing for quick automated live transitions or long running automated installations.
@@ -25,15 +25,13 @@ Varda applies broadcast video workflows to live visuals. Sources (video, cameras
 - **Control**: MIDI, OSC, and HTTP API co-equal consumers of the same engine
 - **Projection mapping**: 2D stage editor, polygon/circle surfaces, per-surface corner-pin warp, calibration cards, edge blending (Auto with precise polygon overlap detection, Manual per-edge)
 - **Multi-output**: multiple windows, fullscreen on any display, headless outputs with surface assignments
-- **Network I/O**: NDI, SRT, HLS, DASH, and RTMP/RTMPS send/receive, with HDR10 and HLG on the HEVC/AV1 streaming paths
+- **Network I/O**: NDI, SRT, HLS, DASH, and RTMP/RTMPS send/receive, with HDR10 and HLG on the HEVC/AV1 streaming paths. Zero copy Syphon send and receive on macOS.
 - **Recording**: H.264, HEVC, AV1, ProRes 422/4444, HAP family per output; HDR10 (PQ, BT.2020) on HEVC and AV1
 - **Presets**: save/load deck and channel presets with modulation recipes
 - **Persistence**: full scene/venue/MIDI state saved and restored across sessions
 
 Experimental:
 - **Dome projection**: fisheye to equirectangular (360°) and cubemap (3D) rendering with configurable lens correction and chromatic aberration.
-- **Surface overlap zones**: manual and auto-detect modes for precise edge blending.
-- **Compute shader support**: ISF compute shaders for particle simulations, fluid dynamics, ect
 
 ## Install
 

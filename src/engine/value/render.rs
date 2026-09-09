@@ -138,6 +138,21 @@ impl PresentationTransfer {
         !matches!(self, Self::EdrLinear)
     }
 
+    /// Whether this contract can be carried by a file or a network stream.
+    ///
+    /// EDR cannot. It is a monitoring contract that writes linear values to an
+    /// extended-range display surface, and no container, codec, or stream carries
+    /// it: there is nothing to signal and nothing that would read the signal.
+    ///
+    /// Deliberately not the negation of [`is_hdr`](Self::is_hdr), which EDR does
+    /// satisfy. Treating "is HDR" as "is deliverable" is what let an EDR request
+    /// resolve cleanly on an HEVC recording and then be written out as plain
+    /// Rec.709, with the output card still claiming EDR.
+    #[must_use]
+    pub const fn is_deliverable(self) -> bool {
+        !matches!(self, Self::EdrLinear)
+    }
+
     /// Whether this contract carries ST 2086 and CTA-861.3 mastering metadata.
     ///
     /// PQ is absolute and needs it. HLG is relative and needs none, which is what
@@ -276,6 +291,30 @@ impl PresentationMode {
     #[must_use]
     pub const fn is_hdr(self) -> bool {
         matches!(self, Self::Hdr10 | Self::Hlg | Self::Edr)
+    }
+}
+
+/// One entry in an output's format picker: a mode, and why it is unavailable.
+///
+/// The picker lists every mode and disables the blocked ones with their reason,
+/// rather than hiding them. Hiding is honest but silent, and a user who knows
+/// their protocol carries HDR is owed the actual obstacle, which is usually a
+/// codec set elsewhere on the same card.
+///
+/// See /spec/presentation-mode-offering.md.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ModeAvailability {
+    pub mode: PresentationMode,
+    /// `None` when this output can deliver the mode. Otherwise the reason it
+    /// cannot, taken from the resolver that would have degraded the request.
+    pub blocked: Option<String>,
+}
+
+impl ModeAvailability {
+    /// Whether this mode can be selected.
+    #[must_use]
+    pub fn is_available(&self) -> bool {
+        self.blocked.is_none()
     }
 }
 
@@ -452,6 +491,31 @@ impl PresentationCapabilities {
         None
     }
 
+    /// Every mode, each with the reason this path cannot deliver it.
+    ///
+    /// Derived by asking [`resolve`](Self::resolve) rather than from a parallel
+    /// capability table, so what the picker says cannot disagree with what the
+    /// output then does. A mode is deliverable exactly when resolving it produces
+    /// no fallback reason, and `fallback_reason` is set at the single point where
+    /// degradation is decided, which is also where the wording comes from.
+    ///
+    /// Every mode is returned rather than only the deliverable ones, because a
+    /// mode that is silently absent teaches nothing: the picker shows the rest
+    /// disabled, with the reason. See /spec/presentation-mode-offering.md.
+    #[must_use]
+    pub fn mode_availability(&self) -> Vec<ModeAvailability> {
+        PresentationMode::ALL
+            .into_iter()
+            .map(|mode| {
+                let blocked = match self.resolve(PresentationRequest::default().with_mode(mode)) {
+                    Ok(resolved) => resolved.fallback_reason,
+                    Err(_) => Some("this output has no usable presentation format".to_string()),
+                };
+                ModeAvailability { mode, blocked }
+            })
+            .collect()
+    }
+
     /// Resolve a request without mutating the persisted requested precision.
     ///
     /// # Errors
@@ -529,6 +593,29 @@ pub struct ResolvedPresentation {
     pub dither: bool,
     /// Explanation when requested and resolved precision differ.
     pub fallback_reason: Option<String>,
+}
+
+impl ResolvedPresentation {
+    /// The user-facing contract this output is actually delivering.
+    ///
+    /// The counterpart to [`PresentationRequest::mode`], read from the resolved
+    /// fields rather than the requested ones. The picker shows this when a stored
+    /// request is not deliverable, so the control never displays a mode the output
+    /// is not producing. See /spec/presentation-mode-offering.md.
+    #[must_use]
+    pub fn mode(&self) -> PresentationMode {
+        if self.transfer == PresentationTransfer::Hlg {
+            PresentationMode::Hlg
+        } else if self.transfer == PresentationTransfer::EdrLinear {
+            PresentationMode::Edr
+        } else if self.transfer.is_hdr() {
+            PresentationMode::Hdr10
+        } else if self.resolved == PresentationDepth::Sdr10 {
+            PresentationMode::Sdr10
+        } else {
+            PresentationMode::Sdr8
+        }
+    }
 }
 
 impl Default for ResolvedPresentation {
@@ -1793,6 +1880,155 @@ mod tests {
         assert_eq!(
             resolved.peak_nits, None,
             "HLG is relative; a peak is meaningless"
+        );
+    }
+
+    // ── offered_modes (/spec/presentation-mode-offering.md) ──────────
+
+    /// Every capability set used by the tests below, so the property test and the
+    /// specific cases cannot drift onto different fixtures.
+    fn caps(formats: Vec<PresentationFormat>) -> PresentationCapabilities {
+        PresentationCapabilities::new(formats, Some("test capability set".into()))
+    }
+
+    /// The modes a capability set can deliver, for tests that care about the set
+    /// rather than the reasons.
+    fn available(capabilities: &PresentationCapabilities) -> Vec<PresentationMode> {
+        capabilities
+            .mode_availability()
+            .into_iter()
+            .filter(ModeAvailability::is_available)
+            .map(|entry| entry.mode)
+            .collect()
+    }
+
+    fn fmt(depth: PresentationDepth, transfer: PresentationTransfer) -> PresentationFormat {
+        PresentationFormat {
+            depth,
+            transfer,
+            pixel_format: PresentationPixelFormat::Rgba8,
+            color_profile: PresentationColorProfile::SrgbFull,
+            alpha_mode: AlphaMode::Opaque,
+        }
+    }
+
+    fn sdr8() -> PresentationFormat {
+        fmt(PresentationDepth::Sdr8, PresentationTransfer::Sdr)
+    }
+
+    /// The contract that makes a derived menu safe: whatever `offered_modes`
+    /// lists, `resolve` must deliver unchanged, and whatever it omits must
+    /// degrade. Stated as a property over capability sets rather than a table,
+    /// because a table would be the very thing this design rejects.
+    #[test]
+    fn the_offered_set_and_the_resolver_always_agree() {
+        let sets = [
+            vec![sdr8()],
+            vec![
+                fmt(PresentationDepth::Sdr10, PresentationTransfer::Sdr),
+                sdr8(),
+            ],
+            vec![
+                fmt(PresentationDepth::Sdr10, PresentationTransfer::Hdr10Pq),
+                fmt(PresentationDepth::Sdr10, PresentationTransfer::Sdr),
+                sdr8(),
+            ],
+            vec![
+                fmt(PresentationDepth::Sdr10, PresentationTransfer::EdrLinear),
+                fmt(PresentationDepth::Sdr10, PresentationTransfer::Hlg),
+                fmt(PresentationDepth::Sdr10, PresentationTransfer::Hdr10Pq),
+                fmt(PresentationDepth::Sdr10, PresentationTransfer::Sdr),
+                sdr8(),
+            ],
+        ];
+        for formats in sets {
+            let capabilities = caps(formats);
+            let offered = available(&capabilities);
+            for mode in PresentationMode::ALL {
+                let resolved = capabilities
+                    .resolve(PresentationRequest::default().with_mode(mode))
+                    .expect("every set here carries eight-bit SDR");
+                if offered.contains(&mode) {
+                    assert!(
+                        resolved.fallback_reason.is_none(),
+                        "{mode:?} was offered but degraded"
+                    );
+                } else {
+                    assert!(
+                        resolved.fallback_reason.is_some(),
+                        "{mode:?} was withheld but would have resolved cleanly"
+                    );
+                }
+            }
+        }
+    }
+
+    /// An empty picker would be a worse failure than an over-full one, and any
+    /// path that can present at all can present eight-bit SDR.
+    #[test]
+    fn eight_bit_is_always_offered() {
+        for formats in [
+            vec![sdr8()],
+            vec![
+                fmt(PresentationDepth::Sdr10, PresentationTransfer::Hdr10Pq),
+                sdr8(),
+            ],
+        ] {
+            let offered = available(&caps(formats));
+            assert!(offered.contains(&PresentationMode::Sdr8));
+            assert!(!offered.is_empty());
+        }
+    }
+
+    /// The case that motivated this phase: an adapter with one fixed format
+    /// offers exactly one mode, rather than five with four warnings behind them.
+    #[test]
+    fn a_single_format_adapter_offers_exactly_one_mode() {
+        assert_eq!(available(&caps(vec![sdr8()])), vec![PresentationMode::Sdr8]);
+    }
+
+    #[test]
+    fn a_ten_bit_sdr_adapter_offers_no_hdr_mode() {
+        let offered = available(&caps(vec![
+            fmt(PresentationDepth::Sdr10, PresentationTransfer::Sdr),
+            sdr8(),
+        ]));
+        assert_eq!(
+            offered,
+            vec![PresentationMode::Sdr8, PresentationMode::Sdr10]
+        );
+    }
+
+    /// Hiding a mode teaches nothing, so every blocked entry has to say why. The
+    /// picker renders this text, and an empty reason would be a blank tooltip.
+    #[test]
+    fn every_blocked_mode_carries_a_reason() {
+        for entry in caps(vec![sdr8()]).mode_availability() {
+            if entry.is_available() {
+                continue;
+            }
+            let reason = entry.blocked.expect("checked above");
+            assert!(
+                !reason.trim().is_empty(),
+                "{:?} was blocked with no explanation",
+                entry.mode
+            );
+        }
+    }
+
+    /// A display surface exposing PQ but no HLG format, which is every display
+    /// surface: `select_surface_presentation` has no HLG branch to build one from.
+    #[test]
+    fn a_pq_surface_offers_hdr10_but_not_hlg() {
+        let offered = available(&caps(vec![
+            fmt(PresentationDepth::Sdr10, PresentationTransfer::Hdr10Pq),
+            fmt(PresentationDepth::Sdr10, PresentationTransfer::Sdr),
+            sdr8(),
+        ]));
+        assert!(offered.contains(&PresentationMode::Hdr10));
+        assert!(
+            !offered.contains(&PresentationMode::Hlg),
+            "HLG has never been deliverable on a display surface"
         );
     }
 }
