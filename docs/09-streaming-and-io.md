@@ -2,7 +2,7 @@
 
 ## 10-bit SDR Delivery
 
-Set **SDR precision** to **10-bit SDR** on an output to request a high-precision codec or transport.
+Set an output's format to **10-bit SDR** to request a high-precision codec or transport.
 Varda probes the installed GPU, FFmpeg encoders, NDI runtime, and endpoint contract before starting.
 If the complete path is unavailable, it keeps the request, delivers 8-bit SDR, and reports why.
 
@@ -16,7 +16,82 @@ If the complete path is unavailable, it keeps the request, delivers 8-bit SDR, a
 | Syphon | No interoperable 10-bit path | BGRA8 |
 
 Ten-bit delivery is still SDR. It preserves more code values after Varda's existing tonemap and LUT;
-it does not enable HDR metadata or extended brightness.
+it does not enable HDR metadata or extended brightness. For that, choose **HDR10** or **HLG**.
+
+## HDR Delivery
+
+Recording and streaming can both carry HDR. There are two transfers, and which one to pick
+depends on whether you are producing a file or a live feed.
+
+| | HDR10 (PQ) | HLG |
+|---|---|---|
+| Standard | SMPTE ST 2084, absolute brightness | ARIB STD-B67 / BT.2100, relative |
+| Mastering metadata | ST 2086 + content light level | **None needed** |
+| Peak setting | Yes, per output | No; the display decides |
+| Best for | Files, and CDN specs that name HDR10 | Live streams |
+
+**Live streams default to HLG**, and that is a real recommendation rather than a default
+picked at random. HDR10 is absolute, so it carries MaxCLL and MaxFALL describing how bright
+the content actually gets, and those are supposed to be measured across the whole programme.
+A live stream never ends, so there is nothing to measure and the values have to be declared
+up front. HLG has no such metadata by design, which is why broadcast uses it for live.
+
+If a CDN ingest spec names HDR10 explicitly, pick HDR10. It works; the metadata is just
+declared from your peak setting rather than measured.
+
+### Where HDR works
+
+| Destination | HDR10 (PQ) | HLG |
+|---|---|---|
+| Recording | HEVC, AV1 | Not yet; falls back to PQ |
+| SRT | HEVC Main10 in MPEG-TS | Yes |
+| HLS (either segment length) | HEVC Main10 or AV1 10-bit in fMP4 | Yes |
+| DASH | HEVC Main10 or AV1 10-bit | Yes |
+| RTMP / RTMPS | HEVC or AV1 on an **Enhanced RTMP** endpoint | Yes |
+| NDI, Syphon | No | No |
+| H.264, ProRes, HAP | No | No |
+
+Legacy RTMP cannot carry HDR at all and falls back with
+`the endpoint contract is legacy RTMP`. NDI is not planned: the public NDI SDK has no
+standardized HDR transfer signalling, so any claim there would be a private convention no
+receiver agrees on.
+
+### Verifying a stream or file
+
+```bash
+ffprobe -show_entries stream=color_transfer,color_primaries,color_space yourfile.mp4
+```
+
+HDR10 reports `smpte2084` / `bt2020` / `bt2020nc`; HLG reports `arib-std-b67` / `bt2020` /
+`bt2020nc`. The same command works on an HLS playlist URL.
+
+### Short segments
+
+An HLS output has a **Short segments (lower latency)** option. It produces one-second segments
+instead of two, which lowers latency because a player can start a segment sooner.
+
+It is **not** RFC low-latency HLS. FFmpeg's HLS muxer cannot write partial segments
+(`EXT-X-PART`), so there are none to deliver and no player can get below segment granularity.
+Expect a couple of seconds of latency rather than sub-second, and expect ordinary HLS players
+to work with it, because that is what it is.
+
+### Segment duration and keyframes
+
+HLS and DASH can only start a segment on a keyframe, so Varda pins the encoder's keyframe
+interval to the segment duration: short-segment HLS gets a keyframe every second, standard HLS and DASH
+every two. You do not configure this, but it is worth knowing if you are reading a playlist
+and wondering why `#EXTINF` values are what they are.
+
+### HLS players read the bitstream, not the playlist
+
+An HLS master playlist can carry a `VIDEO-RANGE` attribute announcing HDR, but FFmpeg's HLS
+muxer does not emit it, so Varda's playlists do not contain one. The HDR contract travels in
+the video bitstream itself, which is where players actually read it from in practice. If you
+hit a player that insists on `VIDEO-RANGE`, that is a known gap rather than a misconfiguration
+on your side.
+
+See [Output Format](07-outputs.md#output-format) for the peak-luminance control, the gamut
+caveat, and the current limitations around LUTs, tonemap curves, and mastering metadata.
 
 ## NDI
 
@@ -75,7 +150,7 @@ SRT input supports receiver deduplication such that the same URL used by multipl
 
 1. Click **"+ Stream"** → select **HLS** or **DASH**
 2. Choose a codec: **H.264**, **H.265**, or **AV1**
-3. For HLS, optionally enable **Low Latency** (LL-HLS) for 2–5 second end-to-end latency
+3. For HLS, optionally enable **Short segments** for 2 to 5 second end-to-end latency
 4. Start the output
 
 Varda writes segments and manifests to `.varda/streams/<name>/` and serves them via the built-in HTTP server:
@@ -93,7 +168,7 @@ The auto-generated `player.html` uses hls.js or dash.js and works in any modern 
 | Mode | Latency | Use Case |
 |------|---------|----------|
 | Standard HLS | 15–25s | Reliable delivery, CDN-friendly |
-| LL-HLS | 2–5s | Near-real-time web viewing |
+| HLS, short segments | 2-5s | Near-real-time web viewing |
 | DASH | 10–20s | Cross-platform, multi-codec |
 
 ### Input

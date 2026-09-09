@@ -241,28 +241,33 @@ impl UIRunner {
         match output {
             UnifiedOutput::Window(w) => &w.preview_texture_view,
             UnifiedOutput::Headless(h) => match &h.source {
-                OutputSource::Master => mixer.composite_view(),
-                OutputSource::Channel(idx) => mixer
-                    .channels()
-                    .get(*idx)
-                    .map_or_else(|| mixer.composite_view(), |c| &c.composite_view),
+                OutputSource::Master => {
+                    mixer.program_view(crate::mixer::ProgramKey::sdr(mixer.tonemap_mode()))
+                }
+                OutputSource::Channel(idx) => mixer.channels().get(*idx).map_or_else(
+                    || mixer.program_view(crate::mixer::ProgramKey::sdr(mixer.tonemap_mode())),
+                    |c| &c.composite_view,
+                ),
                 OutputSource::Deck(ch, dk) => mixer
                     .channels()
                     .get(*ch)
                     .and_then(|c| c.decks.get(*dk))
-                    .map_or_else(|| mixer.composite_view(), |s| &s.deck.texture_view),
+                    .map_or_else(
+                        || mixer.program_view(crate::mixer::ProgramKey::sdr(mixer.tonemap_mode())),
+                        |s| &s.deck.texture_view,
+                    ),
                 OutputSource::Channels(indices) => {
                     let mut sorted = indices.clone();
                     sorted.sort_unstable();
                     sorted.dedup();
-                    mixer
-                        .get_sub_mix_view(&sorted)
-                        .unwrap_or_else(|| mixer.composite_view())
+                    mixer.get_sub_mix_view(&sorted).unwrap_or_else(|| {
+                        mixer.program_view(crate::mixer::ProgramKey::sdr(mixer.tonemap_mode()))
+                    })
                 }
                 OutputSource::Domemaster => {
                     // Domemaster preview falls back to composite view;
                     // the actual domemaster texture is rendered in the output pipeline.
-                    mixer.composite_view()
+                    mixer.program_view(crate::mixer::ProgramKey::sdr(mixer.tonemap_mode()))
                 }
             },
         }
@@ -297,7 +302,7 @@ impl UIRunner {
         let ct = mixer.composite_texture();
         out.push((
             PreviewSlot::Main,
-            mixer.composite_view(),
+            mixer.program_view(crate::mixer::ProgramKey::sdr(mixer.tonemap_mode())),
             ct.width(),
             ct.height(),
         ));

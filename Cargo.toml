@@ -138,6 +138,10 @@ dashu-float = "0.6.0"
 objc2            = "0.6"
 objc2-foundation = "0.3"
 objc2-metal      = "0.3"
+# EDR headroom lives on NSScreen, not on the Metal device (spec/hdr-edr-display.md).
+# Already in the tree via winit at the same 0.3 line, so this adds no new code to
+# the build and nothing new to qualify under Rosetta.
+objc2-app-kit    = "0.3"
 
 # ScreenCaptureKit for the macOS screen/window capture backend (spec/screen-capture.md).
 # These are objc2-family crates from the same maintainer as the three above, so

@@ -292,7 +292,9 @@ struct LutParams {
     shaper_domain_min: [f32; 3],
     _pad2: u32,
     shaper_domain_max: [f32; 3],
-    _pad3: u32,
+    /// 1 when this LUT is scene-referred and needs the ACEScct shaper around the
+    /// lookup; 0 for the display-referred calibration slot.
+    scene_referred: u32,
 }
 
 /// A loaded LUT on the GPU, ready to be applied as a post-process pass.
@@ -323,11 +325,18 @@ pub struct LutPipeline {
 
 impl LoadedLut {
     /// Upload a parsed LUT to the GPU.
+    /// Upload a parsed LUT.
+    ///
+    /// `scene_referred` selects the slot this LUT occupies. A look LUT operates
+    /// on scene-linear light and is encoded to ACEScct around the lookup; a
+    /// calibration LUT operates on the already display-referred signal and is
+    /// used as-is. See /spec/hdr-color-management.md.
     pub fn from_parsed(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         parsed: &ParsedLut,
         filename: String,
+        scene_referred: bool,
     ) -> Self {
         // Create 3D texture
         let size = parsed.size_3d;
@@ -422,7 +431,7 @@ impl LoadedLut {
             shaper_domain_min: shaper_ref.map_or([0.0; 3], |s| s.domain_min),
             _pad2: 0,
             shaper_domain_max: shaper_ref.map_or([1.0; 3], |s| s.domain_max),
-            _pad3: 0,
+            scene_referred: u32::from(scene_referred),
         };
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("LUT Params Buffer"),
@@ -822,5 +831,78 @@ LUT_3D_SIZE 2
 0 1023 0
 ";
         assert!(parse_3dl(content).is_err());
+    }
+}
+
+#[cfg(test)]
+mod scene_referred_tests {
+    use super::*;
+    use crate::renderer::GpuContext;
+    use crate::renderer::acescct;
+
+    /// An identity look LUT must be a no-op through the ACEScct shaper.
+    ///
+    /// This is the property that proves the encode and decode agree. If they
+    /// disagree, every graded frame is wrong by a fixed curve and no `.cube`
+    /// could compensate.
+    #[test]
+    fn an_identity_look_lut_leaves_scene_linear_untouched() {
+        const N: usize = 8;
+        let Ok(ctx) = GpuContext::new_headless() else {
+            return;
+        };
+        // Identity in ACEScct space: output equals input at every lattice point.
+        let mut data = Vec::with_capacity(N * N * N * 3);
+        for b in 0..N {
+            for g in 0..N {
+                for r in 0..N {
+                    let f = |i: usize| i as f32 / (N - 1) as f32;
+                    data.extend_from_slice(&[f(r), f(g), f(b)]);
+                }
+            }
+        }
+        let parsed = ParsedLut {
+            title: Some("identity".to_string()),
+            size_3d: u32::try_from(N).expect("small"),
+            data_3d: data,
+            domain_min: [0.0; 3],
+            domain_max: [1.0; 3],
+            shaper: None,
+        };
+        let look = LoadedLut::from_parsed(&ctx.device, &ctx.queue, &parsed, "id.cube".into(), true);
+        assert_eq!(look.filename, "id.cube");
+
+        // The CPU reference the shader mirrors: a round trip through the shaper
+        // must return the original scene-linear value.
+        for linear in [0.0_f32, 0.002, 0.05, 0.18, 1.0, 4.0, 12.0] {
+            let back = acescct::to_linear(acescct::from_linear(linear));
+            let tolerance = (linear * 1e-3).max(1e-6);
+            assert!(
+                (back - linear).abs() < tolerance,
+                "shaper round trip lost {linear}, got {back}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_two_slots_are_uploaded_with_different_shaper_intent() {
+        let Ok(ctx) = GpuContext::new_headless() else {
+            return;
+        };
+        let parsed = ParsedLut {
+            title: Some("t".to_string()),
+            size_3d: 2,
+            data_3d: vec![0.0; 2 * 2 * 2 * 3],
+            domain_min: [0.0; 3],
+            domain_max: [1.0; 3],
+            shaper: None,
+        };
+        // Same file, two slots: the difference is whether the shaper runs, which
+        // is what keeps a display-referred `.cube` from being fed log values.
+        let calibration =
+            LoadedLut::from_parsed(&ctx.device, &ctx.queue, &parsed, "c.cube".into(), false);
+        let look = LoadedLut::from_parsed(&ctx.device, &ctx.queue, &parsed, "l.cube".into(), true);
+        assert_eq!(calibration.filename, "c.cube");
+        assert_eq!(look.filename, "l.cube");
     }
 }

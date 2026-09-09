@@ -11,11 +11,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 
+use std::collections::HashMap;
+
 use crate::audio::PcmChunk;
 use crate::engine::value::render::{
-    AlphaMode, PresentationColorProfile, PresentationDepth, PresentationPixelFormat,
-    PresentationRequest, RecordingCodec, ResolvedPresentation, RtmpCodecContract, SrtCodec,
-    StreamingCodec,
+    AlphaMode, HdrMetadataSource, PresentationColorProfile, PresentationDepth,
+    PresentationPixelFormat, PresentationRequest, PresentationTransfer, RecordingCodec,
+    ResolvedPresentation, RtmpCodecContract, SrtCodec, StreamingCodec,
 };
 use crate::renderer::{ReadbackFormat, ReadbackFrame};
 
@@ -24,7 +26,7 @@ use crate::renderer::{ReadbackFormat, ReadbackFrame};
 /// Resolution happens before the writer queue starts. A ten-bit request is only
 /// accepted when both the encoder and the typed GPU readback can carry it.
 #[derive(Debug, Clone)]
-struct RecordingPlan {
+pub(crate) struct RecordingPlan {
     /// Runtime precision and encoded pixel format reported to output status.
     resolved: ResolvedPresentation,
     input_pixel_format: &'static str,
@@ -35,12 +37,42 @@ struct RecordingPlan {
 }
 
 impl RecordingPlan {
+    /// Resolve a recording contract without a running subprocess.
+    ///
+    /// The output card has to answer "what will this deliver" before anyone
+    /// presses Start, and the honest answer depends on the configured codec.
+    /// Streaming targets have always resolved this way; recording did not, and
+    /// answered eight-bit for every codec, so a correctly configured HEVC output
+    /// reported a fallback it would not actually take.
+    ///
+    /// Readback is assumed to be whatever the codec needs, because it is:
+    /// `HeadlessOutput::set_resolved_presentation` rebuilds the readback buffer
+    /// from the resolution this returns, so the assumption is self-fulfilling.
+    pub(crate) fn resolved_for_target(
+        target: &crate::engine::value::render::OutputTarget,
+        request: PresentationRequest,
+    ) -> Option<ResolvedPresentation> {
+        let crate::engine::value::render::OutputTarget::Recording { codec, .. } = target else {
+            return None;
+        };
+        let readback = if matches!(codec, RecordingCodec::ProRes4444) {
+            ReadbackFormat::Rgba16Unorm
+        } else {
+            ReadbackFormat::Rgb10A2
+        };
+        let help = recording_encoder_help(codec);
+        Some(Self::resolve(codec, request, readback, help.as_deref()).resolved)
+    }
+
     fn resolve(
         codec: &RecordingCodec,
         request: PresentationRequest,
         readback: ReadbackFormat,
         encoder_help: Option<&str>,
     ) -> Self {
+        // HDR10 is a ten-bit contract, so an incoherent request is coerced before
+        // anything is resolved against it.
+        let request = request.normalized();
         let encoder = recording_encoder(codec);
         let ten_bit_output = ten_bit_output_format(codec);
         let codec_supports_ten_bit = ten_bit_output.is_some();
@@ -53,7 +85,18 @@ impl RecordingPlan {
             ReadbackFormat::Rgb10A2
         };
 
-        let fallback_reason = if request.depth != PresentationDepth::Sdr10 {
+        let hdr_blocked = request
+            .transfer
+            .is_hdr()
+            .then(|| {
+                (!codec_supports_hdr10(codec))
+                    .then(|| format!("{codec} cannot carry HDR10; HEVC or AV1 is required"))
+            })
+            .flatten();
+
+        let fallback_reason = if let Some(reason) = hdr_blocked {
+            Some(reason)
+        } else if request.depth != PresentationDepth::Sdr10 {
             None
         } else if !codec_supports_ten_bit {
             Some(format!(
@@ -95,6 +138,12 @@ impl RecordingPlan {
         };
 
         let use_ten_bit = request.depth == PresentationDepth::Sdr10 && fallback_reason.is_none();
+        let use_hdr = request.transfer.is_hdr() && use_ten_bit;
+        let resolved_transfer = if use_hdr {
+            PresentationTransfer::Hdr10Pq
+        } else {
+            PresentationTransfer::Sdr
+        };
         let (input_pixel_format, output_pixel_format, expected_readback) = if use_ten_bit {
             if matches!(codec, RecordingCodec::ProRes4444) {
                 (
@@ -134,13 +183,31 @@ impl RecordingPlan {
         let resolved = ResolvedPresentation {
             requested: request.depth,
             resolved: resolved_depth,
+            requested_transfer: request.transfer,
+            transfer: resolved_transfer,
+            peak_nits: use_hdr.then_some(request.peak_nits),
+            // MaxCLL and MaxFALL are seeded from the configured peak and the
+            // encoder clamps the signal to it, so the declaration is true by
+            // construction. It is still not the measured value CTA-861.3 asks
+            // for, which is why the origin is reported.
+            hdr_metadata: use_hdr.then_some(HdrMetadataSource::DeclaredFromPeak),
             pixel_format,
-            color_profile: PresentationColorProfile::Rec709Limited,
+            color_profile: if use_hdr {
+                PresentationColorProfile::Pq2020Limited
+            } else {
+                PresentationColorProfile::Rec709Limited
+            },
             alpha_mode,
             dither: request.dither,
             fallback_reason,
         };
-        let video_args = recording_video_args(codec, resolved_depth, output_pixel_format);
+        let video_args = recording_video_args(
+            codec,
+            resolved_depth,
+            output_pixel_format,
+            resolved_transfer,
+            request.peak_nits,
+        );
 
         Self {
             resolved,
@@ -199,6 +266,7 @@ fn readback_label(format: ReadbackFormat) -> &'static str {
         ReadbackFormat::Rgba8 => "RGBA8",
         ReadbackFormat::Bgra8 => "BGRA8",
         ReadbackFormat::Rgb10A2 => "RGB10A2",
+        ReadbackFormat::Rgba32Float => "RGBA32 float",
         ReadbackFormat::Rgba16Float => "RGBA16 half-float",
         ReadbackFormat::Rgba16Unorm => "RGBA16",
         ReadbackFormat::Uyvy => "UYVY",
@@ -237,10 +305,120 @@ fn unpremultiply_filter(input_pixel_format: &str) -> &'static str {
     }
 }
 
+/// Codecs that can carry an HDR10 contract.
+///
+/// ProRes can hold PQ container tags but has no ST 2086 or MaxCLL path through
+/// FFmpeg, so it is out of scope for slice 50a rather than half-supported. See
+/// /spec/hdr-recording-output.md.
+fn codec_supports_hdr10(codec: &RecordingCodec) -> bool {
+    matches!(codec, RecordingCodec::H265 | RecordingCodec::AV1)
+}
+
+/// Colour metadata for the encoded stream.
+///
+/// These flags describe the stream. They do **not** decide the matrix the scaler
+/// uses to reach YUV, which is pinned separately in the filter chain and proven
+/// by a decode-and-compare test rather than by reading the arguments.
+fn color_metadata_args(transfer: PresentationTransfer) -> Vec<String> {
+    let (primaries, trc, matrix) = match transfer {
+        PresentationTransfer::Hdr10Pq => ("bt2020", "smpte2084", "bt2020nc"),
+        PresentationTransfer::Hlg => ("bt2020", "arib-std-b67", "bt2020nc"),
+        // EDR is a display-only monitoring contract and never reaches an
+        // encoder; if one is ever asked for, Rec.709 is the honest answer.
+        PresentationTransfer::Sdr | PresentationTransfer::EdrLinear => ("bt709", "bt709", "bt709"),
+    };
+    [
+        "-color_primaries",
+        primaries,
+        "-color_trc",
+        trc,
+        "-colorspace",
+        matrix,
+        "-color_range",
+        "tv",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+/// `x265` HDR10 signalling, including ST 2086 mastering display derived from the
+/// output's configured peak.
+///
+/// `colorprim`, `transfer`, and `colormatrix` are stated here as well as in
+/// FFmpeg's `-color_*` output flags, and that duplication is load-bearing rather
+/// than belt-and-braces. FFmpeg does not forward those flags into x265, so
+/// without them the encoder writes no transfer or primaries into the VUI (a file
+/// that `ffprobe` reports as `color_transfer=unknown`) and prints
+/// `Disabling hdr10-opt`. Found by encoding a file and reading it back, not by
+/// inspecting arguments. See /spec/hdr-recording-output.md § External acceptance.
+///
+/// `max-cll` is seeded from the configured peak here and corrected to measured
+/// content values when the recording is finalized (/spec/hdr-recording-output.md
+/// § Mastering and Content Metadata).
+fn x265_hdr10_params(peak_nits: u16) -> String {
+    format!(
+        "hdr10=1:hdr10-opt=1:repeat-headers=1:colorprim=bt2020:transfer=smpte2084:\
+         colormatrix=bt2020nc:master-display={}:max-cll={peak_nits},{peak_nits}",
+        crate::renderer::hdr::master_display_string(peak_nits)
+    )
+    .replace(' ', "")
+}
+
+/// `x265` HLG signalling.
+///
+/// No `master-display` and no `max-cll`: HLG is relative and BT.2100 requires
+/// neither. That absence is the point, not an omission, because it is what
+/// removes the declared-versus-measured problem from live paths.
+fn x265_hlg_params() -> String {
+    "repeat-headers=1:colorprim=bt2020:transfer=arib-std-b67:colormatrix=bt2020nc".to_string()
+}
+
+/// `-x265-params` for whichever HDR transfer is in force, if any.
+fn x265_hdr_params(transfer: PresentationTransfer, peak_nits: u16) -> Option<String> {
+    match transfer {
+        PresentationTransfer::Hdr10Pq => Some(x265_hdr10_params(peak_nits)),
+        PresentationTransfer::Hlg => Some(x265_hlg_params()),
+        PresentationTransfer::Sdr | PresentationTransfer::EdrLinear => None,
+    }
+}
+
+/// Low-latency x265 settings for a live stream, in place of `-tune zerolatency`.
+///
+/// `-tune zerolatency` sets `frame-threads=1`, which costs 2.2x throughput and
+/// cannot be overridden (passing `frame-threads` in `-x265-params` alongside the
+/// tune leaves it at 1). Measured at 1080p on a 12-core machine with varied
+/// content: 41.8 fps with the tune, 73.8 fps with these settings, against a
+/// 60 fps target. The old setting could not sustain 1080p60 ten-bit at all, so a
+/// live stream fell steadily behind and the writer queue shed frames.
+///
+/// What is kept is the property that matters for a live feed: `bframes=0` means
+/// output order equals input order, so there is no reordering delay. What is
+/// given up is frame-threading pipeline depth, a bounded few frames, which is
+/// far cheaper than dropping three frames in four.
+///
+/// Eight-bit H.264 is untouched: libx264 measured 326 fps on the same clip and
+/// its `zerolatency` tune does not disable frame threading the same way.
+const X265_LIVE_LATENCY_PARAMS: &str = "bframes=0";
+
+/// One combined `-x265-params` value.
+///
+/// FFmpeg takes `-x265-params` once: passing it twice silently drops the first,
+/// so the latency and HDR settings must be merged rather than appended as
+/// separate arguments.
+fn x265_streaming_params(transfer: PresentationTransfer, peak_nits: u16) -> String {
+    x265_hdr_params(transfer, peak_nits).map_or_else(
+        || X265_LIVE_LATENCY_PARAMS.to_string(),
+        |hdr| format!("{X265_LIVE_LATENCY_PARAMS}:{hdr}"),
+    )
+}
+
 fn recording_video_args(
     codec: &RecordingCodec,
     depth: PresentationDepth,
     output_pixel_format: &str,
+    transfer: PresentationTransfer,
+    peak_nits: u16,
 ) -> Vec<String> {
     let mut args: Vec<String> = match codec {
         RecordingCodec::H264 => vec![
@@ -293,23 +471,32 @@ fn recording_video_args(
     .into_iter()
     .map(str::to_string)
     .collect();
-    args.extend(
-        [
-            "-pix_fmt",
-            output_pixel_format,
-            "-color_primaries",
-            "bt709",
-            "-color_trc",
-            "bt709",
-            "-colorspace",
-            "bt709",
-            "-color_range",
-            "tv",
-        ]
-        .into_iter()
-        .map(str::to_string),
-    );
+    if matches!(codec, RecordingCodec::H265)
+        && let Some(params) = x265_hdr_params(transfer, peak_nits)
+    {
+        args.extend(["-x265-params".to_string(), params]);
+    }
+    args.extend(["-pix_fmt".to_string(), output_pixel_format.to_string()]);
+    args.extend(color_metadata_args(transfer));
     args
+}
+
+/// Cached `-h encoder=` probe for a recording codec.
+///
+/// Idle resolution runs on every presentation change and every stage load, so
+/// this must not spawn FFmpeg each time. Mirrors `StreamingCapabilities::installed`.
+fn recording_encoder_help(codec: &RecordingCodec) -> Option<String> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<String, Option<String>>>> =
+        std::sync::OnceLock::new();
+    let encoder = recording_encoder(codec);
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    let mut guard = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    guard
+        .entry(encoder.to_string())
+        .or_insert_with(|| probe_encoder_help(encoder))
+        .clone()
 }
 
 fn probe_encoder_help(encoder: &str) -> Option<String> {
@@ -456,6 +643,14 @@ impl StreamingPlan {
             None
         };
         let use_ten_bit = request.depth == PresentationDepth::Sdr10 && unavailable.is_none();
+        // HDR is a ten-bit contract, so whatever blocks ten bits blocks HDR and
+        // the reason above already names the real obstacle.
+        let use_hdr = request.transfer.is_hdr() && use_ten_bit;
+        let resolved_transfer = if use_hdr {
+            request.transfer
+        } else {
+            PresentationTransfer::Sdr
+        };
         let legacy_rtmp = matches!(protocol, StreamingProtocol::Rtmp(RtmpCodecContract::Legacy));
         let effective_codec = if legacy_rtmp
             || (request.depth == PresentationDepth::Sdr10 && unavailable.is_some())
@@ -486,12 +681,27 @@ impl StreamingPlan {
         } else {
             ReadbackFormat::Rgba8
         };
-        let video_args =
-            streaming_video_args(&effective_codec, resolved_depth, output_pixel_format);
+        let video_args = streaming_video_args(
+            &effective_codec,
+            resolved_depth,
+            output_pixel_format,
+            resolved_transfer,
+            request.peak_nits,
+        );
         let muxer_args = streaming_muxer_args(protocol, use_ten_bit, &effective_codec);
         let resolved = ResolvedPresentation {
             requested: request.depth,
             resolved: resolved_depth,
+            requested_transfer: request.transfer,
+            transfer: resolved_transfer,
+            peak_nits: resolved_transfer
+                .uses_peak_nits()
+                .then_some(request.peak_nits),
+            // HLG carries no mastering metadata at all, so there is nothing to
+            // declare and nothing to report as declared.
+            hdr_metadata: resolved_transfer
+                .carries_mastering_metadata()
+                .then_some(HdrMetadataSource::DeclaredFromPeak),
             pixel_format: PresentationPixelFormat::EncoderNative(output_pixel_format.to_string()),
             color_profile: PresentationColorProfile::Rec709Limited,
             alpha_mode: AlphaMode::Opaque,
@@ -556,6 +766,8 @@ fn streaming_video_args(
     codec: &StreamingCodec,
     depth: PresentationDepth,
     output_pixel_format: &str,
+    transfer: PresentationTransfer,
+    peak_nits: u16,
 ) -> Vec<String> {
     let mut args: Vec<String> = match codec {
         StreamingCodec::H264 => {
@@ -570,13 +782,13 @@ fn streaming_video_args(
                 "high",
             ]
         }
+        // No `-tune zerolatency` here: it pins frame-threads to 1 and cannot
+        // sustain 1080p60 ten-bit. See `X265_LIVE_LATENCY_PARAMS`.
         StreamingCodec::H265 => vec![
             "-c:v",
             "libx265",
             "-preset",
             "ultrafast",
-            "-tune",
-            "zerolatency",
             "-profile:v",
             if depth == PresentationDepth::Sdr10 {
                 "main10"
@@ -589,22 +801,14 @@ fn streaming_video_args(
     .into_iter()
     .map(str::to_string)
     .collect();
-    args.extend(
-        [
-            "-pix_fmt",
-            output_pixel_format,
-            "-color_primaries",
-            "bt709",
-            "-color_trc",
-            "bt709",
-            "-colorspace",
-            "bt709",
-            "-color_range",
-            "tv",
-        ]
-        .into_iter()
-        .map(str::to_string),
-    );
+    if matches!(codec, StreamingCodec::H265) {
+        args.extend([
+            "-x265-params".to_string(),
+            x265_streaming_params(transfer, peak_nits),
+        ]);
+    }
+    args.extend(["-pix_fmt".to_string(), output_pixel_format.to_string()]);
+    args.extend(color_metadata_args(transfer));
     args
 }
 
@@ -613,6 +817,14 @@ fn streaming_muxer_args(
     ten_bit: bool,
     codec: &StreamingCodec,
 ) -> Vec<String> {
+    // No `VIDEO-RANGE` signalling here, deliberately. That attribute lives in
+    // `EXT-X-STREAM-INF`, and an explicit master playlist was implemented to
+    // carry it, then measured: FFmpeg 8.1.2's HLS muxer never emits
+    // `VIDEO-RANGE` in any configuration tried (HEVC, Main10, PQ, HLG, fMP4).
+    // The master playlist it does write carries BANDWIDTH, RESOLUTION and CODECS
+    // only, so it was removed rather than shipped as signalling it does not
+    // provide. HDR HLS players read the transfer from the bitstream VUI, which is
+    // verified present in the segments. See /spec/hdr-streaming-output.md.
     let args: Vec<&str> = match protocol {
         StreamingProtocol::Srt => vec!["-f", "mpegts"],
         StreamingProtocol::Hls if ten_bit => vec!["-tag:v", codec_tag(codec), "-f", "hls"],
@@ -634,23 +846,41 @@ fn codec_tag(codec: &StreamingCodec) -> &'static str {
     }
 }
 
-fn hls_segment_args(dir: &str, low_latency: bool, use_fmp4: bool) -> Vec<String> {
-    let (time, list_size, flags, extension) = if low_latency {
+/// Keyframe interval for a segmented protocol, in frames.
+///
+/// A segmented muxer can only cut on a keyframe, so asking for one-second
+/// segments while the encoder emits a keyframe every 250 frames produces
+/// four-second segments and the request is silently ignored. Deriving the GOP
+/// from the segment duration is what makes the duration real.
+///
+/// This was a live bug: LL-HLS asked for 1s and got 4.166667s (x265's default
+/// keyint of 250 at 60fps). The LL-HLS player is configured with a 4 second
+/// buffer, shorter than one such segment, so playback stalled and never
+/// recovered. Vanilla HLS survived only because its player uses a much larger
+/// default buffer.
+fn segment_gop_args(segment_seconds: u32, fps: u32) -> Vec<String> {
+    let gop = (segment_seconds * fps).max(1);
+    vec!["-g".to_string(), gop.to_string()]
+}
+
+fn hls_segment_args(dir: &str, short_segments: bool, use_fmp4: bool, fps: u32) -> Vec<String> {
+    let (time, list_size, flags, extension) = if short_segments {
         ("1", "6", "independent_segments+delete_segments", "m4s")
     } else if use_fmp4 {
         ("2", "30", "delete_segments+independent_segments", "m4s")
     } else {
         ("2", "30", "delete_segments", "ts")
     };
-    let mut args = vec![
+    let mut args = segment_gop_args(time.parse().unwrap_or(1), fps);
+    args.extend([
         "-hls_time".to_string(),
         time.to_string(),
         "-hls_list_size".to_string(),
         list_size.to_string(),
         "-hls_flags".to_string(),
         flags.to_string(),
-    ];
-    if low_latency || use_fmp4 {
+    ]);
+    if short_segments || use_fmp4 {
         args.extend([
             "-hls_segment_type".to_string(),
             "fmp4".to_string(),
@@ -667,13 +897,25 @@ fn hls_segment_args(dir: &str, low_latency: bool, use_fmp4: bool) -> Vec<String>
 
 /// Write a self-contained HTML player page into a stream directory.
 /// Uses hls.js for HLS streams and dash.js for DASH streams.
-/// For LL-HLS, enables hls.js low-latency mode with live-edge tuning.
-fn write_stream_player(dir: &str, kind: &str, manifest_filename: &str, low_latency: bool) {
+///
+/// The reduced-latency HLS mode is short segments, not RFC 8216bis LL-HLS.
+/// FFmpeg's HLS muxer emits no `EXT-X-PART`, no `EXT-X-SERVER-CONTROL` and no
+/// `CAN-BLOCK-RELOAD`, so there are no partial segments for a player to use.
+///
+/// The player config used to set `lowLatencyMode: true` anyway, together with a
+/// four second buffer cap and a two segment live-edge target. That asks hls.js
+/// to run at the live edge using parts that never arrive, with less cushion than
+/// one segment of jitter: the stream froze within seconds and did not recover,
+/// while plain HLS from the same engine played fine on hls.js defaults.
+///
+/// What is kept is the part that genuinely reduces latency: one second segments
+/// instead of two, with a live-edge target and buffer sized against them.
+fn write_stream_player(dir: &str, kind: &str, manifest_filename: &str, short_segments: bool) {
     let (lib_url, lib_setup) = match kind {
-        "hls" if low_latency => (
+        "hls" if short_segments => (
             "https://cdn.jsdelivr.net/npm/hls.js@latest",
             format!(
-                r"if(Hls.isSupported()){{var h=new Hls({{lowLatencyMode:true,liveSyncDurationCount:2,liveMaxLatencyDurationCount:4,maxBufferLength:4,backBufferLength:0}});h.loadSource('{manifest_filename}');h.attachMedia(v);}}else if(v.canPlayType('application/vnd.apple.mpegurl')){{v.src='{manifest_filename}';}}",
+                r"if(Hls.isSupported()){{var h=new Hls({{liveSyncDurationCount:3,liveMaxLatencyDurationCount:10,maxBufferLength:12,backBufferLength:4}});h.loadSource('{manifest_filename}');h.attachMedia(v);}}else if(v.canPlayType('application/vnd.apple.mpegurl')){{v.src='{manifest_filename}';}}",
             ),
         ),
         "hls" => (
@@ -689,8 +931,8 @@ fn write_stream_player(dir: &str, kind: &str, manifest_filename: &str, low_laten
             ),
         ),
     };
-    let title = if low_latency {
-        format!("LL-{}", kind.to_uppercase())
+    let title = if short_segments {
+        format!("{} (short segments)", kind.to_uppercase())
     } else {
         kind.to_uppercase()
     };
@@ -1495,7 +1737,7 @@ impl FfmpegSubprocess {
         width: u32,
         height: u32,
         fps: u32,
-        low_latency: bool,
+        short_segments: bool,
         audio: Option<AudioInput>,
     ) -> anyhow::Result<Self> {
         // Streaming target: normalize audio to 48k (Decision 5).
@@ -1509,7 +1751,7 @@ impl FfmpegSubprocess {
         std::fs::create_dir_all(&dir)
             .map_err(|e| anyhow::anyhow!("Failed to create HLS output dir '{dir}': {e}"))?;
         let playlist = format!("{dir}/index.m3u8");
-        write_stream_player(&dir, "hls", "index.m3u8", low_latency);
+        write_stream_player(&dir, "hls", "index.m3u8", short_segments);
 
         let plan = StreamingPlan::resolve(
             StreamingProtocol::Hls,
@@ -1532,9 +1774,10 @@ impl FfmpegSubprocess {
 
         cmd.args(hls_segment_args(
             &dir,
-            low_latency,
+            short_segments,
             plan.resolved.resolved == PresentationDepth::Sdr10
                 || plan.effective_codec != StreamingCodec::H264,
+            fps,
         ));
 
         cmd.arg(&playlist)
@@ -1546,7 +1789,11 @@ impl FfmpegSubprocess {
             anyhow::anyhow!("Failed to spawn ffmpeg for HLS: {e}. Is ffmpeg installed?")
         })?;
 
-        let mode = if low_latency { "LL-HLS" } else { "HLS" };
+        let mode = if short_segments {
+            "HLS (short segments)"
+        } else {
+            "HLS"
+        };
         log::info!("{mode} output started: {playlist} ({width}x{height} @ {fps}fps)");
 
         let stdin = child.stdin.take().expect("ffmpeg stdin not piped");
@@ -1743,6 +1990,7 @@ impl FfmpegSubprocess {
             .args(&plan.video_args)
             .args(a_out)
             .args(&plan.muxer_args)
+            .args(segment_gop_args(2, fps))
             .args(["-seg_duration", "2"])
             .args(["-window_size", "30"])
             .args(["-extra_window_size", "5"])
@@ -1834,6 +2082,9 @@ impl FfmpegSubprocess {
             | ReadbackFormat::Rgb10A2
             | ReadbackFormat::P216 => 4,
             ReadbackFormat::Rgba16Float | ReadbackFormat::Rgba16Unorm => 8,
+            // Never an FFmpeg input format: this is the content light meter's
+            // own readback, which never reaches an encoder.
+            ReadbackFormat::Rgba32Float => 16,
             ReadbackFormat::Uyvy => 2,
         };
         let expected_stride = contract.width * bytes_per_pixel;
@@ -2186,6 +2437,7 @@ mod tests {
         PresentationRequest {
             depth: PresentationDepth::Sdr10,
             dither: true,
+            ..PresentationRequest::default()
         }
     }
 
@@ -2627,7 +2879,7 @@ mod tests {
         assert_eq!(hls.resolved.resolved, PresentationDepth::Sdr10);
         assert!(has_pair(&hls.muxer_args, "-tag:v", "hvc1"));
         assert!(has_pair(&hls.muxer_args, "-f", "hls"));
-        let hls_segments = hls_segment_args("stream", false, true);
+        let hls_segments = hls_segment_args("stream", false, true, 60);
         assert!(has_pair(&hls_segments, "-hls_segment_type", "fmp4"));
         assert!(has_pair(
             &hls_segments,
@@ -3245,5 +3497,797 @@ mod tests {
         let (maxrate, bufsize) = compute_rtmp_bitrate(3840, 2160, 30);
         assert_eq!(maxrate, 15000);
         assert_eq!(bufsize, 30000);
+    }
+
+    fn hdr10_request(peak: u16) -> PresentationRequest {
+        PresentationRequest {
+            depth: PresentationDepth::Sdr10,
+            transfer: PresentationTransfer::Hdr10Pq,
+            peak_nits: peak,
+            ..PresentationRequest::default()
+        }
+    }
+
+    #[test]
+    fn hevc_hdr10_pins_pq_bt2020_and_mastering_metadata() {
+        let plan = RecordingPlan::resolve(
+            &RecordingCodec::H265,
+            hdr10_request(1000),
+            ReadbackFormat::Rgb10A2,
+            Some("Supported pixel formats: yuv420p yuv420p10le"),
+        );
+
+        assert_eq!(plan.resolved.transfer, PresentationTransfer::Hdr10Pq);
+        assert_eq!(plan.resolved.resolved, PresentationDepth::Sdr10);
+        assert_eq!(plan.resolved.peak_nits, Some(1000));
+        assert_eq!(
+            plan.resolved.color_profile,
+            PresentationColorProfile::Pq2020Limited
+        );
+        assert!(plan.resolved.fallback_reason.is_none());
+
+        // What `ffprobe` reads back. These four are the acceptance bar for 50a.
+        assert!(has_pair(&plan.video_args, "-color_primaries", "bt2020"));
+        assert!(has_pair(&plan.video_args, "-color_trc", "smpte2084"));
+        assert!(has_pair(&plan.video_args, "-colorspace", "bt2020nc"));
+        assert!(has_pair(&plan.video_args, "-pix_fmt", "yuv420p10le"));
+
+        let params = plan
+            .video_args
+            .windows(2)
+            .find(|w| w[0] == "-x265-params")
+            .map(|w| w[1].clone())
+            .expect("HDR10 HEVC must carry x265 HDR signalling");
+        // Not yet measured across the programme, and the status says so rather
+        // than letting a declaration pass as a measurement.
+        assert_eq!(
+            plan.resolved.hdr_metadata,
+            Some(HdrMetadataSource::DeclaredFromPeak)
+        );
+        assert!(params.contains("hdr10=1"));
+        assert!(params.contains("master-display=G(8500,39850)"));
+        // ST 2086 luminance is derived from the configured peak, never hardcoded.
+        assert!(params.contains("L(10000000,1)"), "got {params}");
+    }
+
+    #[test]
+    fn mastering_display_luminance_follows_the_requested_peak() {
+        let plan = RecordingPlan::resolve(
+            &RecordingCodec::H265,
+            hdr10_request(4000),
+            ReadbackFormat::Rgb10A2,
+            Some("Supported pixel formats: yuv420p yuv420p10le"),
+        );
+        let params = plan
+            .video_args
+            .windows(2)
+            .find(|w| w[0] == "-x265-params")
+            .map(|w| w[1].clone())
+            .unwrap();
+        assert!(params.contains("L(40000000,1)"), "got {params}");
+    }
+
+    #[test]
+    fn sdr_recordings_keep_their_rec709_metadata_untouched() {
+        // The regression bar: an SDR recording must be byte-identical to before.
+        let plan = RecordingPlan::resolve(
+            &RecordingCodec::H264,
+            PresentationRequest::default(),
+            ReadbackFormat::Rgba8,
+            Some("Supported pixel formats: yuv420p"),
+        );
+        assert!(has_pair(&plan.video_args, "-color_primaries", "bt709"));
+        assert!(has_pair(&plan.video_args, "-color_trc", "bt709"));
+        assert!(has_pair(&plan.video_args, "-colorspace", "bt709"));
+        assert!(!plan.video_args.iter().any(|a| a == "-x265-params"));
+        assert_eq!(plan.resolved.transfer, PresentationTransfer::Sdr);
+        assert_eq!(plan.resolved.peak_nits, None);
+    }
+
+    #[test]
+    fn hdr10_on_an_eight_bit_codec_falls_back_and_names_the_codec() {
+        let plan = RecordingPlan::resolve(
+            &RecordingCodec::H264,
+            hdr10_request(1000),
+            ReadbackFormat::Rgba8,
+            Some("Supported pixel formats: yuv420p"),
+        );
+
+        assert_eq!(plan.resolved.transfer, PresentationTransfer::Sdr);
+        assert_eq!(plan.resolved.peak_nits, None);
+        let reason = plan.resolved.fallback_reason.expect("must explain itself");
+        assert!(reason.contains("H.264"), "reason was: {reason}");
+        assert!(reason.contains("HDR10"), "reason was: {reason}");
+        // A degraded output still produces a valid SDR stream.
+        assert!(has_pair(&plan.video_args, "-color_trc", "bt709"));
+    }
+
+    #[test]
+    fn hdr10_on_prores_falls_back_rather_than_half_supporting_it() {
+        // ProRes can hold PQ container tags but has no ST 2086 or MaxCLL path,
+        // so 50a refuses it instead of shipping partial metadata.
+        let plan = RecordingPlan::resolve(
+            &RecordingCodec::ProRes,
+            hdr10_request(1000),
+            ReadbackFormat::Rgb10A2,
+            Some("Supported pixel formats: yuv422p10le"),
+        );
+        assert_eq!(plan.resolved.transfer, PresentationTransfer::Sdr);
+        assert!(
+            plan.resolved
+                .fallback_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("HEVC or AV1"))
+        );
+    }
+
+    #[test]
+    fn hdr10_still_uses_packed_rgb10_readback() {
+        // PQ-encoded BT.2020 occupies the same four bytes per pixel, so HDR adds
+        // no readback bandwidth over 10-bit SDR.
+        let plan = RecordingPlan::resolve(
+            &RecordingCodec::H265,
+            hdr10_request(1000),
+            ReadbackFormat::Rgb10A2,
+            Some("Supported pixel formats: yuv420p yuv420p10le"),
+        );
+        assert_eq!(plan.expected_readback, ReadbackFormat::Rgb10A2);
+    }
+
+    #[test]
+    fn an_eight_bit_hdr_request_is_normalized_to_ten_bit() {
+        let plan = RecordingPlan::resolve(
+            &RecordingCodec::H265,
+            PresentationRequest {
+                depth: PresentationDepth::Sdr8,
+                transfer: PresentationTransfer::Hdr10Pq,
+                ..PresentationRequest::default()
+            },
+            ReadbackFormat::Rgb10A2,
+            Some("Supported pixel formats: yuv420p yuv420p10le"),
+        );
+        assert_eq!(plan.resolved.resolved, PresentationDepth::Sdr10);
+        assert_eq!(plan.resolved.transfer, PresentationTransfer::Hdr10Pq);
+    }
+
+    /// The acceptance blocker from /spec/hdr-recording-output.md § FFmpeg Contract.
+    ///
+    /// `-colorspace bt2020nc` only *tags* the stream. This proves the pixels were
+    /// actually converted with BT.2020 coefficients, by encoding a saturated patch
+    /// through the real recording plan and reading luma back out of the decoded
+    /// frame. A neutral patch cannot test this: BT.2020 and Rec.709 luma agree
+    /// exactly on greys, so only a saturated colour separates them.
+    /// The VUI half of level-3 acceptance, held by reading the encoded file back.
+    ///
+    /// Argument-level assertions cannot catch this. FFmpeg's `-color_primaries`
+    /// and `-color_trc` are not forwarded into x265, so a plan whose argv looks
+    /// completely correct produced a file reporting
+    /// `color_transfer=unknown, color_primaries=unknown` and an encoder log
+    /// saying `Disabling hdr10-opt`. Only decoding the result showed it.
+    #[test]
+    fn hdr10_recording_writes_pq_and_bt2020_into_the_bitstream() {
+        if !ffmpeg_available() {
+            return;
+        }
+        const W: usize = 64;
+        const H: usize = 64;
+
+        let plan = RecordingPlan::resolve(
+            &RecordingCodec::H265,
+            hdr10_request(1000),
+            ReadbackFormat::Rgb10A2,
+            probe_encoder_help("libx265").as_deref(),
+        );
+        if plan.resolved.transfer != PresentationTransfer::Hdr10Pq {
+            return;
+        }
+
+        let texel: u32 = 594 | (594 << 10) | (594 << 20);
+        let frame: Vec<u8> = std::iter::repeat_n(texel, W * H)
+            .flat_map(u32::to_le_bytes)
+            .collect();
+
+        let path = std::env::temp_dir().join(format!(
+            "varda-hdr10-vui-{}-{}.mp4",
+            std::process::id(),
+            crate::deck::generate_short_uuid()
+        ));
+        let mut cmd = Command::new("ffmpeg");
+        cmd.args(["-v", "error", "-y", "-f", "rawvideo"])
+            .args(["-pix_fmt", plan.input_pixel_format])
+            .args(["-s", &format!("{W}x{H}")])
+            .args(["-r", "30", "-i", "-"])
+            .args(&plan.video_args)
+            .args(["-frames:v", "1"])
+            .arg(&path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        let mut encoder = cmd.spawn().expect("spawn hdr10 encode");
+        encoder
+            .stdin
+            .take()
+            .expect("piped stdin")
+            .write_all(&frame)
+            .expect("write frame");
+        let encoded = encoder.wait_with_output().expect("finish encode");
+        assert!(
+            encoded.status.success(),
+            "{}",
+            String::from_utf8_lossy(&encoded.stderr)
+        );
+        let log = String::from_utf8_lossy(&encoded.stderr);
+        assert!(
+            !log.contains("Disabling hdr10-opt"),
+            "x265 could not see the colour contract: {log}"
+        );
+
+        let probe = Command::new("ffprobe")
+            .args(["-v", "error", "-show_entries"])
+            .args(["stream=color_transfer,color_primaries,color_space"])
+            .args(["-of", "default=noprint_wrappers=1"])
+            .arg(&path)
+            .output()
+            .expect("probe hdr10 file");
+        let _ = std::fs::remove_file(&path);
+        let report = String::from_utf8_lossy(&probe.stdout);
+
+        for expected in [
+            "color_transfer=smpte2084",
+            "color_primaries=bt2020",
+            "color_space=bt2020nc",
+        ] {
+            assert!(
+                report.contains(expected),
+                "the encoded file does not report {expected}; ffprobe said:\n{report}"
+            );
+        }
+    }
+
+    #[test]
+    fn hdr10_recording_actually_converts_with_the_bt2020_matrix() {
+        if !ffmpeg_available() {
+            return;
+        }
+        const W: usize = 64;
+        const H: usize = 64;
+
+        // 10-bit limited-range luma for a full-intensity primary:
+        //   Y = 64 + 876 * (kr*R + kg*G + kb*B)
+        // BT.2020 NCL kr/kg/kb = 0.2627/0.6780/0.0593
+        // Rec.709      kr/kg/kb = 0.2126/0.7152/0.0722
+        // Red separates them by 44 codes, green by 33.
+        for (label, (r, g, b), bt2020_y, bt709_y) in [
+            ("red", (1023u32, 0u32, 0u32), 294.1_f64, 250.2_f64),
+            ("green", (0, 1023, 0), 657.9, 690.5),
+        ] {
+            // x2bgr10le: X(2) B(10) G(10) R(10) from most to least significant,
+            // so red occupies the low bits. Matches wgpu `Rgb10a2Unorm`.
+            let texel: u32 = r | (g << 10) | (b << 20);
+            let mut frame = Vec::with_capacity(W * H * 4);
+            for _ in 0..(W * H) {
+                frame.extend_from_slice(&texel.to_le_bytes());
+            }
+
+            let plan = RecordingPlan::resolve(
+                &RecordingCodec::H265,
+                hdr10_request(1000),
+                ReadbackFormat::Rgb10A2,
+                probe_encoder_help("libx265").as_deref(),
+            );
+            if plan.resolved.transfer != PresentationTransfer::Hdr10Pq {
+                // No 10-bit libx265 on this machine; nothing to prove here.
+                return;
+            }
+
+            let path = std::env::temp_dir().join(format!(
+                "varda-hdr10-matrix-{label}-{}-{}.mp4",
+                std::process::id(),
+                crate::deck::generate_short_uuid()
+            ));
+            let mut cmd = Command::new("ffmpeg");
+            cmd.args(["-v", "error", "-y", "-f", "rawvideo"])
+                .args(["-pix_fmt", plan.input_pixel_format])
+                .args(["-s", &format!("{W}x{H}")])
+                .args(["-r", "30", "-i", "-"]);
+            cmd.args(&plan.video_args)
+                .args(["-frames:v", "1"])
+                .arg(&path)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped());
+            let mut encoder = cmd.spawn().expect("spawn hdr10 encode");
+            encoder
+                .stdin
+                .take()
+                .expect("piped stdin")
+                .write_all(&frame)
+                .expect("write packed RGB10 frame");
+            let encoded = encoder.wait_with_output().expect("finish hdr10 encode");
+            assert!(
+                encoded.status.success(),
+                "{}",
+                String::from_utf8_lossy(&encoded.stderr)
+            );
+
+            let decoded = Command::new("ffmpeg")
+                .args(["-v", "error", "-i"])
+                .arg(&path)
+                .args([
+                    "-frames:v",
+                    "1",
+                    "-f",
+                    "rawvideo",
+                    "-pix_fmt",
+                    "yuv420p10le",
+                    "-",
+                ])
+                .output()
+                .expect("decode hdr10 frame");
+            let _ = std::fs::remove_file(&path);
+            assert!(
+                decoded.status.success(),
+                "{}",
+                String::from_utf8_lossy(&decoded.stderr)
+            );
+
+            // Planar: the luma plane leads, 10-bit values in 16-bit words.
+            let luma: Vec<u16> = decoded.stdout[..W * H * 2]
+                .chunks_exact(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect();
+            let mean =
+                f64::from(luma.iter().map(|&y| u32::from(y)).sum::<u32>()) / (luma.len() as f64);
+
+            let to_bt2020 = (mean - bt2020_y).abs();
+            let to_bt709 = (mean - bt709_y).abs();
+            assert!(
+                to_bt2020 < to_bt709,
+                "{label}: decoded luma {mean:.1} is closer to the Rec.709 value \
+                 ({bt709_y}) than the BT.2020 one ({bt2020_y}). The stream is tagged \
+                 bt2020nc but was converted with the wrong matrix."
+            );
+            assert!(
+                to_bt2020 < 12.0,
+                "{label}: decoded luma {mean:.1} drifted from the BT.2020 expectation \
+                 {bt2020_y} by more than lossy encoding accounts for"
+            );
+        }
+    }
+
+    fn hdr_stream_request(transfer: PresentationTransfer) -> PresentationRequest {
+        PresentationRequest {
+            depth: PresentationDepth::Sdr10,
+            transfer,
+            peak_nits: 1000,
+            ..PresentationRequest::default()
+        }
+    }
+
+    fn hevc_capable() -> StreamingCapabilities {
+        StreamingCapabilities {
+            hevc_main10: true,
+            av1_10: true,
+            enhanced_hevc: true,
+            enhanced_av1: true,
+        }
+    }
+
+    /// Bitstream evidence for HLG, the same discipline 50a's PQ path needed.
+    ///
+    /// Argument assertions cannot see whether the encoder wrote the contract into
+    /// the VUI. For PQ that gap hid a real bug (FFmpeg not forwarding `-color_*`
+    /// into x265), so HLG is held to the same bar: encode, probe, compare.
+    #[test]
+    fn hlg_streaming_writes_arib_and_bt2020_into_the_bitstream() {
+        if !ffmpeg_available() {
+            return;
+        }
+        const W: usize = 64;
+        const H: usize = 64;
+
+        let plan = StreamingPlan::resolve(
+            StreamingProtocol::Srt,
+            StreamingCodec::H265,
+            hdr_stream_request(PresentationTransfer::Hlg),
+            StreamingCapabilities::installed(),
+        );
+        if plan.resolved.transfer != PresentationTransfer::Hlg {
+            return;
+        }
+
+        // 75% signal is HDR reference white, where Varda's linear 1.0 lands.
+        let code = 767_u32;
+        let texel = code | (code << 10) | (code << 20);
+        let frame: Vec<u8> = std::iter::repeat_n(texel, W * H)
+            .flat_map(u32::to_le_bytes)
+            .collect();
+
+        let path = std::env::temp_dir().join(format!(
+            "varda-hlg-vui-{}-{}.mp4",
+            std::process::id(),
+            crate::deck::generate_short_uuid()
+        ));
+        let mut cmd = Command::new("ffmpeg");
+        cmd.args(["-v", "error", "-y", "-f", "rawvideo"])
+            .args(["-pix_fmt", plan.input_pixel_format])
+            .args(["-s", &format!("{W}x{H}")])
+            .args(["-r", "30", "-i", "-"])
+            .args(&plan.video_args)
+            .args(["-frames:v", "1"])
+            .arg(&path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        let mut encoder = cmd.spawn().expect("spawn hlg encode");
+        encoder
+            .stdin
+            .take()
+            .expect("piped stdin")
+            .write_all(&frame)
+            .expect("write frame");
+        let encoded = encoder.wait_with_output().expect("finish encode");
+        assert!(
+            encoded.status.success(),
+            "{}",
+            String::from_utf8_lossy(&encoded.stderr)
+        );
+
+        let probe = Command::new("ffprobe")
+            .args(["-v", "error", "-show_entries"])
+            .args(["stream=color_transfer,color_primaries,color_space"])
+            .args(["-of", "default=noprint_wrappers=1"])
+            .arg(&path)
+            .output()
+            .expect("probe hlg file");
+        let report = String::from_utf8_lossy(&probe.stdout).into_owned();
+
+        let frames = Command::new("ffprobe")
+            .args(["-v", "error", "-select_streams", "v:0", "-show_frames"])
+            .args(["-read_intervals", "%+#1", "-of", "json"])
+            .arg(&path)
+            .output()
+            .expect("probe hlg side data");
+        let _ = std::fs::remove_file(&path);
+        let side = String::from_utf8_lossy(&frames.stdout);
+
+        for expected in [
+            "color_transfer=arib-std-b67",
+            "color_primaries=bt2020",
+            "color_space=bt2020nc",
+        ] {
+            assert!(
+                report.contains(expected),
+                "the encoded stream does not report {expected}; ffprobe said:\n{report}"
+            );
+        }
+        // HLG requires no mastering metadata, and writing it anyway would be a
+        // claim about a display that was never involved.
+        assert!(
+            !side.contains("Mastering display metadata"),
+            "HLG must not carry ST 2086 mastering metadata"
+        );
+        assert!(
+            !side.contains("Content light level"),
+            "HLG must not carry CTA-861.3 content light level"
+        );
+    }
+
+    #[test]
+    fn hlg_streams_carry_arib_transfer_and_no_mastering_metadata() {
+        let plan = StreamingPlan::resolve(
+            StreamingProtocol::Hls,
+            StreamingCodec::H265,
+            hdr_stream_request(PresentationTransfer::Hlg),
+            hevc_capable(),
+        );
+        assert_eq!(plan.resolved.transfer, PresentationTransfer::Hlg);
+        assert!(has_pair(&plan.video_args, "-color_trc", "arib-std-b67"));
+        assert!(has_pair(&plan.video_args, "-color_primaries", "bt2020"));
+        assert!(has_pair(&plan.video_args, "-colorspace", "bt2020nc"));
+
+        // The property that makes HLG the right live default.
+        assert_eq!(plan.resolved.peak_nits, None);
+        assert_eq!(plan.resolved.hdr_metadata, None);
+        let params = plan
+            .video_args
+            .windows(2)
+            .find(|w| w[0] == "-x265-params")
+            .map(|w| w[1].clone())
+            .expect("HLG must still signal its colour contract to x265");
+        assert!(params.contains("transfer=arib-std-b67"));
+        assert!(
+            !params.contains("master-display") && !params.contains("max-cll"),
+            "HLG requires no mastering metadata: {params}"
+        );
+    }
+
+    #[test]
+    fn pq_streams_carry_mastering_metadata_declared_from_peak() {
+        let plan = StreamingPlan::resolve(
+            StreamingProtocol::Dash,
+            StreamingCodec::H265,
+            hdr_stream_request(PresentationTransfer::Hdr10Pq),
+            hevc_capable(),
+        );
+        assert!(has_pair(&plan.video_args, "-color_trc", "smpte2084"));
+        assert_eq!(plan.resolved.peak_nits, Some(1000));
+        assert_eq!(
+            plan.resolved.hdr_metadata,
+            Some(HdrMetadataSource::DeclaredFromPeak)
+        );
+    }
+
+    #[test]
+    fn hdr_hls_signals_through_the_bitstream_not_the_playlist() {
+        // A master playlist was implemented to carry VIDEO-RANGE and measured to
+        // be useless for it: FFmpeg's HLS muxer never emits that attribute. The
+        // HDR contract reaches players through the segment VUI instead, so the
+        // muxer arguments must stay identical to the SDR shape.
+        let hdr = StreamingPlan::resolve(
+            StreamingProtocol::Hls,
+            StreamingCodec::H265,
+            hdr_stream_request(PresentationTransfer::Hlg),
+            hevc_capable(),
+        );
+        assert!(!hdr.muxer_args.iter().any(|a| a == "-master_pl_name"));
+        assert!(has_pair(&hdr.video_args, "-color_trc", "arib-std-b67"));
+
+        let sdr = StreamingPlan::resolve(
+            StreamingProtocol::Hls,
+            StreamingCodec::H264,
+            PresentationRequest::default(),
+            hevc_capable(),
+        );
+        assert!(has_pair(&sdr.video_args, "-color_trc", "bt709"));
+    }
+
+    #[test]
+    fn legacy_rtmp_refuses_hdr_and_names_the_endpoint_contract() {
+        let plan = StreamingPlan::resolve(
+            StreamingProtocol::Rtmp(RtmpCodecContract::Legacy),
+            StreamingCodec::H265,
+            hdr_stream_request(PresentationTransfer::Hlg),
+            hevc_capable(),
+        );
+        assert_eq!(plan.resolved.transfer, PresentationTransfer::Sdr);
+        let reason = plan.resolved.fallback_reason.expect("must explain itself");
+        assert!(reason.contains("legacy RTMP"), "reason was: {reason}");
+    }
+
+    #[test]
+    fn enhanced_rtmp_carries_hdr() {
+        let plan = StreamingPlan::resolve(
+            StreamingProtocol::Rtmp(RtmpCodecContract::Enhanced),
+            StreamingCodec::H265,
+            hdr_stream_request(PresentationTransfer::Hlg),
+            hevc_capable(),
+        );
+        assert_eq!(plan.resolved.transfer, PresentationTransfer::Hlg);
+    }
+
+    #[test]
+    fn hdr_streaming_degrades_when_the_encoder_lacks_ten_bit() {
+        let plan = StreamingPlan::resolve(
+            StreamingProtocol::Srt,
+            StreamingCodec::H265,
+            hdr_stream_request(PresentationTransfer::Hdr10Pq),
+            StreamingCapabilities::default(),
+        );
+        assert_eq!(plan.resolved.transfer, PresentationTransfer::Sdr);
+        assert!(
+            plan.resolved
+                .fallback_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("Main10"))
+        );
+    }
+
+    #[test]
+    fn an_sdr_stream_is_unchanged_by_the_hdr_work() {
+        let plan = StreamingPlan::resolve(
+            StreamingProtocol::Srt,
+            StreamingCodec::H264,
+            PresentationRequest::default(),
+            hevc_capable(),
+        );
+        assert_eq!(plan.resolved.transfer, PresentationTransfer::Sdr);
+        assert!(has_pair(&plan.video_args, "-color_trc", "bt709"));
+        assert!(!plan.video_args.iter().any(|a| a == "-x265-params"));
+        assert_eq!(plan.resolved.hdr_metadata, None);
+    }
+
+    #[test]
+    fn hevc_streaming_does_not_pin_frame_threads_to_one() {
+        // `-tune zerolatency` sets frame-threads=1 and cannot sustain 1080p60
+        // ten-bit, which showed up in the field as a live stream steadily
+        // shedding frames. Measured 41.8 fps with the tune against a 60 fps
+        // target; 73.8 fps without it.
+        let plan = StreamingPlan::resolve(
+            StreamingProtocol::Hls,
+            StreamingCodec::H265,
+            PresentationRequest {
+                depth: PresentationDepth::Sdr10,
+                ..PresentationRequest::default()
+            },
+            hevc_capable(),
+        );
+        assert!(
+            !plan.video_args.iter().any(|a| a == "zerolatency"),
+            "HEVC streaming must not pin frame threads: {:?}",
+            plan.video_args
+        );
+    }
+
+    #[test]
+    fn hevc_streaming_keeps_output_order_equal_to_input_order() {
+        // The property a live feed actually needs. Frame-threading depth is a
+        // bounded pipeline delay; B-frame reordering is a correctness-shaped
+        // latency that also complicates segment boundaries.
+        let plan = StreamingPlan::resolve(
+            StreamingProtocol::Srt,
+            StreamingCodec::H265,
+            PresentationRequest::default(),
+            hevc_capable(),
+        );
+        let params = plan
+            .video_args
+            .windows(2)
+            .find(|w| w[0] == "-x265-params")
+            .map(|w| w[1].clone())
+            .expect("HEVC streaming must pin its latency settings");
+        assert!(params.contains("bframes=0"), "got {params}");
+    }
+
+    #[test]
+    fn latency_and_hdr_params_share_one_x265_params_argument() {
+        // FFmpeg takes `-x265-params` once; passing it twice silently drops the
+        // first. Merging is what keeps both the latency and the colour contract.
+        let plan = StreamingPlan::resolve(
+            StreamingProtocol::Hls,
+            StreamingCodec::H265,
+            hdr_stream_request(PresentationTransfer::Hlg),
+            hevc_capable(),
+        );
+        let occurrences = plan
+            .video_args
+            .iter()
+            .filter(|a| *a == "-x265-params")
+            .count();
+        assert_eq!(occurrences, 1, "x265 params must be passed exactly once");
+
+        let params = plan
+            .video_args
+            .windows(2)
+            .find(|w| w[0] == "-x265-params")
+            .map(|w| w[1].clone())
+            .unwrap();
+        assert!(
+            params.contains("bframes=0"),
+            "latency settings lost: {params}"
+        );
+        assert!(
+            params.contains("transfer=arib-std-b67"),
+            "colour contract lost: {params}"
+        );
+    }
+
+    #[test]
+    fn eight_bit_h264_streaming_is_untouched() {
+        // libx264 measured 326 fps on the same clip and its zerolatency tune does
+        // not disable frame threading, so it keeps the tighter setting.
+        let plan = StreamingPlan::resolve(
+            StreamingProtocol::Srt,
+            StreamingCodec::H264,
+            PresentationRequest::default(),
+            hevc_capable(),
+        );
+        assert!(plan.video_args.iter().any(|a| a == "zerolatency"));
+        assert!(!plan.video_args.iter().any(|a| a == "-x265-params"));
+    }
+
+    fn gop_of(args: &[String]) -> Option<u32> {
+        args.windows(2)
+            .find(|w| w[0] == "-g")
+            .and_then(|w| w[1].parse().ok())
+    }
+
+    fn hls_time_of(args: &[String]) -> Option<u32> {
+        args.windows(2)
+            .find(|w| w[0] == "-hls_time")
+            .and_then(|w| w[1].parse().ok())
+    }
+
+    /// A segmented muxer can only cut on a keyframe, so a segment duration is
+    /// only real if the GOP matches it. LL-HLS asked for 1s and got 4.166667s
+    /// (x265's default keyint of 250 at 60fps), which stalled the player.
+    #[test]
+    fn segment_duration_and_keyframe_interval_always_agree() {
+        for fps in [24, 25, 30, 50, 60] {
+            for (short_segments, use_fmp4) in [(true, true), (false, true), (false, false)] {
+                let args = hls_segment_args("/tmp/x", short_segments, use_fmp4, fps);
+                let gop = gop_of(&args).expect("a segmented output must pin its GOP");
+                let time = hls_time_of(&args).expect("hls_time is always set");
+                assert_eq!(
+                    gop,
+                    time * fps,
+                    "at {fps}fps a {time}s segment needs a {}-frame GOP, got {gop}",
+                    time * fps
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ll_hls_asks_for_one_second_segments_and_can_actually_get_them() {
+        let args = hls_segment_args("/tmp/x", true, true, 60);
+        assert_eq!(hls_time_of(&args), Some(1));
+        assert_eq!(
+            gop_of(&args),
+            Some(60),
+            "a 1s segment at 60fps needs a keyframe every 60 frames"
+        );
+    }
+
+    #[test]
+    fn a_gop_is_never_zero_however_odd_the_frame_rate() {
+        // Guards the arithmetic rather than any real configuration: a zero GOP
+        // would make FFmpeg emit an all-intra stream or reject the argument.
+        assert_eq!(gop_of(&segment_gop_args(1, 0)), Some(1));
+        assert_eq!(gop_of(&segment_gop_args(0, 60)), Some(1));
+    }
+
+    /// FFmpeg's HLS muxer emits no partial segments, so the player must not be
+    /// told to run in a mode that depends on them. Doing so froze the stream
+    /// within seconds while plain HLS from the same engine played fine.
+    #[test]
+    fn the_reduced_latency_player_does_not_claim_ll_hls() {
+        let dir = std::env::temp_dir().join(format!(
+            "varda-player-{}-{}",
+            std::process::id(),
+            crate::deck::generate_short_uuid()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().to_string();
+        write_stream_player(&path, "hls", "index.m3u8", true);
+        let page = std::fs::read_to_string(dir.join("player.html")).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(
+            !page.contains("lowLatencyMode"),
+            "hls.js low-latency mode needs EXT-X-PART, which FFmpeg never writes"
+        );
+    }
+
+    /// Whatever the live-edge target, the player needs more cushion than one
+    /// segment of jitter, or a single late segment stalls it permanently.
+    #[test]
+    fn the_reduced_latency_player_buffers_more_than_one_segment() {
+        let dir = std::env::temp_dir().join(format!(
+            "varda-player-buf-{}-{}",
+            std::process::id(),
+            crate::deck::generate_short_uuid()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().to_string();
+        write_stream_player(&path, "hls", "index.m3u8", true);
+        let page = std::fs::read_to_string(dir.join("player.html")).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let buffer: u32 = page
+            .split("maxBufferLength:")
+            .nth(1)
+            .and_then(|rest| {
+                rest.split(|c: char| !c.is_ascii_digit())
+                    .next()
+                    .and_then(|n| n.parse().ok())
+            })
+            .expect("the reduced-latency player pins its buffer length");
+        // Segments are one second in this mode; anything at or below that leaves
+        // no room for a late one.
+        assert!(
+            buffer >= 4,
+            "a {buffer}s buffer against one-second segments is too thin to absorb jitter"
+        );
     }
 }

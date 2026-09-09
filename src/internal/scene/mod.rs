@@ -771,7 +771,7 @@ pub enum OutputTargetConfig {
         #[serde(default)]
         codec: String,
         #[serde(default)]
-        low_latency: bool,
+        short_segments: bool,
         #[serde(default)]
         audio_device: Option<String>,
     },
@@ -834,6 +834,10 @@ pub struct OutputConfig {
     /// Requested SDR precision and deterministic presentation dithering.
     #[serde(default, flatten)]
     pub presentation: crate::engine::value::render::PresentationRequest,
+    /// Per-output tonemap override. Absent means inherit the show-wide curve,
+    /// which is what every stage written before this field did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tonemap_override: Option<crate::engine::value::render::TonemapMode>,
 }
 
 impl OutputConfig {
@@ -851,6 +855,7 @@ impl OutputConfig {
             edge_blend: crate::renderer::edge_blend::EdgeBlendConfig::default(),
             rotation: crate::renderer::context::OutputRotation::default(),
             presentation: crate::engine::value::render::PresentationRequest::default(),
+            tonemap_override: None,
         }
     }
 }
@@ -2121,6 +2126,93 @@ mod tests {
         assert_eq!(
             output.presentation,
             crate::engine::value::render::PresentationRequest::default()
+        );
+    }
+
+    #[test]
+    fn a_stage_written_before_the_short_segments_rename_still_loads() {
+        // The field was called `low_latency` until it was measured and found not
+        // to be RFC low-latency HLS. Existing `.varda/` directories must keep
+        // working, so the old name is accepted as an alias.
+        use crate::engine::value::render::OutputTarget;
+        let json = serde_json::json!({
+            "HlsStream": { "name": "live", "codec": "H265", "low_latency": true }
+        });
+        let target: OutputTarget = serde_json::from_value(json).unwrap();
+        match target {
+            OutputTarget::HlsStream { short_segments, .. } => {
+                assert!(short_segments, "the old field name must still be honoured");
+            }
+            other => panic!("expected an HLS stream, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tonemap_override_survives_a_stage_round_trip() {
+        use crate::engine::value::render::TonemapMode;
+        let mut output: OutputConfig = serde_json::from_str(r#"{"name":"Main"}"#).unwrap();
+        output.tonemap_override = Some(TonemapMode::AgX);
+
+        let value = serde_json::to_value(&output).unwrap();
+        assert_eq!(value["tonemap_override"], "AgX");
+        let back: OutputConfig = serde_json::from_value(value).unwrap();
+        assert_eq!(back.tonemap_override, Some(TonemapMode::AgX));
+    }
+
+    #[test]
+    fn an_inheriting_output_writes_no_tonemap_override_key() {
+        // Inherit is the overwhelmingly common case, so it stays absent from
+        // stage.json rather than writing a null on every output.
+        let output: OutputConfig = serde_json::from_str(r#"{"name":"Main"}"#).unwrap();
+        assert_eq!(output.tonemap_override, None);
+        let value = serde_json::to_value(&output).unwrap();
+        assert!(
+            value.get("tonemap_override").is_none(),
+            "an inheriting output should not write the key"
+        );
+    }
+
+    #[test]
+    fn a_stage_written_before_per_output_tonemap_loads_as_inheriting() {
+        let loaded: OutputConfig =
+            serde_json::from_str(r#"{"name":"Main","presentation_depth":"sdr10"}"#).unwrap();
+        assert_eq!(loaded.tonemap_override, None);
+    }
+
+    #[test]
+    fn hdr_presentation_fields_survive_a_stage_round_trip() {
+        use crate::engine::value::render::{PresentationMode, PresentationTransfer};
+        let mut output: OutputConfig = serde_json::from_str(r#"{"name":"Main"}"#).unwrap();
+        output.presentation = output.presentation.with_mode(PresentationMode::Hdr10);
+        output.presentation.peak_nits = 4000;
+
+        let value = serde_json::to_value(&output).unwrap();
+        assert_eq!(value["presentation_depth"], "sdr10");
+        assert_eq!(value["transfer"], "hdr10_pq");
+        assert_eq!(value["peak_nits"], 4000);
+
+        let back: OutputConfig = serde_json::from_value(value).unwrap();
+        assert_eq!(back.presentation.transfer, PresentationTransfer::Hdr10Pq);
+        assert_eq!(back.presentation.peak_nits, 4000);
+        assert_eq!(back.presentation.mode(), PresentationMode::Hdr10);
+    }
+
+    #[test]
+    fn a_pre_hdr_stage_file_loads_as_sdr() {
+        use crate::engine::value::render::{PresentationMode, PresentationTransfer};
+        // Exactly what a Phase 49 build wrote: no transfer, no peak.
+        let json = serde_json::json!({
+            "uuid": "out00001",
+            "name": "Main",
+            "presentation_depth": "sdr10",
+            "dither": true,
+        });
+        let loaded: OutputConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(loaded.presentation.transfer, PresentationTransfer::Sdr);
+        assert_eq!(loaded.presentation.mode(), PresentationMode::Sdr10);
+        assert_eq!(
+            loaded.presentation.peak_nits,
+            crate::engine::value::render::HDR_DEFAULT_PEAK_NITS
         );
     }
 

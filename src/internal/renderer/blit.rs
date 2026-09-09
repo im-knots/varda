@@ -32,6 +32,12 @@ struct BlitParams {
     quantization_levels: f32,
     /// 1 enables deterministic destination-aware RGB dithering.
     dither_enabled: u32,
+    /// Transfer: 0 = SDR (sRGB), 1 = HDR10 (ST 2084 PQ), 2 = HLG. Mirrors the
+    /// branch in `blit.wgsl`.
+    transfer: u32,
+    /// Peak luminance in cd/m² for the PQ path. Unused for SDR and for HLG,
+    /// which is relative and has no peak.
+    peak_nits: f32,
     /// Uniform structs are padded to a 16-byte multiple for WGSL layout.
     _padding: [u32; 2],
 }
@@ -61,9 +67,17 @@ fn presentation_encoding(
         PresentationDepth::Sdr8 => 255.0,
         PresentationDepth::Sdr10 => 1023.0,
     };
-    let explicit_srgb_encode =
-        presentation.resolved == PresentationDepth::Sdr10 && !adapter_encodes_after_the_blit;
-    let dither = presentation.dither && !adapter_encodes_after_the_blit;
+    // The PQ path always encodes in the shader: an HDR surface is never an
+    // `*Srgb` format, so there is no hardware transfer to defer to.
+    let explicit_srgb_encode = !presentation.transfer.is_hdr()
+        && presentation.resolved == PresentationDepth::Sdr10
+        && !adapter_encodes_after_the_blit;
+    // EDR targets a float surface, so there is no integer quantization for a
+    // dither pattern to sit in front of. Dithering it would add noise for
+    // nothing.
+    let dither = presentation.dither
+        && presentation.transfer.encodes_a_transfer()
+        && !adapter_encodes_after_the_blit;
     (quantization_levels, explicit_srgb_encode, dither)
 }
 
@@ -138,6 +152,8 @@ impl BlitPipeline {
                 srgb_encode: 0,
                 quantization_levels: 0.0,
                 dither_enabled: 0,
+                transfer: 0,
+                peak_nits: 0.0,
                 _padding: [0; 2],
             }]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
@@ -284,6 +300,8 @@ impl BlitPipeline {
                 srgb_encode: 0,
                 quantization_levels: 0.0,
                 dither_enabled: 0,
+                transfer: 0,
+                peak_nits: 0.0,
                 _padding: [0; 2],
             }]),
         );
@@ -309,6 +327,8 @@ impl BlitPipeline {
                 srgb_encode: 0,
                 quantization_levels: 0.0,
                 dither_enabled: 0,
+                transfer: 0,
+                peak_nits: 0.0,
                 _padding: [0; 2],
             }]),
         );
@@ -338,6 +358,8 @@ impl BlitPipeline {
                 srgb_encode: u32::from(encode),
                 quantization_levels: 0.0,
                 dither_enabled: 0,
+                transfer: 0,
+                peak_nits: 0.0,
                 _padding: [0; 2],
             }]),
         );
@@ -357,6 +379,8 @@ impl BlitPipeline {
                 srgb_encode: 0,
                 quantization_levels: 0.0,
                 dither_enabled: 0,
+                transfer: 0,
+                peak_nits: 0.0,
                 _padding: [0; 2],
             }]),
         );
@@ -385,6 +409,15 @@ impl BlitPipeline {
                 // NDI P216 dithers Y, U and V immediately before ten-bit
                 // quantization in its dedicated GPU conversion pass.
                 dither_enabled: u32::from(dither_enabled),
+                transfer: match presentation.transfer {
+                    crate::engine::value::render::PresentationTransfer::Sdr => 0,
+                    crate::engine::value::render::PresentationTransfer::Hdr10Pq => 1,
+                    crate::engine::value::render::PresentationTransfer::Hlg => 2,
+                    // EDR encodes nothing: the shader passes linear values
+                    // through to an extended-range surface.
+                    crate::engine::value::render::PresentationTransfer::EdrLinear => 3,
+                },
+                peak_nits: presentation.peak_nits.map_or(0.0, f32::from),
                 _padding: [0; 2],
             }]),
         );
@@ -454,6 +487,8 @@ impl BlitPipeline {
                 srgb_encode: 0,
                 quantization_levels: 0.0,
                 dither_enabled: 0,
+                transfer: 0,
+                peak_nits: 0.0,
                 _padding: [0; 2],
             }]),
         );
@@ -1777,6 +1812,7 @@ mod tests {
             alpha_mode: AlphaMode::Opaque,
             dither: true,
             fallback_reason: None,
+            ..ResolvedPresentation::default()
         };
 
         assert_eq!(presentation_encoding(&presentation), (1023.0, true, true));
@@ -1796,6 +1832,7 @@ mod tests {
             alpha_mode: AlphaMode::Premultiplied,
             dither: true,
             fallback_reason: None,
+            ..ResolvedPresentation::default()
         };
         assert_eq!(presentation_encoding(&presentation), (255.0, false, true));
     }
@@ -1814,6 +1851,7 @@ mod tests {
             alpha_mode: AlphaMode::Opaque,
             dither: true,
             fallback_reason: None,
+            ..ResolvedPresentation::default()
         };
         assert_eq!(presentation_encoding(&presentation), (1023.0, true, true));
     }
@@ -1832,6 +1870,7 @@ mod tests {
             alpha_mode: AlphaMode::Opaque,
             dither: true,
             fallback_reason: None,
+            ..ResolvedPresentation::default()
         };
 
         assert_eq!(presentation_encoding(&presentation), (1023.0, false, false));
@@ -1851,6 +1890,7 @@ mod tests {
             alpha_mode: AlphaMode::Straight,
             dither: true,
             fallback_reason: None,
+            ..ResolvedPresentation::default()
         };
 
         assert_eq!(presentation_encoding(&presentation), (1023.0, true, true));
@@ -1944,6 +1984,7 @@ mod tests {
                 alpha_mode: AlphaMode::Straight,
                 dither: false,
                 fallback_reason: None,
+                ..ResolvedPresentation::default()
             },
         );
         let readback = ctx.device.create_buffer(&wgpu::BufferDescriptor {
@@ -2099,6 +2140,7 @@ mod tests {
                 alpha_mode: AlphaMode::Opaque,
                 dither: false,
                 fallback_reason: None,
+                ..ResolvedPresentation::default()
             },
         );
         let readback = ctx.device.create_buffer(&wgpu::BufferDescriptor {
@@ -2255,6 +2297,7 @@ mod tests {
                 alpha_mode: AlphaMode::Opaque,
                 dither,
                 fallback_reason: None,
+                ..ResolvedPresentation::default()
             },
         );
         let readback = ctx.device.create_buffer(&wgpu::BufferDescriptor {
@@ -2572,5 +2615,267 @@ mod tests {
         }
         // Cursor wrapped back to the first pool set after a full rotation.
         assert_eq!(pipeline.frame_cursor.get(), 0);
+    }
+
+    #[test]
+    fn hdr10_presentation_always_encodes_in_the_shader() {
+        use crate::engine::value::render::{
+            AlphaMode, PresentationColorProfile, PresentationDepth, PresentationPixelFormat,
+            PresentationTransfer, ResolvedPresentation,
+        };
+        // An HDR surface is never an `*Srgb` format, so there is no hardware
+        // transfer to defer to and the shader must own the encode.
+        let presentation = ResolvedPresentation {
+            requested: PresentationDepth::Sdr10,
+            resolved: PresentationDepth::Sdr10,
+            requested_transfer: PresentationTransfer::Hdr10Pq,
+            transfer: PresentationTransfer::Hdr10Pq,
+            peak_nits: Some(1000),
+            hdr_metadata: None,
+            pixel_format: PresentationPixelFormat::Rgb10A2,
+            color_profile: PresentationColorProfile::Pq2020Limited,
+            alpha_mode: AlphaMode::Opaque,
+            dither: true,
+            fallback_reason: None,
+        };
+        // `explicit_srgb_encode` must be false: the PQ branch runs instead.
+        assert_eq!(presentation_encoding(&presentation), (1023.0, false, true));
+    }
+
+    #[test]
+    fn hdr10_blit_matches_the_cpu_pq_reference_at_known_luminances() {
+        use crate::engine::value::render::{
+            AlphaMode, PresentationColorProfile, PresentationDepth, PresentationPixelFormat,
+            PresentationTransfer, ResolvedPresentation,
+        };
+        use crate::renderer::hdr;
+
+        const PEAK: u16 = 1000;
+        // Neutral greys: the BT.2020 matrix rows are normalized, so a neutral
+        // stays neutral and the shader result must equal the scalar reference
+        // exactly. Any drift is a transposed matrix or a wrong constant.
+        let probes: [f32; 6] = [
+            0.0,
+            0.5,
+            1.0,
+            2.0,
+            hdr::linear_headroom(f32::from(PEAK)),
+            50.0,
+        ];
+        // `copy_texture_to_buffer` needs a row pitch that is a multiple of
+        // `COPY_BYTES_PER_ROW_ALIGNMENT`. At four bytes per texel that means a
+        // width divisible by 64; the probes occupy the first few texels and the
+        // rest of the row is padding.
+        const WIDTH: u32 = 64;
+        let width = WIDTH;
+        assert!(probes.len() as u32 <= WIDTH);
+
+        let Ok(ctx) = GpuContext::new_headless() else {
+            return;
+        };
+        let Ok(pipeline) = BlitPipeline::new(&ctx.device, wgpu::TextureFormat::Rgb10a2Unorm) else {
+            return;
+        };
+        let source = ctx.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("HDR10 Probe Source"),
+            size: wgpu::Extent3d {
+                width,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let mut words = Vec::with_capacity(WIDTH as usize * 4);
+        for index in 0..WIDTH as usize {
+            let probe = probes.get(index).copied().unwrap_or(0.0);
+            let v = half::f16::from_f32(probe).to_bits();
+            words.extend_from_slice(&[v, v, v, half::f16::ONE.to_bits()]);
+        }
+        ctx.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &source,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(&words),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 8),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d {
+                width,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        let target = ctx.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("HDR10 Probe Target"),
+            size: wgpu::Extent3d {
+                width,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgb10a2Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let source_view = source.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = pipeline.create_bind_group(&ctx.device, &source_view);
+        pipeline.set_presentation(
+            &ctx.queue,
+            0,
+            &ResolvedPresentation {
+                requested: PresentationDepth::Sdr10,
+                resolved: PresentationDepth::Sdr10,
+                requested_transfer: PresentationTransfer::Hdr10Pq,
+                transfer: PresentationTransfer::Hdr10Pq,
+                peak_nits: Some(PEAK),
+                hdr_metadata: None,
+                pixel_format: PresentationPixelFormat::Rgb10A2,
+                color_profile: PresentationColorProfile::Pq2020Limited,
+                alpha_mode: AlphaMode::Opaque,
+                dither: false,
+                fallback_reason: None,
+            },
+        );
+        let readback = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("HDR10 Probe Readback"),
+            size: u64::from(width * 4),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("HDR10 Probe Encoder"),
+            });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("HDR10 Probe Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pipeline.render(&mut pass, &bind_group);
+        }
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(width * 4),
+                    rows_per_image: Some(1),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        ctx.queue.submit([encoder.finish()]);
+        let (tx, rx) = std::sync::mpsc::channel();
+        readback
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                let _ = tx.send(result);
+            });
+        let _ = ctx.device.poll(wgpu::PollType::wait_indefinitely());
+        rx.recv().unwrap().unwrap();
+        let mapped = readback.slice(..).get_mapped_range().unwrap();
+        let codes: Vec<u32> = bytemuck::cast_slice::<u8, u32>(&mapped)
+            .iter()
+            .map(|packed| packed & 0x3ff)
+            .collect();
+
+        for (probe, code) in probes.iter().zip(&codes) {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let expected = (hdr::pq_from_linear(*probe, f32::from(PEAK)) * 1023.0).round() as u32;
+            assert!(
+                code.abs_diff(expected) <= 1,
+                "linear {probe} encoded to {code}, reference says {expected}"
+            );
+        }
+
+        // The anchor from /spec/hdr-color-management.md Decision 2: linear 1.0 is
+        // BT.2408 reference white, 203 cd/m², PQ 10-bit code 594.
+        assert!(
+            codes[2].abs_diff(594) <= 1,
+            "reference white encoded to {} instead of 594",
+            codes[2]
+        );
+        // Everything at or above the headroom clamps to the configured peak.
+        assert_eq!(
+            codes[4], codes[5],
+            "values past the peak must clamp, not keep climbing"
+        );
+        drop(mapped);
+        readback.unmap();
+    }
+
+    #[test]
+    fn edr_encodes_nothing_and_dithers_nothing() {
+        use crate::engine::value::render::{
+            AlphaMode, PresentationColorProfile, PresentationDepth, PresentationPixelFormat,
+            PresentationTransfer, ResolvedPresentation,
+        };
+        // EDR targets a float surface: there is no transfer to apply and no
+        // integer quantization for a dither pattern to sit in front of.
+        let presentation = ResolvedPresentation {
+            requested: PresentationDepth::Sdr10,
+            resolved: PresentationDepth::Sdr10,
+            requested_transfer: PresentationTransfer::EdrLinear,
+            transfer: PresentationTransfer::EdrLinear,
+            peak_nits: Some(1000),
+            hdr_metadata: None,
+            pixel_format: PresentationPixelFormat::Rgba16,
+            color_profile: PresentationColorProfile::SrgbFull,
+            alpha_mode: AlphaMode::Opaque,
+            // Dithering is requested and must still be refused.
+            dither: true,
+            fallback_reason: None,
+        };
+        let (_, srgb_encode, dither) = presentation_encoding(&presentation);
+        assert!(!srgb_encode, "EDR must not apply a transfer");
+        assert!(!dither, "EDR has no integer quantization to dither into");
+    }
+
+    #[test]
+    fn only_edr_skips_the_transfer_encode() {
+        use crate::engine::value::render::PresentationTransfer;
+        for transfer in PresentationTransfer::ALL {
+            assert_eq!(
+                transfer.encodes_a_transfer(),
+                transfer != PresentationTransfer::EdrLinear,
+                "{transfer:?}"
+            );
+        }
     }
 }

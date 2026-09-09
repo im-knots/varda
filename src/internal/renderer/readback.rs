@@ -27,6 +27,9 @@ pub enum ReadbackFormat {
     Uyvy,
     /// Planar 4:2:2 ten-bit video in sixteen-bit words.
     P216,
+    /// Four IEEE-754 single-precision channels. Used by the content light level
+    /// reduction, whose final level is a handful of texels.
+    Rgba32Float,
 }
 
 impl ReadbackFormat {
@@ -34,6 +37,7 @@ impl ReadbackFormat {
         match self {
             Self::Rgba8 | Self::Bgra8 | Self::Rgb10A2 | Self::P216 => 4,
             Self::Rgba16Float | Self::Rgba16Unorm => 8,
+            Self::Rgba32Float => 16,
             Self::Uyvy => 2,
         }
     }

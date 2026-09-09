@@ -91,6 +91,15 @@ pub enum EngineCommand {
         filename: String,
     },
     UnloadLut,
+    /// Load a scene-referred look LUT, applied to the linear program before any
+    /// output transform so one grade reaches every output including HDR ones.
+    ///
+    /// Distinct from [`EngineCommand::LoadLut`], which loads the display-referred
+    /// calibration LUT. See /spec/hdr-color-management.md.
+    LoadLookLut {
+        filename: String,
+    },
+    UnloadLookLut,
     AutoCrossfade {
         target: f32,
         duration_secs: f32,
@@ -648,6 +657,16 @@ pub enum EngineCommand {
     SetOutputPresentation {
         output_uuid: String,
         request: crate::engine::value::render::PresentationRequest,
+    },
+    /// Override the show-wide tonemap curve for one output, or clear the
+    /// override so it inherits again.
+    ///
+    /// The tonemap is an output transform, so a projector and a master file can
+    /// be graded for their own medium. `None` inherits the mixer's curve, which
+    /// is what every output does until someone deliberately differs.
+    SetOutputTonemap {
+        output_uuid: String,
+        tonemap: Option<crate::engine::value::render::TonemapMode>,
     },
 
     // ── Surfaces ────────────────────────────────────────────────

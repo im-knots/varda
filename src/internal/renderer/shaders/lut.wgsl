@@ -10,7 +10,33 @@ struct LutParams {
     shaper_domain_min: vec3<f32>,
     _pad2: u32,
     shaper_domain_max: vec3<f32>,
-    _pad3: u32,
+    // 0 = display-referred (input used as-is, the calibration slot).
+    // 1 = scene-referred: encode to ACEScct before the lookup and decode after,
+    //     so a look LUT sees log values rather than linear light.
+    scene_referred: u32,
+}
+
+// ── ACEScct, mirrored from acescct.rs ──
+const ACESCCT_A: f32 = 10.5402377;
+const ACESCCT_B: f32 = 0.072905534;
+const ACESCCT_LINEAR_BREAK: f32 = 0.0078125;
+const ACESCCT_ENCODED_BREAK: f32 = 0.15525114;
+const ACESCCT_LOG_OFFSET: f32 = 9.72;
+const ACESCCT_LOG_SCALE: f32 = 17.52;
+
+fn acescct_from_linear(rgb: vec3<f32>) -> vec3<f32> {
+    let safe = max(rgb, vec3<f32>(0.0));
+    let toe = ACESCCT_A * safe + ACESCCT_B;
+    // `log2` of a non-positive value is undefined, and the toe covers that range
+    // anyway, so the guard is on the value fed to log2 rather than on the result.
+    let logged = (log2(max(safe, vec3<f32>(1e-10))) + ACESCCT_LOG_OFFSET) / ACESCCT_LOG_SCALE;
+    return select(logged, toe, safe <= vec3<f32>(ACESCCT_LINEAR_BREAK));
+}
+
+fn linear_from_acescct(rgb: vec3<f32>) -> vec3<f32> {
+    let toe = (rgb - ACESCCT_B) / ACESCCT_A;
+    let logged = exp2(rgb * ACESCCT_LOG_SCALE - ACESCCT_LOG_OFFSET);
+    return select(logged, toe, rgb <= vec3<f32>(ACESCCT_ENCODED_BREAK));
 }
 
 struct VertexOutput {
@@ -55,6 +81,12 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
     let color = textureSample(source_texture, source_sampler, uv);
     var rgb = color.rgb;
 
+    // A scene-referred look LUT is authored against ACEScct, because a lattice
+    // indexed by linear light resolves almost nothing in the shadows.
+    if (params.scene_referred == 1u) {
+        rgb = acescct_from_linear(rgb);
+    }
+
     // Apply 1D shaper if present (redistributes precision in input range)
     if (params.has_shaper == 1u) {
         let shaper_range = params.shaper_domain_max - params.shaper_domain_min;
@@ -73,6 +105,11 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
 
     // Sample 3D LUT with trilinear interpolation
     rgb = textureSample(lut_3d, lut_sampler, lut_uv).rgb;
+
+    // Back to scene-linear so the output transform still receives linear light.
+    if (params.scene_referred == 1u) {
+        rgb = linear_from_acescct(rgb);
+    }
 
     return vec4<f32>(rgb, color.a);
 }

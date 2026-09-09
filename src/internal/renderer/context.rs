@@ -9,8 +9,8 @@ use winit::window::Window;
 pub use super::config::{
     AlphaMode, CalibrationMode, OutputRotation, OutputSource, OutputTarget,
     PresentationCapabilities, PresentationColorProfile, PresentationDepth, PresentationFormat,
-    PresentationPixelFormat, PresentationRequest, RecordingCodec, ResolvedPresentation,
-    RtmpCodecContract, SrtCodec, StreamingCodec,
+    PresentationPixelFormat, PresentationRequest, PresentationTransfer, RecordingCodec,
+    ResolvedPresentation, RtmpCodecContract, SrtCodec, StreamingCodec, TonemapMode,
 };
 
 /// Linear-light format used by the entire color path: deck render targets, all
@@ -34,6 +34,7 @@ fn resolve_eight_bit_presentation(
     PresentationCapabilities::new(
         vec![PresentationFormat {
             depth: PresentationDepth::Sdr8,
+            transfer: PresentationTransfer::Sdr,
             pixel_format,
             color_profile,
             alpha_mode,
@@ -70,14 +71,44 @@ fn select_surface_presentation(
         .find(wgpu::TextureFormat::is_srgb)
         .or_else(|| capabilities.formats.first().copied())
         .context("output surface exposes no SDR presentation format")?;
-    let supports_rgb10_srgb = capabilities
-        .color_spaces(wgpu::TextureFormat::Rgb10a2Unorm)
-        .contains(wgpu::SurfaceColorSpaces::SRGB);
+    // EDR is a float surface, unlike every other contract here. Requested
+    // explicitly rather than relying on `Auto`, which resolves to
+    // `ExtendedSrgbLinear` for `Rgba16Float` and would make an HDR contract an
+    // accident of format choice. See /spec/hdr-edr-display.md.
+    let supports_edr = capabilities
+        .color_spaces(wgpu::TextureFormat::Rgba16Float)
+        .contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR);
+    let rgb10_color_spaces = capabilities.color_spaces(wgpu::TextureFormat::Rgb10a2Unorm);
+    let supports_rgb10_srgb = rgb10_color_spaces.contains(wgpu::SurfaceColorSpaces::SRGB);
+    // HDR10 on a display needs the PQ colour space on the same format. Selecting
+    // RGB10A2 alone proves nothing about the transfer the compositor will apply.
+    let supports_rgb10_pq = rgb10_color_spaces.contains(wgpu::SurfaceColorSpaces::BT2100_PQ);
 
-    let mut formats = Vec::with_capacity(2);
+    // Adapter preference order: the resolver reads this top down when it has to
+    // degrade, so HDR first, then the widest SDR result.
+    let mut formats = Vec::with_capacity(4);
+    if supports_edr {
+        formats.push(PresentationFormat {
+            depth: PresentationDepth::Sdr10,
+            transfer: PresentationTransfer::EdrLinear,
+            pixel_format: PresentationPixelFormat::Rgba16,
+            color_profile: PresentationColorProfile::SrgbFull,
+            alpha_mode: AlphaMode::Opaque,
+        });
+    }
+    if supports_rgb10_pq {
+        formats.push(PresentationFormat {
+            depth: PresentationDepth::Sdr10,
+            transfer: PresentationTransfer::Hdr10Pq,
+            pixel_format: PresentationPixelFormat::Rgb10A2,
+            color_profile: PresentationColorProfile::Pq2020Full,
+            alpha_mode: AlphaMode::Opaque,
+        });
+    }
     if supports_rgb10_srgb {
         formats.push(PresentationFormat {
             depth: PresentationDepth::Sdr10,
+            transfer: PresentationTransfer::Sdr,
             pixel_format: PresentationPixelFormat::Rgb10A2,
             color_profile: PresentationColorProfile::SrgbFull,
             alpha_mode: AlphaMode::Opaque,
@@ -85,23 +116,51 @@ fn select_surface_presentation(
     }
     formats.push(PresentationFormat {
         depth: PresentationDepth::Sdr8,
+        transfer: PresentationTransfer::Sdr,
         pixel_format: surface_pixel_format(sdr8_format),
         color_profile: PresentationColorProfile::SrgbFull,
         alpha_mode: AlphaMode::Opaque,
     });
-    let reason = (!supports_rgb10_srgb).then(|| {
-        if capabilities
-            .format_capabilities
-            .iter()
-            .any(|candidate| candidate.format == wgpu::TextureFormat::Rgb10a2Unorm)
-        {
-            "RGB10A2 is available, but not with an sRGB color-space contract".to_string()
-        } else {
-            "the output surface does not expose RGB10A2".to_string()
-        }
-    });
+    let reason = (!supports_edr && request.transfer == PresentationTransfer::EdrLinear)
+        .then(|| {
+            "this display surface does not expose an extended-range float color space".to_string()
+        })
+        .or_else(|| {
+            (!supports_rgb10_pq && request.transfer.is_hdr()).then(|| {
+                if supports_rgb10_srgb {
+                    "this display surface offers RGB10A2 but not the BT.2100 PQ color space"
+                        .to_string()
+                } else {
+                    "this display surface does not expose RGB10A2 with an HDR color space"
+                        .to_string()
+                }
+            })
+        })
+        .or_else(|| {
+            (!supports_rgb10_srgb).then(|| {
+                if capabilities
+                    .format_capabilities
+                    .iter()
+                    .any(|candidate| candidate.format == wgpu::TextureFormat::Rgb10a2Unorm)
+                {
+                    "RGB10A2 is available, but not with an sRGB color-space contract".to_string()
+                } else {
+                    "the output surface does not expose RGB10A2".to_string()
+                }
+            })
+        });
     let resolved = PresentationCapabilities::new(formats, reason).resolve(request)?;
-    let (format, color_space) = if resolved.resolved == PresentationDepth::Sdr10 {
+    let (format, color_space) = if resolved.transfer == PresentationTransfer::EdrLinear {
+        (
+            wgpu::TextureFormat::Rgba16Float,
+            wgpu::SurfaceColorSpace::ExtendedSrgbLinear,
+        )
+    } else if resolved.transfer.is_hdr() {
+        (
+            wgpu::TextureFormat::Rgb10a2Unorm,
+            wgpu::SurfaceColorSpace::Bt2100Pq,
+        )
+    } else if resolved.resolved == PresentationDepth::Sdr10 {
         (
             wgpu::TextureFormat::Rgb10a2Unorm,
             wgpu::SurfaceColorSpace::Srgb,
@@ -132,6 +191,12 @@ fn resolve_headless_presentation(
         );
         return plan.resolved;
     }
+    // A recording's contract depends on its configured codec, so it is resolved
+    // by the same plan that will run when recording starts rather than assumed
+    // to be eight-bit.
+    if let Some(resolved) = super::subprocess::RecordingPlan::resolved_for_target(target, request) {
+        return resolved;
+    }
     let (pixel_format, color_profile, alpha_mode, fallback_reason) = match target {
         OutputTarget::NdiSend { .. } => (
             PresentationPixelFormat::Uyvy,
@@ -145,16 +210,13 @@ fn resolve_headless_presentation(
             AlphaMode::Premultiplied,
             "Syphon interoperability is limited to BGRA8",
         ),
-        OutputTarget::Recording { .. } => (
-            PresentationPixelFormat::EncoderNative("yuv420p".to_string()),
-            PresentationColorProfile::Rec709Limited,
-            AlphaMode::Opaque,
-            "the active FFmpeg path is configured for eight-bit video",
-        ),
-        OutputTarget::SrtStream { .. }
+        OutputTarget::Recording { .. }
+        | OutputTarget::SrtStream { .. }
         | OutputTarget::HlsStream { .. }
         | OutputTarget::DashStream { .. }
-        | OutputTarget::RtmpStream { .. } => unreachable!("streaming targets resolve above"),
+        | OutputTarget::RtmpStream { .. } => {
+            unreachable!("ffmpeg targets resolve through their own plan above")
+        }
         OutputTarget::Windowed | OutputTarget::Display { .. } => (
             PresentationPixelFormat::Rgba8,
             PresentationColorProfile::SrgbFull,
@@ -698,6 +760,15 @@ pub struct OutputWindow {
     pub rotation: OutputRotation,
     /// Persisted precision and dithering request.
     pub presentation_request: PresentationRequest,
+    /// Output transform for this output, overriding the mixer's show-wide
+    /// default when set.
+    ///
+    /// `None` inherits the mixer's mode, which is what every output does until
+    /// someone deliberately grades one differently. An HDR output resolves its
+    /// curve against its own peak rather than display white.
+    /// See /spec/hdr-per-output-encode.md.
+    pub tonemap_override: Option<TonemapMode>,
+
     /// Runtime format selected for the active surface.
     pub resolved_presentation: ResolvedPresentation,
 }
@@ -786,6 +857,7 @@ impl OutputWindow {
             preview_texture_view,
             rotation: OutputRotation::default(),
             presentation_request,
+            tonemap_override: None,
             resolved_presentation: selection.resolved,
         })
     }
@@ -1529,6 +1601,25 @@ pub struct HeadlessOutput {
     pub rotation: OutputRotation,
     /// Persisted precision and dithering request.
     pub presentation_request: PresentationRequest,
+    /// Output transform for this output, overriding the mixer's show-wide
+    /// default when set.
+    ///
+    /// `None` inherits the mixer's mode, which is what every output does until
+    /// someone deliberately grades one differently. An HDR output resolves its
+    /// curve against its own peak rather than display white.
+    /// See /spec/hdr-per-output-encode.md.
+    pub tonemap_override: Option<TonemapMode>,
+
+    /// Content light level meter, present only while an HDR recording is active.
+    ///
+    /// Measures the frame that is about to be written, so the numbers describe
+    /// the file rather than anything upstream of it.
+    /// Boxed: the meter owns a pipeline and a reduction chain, and inlining it
+    /// pushes `UnifiedOutput` past the large-variant guard.
+    pub light_meter: Option<Box<crate::renderer::measure::ContentLightMeter>>,
+    /// Running MaxCLL and MaxFALL across the current recording.
+    pub light_levels: crate::renderer::measure::ContentLightLevels,
+
     /// Runtime format selected for the active adapter.
     pub resolved_presentation: ResolvedPresentation,
 }
@@ -1690,6 +1781,9 @@ impl HeadlessOutput {
             edge_blend_texture_view: eb_view,
             rotation: OutputRotation::default(),
             presentation_request,
+            tonemap_override: None,
+            light_meter: None,
+            light_levels: crate::renderer::measure::ContentLightLevels::default(),
             resolved_presentation,
         }
     }
@@ -1944,6 +2038,15 @@ impl UnifiedOutput {
         }
     }
 
+    /// Per-output transform override, or `None` to inherit the mixer's default.
+    #[must_use]
+    pub fn tonemap_override(&self) -> Option<TonemapMode> {
+        match self {
+            UnifiedOutput::Window(w) => w.tonemap_override,
+            UnifiedOutput::Headless(h) => h.tonemap_override,
+        }
+    }
+
     /// Runtime format selected by the active output adapter.
     pub fn resolved_presentation(&self) -> &ResolvedPresentation {
         match self {
@@ -1995,7 +2098,7 @@ mod tests {
     };
     use crate::engine::value::render::{
         AlphaMode, PresentationColorProfile, PresentationDepth, PresentationPixelFormat,
-        PresentationRequest, ResolvedPresentation,
+        PresentationRequest, PresentationTransfer, ResolvedPresentation,
     };
 
     fn surface_capabilities(
@@ -2023,6 +2126,7 @@ mod tests {
             PresentationRequest {
                 depth: PresentationDepth::Sdr10,
                 dither: true,
+                ..PresentationRequest::default()
             },
             &capabilities,
         )
@@ -2035,6 +2139,199 @@ mod tests {
     }
 
     #[test]
+    fn an_idle_hdr_recording_reports_its_codec_not_a_blanket_eight_bit() {
+        use crate::engine::value::render::{OutputTarget, PresentationMode, RecordingCodec};
+        // Reported from the field: an HDR10 request on an HEVC recording showed
+        // "Delivering 8-bit SDR" with "the active FFmpeg path is configured for
+        // eight-bit video" before Start was pressed. The idle resolver answered
+        // eight-bit for every codec, so a correctly configured output reported a
+        // fallback it would not actually take.
+        let request = PresentationRequest::default().with_mode(PresentationMode::Hdr10);
+        let target = OutputTarget::Recording {
+            path: "out.mp4".to_string(),
+            codec: RecordingCodec::H265,
+            audio_device: None,
+        };
+        let resolved = resolve_headless_presentation(request, &target);
+
+        if resolved.transfer.is_hdr() {
+            assert_eq!(resolved.resolved, PresentationDepth::Sdr10);
+            assert!(resolved.fallback_reason.is_none());
+        } else {
+            // No ten-bit libx265 installed is a legitimate answer, but the reason
+            // must name the encoder rather than claim the path is eight-bit.
+            let reason = resolved
+                .fallback_reason
+                .expect("a degraded HDR request must explain itself");
+            assert!(
+                !reason.contains("the active FFmpeg path is configured for eight-bit video"),
+                "idle resolution still gives the blanket answer: {reason}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_idle_recording_on_an_eight_bit_codec_names_that_codec() {
+        use crate::engine::value::render::{OutputTarget, PresentationMode, RecordingCodec};
+        let request = PresentationRequest::default().with_mode(PresentationMode::Hdr10);
+        let target = OutputTarget::Recording {
+            path: "out.mp4".to_string(),
+            codec: RecordingCodec::H264,
+            audio_device: None,
+        };
+        let resolved = resolve_headless_presentation(request, &target);
+
+        assert_eq!(resolved.resolved, PresentationDepth::Sdr8);
+        let reason = resolved.fallback_reason.expect("must explain itself");
+        assert!(reason.contains("H.264"), "reason was: {reason}");
+    }
+
+    #[test]
+    fn edr_selects_a_float_surface_and_the_extended_linear_color_space() {
+        let capabilities = surface_capabilities(vec![wgpu::SurfaceFormatCapabilities {
+            format: wgpu::TextureFormat::Rgba16Float,
+            color_spaces: wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR,
+        }]);
+        let selected = select_surface_presentation(
+            PresentationRequest {
+                transfer: PresentationTransfer::EdrLinear,
+                peak_nits: 1000,
+                ..PresentationRequest::default()
+            },
+            &capabilities,
+        )
+        .unwrap();
+
+        assert_eq!(selected.format, wgpu::TextureFormat::Rgba16Float);
+        assert_eq!(
+            selected.color_space,
+            wgpu::SurfaceColorSpace::ExtendedSrgbLinear
+        );
+        assert_eq!(selected.resolved.transfer, PresentationTransfer::EdrLinear);
+        // The peak names the deliverable being monitored, not the display.
+        assert_eq!(selected.resolved.peak_nits, Some(1000));
+        assert!(selected.resolved.fallback_reason.is_none());
+    }
+
+    #[test]
+    fn edr_falls_back_and_says_so_without_an_extended_range_surface() {
+        let capabilities = surface_capabilities(vec![wgpu::SurfaceFormatCapabilities {
+            format: wgpu::TextureFormat::Rgb10a2Unorm,
+            color_spaces: wgpu::SurfaceColorSpaces::SRGB,
+        }]);
+        let selected = select_surface_presentation(
+            PresentationRequest {
+                transfer: PresentationTransfer::EdrLinear,
+                ..PresentationRequest::default()
+            },
+            &capabilities,
+        )
+        .unwrap();
+
+        assert_eq!(selected.resolved.transfer, PresentationTransfer::Sdr);
+        let reason = selected
+            .resolved
+            .fallback_reason
+            .expect("a degraded EDR request must explain itself");
+        assert!(reason.contains("extended-range"), "reason was: {reason}");
+    }
+
+    #[test]
+    fn an_sdr_request_is_never_answered_with_an_edr_surface() {
+        // EDR is listed first in adapter preference order, so this guards the
+        // same way the PQ test does: preference must not override the request.
+        let capabilities = surface_capabilities(vec![
+            wgpu::SurfaceFormatCapabilities {
+                format: wgpu::TextureFormat::Rgba16Float,
+                color_spaces: wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR,
+            },
+            wgpu::SurfaceFormatCapabilities {
+                format: wgpu::TextureFormat::Rgb10a2Unorm,
+                color_spaces: wgpu::SurfaceColorSpaces::SRGB,
+            },
+        ]);
+        let selected = select_surface_presentation(
+            PresentationRequest {
+                depth: PresentationDepth::Sdr10,
+                ..PresentationRequest::default()
+            },
+            &capabilities,
+        )
+        .unwrap();
+        assert_eq!(selected.resolved.transfer, PresentationTransfer::Sdr);
+    }
+
+    #[test]
+    fn hdr10_display_selects_rgb10_with_the_pq_color_space() {
+        let capabilities = surface_capabilities(vec![wgpu::SurfaceFormatCapabilities {
+            format: wgpu::TextureFormat::Rgb10a2Unorm,
+            color_spaces: wgpu::SurfaceColorSpaces::SRGB | wgpu::SurfaceColorSpaces::BT2100_PQ,
+        }]);
+        let selected = select_surface_presentation(
+            PresentationRequest {
+                transfer: PresentationTransfer::Hdr10Pq,
+                peak_nits: 1000,
+                ..PresentationRequest::default()
+            },
+            &capabilities,
+        )
+        .unwrap();
+
+        assert_eq!(selected.format, wgpu::TextureFormat::Rgb10a2Unorm);
+        assert_eq!(selected.color_space, wgpu::SurfaceColorSpace::Bt2100Pq);
+        assert_eq!(selected.resolved.transfer, PresentationTransfer::Hdr10Pq);
+        assert_eq!(selected.resolved.peak_nits, Some(1000));
+        assert!(selected.resolved.fallback_reason.is_none());
+    }
+
+    #[test]
+    fn hdr10_falls_back_to_ten_bit_sdr_when_only_srgb_is_offered() {
+        // RGB10A2 alone proves nothing about the transfer the compositor applies,
+        // so the PQ colour space is required, not merely the format.
+        let capabilities = surface_capabilities(vec![wgpu::SurfaceFormatCapabilities {
+            format: wgpu::TextureFormat::Rgb10a2Unorm,
+            color_spaces: wgpu::SurfaceColorSpaces::SRGB,
+        }]);
+        let selected = select_surface_presentation(
+            PresentationRequest {
+                transfer: PresentationTransfer::Hdr10Pq,
+                ..PresentationRequest::default()
+            },
+            &capabilities,
+        )
+        .unwrap();
+
+        assert_eq!(selected.color_space, wgpu::SurfaceColorSpace::Srgb);
+        assert_eq!(selected.resolved.transfer, PresentationTransfer::Sdr);
+        assert_eq!(selected.resolved.resolved, PresentationDepth::Sdr10);
+        assert_eq!(selected.resolved.peak_nits, None);
+        let reason = selected
+            .resolved
+            .fallback_reason
+            .expect("an HDR request that degrades must say why");
+        assert!(reason.contains("PQ"), "reason was: {reason}");
+    }
+
+    #[test]
+    fn an_sdr_request_is_never_answered_with_a_pq_surface() {
+        let capabilities = surface_capabilities(vec![wgpu::SurfaceFormatCapabilities {
+            format: wgpu::TextureFormat::Rgb10a2Unorm,
+            color_spaces: wgpu::SurfaceColorSpaces::SRGB | wgpu::SurfaceColorSpaces::BT2100_PQ,
+        }]);
+        let selected = select_surface_presentation(
+            PresentationRequest {
+                depth: PresentationDepth::Sdr10,
+                ..PresentationRequest::default()
+            },
+            &capabilities,
+        )
+        .unwrap();
+
+        assert_eq!(selected.color_space, wgpu::SurfaceColorSpace::Srgb);
+        assert_eq!(selected.resolved.transfer, PresentationTransfer::Sdr);
+    }
+
+    #[test]
     fn rgb10_without_srgb_falls_back_to_eight_bit() {
         let capabilities = surface_capabilities(vec![wgpu::SurfaceFormatCapabilities {
             format: wgpu::TextureFormat::Rgb10a2Unorm,
@@ -2044,6 +2341,7 @@ mod tests {
             PresentationRequest {
                 depth: PresentationDepth::Sdr10,
                 dither: true,
+                ..PresentationRequest::default()
             },
             &capabilities,
         )
@@ -2112,6 +2410,7 @@ mod tests {
             PresentationRequest {
                 depth: PresentationDepth::Sdr10,
                 dither: true,
+                ..PresentationRequest::default()
             },
             &OutputTarget::SyphonServer {
                 server_name: "Precision Test".into(),
@@ -2151,6 +2450,7 @@ mod tests {
                 alpha_mode: AlphaMode::Opaque,
                 dither: true,
                 fallback_reason: None,
+                ..ResolvedPresentation::default()
             },
         );
 
@@ -2191,6 +2491,7 @@ mod tests {
                 alpha_mode: AlphaMode::Straight,
                 dither: true,
                 fallback_reason: None,
+                ..ResolvedPresentation::default()
             },
         );
 

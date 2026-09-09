@@ -52,6 +52,7 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::mixer::beat_crossfade,
         routes::mixer::set_tonemap_mode,
         routes::mixer::load_lut, routes::mixer::unload_lut,
+        routes::mixer::load_look_lut, routes::mixer::unload_look_lut,
         // Channels
         routes::channels::add_channel, routes::channels::remove_channel,
         routes::channels::set_opacity, routes::channels::set_blend_mode,
@@ -198,6 +199,7 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::outputs::start, routes::outputs::stop,
         routes::outputs::set_calibration_mode, routes::outputs::set_target,
         routes::outputs::set_presentation,
+        routes::outputs::set_output_tonemap,
         routes::outputs::set_edge_blend, routes::outputs::set_edge_blend_mode,
         // Sequences
         routes::sequences::create, routes::sequences::delete,
@@ -362,6 +364,10 @@ pub fn build_router(shared: SharedState) -> Router {
         .route(
             "/api/mixer/lut",
             axum::routing::put(routes::mixer::load_lut).delete(routes::mixer::unload_lut),
+        )
+        .route(
+            "/api/mixer/look-lut",
+            axum::routing::put(routes::mixer::load_look_lut).delete(routes::mixer::unload_look_lut),
         )
         // ── Write: Channels ─────────────────────────────────────
         .route(
@@ -1114,6 +1120,10 @@ pub fn build_router(shared: SharedState) -> Router {
         .route(
             "/api/outputs/{output_uuid}/presentation",
             axum::routing::put(routes::outputs::set_presentation),
+        )
+        .route(
+            "/api/outputs/{output_uuid}/tonemap",
+            axum::routing::put(routes::outputs::set_output_tonemap),
         )
         .route(
             "/api/outputs/{output_uuid}/edge-blend",

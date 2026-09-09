@@ -10,24 +10,13 @@ use super::super::{UIActions, UIData};
 use crate::engine::EngineCommand;
 use crate::renderer::tonemap::TonemapMode;
 
-const TONEMAP_PRESETS: &[(&str, TonemapMode)] = &[
-    ("Bypass (clamp)", TonemapMode::Bypass),
-    ("ACES Filmic", TonemapMode::Aces),
-    ("Reinhard", TonemapMode::Reinhard),
-    ("Reinhard Extended", TonemapMode::ReinhardExtended),
-    ("Hable Filmic", TonemapMode::HableFilmic),
-    ("Uchimura (GT)", TonemapMode::Uchimura),
-    ("Lottes (AMD)", TonemapMode::Lottes),
-    ("AgX", TonemapMode::AgX),
-    ("PBR Neutral", TonemapMode::KhronosPbrNeutral),
-];
+/// Presets in user-facing order, shared with the per-output picker so the two
+/// cannot drift apart.
+const TONEMAP_PRESETS: &[TonemapMode] = &TonemapMode::ALL;
 
 /// Full name of a mode, for the collapsed section header.
 pub(super) fn tonemap_name(mode: TonemapMode) -> &'static str {
-    TONEMAP_PRESETS
-        .iter()
-        .find(|(_, m)| *m == mode)
-        .map_or("Unknown", |(label, _)| *label)
+    mode.label()
 }
 
 fn tonemap_description(mode: TonemapMode) -> &'static str {
@@ -47,8 +36,8 @@ fn tonemap_description(mode: TonemapMode) -> &'static str {
 pub(super) fn render_tonemap_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     let current = data.tonemap_mode;
 
-    for &(label, mode) in TONEMAP_PRESETS {
-        if ui.radio(current == mode, label).clicked() && current != mode {
+    for &mode in TONEMAP_PRESETS {
+        if ui.radio(current == mode, mode.label()).clicked() && current != mode {
             actions.commands.push(EngineCommand::SetTonemapMode(mode));
         }
     }
@@ -60,7 +49,33 @@ pub(super) fn render_tonemap_section(ui: &mut egui::Ui, data: &UIData, actions: 
     );
 
     ui.separator();
-    ui.label(egui::RichText::new("🎞 3D LUT").strong());
+    ui.label(egui::RichText::new("🎨 Look LUT").strong());
+    ui.label(
+        egui::RichText::new("Graded before the tonemap. Reaches every output, including HDR.")
+            .weak()
+            .small(),
+    );
+
+    let look_lut = data.look_lut_filename.as_deref();
+    if ui.radio(look_lut.is_none(), "None").clicked() && look_lut.is_some() {
+        actions.commands.push(EngineCommand::UnloadLookLut);
+    }
+    for lut_name in &data.available_luts {
+        let is_active = look_lut == Some(lut_name.as_str());
+        if ui.radio(is_active, format!("{lut_name} (look)")).clicked() && !is_active {
+            actions.commands.push(EngineCommand::LoadLookLut {
+                filename: lut_name.clone(),
+            });
+        }
+    }
+
+    ui.separator();
+    ui.label(egui::RichText::new("🎞 Calibration LUT").strong());
+    ui.label(
+        egui::RichText::new("Graded after the tonemap. SDR outputs only.")
+            .weak()
+            .small(),
+    );
 
     let active_lut = data.active_lut_filename.as_deref();
 
@@ -107,7 +122,7 @@ mod tests {
             TonemapMode::KhronosPbrNeutral,
         ] {
             assert!(
-                TONEMAP_PRESETS.iter().any(|(_, m)| *m == mode),
+                TONEMAP_PRESETS.contains(&mode),
                 "{mode:?} is missing from the preset list"
             );
             assert_ne!(tonemap_name(mode), "Unknown");

@@ -17,7 +17,8 @@ use std::sync::{
 
 use crate::engine::value::render::{
     AlphaMode, PresentationCapabilities, PresentationColorProfile, PresentationDepth,
-    PresentationFormat, PresentationPixelFormat, PresentationRequest, ResolvedPresentation,
+    PresentationFormat, PresentationPixelFormat, PresentationRequest, PresentationTransfer,
+    ResolvedPresentation,
 };
 
 /// Frame rate declared to receivers when the caller's rate will not fit the
@@ -159,6 +160,7 @@ impl NdiManager {
         if capability.p216_confirmed() {
             formats.push(PresentationFormat {
                 depth: PresentationDepth::Sdr10,
+                transfer: PresentationTransfer::Sdr,
                 pixel_format: PresentationPixelFormat::P216,
                 color_profile: PresentationColorProfile::Rec709Limited,
                 alpha_mode: AlphaMode::Opaque,
@@ -166,6 +168,7 @@ impl NdiManager {
         }
         formats.push(PresentationFormat {
             depth: PresentationDepth::Sdr8,
+            transfer: PresentationTransfer::Sdr,
             pixel_format: PresentationPixelFormat::Uyvy,
             color_profile: PresentationColorProfile::Rec709Limited,
             alpha_mode: AlphaMode::Opaque,
@@ -879,6 +882,7 @@ mod tests {
         let request = PresentationRequest {
             depth: PresentationDepth::Sdr10,
             dither: true,
+            ..PresentationRequest::default()
         };
         let capability = sdk::NdiSendCapability::from_runtime_evidence(Some("NDI SDK 6.3.1"), true);
 
@@ -914,6 +918,7 @@ mod tests {
         let request = PresentationRequest {
             depth: PresentationDepth::Sdr10,
             dither: true,
+            ..PresentationRequest::default()
         };
         let capability = sdk::NdiSendCapability::from_runtime_evidence(Some("NDI SDK 5.6.0"), true);
 

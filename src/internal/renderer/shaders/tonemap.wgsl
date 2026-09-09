@@ -3,7 +3,10 @@
 
 struct TonemapParams {
     mode: u32,
-    _pad0: u32,
+    // Scene-linear range this output transform targets. 1.0 for SDR; peak/203
+    // for HDR, so the curve lands on the output's peak rather than on display
+    // white. See /spec/hdr-color-management.md.
+    headroom: f32,
     _pad1: u32,
     _pad2: u32,
 }
@@ -163,10 +166,22 @@ fn pbr_neutral_tonemap(color_in: vec3<f32>) -> vec3<f32> {
     return mix(color, vec3(new_peak), g);
 }
 
+// Reinhard with the white point placed at the output's headroom, which is the
+// operator's own parameter rather than a rescale of a curve fitted to [0,1].
+fn reinhard_to_headroom(x: vec3<f32>, headroom: f32) -> vec3<f32> {
+    let w = max(headroom, 1.0);
+    return x * (vec3(1.0) + x / vec3(w * w)) / (vec3(1.0) + x);
+}
+
 @fragment
 fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
     let color = textureSample(source_texture, texture_sampler, uv);
+    let headroom = max(params.headroom, 1.0);
 
+    // An HDR output transform targets [0, headroom]. Operators whose shoulder
+    // constants are fitted to an SDR target are not offered on an HDR output
+    // (the resolver refuses them), so only the forms with a defined HDR
+    // behaviour are reachable here with headroom > 1.
     var rgb: vec3<f32>;
     switch (params.mode) {
         case 1u: { rgb = aces_tonemap(color.rgb); }
@@ -177,7 +192,16 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
         case 6u: { rgb = lottes_tonemap(color.rgb); }
         case 7u: { rgb = agx_tonemap(color.rgb); }
         case 8u: { rgb = pbr_neutral_tonemap(color.rgb); }
-        default: { rgb = clamp(color.rgb, vec3(0.0), vec3(1.0)); }
+        default: { rgb = clamp(color.rgb, vec3(0.0), vec3(headroom)); }
+    }
+
+    if (headroom > 1.0) {
+        switch (params.mode) {
+            // Bypass already clamped to headroom above.
+            case 0u: {}
+            case 3u: { rgb = reinhard_to_headroom(color.rgb, headroom); }
+            default: {}
+        }
     }
 
     return vec4<f32>(rgb, color.a);

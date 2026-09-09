@@ -218,6 +218,38 @@ pub async fn set_presentation(
     }
 }
 
+#[derive(Deserialize, ToSchema)]
+pub struct SetOutputTonemapBody {
+    /// Tonemap curve for this output, or `null` to inherit the show-wide curve.
+    #[serde(default)]
+    pub mode: Option<crate::engine::value::render::TonemapMode>,
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/outputs/{output_uuid}/tonemap",
+    params(("output_uuid" = String, Path, description = "Output UUID")),
+    request_body = SetOutputTonemapBody,
+    responses((status = 200, body = CommandResult), (status = 404, description = "Output not found")),
+    tag = "Outputs"
+)]
+pub async fn set_output_tonemap(
+    State(s): State<SharedState>,
+    Path(output_uuid): Path<String>,
+    Json(body): Json<SetOutputTonemapBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::SetOutputTonemap {
+            output_uuid,
+            tonemap: body.mode,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
 // ── Edge Blending ────────────────────────────────────────────────────
 
 #[derive(Deserialize, ToSchema)]
