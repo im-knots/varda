@@ -252,7 +252,7 @@ impl VardaApp {
             OutputTarget::HlsStream {
                 name: target_name,
                 codec,
-                low_latency,
+                short_segments,
                 ..
             } => crate::renderer::FfmpegSubprocess::spawn_hls(
                 target_name,
@@ -261,7 +261,7 @@ impl VardaApp {
                 width,
                 height,
                 fps,
-                *low_latency,
+                *short_segments,
                 audio_input,
             ),
             OutputTarget::DashStream {
@@ -378,6 +378,27 @@ impl VardaApp {
                     sub.stop();
                 }
                 let passthrough = h.audio_pcm.take();
+                // Report what the content actually reached before clearing it.
+                //
+                // The file's MaxCLL and MaxFALL are whatever x265 wrote at encode
+                // start, and FFmpeg has no way to rewrite them afterwards, so
+                // these numbers cannot be written into the file. What they are
+                // for is choosing the peak: a show measuring 380 cd/m² declared
+                // against a 1000 cd/m² peak over-declares, and a display will
+                // tone-map more conservatively than it needs to.
+                // See /spec/hdr-recording-output.md § As built.
+                if let Some((max_cll, max_fall)) = h.light_levels.measured() {
+                    log::info!(
+                        "Output '{}': measured content light over {} frames: \
+                         MaxCLL {max_cll} cd/m², MaxFALL {max_fall} cd/m². \
+                         The file declares its configured peak; set the output's \
+                         peak near MaxCLL for a tighter declaration.",
+                        h.name,
+                        h.light_levels.frames(),
+                    );
+                }
+                h.light_levels = crate::renderer::measure::ContentLightLevels::default();
+                h.light_meter = None;
                 h.active = false;
                 h.started_at = None;
                 // Disjoint field borrow (audio_manager vs. output): release the
@@ -665,6 +686,28 @@ impl VardaApp {
     }
 
     /// Set requested SDR precision and dithering, preserving any fallback status.
+    /// Set or clear one output's tonemap override.
+    ///
+    /// Needs no restart and no GPU reconfiguration: the curve only selects which
+    /// graded program the output reads, and the mixer materializes that on the
+    /// next frame.
+    pub fn cmd_set_output_tonemap(
+        &mut self,
+        output_uuid: &str,
+        tonemap: Option<crate::engine::value::render::TonemapMode>,
+    ) -> CommandResult {
+        let idx = match self.resolve_output(output_uuid) {
+            Ok(idx) => idx,
+            Err(e) => return e.into(),
+        };
+        match self.output.outputs.get_mut(idx) {
+            Some(UnifiedOutput::Window(w)) => w.tonemap_override = tonemap,
+            Some(UnifiedOutput::Headless(h)) => h.tonemap_override = tonemap,
+            None => return CommandResult::Ok,
+        }
+        CommandResult::Ok
+    }
+
     pub fn cmd_set_output_presentation(
         &mut self,
         output_uuid: &str,

@@ -12,9 +12,23 @@ pub use super::config::TonemapMode;
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct TonemapParams {
     mode: u32,
-    _pad0: u32,
+    /// Scene-linear range this output transform targets: 1.0 for SDR, `peak/203`
+    /// for HDR.
+    headroom: f32,
     _pad1: u32,
     _pad2: u32,
+}
+
+/// One output transform: a curve and the scene-linear range it targets.
+///
+/// The two always travel together, because a curve without its range is not a
+/// transform, so they are one value rather than two arguments.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OutputTransform {
+    /// Curve to apply.
+    pub mode: TonemapMode,
+    /// Scene-linear range the curve targets: 1.0 for SDR, `peak/203` for HDR.
+    pub headroom: f32,
 }
 
 pub struct TonemapPipeline {
@@ -72,7 +86,7 @@ impl TonemapPipeline {
             label: Some("Tonemap Params Buffer"),
             contents: bytemuck::cast_slice(&[TonemapParams {
                 mode: TonemapMode::Aces as u32,
-                _pad0: 0,
+                headroom: 1.0,
                 _pad1: 0,
                 _pad2: 0,
             }]),
@@ -147,6 +161,36 @@ impl TonemapPipeline {
         })
     }
 
+    /// Run the output transform for one program, writing mode and headroom for
+    /// this call.
+    ///
+    /// One pipeline serves every program key: the parameters are per draw, so
+    /// two outputs with different curves do not need two pipelines. `headroom`
+    /// is 1.0 for SDR and `peak/203` for HDR
+    /// (/spec/hdr-color-management.md Decision 3).
+    pub fn render_with_headroom(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        source_view: &wgpu::TextureView,
+        target_view: &wgpu::TextureView,
+        transform: OutputTransform,
+    ) {
+        let OutputTransform { mode, headroom } = transform;
+        queue.write_buffer(
+            &self.params_buffer,
+            0,
+            bytemuck::cast_slice(&[TonemapParams {
+                mode: mode as u32,
+                headroom,
+                _pad1: 0,
+                _pad2: 0,
+            }]),
+        );
+        self.render(device, encoder, source_view, target_view);
+    }
+
     /// Update the tonemap mode on the GPU.
     pub fn set_mode(&self, queue: &wgpu::Queue, mode: TonemapMode) {
         queue.write_buffer(
@@ -154,7 +198,7 @@ impl TonemapPipeline {
             0,
             bytemuck::cast_slice(&[TonemapParams {
                 mode: mode as u32,
-                _pad0: 0,
+                headroom: 1.0,
                 _pad1: 0,
                 _pad2: 0,
             }]),

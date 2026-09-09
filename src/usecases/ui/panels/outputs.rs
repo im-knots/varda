@@ -147,7 +147,7 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
                         // Headless output controls (recording/SRT/NDI/Syphon)
                         render_headless_controls(ui, &output.uuid, output, data, actions);
                     }
-                    render_presentation_controls(ui, &output.uuid, output, actions);
+                    render_presentation_controls(ui, &output.uuid, output, data, actions);
                 });
             ui.add_space(4.0);
         }
@@ -158,54 +158,150 @@ fn render_presentation_controls(
     ui: &mut egui::Ui,
     output_uuid: &str,
     output: &super::super::OutputUI,
+    data: &UIData,
     actions: &mut UIActions,
 ) {
-    use crate::engine::value::render::{PresentationDepth, PresentationRequest};
+    use crate::engine::value::render::{
+        HDR_PEAK_NITS_PRESETS, PresentationMode, PresentationRequest, PresentationTransfer,
+    };
+
+    let request = output.presentation_request;
+    let current_mode = request.mode();
 
     ui.add_space(2.0);
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("SDR precision:").small());
-        egui::ComboBox::from_id_salt(format!("presentation_depth_{output_uuid}"))
-            .selected_text(egui::RichText::new(output.presentation_request.depth.label()).small())
+        ui.label(egui::RichText::new("Output:").small());
+        egui::ComboBox::from_id_salt(format!("presentation_mode_{output_uuid}"))
+            .selected_text(egui::RichText::new(current_mode.label()).small())
             .width(100.0)
             .show_ui(ui, |ui| {
-                for depth in PresentationDepth::ALL {
+                for mode in PresentationMode::ALL {
                     if ui
-                        .selectable_label(output.presentation_request.depth == depth, depth.label())
+                        .selectable_label(current_mode == mode, mode.label())
+                        .on_hover_text(mode.description())
                         .clicked()
                     {
                         actions.commands.push(EngineCommand::SetOutputPresentation {
                             output_uuid: output_uuid.to_string(),
-                            request: PresentationRequest {
-                                depth,
-                                dither: output.presentation_request.dither,
-                            },
+                            request: request.with_mode(mode),
                         });
                     }
                 }
             });
 
-        let mut dither = output.presentation_request.dither;
+        let mut dither = request.dither;
         if ui
             .checkbox(&mut dither, egui::RichText::new("Dither").small())
             .changed()
         {
             actions.commands.push(EngineCommand::SetOutputPresentation {
                 output_uuid: output_uuid.to_string(),
-                request: PresentationRequest {
-                    depth: output.presentation_request.depth,
-                    dither,
-                },
+                request: PresentationRequest { dither, ..request },
             });
         }
     });
 
+    // Peak luminance only exists for an HDR contract, so it only appears for one.
+    if current_mode.is_hdr() {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Peak:").small());
+            egui::ComboBox::from_id_salt(format!("presentation_peak_{output_uuid}"))
+                .selected_text(egui::RichText::new(format!("{} cd/m²", request.peak_nits)).small())
+                .width(100.0)
+                .show_ui(ui, |ui| {
+                    for peak in HDR_PEAK_NITS_PRESETS {
+                        if ui
+                            .selectable_label(request.peak_nits == peak, format!("{peak} cd/m²"))
+                            .clicked()
+                        {
+                            actions.commands.push(EngineCommand::SetOutputPresentation {
+                                output_uuid: output_uuid.to_string(),
+                                request: PresentationRequest {
+                                    peak_nits: peak,
+                                    ..request
+                                },
+                            });
+                        }
+                    }
+                })
+                .response
+                .on_hover_text(
+                    "Mastering target. Linear 1.0 stays at 203 cd/m² reference white; \
+                     this sets where the headroom above it ends.",
+                );
+        });
+    }
+
+    // The tonemap is an output transform, so it belongs on the output card as
+    // well as in the show-wide Tonemap panel. `None` inherits.
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Tonemap:").small());
+        let effective = output.tonemap_override.unwrap_or(data.tonemap_mode);
+        let selected = output.tonemap_override.map_or_else(
+            || format!("Show ({})", data.tonemap_mode.label()),
+            |m| m.label().to_string(),
+        );
+        egui::ComboBox::from_id_salt(format!("output_tonemap_{output_uuid}"))
+            .selected_text(egui::RichText::new(selected).small())
+            .width(150.0)
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_label(output.tonemap_override.is_none(), "Show default")
+                    .clicked()
+                {
+                    actions.commands.push(EngineCommand::SetOutputTonemap {
+                        output_uuid: output_uuid.to_string(),
+                        tonemap: None,
+                    });
+                }
+                for mode in crate::renderer::tonemap::TonemapMode::ALL {
+                    let label = if request.transfer.is_hdr() && !mode.has_hdr_form() {
+                        format!("{} (no HDR form)", mode.label())
+                    } else {
+                        mode.label().to_string()
+                    };
+                    if ui
+                        .selectable_label(output.tonemap_override == Some(mode), label)
+                        .clicked()
+                    {
+                        actions.commands.push(EngineCommand::SetOutputTonemap {
+                            output_uuid: output_uuid.to_string(),
+                            tonemap: Some(mode),
+                        });
+                    }
+                }
+            });
+        let _ = effective;
+    });
+
     let resolved = &output.resolved_presentation;
-    let status = format!(
-        "Delivering {} · {}",
-        resolved.resolved.label(),
-        resolved.pixel_format
-    );
+    let status = if resolved.transfer == PresentationTransfer::EdrLinear {
+        format!(
+            "Monitoring EDR · {} · linear · to {} cd/m²",
+            resolved.pixel_format,
+            resolved.peak_nits.unwrap_or_default()
+        )
+    } else if resolved.transfer.is_hdr() {
+        format!(
+            "Delivering {} · {} · {} · {}",
+            resolved.transfer.label(),
+            resolved.pixel_format,
+            if resolved.transfer == PresentationTransfer::Hlg {
+                "HLG/BT.2020"
+            } else {
+                "PQ/BT.2020"
+            },
+            resolved
+                .peak_nits
+                .map_or_else(|| "display-relative".to_string(), |p| format!("{p} cd/m²"))
+        )
+    } else {
+        format!(
+            "Delivering {} · {}",
+            resolved.resolved.label(),
+            resolved.pixel_format
+        )
+    };
     let color = if resolved.fallback_reason.is_some() {
         egui::Color32::from_rgb(255, 190, 80)
     } else {
@@ -213,10 +309,97 @@ fn render_presentation_controls(
     };
     ui.label(egui::RichText::new(status).small().color(color));
     if let Some(reason) = &resolved.fallback_reason {
+        // The requested contract names the fallback, so an HDR request that
+        // degrades does not report itself as a bit-depth problem.
+        let label = if request.transfer.is_hdr() {
+            "HDR10 fallback"
+        } else {
+            "10-bit fallback"
+        };
         ui.label(
-            egui::RichText::new(format!("10-bit fallback: {reason}"))
+            egui::RichText::new(format!("{label}: {reason}"))
                 .small()
                 .color(color),
+        );
+    }
+
+    // EDR headroom is runtime health, not part of the resolved contract: it
+    // climbs from 1.0 once EDR engages and moves with display brightness. It
+    // answers whether the monitor can currently show the top of the range being
+    // graded. See /spec/hdr-edr-display.md.
+    if resolved.transfer == PresentationTransfer::EdrLinear
+        && let Some(headroom) = crate::renderer::edr::primary_headroom()
+    {
+        let needed = resolved.peak_nits.map_or(1.0, |peak| {
+            f32::from(peak) / crate::engine::value::render::HDR_REFERENCE_WHITE_NITS
+        });
+        let covered = headroom.covers(needed);
+        ui.label(
+            egui::RichText::new(format!(
+                "Display headroom {:.1}x · monitoring to {needed:.1}x{}",
+                headroom.current,
+                if covered {
+                    ""
+                } else {
+                    " · top of range is clipped, lower display brightness"
+                }
+            ))
+            .small()
+            .color(if covered {
+                egui::Color32::from_rgb(120, 200, 255)
+            } else {
+                egui::Color32::from_rgb(255, 190, 80)
+            }),
+        );
+    }
+
+    // CTA-861.3 expects MaxCLL and MaxFALL to be measured across the programme.
+    // Saying which one is in force keeps a non-standard declaration from passing
+    // as a measured one (/spec/hdr-recording-output.md).
+    if let Some(metadata) = resolved.hdr_metadata {
+        let color = match metadata {
+            crate::engine::value::render::HdrMetadataSource::MeasuredFromContent => {
+                egui::Color32::from_rgb(120, 200, 255)
+            }
+            crate::engine::value::render::HdrMetadataSource::DeclaredFromPeak => {
+                egui::Color32::from_rgb(255, 190, 80)
+            }
+        };
+        ui.label(
+            egui::RichText::new(format!("MaxCLL/MaxFALL {}", metadata.label()))
+                .small()
+                .color(color),
+        );
+    }
+
+    // A curve fitted against an SDR target is substituted rather than rescaled on
+    // an HDR output (/spec/hdr-per-output-encode.md § Output transform range).
+    // The substitution is reported so a look choice never silently changes the
+    // picture a delivery carries.
+    let effective_tonemap = output.tonemap_override.unwrap_or(data.tonemap_mode);
+    if resolved.transfer.is_hdr() && !effective_tonemap.has_hdr_form() {
+        ui.label(
+            egui::RichText::new(format!(
+                "{} has no HDR form; this output uses Bypass",
+                effective_tonemap.label()
+            ))
+            .small()
+            .color(egui::Color32::from_rgb(255, 190, 80)),
+        );
+    }
+
+    // The calibration LUT is display-referred and does not apply to an HDR
+    // output (/spec/hdr-color-management.md Decision 4). Say so here rather than
+    // letting the user find it by opening the file.
+    if resolved.transfer.is_hdr()
+        && let Some(lut) = &data.active_lut_filename
+    {
+        ui.label(
+            egui::RichText::new(format!(
+                "LUT '{lut}' is SDR-calibrated and is not applied to this HDR10 output"
+            ))
+            .small()
+            .color(egui::Color32::from_rgb(255, 190, 80)),
         );
     }
 }
@@ -607,7 +790,7 @@ fn render_stream_config(
                             OutputTarget::HlsStream {
                                 name: "live".to_string(),
                                 codec: StreamingCodec::default(),
-                                low_latency: false,
+                                short_segments: false,
                                 audio_device: None,
                             },
                         ),
@@ -716,7 +899,7 @@ fn render_stream_config(
         OutputTarget::HlsStream {
             name,
             codec,
-            low_latency,
+            short_segments,
             audio_device,
         } => {
             render_hls_dash_name_codec(
@@ -730,15 +913,23 @@ fn render_stream_config(
                 |n, c| OutputTarget::HlsStream {
                     name: n,
                     codec: c,
-                    low_latency: *low_latency,
+                    short_segments: *short_segments,
                     audio_device: audio_device.clone(),
                 },
             );
             if !output.is_active {
                 ui.horizontal(|ui| {
-                    let mut ll = *low_latency;
+                    let mut ll = *short_segments;
                     if ui
-                        .checkbox(&mut ll, egui::RichText::new("LL-HLS (Low Latency)").small())
+                        .checkbox(
+                            &mut ll,
+                            egui::RichText::new("Short segments (lower latency)").small(),
+                        )
+                        .on_hover_text(
+                            "One-second segments instead of two. Not RFC low-latency HLS: \
+                             FFmpeg writes no partial segments, so expect a couple of \
+                             seconds of latency rather than sub-second.",
+                        )
                         .changed()
                     {
                         actions.commands.push(EngineCommand::SetOutputTarget {
@@ -746,7 +937,7 @@ fn render_stream_config(
                             target: OutputTarget::HlsStream {
                                 name: name.clone(),
                                 codec: codec.clone(),
-                                low_latency: ll,
+                                short_segments: ll,
                                 audio_device: audio_device.clone(),
                             },
                         });
@@ -1188,6 +1379,7 @@ mod tests {
             rotation: crate::renderer::context::OutputRotation::default(),
             presentation_request: crate::engine::value::render::PresentationRequest::default(),
             resolved_presentation: resolved,
+            tonemap_override: None,
             audio_passthrough: None,
             delivery: None,
             preview_width: 1920,
@@ -1256,6 +1448,7 @@ mod tests {
             alpha_mode: AlphaMode::Premultiplied,
             dither: true,
             fallback_reason: Some("Syphon interoperability is limited to BGRA8".into()),
+            ..ResolvedPresentation::default()
         }));
         let mut actions = UIActions::new();
         let mut harness = egui_kittest::Harness::builder()
@@ -1266,5 +1459,264 @@ mod tests {
         harness.run();
         harness.get_by_label("Delivering 8-bit SDR · BGRA8");
         harness.get_by_label("10-bit fallback: Syphon interoperability is limited to BGRA8");
+    }
+
+    #[test]
+    fn the_status_line_states_the_hdr_contract_in_full() {
+        use crate::engine::value::render::{
+            AlphaMode, PresentationColorProfile, PresentationDepth, PresentationMode,
+            PresentationPixelFormat, PresentationTransfer, ResolvedPresentation,
+        };
+        // An operator reading the card should not have to infer the transfer,
+        // the container, the peak the file was mastered against, or whether the
+        // mastering metadata was measured.
+        let mut data = UIData::test_fixture();
+        let mut output = sample_output(ResolvedPresentation {
+            requested: PresentationDepth::Sdr10,
+            resolved: PresentationDepth::Sdr10,
+            requested_transfer: PresentationTransfer::Hdr10Pq,
+            transfer: PresentationTransfer::Hdr10Pq,
+            peak_nits: Some(1000),
+            hdr_metadata: Some(crate::engine::value::render::HdrMetadataSource::DeclaredFromPeak),
+            pixel_format: PresentationPixelFormat::Rgb10A2,
+            color_profile: PresentationColorProfile::Pq2020Limited,
+            alpha_mode: AlphaMode::Opaque,
+            dither: true,
+            fallback_reason: None,
+        });
+        output.presentation_request = output
+            .presentation_request
+            .with_mode(PresentationMode::Hdr10);
+        data.outputs.push(output);
+
+        let mut actions = UIActions::new();
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(420.0, 900.0))
+            .build_ui(|ui| {
+                render_output_section(ui, &data, &mut actions);
+            });
+        harness.run();
+        // A declaration must never pass as a measurement.
+        assert!(
+            harness
+                .query_by_label_contains("declared from peak")
+                .is_some(),
+            "the card must say where the mastering metadata came from"
+        );
+        for expected in ["HDR10", "PQ/BT.2020", "1000 cd/m²"] {
+            assert!(
+                harness.query_by_label_contains(expected).is_some(),
+                "the status line never mentions {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_peak_control_only_exists_for_an_hdr_contract() {
+        use crate::engine::value::render::{PresentationMode, ResolvedPresentation};
+        let mut data = UIData::test_fixture();
+        let mut output = sample_output(ResolvedPresentation::default());
+        output.presentation_request = output
+            .presentation_request
+            .with_mode(PresentationMode::Sdr10);
+        data.outputs.push(output);
+        let mut actions = UIActions::new();
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(420.0, 640.0))
+            .build_ui(|ui| {
+                render_output_section(ui, &data, &mut actions);
+            });
+        harness.run();
+        assert!(
+            harness.query_by_label("Peak:").is_none(),
+            "an SDR output must not offer a peak luminance it cannot use"
+        );
+    }
+
+    #[test]
+    fn an_hdr_output_warns_that_the_sdr_lut_is_not_applied() {
+        use crate::engine::value::render::{
+            AlphaMode, PresentationColorProfile, PresentationDepth, PresentationMode,
+            PresentationPixelFormat, PresentationTransfer, ResolvedPresentation,
+        };
+        let mut data = UIData::test_fixture();
+        data.active_lut_filename = Some("club_grade.cube".to_string());
+        let mut output = sample_output(ResolvedPresentation {
+            requested: PresentationDepth::Sdr10,
+            resolved: PresentationDepth::Sdr10,
+            requested_transfer: PresentationTransfer::Hdr10Pq,
+            transfer: PresentationTransfer::Hdr10Pq,
+            peak_nits: Some(1000),
+            hdr_metadata: None,
+            pixel_format: PresentationPixelFormat::Rgb10A2,
+            color_profile: PresentationColorProfile::Pq2020Limited,
+            alpha_mode: AlphaMode::Opaque,
+            dither: true,
+            fallback_reason: None,
+        });
+        output.presentation_request = output
+            .presentation_request
+            .with_mode(PresentationMode::Hdr10);
+        data.outputs.push(output);
+
+        let mut actions = UIActions::new();
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(420.0, 900.0))
+            .build_ui(|ui| {
+                render_output_section(ui, &data, &mut actions);
+            });
+        harness.run();
+        // The operator must not discover this by opening the file.
+        assert!(
+            harness.query_by_label_contains("club_grade.cube").is_some(),
+            "an HDR output with a LUT loaded must say the LUT is not applied"
+        );
+    }
+
+    #[test]
+    fn an_hdr_fallback_is_not_reported_as_a_bit_depth_problem() {
+        use crate::engine::value::render::{
+            AlphaMode, PresentationColorProfile, PresentationDepth, PresentationMode,
+            PresentationPixelFormat, PresentationTransfer, ResolvedPresentation,
+        };
+        let mut data = UIData::test_fixture();
+        let mut output = sample_output(ResolvedPresentation {
+            requested: PresentationDepth::Sdr10,
+            resolved: PresentationDepth::Sdr10,
+            requested_transfer: PresentationTransfer::Hdr10Pq,
+            transfer: PresentationTransfer::Sdr,
+            peak_nits: None,
+            hdr_metadata: None,
+            pixel_format: PresentationPixelFormat::Rgb10A2,
+            color_profile: PresentationColorProfile::SrgbFull,
+            alpha_mode: AlphaMode::Opaque,
+            dither: true,
+            fallback_reason: Some("H.264 cannot carry HDR10".to_string()),
+        });
+        output.presentation_request = output
+            .presentation_request
+            .with_mode(PresentationMode::Hdr10);
+        data.outputs.push(output);
+
+        let mut actions = UIActions::new();
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(420.0, 900.0))
+            .build_ui(|ui| {
+                render_output_section(ui, &data, &mut actions);
+            });
+        harness.run();
+        assert!(
+            harness.query_by_label_contains("HDR10 fallback").is_some(),
+            "an HDR request that degrades must name HDR, not bit depth"
+        );
+    }
+
+    #[test]
+    fn an_hdr_output_says_when_the_chosen_curve_has_no_hdr_form() {
+        use crate::engine::value::render::{
+            AlphaMode, PresentationColorProfile, PresentationDepth, PresentationMode,
+            PresentationPixelFormat, PresentationTransfer, ResolvedPresentation,
+        };
+        let mut data = UIData::test_fixture();
+        data.tonemap_mode = crate::renderer::tonemap::TonemapMode::AgX;
+        let mut output = sample_output(ResolvedPresentation {
+            requested: PresentationDepth::Sdr10,
+            resolved: PresentationDepth::Sdr10,
+            requested_transfer: PresentationTransfer::Hdr10Pq,
+            transfer: PresentationTransfer::Hdr10Pq,
+            peak_nits: Some(1000),
+            hdr_metadata: None,
+            pixel_format: PresentationPixelFormat::Rgb10A2,
+            color_profile: PresentationColorProfile::Pq2020Limited,
+            alpha_mode: AlphaMode::Opaque,
+            dither: true,
+            fallback_reason: None,
+        });
+        output.presentation_request = output
+            .presentation_request
+            .with_mode(PresentationMode::Hdr10);
+        data.outputs.push(output);
+
+        let mut actions = UIActions::new();
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(420.0, 900.0))
+            .build_ui(|ui| {
+                render_output_section(ui, &data, &mut actions);
+            });
+        harness.run();
+        assert!(
+            harness.query_by_label_contains("no HDR form").is_some(),
+            "a substituted curve must be reported, never silent"
+        );
+    }
+
+    #[test]
+    fn an_sdr_output_never_mentions_curve_substitution() {
+        use crate::engine::value::render::ResolvedPresentation;
+        let mut data = UIData::test_fixture();
+        data.tonemap_mode = crate::renderer::tonemap::TonemapMode::AgX;
+        data.outputs
+            .push(sample_output(ResolvedPresentation::default()));
+
+        let mut actions = UIActions::new();
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(420.0, 900.0))
+            .build_ui(|ui| {
+                render_output_section(ui, &data, &mut actions);
+            });
+        harness.run();
+        assert!(harness.query_by_label_contains("no HDR form").is_none());
+    }
+
+    // Note: the per-output tonemap ComboBox's selected text is not exposed to the
+    // accessibility tree, so it cannot be asserted on here. Two tests that tried
+    // were removed rather than weakened into assertions that observe nothing. The
+    // override's effect on this panel is covered below through the substitution
+    // warning, which is a real label, and end to end by the engine, API, and
+    // persistence tests.
+
+    #[test]
+    fn the_substitution_warning_follows_the_override_not_the_show_curve() {
+        use crate::engine::value::render::{
+            AlphaMode, PresentationColorProfile, PresentationDepth, PresentationMode,
+            PresentationPixelFormat, PresentationTransfer, ResolvedPresentation,
+        };
+        use crate::renderer::tonemap::TonemapMode;
+        // Show-wide curve has an HDR form; the override does not. The warning
+        // must describe what this output actually runs.
+        let mut data = UIData::test_fixture();
+        data.tonemap_mode = TonemapMode::Bypass;
+        let mut output = sample_output(ResolvedPresentation {
+            requested: PresentationDepth::Sdr10,
+            resolved: PresentationDepth::Sdr10,
+            requested_transfer: PresentationTransfer::Hdr10Pq,
+            transfer: PresentationTransfer::Hdr10Pq,
+            peak_nits: Some(1000),
+            hdr_metadata: None,
+            pixel_format: PresentationPixelFormat::Rgb10A2,
+            color_profile: PresentationColorProfile::Pq2020Limited,
+            alpha_mode: AlphaMode::Opaque,
+            dither: true,
+            fallback_reason: None,
+        });
+        output.presentation_request = output
+            .presentation_request
+            .with_mode(PresentationMode::Hdr10);
+        output.tonemap_override = Some(TonemapMode::Lottes);
+        data.outputs.push(output);
+
+        let mut actions = UIActions::new();
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(420.0, 900.0))
+            .build_ui(|ui| {
+                render_output_section(ui, &data, &mut actions);
+            });
+        harness.run();
+        assert!(
+            harness
+                .query_by_label_contains("Lottes (AMD) has no HDR form")
+                .is_some(),
+            "the warning must name the override, not the show-wide curve"
+        );
     }
 }

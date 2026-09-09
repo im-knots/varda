@@ -431,6 +431,8 @@ pub struct UIData {
     pub tonemap_mode: crate::renderer::tonemap::TonemapMode,
     /// Active LUT filename (if any)
     pub active_lut_filename: Option<String>,
+    /// Scene-referred look LUT filename, applied before every output transform.
+    pub look_lut_filename: Option<String>,
     /// Available LUT files in .varda/luts/
     pub available_luts: Vec<String>,
     /// Whether MIDI learn mode is active
@@ -739,6 +741,8 @@ pub struct OutputUI {
     pub presentation_request: crate::engine::value::render::PresentationRequest,
     /// Runtime format selected by the active adapter.
     pub resolved_presentation: crate::engine::value::render::ResolvedPresentation,
+    /// Per-output tonemap override. `None` inherits the show-wide curve.
+    pub tonemap_override: Option<crate::engine::value::render::TonemapMode>,
     /// Audio passthrough health for an active ffmpeg output (None = video-only).
     pub audio_passthrough: Option<AudioPassthroughUI>,
     /// ffmpeg video health (None = no subprocess on this output).

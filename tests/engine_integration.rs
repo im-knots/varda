@@ -4156,6 +4156,7 @@ fn presentation_request_keeps_ten_bit_intent_and_reports_ndi_fallback() {
                 request: PresentationRequest {
                     depth: PresentationDepth::Sdr10,
                     dither: true,
+                    ..PresentationRequest::default()
                 },
             },
         ),
@@ -4175,6 +4176,127 @@ fn presentation_request_keeps_ten_bit_intent_and_reports_ndi_fallback() {
         PresentationDepth::Sdr8
     );
     assert!(output.resolved_presentation.fallback_reason.is_some());
+}
+
+#[test]
+fn output_tonemap_override_is_settable_and_clearable_through_the_engine() {
+    use varda::engine::value::render::TonemapMode;
+    use varda::renderer::context::OutputTarget;
+
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::CreateHeadlessOutput {
+            target: OutputTarget::NdiSend {
+                sender_name: "Tonemap Override".into(),
+            },
+        },
+    );
+    let output_uuid = last_output_uuid(&mut app);
+
+    // Inherit is the default: nothing has deliberately differed yet.
+    let state = app.build_engine_state();
+    let output = state
+        .outputs
+        .windows
+        .iter()
+        .find(|o| o.uuid == output_uuid)
+        .unwrap();
+    assert_eq!(output.tonemap_override, None);
+
+    assert!(matches!(
+        send_cmd(
+            &mut app,
+            EngineCommand::SetOutputTonemap {
+                output_uuid: output_uuid.clone(),
+                tonemap: Some(TonemapMode::AgX),
+            },
+        ),
+        CommandResult::Ok
+    ));
+    let state = app.build_engine_state();
+    let output = state
+        .outputs
+        .windows
+        .iter()
+        .find(|o| o.uuid == output_uuid)
+        .unwrap();
+    assert_eq!(output.tonemap_override, Some(TonemapMode::AgX));
+
+    // Clearing must return to inherit, not to some concrete curve.
+    assert!(matches!(
+        send_cmd(
+            &mut app,
+            EngineCommand::SetOutputTonemap {
+                output_uuid: output_uuid.clone(),
+                tonemap: None,
+            },
+        ),
+        CommandResult::Ok
+    ));
+    let state = app.build_engine_state();
+    let output = state
+        .outputs
+        .windows
+        .iter()
+        .find(|o| o.uuid == output_uuid)
+        .unwrap();
+    assert_eq!(output.tonemap_override, None);
+}
+
+#[test]
+fn output_tonemap_override_does_not_disturb_the_show_wide_curve() {
+    use varda::engine::value::render::TonemapMode;
+    use varda::renderer::context::OutputTarget;
+
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(&mut app, EngineCommand::SetTonemapMode(TonemapMode::Aces));
+    send_cmd(
+        &mut app,
+        EngineCommand::CreateHeadlessOutput {
+            target: OutputTarget::NdiSend {
+                sender_name: "Independent".into(),
+            },
+        },
+    );
+    let output_uuid = last_output_uuid(&mut app);
+    send_cmd(
+        &mut app,
+        EngineCommand::SetOutputTonemap {
+            output_uuid,
+            tonemap: Some(TonemapMode::Lottes),
+        },
+    );
+
+    // Overriding one output is not a way to change the show's look.
+    assert_eq!(
+        app.build_engine_state().mixer.tonemap_mode,
+        TonemapMode::Aces
+    );
+}
+
+#[test]
+fn tonemap_override_on_an_unknown_output_is_not_found() {
+    use varda::engine::value::render::TonemapMode;
+
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let result = send_cmd(
+        &mut app,
+        EngineCommand::SetOutputTonemap {
+            output_uuid: "no-such-output".into(),
+            tonemap: Some(TonemapMode::AgX),
+        },
+    );
+    assert!(
+        matches!(&result, CommandResult::Err { code, .. } if *code == ErrorCode::NotFound),
+        "expected NotFound, got {result:?}"
+    );
 }
 
 fn last_output_uuid(app: &mut VardaApp) -> String {
@@ -4201,6 +4323,7 @@ fn presentation_request_unknown_output_is_not_found() {
             request: PresentationRequest {
                 depth: PresentationDepth::Sdr10,
                 dither: true,
+                ..PresentationRequest::default()
             },
         },
     );
@@ -4243,6 +4366,7 @@ fn presentation_request_keeps_ten_bit_intent_on_syphon_fallback() {
                 request: PresentationRequest {
                     depth: PresentationDepth::Sdr10,
                     dither: false,
+                    ..PresentationRequest::default()
                 },
             },
         ),
@@ -4284,6 +4408,7 @@ fn chaos_unknown_output_uuid_presentation_does_not_panic() {
                 request: PresentationRequest {
                     depth: PresentationDepth::Sdr10,
                     dither: uuid.len() % 2 == 0,
+                    ..PresentationRequest::default()
                 },
             },
         );
@@ -4322,6 +4447,7 @@ fn chaos_rapid_presentation_toggle_while_rendering() {
                         PresentationDepth::Sdr8
                     },
                     dither: i % 3 != 0,
+                    ..PresentationRequest::default()
                 },
             },
         );
@@ -4374,7 +4500,7 @@ fn chaos_retarget_and_presentation_storm() {
         OutputTarget::HlsStream {
             name: "storm".into(),
             codec: StreamingCodec::H265,
-            low_latency: true,
+            short_segments: true,
             audio_device: None,
         },
         OutputTarget::NdiSend {
@@ -4396,6 +4522,7 @@ fn chaos_retarget_and_presentation_storm() {
                 request: PresentationRequest {
                     depth: PresentationDepth::Sdr10,
                     dither: i % 2 == 0,
+                    ..PresentationRequest::default()
                 },
             },
         );
@@ -4445,6 +4572,7 @@ fn chaos_create_close_presentation_cycle() {
                 request: PresentationRequest {
                     depth: PresentationDepth::Sdr10,
                     dither: true,
+                    ..PresentationRequest::default()
                 },
             },
         );

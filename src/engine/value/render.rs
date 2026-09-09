@@ -42,6 +42,120 @@ impl PresentationDepth {
     }
 }
 
+/// ITU-R BT.2408 HDR Reference White, in cd/m².
+///
+/// Linear 1.0 maps here, so existing SDR content keeps the apparent brightness it
+/// has today and the range above 1.0 that the mixer tonemap used to discard becomes
+/// the HDR gain. See /spec/hdr-color-management.md Decision 2.
+pub const HDR_REFERENCE_WHITE_NITS: f32 = 203.0;
+
+/// Default per-output peak luminance for HDR presentation, in cd/m².
+pub const HDR_DEFAULT_PEAK_NITS: u16 = 1000;
+
+/// Lowest peak luminance an output may request, in cd/m².
+///
+/// Must exceed [`HDR_REFERENCE_WHITE_NITS`], or the contract stops meaning
+/// anything: a peak at or below reference white leaves no headroom above display
+/// white, so an "HDR" output could not reach the brightness an SDR one already
+/// shows. This floor was 100, which put headroom at 0.49 and had the CPU and the
+/// shader disagreeing, because `tonemap.wgsl` clamps headroom at 1.0 and
+/// `linear_headroom` did not. Found by `tests/presentation_chaos.rs`.
+///
+/// 400 is about one stop over reference white and matches the lowest commonly
+/// cited HDR display tier.
+pub const HDR_PEAK_NITS_MIN: u16 = 400;
+/// Upper bound of requestable peak luminance, in cd/m² (the PQ signal ceiling).
+pub const HDR_PEAK_NITS_MAX: u16 = 10_000;
+
+/// Transfer and dynamic-range contract requested at an output boundary.
+///
+/// Deliberately a sibling of [`PresentationDepth`] rather than a widening of it:
+/// bit depth is integer precision, dynamic range is a different axis, and
+/// conflating them is the mistake /spec/sdr-presentation-precision.md was written
+/// to avoid.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    utoipa::ToSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum PresentationTransfer {
+    /// Standard dynamic range: sRGB or Rec.709 transfer with Rec.709 primaries.
+    #[default]
+    Sdr,
+    /// HDR10: ST 2084 (PQ) transfer, BT.2020 primaries, static mastering metadata.
+    Hdr10Pq,
+    /// HLG: ARIB STD-B67 transfer, BT.2020 primaries, no mastering metadata.
+    ///
+    /// Relative rather than absolute, so it carries no peak and needs no content
+    /// light level. That is why it is the default for live paths, which have no
+    /// finalize step in which `MaxCLL` could be measured.
+    Hlg,
+    /// Apple EDR: linear scRGB, Rec.709 primaries, no transfer encode at all.
+    ///
+    /// The one HDR contract where Varda stops encoding rather than encoding
+    /// differently. `1.0` is the display's SDR white, which is what Varda's
+    /// linear 1.0 already means, so values are written unchanged and the
+    /// compositor clips at whatever headroom it currently allows.
+    ///
+    /// A monitoring contract, never delivery. See /spec/hdr-edr-display.md.
+    EdrLinear,
+}
+
+impl PresentationTransfer {
+    /// Values in user-facing order.
+    pub const ALL: [Self; 4] = [Self::Sdr, Self::Hdr10Pq, Self::Hlg, Self::EdrLinear];
+
+    /// Human-readable label.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Sdr => "SDR",
+            Self::Hdr10Pq => "HDR10 (PQ)",
+            Self::Hlg => "HLG",
+            Self::EdrLinear => "EDR",
+        }
+    }
+
+    /// Whether this contract carries high dynamic range.
+    #[must_use]
+    pub const fn is_hdr(self) -> bool {
+        matches!(self, Self::Hdr10Pq | Self::Hlg | Self::EdrLinear)
+    }
+
+    /// Whether this contract encodes a transfer function at all.
+    ///
+    /// EDR does not: it writes linear values to an extended-range surface. Every
+    /// other contract, SDR included, encodes something.
+    #[must_use]
+    pub const fn encodes_a_transfer(self) -> bool {
+        !matches!(self, Self::EdrLinear)
+    }
+
+    /// Whether this contract carries ST 2086 and CTA-861.3 mastering metadata.
+    ///
+    /// PQ is absolute and needs it. HLG is relative and needs none, which is what
+    /// removes the declared-versus-measured `MaxCLL` problem on live paths.
+    #[must_use]
+    pub const fn carries_mastering_metadata(self) -> bool {
+        matches!(self, Self::Hdr10Pq)
+    }
+
+    /// Whether the peak-luminance setting means anything for this contract.
+    #[must_use]
+    pub const fn uses_peak_nits(self) -> bool {
+        // EDR's peak is not a display property; it names the deliverable being
+        // monitored, which is what makes the preview comparable to the file.
+        matches!(self, Self::Hdr10Pq | Self::EdrLinear)
+    }
+}
+
 /// Framework-free pixel format selected for an output adapter.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -88,6 +202,10 @@ pub enum PresentationColorProfile {
     Rec709Limited,
     /// Full-range Rec.709 video presentation.
     Rec709Full,
+    /// Limited-range PQ with BT.2020 primaries and non-constant-luminance matrix.
+    Pq2020Limited,
+    /// Full-range PQ with BT.2020 primaries.
+    Pq2020Full,
 }
 
 /// Alpha representation at the output boundary.
@@ -104,21 +222,121 @@ pub enum AlphaMode {
     Straight,
 }
 
+/// The presentation contract a user picks, as one choice.
+///
+/// Depth and transfer are separate axes in the domain, but not every pairing is
+/// meaningful: HDR10 is a ten-bit contract by definition, and an eight-bit PQ
+/// signal is not a picture anyone would ship. Offering the combinations as one
+/// list keeps the meaningless ones unreachable from the UI and the API instead
+/// of relying on validation to reject them afterwards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PresentationMode {
+    /// Eight-bit SDR, the compatibility default.
+    Sdr8,
+    /// Ten-bit SDR: more code values, same Rec.709 picture.
+    Sdr10,
+    /// HDR10: PQ transfer, BT.2020 primaries, ten-bit.
+    Hdr10,
+    /// HLG: relative HDR with no mastering metadata. The live-path default.
+    Hlg,
+    /// Apple EDR: linear extended range for monitoring on a capable display.
+    Edr,
+}
+
+impl PresentationMode {
+    /// Values in user-facing order.
+    pub const ALL: [Self; 5] = [Self::Sdr8, Self::Sdr10, Self::Hdr10, Self::Hlg, Self::Edr];
+
+    /// Human-readable label.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Sdr8 => "8-bit SDR",
+            Self::Sdr10 => "10-bit SDR",
+            Self::Hdr10 => "HDR10",
+            Self::Hlg => "HLG",
+            Self::Edr => "EDR (monitor)",
+        }
+    }
+
+    /// One line on what choosing this does, for the picker.
+    #[must_use]
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Sdr8 => "Compatibility default. Eight-bit Rec.709.",
+            Self::Sdr10 => "More code values after tonemap. Same brightness and gamut.",
+            Self::Hdr10 => "PQ transfer and BT.2020 container. HDR range, not wide gamut.",
+            Self::Hlg => "Relative HDR for live paths. No mastering metadata needed.",
+            Self::Edr => "Linear extended range for monitoring on this Mac. Not a delivery format.",
+        }
+    }
+
+    /// Whether this contract carries high dynamic range.
+    #[must_use]
+    pub const fn is_hdr(self) -> bool {
+        matches!(self, Self::Hdr10 | Self::Hlg | Self::Edr)
+    }
+}
+
+/// Peak luminance values offered in the picker, in cd/m².
+///
+/// Deliverable targets and common LED-processor ceilings, not a continuous
+/// range: a peak nobody masters to is not a useful choice.
+pub const HDR_PEAK_NITS_PRESETS: [u16; 4] = [600, 1000, 1500, 4000];
+
+/// Where an HDR output's content light level metadata came from.
+///
+/// CTA-861.3 expects `MaxCLL` and `MaxFALL` to describe the *content*, measured
+/// across the programme. Declaring them from the configured peak is true by
+/// construction only because the encoder clamps the signal to that peak, and it
+/// is still not what the standard asks for, so which one is in force is reported
+/// rather than assumed. See /spec/hdr-recording-output.md.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HdrMetadataSource {
+    /// Derived from the output's configured peak, with the signal clamped to it.
+    DeclaredFromPeak,
+    /// Measured across the recorded programme and written at finalize.
+    MeasuredFromContent,
+}
+
+impl HdrMetadataSource {
+    /// Human-readable status for the output card.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::DeclaredFromPeak => "declared from peak",
+            Self::MeasuredFromContent => "measured from content",
+        }
+    }
+}
+
 /// Persisted precision and dithering request for one output.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
 )]
 pub struct PresentationRequest {
-    /// Requested SDR code precision.
+    /// Requested integer code precision.
     #[serde(default, rename = "presentation_depth")]
     pub depth: PresentationDepth,
     /// Whether deterministic destination-aware dithering is enabled.
     #[serde(default = "presentation_dither_default")]
     pub dither: bool,
+    /// Requested transfer and dynamic-range contract.
+    #[serde(default)]
+    pub transfer: PresentationTransfer,
+    /// Peak luminance in cd/m², meaningful only when `transfer` is HDR.
+    #[serde(default = "presentation_peak_nits_default")]
+    pub peak_nits: u16,
 }
 
 const fn presentation_dither_default() -> bool {
     true
+}
+
+const fn presentation_peak_nits_default() -> u16 {
+    HDR_DEFAULT_PEAK_NITS
 }
 
 impl Default for PresentationRequest {
@@ -126,7 +344,62 @@ impl Default for PresentationRequest {
         Self {
             depth: PresentationDepth::default(),
             dither: presentation_dither_default(),
+            transfer: PresentationTransfer::default(),
+            peak_nits: presentation_peak_nits_default(),
         }
+    }
+}
+
+impl PresentationRequest {
+    /// Coerce a request into a self-consistent one before resolution.
+    ///
+    /// HDR10 is a ten-bit contract: PQ quantized to eight bits bands severely, so
+    /// an eight-bit HDR request is upgraded rather than resolved into a picture no
+    /// one would ship. Peak luminance is clamped to the representable range. This
+    /// runs inside [`PresentationCapabilities::resolve`], so a hand-edited
+    /// `stage.json` cannot produce an incoherent runtime contract.
+    /// The single user-facing contract this request represents.
+    #[must_use]
+    pub fn mode(self) -> PresentationMode {
+        if self.transfer == PresentationTransfer::Hlg {
+            PresentationMode::Hlg
+        } else if self.transfer == PresentationTransfer::EdrLinear {
+            PresentationMode::Edr
+        } else if self.transfer.is_hdr() {
+            PresentationMode::Hdr10
+        } else if self.depth == PresentationDepth::Sdr10 {
+            PresentationMode::Sdr10
+        } else {
+            PresentationMode::Sdr8
+        }
+    }
+
+    /// Apply a user-facing contract, leaving dithering and peak untouched.
+    #[must_use]
+    pub fn with_mode(self, mode: PresentationMode) -> Self {
+        let (depth, transfer) = match mode {
+            PresentationMode::Sdr8 => (PresentationDepth::Sdr8, PresentationTransfer::Sdr),
+            PresentationMode::Sdr10 => (PresentationDepth::Sdr10, PresentationTransfer::Sdr),
+            PresentationMode::Hdr10 => (PresentationDepth::Sdr10, PresentationTransfer::Hdr10Pq),
+            PresentationMode::Hlg => (PresentationDepth::Sdr10, PresentationTransfer::Hlg),
+            // The surface is `Rgba16Float`, so integer depth does not apply; the
+            // ten-bit request keeps the contract coherent for the resolver.
+            PresentationMode::Edr => (PresentationDepth::Sdr10, PresentationTransfer::EdrLinear),
+        };
+        Self {
+            depth,
+            transfer,
+            ..self
+        }
+    }
+
+    #[must_use]
+    pub fn normalized(mut self) -> Self {
+        if self.transfer.is_hdr() {
+            self.depth = PresentationDepth::Sdr10;
+        }
+        self.peak_nits = self.peak_nits.clamp(HDR_PEAK_NITS_MIN, HDR_PEAK_NITS_MAX);
+        self
     }
 }
 
@@ -135,6 +408,8 @@ impl Default for PresentationRequest {
 pub struct PresentationFormat {
     /// Precision carried by the format.
     pub depth: PresentationDepth,
+    /// Transfer and dynamic-range contract carried by the format.
+    pub transfer: PresentationTransfer,
     /// Pixel or encoded storage format.
     pub pixel_format: PresentationPixelFormat,
     /// Transfer and range contract.
@@ -147,16 +422,34 @@ pub struct PresentationFormat {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PresentationCapabilities {
     formats: Vec<PresentationFormat>,
-    sdr10_unavailable_reason: Option<String>,
+    fallback_reason: Option<String>,
 }
 
 impl PresentationCapabilities {
     /// Build capabilities in adapter preference order.
-    pub fn new(formats: Vec<PresentationFormat>, sdr10_unavailable_reason: Option<String>) -> Self {
+    pub fn new(formats: Vec<PresentationFormat>, fallback_reason: Option<String>) -> Self {
         Self {
             formats,
-            sdr10_unavailable_reason,
+            fallback_reason,
         }
+    }
+
+    /// Best result this path can carry when the exact request is unavailable.
+    ///
+    /// An HDR request degrades to the best SDR format the adapter advertised, in
+    /// adapter preference order, rather than erroring: an HDR10 recording request
+    /// on an eight-bit codec is a capability answer, not a configuration error. An
+    /// SDR ten-bit request keeps the existing eight-bit ladder.
+    fn fallback_for(&self, request: PresentationRequest) -> Option<&PresentationFormat> {
+        if request.transfer.is_hdr() {
+            return self.formats.iter().find(|format| !format.transfer.is_hdr());
+        }
+        if request.depth == PresentationDepth::Sdr10 {
+            return self.formats.iter().find(|format| {
+                format.depth == PresentationDepth::Sdr8 && !format.transfer.is_hdr()
+            });
+        }
+        None
     }
 
     /// Resolve a request without mutating the persisted requested precision.
@@ -169,31 +462,38 @@ impl PresentationCapabilities {
         &self,
         request: PresentationRequest,
     ) -> Result<ResolvedPresentation, PresentationResolveError> {
+        let request = request.normalized();
         let exact = self
             .formats
             .iter()
-            .find(|format| format.depth == request.depth);
-        let selected = exact.or_else(|| {
-            (request.depth == PresentationDepth::Sdr10)
-                .then(|| {
-                    self.formats
-                        .iter()
-                        .find(|format| format.depth == PresentationDepth::Sdr8)
-                })
-                .flatten()
-        });
+            .find(|format| format.depth == request.depth && format.transfer == request.transfer);
+        let selected = exact.or_else(|| self.fallback_for(request));
         let Some(selected) = selected else {
             return Err(PresentationResolveError::NoSupportedFormats);
         };
-        let fallback_reason = (selected.depth != request.depth).then(|| {
-            self.sdr10_unavailable_reason
-                .clone()
-                .unwrap_or_else(|| "10-bit SDR is unavailable for this output".to_string())
+        let degraded = selected.depth != request.depth || selected.transfer != request.transfer;
+        let fallback_reason = degraded.then(|| {
+            self.fallback_reason.clone().unwrap_or_else(|| {
+                if request.transfer.is_hdr() {
+                    "HDR10 is unavailable for this output".to_string()
+                } else {
+                    "10-bit SDR is unavailable for this output".to_string()
+                }
+            })
         });
 
         Ok(ResolvedPresentation {
             requested: request.depth,
             resolved: selected.depth,
+            requested_transfer: request.transfer,
+            transfer: selected.transfer,
+            peak_nits: selected
+                .transfer
+                .uses_peak_nits()
+                .then_some(request.peak_nits),
+            // Adapters that write mastering metadata set this; the pure resolver
+            // has no way to know whether one does.
+            hdr_metadata: None,
             pixel_format: selected.pixel_format.clone(),
             color_profile: selected.color_profile,
             alpha_mode: selected.alpha_mode,
@@ -210,6 +510,15 @@ pub struct ResolvedPresentation {
     pub requested: PresentationDepth,
     /// Precision the active path carries.
     pub resolved: PresentationDepth,
+    /// Persisted requested transfer contract.
+    pub requested_transfer: PresentationTransfer,
+    /// Transfer contract the active path carries.
+    pub transfer: PresentationTransfer,
+    /// Peak luminance in cd/m², present only when the resolved transfer is HDR.
+    pub peak_nits: Option<u16>,
+    /// Origin of `MaxCLL` and `MaxFALL`, present only when the resolved transfer is
+    /// HDR and the adapter writes mastering metadata.
+    pub hdr_metadata: Option<HdrMetadataSource>,
     /// Active pixel or encoded format.
     pub pixel_format: PresentationPixelFormat,
     /// Active color contract.
@@ -227,6 +536,10 @@ impl Default for ResolvedPresentation {
         Self {
             requested: PresentationDepth::Sdr8,
             resolved: PresentationDepth::Sdr8,
+            requested_transfer: PresentationTransfer::Sdr,
+            transfer: PresentationTransfer::Sdr,
+            peak_nits: None,
+            hdr_metadata: None,
             pixel_format: PresentationPixelFormat::Rgba8,
             color_profile: PresentationColorProfile::SrgbFull,
             alpha_mode: AlphaMode::Opaque,
@@ -416,7 +729,15 @@ pub enum OutputTarget {
     HlsStream {
         name: String,
         codec: StreamingCodec,
-        low_latency: bool,
+        /// One-second segments instead of two.
+        ///
+        /// Not RFC 8216bis low-latency HLS: FFmpeg's muxer writes no partial
+        /// segments, so there are none to deliver. This shortens segments and
+        /// nothing more. Named `low_latency` until it was measured; the alias
+        /// keeps existing `stage.json` files loading.
+        /// See /spec/hls-dash-io.md and /spec/ll-hls-output.md.
+        #[serde(alias = "low_latency")]
+        short_segments: bool,
         #[serde(default)]
         audio_device: Option<String>,
     },
@@ -495,11 +816,11 @@ impl std::fmt::Display for OutputTarget {
             OutputTarget::HlsStream {
                 name,
                 codec,
-                low_latency,
+                short_segments,
                 ..
             } => {
-                if *low_latency {
-                    write!(f, "LL-HLS [{codec}]: {name}")
+                if *short_segments {
+                    write!(f, "HLS-short [{codec}]: {name}")
                 } else {
                     write!(f, "HLS [{codec}]: {name}")
                 }
@@ -628,6 +949,7 @@ pub enum RtmpCodecContract {
     Copy,
     PartialEq,
     Eq,
+    Hash,
     Default,
     serde::Serialize,
     serde::Deserialize,
@@ -653,6 +975,71 @@ pub enum TonemapMode {
     AgX = 7,
     /// Khronos PBR Neutral — color-accurate, minimal look.
     KhronosPbrNeutral = 8,
+}
+
+impl TonemapMode {
+    /// Whether this curve has a defined form for an HDR output transform.
+    ///
+    /// An HDR output transform targets `[0, peak/203]` instead of `[0, 1]`.
+    /// `Bypass` extends by clamping to the wider range, and Reinhard Extended
+    /// already carries a white point that becomes the headroom. The rest
+    /// (`Aces`, `Reinhard`, `HableFilmic`, `Uchimura`, `Lottes`, `AgX`,
+    /// `KhronosPbrNeutral`) have shoulder constants fitted against an SDR target
+    /// and do **not** extend by rescaling their output: rescaling a curve outside
+    /// the range it was fitted for produces a plausible wrong picture, which is
+    /// the failure this phase family exists to prevent.
+    ///
+    /// ACES has a published HDR output-transform family. Adopting it is a
+    /// separate piece of work, not a rescale of the SDR curve already here.
+    /// See /spec/hdr-per-output-encode.md § Output transform range.
+    /// Every curve, in the order the tonemap panel lists them.
+    pub const ALL: [Self; 9] = [
+        Self::Bypass,
+        Self::Aces,
+        Self::Reinhard,
+        Self::ReinhardExtended,
+        Self::HableFilmic,
+        Self::Uchimura,
+        Self::Lottes,
+        Self::AgX,
+        Self::KhronosPbrNeutral,
+    ];
+
+    /// Human-readable name, matching the preset list in the tonemap panel.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Bypass => "Bypass (clamp)",
+            Self::Aces => "ACES Filmic",
+            Self::Reinhard => "Reinhard",
+            Self::ReinhardExtended => "Reinhard Extended",
+            Self::HableFilmic => "Hable Filmic",
+            Self::Uchimura => "Uchimura (GT)",
+            Self::Lottes => "Lottes (AMD)",
+            Self::AgX => "AgX",
+            Self::KhronosPbrNeutral => "PBR Neutral",
+        }
+    }
+
+    #[must_use]
+    pub const fn has_hdr_form(self) -> bool {
+        matches!(self, Self::Bypass | Self::ReinhardExtended)
+    }
+
+    /// The curve an HDR output actually runs, substituting a safe one when the
+    /// selected curve has no HDR form.
+    ///
+    /// Substituting rather than refusing keeps the transfer contract and the
+    /// creative curve independent: a look choice must not silently decide whether
+    /// a delivery is HDR. The substitution is reported, never silent.
+    #[must_use]
+    pub const fn for_hdr(self) -> Self {
+        if self.has_hdr_form() {
+            self
+        } else {
+            Self::Bypass
+        }
+    }
 }
 
 // ── Edge blend ───────────────────────────────────────────────────────
@@ -906,17 +1293,17 @@ mod tests {
             OutputTarget::HlsStream {
                 name: "live".into(),
                 codec: StreamingCodec::H264,
-                low_latency: true,
+                short_segments: true,
                 audio_device: None,
             }
             .to_string(),
-            "LL-HLS [H.264]: live"
+            "HLS-short [H.264]: live"
         );
         assert_eq!(
             OutputTarget::HlsStream {
                 name: "live".into(),
                 codec: StreamingCodec::H264,
-                low_latency: false,
+                short_segments: false,
                 audio_device: None,
             }
             .to_string(),
@@ -980,6 +1367,7 @@ mod tests {
     fn sdr8_format() -> PresentationFormat {
         PresentationFormat {
             depth: PresentationDepth::Sdr8,
+            transfer: PresentationTransfer::Sdr,
             pixel_format: PresentationPixelFormat::Rgba8,
             color_profile: PresentationColorProfile::SrgbFull,
             alpha_mode: AlphaMode::Opaque,
@@ -989,6 +1377,7 @@ mod tests {
     fn sdr10_format() -> PresentationFormat {
         PresentationFormat {
             depth: PresentationDepth::Sdr10,
+            transfer: PresentationTransfer::Sdr,
             pixel_format: PresentationPixelFormat::Rgb10A2,
             color_profile: PresentationColorProfile::SrgbFull,
             alpha_mode: AlphaMode::Opaque,
@@ -1021,13 +1410,11 @@ mod tests {
 
     #[test]
     fn presentation_request_defaults_to_sdr8_with_dither() {
-        assert_eq!(
-            PresentationRequest::default(),
-            PresentationRequest {
-                depth: PresentationDepth::Sdr8,
-                dither: true,
-            }
-        );
+        let request = PresentationRequest::default();
+        assert_eq!(request.depth, PresentationDepth::Sdr8);
+        assert!(request.dither);
+        assert_eq!(request.transfer, PresentationTransfer::Sdr);
+        assert_eq!(request.peak_nits, HDR_DEFAULT_PEAK_NITS);
     }
 
     #[test]
@@ -1056,6 +1443,7 @@ mod tests {
             .resolve(PresentationRequest {
                 depth: PresentationDepth::Sdr10,
                 dither: false,
+                ..PresentationRequest::default()
             })
             .unwrap();
 
@@ -1075,6 +1463,7 @@ mod tests {
             .resolve(PresentationRequest {
                 depth: PresentationDepth::Sdr10,
                 dither: true,
+                ..PresentationRequest::default()
             })
             .unwrap();
 
@@ -1124,6 +1513,7 @@ mod tests {
             .resolve(PresentationRequest {
                 depth: PresentationDepth::Sdr10,
                 dither: false,
+                ..PresentationRequest::default()
             })
             .unwrap();
 
@@ -1133,6 +1523,276 @@ mod tests {
         assert_eq!(
             resolved.fallback_reason.as_deref(),
             Some("10-bit SDR is unavailable for this output")
+        );
+    }
+
+    fn hdr10_format() -> PresentationFormat {
+        PresentationFormat {
+            depth: PresentationDepth::Sdr10,
+            transfer: PresentationTransfer::Hdr10Pq,
+            pixel_format: PresentationPixelFormat::Rgb10A2,
+            color_profile: PresentationColorProfile::Pq2020Limited,
+            alpha_mode: AlphaMode::Opaque,
+        }
+    }
+
+    #[test]
+    fn legacy_stage_json_loads_as_sdr_at_the_default_peak() {
+        // A `.varda/` written before Phase 50 carries neither field. It must land on
+        // the SDR contract it was written for, not on an HDR one.
+        let request: PresentationRequest =
+            serde_json::from_str(r#"{"presentation_depth":"sdr10","dither":false}"#).unwrap();
+        assert_eq!(request.depth, PresentationDepth::Sdr10);
+        assert!(!request.dither);
+        assert_eq!(request.transfer, PresentationTransfer::Sdr);
+        assert_eq!(request.peak_nits, HDR_DEFAULT_PEAK_NITS);
+    }
+
+    #[test]
+    fn presentation_request_round_trips_hdr_fields() {
+        let request = PresentationRequest {
+            transfer: PresentationTransfer::Hdr10Pq,
+            peak_nits: 4000,
+            ..PresentationRequest::default()
+        };
+        let json = serde_json::to_value(request).unwrap();
+        assert_eq!(json["transfer"], "hdr10_pq");
+        assert_eq!(json["peak_nits"], 4000);
+        assert_eq!(
+            serde_json::from_value::<PresentationRequest>(json).unwrap(),
+            request
+        );
+    }
+
+    #[test]
+    fn normalization_upgrades_eight_bit_hdr_to_ten_bit() {
+        // PQ quantized to eight bits bands severely. An incoherent hand-edited
+        // request is coerced rather than resolved into a picture no one would ship.
+        let normalized = PresentationRequest {
+            depth: PresentationDepth::Sdr8,
+            transfer: PresentationTransfer::Hdr10Pq,
+            ..PresentationRequest::default()
+        }
+        .normalized();
+        assert_eq!(normalized.depth, PresentationDepth::Sdr10);
+    }
+
+    #[test]
+    fn normalization_clamps_peak_nits_and_leaves_sdr_depth_alone() {
+        let low = PresentationRequest {
+            peak_nits: 1,
+            ..PresentationRequest::default()
+        }
+        .normalized();
+        assert_eq!(low.peak_nits, HDR_PEAK_NITS_MIN);
+
+        let high = PresentationRequest {
+            peak_nits: u16::MAX,
+            ..PresentationRequest::default()
+        }
+        .normalized();
+        assert_eq!(high.peak_nits, HDR_PEAK_NITS_MAX);
+
+        let sdr = PresentationRequest {
+            depth: PresentationDepth::Sdr8,
+            ..PresentationRequest::default()
+        }
+        .normalized();
+        assert_eq!(sdr.depth, PresentationDepth::Sdr8);
+    }
+
+    #[test]
+    fn resolver_selects_hdr10_when_the_adapter_advertises_it() {
+        let capabilities = PresentationCapabilities::new(
+            vec![hdr10_format(), sdr10_format(), sdr8_format()],
+            None,
+        );
+        let resolved = capabilities
+            .resolve(PresentationRequest {
+                transfer: PresentationTransfer::Hdr10Pq,
+                peak_nits: 1000,
+                ..PresentationRequest::default()
+            })
+            .unwrap();
+
+        assert_eq!(resolved.transfer, PresentationTransfer::Hdr10Pq);
+        assert_eq!(resolved.resolved, PresentationDepth::Sdr10);
+        assert_eq!(
+            resolved.color_profile,
+            PresentationColorProfile::Pq2020Limited
+        );
+        assert_eq!(resolved.peak_nits, Some(1000));
+        assert_eq!(resolved.fallback_reason, None);
+    }
+
+    #[test]
+    fn resolver_degrades_hdr_to_the_best_sdr_the_path_can_carry() {
+        // An HDR10 request on an SDR-only path is a capability answer, not an error.
+        // Adapter preference order decides which SDR result is "best".
+        let capabilities = PresentationCapabilities::new(vec![sdr10_format(), sdr8_format()], None);
+        let resolved = capabilities
+            .resolve(PresentationRequest {
+                transfer: PresentationTransfer::Hdr10Pq,
+                ..PresentationRequest::default()
+            })
+            .unwrap();
+
+        assert_eq!(resolved.requested_transfer, PresentationTransfer::Hdr10Pq);
+        assert_eq!(resolved.transfer, PresentationTransfer::Sdr);
+        assert_eq!(resolved.resolved, PresentationDepth::Sdr10);
+        assert_eq!(resolved.peak_nits, None);
+        assert_eq!(
+            resolved.fallback_reason.as_deref(),
+            Some("HDR10 is unavailable for this output")
+        );
+    }
+
+    #[test]
+    fn resolver_degrades_hdr_all_the_way_to_eight_bit_when_that_is_all_there_is() {
+        let capabilities = PresentationCapabilities::new(
+            vec![sdr8_format()],
+            Some("H.264 is an eight-bit codec".into()),
+        );
+        let resolved = capabilities
+            .resolve(PresentationRequest {
+                transfer: PresentationTransfer::Hdr10Pq,
+                ..PresentationRequest::default()
+            })
+            .unwrap();
+
+        assert_eq!(resolved.resolved, PresentationDepth::Sdr8);
+        assert_eq!(resolved.transfer, PresentationTransfer::Sdr);
+        assert_eq!(
+            resolved.fallback_reason.as_deref(),
+            Some("H.264 is an eight-bit codec")
+        );
+    }
+
+    #[test]
+    fn resolver_never_answers_an_sdr_request_with_an_hdr_format() {
+        // An adapter listing HDR first must not hand HDR to a show that asked for SDR.
+        let capabilities = PresentationCapabilities::new(vec![hdr10_format(), sdr8_format()], None);
+        let resolved = capabilities
+            .resolve(PresentationRequest::default())
+            .unwrap();
+
+        assert_eq!(resolved.transfer, PresentationTransfer::Sdr);
+        assert_eq!(resolved.resolved, PresentationDepth::Sdr8);
+        assert!(resolved.fallback_reason.is_none());
+    }
+
+    #[test]
+    fn resolver_degrading_sdr_ten_bit_skips_hdr_formats() {
+        let capabilities = PresentationCapabilities::new(vec![hdr10_format(), sdr8_format()], None);
+        let resolved = capabilities
+            .resolve(PresentationRequest {
+                depth: PresentationDepth::Sdr10,
+                ..PresentationRequest::default()
+            })
+            .unwrap();
+
+        assert_eq!(resolved.transfer, PresentationTransfer::Sdr);
+        assert_eq!(resolved.resolved, PresentationDepth::Sdr8);
+    }
+
+    #[test]
+    fn resolved_presentation_defaults_to_sdr() {
+        let resolved = ResolvedPresentation::default();
+        assert_eq!(resolved.transfer, PresentationTransfer::Sdr);
+        assert_eq!(resolved.requested_transfer, PresentationTransfer::Sdr);
+        assert_eq!(resolved.peak_nits, None);
+    }
+
+    #[test]
+    fn every_mode_round_trips_through_a_request() {
+        for mode in PresentationMode::ALL {
+            let request = PresentationRequest::default().with_mode(mode);
+            assert_eq!(request.mode(), mode, "{mode:?} did not round trip");
+        }
+    }
+
+    #[test]
+    fn hdr10_mode_implies_a_ten_bit_request() {
+        let request = PresentationRequest::default().with_mode(PresentationMode::Hdr10);
+        assert_eq!(request.depth, PresentationDepth::Sdr10);
+        assert_eq!(request.transfer, PresentationTransfer::Hdr10Pq);
+    }
+
+    #[test]
+    fn switching_modes_preserves_dither_and_peak() {
+        // Changing the contract must not silently discard the operator's other
+        // settings, so a round trip through HDR and back is lossless.
+        let original = PresentationRequest {
+            dither: false,
+            peak_nits: 4000,
+            ..PresentationRequest::default()
+        };
+        let hdr = original.with_mode(PresentationMode::Hdr10);
+        assert!(!hdr.dither);
+        assert_eq!(hdr.peak_nits, 4000);
+
+        let back = hdr.with_mode(PresentationMode::Sdr8);
+        assert_eq!(back, original);
+    }
+
+    #[test]
+    fn mode_labels_are_distinct_and_never_call_ten_bit_sdr_hdr() {
+        let labels: Vec<_> = PresentationMode::ALL.iter().map(|m| m.label()).collect();
+        assert_eq!(
+            labels,
+            ["8-bit SDR", "10-bit SDR", "HDR10", "HLG", "EDR (monitor)"]
+        );
+        // The naming rule from /spec/sdr-presentation-precision.md § Naming and
+        // Boundary: 10-bit SDR is not HDR and must never be labelled as such.
+        assert!(!PresentationMode::Sdr10.label().contains("HDR"));
+        assert!(!PresentationMode::Sdr10.description().contains("HDR"));
+    }
+
+    #[test]
+    fn edr_is_hdr_but_encodes_nothing_and_keeps_a_peak() {
+        // EDR is the one HDR contract that writes linear values, and the one
+        // whose peak names a deliverable rather than the display.
+        assert!(PresentationTransfer::EdrLinear.is_hdr());
+        assert!(!PresentationTransfer::EdrLinear.encodes_a_transfer());
+        assert!(!PresentationTransfer::EdrLinear.carries_mastering_metadata());
+        assert!(PresentationTransfer::EdrLinear.uses_peak_nits());
+    }
+
+    #[test]
+    fn hlg_is_hdr_but_carries_no_mastering_metadata() {
+        // The property that makes HLG the right live default: nothing to declare,
+        // so nothing to report as declared rather than measured.
+        assert!(PresentationTransfer::Hlg.is_hdr());
+        assert!(!PresentationTransfer::Hlg.carries_mastering_metadata());
+        assert!(!PresentationTransfer::Hlg.uses_peak_nits());
+        assert!(PresentationTransfer::Hdr10Pq.carries_mastering_metadata());
+        assert!(PresentationTransfer::Hdr10Pq.uses_peak_nits());
+    }
+
+    #[test]
+    fn hlg_mode_round_trips_and_implies_ten_bit() {
+        let request = PresentationRequest::default().with_mode(PresentationMode::Hlg);
+        assert_eq!(request.mode(), PresentationMode::Hlg);
+        assert_eq!(request.transfer, PresentationTransfer::Hlg);
+        assert_eq!(request.depth, PresentationDepth::Sdr10);
+    }
+
+    #[test]
+    fn an_hlg_resolution_reports_no_peak() {
+        let hlg = PresentationFormat {
+            depth: PresentationDepth::Sdr10,
+            transfer: PresentationTransfer::Hlg,
+            pixel_format: PresentationPixelFormat::Rgb10A2,
+            color_profile: PresentationColorProfile::Pq2020Limited,
+            alpha_mode: AlphaMode::Opaque,
+        };
+        let resolved = PresentationCapabilities::new(vec![hlg, sdr8_format()], None)
+            .resolve(PresentationRequest::default().with_mode(PresentationMode::Hlg))
+            .unwrap();
+        assert_eq!(resolved.transfer, PresentationTransfer::Hlg);
+        assert_eq!(
+            resolved.peak_nits, None,
+            "HLG is relative; a peak is meaningless"
         );
     }
 }

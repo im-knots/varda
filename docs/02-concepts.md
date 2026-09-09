@@ -26,7 +26,7 @@ Composites multiple decks into a single layer using per-deck opacity, blend mode
 
 ### Mixer
 
-Composites channels into the final output. With 2 channels, an A/B crossfader blends between them. With 3+ channels, per-channel opacity and blend modes control the mix. The mixer owns the master effect chain, tonemapping, optional 3D LUT color grading, and a state-machine-driven multi-channel transition sequencer (see [Transition Sequences](04-performance.md#transition-sequences)).
+Composites channels into the final output. With 2 channels, an A/B crossfader blends between them. With 3+ channels, per-channel opacity and blend modes control the mix. The mixer owns the master effect chain, the show-wide look grade and default tonemap curve, and a state-machine-driven multi-channel transition sequencer (see [Transition Sequences](04-performance.md#transition-sequences)).
 
 ### Surface
 
@@ -98,14 +98,27 @@ Effects can be reordered via drag-and-drop and toggled on/off individually.
 
 ## Tonemapping & Color Grading
 
-Varda works in **linear-light HDR** (`Rgba16Float`) from the moment a source enters a
-deck all the way to the output boundary
+Varda works in **16-bit float linear light** (`Rgba16Float`) from the moment a source enters
+a deck all the way to each output, where the picture is finally encoded for its destination.
 
-Before frames reach outputs, two optional color transforms are applied in order:
+Three stages shape that picture, and which of them is global matters:
+
+1. **Look LUT** grades the linear program before anything else. Global, so one grade reaches
+   every output.
+2. **Tonemap** maps the program into what one output can show. **Per output**, because a
+   tonemap *is* an output transform: an SDR projector and an HDR10 recording need different
+   ones from the same program.
+3. **Calibration LUT** corrects one display after its tonemap. Bound to the output's resolved
+   contract.
+
+What each output does with the result, and which of 8-bit SDR, 10-bit SDR, HDR10, HLG or EDR
+it delivers, is chosen per output. See [Output Format](07-outputs.md#output-format).
 
 ### Tonemap
 
-Compresses HDR values into displayable [0, 1] range. Nine algorithmic presets are available:
+Maps the linear composite into the range its output can show. For an SDR output that is
+[0, 1]; for an HDR10 output it is the range up to that output's configured peak. Nine
+algorithmic presets are available:
 
 | Preset | Character |
 |--------|-----------|
@@ -119,15 +132,21 @@ Compresses HDR values into displayable [0, 1] range. Nine algorithmic presets ar
 | **AgX** | Neutral, minimal hue shift |
 | **PBR Neutral** | Color-accurate, minimal look modification |
 
-Select via the **🎨 Tonemap** section in the right panel, under the main output preview, or `PUT /api/mixer/tonemap`.
+Select via the **🎨 Tonemap** section in the right panel, under the main output preview, or `PUT /api/mixer/tonemap`. This sets the show-wide curve that every output and the previews use.
 
-### 3D LUT
+Any output can override this from its own card, so a projector and a master recording can be graded for their own medium. See [Per-output tonemap](07-outputs.md#per-output-tonemap).
 
-An optional 3D Look-Up Table applied after tonemapping for color grading, gamut transforms, or creative looks. Supports industry-standard `.cube` and `.3dl` files (including 1D shaper LUTs for shadow precision).
+Only **Bypass** and **Reinhard Extended** have defined HDR forms. The other curves have shoulders fitted against an SDR target, so an HDR output substitutes Bypass rather than stretching a curve outside the range it was built for. The output card reports the substitution.
 
-Place LUT files in `.varda/luts/` and they will appear in the **🎨 Tonemap** section for one-click selection. The active LUT persists across sessions.
+### 3D LUTs: two slots
 
-LUTs are the universal mechanism for importing color transforms from DaVinci Resolve, Photoshop, or any color grading tool. A single `.cube` file can encode tonemapping + color grading + gamut mapping in one pass.
+Both slots take industry-standard `.cube` and `.3dl` files (including 1D shaper LUTs for shadow precision). Drop them in `.varda/luts/` and they appear in the **🎨 Tonemap** panel. Both persist across sessions.
+
+**Look LUT** is your show's grade. It runs on scene-linear light *before* the tonemap, so it reaches every output including HDR ones. Because linear light spends almost all its range on highlights, the lookup is encoded to **ACEScct** first, which is the log curve ACES specifies for look transforms. A `.cube` authored against ACEScct in Resolve or Nuke lands where its author intended.
+
+**Calibration LUT** corrects a specific display. It runs *after* the tonemap on the display-referred signal, which is what makes it a per-display correction rather than a look. Because it is calibrated against one output transform, applying it after a different one would put its midtones in the wrong place, so it is **not applied to HDR outputs** and the output card names the LUT it skipped.
+
+If you only want one, use the Look slot. The Calibration slot is for the case where one projector needs correcting and the rest do not.
 
 ---
 

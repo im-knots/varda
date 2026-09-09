@@ -131,3 +131,27 @@ pub async fn unload_lut(State(state): State<SharedState>) -> impl IntoResponse {
         Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
     }
 }
+
+#[utoipa::path(put, path = "/api/mixer/look-lut", request_body = LoadLutBody, responses((status = 200, body = CommandResult)), tag = "Mixer")]
+pub async fn load_look_lut(
+    State(state): State<SharedState>,
+    Json(body): Json<LoadLutBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::LoadLookLut {
+            filename: body.filename,
+        })
+        .await
+    {
+        Ok(result) => command_response(result),
+        Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+    }
+}
+
+#[utoipa::path(delete, path = "/api/mixer/look-lut", responses((status = 200, body = CommandResult)), tag = "Mixer")]
+pub async fn unload_look_lut(State(state): State<SharedState>) -> impl IntoResponse {
+    match state.send_command(EngineCommand::UnloadLookLut).await {
+        Ok(result) => command_response(result),
+        Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+    }
+}

@@ -605,7 +605,9 @@ fn frame_to_rgba8(frame: &crate::renderer::ReadbackFrame) -> Vec<u8> {
         }
         // Video layouts never reach a deck texture; the format gate above
         // refuses them before a buffer is ever built.
-        R::Uyvy | R::P216 => Vec::new(),
+        // Video layouts, plus the content light meter's own readback, which never
+        // reaches the analyzer: it consumes deck frames.
+        R::Uyvy | R::P216 | R::Rgba32Float => Vec::new(),
     }
 }
 

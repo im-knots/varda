@@ -165,6 +165,12 @@ pub trait MixerCommands {
     /// `luts/` directory or cannot be parsed as a supported LUT file.
     fn load_lut(&mut self, filename: &str) -> Result<()>;
     fn unload_lut(&mut self);
+    /// Load a scene-referred look LUT, applied before any output transform.
+    ///
+    /// # Errors
+    /// Returns an error if `filename` does not exist under the workspace's
+    /// `luts/` directory or cannot be parsed as a supported LUT file.
+    fn load_look_lut(&mut self, filename: &str) -> Result<()>;
     /// Apply a typed value to the parameter at `path`.
     ///
     /// # Errors

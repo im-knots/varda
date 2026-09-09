@@ -304,6 +304,9 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
         active_lut: mixer
             .active_lut_filename()
             .map(std::string::ToString::to_string),
+        look_lut: mixer
+            .look_lut_filename()
+            .map(std::string::ToString::to_string),
     }
 }
 

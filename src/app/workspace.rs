@@ -909,6 +909,14 @@ impl VardaApp {
                         overlap_zones: crate::renderer::edge_blend::SurfaceOverlapZones::default(),
                     })
                     .collect();
+                match output {
+                    crate::renderer::context::UnifiedOutput::Window(w) => {
+                        w.tonemap_override = cfg.tonemap_override;
+                    }
+                    crate::renderer::context::UnifiedOutput::Headless(h) => {
+                        h.tonemap_override = cfg.tonemap_override;
+                    }
+                }
                 match output.set_presentation_request(&self.context, cfg.presentation) {
                     Ok(()) => {
                         if let crate::renderer::context::UnifiedOutput::Headless(headless) = output
@@ -1168,6 +1176,7 @@ mod tests {
                 request: PresentationRequest {
                     depth: PresentationDepth::Sdr10,
                     dither: false,
+                    ..PresentationRequest::default()
                 },
             }),
             CommandResult::Ok

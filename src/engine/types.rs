@@ -342,6 +342,8 @@ pub struct MixerSnapshot {
     pub sequences: Vec<SequenceSnapshot>,
     pub tonemap_mode: crate::engine::value::render::TonemapMode,
     pub active_lut: Option<String>,
+    /// Scene-referred look LUT filename, applied before every output transform.
+    pub look_lut: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -670,6 +672,8 @@ pub struct OutputWindowSnapshot {
     pub presentation_request: crate::engine::value::render::PresentationRequest,
     /// Runtime format selected by the active output adapter.
     pub resolved_presentation: crate::engine::value::render::ResolvedPresentation,
+    /// Per-output tonemap override. `None` inherits the mixer's show-wide curve.
+    pub tonemap_override: Option<crate::engine::value::render::TonemapMode>,
     /// Live audio passthrough health for an active ffmpeg output (None = video-only).
     pub audio_passthrough: Option<AudioPassthroughSnapshot>,
     /// Live ffmpeg video health (None = this output has no subprocess).
@@ -964,6 +968,7 @@ mod tests {
                 sequences: vec![],
                 tonemap_mode: crate::engine::value::render::TonemapMode::default(),
                 active_lut: None,
+                look_lut: None,
             },
             audio: AudioSnapshot {
                 level: 0.0,
@@ -1050,6 +1055,7 @@ mod tests {
                 sequences: vec![],
                 tonemap_mode: crate::engine::value::render::TonemapMode::default(),
                 active_lut: None,
+                look_lut: None,
             },
             audio: AudioSnapshot {
                 level: 0.0,

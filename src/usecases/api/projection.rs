@@ -226,6 +226,7 @@ pub(crate) mod tests {
                 sequences: vec![],
                 tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
                 active_lut: None,
+                look_lut: None,
             },
             audio: AudioSnapshot {
                 level: 0.0,
@@ -259,6 +260,7 @@ pub(crate) mod tests {
                     calibration_mode: crate::renderer::context::CalibrationMode::Off,
                     presentation_request:
                         crate::engine::value::render::PresentationRequest::default(),
+                    tonemap_override: None,
                     resolved_presentation:
                         crate::engine::value::render::ResolvedPresentation::default(),
                     audio_passthrough: None,
@@ -419,6 +421,7 @@ pub(crate) mod tests {
             calibration_mode: crate::renderer::context::CalibrationMode::Off,
             presentation_request: crate::engine::value::render::PresentationRequest::default(),
             resolved_presentation: crate::engine::value::render::ResolvedPresentation::default(),
+            tonemap_override: None,
             audio_passthrough: Some(AudioPassthroughSnapshot {
                 device: "Scarlett 2i2".into(),
                 frames_written: 42,

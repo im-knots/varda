@@ -3638,6 +3638,150 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_set_output_presentation_carries_an_hdr10_request() {
+        // The installation operator drives the same contract the GUI does.
+        let (app, seen) = router_capturing_commands();
+        let (status, json) = put_json(
+            app,
+            "/api/outputs/out-001/presentation",
+            serde_json::json!({
+                "presentation_depth": "sdr10",
+                "dither": true,
+                "transfer": "hdr10_pq",
+                "peak_nits": 4000
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+        match take_command(&seen) {
+            crate::engine::EngineCommand::SetOutputPresentation { request, .. } => {
+                assert_eq!(
+                    request.transfer,
+                    crate::engine::value::render::PresentationTransfer::Hdr10Pq
+                );
+                assert_eq!(request.peak_nits, 4000);
+                assert_eq!(
+                    request.mode(),
+                    crate::engine::value::render::PresentationMode::Hdr10
+                );
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_presentation_request_without_hdr_fields_stays_sdr() {
+        // A script written against Phase 49 must keep working unchanged.
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = put_json(
+            app,
+            "/api/outputs/out-001/presentation",
+            serde_json::json!({"presentation_depth": "sdr10"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::SetOutputPresentation { request, .. } => {
+                assert_eq!(
+                    request.transfer,
+                    crate::engine::value::render::PresentationTransfer::Sdr
+                );
+                assert_eq!(
+                    request.peak_nits,
+                    crate::engine::value::render::HDR_DEFAULT_PEAK_NITS
+                );
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_set_output_tonemap_carries_the_curve() {
+        // The installation operator can grade one output differently, same as
+        // the GUI can.
+        let (app, seen) = router_capturing_commands();
+        let (status, json) = put_json(
+            app,
+            "/api/outputs/out-001/tonemap",
+            // `TonemapMode` carries no `rename_all`, so its API representation is
+            // the variant name verbatim. That differs from the presentation enums,
+            // which are snake_case; changing either would break existing clients.
+            serde_json::json!({"mode": "AgX"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+        match take_command(&seen) {
+            crate::engine::EngineCommand::SetOutputTonemap {
+                output_uuid,
+                tonemap,
+            } => {
+                assert_eq!(output_uuid, "out-001");
+                assert_eq!(
+                    tonemap,
+                    Some(crate::engine::value::render::TonemapMode::AgX)
+                );
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_set_output_tonemap_null_clears_the_override() {
+        // Clearing must be expressible, or an output could be overridden and
+        // never returned to the show-wide curve through the API.
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = put_json(
+            app,
+            "/api/outputs/out-001/tonemap",
+            serde_json::json!({ "mode": null }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::SetOutputTonemap { tonemap, .. } => {
+                assert_eq!(tonemap, None);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_set_output_tonemap_omitted_body_field_means_inherit() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) =
+            put_json(app, "/api/outputs/out-001/tonemap", serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::SetOutputTonemap { tonemap, .. } => {
+                assert_eq!(tonemap, None);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_look_lut_is_a_separate_slot_from_the_calibration_lut() {
+        // Two slots, two routes. Loading a look must not touch the calibration
+        // LUT, which is display-referred and bound to one output transform.
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = put_json(
+            app,
+            "/api/mixer/look-lut",
+            serde_json::json!({"filename": "club_grade.cube"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::LoadLookLut { filename } => {
+                assert_eq!(filename, "club_grade.cube");
+            }
+            other => panic!("expected LoadLookLut, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn test_unresolvable_output_uuid_presentation_returns_404() {
         let (status, json) = put_json(
             router_with_not_found_engine(),

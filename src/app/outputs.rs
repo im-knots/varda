@@ -134,6 +134,7 @@ impl VardaApp {
                                         output.set_target(OutputTarget::Windowed, None);
                                     }
                                 }
+                                output.tonemap_override = config.tonemap_override;
                                 if let Err(error) = output
                                     .set_presentation_request(&self.context, config.presentation)
                                 {
@@ -188,6 +189,7 @@ impl VardaApp {
                 headless.edge_blend = config.edge_blend;
                 headless.rotation = config.rotation;
                 headless.set_presentation_request(&self.context.device, config.presentation);
+                headless.tonemap_override = config.tonemap_override;
                 if matches!(&headless.target, OutputTarget::NdiSend { .. }) {
                     let resolved = self
                         .external_io

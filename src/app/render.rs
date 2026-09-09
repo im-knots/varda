@@ -621,14 +621,23 @@ impl VardaApp {
             }
         }
 
+        // Build the graded master programs the outputs asked for. One pass per
+        // distinct output transform, shared by every output that wants it, so a
+        // single-output show pays exactly what the old global tonemap paid.
+        {
+            let keys = Self::program_keys_for_outputs(&self.output.outputs, &self.mixer);
+            self.mixer.prepare_programs(&keys, &self.context);
+        }
+
         let render_aspect = self.render_width as f32 / self.render_height.max(1) as f32;
         let mixer = &self.mixer;
+        let master_key = Self::master_program_key(&self.mixer);
 
         // Run domemaster renderer if enabled (content rotation is updated each frame via set_content_rotation)
         let domemaster_view = if let Some(dome) = &self.output.domemaster {
             if dome.enabled {
                 dome.update_params(&self.context.queue);
-                dome.render(&self.context, mixer.composite_view());
+                dome.render(&self.context, mixer.program_view(master_key));
                 Some(dome.output_view())
             } else {
                 None
@@ -685,6 +694,20 @@ impl VardaApp {
         render_aspect: f32,
     ) {
         use crate::renderer::context::CalibrationMode;
+
+        // Derived here rather than passed in: everything it needs is already an
+        // argument, and computing it at the call site duplicated the rule.
+        let program_key = crate::mixer::ProgramKey::for_output(
+            output
+                .tonemap_override
+                .unwrap_or_else(|| mixer.tonemap_mode()),
+            output
+                .resolved_presentation
+                .transfer
+                .is_hdr()
+                .then_some(output.resolved_presentation.peak_nits)
+                .flatten(),
+        );
         // Projector calibration: one full-frame test card over the whole output,
         // bypassing surface geometry/warp (physical projector alignment).
         if output.calibration_mode == CalibrationMode::Projector && !calibration_textures.is_empty()
@@ -699,7 +722,7 @@ impl VardaApp {
             // No stage geometry, so the window is the whole canvas and the
             // master's shape is the only thing that can define the picture.
             // Surfaces below are user-placed and carry their own aspect.
-            output.render_fit(context, mixer.composite_view(), render_aspect);
+            output.render_fit(context, mixer.program_view(program_key), render_aspect);
         } else if !output.surface_assignments.is_empty() {
             // Draw in global stacking order (surface-manager Vec order, index 0 =
             // bottom), not per-assignment order — see 8i.12. For each surface, find
@@ -717,7 +740,7 @@ impl VardaApp {
                     let content_view = if surfaces_cal && !calibration_textures.is_empty() {
                         &calibration_textures[ai % calibration_textures.len()].1
                     } else {
-                        Self::resolve_source(mixer, &surface.source, domemaster_view)?
+                        Self::resolve_source(mixer, &surface.source, domemaster_view, program_key)?
                     };
                     let (uv_scale, uv_offset) = if surfaces_cal {
                         ([1.0, 1.0], [0.0, 0.0])
@@ -749,7 +772,7 @@ impl VardaApp {
                     let content_view = if surfaces_cal && !calibration_textures.is_empty() {
                         &calibration_textures[si % calibration_textures.len()].1
                     } else {
-                        Self::resolve_source(mixer, &surface.source, domemaster_view)?
+                        Self::resolve_source(mixer, &surface.source, domemaster_view, program_key)?
                     };
                     let (uv_scale, uv_offset) = if surfaces_cal {
                         ([1.0, 1.0], [0.0, 0.0])
@@ -775,13 +798,58 @@ impl VardaApp {
         output.window.request_redraw();
     }
 
+    /// Output transform this output wants.
+    ///
+    /// The mixer's mode is the show-wide default; an output may override it. An
+    /// output whose contract resolved to HDR grades to its own peak instead of
+    /// to display white.
+    fn program_key_for(
+        output: &crate::renderer::context::UnifiedOutput,
+        mixer: &Mixer,
+    ) -> crate::mixer::ProgramKey {
+        let resolved = output.resolved_presentation();
+        crate::mixer::ProgramKey::for_output(
+            output
+                .tonemap_override()
+                .unwrap_or_else(|| mixer.tonemap_mode()),
+            resolved
+                .transfer
+                .is_hdr()
+                .then_some(resolved.peak_nits)
+                .flatten(),
+        )
+    }
+
+    /// Key for consumers that show the show-wide look rather than one output's:
+    /// the UI previews and the domemaster render.
+    fn master_program_key(mixer: &Mixer) -> crate::mixer::ProgramKey {
+        crate::mixer::ProgramKey::sdr(mixer.tonemap_mode())
+    }
+
+    /// Every distinct program the active outputs need this frame, plus the
+    /// show-wide one the previews read.
+    fn program_keys_for_outputs(
+        outputs: &[crate::renderer::context::UnifiedOutput],
+        mixer: &Mixer,
+    ) -> Vec<crate::mixer::ProgramKey> {
+        let mut keys = vec![Self::master_program_key(mixer)];
+        for output in outputs {
+            let key = Self::program_key_for(output, mixer);
+            if !keys.contains(&key) {
+                keys.push(key);
+            }
+        }
+        keys
+    }
+
     fn resolve_source<'a>(
         mixer: &'a Mixer,
         source: &OutputSource,
         domemaster_view: Option<&'a wgpu::TextureView>,
+        program_key: crate::mixer::ProgramKey,
     ) -> Option<&'a wgpu::TextureView> {
         match source {
-            OutputSource::Master => Some(mixer.composite_view()),
+            OutputSource::Master => Some(mixer.program_view(program_key)),
             OutputSource::Channel(ch_idx) => mixer
                 .get_tonemapped_channel_view(*ch_idx)
                 .or_else(|| mixer.channels().get(*ch_idx).map(|ch| &ch.composite_view)),
@@ -845,6 +913,15 @@ impl VardaApp {
                         label: Some("Headless Output Encoder"),
                     });
 
+            let program_key = crate::mixer::ProgramKey::for_output(
+                h.tonemap_override.unwrap_or_else(|| mixer.tonemap_mode()),
+                h.resolved_presentation
+                    .transfer
+                    .is_hdr()
+                    .then_some(h.resolved_presentation.peak_nits)
+                    .flatten(),
+            );
+
             // Post-process edge blend only for Manual mode; Auto uses per-surface shader blend.
             let use_edge_blend = h.edge_blend_mode
                 == crate::renderer::edge_blend::EdgeBlendMode::Manual
@@ -858,7 +935,8 @@ impl VardaApp {
 
             if h.surface_assignments.is_empty() {
                 // Fallback: simple blit from source
-                let Some(source_view) = Self::resolve_source(mixer, &h.source, domemaster_view)
+                let Some(source_view) =
+                    Self::resolve_source(mixer, &h.source, domemaster_view, program_key)
                 else {
                     continue;
                 };
@@ -904,8 +982,12 @@ impl VardaApp {
                             .iter()
                             .find(|a| a.enabled && a.surface_uuid == surface.uuid)?;
                         let bb = surface.bounding_box();
-                        let content_view =
-                            Self::resolve_source(mixer, &surface.source, domemaster_view)?;
+                        let content_view = Self::resolve_source(
+                            mixer,
+                            &surface.source,
+                            domemaster_view,
+                            program_key,
+                        )?;
                         let (uv_scale, uv_offset) = Self::compute_uv(surface.content_mapping, &bb);
                         // Warp is per-surface now; `None` = no warp (native
                         // position). `effective_warp` applies auto-warp binding.
@@ -1066,6 +1148,34 @@ impl VardaApp {
                 // Enqueue readback copy from the now-rendered texture
                 h.readback.begin_readback(&mut encoder, &h.texture);
             }
+
+            // Measure content light levels for an active HDR recording. The
+            // source is the frame about to be written, so what is measured is
+            // what the file contains. See /spec/hdr-recording-output.md.
+            if h.active && h.resolved_presentation.transfer.is_hdr() {
+                if h.light_meter.is_none() {
+                    match crate::renderer::measure::ContentLightMeter::new(&context.device) {
+                        Ok(meter) => h.light_meter = Some(Box::new(meter)),
+                        Err(error) => {
+                            log::warn!(
+                                "Output '{}': content light measurement unavailable: {error}",
+                                h.name
+                            );
+                        }
+                    }
+                }
+                if let Some(meter) = h.light_meter.as_mut() {
+                    meter.measure(
+                        &context.device,
+                        &mut encoder,
+                        &h.texture_view,
+                        h.width,
+                        h.height,
+                    );
+                }
+            } else if h.light_meter.is_some() {
+                h.light_meter = None;
+            }
             context.submit(std::iter::once(encoder.finish()));
 
             if is_ndi_p216
@@ -1097,6 +1207,15 @@ impl VardaApp {
                     h.width,
                     h.height,
                 );
+            }
+
+            // Fold in any completed light measurement. Asynchronous like every
+            // other readback, so a frame's numbers arrive a frame or two later,
+            // which is immaterial for a running maximum.
+            if let Some(meter) = h.light_meter.as_mut()
+                && let Some(levels) = meter.try_read(&context.device)
+            {
+                h.light_levels.observe(levels);
             }
 
             // Deliver previous frame's readback data to target

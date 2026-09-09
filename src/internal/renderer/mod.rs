@@ -1,3 +1,4 @@
+pub mod acescct;
 pub mod blit;
 pub mod compute_pipeline;
 pub mod config;
@@ -5,9 +6,12 @@ pub mod context;
 pub mod dome;
 pub mod dome_preview;
 pub mod edge_blend;
+pub mod edr;
 pub mod gpu_guard;
 pub mod hap_convert;
+pub mod hdr;
 pub mod lut;
+pub mod measure;
 pub mod pipeline;
 pub mod readback;
 pub mod slicer;

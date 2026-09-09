@@ -799,12 +799,12 @@ fn target_to_config(target: &OutputTarget) -> OutputTargetConfig {
         OutputTarget::HlsStream {
             name,
             codec,
-            low_latency,
+            short_segments,
             audio_device,
         } => OutputTargetConfig::HlsStream {
             name: name.clone(),
             codec: codec.to_string(),
-            low_latency: *low_latency,
+            short_segments: *short_segments,
             audio_device: audio_device.clone(),
         },
         OutputTarget::DashStream {
@@ -882,7 +882,7 @@ fn config_to_target(config: &OutputTargetConfig) -> OutputTarget {
         OutputTargetConfig::HlsStream {
             name,
             codec,
-            low_latency,
+            short_segments,
             audio_device,
         } => OutputTarget::HlsStream {
             name: name.clone(),
@@ -891,7 +891,7 @@ fn config_to_target(config: &OutputTargetConfig) -> OutputTarget {
                 "AV1" | "av1" => crate::renderer::context::StreamingCodec::AV1,
                 _ => crate::renderer::context::StreamingCodec::H264,
             },
-            low_latency: *low_latency,
+            short_segments: *short_segments,
             audio_device: audio_device.clone(),
         },
         OutputTargetConfig::DashStream {
@@ -1008,6 +1008,7 @@ pub fn snapshot_stage(
                 edge_blend,
                 rotation: unified.rotation(),
                 presentation: unified.presentation_request(),
+                tonemap_override: unified.tonemap_override(),
             }
         })
         .collect();

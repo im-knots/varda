@@ -800,6 +800,24 @@ impl MixerCommands for VardaApp {
         self.mixer.unload_lut();
     }
 
+    /// Load a scene-referred look LUT from the same `.varda/luts` directory.
+    ///
+    /// Shares the directory with calibration LUTs deliberately: a `.cube` is a
+    /// `.cube`, and which slot it occupies is the user's choice rather than a
+    /// property of the file.
+    fn load_look_lut(&mut self, filename: &str) -> Result<()> {
+        let lut_dir = self.session.workspace.varda_dir().join("luts");
+        let path = lut_dir.join(filename);
+        let parsed = crate::renderer::lut::parse_lut_file(&path)?;
+        self.mixer.set_look_lut(
+            &self.context.device,
+            &self.context.queue,
+            &parsed,
+            filename.to_string(),
+        );
+        Ok(())
+    }
+
     fn set_param(
         &mut self,
         path: &str,
@@ -1326,6 +1344,7 @@ impl OutputQueries for VardaApp {
                         calibration_mode,
                         presentation_request: o.presentation_request(),
                         resolved_presentation: o.resolved_presentation().clone(),
+                        tonemap_override: o.tonemap_override(),
                         audio_passthrough,
                         delivery,
                     }

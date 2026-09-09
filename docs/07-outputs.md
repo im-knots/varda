@@ -29,20 +29,127 @@ A windowed output has a **Display:** dropdown listing **Windowed** plus every co
 
 Monitors are re-enumerated every frame, so hot-plugging works without restart. If an output is configured for a monitor that isn't connected at startup, it falls back to a window and shows a notice (`Monitor '<name>' not connected — output '<name>' opened as window`); re-select the monitor from the dropdown once it appears.
 
-## SDR Precision
+## Output Format
 
-Every output has an **SDR precision** choice:
+Every output picks one contract:
 
 - **8-bit SDR** is the compatibility default.
-- **10-bit SDR** requests higher output precision without changing gamut, brightness range, or tonemapping.
+- **10-bit SDR** requests more code values without changing gamut, brightness range, or tonemapping.
+- **HDR10** requests a PQ (ST 2084) transfer in a BT.2020 container, with mastering metadata.
+- **HLG** requests a relative HDR transfer (ARIB STD-B67) that needs no mastering metadata.
+- **EDR (monitor)** is macOS only and is for *looking at* HDR on this Mac, not for delivering
+  it. It writes linear values straight to an extended-range display, so you can see the
+  highlights an HDR10 recording contains without a mastering suite.
+
+Selecting HDR10 reveals a **Peak** control (600 / 1000 / 1500 / 4000 cd/m², default 1000). This is
+the mastering target: the brightness the top of the range maps to. It does not change where existing
+content sits, because linear 1.0 stays anchored at 203 cd/m² reference white (ITU-R BT.2408) whatever
+peak you choose. Everything your shaders and blend modes already produce above 1.0, which used to be
+clipped away, becomes the headroom above white.
+
+HLG has no Peak control, and that is the point rather than an omission. HLG is *relative*: the top
+of its range means "as bright as this display gets", so the display decides rather than you. Linear
+1.0 lands at the same 203 cd/m² reference white, at 75% signal per BT.2408, giving about 1.92 stops
+of headroom against 2.30 for HDR10 at a 1000 cd/m² peak.
+
+**Which to pick.** For a file, HDR10. For a live stream, HLG, unless a CDN spec names HDR10. The
+reason is metadata: HDR10 carries content light levels that are supposed to be measured across a
+finished programme, and a live stream never finishes. HLG needs none, which is why broadcast uses it
+for live.
 
 The **Dither** checkbox is enabled by default. It applies a stable, destination-aware pattern before
 the final integer conversion, which reduces visible banding without temporal noise.
 
-The output card always reports what is actually being delivered. A 10-bit request uses RGB10 on a
-display only when the GPU surface exposes both RGB10A2 and an sRGB color-space contract. Otherwise
-the output continues in 8-bit and shows the reason. This status reports Varda's configured signal
-format, not unverified monitor panel depth or cable behavior.
+### Watching HDR on a Mac
+
+Set a windowed output to **EDR (monitor)** on a display that supports it (any recent MacBook
+Pro or Pro Display XDR) and content above display white shows as highlights rather than
+clipping at white. Set the Peak control to the same value your recording uses, so what you see
+matches what the file will contain.
+
+The card reports `Display headroom 4.2x · monitoring to 4.9x`, and warns when the top of your
+range is being clipped. Headroom starts at 1.0 and climbs once EDR actually engages, and it
+shrinks as you turn display brightness up, because SDR white rises toward the panel's ceiling.
+Turning brightness *down* gives you more headroom.
+
+In the default adaptive display preset this shows you that range exists, not what it will look
+like on someone else's screen. To judge a grade, switch the display to a reference preset such
+as **Apple XDR Display (P3-1600 nits)**, which pins SDR white and gives a fixed known headroom.
+
+EDR is not proof that an HDR10 file is correct. A file can look right here and still carry
+wrong metadata, which is what `ffprobe` and a grading tool are for.
+
+### HDR range, not wide gamut
+
+Varda composites in linear **Rec.709**. An HDR10 output signals BT.2020 because the format requires
+it, but the content inside is Rec.709-gamut: you get the extra brightness range, not extra
+saturation. This is deliberate. Changing the working space would alter what every existing blend
+mode, shader, and saved scene means, which is a much larger change than HDR delivery needs.
+
+Do not read BT.2020 in the file's metadata as a wide-gamut claim.
+
+### Where HDR works
+
+| Output | HDR10 (PQ) | HLG | EDR |
+|--------|------------|-----|-----|
+| **Recording** | HEVC and AV1. Verified with `ffprobe`: PQ transfer, BT.2020 primaries, ST 2086 mastering display, and CTA-861.3 content light level. | Not yet | No, and never: EDR is not a delivery format |
+| **Streaming** | SRT, HLS, DASH, and Enhanced RTMP on HEVC or AV1. Legacy RTMP cannot. | Same protocols | No |
+| **Display** | When the GPU surface exposes RGB10A2 with the BT.2100 PQ color space. Implemented but **not yet qualified against capture hardware or an LED processor**, so treat it as experimental. | Not on Windows (DX12 exposes no HLG surface) | macOS, on an EDR-capable display |
+| **NDI, Syphon** | Not supported. These fall back and say so. | Not supported | No |
+| **ProRes, H.264, HAP** | Not supported. HAP is block texture compression and is 8-bit by construction. | Not supported | No |
+
+See [HDR Delivery](09-streaming-and-io.md#hdr-delivery) for the streaming detail and how to verify
+a stream.
+
+An output that cannot carry what you asked for keeps your request, delivers the best it can, and
+shows the reason. `H.264 cannot carry HDR10; HEVC or AV1 is required` names the obstacle rather than
+blaming bit depth.
+
+### Limitations worth knowing
+
+**There are two LUT slots** The **Look LUT** is graded before the
+tonemap, on scene-linear light, so it reaches every output including HDR ones. The **Calibration
+LUT** is graded after the tonemap and is calibrated against the SDR output transform, so applying it
+after a PQ transform would put its midtones in the wrong place; HDR outputs skip it and the output
+card says which LUT was skipped.
+
+Put your show's look in the Look slot. Use the Calibration slot for a specific display's correction.
+
+### Per-output tonemap
+
+Each output card has a **Tonemap** picker. It defaults to `Show (<curve>)`, meaning it inherits the
+show-wide curve from the 🎨 Tonemap panel, and naming which curve that currently is. Pick any other
+curve to grade that one output differently, or pick **Show default** to go back to inheriting.
+
+This exists because a tonemap *is* an output transform: a projector and a master recording are
+different mediums and can want different curves from the same program. Outputs sharing a curve share
+the work, so overriding one output costs one extra pass, not one per output.
+
+The same control is available over HTTP: `PUT /api/outputs/{uuid}/tonemap` with `{"mode": "AgX"}`,
+or `{"mode": null}` to inherit. See the [API reference](13-api.md).
+
+**Tonemap curves are substituted on HDR outputs.** Only Bypass and Reinhard Extended have defined HDR
+forms. The others (ACES, AgX, Hable, Uchimura, Lottes, PBR Neutral, Reinhard) have shoulders fitted
+against an SDR target and would produce a plausible but wrong picture if stretched. Selecting one on
+an HDR output falls back to Bypass, and the card tells you.
+
+**MaxCLL and MaxFALL are declared from your configured peak**, not measured across the recording.
+The encoder clamps the signal to that peak so the declaration is true, but it is not the measured
+value the standard asks for, and the output card says `MaxCLL/MaxFALL declared from peak`. This is
+not a shortcut: FFmpeg cannot rewrite content light level after encode, because the values are
+written into the video bitstream by the encoder at the moment it starts.
+
+Varda does measure them anyway, and reports the result when a recording stops:
+
+```
+measured content light over 5400 frames: MaxCLL 380 cd/m², MaxFALL 96 cd/m².
+```
+
+Use it to pick your peak. A show that only reaches 380 cd/m² declared against a 1000 cd/m² peak
+over-declares, and a display will tone-map more conservatively than it needs to. Set the peak near
+the measured MaxCLL and the declaration becomes accurate.
+
+HLG sidesteps all of this by carrying no such metadata, so an HLG output shows no line at all.
 
 Recording and network outputs apply the same request to their codec or protocol. See
 [10-bit delivery](09-streaming-and-io.md#10-bit-sdr-delivery) for the supported combinations.
@@ -77,9 +184,9 @@ Click **+ Recording** to add a recording output; each runs its own ffmpeg subpro
 
 ## Persistence
 
-Outputs, their targets, rotation, SDR precision request, dithering preference, surface assignments,
-and warp calibration are saved in `stage.json` (the venue layout), separate from your scene/show.
-Existing stages default to 8-bit SDR with dithering enabled. See
+Outputs, their targets, rotation, output format request, peak luminance, dithering preference,
+surface assignments, and warp calibration are saved in `stage.json` (the venue layout), separate from
+your scene/show. Existing stages load as 8-bit SDR with dithering enabled. See
 [Persistence](02-concepts.md#persistence).
 
 ---

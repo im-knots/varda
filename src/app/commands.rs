@@ -197,6 +197,17 @@ impl VardaApp {
                     message: e.to_string(),
                 },
             },
+            EngineCommand::LoadLookLut { filename } => match self.load_look_lut(&filename) {
+                Ok(()) => CommandResult::Ok,
+                Err(e) => CommandResult::Err {
+                    code: ErrorCode::InternalError,
+                    message: e.to_string(),
+                },
+            },
+            EngineCommand::UnloadLookLut => {
+                self.mixer.clear_look_lut();
+                CommandResult::Ok
+            }
             EngineCommand::UnloadLut => {
                 self.unload_lut();
                 CommandResult::Ok
@@ -1062,6 +1073,10 @@ impl VardaApp {
                 output_uuid,
                 request,
             } => self.cmd_set_output_presentation(&output_uuid, request),
+            EngineCommand::SetOutputTonemap {
+                output_uuid,
+                tonemap,
+            } => self.cmd_set_output_tonemap(&output_uuid, tonemap),
 
             // ── Modulation Updates ────────────────────────────────
             EngineCommand::UpdateLfoFrequency { uuid, frequency } => {
@@ -1839,6 +1854,7 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
             | C::SetCalibrationMode { .. }
             | C::SetOutputRotation { .. }
             | C::SetOutputPresentation { .. }
+            | C::SetOutputTonemap { .. }
             | C::SetEdgeBlend { .. }
             | C::SetEdgeBlendMode { .. }
             // Surface auto-detection produces preview contours only; the scene

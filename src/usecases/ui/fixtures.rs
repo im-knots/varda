@@ -295,6 +295,7 @@ impl UIData {
             auto_crossfade_progress: 0.0,
             tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
             active_lut_filename: None,
+            look_lut_filename: None,
             available_luts: vec![],
             midi_learn_active: false,
             midi_learn_target: None,

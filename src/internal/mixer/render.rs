@@ -1,6 +1,7 @@
 //! Mixer render pipeline — compositing, master effects, sub-mixes.
 
-use super::{AutoCrossfade, CrossfadeEasing, Mixer};
+use super::{AutoCrossfade, CrossfadeEasing, Mixer, ProgramKey};
+use crate::renderer::tonemap::TonemapMode;
 use crate::renderer::{GpuContext, ISFUniforms};
 use anyhow::Result;
 
@@ -695,10 +696,10 @@ impl Mixer {
         self.swap_master_tap();
         master_fx?;
 
-        // Tonemap pass: compress HDR composite into displayable [0,1] range.
-        // Bypass mode is a no-op (values clamp at the output boundary anyway).
-        self.apply_tonemap(context);
-        self.apply_lut(context);
+        // No grade here. The tonemap *is* the output transform, so it runs per
+        // output in `prepare_programs`; `composite_texture` stays linear
+        // scene-referred so an HDR output still has range to encode.
+        // See /spec/hdr-per-output-encode.md.
 
         // GPU profiling: drain composite + master FX GPU work
         let gpu_composite_us = if profiling {
@@ -1383,60 +1384,137 @@ impl Mixer {
         }
     }
 
-    /// Tonemap the master program.
+    /// Build the graded master programs the active outputs asked for.
     ///
-    /// Without a tap this is in-place on the composite. With one, the
-    /// pre-tonemap program is already in a separate target, so the pass reads
-    /// straight from it and the in-place scratch copy disappears. Bypass still
-    /// has to move the pixels across, which is the one case a tap costs a copy.
-    fn apply_tonemap(&self, context: &GpuContext) {
-        let Some((tap_texture, tap_view)) = &self.master_tap else {
-            tonemap_in_place(
-                self.tonemap_mode,
-                &self.tonemap_pipeline,
-                &self.composite_texture,
-                &self.composite_view,
-                &self.effect_ping_texture,
-                &self.effect_ping_view,
-                context,
+    /// One pass per distinct [`ProgramKey`], not per output: outputs sharing a
+    /// curve and range share a result, so the common single-output show
+    /// materializes exactly one and pays what the old global tonemap paid. A key
+    /// whose grade is a no-op is not materialized at all, so a Bypass show with
+    /// no LUT still runs zero grading passes and reads the linear composite
+    /// directly.
+    ///
+    /// The linear composite is never written here. That is what makes it safe
+    /// for an HDR output to read it and what keeps the master tap linear.
+    pub fn prepare_programs(&mut self, keys: &[ProgramKey], context: &GpuContext) {
+        self.program_cache.retain(|key, _| keys.contains(key));
+        self.apply_look(context);
+
+        for &key in keys {
+            if !Self::program_needs_grading(key, self.active_lut.is_some()) {
+                self.program_cache.remove(&key);
+                continue;
+            }
+            let width = self.composite_texture.width();
+            let height = self.composite_texture.height();
+            if self
+                .program_cache
+                .get(&key)
+                .is_none_or(|(tex, _)| tex.width() != width || tex.height() != height)
+            {
+                let tex = context.create_compositing_texture(width, height);
+                let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+                self.program_cache.insert(key, (tex, view));
+            }
+
+            // Source and destination are distinct textures, so the grade needs no
+            // scratch copy. The old in-place path had to copy first whenever no
+            // master tap was allocated.
+            let target = &self.program_cache[&key].1;
+            let mut encoder =
+                context
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Program Tonemap Encoder"),
+                    });
+            self.tonemap_pipeline.render_with_headroom(
+                &context.device,
+                &context.queue,
+                &mut encoder,
+                self.program_source(),
+                target,
+                crate::renderer::tonemap::OutputTransform {
+                    mode: key.tonemap,
+                    headroom: key.headroom(),
+                },
             );
+            context.submit(Some(encoder.finish()));
+
+            if key.takes_calibration_lut() {
+                let (tex, view) = &self.program_cache[&key];
+                apply_lut_in_place(
+                    &self.lut_pipeline,
+                    self.active_lut.as_ref(),
+                    tex,
+                    view,
+                    &self.effect_ping_texture,
+                    &self.effect_ping_view,
+                    context,
+                );
+            }
+        }
+    }
+
+    /// Whether a key's grade changes any pixel.
+    ///
+    /// Bypass clamps, and every consumer clamps again at its own boundary, so a
+    /// Bypass program with no applicable LUT is byte-identical to the linear
+    /// composite and is not worth a texture or a pass.
+    fn program_needs_grading(key: ProgramKey, has_lut: bool) -> bool {
+        key.tonemap != TonemapMode::Bypass || (key.takes_calibration_lut() && has_lut)
+    }
+
+    /// Apply the scene-referred look to the linear program.
+    ///
+    /// Runs once per frame, ahead of every output transform, so one grade reaches
+    /// every output including HDR ones. It writes into a separate target rather
+    /// than over the composite, which keeps the master tap ungraded: tapping the
+    /// looked program would compound the grade once per feedback cycle.
+    fn apply_look(&mut self, context: &GpuContext) {
+        let Some(look) = &self.look_lut else {
+            self.look_texture = None;
             return;
         };
-
+        let width = self.composite_texture.width();
+        let height = self.composite_texture.height();
+        if self
+            .look_texture
+            .as_ref()
+            .is_none_or(|(tex, _)| tex.width() != width || tex.height() != height)
+        {
+            let tex = context.create_compositing_texture(width, height);
+            let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+            self.look_texture = Some((tex, view));
+        }
+        let (_, target) = self.look_texture.as_ref().expect("just ensured");
         let mut encoder = context
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Master Tap Tonemap Encoder"),
+                label: Some("Look LUT Encoder"),
             });
-        if self.tonemap_mode == crate::renderer::tonemap::TonemapMode::Bypass {
-            encoder.copy_texture_to_texture(
-                tap_texture.as_image_copy(),
-                self.composite_texture.as_image_copy(),
-                self.composite_texture.size(),
-            );
-        } else {
-            self.tonemap_pipeline.render(
-                &context.device,
-                &mut encoder,
-                tap_view,
-                &self.composite_view,
-            );
-        }
+        self.lut_pipeline.render(
+            &context.device,
+            &mut encoder,
+            &self.composite_view,
+            target,
+            look,
+        );
         context.submit(Some(encoder.finish()));
     }
 
-    /// Apply LUT to the main composite texture in-place.
-    /// Runs after tonemap, before outputs read the composite.
-    fn apply_lut(&self, context: &GpuContext) {
-        apply_lut_in_place(
-            &self.lut_pipeline,
-            self.active_lut.as_ref(),
-            &self.composite_texture,
-            &self.composite_view,
-            &self.effect_ping_texture,
-            &self.effect_ping_view,
-            context,
-        );
+    /// The linear program every output transform reads: looked when a look LUT is
+    /// loaded, the raw composite otherwise.
+    fn program_source(&self) -> &wgpu::TextureView {
+        self.look_texture
+            .as_ref()
+            .map_or(&self.composite_view, |(_, view)| view)
+    }
+
+    /// The graded program for `key`, or the linear program when that key needs
+    /// no grading of its own.
+    pub fn program_view(&self, key: ProgramKey) -> &wgpu::TextureView {
+        self.program_cache
+            .get(&key)
+            .map_or_else(|| self.program_source(), |(_, view)| view)
     }
 
     /// Prepare tonemapped copies of individual channel composites.
@@ -1712,5 +1790,145 @@ mod gpu_load_ratio_tests {
     fn an_uncapped_target_with_no_timing_yields_no_signal() {
         assert!(raw_gpu_load_ratio(0.0, 0.0, BUDGET_60FPS, f32::MAX).is_none());
         assert!(raw_gpu_load_ratio(0.0, 0.0, 0.0, BUDGET_60FPS).is_none());
+    }
+}
+
+#[cfg(test)]
+mod program_cache_tests {
+    use super::super::ProgramKey;
+    use crate::renderer::tonemap::TonemapMode;
+
+    /// The gate for the whole slice: a Bypass show with no LUT must still run
+    /// zero grading passes, exactly as the old in-place tonemap did when it
+    /// early-returned on Bypass.
+    #[test]
+    fn bypass_without_a_lut_needs_no_grading_pass() {
+        let key = ProgramKey::sdr(TonemapMode::Bypass);
+        assert!(!super::Mixer::program_needs_grading(key, false));
+    }
+
+    #[test]
+    fn bypass_with_a_lut_still_needs_a_pass_to_apply_it() {
+        let key = ProgramKey::sdr(TonemapMode::Bypass);
+        assert!(super::Mixer::program_needs_grading(key, true));
+    }
+
+    #[test]
+    fn an_hdr_bypass_program_ignores_the_lut_and_needs_no_pass() {
+        // The calibration LUT is SDR-referred and does not apply to HDR, so a
+        // loaded LUT must not force a pass that would only mis-grade the frame.
+        let key = ProgramKey {
+            tonemap: TonemapMode::Bypass,
+            hdr_peak: Some(1000),
+        };
+        assert!(!key.takes_calibration_lut());
+        assert!(!super::Mixer::program_needs_grading(key, true));
+    }
+
+    #[test]
+    fn any_real_curve_needs_a_pass() {
+        for mode in [TonemapMode::Aces, TonemapMode::AgX, TonemapMode::Reinhard] {
+            assert!(super::Mixer::program_needs_grading(
+                ProgramKey::sdr(mode),
+                false
+            ));
+        }
+    }
+
+    #[test]
+    fn sdr_programs_target_display_white() {
+        assert!((ProgramKey::sdr(TonemapMode::Aces).headroom() - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn hdr_headroom_follows_the_configured_peak() {
+        // 1000 cd/m² over 203 cd/m² reference white is 4.93x, the figure in
+        // /spec/hdr-color-management.md Decision 3.
+        let key = ProgramKey {
+            tonemap: TonemapMode::Bypass,
+            hdr_peak: Some(1000),
+        };
+        assert!((key.headroom() - 1000.0 / 203.0).abs() < 1e-4);
+
+        let dimmer = ProgramKey {
+            tonemap: TonemapMode::Bypass,
+            hdr_peak: Some(600),
+        };
+        assert!(dimmer.headroom() < key.headroom());
+    }
+
+    /// The gap 50b exists to close: a look reaches HDR outputs, a calibration
+    /// LUT does not.
+    #[test]
+    fn the_look_reaches_every_contract_but_calibration_stops_at_sdr() {
+        let sdr = ProgramKey::sdr(TonemapMode::Aces);
+        let hdr = ProgramKey {
+            tonemap: TonemapMode::Bypass,
+            hdr_peak: Some(1000),
+        };
+        // Calibration is display-referred and bound to one output transform.
+        assert!(sdr.takes_calibration_lut());
+        assert!(!hdr.takes_calibration_lut());
+        // The look is upstream of every output transform, so no key opts out of
+        // it: it is applied to the program, not per key.
+        assert!(!super::Mixer::program_needs_grading(hdr, false));
+    }
+
+    /// Only curves with a defined HDR form may reach an HDR output transform.
+    #[test]
+    fn sdr_fitted_curves_are_substituted_on_an_hdr_output() {
+        for mode in [
+            TonemapMode::Aces,
+            TonemapMode::Reinhard,
+            TonemapMode::HableFilmic,
+            TonemapMode::Uchimura,
+            TonemapMode::Lottes,
+            TonemapMode::AgX,
+            TonemapMode::KhronosPbrNeutral,
+        ] {
+            assert!(!mode.has_hdr_form(), "{mode:?} claims an HDR form");
+            let key = ProgramKey::for_output(mode, Some(1000));
+            assert_eq!(
+                key.tonemap,
+                TonemapMode::Bypass,
+                "{mode:?} reached an HDR output unrescaled"
+            );
+        }
+    }
+
+    #[test]
+    fn curves_with_an_hdr_form_pass_through_untouched() {
+        for mode in [TonemapMode::Bypass, TonemapMode::ReinhardExtended] {
+            assert!(mode.has_hdr_form());
+            assert_eq!(ProgramKey::for_output(mode, Some(1000)).tonemap, mode);
+        }
+    }
+
+    /// The gate must not touch SDR, where every curve is in its fitted range.
+    #[test]
+    fn sdr_outputs_keep_whatever_curve_was_chosen() {
+        for mode in [TonemapMode::AgX, TonemapMode::Aces, TonemapMode::Lottes] {
+            assert_eq!(ProgramKey::for_output(mode, None).tonemap, mode);
+        }
+    }
+
+    /// Two outputs asking for the same look must not each get their own pass.
+    #[test]
+    fn keys_collide_when_the_contract_and_curve_match() {
+        assert_eq!(
+            ProgramKey::sdr(TonemapMode::Aces),
+            ProgramKey::sdr(TonemapMode::Aces)
+        );
+        assert_ne!(
+            ProgramKey::sdr(TonemapMode::Aces),
+            ProgramKey::sdr(TonemapMode::AgX)
+        );
+        assert_ne!(
+            ProgramKey::sdr(TonemapMode::Aces),
+            ProgramKey {
+                tonemap: TonemapMode::Aces,
+                hdr_peak: Some(1000)
+            }
+        );
     }
 }

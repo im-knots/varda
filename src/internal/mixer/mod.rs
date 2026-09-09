@@ -120,6 +120,69 @@ pub struct FrameInputs<'a> {
 }
 
 /// Mixer - Top-level compositor
+/// Which graded master program an output wants.
+///
+/// Outputs sharing a key share one grading pass, so a single-output show
+/// materializes exactly one graded program. `hdr_peak` is `None` for an SDR
+/// contract and `Some(nits)` for HDR10, because an HDR output transform targets
+/// `[0, peak/203]` rather than the `[0, 1]` every SDR operator targets.
+/// See /spec/hdr-per-output-encode.md and /spec/hdr-color-management.md.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ProgramKey {
+    /// Output transform curve for this program.
+    pub tonemap: TonemapMode,
+    /// Peak luminance in cd/m² when the contract is HDR; `None` for SDR.
+    pub hdr_peak: Option<u16>,
+}
+
+impl ProgramKey {
+    /// The SDR program produced by `tonemap`, which is what previews and any
+    /// output without an explicit HDR contract read.
+    #[must_use]
+    pub const fn sdr(tonemap: TonemapMode) -> Self {
+        Self {
+            tonemap,
+            hdr_peak: None,
+        }
+    }
+
+    /// Build a key for an output, substituting a safe curve when the contract is
+    /// HDR and the selected curve has no HDR form.
+    ///
+    /// This is the single place a curve meets a contract, so gating here means no
+    /// caller can construct a key that would run an SDR-fitted shoulder against an
+    /// HDR range.
+    #[must_use]
+    pub fn for_output(tonemap: TonemapMode, hdr_peak: Option<u16>) -> Self {
+        Self {
+            tonemap: if hdr_peak.is_some() {
+                tonemap.for_hdr()
+            } else {
+                tonemap
+            },
+            hdr_peak,
+        }
+    }
+
+    /// Scene-linear range this program's output transform targets.
+    #[must_use]
+    pub fn headroom(self) -> f32 {
+        self.hdr_peak.map_or(1.0, |peak| {
+            crate::renderer::hdr::linear_headroom(f32::from(peak))
+        })
+    }
+
+    /// Whether the display-referred calibration LUT applies to this program.
+    ///
+    /// It does not apply to HDR: a `.cube` authored against the SDR output
+    /// transform puts its midtones in the wrong place under any other one
+    /// (/spec/hdr-color-management.md Decision 4).
+    #[must_use]
+    pub const fn takes_calibration_lut(self) -> bool {
+        self.hdr_peak.is_none()
+    }
+}
+
 pub struct Mixer {
     /// Channels (default 2: A and B)
     channels: Vec<Channel>,
@@ -207,8 +270,20 @@ pub struct Mixer {
     /// LUT pipeline for applying 3D LUTs after tonemapping
     lut_pipeline: LutPipeline,
 
-    /// Currently loaded LUT (applied after tonemap, before output)
+    /// Display-referred calibration LUT, applied after the output transform.
+    ///
+    /// Calibrated against one output transform, so it is not applied to HDR
+    /// outputs. See /spec/hdr-color-management.md Decision 4.
     active_lut: Option<LoadedLut>,
+
+    /// Scene-referred look LUT, applied to the linear program before any output
+    /// transform, so one grade reaches every output including HDR ones.
+    ///
+    /// Authored against `ACEScct`. See /spec/hdr-color-management.md Decision 5.
+    look_lut: Option<LoadedLut>,
+
+    /// Graded linear program, materialized only while a look LUT is loaded.
+    look_texture: Option<(wgpu::Texture, wgpu::TextureView)>,
 
     /// Active transition effect (replaces opacity-based crossfade when set)
     active_transition: Option<TransitionEffect>,
@@ -223,6 +298,16 @@ pub struct Mixer {
     /// Used when surfaces source from Channel(idx) — the raw channel composite
     /// can't be tonemapped in-place since it feeds into the mixer composite.
     tonemapped_channel_cache: std::collections::HashMap<usize, (wgpu::Texture, wgpu::TextureView)>,
+
+    /// Graded master programs, one per distinct output transform in use.
+    ///
+    /// `composite_texture` holds the *linear* scene-referred program; the output
+    /// transform is per output (/spec/hdr-per-output-encode.md), so outputs that
+    /// share a curve and range share one graded result and a single-output show
+    /// materializes exactly one. A key whose grade is a no-op is never inserted:
+    /// [`Self::program_view`] hands back the linear composite instead, so a
+    /// Bypass show with no LUT still runs zero grading passes.
+    program_cache: std::collections::HashMap<ProgramKey, (wgpu::Texture, wgpu::TextureView)>,
 
     /// GPU performance profiling: when > 0, insert device.poll(Wait) between
     /// GPU work stages to measure actual GPU drain time per category.
@@ -319,10 +404,13 @@ impl Mixer {
             tonemap_mode: TonemapMode::default(),
             lut_pipeline,
             active_lut: None,
+            look_lut: None,
+            look_texture: None,
             active_transition: None,
             transition_sequences: Vec::new(),
             sub_mix_cache: std::collections::HashMap::new(),
             tonemapped_channel_cache: std::collections::HashMap::new(),
+            program_cache: std::collections::HashMap::new(),
             perf_profile_frames: 0,
             query_set: if context.timestamp_supported {
                 Some(context.device.create_query_set(&wgpu::QuerySetDescriptor {
@@ -395,6 +483,8 @@ impl Mixer {
         }
         self.sub_mix_cache.clear();
         self.tonemapped_channel_cache.clear();
+        self.program_cache.clear();
+        self.look_texture = None;
     }
 
     /// Resolve every tap deck for this frame.
@@ -738,7 +828,9 @@ impl Mixer {
         parsed: &crate::renderer::lut::ParsedLut,
         filename: String,
     ) {
-        self.active_lut = Some(LoadedLut::from_parsed(device, queue, parsed, filename));
+        self.active_lut = Some(LoadedLut::from_parsed(
+            device, queue, parsed, filename, false,
+        ));
     }
 
     /// Unload the active LUT.
@@ -747,6 +839,31 @@ impl Mixer {
     }
 
     /// Get the active LUT filename (if any).
+    /// Load a scene-referred look LUT, replacing any current one.
+    pub fn set_look_lut(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        parsed: &crate::renderer::lut::ParsedLut,
+        filename: String,
+    ) {
+        self.look_lut = Some(LoadedLut::from_parsed(
+            device, queue, parsed, filename, true,
+        ));
+    }
+
+    /// Clear the look LUT so the program reaches outputs ungraded.
+    pub fn clear_look_lut(&mut self) {
+        self.look_lut = None;
+        self.look_texture = None;
+    }
+
+    /// Filename of the active look LUT.
+    #[must_use]
+    pub fn look_lut_filename(&self) -> Option<&str> {
+        self.look_lut.as_ref().map(|l| l.filename.as_str())
+    }
+
     pub fn active_lut_filename(&self) -> Option<&str> {
         self.active_lut.as_ref().map(|l| l.filename.as_str())
     }

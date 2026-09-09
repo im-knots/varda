@@ -201,6 +201,46 @@ curl -X PUT http://localhost:8080/api/mixer/tonemap \
 
 Modes: `Bypass`, `Aces`, `Reinhard`, `ReinhardExtended`, `HableFilmic`, `Uchimura`, `Lottes`, `AgX`, `KhronosPbrNeutral`
 
+### Load a look LUT
+
+The look grade runs before every output transform, so it reaches HDR outputs as well as SDR
+ones. Authored against ACEScct. The separate calibration LUT (`/api/mixer/lut`) runs after the
+tonemap and is SDR-only.
+
+```bash
+curl -X PUT http://localhost:8080/api/mixer/look-lut \
+  -H 'Content-Type: application/json' \
+  -d '{"filename": "club_grade.cube"}'
+
+curl -X DELETE http://localhost:8080/api/mixer/look-lut
+```
+
+Both slots read from `.varda/luts/`. Which slot a file belongs in is your choice, not a
+property of the file.
+
+### Set a per-output tonemap
+
+The tonemap is an output transform, so one output can be graded differently from the rest
+(a projector and a master recording want different curves). Omit `mode`, or send `null`, to
+go back to inheriting the show-wide curve.
+
+```bash
+# Grade this one output with AgX
+curl -X PUT http://localhost:8080/api/outputs/$OUTPUT_UUID/tonemap \
+  -H 'Content-Type: application/json' \
+  -d '{"mode": "AgX"}'
+
+# Back to the show-wide curve
+curl -X PUT http://localhost:8080/api/outputs/$OUTPUT_UUID/tonemap \
+  -H 'Content-Type: application/json' \
+  -d '{"mode": null}'
+```
+
+An output resolved to HDR only runs curves with a defined HDR form (Bypass and Reinhard
+Extended). Any other curve is substituted with Bypass and reported in the output's state, so
+read `tonemap_override` back from `GET /api/state` to see what was stored and the output
+card or state snapshot to see what is actually running.
+
 ### Load a 3D LUT
 
 ```sh
@@ -577,6 +617,8 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `POST` | `/api/mixer/auto-crossfade` |  |
 | `POST` | `/api/mixer/beat-crossfade` |  |
 | `PUT` | `/api/mixer/crossfader` |  |
+| `PUT` | `/api/mixer/look-lut` |  |
+| `DELETE` | `/api/mixer/look-lut` |  |
 | `PUT` | `/api/mixer/lut` |  |
 | `DELETE` | `/api/mixer/lut` |  |
 | `PUT` | `/api/mixer/tonemap` |  |
@@ -642,6 +684,7 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `POST` | `/api/outputs/{output_uuid}/surfaces` |  |
 | `DELETE` | `/api/outputs/{output_uuid}/surfaces/{surface_uuid}` |  |
 | `PUT` | `/api/outputs/{output_uuid}/target` |  |
+| `PUT` | `/api/outputs/{output_uuid}/tonemap` |  |
 
 ### Params
 
