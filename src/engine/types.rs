@@ -672,6 +672,10 @@ pub struct OutputWindowSnapshot {
     pub presentation_request: crate::engine::value::render::PresentationRequest,
     /// Runtime format selected by the active output adapter.
     pub resolved_presentation: crate::engine::value::render::ResolvedPresentation,
+    /// Every presentation mode, with the reason this output cannot deliver it.
+    /// A client building a picker should disable the blocked ones and show the
+    /// reason. See /spec/presentation-mode-offering.md.
+    pub mode_availability: Vec<crate::engine::value::render::ModeAvailability>,
     /// Per-output tonemap override. `None` inherits the mixer's show-wide curve.
     pub tonemap_override: Option<crate::engine::value::render::TonemapMode>,
     /// Live audio passthrough health for an active ffmpeg output (None = video-only).

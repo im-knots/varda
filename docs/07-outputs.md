@@ -31,7 +31,13 @@ Monitors are re-enumerated every frame, so hot-plugging works without restart. I
 
 ## Output Format
 
-Every output picks one contract:
+Every output picks one contract, and **you can only select the ones that output can actually
+deliver.** The rest stay in the list greyed out, and hovering one tells you why it is unavailable:
+a Syphon output says `Syphon interoperability is limited to BGRA8`, an H.264 stream says
+`H.264 streaming is limited to eight-bit SDR`. There is no need to select a mode, read a warning,
+and undo it to find out what an output can do.
+
+The full set of contracts:
 
 - **8-bit SDR** is the compatibility default.
 - **10-bit SDR** requests more code values without changing gamut, brightness range, or tonemapping.
@@ -59,6 +65,31 @@ for live.
 
 The **Dither** checkbox is enabled by default. It applies a stable, destination-aware pattern before
 the final integer conversion, which reduces visible banding without temporal noise.
+
+### When the picker changes under you
+
+Capability follows the target **and the codec**, so the list changes when you change either.
+Switching a recording from HEVC to H.264 removes HDR10 from its picker.
+
+This catches people out most often on streams, because **SRT, HLS, DASH and RTMP all default to
+H.264**, which is eight-bit. A newly created or newly switched stream output therefore has only
+8-bit SDR selectable, and that is correct rather than stale. The greyed-out HDR10 entry will say
+`H.264 streaming is limited to eight-bit SDR`. Set the **Codec** to H.265 and 10-bit SDR, HDR10 and
+HLG all become selectable.
+
+NDI is the exception that makes this look inconsistent: it has no codec to set, so it shows its real
+capability straight away.
+
+EDR is never selectable on a recording or a stream. It is a way of *looking at* HDR on this Mac, not
+a format anything can carry, so it is deliverable on display outputs only.
+
+Your choice is **kept, not discarded**. Switch that recording back to HEVC and HDR10 returns as the
+selection. While an output cannot carry what you asked for, the picker shows what it is actually
+delivering and the card explains the difference, for example
+`HDR10 fallback: the configured codec is eight-bit`.
+
+That warning is now the only thing it was ever meant to be: a note that something changed underneath
+a choice you had already made.
 
 ### Watching HDR on a Mac
 

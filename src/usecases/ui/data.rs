@@ -741,6 +741,9 @@ pub struct OutputUI {
     pub presentation_request: crate::engine::value::render::PresentationRequest,
     /// Runtime format selected by the active adapter.
     pub resolved_presentation: crate::engine::value::render::ResolvedPresentation,
+    /// Every presentation mode, with the reason this output cannot deliver it.
+    /// The picker disables the blocked ones. See /spec/presentation-mode-offering.md.
+    pub mode_availability: Vec<crate::engine::value::render::ModeAvailability>,
     /// Per-output tonemap override. `None` inherits the show-wide curve.
     pub tonemap_override: Option<crate::engine::value::render::TonemapMode>,
     /// Audio passthrough health for an active ffmpeg output (None = video-only).

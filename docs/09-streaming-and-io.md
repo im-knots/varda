@@ -329,6 +329,30 @@ Syphon enables inter-application GPU texture sharing on macOS. Varda works both 
 3. Enter a server name (e.g., "Varda Main")
 4. Start the output — other Syphon apps then see it in their source list
 
+### Colour
+
+Syphon carries display-encoded 8-bit BGRA, and that is what Varda both publishes and expects to
+receive. There is no interoperable 10-bit or HDR path: a Syphon output resolves to BGRA8 and says so
+in the output card (see the tables at the top of this page).
+
+> **Behaviour change.** Earlier versions published a linearised picture. Varda's publish texture
+> format did not match the one Syphon compares against internally, so every frame took a conversion
+> path that stripped the display encoding without putting it back. A mid grey of 128 reached other
+> applications as 55, and only pure black and pure white came through unaffected. Published frames
+> now match the source exactly. If you compensated for this downstream, in a receiving app's colour
+> controls or a projector LUT, remove that compensation.
+
+### Performance
+
+Both directions share GPU memory with the other application rather than copying frames through the
+CPU:
+
+- **Receiving** binds the publishing app's shared surface directly, so a Syphon source costs no
+  per-frame transfer at any resolution. Varda re-binds only when the other application resizes or
+  restarts.
+- **Publishing** costs one conversion pass, plus Syphon's own copy into the surface it shares with
+  its clients. That copy is part of Syphon's contract and every Syphon publisher pays it.
+
 ### Installing Syphon.framework
 
 Syphon support needs **nothing special at build time** — `Syphon.framework` is *not* linked, it is loaded at runtime via `dlopen`. A normal macOS build (`cargo build` / `cargo run`) works whether or not Syphon is installed; if it is missing, Syphon features simply stay disabled and the rest of Varda runs normally.
@@ -351,8 +375,6 @@ This is the standard, verified location. It is also where other Syphon apps on t
 > Varda also checks `~/Library/Frameworks/Syphon.framework` (per-user, no admin) as a fallback. The system-wide `/Library/Frameworks/` path above is the recommended and verified one.
 
 Pass `--no-syphon` to disable Syphon explicitly even when the framework is installed.
-
-> **Note:** Varda is both a Syphon client (receive) and a Syphon server (publish a `SyphonServer` output).
 
 ---
 

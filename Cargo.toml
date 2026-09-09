@@ -137,7 +137,16 @@ dashu-float = "0.6.0"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2            = "0.6"
 objc2-foundation = "0.3"
-objc2-metal      = "0.3"
+# The `objc2-io-surface` feature unlocks `MTLTexture.iosurface` and
+# `newTextureWithDescriptor:iosurface:plane:`, which the zero-copy Syphon receive
+# path is built on (spec/syphon-zero-copy.md). This is a feature flag, not a new
+# crate: objc2-io-surface is already resolved in Cargo.lock through
+# objc2-core-video and objc2-core-graphics, so nothing new compiles and there is
+# nothing new to qualify under Rosetta. It is named directly here rather than
+# inherited, because the syphon module builds on macOS even with
+# --no-default-features, where those two are absent.
+objc2-metal      = { version = "0.3", features = ["objc2-io-surface"] }
+objc2-io-surface = "0.3"
 # EDR headroom lives on NSScreen, not on the Metal device (spec/hdr-edr-display.md).
 # Already in the tree via winit at the same 0.3 line, so this adds no new code to
 # the build and nothing new to qualify under Rosetta.

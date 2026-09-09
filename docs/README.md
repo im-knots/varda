@@ -88,7 +88,7 @@ Here you will find everything you need to start throwing those pixels.
   - [Recording](09-streaming-and-io.md#recording)
   - [Stream Input Reliability](09-streaming-and-io.md#stream-input-reliability) — dedup, stall detection, reconnect
   - [HTML / Web Content](09-streaming-and-io.md#html--web-content)
-  - [Syphon](09-streaming-and-io.md#syphon-macos)
+  - [Syphon](09-streaming-and-io.md#syphon-macos) — send and receive, shared-memory in both directions, colour contract, framework install
   - [Screen & Window Capture](09-streaming-and-io.md#screen--window-capture) — displays and windows as decks, permissions, crop and rate, capturing Varda itself
   - [Program Tap](09-streaming-and-io.md#program-tap) — Varda's own output as a source, one frame behind, feedback loops
 - **10. [Resolution, Settings & Monitoring](10-resolution-and-monitoring.md)**

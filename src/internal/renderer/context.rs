@@ -7,10 +7,10 @@ use winit::window::Window;
 // re-exported here so existing `crate::renderer::context::…` paths still work;
 // window-lifecycle inherent impls (e.g. `OutputWindow::set_target`) stay below.
 pub use super::config::{
-    AlphaMode, CalibrationMode, OutputRotation, OutputSource, OutputTarget,
+    AlphaMode, CalibrationMode, ModeAvailability, OutputRotation, OutputSource, OutputTarget,
     PresentationCapabilities, PresentationColorProfile, PresentationDepth, PresentationFormat,
-    PresentationPixelFormat, PresentationRequest, PresentationTransfer, RecordingCodec,
-    ResolvedPresentation, RtmpCodecContract, SrtCodec, StreamingCodec, TonemapMode,
+    PresentationMode, PresentationPixelFormat, PresentationRequest, PresentationTransfer,
+    RecordingCodec, ResolvedPresentation, RtmpCodecContract, SrtCodec, StreamingCodec, TonemapMode,
 };
 
 /// Linear-light format used by the entire color path: deck render targets, all
@@ -58,6 +58,11 @@ struct SurfacePresentationSelection {
     format: wgpu::TextureFormat,
     color_space: wgpu::SurfaceColorSpace,
     resolved: ResolvedPresentation,
+    /// Every mode with the reason this surface cannot deliver it. Computed here
+    /// because the capabilities are already in hand; re-deriving it later would
+    /// mean re-querying the surface every frame.
+    /// See /spec/presentation-mode-offering.md.
+    mode_availability: Vec<ModeAvailability>,
 }
 
 fn select_surface_presentation(
@@ -149,7 +154,9 @@ fn select_surface_presentation(
                 }
             })
         });
-    let resolved = PresentationCapabilities::new(formats, reason).resolve(request)?;
+    let capabilities = PresentationCapabilities::new(formats, reason);
+    let mode_availability = capabilities.mode_availability();
+    let resolved = capabilities.resolve(request)?;
     let (format, color_space) = if resolved.transfer == PresentationTransfer::EdrLinear {
         (
             wgpu::TextureFormat::Rgba16Float,
@@ -173,6 +180,7 @@ fn select_surface_presentation(
         format,
         color_space,
         resolved,
+        mode_availability,
     })
 }
 
@@ -232,6 +240,27 @@ fn resolve_headless_presentation(
         alpha_mode,
         fallback_reason,
     )
+}
+
+/// Every presentation mode, with the reason a headless target cannot deliver it.
+///
+/// Same rule as the surface path: a mode is deliverable when resolving it
+/// produces no fallback reason, and the reason is the one the resolver would have
+/// reported. Derived from [`resolve_headless_presentation`] itself rather than a
+/// capability table, so the picker cannot disagree with the outcome.
+/// See /spec/presentation-mode-offering.md.
+fn mode_availability_for_target(target: &OutputTarget) -> Vec<ModeAvailability> {
+    PresentationMode::ALL
+        .into_iter()
+        .map(|mode| ModeAvailability {
+            mode,
+            blocked: resolve_headless_presentation(
+                PresentationRequest::default().with_mode(mode),
+                target,
+            )
+            .fallback_reason,
+        })
+        .collect()
 }
 
 /// GPU rendering context — device, queue, and adapter.
@@ -771,6 +800,9 @@ pub struct OutputWindow {
 
     /// Runtime format selected for the active surface.
     pub resolved_presentation: ResolvedPresentation,
+    /// Every mode with the reason this surface cannot deliver it, for the picker.
+    /// See /spec/presentation-mode-offering.md.
+    pub mode_availability: Vec<ModeAvailability>,
 }
 
 impl OutputWindow {
@@ -859,6 +891,7 @@ impl OutputWindow {
             presentation_request,
             tonemap_override: None,
             resolved_presentation: selection.resolved,
+            mode_availability: selection.mode_availability,
         })
     }
 
@@ -976,6 +1009,7 @@ impl OutputWindow {
 
         self.presentation_request = request;
         self.resolved_presentation = selection.resolved;
+        self.mode_availability = selection.mode_availability;
         if surface_changed {
             self.surface_config.format = selection.format;
             self.surface_config.color_space = selection.color_space;
@@ -1622,6 +1656,9 @@ pub struct HeadlessOutput {
 
     /// Runtime format selected for the active adapter.
     pub resolved_presentation: ResolvedPresentation,
+    /// Every mode with the reason this target cannot deliver it, for the picker.
+    /// See /spec/presentation-mode-offering.md.
+    pub mode_availability: Vec<ModeAvailability>,
 }
 
 /// Result of delivering a frame to an output target.
@@ -1747,6 +1784,7 @@ impl HeadlessOutput {
     ) -> Self {
         let presentation_request = PresentationRequest::default();
         let resolved_presentation = resolve_headless_presentation(presentation_request, &target);
+        let mode_availability = mode_availability_for_target(&target);
         let (format, readback_format) = Self::storage_formats(&resolved_presentation);
         let (texture, texture_view, eb_tex, eb_view) =
             Self::create_textures(device, width, height, format);
@@ -1785,6 +1823,7 @@ impl HeadlessOutput {
             light_meter: None,
             light_levels: crate::renderer::measure::ContentLightLevels::default(),
             resolved_presentation,
+            mode_availability,
         }
     }
 
@@ -1894,6 +1933,9 @@ impl HeadlessOutput {
         request: PresentationRequest,
     ) {
         self.presentation_request = request;
+        // Also the path a target change takes: `h.target = ...` is always followed
+        // by a `set_presentation_request`, so the offered set never goes stale.
+        self.mode_availability = mode_availability_for_target(&self.target);
         let resolved = resolve_headless_presentation(request, &self.target);
         self.set_resolved_presentation(device, resolved);
     }
@@ -2055,6 +2097,18 @@ impl UnifiedOutput {
         }
     }
 
+    /// Every presentation mode, with the reason this output cannot deliver it.
+    ///
+    /// The picker lists all of them and disables the blocked ones with their
+    /// reason. See /spec/presentation-mode-offering.md.
+    #[must_use]
+    pub fn mode_availability(&self) -> &[ModeAvailability] {
+        match self {
+            UnifiedOutput::Window(w) => &w.mode_availability,
+            UnifiedOutput::Headless(h) => &h.mode_availability,
+        }
+    }
+
     /// Apply a new request through the variant's resolver.
     ///
     /// # Errors
@@ -2100,6 +2154,155 @@ mod tests {
         AlphaMode, PresentationColorProfile, PresentationDepth, PresentationPixelFormat,
         PresentationRequest, PresentationTransfer, ResolvedPresentation,
     };
+
+    // ── offered modes per target (/spec/presentation-mode-offering.md) ──
+
+    /// The modes a target can actually deliver, for tests about the set rather
+    /// than the reasons.
+    fn deliverable(
+        target: &crate::engine::value::render::OutputTarget,
+    ) -> Vec<crate::engine::value::render::PresentationMode> {
+        super::mode_availability_for_target(target)
+            .into_iter()
+            .filter(crate::engine::value::render::ModeAvailability::is_available)
+            .map(|entry| entry.mode)
+            .collect()
+    }
+
+    /// What a stream can carry follows its codec, so the picker follows it too.
+    /// Reported from the field as a bug: switching an output from Syphon to SRT
+    /// still showed only eight-bit. It is not stale state. SRT and HLS default to
+    /// H.264, which is eight-bit.
+    ///
+    /// Asserted through the blocking *reason* rather than the resulting set,
+    /// because whether HEVC can actually carry ten bits is a fact about the
+    /// installed FFmpeg rather than about this code. An earlier version of this
+    /// test asserted the set and failed on any machine whose libx265 lacks
+    /// `yuv420p10le`, which made an environment difference look like a defect.
+    #[test]
+    fn a_streams_blocking_reason_follows_its_codec() {
+        use crate::engine::value::render::{
+            ModeAvailability, OutputTarget, PresentationMode, SrtCodec, StreamingCodec,
+        };
+
+        fn blocked_reason(target: &OutputTarget, mode: PresentationMode) -> Option<String> {
+            super::mode_availability_for_target(target)
+                .into_iter()
+                .find(|entry: &ModeAvailability| entry.mode == mode)
+                .and_then(|entry| entry.blocked)
+        }
+
+        // H.264 is eight-bit whatever FFmpeg is installed, so this half is pure.
+        let h264 = OutputTarget::SrtStream {
+            url: "srt://example:9000".into(),
+            codec: SrtCodec::H264,
+            audio_device: None,
+        };
+        assert_eq!(
+            deliverable(&h264),
+            vec![PresentationMode::Sdr8],
+            "H.264 streaming is eight-bit, so nothing else should be selectable"
+        );
+        let h264_reason =
+            blocked_reason(&h264, PresentationMode::Hdr10).expect("HDR10 is blocked on H.264");
+        assert!(
+            h264_reason.contains("H.264"),
+            "the reason should name the codec the operator can change: {h264_reason}"
+        );
+
+        // On HEVC the codec stops being the obstacle. Either the mode opens up, or
+        // the obstacle becomes the installed encoder, which is a different answer
+        // and a different thing for the operator to fix. What must never happen is
+        // the H.264 reason surviving a codec change: that is the staleness this
+        // test exists to catch.
+        let h265 = OutputTarget::HlsStream {
+            name: "show".into(),
+            codec: StreamingCodec::H265,
+            short_segments: false,
+            audio_device: None,
+        };
+        if let Some(reason) = blocked_reason(&h265, PresentationMode::Hdr10) {
+            assert!(
+                !reason.contains("H.264"),
+                "an HEVC stream still blamed H.264, so the set went stale: {reason}"
+            );
+            assert!(
+                reason.contains("FFmpeg") || reason.contains("encoder"),
+                "the only legitimate remaining obstacle is the installed encoder: {reason}"
+            );
+        }
+    }
+
+    /// EDR is a display monitoring contract. No container, codec, or stream
+    /// carries it, so it must never be offered on a delivery path.
+    ///
+    /// This was a live defect rather than only a menu problem: `EdrLinear`
+    /// satisfies `is_hdr`, so an EDR request on an HEVC recording resolved with no
+    /// fallback reason and was then written out as plain Rec.709, with the output
+    /// card still reporting EDR.
+    #[test]
+    fn edr_is_never_offered_on_a_delivery_path() {
+        use crate::engine::value::render::{
+            OutputTarget, PresentationMode, RecordingCodec, StreamingCodec,
+        };
+        let targets = [
+            OutputTarget::Recording {
+                path: "/tmp/take.mov".into(),
+                codec: RecordingCodec::H265,
+                audio_device: None,
+            },
+            OutputTarget::HlsStream {
+                name: "show".into(),
+                codec: StreamingCodec::H265,
+                short_segments: false,
+                audio_device: None,
+            },
+            OutputTarget::DashStream {
+                name: "show".into(),
+                codec: StreamingCodec::H265,
+                audio_device: None,
+            },
+            OutputTarget::SyphonServer {
+                server_name: "Varda".into(),
+            },
+        ];
+        for target in targets {
+            assert!(
+                !deliverable(&target).contains(&PresentationMode::Edr),
+                "EDR was offered on {target:?}"
+            );
+        }
+    }
+
+    /// The half of the same defect that a menu alone would not have fixed: the
+    /// request must degrade and say why, not resolve silently.
+    #[test]
+    fn an_edr_request_on_a_recording_degrades_and_names_the_reason() {
+        use crate::engine::value::render::{
+            OutputTarget, PresentationMode, PresentationRequest, PresentationTransfer,
+            RecordingCodec,
+        };
+        let resolved = super::resolve_headless_presentation(
+            PresentationRequest::default().with_mode(PresentationMode::Edr),
+            &OutputTarget::Recording {
+                path: "/tmp/take.mov".into(),
+                codec: RecordingCodec::H265,
+                audio_device: None,
+            },
+        );
+        assert_ne!(
+            resolved.transfer,
+            PresentationTransfer::EdrLinear,
+            "a recording must not claim to be delivering EDR"
+        );
+        let reason = resolved
+            .fallback_reason
+            .expect("an undeliverable request must explain itself");
+        assert!(
+            reason.contains("EDR"),
+            "the reason should name EDR rather than blame the codec: {reason}"
+        );
+    }
 
     fn surface_capabilities(
         format_capabilities: Vec<wgpu::SurfaceFormatCapabilities>,
