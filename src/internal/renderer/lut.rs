@@ -292,7 +292,7 @@ struct LutParams {
     shaper_domain_min: [f32; 3],
     _pad2: u32,
     shaper_domain_max: [f32; 3],
-    /// 1 when this LUT is scene-referred and needs the ACEScct shaper around the
+    /// 1 when this LUT is scene-referred and needs the `ACEScct` shaper around the
     /// lookup; 0 for the display-referred calibration slot.
     scene_referred: u32,
 }
@@ -328,7 +328,7 @@ impl LoadedLut {
     /// Upload a parsed LUT.
     ///
     /// `scene_referred` selects the slot this LUT occupies. A look LUT operates
-    /// on scene-linear light and is encoded to ACEScct around the lookup; a
+    /// on scene-linear light and is encoded to `ACEScct` around the lookup; a
     /// calibration LUT operates on the already display-referred signal and is
     /// used as-is. See /spec/hdr-color-management.md.
     pub fn from_parsed(
@@ -840,7 +840,7 @@ mod scene_referred_tests {
     use crate::renderer::GpuContext;
     use crate::renderer::acescct;
 
-    /// An identity look LUT must be a no-op through the ACEScct shaper.
+    /// An identity look LUT must be a no-op through the `ACEScct` shaper.
     ///
     /// This is the property that proves the encode and decode agree. If they
     /// disagree, every graded frame is wrong by a fixed curve and no `.cube`

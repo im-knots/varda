@@ -19,6 +19,18 @@ struct TonemapParams {
     _pad2: u32,
 }
 
+/// One output transform: a curve and the scene-linear range it targets.
+///
+/// The two always travel together, because a curve without its range is not a
+/// transform, so they are one value rather than two arguments.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OutputTransform {
+    /// Curve to apply.
+    pub mode: TonemapMode,
+    /// Scene-linear range the curve targets: 1.0 for SDR, `peak/203` for HDR.
+    pub headroom: f32,
+}
+
 pub struct TonemapPipeline {
     pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
@@ -163,9 +175,9 @@ impl TonemapPipeline {
         encoder: &mut wgpu::CommandEncoder,
         source_view: &wgpu::TextureView,
         target_view: &wgpu::TextureView,
-        mode: TonemapMode,
-        headroom: f32,
+        transform: OutputTransform,
     ) {
+        let OutputTransform { mode, headroom } = transform;
         queue.write_buffer(
             &self.params_buffer,
             0,

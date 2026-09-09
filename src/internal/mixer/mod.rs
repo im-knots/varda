@@ -279,7 +279,7 @@ pub struct Mixer {
     /// Scene-referred look LUT, applied to the linear program before any output
     /// transform, so one grade reaches every output including HDR ones.
     ///
-    /// Authored against ACEScct. See /spec/hdr-color-management.md Decision 5.
+    /// Authored against `ACEScct`. See /spec/hdr-color-management.md Decision 5.
     look_lut: Option<LoadedLut>,
 
     /// Graded linear program, materialized only while a look LUT is loaded.

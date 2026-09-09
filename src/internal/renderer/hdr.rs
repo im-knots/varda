@@ -75,7 +75,7 @@ pub fn linear_headroom(peak_nits: f32) -> f32 {
 // OETF constants from BT.2100.
 const HLG_A: f32 = 0.178_832_77;
 const HLG_B: f32 = 0.284_668_92;
-const HLG_C: f32 = 0.559_910_73;
+const HLG_C: f32 = 0.559_910_7;
 
 /// Scene-linear HLG value that encodes to 75% signal.
 ///

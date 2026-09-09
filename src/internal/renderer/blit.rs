@@ -2651,6 +2651,11 @@ mod tests {
         use crate::renderer::hdr;
 
         const PEAK: u16 = 1000;
+        // `copy_texture_to_buffer` needs a row pitch that is a multiple of
+        // `COPY_BYTES_PER_ROW_ALIGNMENT`. At four bytes per texel that means a
+        // width divisible by 64; the probes occupy the first few texels and the
+        // rest of the row is padding.
+        const WIDTH: u32 = 64;
         // Neutral greys: the BT.2020 matrix rows are normalized, so a neutral
         // stays neutral and the shader result must equal the scalar reference
         // exactly. Any drift is a transposed matrix or a wrong constant.
@@ -2662,11 +2667,6 @@ mod tests {
             hdr::linear_headroom(f32::from(PEAK)),
             50.0,
         ];
-        // `copy_texture_to_buffer` needs a row pitch that is a multiple of
-        // `COPY_BYTES_PER_ROW_ALIGNMENT`. At four bytes per texel that means a
-        // width divisible by 64; the probes occupy the first few texels and the
-        // rest of the row is padding.
-        const WIDTH: u32 = 64;
         let width = WIDTH;
         assert!(probes.len() as u32 <= WIDTH);
 

@@ -1,7 +1,7 @@
 //! Apple EDR headroom, read from `NSScreen`.
 //!
 //! wgpu does not expose EDR headroom, and it does not live on the Metal device,
-//! so this is an AppKit query rather than the `as_hal` interop the rest of the
+//! so this is an `AppKit` query rather than the `as_hal` interop the rest of the
 //! macOS code uses.
 //!
 //! **Capability is `potential`, never `current`.** macOS allocates headroom on

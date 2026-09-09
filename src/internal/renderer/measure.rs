@@ -1,6 +1,6 @@
 //! Content light level measurement for HDR10 mastering metadata.
 //!
-//! CTA-861.3 expects MaxCLL and MaxFALL to describe the content, measured across
+//! CTA-861.3 expects `MaxCLL` and `MaxFALL` to describe the content, measured across
 //! the programme. Declaring them from a configured peak is true only because the
 //! encoder clamps to it, and is not what the standard asks for.
 //!
@@ -42,7 +42,7 @@ pub struct FrameLightLevels {
 
 /// Running content light levels across a recording.
 ///
-/// MaxCLL is the largest pixel seen anywhere; MaxFALL is the largest *frame
+/// `MaxCLL` is the largest pixel seen anywhere; `MaxFALL` is the largest *frame
 /// average* seen, not the average of averages, so a single bright frame raises
 /// it and a long dark passage does not lower it.
 #[derive(Debug, Clone, Copy, Default)]
@@ -64,7 +64,7 @@ impl ContentLightLevels {
         self.frames += 1;
     }
 
-    /// Measured MaxCLL and MaxFALL, rounded as the metadata carries them.
+    /// Measured `MaxCLL` and `MaxFALL`, rounded as the metadata carries them.
     ///
     /// `None` until at least one frame has been observed: declaring measured
     /// values for a recording nothing was measured from would be worse than
@@ -320,7 +320,7 @@ impl ContentLightMeter {
         let mut max = 0.0f32;
         let mut total = 0.0f64;
         let mut samples = 0.0f64;
-        for texel in floats.chunks_exact(4) {
+        for texel in floats.as_chunks::<4>().0 {
             max = max.max(texel[0]);
             total += f64::from(texel[1]);
             samples += f64::from(texel[2]);

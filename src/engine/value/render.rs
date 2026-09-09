@@ -95,7 +95,7 @@ pub enum PresentationTransfer {
     ///
     /// Relative rather than absolute, so it carries no peak and needs no content
     /// light level. That is why it is the default for live paths, which have no
-    /// finalize step in which MaxCLL could be measured.
+    /// finalize step in which `MaxCLL` could be measured.
     Hlg,
     /// Apple EDR: linear scRGB, Rec.709 primaries, no transfer encode at all.
     ///
@@ -141,7 +141,7 @@ impl PresentationTransfer {
     /// Whether this contract carries ST 2086 and CTA-861.3 mastering metadata.
     ///
     /// PQ is absolute and needs it. HLG is relative and needs none, which is what
-    /// removes the declared-versus-measured MaxCLL problem on live paths.
+    /// removes the declared-versus-measured `MaxCLL` problem on live paths.
     #[must_use]
     pub const fn carries_mastering_metadata(self) -> bool {
         matches!(self, Self::Hdr10Pq)
@@ -287,7 +287,7 @@ pub const HDR_PEAK_NITS_PRESETS: [u16; 4] = [600, 1000, 1500, 4000];
 
 /// Where an HDR output's content light level metadata came from.
 ///
-/// CTA-861.3 expects MaxCLL and MaxFALL to describe the *content*, measured
+/// CTA-861.3 expects `MaxCLL` and `MaxFALL` to describe the *content*, measured
 /// across the programme. Declaring them from the configured peak is true by
 /// construction only because the encoder clamps the signal to that peak, and it
 /// is still not what the standard asks for, so which one is in force is reported
@@ -516,7 +516,7 @@ pub struct ResolvedPresentation {
     pub transfer: PresentationTransfer,
     /// Peak luminance in cd/m², present only when the resolved transfer is HDR.
     pub peak_nits: Option<u16>,
-    /// Origin of MaxCLL and MaxFALL, present only when the resolved transfer is
+    /// Origin of `MaxCLL` and `MaxFALL`, present only when the resolved transfer is
     /// HDR and the adapter writes mastering metadata.
     pub hdr_metadata: Option<HdrMetadataSource>,
     /// Active pixel or encoded format.

@@ -1,22 +1,22 @@
-//! ACEScct, the log encoding a scene-referred look LUT is authored against.
+//! `ACEScct`, the log encoding a scene-referred look LUT is authored against.
 //!
 //! A creative grade cannot be applied to scene-linear values directly. Linear
 //! light spends most of its code range on highlights, so a 3D LUT indexed by it
-//! would resolve shadows into almost no lattice points. ACES specifies ACEScct
+//! would resolve shadows into almost no lattice points. ACES specifies `ACEScct`
 //! for exactly this: a log curve with a linear toe near black, which is what
 //! look transforms (LMTs) are authored in.
 //!
 //! This is not a Varda invention and must not become one. The constants are from
 //! the ACES specification so a `.cube` authored in Resolve or Nuke against
-//! ACEScct lands where its author intended.
+//! `ACEScct` lands where its author intended.
 //!
 //! See /spec/hdr-color-management.md Decision 5. `lut.wgsl` carries the WGSL
 //! mirror, held to these values by tests rather than by inspection.
 
 /// Slope of the linear toe.
-const A: f32 = 10.540_237_7;
+const A: f32 = 10.540_237;
 /// Intercept of the linear toe.
-const B: f32 = 0.072_905_534;
+const B: f32 = 0.072_905_53;
 /// Linear value where the toe meets the log segment (2^-7).
 const LINEAR_BREAK: f32 = 0.007_812_5;
 /// Encoded value at the break, `A * LINEAR_BREAK + B`.
@@ -25,10 +25,10 @@ const ENCODED_BREAK: f32 = 0.155_251_14;
 const LOG_OFFSET: f32 = 9.72;
 const LOG_SCALE: f32 = 17.52;
 
-/// Largest linear value ACEScct represents, the half-float maximum.
+/// Largest linear value `ACEScct` represents, the half-float maximum.
 pub const MAX_LINEAR: f32 = 65504.0;
 
-/// Scene-linear to ACEScct.
+/// Scene-linear to `ACEScct`.
 ///
 /// Values at or below the break use the linear toe, which is what keeps shadow
 /// detail addressable by a LUT lattice. Negatives clamp to the toe rather than
@@ -44,7 +44,7 @@ pub fn from_linear(linear: f32) -> f32 {
     }
 }
 
-/// ACEScct back to scene-linear.
+/// `ACEScct` back to scene-linear.
 #[must_use]
 pub fn to_linear(encoded: f32) -> f32 {
     if encoded <= ENCODED_BREAK {

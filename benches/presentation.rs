@@ -3,7 +3,7 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use varda::engine::value::render::{
     AlphaMode, PresentationColorProfile, PresentationDepth, PresentationPixelFormat,
-    ResolvedPresentation,
+    PresentationTransfer, ResolvedPresentation,
 };
 use varda::renderer::blit::BlitPipeline;
 use varda::renderer::context::GpuContext;
@@ -15,6 +15,10 @@ fn presentation(
     ResolvedPresentation {
         requested: depth,
         resolved: depth,
+        requested_transfer: PresentationTransfer::Sdr,
+        transfer: PresentationTransfer::Sdr,
+        peak_nits: None,
+        hdr_metadata: None,
         pixel_format,
         color_profile: PresentationColorProfile::SrgbFull,
         alpha_mode: AlphaMode::Opaque,

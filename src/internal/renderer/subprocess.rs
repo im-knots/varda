@@ -307,7 +307,7 @@ fn unpremultiply_filter(input_pixel_format: &str) -> &'static str {
 
 /// Codecs that can carry an HDR10 contract.
 ///
-/// ProRes can hold PQ container tags but has no ST 2086 or MaxCLL path through
+/// `ProRes` can hold PQ container tags but has no ST 2086 or `MaxCLL` path through
 /// FFmpeg, so it is out of scope for slice 50a rather than half-supported. See
 /// /spec/hdr-recording-output.md.
 fn codec_supports_hdr10(codec: &RecordingCodec) -> bool {
@@ -3666,11 +3666,11 @@ mod tests {
     /// saying `Disabling hdr10-opt`. Only decoding the result showed it.
     #[test]
     fn hdr10_recording_writes_pq_and_bt2020_into_the_bitstream() {
+        const W: usize = 64;
+        const H: usize = 64;
         if !ffmpeg_available() {
             return;
         }
-        const W: usize = 64;
-        const H: usize = 64;
 
         let plan = RecordingPlan::resolve(
             &RecordingCodec::H265,
@@ -3682,7 +3682,9 @@ mod tests {
             return;
         }
 
-        let texel: u32 = 594 | (594 << 10) | (594 << 20);
+        // 594 is the PQ code for 203 cd/m²; packed into all three channels.
+        let code: u32 = 0x252;
+        let texel: u32 = code | (code << 10) | (code << 20);
         let frame: Vec<u8> = std::iter::repeat_n(texel, W * H)
             .flat_map(u32::to_le_bytes)
             .collect();
@@ -3710,13 +3712,13 @@ mod tests {
             .expect("piped stdin")
             .write_all(&frame)
             .expect("write frame");
-        let encoded = encoder.wait_with_output().expect("finish encode");
+        let finished = encoder.wait_with_output().expect("finish encode");
         assert!(
-            encoded.status.success(),
+            finished.status.success(),
             "{}",
-            String::from_utf8_lossy(&encoded.stderr)
+            String::from_utf8_lossy(&finished.stderr)
         );
-        let log = String::from_utf8_lossy(&encoded.stderr);
+        let log = String::from_utf8_lossy(&finished.stderr);
         assert!(
             !log.contains("Disabling hdr10-opt"),
             "x265 could not see the colour contract: {log}"
@@ -3746,11 +3748,11 @@ mod tests {
 
     #[test]
     fn hdr10_recording_actually_converts_with_the_bt2020_matrix() {
+        const W: usize = 64;
+        const H: usize = 64;
         if !ffmpeg_available() {
             return;
         }
-        const W: usize = 64;
-        const H: usize = 64;
 
         // 10-bit limited-range luma for a full-intensity primary:
         //   Y = 64 + 876 * (kr*R + kg*G + kb*B)
@@ -3803,11 +3805,11 @@ mod tests {
                 .expect("piped stdin")
                 .write_all(&frame)
                 .expect("write packed RGB10 frame");
-            let encoded = encoder.wait_with_output().expect("finish hdr10 encode");
+            let finished = encoder.wait_with_output().expect("finish hdr10 encode");
             assert!(
-                encoded.status.success(),
+                finished.status.success(),
                 "{}",
-                String::from_utf8_lossy(&encoded.stderr)
+                String::from_utf8_lossy(&finished.stderr)
             );
 
             let decoded = Command::new("ffmpeg")
@@ -3833,8 +3835,10 @@ mod tests {
 
             // Planar: the luma plane leads, 10-bit values in 16-bit words.
             let luma: Vec<u16> = decoded.stdout[..W * H * 2]
-                .chunks_exact(2)
-                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| u16::from_le_bytes(*c))
                 .collect();
             let mean =
                 f64::from(luma.iter().map(|&y| u32::from(y)).sum::<u32>()) / (luma.len() as f64);
@@ -3880,11 +3884,11 @@ mod tests {
     /// into x265), so HLG is held to the same bar: encode, probe, compare.
     #[test]
     fn hlg_streaming_writes_arib_and_bt2020_into_the_bitstream() {
+        const W: usize = 64;
+        const H: usize = 64;
         if !ffmpeg_available() {
             return;
         }
-        const W: usize = 64;
-        const H: usize = 64;
 
         let plan = StreamingPlan::resolve(
             StreamingProtocol::Srt,
@@ -3926,11 +3930,11 @@ mod tests {
             .expect("piped stdin")
             .write_all(&frame)
             .expect("write frame");
-        let encoded = encoder.wait_with_output().expect("finish encode");
+        let finished = encoder.wait_with_output().expect("finish encode");
         assert!(
-            encoded.status.success(),
+            finished.status.success(),
             "{}",
-            String::from_utf8_lossy(&encoded.stderr)
+            String::from_utf8_lossy(&finished.stderr)
         );
 
         let probe = Command::new("ffprobe")

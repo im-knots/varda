@@ -1617,7 +1617,7 @@ pub struct HeadlessOutput {
     /// Boxed: the meter owns a pipeline and a reduction chain, and inlining it
     /// pushes `UnifiedOutput` past the large-variant guard.
     pub light_meter: Option<Box<crate::renderer::measure::ContentLightMeter>>,
-    /// Running MaxCLL and MaxFALL across the current recording.
+    /// Running `MaxCLL` and `MaxFALL` across the current recording.
     pub light_levels: crate::renderer::measure::ContentLightLevels,
 
     /// Runtime format selected for the active adapter.

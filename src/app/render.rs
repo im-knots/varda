@@ -649,17 +649,6 @@ impl VardaApp {
         for output in &mut self.output.outputs {
             match output {
                 crate::renderer::context::UnifiedOutput::Window(output) => {
-                    let program_key = crate::mixer::ProgramKey::for_output(
-                        output
-                            .tonemap_override
-                            .unwrap_or_else(|| mixer.tonemap_mode()),
-                        output
-                            .resolved_presentation
-                            .transfer
-                            .is_hdr()
-                            .then_some(output.resolved_presentation.peak_nits)
-                            .flatten(),
-                    );
                     Self::render_window_output(
                         output,
                         context,
@@ -668,7 +657,6 @@ impl VardaApp {
                         &self.output.calibration_textures,
                         domemaster_view,
                         render_aspect,
-                        program_key,
                     );
                 }
                 crate::renderer::context::UnifiedOutput::Headless(_) => {
@@ -704,9 +692,22 @@ impl VardaApp {
         calibration_textures: &[(wgpu::Texture, wgpu::TextureView)],
         domemaster_view: Option<&wgpu::TextureView>,
         render_aspect: f32,
-        program_key: crate::mixer::ProgramKey,
     ) {
         use crate::renderer::context::CalibrationMode;
+
+        // Derived here rather than passed in: everything it needs is already an
+        // argument, and computing it at the call site duplicated the rule.
+        let program_key = crate::mixer::ProgramKey::for_output(
+            output
+                .tonemap_override
+                .unwrap_or_else(|| mixer.tonemap_mode()),
+            output
+                .resolved_presentation
+                .transfer
+                .is_hdr()
+                .then_some(output.resolved_presentation.peak_nits)
+                .flatten(),
+        );
         // Projector calibration: one full-frame test card over the whole output,
         // bypassing surface geometry/warp (physical projector alignment).
         if output.calibration_mode == CalibrationMode::Projector && !calibration_textures.is_empty()

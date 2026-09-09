@@ -1432,8 +1432,10 @@ impl Mixer {
                 &mut encoder,
                 self.program_source(),
                 target,
-                key.tonemap,
-                key.headroom(),
+                crate::renderer::tonemap::OutputTransform {
+                    mode: key.tonemap,
+                    headroom: key.headroom(),
+                },
             );
             context.submit(Some(encoder.finish()));
 
