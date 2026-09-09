@@ -2172,12 +2172,27 @@ mod tests {
     /// What a stream can carry follows its codec, so the picker follows it too.
     /// Reported from the field as a bug: switching an output from Syphon to SRT
     /// still showed only eight-bit. It is not stale state. SRT and HLS default to
-    /// H.264, which is eight-bit, and the list opens up on H.265.
+    /// H.264, which is eight-bit.
+    ///
+    /// Asserted through the blocking *reason* rather than the resulting set,
+    /// because whether HEVC can actually carry ten bits is a fact about the
+    /// installed FFmpeg rather than about this code. An earlier version of this
+    /// test asserted the set and failed on any machine whose libx265 lacks
+    /// `yuv420p10le`, which made an environment difference look like a defect.
     #[test]
-    fn a_streams_offered_modes_follow_its_codec() {
+    fn a_streams_blocking_reason_follows_its_codec() {
         use crate::engine::value::render::{
-            OutputTarget, PresentationMode, SrtCodec, StreamingCodec,
+            ModeAvailability, OutputTarget, PresentationMode, SrtCodec, StreamingCodec,
         };
+
+        fn blocked_reason(target: &OutputTarget, mode: PresentationMode) -> Option<String> {
+            super::mode_availability_for_target(target)
+                .into_iter()
+                .find(|entry: &ModeAvailability| entry.mode == mode)
+                .and_then(|entry| entry.blocked)
+        }
+
+        // H.264 is eight-bit whatever FFmpeg is installed, so this half is pure.
         let h264 = OutputTarget::SrtStream {
             url: "srt://example:9000".into(),
             codec: SrtCodec::H264,
@@ -2188,19 +2203,34 @@ mod tests {
             vec![PresentationMode::Sdr8],
             "H.264 streaming is eight-bit, so nothing else should be selectable"
         );
+        let h264_reason =
+            blocked_reason(&h264, PresentationMode::Hdr10).expect("HDR10 is blocked on H.264");
+        assert!(
+            h264_reason.contains("H.264"),
+            "the reason should name the codec the operator can change: {h264_reason}"
+        );
 
+        // On HEVC the codec stops being the obstacle. Either the mode opens up, or
+        // the obstacle becomes the installed encoder, which is a different answer
+        // and a different thing for the operator to fix. What must never happen is
+        // the H.264 reason surviving a codec change: that is the staleness this
+        // test exists to catch.
         let h265 = OutputTarget::HlsStream {
             name: "show".into(),
             codec: StreamingCodec::H265,
             short_segments: false,
             audio_device: None,
         };
-        let offered = deliverable(&h265);
-        assert!(
-            offered.contains(&PresentationMode::Sdr10)
-                && offered.contains(&PresentationMode::Hdr10),
-            "HEVC streaming carries ten-bit and HDR10: {offered:?}"
-        );
+        if let Some(reason) = blocked_reason(&h265, PresentationMode::Hdr10) {
+            assert!(
+                !reason.contains("H.264"),
+                "an HEVC stream still blamed H.264, so the set went stale: {reason}"
+            );
+            assert!(
+                reason.contains("FFmpeg") || reason.contains("encoder"),
+                "the only legitimate remaining obstacle is the installed encoder: {reason}"
+            );
+        }
     }
 
     /// EDR is a display monitoring contract. No container, codec, or stream

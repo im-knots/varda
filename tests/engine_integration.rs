@@ -4588,11 +4588,16 @@ fn chaos_create_close_presentation_cycle() {
 /// Reported from the field: a stream output offered only 8-bit even for protocols
 /// that carry HDR. Drives the real command path end to end, because the pure
 /// resolver already agreed and the question was whether the engine kept the
-/// offered set current when the codec changed.
+/// availability current when the codec changed.
+///
+/// Asserted through the blocking *reason* rather than the resulting set: whether
+/// HEVC can actually carry ten bits depends on the installed FFmpeg, not on this
+/// code, and an earlier version of this test turned that environment difference
+/// into a failure.
 ///
 /// See /spec/presentation-mode-offering.md.
 #[test]
-fn a_stream_outputs_offered_modes_track_its_codec_through_the_engine() {
+fn a_stream_outputs_availability_tracks_its_codec_through_the_engine() {
     use varda::engine::value::render::{PresentationMode, StreamingCodec};
     use varda::renderer::context::OutputTarget;
 
@@ -4612,7 +4617,7 @@ fn a_stream_outputs_offered_modes_track_its_codec_through_the_engine() {
     );
     let output_uuid = last_output_uuid(&mut app);
 
-    let offered = |app: &mut VardaApp| -> Vec<PresentationMode> {
+    let blocked = |app: &mut VardaApp, mode: PresentationMode| -> Option<String> {
         app.build_engine_state()
             .outputs
             .windows
@@ -4621,16 +4626,20 @@ fn a_stream_outputs_offered_modes_track_its_codec_through_the_engine() {
             .expect("output present")
             .mode_availability
             .iter()
-            .filter(|entry| entry.is_available())
-            .map(|entry| entry.mode)
-            .collect()
+            .find(|entry| entry.mode == mode)
+            .and_then(|entry| entry.blocked.clone())
     };
 
-    // H.264 is eight-bit, so one mode is the correct answer here.
-    assert_eq!(
-        offered(&mut app),
-        vec![PresentationMode::Sdr8],
-        "H.264 HLS carries eight-bit only"
+    // H.264 is eight-bit whatever FFmpeg is installed, so this half is exact.
+    assert!(
+        blocked(&mut app, PresentationMode::Sdr8).is_none(),
+        "eight-bit SDR must always be selectable"
+    );
+    let h264_reason =
+        blocked(&mut app, PresentationMode::Hdr10).expect("HDR10 is blocked on H.264");
+    assert!(
+        h264_reason.contains("H.264"),
+        "the reason should name the codec the operator can change: {h264_reason}"
     );
 
     assert!(matches!(
@@ -4649,13 +4658,18 @@ fn a_stream_outputs_offered_modes_track_its_codec_through_the_engine() {
         CommandResult::Ok
     ));
 
-    let after = offered(&mut app);
+    // The codec is no longer the obstacle. Either HDR10 opened up, or the obstacle
+    // moved to the installed encoder. The H.264 reason surviving a codec change is
+    // the staleness this test exists to catch.
+    if let Some(reason) = blocked(&mut app, PresentationMode::Hdr10) {
+        assert!(
+            !reason.contains("H.264"),
+            "an HEVC stream still blamed H.264, so availability went stale: {reason}"
+        );
+    }
+
     assert!(
-        after.contains(&PresentationMode::Sdr10) && after.contains(&PresentationMode::Hdr10),
-        "switching HLS to HEVC must open up ten-bit and HDR10, got {after:?}"
-    );
-    assert!(
-        !after.contains(&PresentationMode::Edr),
-        "EDR is display monitoring and is never deliverable over HLS: {after:?}"
+        blocked(&mut app, PresentationMode::Edr).is_some(),
+        "EDR is display monitoring and is never deliverable over HLS"
     );
 }
