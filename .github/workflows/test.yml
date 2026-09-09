@@ -116,3 +116,57 @@ jobs:
       # covered without anyone remembering to list it here.
       - name: Run test suite
         run: cargo test --workspace
+
+  test-windows:
+    name: test (windows)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # The build setup below mirrors `clippy (windows)` in clippy.yml. Keep the
+      # two in step: a divergence shows up as a job that cannot build rather than
+      # as a test failure.
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: C:\vcpkg\installed
+          key: vcpkg-windows-x64-${{ hashFiles('.github/workflows/release.yml') }}
+          restore-keys: vcpkg-windows-x64-
+
+      - name: Install vcpkg FFmpeg
+        shell: pwsh
+        run: |
+          vcpkg install ffmpeg:x64-windows
+          echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
+
+      - name: Install LLVM (for shaderc)
+        run: choco install llvm -y
+        shell: cmd
+
+      - name: Set build environment
+        shell: pwsh
+        run: |
+          echo "LIBCLANG_PATH=C:\Program Files\LLVM\lib" >> $env:GITHUB_ENV
+          echo "PKG_CONFIG_PATH=C:\vcpkg\installed\x64-windows\lib\pkgconfig" >> $env:GITHUB_ENV
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      # What the runner can actually do, printed whether it succeeds or not. This
+      # runs before the suite so the log carries the answer even when a later step
+      # fails, and it is the input to the two open questions in
+      # spec/spout-output.md.
+      - name: Report Spout capability
+        run: cargo test --no-default-features --features face-detection,html,screen-capture --lib spout::capability -- --nocapture
+
+      # `VARDA_REQUIRE_GPU` is deliberately *not* set yet, unlike the Linux job.
+      # There it pins a known-good lavapipe install; here whether wgpu finds a
+      # usable adapter at all is one of the things being measured. Turn it on once
+      # the capability step above confirms an adapter, otherwise this job would
+      # fail on an unknown rather than report it.
+      - name: Run test suite
+        run: cargo test --no-default-features --features face-detection,html,screen-capture

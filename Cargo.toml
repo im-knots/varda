@@ -167,7 +167,13 @@ block2                   = { version = "0.6", optional = true }
 # Windows Graphics Capture for the Windows screen/window capture backend
 # (spec/screen-capture.md). Microsoft-maintained, so no third-party binding.
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.62", optional = true, features = [
+# Non-optional on Windows, mirroring the objc2 family on macOS: two separate
+# subsystems need it now, screen capture (spec/screen-capture.md) and Spout
+# (spec/spout-output.md), and Spout's module has no reason to inherit the
+# screen-capture feature gate. The Direct3D12, Direct3D11on12 and Memory
+# features are Spout's: the D3D11On12 bridge and the shared-memory sender
+# registry.
+windows = { version = "0.62", features = [
     "Foundation",
     "Graphics",
     "Graphics_Capture",
@@ -176,11 +182,14 @@ windows = { version = "0.62", optional = true, features = [
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Direct3D11on12",
+    "Win32_Graphics_Direct3D12",
     "Win32_Graphics_Dwm",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
     "Win32_System_Com",
+    "Win32_System_Memory",
     "Win32_System_Threading",
     "Win32_System_WinRT",
     "Win32_System_WinRT_Direct3D11",
@@ -232,7 +241,7 @@ depth = ["dep:freenectrs"]
 # XDG portal + PipeWire on Wayland or GetImage on X11. The `dep:` entries below
 # are target-scoped, so each platform pulls only its own bindings.
 # See spec/screen-capture.md.
-screen-capture = ["dep:objc2-screen-capture-kit", "dep:objc2-core-media", "dep:objc2-core-video", "dep:objc2-core-graphics", "dep:objc2-core-foundation", "dep:dispatch2", "dep:block2", "dep:windows", "dep:x11rb", "dep:ashpd", "dep:pipewire"]
+screen-capture = ["dep:objc2-screen-capture-kit", "dep:objc2-core-media", "dep:objc2-core-video", "dep:objc2-core-graphics", "dep:objc2-core-foundation", "dep:dispatch2", "dep:block2", "dep:x11rb", "dep:ashpd", "dep:pipewire"]
 test-fixtures = ["dep:tempfile"]
 url = ["dep:url"]
 euclid = ["dep:euclid"]
