@@ -1,0 +1,112 @@
+name: windows heap bisect
+
+# A diagnostic, not a gate. Manual only, so it never turns an unrelated PR red.
+#
+# The Windows test suite crashed with STATUS_HEAP_CORRUPTION (0xc0000374) part
+# way through, and `--test-threads=1` in test.yml hides it rather than fixing it:
+# the fault only appears under parallel execution. Heap corruption is reported
+# when some later allocation notices the damage, so the reported stack is
+# innocent and the log names nothing useful.
+#
+# This run answers one question before any expensive tooling is aimed at it:
+# is the fault in the Spout code added in Phase 58, or was it already there?
+# Windows tests had never run before that phase, so "already there" means it
+# shipped in v0.4.0 and v0.5.0.
+#
+#   without spout : the whole lib suite, in parallel, minus Spout.
+#                   Crashes here mean it is pre-existing and unrelated.
+#   spout only    : the 24 Spout tests, in parallel, repeatedly. They are the
+#                   newest unsafe code in the tree and they touch machine-global
+#                   named objects, so they are the prime suspect on priors.
+#
+# Both run whatever the other does (`fail-fast: false`); the pair of results is
+# the answer, not either one alone. Next levers if this is inconclusive, in
+# order: vary --test-threads to find a contention threshold, then Full Page Heap
+# via gflags on the narrowed binary (memory hungry, so narrow first), then
+# -Zsanitizer=address on nightly. See spec/roadmap.md.
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  VARDA_SKIP_GOLDEN_SNAPSHOTS: 1
+
+jobs:
+  bisect:
+    name: heap bisect (${{ matrix.name }})
+    runs-on: windows-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: without spout
+            filter: --skip spout
+            repeat: 1
+          - name: spout only
+            filter: spout::
+            repeat: 20
+    env:
+      # Same memory settings as test.yml: the runner has a small paging file and
+      # full debug info made rustc fail to mmap its own rlibs.
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # Build setup mirrors test.yml's `test (windows)`. Same vcpkg cache key, so
+      # this reuses that job's cache rather than paying for its own.
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: C:\vcpkg\installed
+          key: vcpkg-windows-x64-${{ hashFiles('.github/workflows/release.yml') }}
+          restore-keys: vcpkg-windows-x64-
+
+      - name: Install vcpkg FFmpeg
+        shell: pwsh
+        run: |
+          vcpkg install ffmpeg:x64-windows
+          echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
+
+      - name: Install LLVM (for shaderc)
+        run: choco install llvm -y
+        shell: cmd
+
+      - name: Set build environment
+        shell: pwsh
+        run: |
+          echo "LIBCLANG_PATH=C:\Program Files\LLVM\lib" >> $env:GITHUB_ENV
+          echo "PKG_CONFIG_PATH=C:\vcpkg\installed\x64-windows\lib\pkgconfig" >> $env:GITHUB_ENV
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      # `--lib` only: the crash was in the lib test binary, and the integration
+      # binaries cost build time without bearing on the question.
+      #
+      # Note the deliberate absence of `--test-threads`. Parallel execution is
+      # the condition being reproduced, so constraining it here would reproduce
+      # nothing. `VARDA_REQUIRE_GPU` is also absent: a skipped GPU test is not
+      # what this run is measuring, and a hard failure would mask a crash.
+      - name: Run
+        shell: pwsh
+        run: |
+          $failed = 0
+          for ($i = 1; $i -le ${{ matrix.repeat }}; $i++) {
+            Write-Host "--- attempt $i of ${{ matrix.repeat }} ---"
+            cargo test --no-default-features --features face-detection,screen-capture --lib -- ${{ matrix.filter }}
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "::error::crashed or failed on attempt $i (exit $LASTEXITCODE)"
+              $failed = 1
+              break
+            }
+          }
+          # A single crash is the finding; report it as a failure so the matrix
+          # cell is unambiguous at a glance.
+          exit $failed

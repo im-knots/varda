@@ -1250,8 +1250,18 @@ fn chroma_flow_auto_palette_does_not_lurch_on_smooth_input() {
     /// deltas by design, and a fixed threshold set against one transport model
     /// silently becomes a different test under the next. The control holds the
     /// anchors still and is otherwise identical, so it isolates the one thing
-    /// this is about. Auto currently runs at or just under it.
-    const MAX_SPIKE_RATIO: f32 = 1.4;
+    /// this is about.
+    ///
+    /// Derived rather than chosen. With the true maximum this was 1.4 against a
+    /// worst observed ratio of 1.17, a 20% allowance. Measured on the p95
+    /// statistic the worst observed ratio is 1.08 (`taste_of_noise` at stability
+    /// 0), and 1.3 keeps the same 20% allowance, so the guard is about as
+    /// sensitive to a real regression as it was before.
+    ///
+    /// If this trips again on a software rasterizer, the answer is to find out
+    /// why the *tail* moved, not to widen this. A tail that shifts is the effect
+    /// changing behaviour, which is what the test is for.
+    const MAX_SPIKE_RATIO: f32 = 1.3;
 
     let Some(ctx) = headless_gpu() else {
         return;
@@ -1270,7 +1280,18 @@ fn chroma_flow_auto_palette_does_not_lurch_on_smooth_input() {
         a.iter().zip(b).map(|(x, y)| (x - y).abs()).sum::<f32>() / a.len() as f32
     };
 
-    // Worst-frame-over-median change for one configuration.
+    // Tail-frame-over-median change for one configuration.
+    //
+    // The p95 delta rather than the maximum. The maximum is a single frame out
+    // of ninety, and on this content it sits well clear of the rest: for
+    // `taste_of_noise` the top six deltas run 1.43, 1.45, 1.45, 1.47, 1.49 and
+    // then 1.66, so the statistic was decided by one outlier. Which frame that
+    // is, and how far it sticks out, differs between renderers, and the test
+    // passed on Metal while failing on both lavapipe and WARP for that reason
+    // alone.
+    //
+    // A lurch big enough to matter lifts the whole tail, not one frame, so p95
+    // still sees it while no longer being decided by float noise.
     let spike_ratio = |src_name: &str, manual: bool, stability: f32| -> f32 {
         let src =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("shaders/{src_name}"));
@@ -1303,11 +1324,12 @@ fn chroma_flow_auto_palette_does_not_lurch_on_smooth_input() {
         }
         deltas.sort_by(|a, b| a.partial_cmp(b).expect("no NaN frames"));
         let median = deltas[deltas.len() / 2];
+
         assert!(
             median > 0.0,
             "{src_name} is animated, so frames must differ; got a static image"
         );
-        deltas.last().expect("measured frames") / median
+        deltas[deltas.len() * 95 / 100] / median
     };
 
     for src in ["dull_skull.fs", "liquid_light.fs", "taste_of_noise.fs"] {

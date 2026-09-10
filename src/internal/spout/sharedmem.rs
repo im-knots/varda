@@ -19,8 +19,8 @@
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::System::Memory::{
-    CreateFileMappingA, FILE_MAP_ALL_ACCESS, MapViewOfFile, OpenFileMappingA, PAGE_READWRITE,
-    UnmapViewOfFile,
+    CreateFileMappingA, FILE_MAP_ALL_ACCESS, MEMORY_BASIC_INFORMATION, MapViewOfFile,
+    OpenFileMappingA, PAGE_READWRITE, UnmapViewOfFile, VirtualQuery,
 };
 use windows::Win32::System::Threading::{CreateMutexA, ReleaseMutex, WaitForSingleObject};
 use windows::core::PCSTR;
@@ -96,25 +96,48 @@ impl SharedMemory {
             unsafe { CloseHandle(map) }.ok()?;
             return None;
         }
+        // Never trust the requested size. `CreateFileMappingA` hands back the
+        // *existing* mapping when the name is already taken, ignoring the size
+        // asked for, and `open` is reading a region another application sized. So
+        // the usable length is whatever was actually mapped, and every access is
+        // bounded by that rather than by what the caller hoped for.
+        let mut info = MEMORY_BASIC_INFORMATION::default();
+        let queried = unsafe {
+            VirtualQuery(
+                Some(view.Value.cast_const()),
+                std::ptr::from_mut(&mut info),
+                size_of::<MEMORY_BASIC_INFORMATION>(),
+            )
+        };
+        let mapped = if queried == 0 { 0 } else { info.RegionSize };
         let mutex_name = c_string(&format!("{name}_mutex"));
-        let mutex = unsafe { CreateMutexA(None, false, PCSTR(mutex_name.as_ptr())) }.ok()?;
+        let Ok(mutex) = (unsafe { CreateMutexA(None, false, PCSTR(mutex_name.as_ptr())) }) else {
+            // Do not leak the view and handle on the way out.
+            unsafe {
+                let _ =
+                    UnmapViewOfFile(windows::Win32::System::Memory::MEMORY_MAPPED_VIEW_ADDRESS {
+                        Value: view.Value,
+                    });
+                let _ = CloseHandle(map);
+            }
+            return None;
+        };
         Some(Self {
             map,
             view: view.Value.cast::<u8>(),
             mutex,
-            size,
+            size: size.min(mapped),
         })
     }
 
-    /// Run `f` over the region under its mutex.
+    /// Hold the region's mutex for the duration of `f`.
     ///
     /// Proceeds on timeout rather than giving up, matching Spout: the worst case
     /// is one torn read of a struct that is rewritten every frame anyway, and
     /// blocking the render thread on another application's lock is worse.
-    fn locked<T>(&self, f: impl FnOnce(&mut [u8]) -> T) -> T {
+    fn locked<T>(&self, f: impl FnOnce() -> T) -> T {
         let held = unsafe { WaitForSingleObject(self.mutex, WAIT_TIMEOUT_MS) } == WAIT_OBJECT_0;
-        let bytes = unsafe { std::slice::from_raw_parts_mut(self.view, self.size) };
-        let out = f(bytes);
+        let out = f();
         if held {
             let _ = unsafe { ReleaseMutex(self.mutex) };
         }
@@ -122,16 +145,29 @@ impl SharedMemory {
     }
 
     /// Copy the region out.
+    ///
+    /// Copies through a raw pointer rather than materialising a `&mut [u8]`.
+    /// Several `SharedMemory` values can address one region, by design and by
+    /// test, so handing out overlapping mutable slices would be aliasing UB even
+    /// though the bytes are shared memory rather than heap.
     #[must_use]
     pub fn read(&self) -> Vec<u8> {
-        self.locked(|bytes| bytes.to_vec())
+        self.locked(|| {
+            let mut out = vec![0u8; self.size];
+            if self.size > 0 {
+                unsafe { std::ptr::copy_nonoverlapping(self.view, out.as_mut_ptr(), self.size) };
+            }
+            out
+        })
     }
 
     /// Overwrite the region, up to whichever of the two is shorter.
     pub fn write(&self, data: &[u8]) {
-        self.locked(|bytes| {
-            let n = data.len().min(bytes.len());
-            bytes[..n].copy_from_slice(&data[..n]);
+        self.locked(|| {
+            let n = data.len().min(self.size);
+            if n > 0 {
+                unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), self.view, n) };
+            }
         });
     }
 }

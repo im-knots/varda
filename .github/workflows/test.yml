@@ -162,7 +162,16 @@ jobs:
       # clippy (windows) still type-checks the feature and the release job still
       # builds it, and the HtmlManager surface compiles without it, so the
       # integration and persistence tests around HTML decks still run here.
+      # `--test-threads=1` is a diagnostic, not a preference. The first run of
+      # this suite died with STATUS_HEAP_CORRUPTION (0xc0000374) part way through,
+      # and under the default parallelism the last test *printed* is not the test
+      # that crashed, so the log named nothing. Serial execution makes the last
+      # line the culprit. Restore parallelism once the cause is identified: this
+      # suite is 2586 tests and serial is much slower.
+      #
+      # This is the first time Varda's tests have ever run on Windows, so a
+      # long-standing Windows-only fault is as likely as a new one.
       - name: Run test suite
         env:
           VARDA_REQUIRE_GPU: 1
-        run: cargo test --no-default-features --features face-detection,screen-capture
+        run: cargo test --no-default-features --features face-detection,screen-capture -- --test-threads=1
