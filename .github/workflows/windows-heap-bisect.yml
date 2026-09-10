@@ -43,10 +43,10 @@ jobs:
       matrix:
         include:
           - name: without spout
-            filter: --skip spout
+            filter: "--skip spout"
             repeat: 1
           - name: spout only
-            filter: spout::
+            filter: "spout::"
             repeat: 20
     env:
       # Same memory settings as test.yml: the runner has a small paging file and
