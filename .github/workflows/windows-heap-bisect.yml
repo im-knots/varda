@@ -1,42 +1,58 @@
 name: windows heap bisect
 
-# A diagnostic, not a gate. Manual only, so it never turns an unrelated PR red.
+# A diagnostic, not a gate. This job is *expected* to fail: it exists to
+# reproduce a crash.
 #
-# The Windows test suite crashed with STATUS_HEAP_CORRUPTION (0xc0000374) part
-# way through, and `--test-threads=1` in test.yml hides it rather than fixing it:
-# the fault only appears under parallel execution. Heap corruption is reported
-# when some later allocation notices the damage, so the reported stack is
-# innocent and the log names nothing useful.
+# The Windows lib suite dies within seconds of starting under the default test
+# parallelism. `--test-threads=1` in test.yml hides it rather than fixing it.
+# Heap corruption is reported when some later allocation notices the damage, so
+# the reported stack is innocent and the log names nothing useful.
 #
-# This run answers one question before any expensive tooling is aimed at it:
-# is the fault in the Spout code added in Phase 58, or was it already there?
-# Windows tests had never run before that phase, so "already there" means it
-# shipped in v0.4.0 and v0.5.0.
+# ROUND 1 asked whether Phase 58's Spout code was responsible. `spout only`
+# passed twenty consecutive parallel runs; `without spout` crashed on attempt
+# one. The fault is **pre-existing**, which means it shipped in v0.4.0 and
+# v0.5.0.
 #
-# ROUND 1 ANSWERED IT: `spout only` passed twenty consecutive parallel runs and
-# `without spout` crashed on attempt one. The fault is **pre-existing**, not from
-# Phase 58, which means it shipped in v0.4.0 and v0.5.0.
+# ROUND 2 split the suite by area: `internal::renderer` against everything else.
+# **Both cells crashed**, with different exception codes:
+#   renderer only : STATUS_ACCESS_VIOLATION (0xc0000005) after ~21 tests
+#   no renderer   : STATUS_HEAP_CORRUPTION  (0xc0000374) after ~8 tests
+# Both within seconds of start, and every test that had *printed* by then was a
+# pure CPU test. So the crash is not in the tests that were finishing; it is in
+# whatever the other threads had concurrently started.
 #
-# ROUND 2, below, is a binary split aimed at the leading hypothesis rather than a
-# blind bisect. `GpuContext::new_headless` is called by hundreds of tests, and on
-# a runner every one of them builds a full D3D12 device on WARP, a *software*
-# adapter. Dozens created and torn down concurrently is a load nothing else in
-# this project puts on it.
+# That rules out "one bad module" and points at something both halves do a lot
+# of. Both halves build GPU contexts: about sixty test sites call
+# `GpuContext::new_headless`, spread across nearly every module, and each builds
+# its own `wgpu::Instance` with `Backends::all()`, enumerates adapters, and
+# creates a device. On the runner that device is WARP, a *software* D3D12
+# implementation, and `Backends::all()` on Windows also brings up the Vulkan
+# loader and a WGL context.
 #
-#   renderer only : internal::renderer in parallel. Crashes here point at wgpu
-#                   or WARP device churn.
-#   no renderer   : everything else in parallel. Crashes here rule that out.
+# ROUND 3, below, stops bisecting and tries to reproduce. `tests/gpu_context_stress.rs`
+# does nothing but build GPU contexts on several threads at once. Four cells,
+# each answering one question:
 #
-# Neither crashing is also a result: it would mean the fault needs two subsystems
-# running at once, and the next split has to be by pairs rather than by area.
+#   new_headless parallel : does the production path crash on its own? A crash
+#                           here is a ~40 line reproducer and the search ends.
+#   new_headless serial   : the control. Same total number of contexts, one
+#                           thread. Clean means concurrency; a crash means
+#                           volume, i.e. a leak, and thread count is a red
+#                           herring.
+#   instance only, all    : stops after `Instance::new`, never reaching wgpu's
+#                           device code. A crash here is backend *loading*:
+#                           the Vulkan loader or WGL, not D3D12.
+#   device, dx12 only     : full device creation with Vulkan and GL excluded.
+#                           A crash here is WARP device churn.
 #
-# Both cells run whatever the other does (`fail-fast: false`), and each repeats,
-# so "did not crash" is distinguishable from "did not crash this time".
+# Read `instance only` and `device, dx12 only` together: whichever crashes names
+# the culprit, and both staying clean while `new_headless parallel` crashes
+# would mean the combination matters rather than either part.
 #
-# Later levers, in order: vary --test-threads for a contention threshold, then
-# Full Page Heap (memory hungry, so narrow first), then -Zsanitizer=address on
-# nightly, which reports the bad access and its allocation without a debugger.
-# See spec/roadmap.md.
+# If every cell is clean the hypothesis is wrong, and the next lever is Full
+# Page Heap (`gflags /p /enable <exe> /full`) plus `LocalDumps` and
+# `cdb -c "!analyze -v"`, or `-Zsanitizer=address` on nightly, which reports the
+# bad access and its allocation without a debugger. See spec/roadmap.md.
 
 # TEMPORARY: runs as a PR check so it can be triggered from this branch.
 #
@@ -44,10 +60,9 @@ name: windows heap bisect
 # default branch, and `gh workflow run` fails for the same reason, so a manual
 # trigger is not available until this lands on main.
 #
-# **Remove the `pull_request` trigger before merging.** This job is expected to
-# fail: it exists to reproduce a crash, so leaving it on would put a permanent
-# red X on every PR and train people to ignore it. Once on main, the Run button
-# appears and its "Use workflow from" dropdown can target any branch.
+# **Remove the `pull_request` trigger before merging.** Leaving a job that is
+# meant to fail on every PR trains people to ignore a red X. Once on main, the
+# Run button appears and its "Use workflow from" dropdown can target any branch.
 on:
   workflow_dispatch:
   pull_request:
@@ -56,23 +71,40 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  VARDA_SKIP_GOLDEN_SNAPSHOTS: 1
 
 jobs:
   bisect:
     name: heap bisect (${{ matrix.name }})
     runs-on: windows-latest
-    timeout-minutes: 90
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: renderer only
-            filter: "internal::renderer"
-            repeat: 3
-          - name: no renderer
-            filter: "--skip internal::renderer --skip spout"
-            repeat: 3
+          - name: new_headless parallel
+            test: parallel_headless_contexts
+            threads: 4
+            iters: 8
+            stage: device
+            backends: all
+          - name: new_headless serial
+            test: parallel_headless_contexts
+            threads: 1
+            iters: 32
+            stage: device
+            backends: all
+          - name: instance only, all backends
+            test: parallel_instances
+            threads: 4
+            iters: 8
+            stage: instance
+            backends: all
+          - name: device, dx12 only
+            test: parallel_instances
+            threads: 4
+            iters: 8
+            stage: device
+            backends: dx12
     env:
       # Same memory settings as test.yml: the runner has a small paging file and
       # full debug info made rustc fail to mmap its own rlibs.
@@ -112,20 +144,32 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
 
-      # `--lib` only: the crash was in the lib test binary, and the integration
-      # binaries cost build time without bearing on the question.
+      # Report the adapter before stressing it, so a runner whose adapter changed
+      # is visible in the log rather than inferred from a different crash. Same
+      # feature set as the Run step below on purpose, so both share one build.
+      - name: Report adapter
+        run: cargo test --no-default-features --lib spout::capability -- --nocapture
+
+      # Minimal features on purpose. The reproducer needs only the renderer, and
+      # every feature left out is one fewer confound (and a much shorter build).
+      # If every cell here is clean, re-run with the suite's own
+      # `face-detection,screen-capture` before concluding the hypothesis is dead.
       #
-      # Note the deliberate absence of `--test-threads`. Parallel execution is
-      # the condition being reproduced, so constraining it here would reproduce
-      # nothing. `VARDA_REQUIRE_GPU` is also absent: a skipped GPU test is not
-      # what this run is measuring, and a hard failure would mask a crash.
+      # `--test-threads=1` runs the two reproducers one after another; the
+      # parallelism under test is inside them, controlled by VARDA_STRESS_THREADS.
       - name: Run
         shell: pwsh
+        env:
+          VARDA_STRESS_THREADS: ${{ matrix.threads }}
+          VARDA_STRESS_ITERS: ${{ matrix.iters }}
+          VARDA_STRESS_STAGE: ${{ matrix.stage }}
+          VARDA_STRESS_BACKENDS: ${{ matrix.backends }}
         run: |
           $failed = 0
-          for ($i = 1; $i -le ${{ matrix.repeat }}; $i++) {
-            Write-Host "--- attempt $i of ${{ matrix.repeat }} ---"
-            cargo test --no-default-features --features face-detection,screen-capture --lib -- ${{ matrix.filter }}
+          for ($i = 1; $i -le 3; $i++) {
+            Write-Host "--- attempt $i of 3 ---"
+            cargo test --no-default-features --test gpu_context_stress `
+              -- --ignored --nocapture --test-threads=1 "${{ matrix.test }}"
             if ($LASTEXITCODE -ne 0) {
               Write-Host "::error::crashed or failed on attempt $i (exit $LASTEXITCODE)"
               $failed = 1
