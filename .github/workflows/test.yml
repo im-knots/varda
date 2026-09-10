@@ -104,10 +104,25 @@ jobs:
       # `os error 1455: The paging file is too small for this operation`,
       # surfacing as `E0786: found invalid metadata files`.
       #
-      # Debug info is the bulk of those rlibs: measured locally, one `libvarda`
-      # rlib is ~425 MB at `debuginfo=2`. Dropping it shrinks every artefact
-      # rustc has to map, and a backtrace from a CI failure is worth less than
-      # the assertion message anyway.
+      # Three changes went in together to fix that: this setting, the job count
+      # below, and dropping the `html` feature. **Which one was load bearing has
+      # not been established**, and an earlier comment here credited this one on
+      # reasoning alone. Two things argue against it. Cargo builds dependencies
+      # of test targets with the `dev` profile, so this does not touch the
+      # dependency rlibs that rustc was failing to map. And the effect measured
+      # on the test target itself is small: 180 MB at `0`, 201 MB at
+      # `line-tables-only`, 210 MB at `2` (macOS, where debug info is not linked
+      # into the executable, so treat it as a lower bound rather than a
+      # transferable number).
+      #
+      # Dropping `html` is the better candidate: Servo's `libscript` alone is
+      # ~486 MB per debug rlib and takes a large dependency tree with it.
+      #
+      # Kept at `0` because it is cheap and harmless, not because it is proven.
+      # Note the cost: at `0` on MSVC there is no PDB, so a crash inside the
+      # harness gives an unusable stack. A real failure here already printed
+      # frames from the wrong module entirely. Raise this to `line-tables-only`
+      # when debugging.
       CARGO_PROFILE_TEST_DEBUG: "0"
       # And halve how many of those rustc processes hold memory at once. Slower,
       # but the job is bounded by linking rather than by CPU.

@@ -48,31 +48,48 @@ name: windows heap bisect
 # Instrumentation that would be ruinous across a 2586-test run is cheap across
 # one that dies almost immediately.
 #
-# ROUND 5 runs the test binary under `cdb` so the debugger, not the harness,
-# reports the fault:
+# ROUND 5 tried to run the binary under `cdb`. **The install step failed on
+# every cell**: `cdb` is not on the runner image (actions/runner-images#942 asks
+# for it), and the SDK fwlink used to fetch it was a guess that returned an HTML
+# page, which then would not execute. Nothing was learned about the crash.
 #
-#   cdb                : catch the exception and print a stack. Cheapest, and it
-#                        may name the culprit on its own.
-#   cdb + page heap    : full page heap makes the *corrupting write* fault at the
-#                        instruction that does it, instead of some later,
-#                        innocent allocation noticing the damage. This is the
-#                        cell most likely to end it. It is also the most memory
-#                        hungry, and this job has hit ERROR_COMMITMENT_LIMIT
-#                        before, so the plain cdb cell above is the fallback.
-#   two threads        : does it still crash at --test-threads=2? A threshold
-#                        distinguishes contention on a shared resource from a
-#                        race that needs only two participants.
-#   app:: only         : narrowing. Round 2 showed both halves crash, so many
-#                        subsets should. Finding a small one that does is worth
-#                        a cell.
+# ROUND 6 drops the debugger entirely, because the harness can answer the
+# question by itself.
 #
-# Debug info is raised to line tables for this round. At `debug=0` the Windows
-# job's backtraces are not merely sparse, they are **wrong**: a panic in
-# `decks.rs` printed frames attributed to `sequences::move_step`. Anyone reading
-# that log is sent to the wrong file.
+# The reason every round so far has been reading tea leaves is that **the last
+# test printed is not the test that crashed**: libtest's normal output prints a
+# test when it *finishes*, so the crashing test, still running, never appears.
 #
-# Page heap is enabled through the Image File Execution Options registry key
-# rather than `gflags`, so it needs no extra tooling; the runner is admin.
+# But libtest's JSON format also emits an event when a test **starts**:
+#
+#   { "type": "test", "event": "started", "name": "..." }
+#   { "type": "test", "name": "...", "event": "ok" }
+#
+# So the tests that started and never reported a result are exactly the ones in
+# flight when the process died. At four threads that is at most four names, out
+# of 2586. Verified locally: the events stream as tests run rather than being
+# batched at the end, and Rust line buffers stdout even through a pipe (checked
+# with a program that prints and then calls `abort`), so everything up to the
+# fault survives the crash.
+#
+# `--format=json` needs `-Zunstable-options`, hence `RUSTC_BOOTSTRAP=1`. It is
+# set **only for the run**, never for the build: it is part of the build
+# fingerprint, so setting it during compilation would evict the whole cache. And
+# keeping the stable compiler matters on its own, because a nightly toolchain
+# would be a different binary that might not crash.
+#
+#   four threads  : the configuration that has been crashing.
+#   two threads   : fewer tests in flight, so a sharper answer, if it still dies.
+#   eight threads : more pressure. Likely to crash sooner, and a wider in-flight
+#                   set is still a small set.
+#   page heap     : full page heap makes the *corrupting write* fault where it
+#                   happens rather than when a later, innocent allocation
+#                   notices. No debugger needed for that to help: it moves the
+#                   crash closer to the culprit, so the in-flight list gets more
+#                   informative. Enabled through the Image File Execution
+#                   Options registry key, which needs no tooling.
+#
+# If this names a small set, the next step is to run just those tests together.
 
 # TEMPORARY: runs as a PR check so it can be triggered from this branch.
 #
@@ -101,22 +118,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: cdb
+          - name: four threads
+            threads: "4"
             pageheap: "0"
-            filter: ""
-            threads: "4"
-          - name: cdb + page heap
-            pageheap: "1"
-            filter: ""
-            threads: "4"
           - name: two threads
-            pageheap: "0"
-            filter: ""
             threads: "2"
-          - name: app only
             pageheap: "0"
-            filter: "app::"
+          - name: eight threads
+            threads: "8"
+            pageheap: "0"
+          - name: four threads + page heap
             threads: "4"
+            pageheap: "1"
     env:
       # Same memory settings as test.yml: the runner has a small paging file and
       # full debug info made rustc fail to mmap its own rlibs.
@@ -160,23 +173,8 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
 
-      - name: Install Debugging Tools for Windows
-        shell: pwsh
-        run: |
-          # cdb is not on the runner by default. The SDK installer takes a
-          # feature list, so this pulls the debuggers and nothing else.
-          $url = "https://go.microsoft.com/fwlink/?linkid=2320463"
-          Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\sdksetup.exe"
-          Start-Process -Wait -FilePath "$env:TEMP\sdksetup.exe" `
-            -ArgumentList "/quiet","/norestart","/features","OptionId.WindowsDesktopDebuggers"
-          $cdb = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe" -ErrorAction SilentlyContinue
-          if (-not $cdb) { Write-Host "::error::cdb.exe was not installed"; exit 1 }
-          Write-Host "cdb: $($cdb.FullName)"
-          echo $cdb.DirectoryName >> $env:GITHUB_PATH
-
-      # Build separately so the run step can hand the test executable straight to
-      # the debugger. Running `cargo test` under cdb would debug cargo, not the
-      # test binary it spawns.
+      # Built separately from the run so RUSTC_BOOTSTRAP stays out of the build
+      # fingerprint. Setting it here would evict the cargo cache every time.
       - name: Build test binary
         run: cargo test --no-default-features --features face-detection,screen-capture --lib --no-run
 
@@ -184,10 +182,9 @@ jobs:
         if: matrix.pageheap == '1'
         shell: pwsh
         run: |
-          # Image File Execution Options is keyed on the file name, and cargo
-          # stamps a hash into it, so resolve the name rather than hardcoding it.
+          # Image File Execution Options is keyed on file name, and cargo stamps
+          # a hash into it, so resolve the name rather than hardcoding it.
           $exe = Get-ChildItem target\debug\deps\varda-*.exe |
-            Where-Object { $_.Name -notmatch '\.d$' } |
             Sort-Object LastWriteTime -Descending | Select-Object -First 1
           Write-Host "enabling page heap for $($exe.Name)"
           $key = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$($exe.Name)"
@@ -197,27 +194,39 @@ jobs:
           New-ItemProperty -Path $key -Name GlobalFlag -Value 0x02000000 -PropertyType DWord -Force | Out-Null
           New-ItemProperty -Path $key -Name PageHeapFlags -Value 0x3 -PropertyType DWord -Force | Out-Null
 
-      - name: Run under cdb
+      - name: Run and report what was in flight
         shell: pwsh
         env:
           VARDA_SKIP_GOLDEN_SNAPSHOTS: 1
+          VARDA_REQUIRE_GPU: 1
+          # Runtime only. See the note at the top of this file.
+          RUSTC_BOOTSTRAP: "1"
         run: |
           $exe = Get-ChildItem target\debug\deps\varda-*.exe |
-            Where-Object { $_.Name -notmatch '\.d$' } |
             Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          Write-Host "debugging $($exe.FullName)"
+          $failed = 0
 
-          # -g / -G skip the initial and final breakpoints so a clean run is not
-          # mistaken for a hang. `sxe` promotes the two faults we have actually
-          # seen to first-chance breaks, so the debugger stops at the fault
-          # rather than after the stack has unwound. `!analyze -v` names it,
-          # `~*kP` gives every thread's stack, which is the part the harness
-          # could never show: the crashing thread is not the one that printed.
-          $cmds = "sxe av; sxe ch; g; .echo ==== ANALYZE ====; !analyze -v; .echo ==== ALL THREADS ====; ~*kP; q"
-          $testArgs = "--test-threads=${{ matrix.threads }}"
-          if ("${{ matrix.filter }}") { $testArgs = "${{ matrix.filter }} $testArgs" }
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            Write-Host "--- attempt $attempt of 3 ---"
+            $log = "events-$attempt.jsonl"
+            # stdout only: that is where the JSON events go. stderr carries the
+            # crash message and stays on the console, where it is wanted, and
+            # out of the file, where it would corrupt parsing.
+            & $exe.FullName -Zunstable-options --format=json --test-threads=${{ matrix.threads }} > $log
+            $code = $LASTEXITCODE
 
-          cdb -g -G -c $cmds $exe.FullName $testArgs.Split(" ")
-          # cdb's exit code is the debuggee's, so a crash shows up as a failed
-          # cell while the analysis above stays in the log either way.
-          exit $LASTEXITCODE
+            # `.github/scripts/inflight_tests.py` does the parsing. It lives in
+            # a file, not inline here, so it can be run against real logs
+            # locally: it has been checked against a clean run, a run killed
+            # mid-flight, and a log whose final line was cut in half.
+            python .github/scripts/inflight_tests.py $log
+            if ($code -eq 0) { continue }
+
+            Write-Host "==== last 15 events ===="
+            Get-Content $log -Tail 15 | ForEach-Object { Write-Host "  $_" }
+            Write-Host "::error::attempt $attempt died with exit $code"
+            $failed = 1
+            break
+          }
+          # The crash is the finding, so report it as a failed cell.
+          exit $failed
