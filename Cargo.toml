@@ -253,7 +253,17 @@ egui_kittest = { version = "0.36", features = ["wgpu", "snapshot"] }
 tempfile = "3.27.0"
 tower = { version = "0.5.3", features = ["util"] }
 proptest = "1.9"
-varda = { path = ".", features = ["test-fixtures"] }
+# `default-features = false` is load-bearing. Without it this self-dependency
+# re-enables the default set, `depth` included, no matter what the command line
+# says, so `cargo test --no-default-features` still links libfreenect. Nothing
+# caught it for a long time: `cargo build` (the release job) does not build
+# dev-dependencies, and `cargo clippy` (the Windows lint job) does not link. The
+# Windows test job is the first thing to do both, and it failed with
+# `LNK1181: cannot open input file 'freenect.lib'`.
+#
+# Dropping the defaults here does not weaken any job: a plain `cargo test` still
+# has them from the primary package, and feature unification carries them over.
+varda = { path = ".", default-features = false, features = ["test-fixtures"] }
 
 [[bench]]
 name = "compositing"

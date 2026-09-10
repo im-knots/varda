@@ -18,28 +18,21 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: 1
-  # The adapter is pinned by VK_DRIVER_FILES, exported to $GITHUB_ENV by the
-  # install step below because the ICD path is discovered rather than fixed.
-  #
-  # Note WGPU_BACKEND is deliberately *not* set: `GpuContext::new_headless`
-  # builds its instance with `Backends::all()` and never reads it, and the one
-  # thing that did honour it (egui_kittest, via egui-wgpu's `Backends::from_env`)
-  # no longer runs here. Loader-level pinning is what actually constrains this.
-  #
-  # Turn `tests/common/mod.rs`'s no-adapter skip into a hard failure. Without
-  # this the entire GPU suite reports green on a runner with a broken driver.
-  VARDA_REQUIRE_GPU: 1
-  # Exclude the egui golden-image tests. Their reference PNGs are rendered on a
-  # developer's Metal GPU and lavapipe rounds a few pixels differently, so the
-  # comparison is cross-renderer and needs a tolerance wide enough to hide real
-  # regressions. They stay a local-only check — see tests/ui_snapshots.rs. Every
-  # other GPU suite below runs for real on lavapipe.
+  RUST_BACKTRACE: 
+  # Exclude the egui golden-image tests. 
   VARDA_SKIP_GOLDEN_SNAPSHOTS: 1
 
 jobs:
-  test:
-    name: test
+  test-linux:
+    name: test (linux)
+    # Scoped to this job on purpose. It turns tests/common/mod.rs's no-adapter
+    # skip into a hard failure, which is only safe where the adapter is pinned,
+    # and lavapipe is installed below. At workflow level it would also apply to
+    # test (windows), where whether wgpu finds an adapter at all is one of the
+    # things being measured, and the job would fail on that unknown instead of
+    # reporting it.
+    env:
+      VARDA_REQUIRE_GPU: 1
     # ubuntu-24.04 (glibc 2.39) required: ort's prebuilt ONNX Runtime
     # references __isoc23_strtol / __isoc23_strtoull / __isoc23_strtoll
     # which only exist in glibc >= 2.38. ubuntu-22.04 (glibc 2.35) fails.
@@ -74,11 +67,6 @@ jobs:
           test -e /usr/lib/x86_64-linux-gnu/libfreenect.so \
             || { echo "::error::libfreenect-dev did not provide libfreenect.so"; exit 1; }
 
-      # GitHub runners have no GPU. lavapipe (Mesa's software Vulkan
-      # implementation) provides the headless adapter that the render, engine,
-      # and egui snapshot suites need. Without it they all skip and the job is
-      # green having tested nothing. egui_kittest already prefers a CPU adapter
-      # over a hardware one, so its snapshot renderer picks lavapipe unaided.
       - name: Install lavapipe (software Vulkan)
         run: |
           sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
@@ -111,9 +99,6 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
 
-      # The whole suite, not a curated subset: with an adapter present there is
-      # no GPU-free/GPU-gated split to maintain, and a newly added GPU test is
-      # covered without anyone remembering to list it here.
       - name: Run test suite
         run: cargo test --workspace
 
@@ -127,9 +112,6 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      # The build setup below mirrors `clippy (windows)` in clippy.yml. Keep the
-      # two in step: a divergence shows up as a job that cannot build rather than
-      # as a test failure.
       - name: Cache vcpkg packages
         uses: actions/cache@v4
         with:
@@ -156,17 +138,8 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
 
-      # What the runner can actually do, printed whether it succeeds or not. This
-      # runs before the suite so the log carries the answer even when a later step
-      # fails, and it is the input to the two open questions in
-      # spec/spout-output.md.
       - name: Report Spout capability
         run: cargo test --no-default-features --features face-detection,html,screen-capture --lib spout::capability -- --nocapture
 
-      # `VARDA_REQUIRE_GPU` is deliberately *not* set yet, unlike the Linux job.
-      # There it pins a known-good lavapipe install; here whether wgpu finds a
-      # usable adapter at all is one of the things being measured. Turn it on once
-      # the capability step above confirms an adapter, otherwise this job would
-      # fail on an unknown rather than report it.
       - name: Run test suite
         run: cargo test --no-default-features --features face-detection,html,screen-capture
