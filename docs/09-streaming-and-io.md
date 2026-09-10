@@ -14,6 +14,7 @@ If the complete path is unavailable, it keeps the request, delivers 8-bit SDR, a
 | HLS / DASH | HEVC Main10 or AV1 10-bit in fMP4 | Unsupported encoders use 8-bit |
 | RTMP / RTMPS | HEVC Main10 or AV1 with an Enhanced endpoint contract | Legacy RTMP uses H.264 8-bit |
 | Syphon | No interoperable 10-bit path | BGRA8 |
+| Spout | `R10G10B10A2` | BGRA8 |
 
 Ten-bit delivery is still SDR. It preserves more code values after Varda's existing tonemap and LUT;
 it does not enable HDR metadata or extended brightness. For that, choose **HDR10** or **HLG**.
@@ -48,7 +49,7 @@ declared from your peak setting rather than measured.
 | HLS (either segment length) | HEVC Main10 or AV1 10-bit in fMP4 | Yes |
 | DASH | HEVC Main10 or AV1 10-bit | Yes |
 | RTMP / RTMPS | HEVC or AV1 on an **Enhanced RTMP** endpoint | Yes |
-| NDI, Syphon | No | No |
+| NDI, Syphon, Spout | No | No |
 | H.264, ProRes, HAP | No | No |
 
 Legacy RTMP cannot carry HDR at all and falls back with
@@ -375,6 +376,47 @@ This is the standard, verified location. It is also where other Syphon apps on t
 > Varda also checks `~/Library/Frameworks/Syphon.framework` (per-user, no admin) as a fallback. The system-wide `/Library/Frameworks/` path above is the recommended and verified one.
 
 Pass `--no-syphon` to disable Syphon explicitly even when the framework is installed.
+
+---
+
+## Spout (Windows)
+
+Spout is inter-application GPU texture sharing on Windows, and the counterpart to Syphon. Varda works both ways: as a Spout **receiver** (taking other applications' frames as live sources) and as a Spout **sender** (publishing a Varda output for applications such as Resolume, OBS, TouchDesigner or HeavyM to pick up).
+
+Nothing needs installing. Spout's sharing lives in Windows itself, so there is no framework or runtime to add, unlike Syphon on macOS or the NDI SDK.
+
+**Receive:**
+
+1. Open the Library and look under **Spout Senders** for the applications currently publishing
+2. **Drag** one into a channel to create a live deck
+
+**Publish:**
+
+1. In the output panel, click **+ Stream**
+2. Select **Spout** from the protocol dropdown
+3. Enter a sender name (e.g., "Varda Main")
+4. Start the output, and other Spout applications see it in their source list
+
+Start order does not matter in either direction. A deck bound to a sender that is not running yet attaches itself the moment that application starts publishing, so a saved show reopens correctly whatever you launch first.
+
+### Requirements
+
+Spout needs Varda running on the **DirectX 12** graphics backend, which is the default on Windows. On a machine where Varda selects Vulkan instead, the Spout library section and the Spout output option are not shown.
+
+### Colour
+
+Spout carries display-encoded pixels, and Varda publishes 8-bit BGRA by default: that is Spout's own default and what every receiving application understands.
+
+**10-bit** is available too, chosen per output like any other format, and worth using when the receiving application reads it. Most Spout applications expect 8-bit BGRA, so check the other end before switching a show over to it.
+
+There is no HDR over Spout, in either direction. Spout shares a texture and nothing else: no transfer function, no primaries, no mastering metadata. Selecting HDR10 or HLG on a Spout output is therefore not offered, and the picker says why. For HDR delivery, use a recording or one of the streaming protocols (see [HDR Delivery](#hdr-delivery)).
+
+### Performance
+
+Frames stay on the GPU in both directions and never round-trip through the CPU, so resolution costs bandwidth rather than frame time.
+
+- **Receiving** reads the sending application's shared texture directly on the GPU. Varda re-binds only when that application resizes or restarts.
+- **Publishing** converts the frame and hands it to the shared texture receivers read.
 
 ---
 

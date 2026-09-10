@@ -22,6 +22,7 @@ Any output can be retargeted after creation:
 | **SRT / HLS / DASH / RTMP** | Network streams (video-only) |
 | **NDI** | Network Device Interface sender |
 | **Syphon** | macOS inter-app texture sharing |
+| **Spout** | Windows inter-app texture sharing |
 
 ### Display Selection
 
@@ -83,6 +84,12 @@ capability straight away.
 EDR is never selectable on a recording or a stream. It is a way of *looking at* HDR on this Mac, not
 a format anything can carry, so it is deliverable on display outputs only.
 
+Inter-application sharing has its own shape: **Spout** offers 8-bit and 10-bit SDR, while **Syphon**
+offers 8-bit alone, because that is the whole of the Syphon interoperability contract. Neither
+offers HDR, since both share a texture with no transfer signalling attached. See
+[Spout](09-streaming-and-io.md#spout-windows) and
+[Syphon](09-streaming-and-io.md#syphon-macos).
+
 Your choice is **kept, not discarded**. Switch that recording back to HEVC and HDR10 returns as the
 selection. While an output cannot carry what you asked for, the picker shows what it is actually
 delivering and the card explains the difference, for example
@@ -126,7 +133,7 @@ Do not read BT.2020 in the file's metadata as a wide-gamut claim.
 | **Recording** | HEVC and AV1. Verified with `ffprobe`: PQ transfer, BT.2020 primaries, ST 2086 mastering display, and CTA-861.3 content light level. | Not yet | No, and never: EDR is not a delivery format |
 | **Streaming** | SRT, HLS, DASH, and Enhanced RTMP on HEVC or AV1. Legacy RTMP cannot. | Same protocols | No |
 | **Display** | When the GPU surface exposes RGB10A2 with the BT.2100 PQ color space. Implemented but **not yet qualified against capture hardware or an LED processor**, so treat it as experimental. | Not on Windows (DX12 exposes no HLG surface) | macOS, on an EDR-capable display |
-| **NDI, Syphon** | Not supported. These fall back and say so. | Not supported | No |
+| **NDI, Syphon, Spout** | Not supported. These fall back and say so. | Not supported | No |
 | **ProRes, H.264, HAP** | Not supported. HAP is block texture compression and is 8-bit by construction. | Not supported | No |
 
 See [HDR Delivery](09-streaming-and-io.md#hdr-delivery) for the streaming detail and how to verify
