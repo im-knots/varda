@@ -166,3 +166,188 @@ fn parallel_instances() {
         .is_ok()
     });
 }
+
+// ── Round 4: shader compilation ─────────────────────────────────────
+
+/// Serialises pipeline creation when `VARDA_STRESS_LOCK_COMPILE` is set, so a
+/// crash and its absence can be compared with nothing else changed.
+static COMPILE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// An empty value counts as unset. CI fills these from a matrix, and on Windows
+/// an empty variable is still present in the environment.
+fn compile_lock_enabled() -> bool {
+    std::env::var("VARDA_STRESS_LOCK_COMPILE").is_ok_and(|v| !v.is_empty())
+}
+
+/// A trivial pipeline, with `tag` woven into the source so no two iterations
+/// compile identical text and nothing can be served from a cache.
+fn build_pipeline(device: &wgpu::Device, tag: usize) -> wgpu::RenderPipeline {
+    let source = format!(
+        r"
+@vertex
+fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {{
+    let x = f32(i32(i) - 1) * {tag}.0 / {tag}.0;
+    let y = f32(i32(i & 1u) * 2 - 1);
+    return vec4<f32>(x, y, 0.0, 1.0);
+}}
+
+@fragment
+fn fs_main() -> @location(0) vec4<f32> {{
+    return vec4<f32>({tag}.0 / 255.0, 0.0, 0.0, 1.0);
+}}
+"
+    );
+
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("stress shader"),
+        source: wgpu::ShaderSource::Wgsl(source.into()),
+    });
+
+    // The lock, if any, covers exactly this call. On DX12 this is where naga
+    // emits HLSL and wgpu-hal calls into `d3dcompiler_47.dll`.
+    let _guard = compile_lock_enabled().then(|| {
+        COMPILE_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    });
+
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("stress pipeline"),
+        layout: None,
+        vertex: wgpu::VertexState {
+            module: &module,
+            entry_point: Some("vs_main"),
+            buffers: &[],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &module,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// Which DX12 shader compiler to force, from `VARDA_STRESS_COMPILER`.
+///
+/// `None` means take the production path through `GpuContext::new_headless`,
+/// which is `Dx12Compiler::Auto`: try `dxcompiler.dll`, fall back to FXC. Note
+/// that `WGPU_DX12_COMPILER` cannot be used for this. It is only read by
+/// `BackendOptions::from_env_or_default`, and `new_headless` calls
+/// `BackendOptions::default`, so Varda ignores that variable entirely.
+///
+/// Neither explicit setting falls back: wgpu returns an instance error if the
+/// named compiler will not load. That is what we want here, because a silent
+/// fall back to FXC would report a green cell having tested nothing.
+fn compiler_override() -> Option<wgpu::Dx12Compiler> {
+    match std::env::var("VARDA_STRESS_COMPILER")
+        .ok()
+        .filter(|v| !v.is_empty())?
+        .as_str()
+    {
+        "fxc" => Some(wgpu::Dx12Compiler::Fxc),
+        "dxc" => Some(wgpu::Dx12Compiler::default_dynamic_dxc()),
+        other => panic!("VARDA_STRESS_COMPILER must be fxc or dxc, got {other:?}"),
+    }
+}
+
+/// A DX12 device using an explicitly chosen shader compiler.
+///
+/// The instance is returned alongside the device because dropping it would take
+/// the loaded compiler library with it.
+fn device_with_compiler(
+    compiler: wgpu::Dx12Compiler,
+) -> Option<(wgpu::Instance, wgpu::Device, wgpu::Queue)> {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::DX12,
+        flags: wgpu::InstanceFlags::default(),
+        backend_options: wgpu::BackendOptions {
+            dx12: wgpu::Dx12BackendOptions {
+                shader_compiler: compiler,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        display: None,
+        memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
+    });
+
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        compatible_surface: None,
+        force_fallback_adapter: false,
+        apply_limit_buckets: false,
+    }))
+    .ok()?;
+
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("stress device"),
+        required_features: wgpu::Features::empty(),
+        required_limits: wgpu::Limits::default(),
+        memory_hints: wgpu::MemoryHints::default(),
+        experimental_features: wgpu::ExperimentalFeatures::default(),
+        trace: wgpu::Trace::default(),
+    }))
+    .ok()?;
+
+    Some((instance, device, queue))
+}
+
+/// Build a context **and compile a shader on it**, on several threads at once.
+///
+/// This is the difference between Round 3, which was green on every cell, and
+/// what the real suite does. Round 3 built contexts and dropped them; it never
+/// compiled anything. On DX12 `create_render_pipeline` is where wgpu-hal calls
+/// `D3DCompile` in `d3dcompiler_47.dll`, and wgpu-hal holds no lock around it:
+/// every `Instance` loads the library separately, but Windows reference counts
+/// modules, so all of them are calling into one copy with one set of globals.
+///
+/// Set `VARDA_STRESS_LOCK_COMPILE=1` to serialise just the pipeline call. If
+/// that turns a crashing run green, the compiler is named and the shape of the
+/// fix is known.
+#[test]
+#[ignore = "reproducer: compiles many shaders at once and may crash the process"]
+fn parallel_pipelines() {
+    let locked = compile_lock_enabled();
+    println!("compile lock: {}", if locked { "on" } else { "off" });
+
+    let forced = compiler_override();
+    println!(
+        "compiler: {}",
+        match &forced {
+            None => "auto (production path)",
+            Some(wgpu::Dx12Compiler::Fxc) => "fxc",
+            Some(_) => "dxc",
+        }
+    );
+
+    stress("pipelines", move |t, i| {
+        let tag = t * 97 + i + 1;
+        match forced.clone() {
+            None => {
+                let Ok(gpu) = varda::renderer::GpuContext::new_headless() else {
+                    return false;
+                };
+                let _pipeline = build_pipeline(&gpu.device, tag);
+                gpu.device.poll(wgpu::PollType::Poll).is_ok()
+            }
+            Some(compiler) => {
+                let Some((_instance, device, _queue)) = device_with_compiler(compiler) else {
+                    return false;
+                };
+                let _pipeline = build_pipeline(&device, tag);
+                device.poll(wgpu::PollType::Poll).is_ok()
+            }
+        }
+    });
+}

@@ -29,28 +29,43 @@ name: windows heap bisect
 # implementation, and `Backends::all()` on Windows also brings up the Vulkan
 # loader and a WGL context.
 #
-# ROUND 3, below, stops bisecting and tries to reproduce. `tests/gpu_context_stress.rs`
-# does nothing but build GPU contexts on several threads at once. Four cells,
-# each answering one question:
+# ROUND 3 tried to reproduce instead of bisecting. `tests/gpu_context_stress.rs`
+# built GPU contexts on four threads at once, with the backend set and setup
+# stage under environment control. **All four cells were green**, including the
+# production `new_headless` path. So concurrent context creation is not it.
 #
-#   new_headless parallel : does the production path crash on its own? A crash
-#                           here is a ~40 line reproducer and the search ends.
-#   new_headless serial   : the control. Same total number of contexts, one
-#                           thread. Clean means concurrency; a crash means
-#                           volume, i.e. a leak, and thread count is a red
-#                           herring.
-#   instance only, all    : stops after `Instance::new`, never reaching wgpu's
-#                           device code. A crash here is backend *loading*:
-#                           the Vulkan loader or WGL, not D3D12.
-#   device, dx12 only     : full device creation with Vulkan and GL excluded.
-#                           A crash here is WARP device churn.
+# That is a useful negative, because of *how* the reproducer differed from the
+# suite: it built contexts and dropped them. It never compiled a shader.
 #
-# Read `instance only` and `device, dx12 only` together: whichever crashes names
-# the culprit, and both staying clean while `new_headless parallel` crashes
-# would mean the combination matters rather than either part.
+# ROUND 4, below, closes that gap. On DX12 `create_render_pipeline` is where
+# naga emits HLSL and wgpu-hal calls `D3DCompile` in `d3dcompiler_47.dll`, and
+# wgpu-hal holds no lock around that call (see wgpu-hal 30.0.0
+# `src/dx12/shader_compilation.rs`). Every `Instance` loads the library
+# separately, but Windows reference counts modules, so all of them are calling
+# into one copy of FXC with one set of globals. FXC is the compiler in play
+# here: `Dx12Compiler::Auto` looks for `dxcompiler.dll` and falls back to FXC,
+# and the runner is unlikely to have DXC on PATH (the step below reports
+# whether it does, so this is checked rather than assumed).
 #
-# If every cell is clean the hypothesis is wrong, and the next lever is Full
-# Page Heap (`gflags /p /enable <exe> /full`) plus `LocalDumps` and
+#   pipelines parallel : context + shader compile on four threads. The
+#                        hypothesis. A crash here ends the search.
+#   pipelines serial   : the control. Same total compiles, one thread.
+#   parallel, locked   : identical to the first, with a process-global mutex
+#                        around `create_render_pipeline` and nothing else
+#                        changed. Green here against a crash there is proof,
+#                        and shows the shape of a fix.
+#   parallel, DXC      : forces `dxcompiler.dll` instead of FXC. Green here
+#                        names FXC directly. Note this cannot be done with
+#                        `WGPU_DX12_COMPILER`: that is only read by
+#                        `BackendOptions::from_env_or_default`, and
+#                        `new_headless` calls `BackendOptions::default`, so
+#                        Varda ignores it. The test selects the compiler itself.
+#
+# Neither explicit compiler setting falls back if it will not load, so the DXC
+# cell fails loudly rather than quietly re-testing FXC.
+#
+# If every cell is clean again, the hypothesis is wrong and the next lever is
+# Full Page Heap (`gflags /p /enable <exe> /full`) plus `LocalDumps` and
 # `cdb -c "!analyze -v"`, or `-Zsanitizer=address` on nightly, which reports the
 # bad access and its allocation without a debugger. See spec/roadmap.md.
 
@@ -81,30 +96,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: new_headless parallel
-            test: parallel_headless_contexts
+          - name: pipelines parallel
             threads: 4
             iters: 8
-            stage: device
-            backends: all
-          - name: new_headless serial
-            test: parallel_headless_contexts
+            lock: ""
+            compiler: ""
+          - name: pipelines serial
             threads: 1
             iters: 32
-            stage: device
-            backends: all
-          - name: instance only, all backends
-            test: parallel_instances
+            lock: ""
+            compiler: ""
+          - name: pipelines parallel, compile locked
             threads: 4
             iters: 8
-            stage: instance
-            backends: all
-          - name: device, dx12 only
-            test: parallel_instances
+            lock: "1"
+            compiler: ""
+          - name: pipelines parallel, DXC
             threads: 4
             iters: 8
-            stage: device
-            backends: dx12
+            lock: ""
+            compiler: "dxc"
     env:
       # Same memory settings as test.yml: the runner has a small paging file and
       # full debug info made rustc fail to mmap its own rlibs.
@@ -150,26 +161,59 @@ jobs:
       - name: Report adapter
         run: cargo test --no-default-features --lib spout::capability -- --nocapture
 
+      # Which compiler `Dx12Compiler::Auto` will pick is the premise of this
+      # whole round, so measure it rather than assuming. If DXC turns out to be
+      # on PATH already then FXC was never in play and the hypothesis is dead
+      # before the cells run.
+      - name: Is DXC on PATH
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $found = Get-Command dxcompiler.dll -ErrorAction SilentlyContinue
+          if ($found) { Write-Host "dxcompiler.dll found: $($found.Source)" }
+          else { Write-Host "dxcompiler.dll NOT on PATH, so Auto falls back to FXC" }
+          Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin" -Filter dxcompiler.dll -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 5 -ExpandProperty FullName
+
+      # The DXC cell needs the library importable. The Windows SDK ships it, so
+      # put its bin directory on PATH. If it is genuinely absent the cell fails
+      # rather than silently re-running FXC, because an explicit compiler choice
+      # does not fall back.
+      - name: Put DXC on PATH
+        if: matrix.compiler == 'dxc'
+        shell: pwsh
+        run: |
+          $dll = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin" -Filter dxcompiler.dll -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+          if (-not $dll) { Write-Host "::error::no dxcompiler.dll in the Windows SDK"; exit 1 }
+          Write-Host "using $($dll.FullName)"
+          echo $dll.DirectoryName >> $env:GITHUB_PATH
+
       # Minimal features on purpose. The reproducer needs only the renderer, and
       # every feature left out is one fewer confound (and a much shorter build).
       # If every cell here is clean, re-run with the suite's own
       # `face-detection,screen-capture` before concluding the hypothesis is dead.
       #
-      # `--test-threads=1` runs the two reproducers one after another; the
-      # parallelism under test is inside them, controlled by VARDA_STRESS_THREADS.
+      # `--test-threads=1` is about the harness, not the subject: it keeps the
+      # reproducers from overlapping each other. The parallelism under test is
+      # inside the test, set by VARDA_STRESS_THREADS.
       - name: Run
         shell: pwsh
         env:
           VARDA_STRESS_THREADS: ${{ matrix.threads }}
           VARDA_STRESS_ITERS: ${{ matrix.iters }}
-          VARDA_STRESS_STAGE: ${{ matrix.stage }}
-          VARDA_STRESS_BACKENDS: ${{ matrix.backends }}
+          VARDA_STRESS_LOCK_COMPILE: ${{ matrix.lock }}
+          VARDA_STRESS_COMPILER: ${{ matrix.compiler }}
         run: |
+          # An empty env var is still *set* on Windows, and the test only checks
+          # presence, so clear the ones this cell does not want.
+          if (-not "${{ matrix.lock }}") { Remove-Item Env:VARDA_STRESS_LOCK_COMPILE -ErrorAction SilentlyContinue }
+          if (-not "${{ matrix.compiler }}") { Remove-Item Env:VARDA_STRESS_COMPILER -ErrorAction SilentlyContinue }
           $failed = 0
           for ($i = 1; $i -le 3; $i++) {
             Write-Host "--- attempt $i of 3 ---"
             cargo test --no-default-features --test gpu_context_stress `
-              -- --ignored --nocapture --test-threads=1 "${{ matrix.test }}"
+              -- --ignored --nocapture --test-threads=1 parallel_pipelines
             if ($LASTEXITCODE -ne 0) {
               Write-Host "::error::crashed or failed on attempt $i (exit $LASTEXITCODE)"
               $failed = 1
