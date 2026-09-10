@@ -99,9 +99,15 @@ mod sanitize_path_tests {
         let cleaned = strip_parent_dirs(Path::new("/etc/../var/log"));
         assert_eq!(cleaned, PathBuf::from("/etc/var/log"));
 
-        // The root itself has to survive, or an absolute path would quietly
-        // turn into a relative one.
-        assert!(cleaned.is_absolute(), "lost the root: {cleaned:?}");
+        // The root itself has to survive, or a rooted path would quietly turn
+        // into a relative one.
+        //
+        // `has_root`, not `is_absolute`. On Windows a leading separator with no
+        // drive letter is rooted but *not* absolute: `\etc\var\log` needs a
+        // `C:` prefix to qualify. `is_absolute` here was a POSIX assumption that
+        // failed on Windows, which is precisely the bug these tests were
+        // rewritten to remove.
+        assert!(cleaned.has_root(), "lost the root: {cleaned:?}");
     }
 
     // And one test for the branch that does touch disk, on a path built to

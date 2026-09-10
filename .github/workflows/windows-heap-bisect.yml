@@ -134,11 +134,28 @@ jobs:
       # Same memory settings as test.yml: the runner has a small paging file and
       # full debug info made rustc fail to mmap its own rlibs.
       #
-      # `line-tables-only` rather than test.yml's `0`. A debugging round needs
-      # symbols that point at the right file, and this is the cheapest setting
-      # that gives them.
+      # `line-tables-only` rather than test.yml's `0`, so any symbol that does
+      # get printed points at the right file.
       CARGO_PROFILE_TEST_DEBUG: line-tables-only
       CARGO_BUILD_JOBS: "2"
+      # Set for the build as well as the run, deliberately.
+      #
+      # The first attempt set it only for the run and launched the test
+      # executable directly, to keep it out of the build fingerprint and so
+      # preserve the cargo cache. That failed on every cell with exit 0xC0000135
+      # (STATUS_DLL_NOT_FOUND) before a single test started: `cargo test` sets up
+      # the library search path that the binary needs, and launching the exe
+      # directly does without it.
+      #
+      # So the run goes through cargo, which means cargo must see the same
+      # environment at build time or it rebuilds anyway. The cost is that this
+      # job cannot share `test (windows)`'s cache. That is a slower build in
+      # exchange for a job that runs at all.
+      #
+      # Nightly would avoid the variable entirely, and is the wrong trade: it
+      # would be a different compiler producing a different binary, which might
+      # not crash.
+      RUSTC_BOOTSTRAP: "1"
     steps:
       - uses: actions/checkout@v5
 
@@ -199,32 +216,43 @@ jobs:
         env:
           VARDA_SKIP_GOLDEN_SNAPSHOTS: 1
           VARDA_REQUIRE_GPU: 1
-          # Runtime only. See the note at the top of this file.
-          RUSTC_BOOTSTRAP: "1"
         run: |
-          $exe = Get-ChildItem target\debug\deps\varda-*.exe |
-            Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          $failed = 0
+          # Known NTSTATUS values, so a failure is named rather than left as a
+          # signed decimal to squint at. 0xC0000135 is here because this job hit
+          # it: it is a loader failure, not a crash, and it looks alarming.
+          $names = @{
+            "-1073741819" = "0xC0000005 STATUS_ACCESS_VIOLATION";
+            "-1073741571" = "0xC00000FD STATUS_STACK_OVERFLOW";
+            "-1073740940" = "0xC0000374 STATUS_HEAP_CORRUPTION";
+            "-1073741515" = "0xC0000135 STATUS_DLL_NOT_FOUND (the binary did not start; not the bug)";
+            "-1073741510" = "0xC000013A control-C";
+          }
 
+          $failed = 0
           for ($attempt = 1; $attempt -le 3; $attempt++) {
             Write-Host "--- attempt $attempt of 3 ---"
             $log = "events-$attempt.jsonl"
-            # stdout only: that is where the JSON events go. stderr carries the
-            # crash message and stays on the console, where it is wanted, and
-            # out of the file, where it would corrupt parsing.
-            & $exe.FullName -Zunstable-options --format=json --test-threads=${{ matrix.threads }} > $log
+
+            # Through cargo, not the exe directly. See the RUSTC_BOOTSTRAP note
+            # above: the direct launch fails in the loader. Cargo's own progress
+            # goes to stderr, so stdout is the harness's JSON, and stderr keeps
+            # the crash message visible in the log.
+            cargo test --no-default-features --features face-detection,screen-capture --lib `
+              -- -Zunstable-options --format=json --test-threads=${{ matrix.threads }} > $log
             $code = $LASTEXITCODE
 
-            # `.github/scripts/inflight_tests.py` does the parsing. It lives in
-            # a file, not inline here, so it can be run against real logs
-            # locally: it has been checked against a clean run, a run killed
-            # mid-flight, and a log whose final line was cut in half.
+            # `.github/scripts/inflight_tests.py` does the parsing. It lives in a
+            # file, not inline here, so it can be run against real logs locally:
+            # it is checked against a clean run, a run killed mid-flight, a log
+            # whose final line was cut in half, and an empty log.
             python .github/scripts/inflight_tests.py $log
             if ($code -eq 0) { continue }
 
+            $named = $names["$code"]
+            if (-not $named) { $named = "unrecognized" }
             Write-Host "==== last 15 events ===="
             Get-Content $log -Tail 15 | ForEach-Object { Write-Host "  $_" }
-            Write-Host "::error::attempt $attempt died with exit $code"
+            Write-Host "::error::attempt $attempt died with exit $code ($named)"
             $failed = 1
             break
           }

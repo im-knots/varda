@@ -64,8 +64,22 @@ def main():
         started, running = in_flight(f)
 
     print(f"{started} tests started, {len(running)} still in flight")
+
+    if started == 0:
+        # Distinct from "crashed early", and easy to misread as one. No start
+        # events at all means the process never reached the first test, so
+        # whatever killed it happened before any Varda code ran and is not the
+        # fault being hunted. Loader failures look like this: exit 0xC0000135
+        # (STATUS_DLL_NOT_FOUND) is the one already seen here, from launching
+        # the test binary directly instead of through `cargo test`, which sets
+        # up the library search path.
+        print()
+        print("NOTE: no test ever started, so the process died before libtest")
+        print("      got going. This says nothing about the crash under")
+        print("      investigation. Check how the binary was launched.")
+        return 0
+
     if not running:
-        # Either a clean run, or the process died before libtest got going.
         return 0
 
     print()
