@@ -252,6 +252,17 @@ void loadPalette(out vec3 pal[MAX_PALETTE]) {
 
 #define NUM_CANDIDATES 25
 
+/// How much better a candidate must be to displace the one already winning.
+///
+/// Two percent of a squared colour distance, so roughly one percent of a
+/// distance: far below anything visible, and far above the ~1e-7 relative noise
+/// that separates two backends compiling the same arithmetic. Below that floor
+/// a selection is a coin flip; above it, a decision.
+///
+/// This is not a tuning knob. Anything comfortably inside those two bounds
+/// behaves identically; the value only has to sit between them.
+#define SELECTION_MARGIN 0.02
+
 // A candidate stands for a whole region of the picture, so estimating it from a
 // single texel makes it track that texel's noise: on live video the value moves
 // every frame and the palette inherits the flicker. A short cross average costs
@@ -294,7 +305,22 @@ void extractAutoPalette(int numGroups, out vec3 pal[MAX_PALETTE]) {
                 vec3 d = candidates[c] - pal[p];
                 minDist = min(minDist, dot(d, d));
             }
-            if (minDist > bestMinDist) {
+            // A challenger has to be decisively farther, not farther by a
+            // rounding error.
+            //
+            // With a bare `>`, two near-tied candidates are separated by
+            // whatever the last bit of the arithmetic happened to do, so the
+            // same scene picks a different anchor on a different backend, and
+            // can pick a different one on consecutive frames of the *same*
+            // backend. That flapping is what this whole file's palette state
+            // exists to survive, and it is cheaper to stop it here than to
+            // absorb it downstream.
+            //
+            // Requiring a relative margin makes near-ties fall to the lowest
+            // candidate index instead, which is the same everywhere. Genuine
+            // separations are far larger than the margin, so the palette that
+            // gets picked is unchanged; only the coin-flips become decisions.
+            if (minDist > bestMinDist + max(bestMinDist, 0.0) * SELECTION_MARGIN) {
                 bestMinDist = minDist;
                 bestIdx = c;
             }
@@ -353,7 +379,13 @@ vec4 palettePass(int numGroups) {
                 if (c >= numGroups || claimed[c]) continue;
                 vec3 d = targets[c] - prev[s];
                 float dd = dot(d, d);
-                if (dd < bestDist) { bestDist = dd; bestSlot = s; bestCand = c; }
+                // Same margin, same reason, minimizing instead of maximizing:
+                // a pair has to be decisively closer to displace the incumbent.
+                if (dd < bestDist * (1.0 - SELECTION_MARGIN)) {
+                    bestDist = dd;
+                    bestSlot = s;
+                    bestCand = c;
+                }
             }
         }
         if (bestSlot < 0) break;

@@ -1005,8 +1005,15 @@ fn liquid_light_agitation_survives_being_automated() {
         deck.generator_params.set_float("agitation", automate(0));
         mixer.channel_mut(0).unwrap().add_deck(deck);
 
-        for _ in 0..WARMUP {
-            render_once(&ctx, &mut mixer);
+        // `render_at`, not `render_once`: this grades how the picture changes
+        // *between* frames, so it needs the free-running clock stepped in equal
+        // increments rather than by however long the last frame took. On the
+        // wall clock under a software rasterizer, frames are slow enough that
+        // the flow animation aliases, and the dish reads as perfectly still:
+        // this test failed on Windows with a parked delta of 0.000000, tripping
+        // its own "proves nothing" guard.
+        for frame in 0..WARMUP {
+            render_at(&ctx, &mut mixer, frame);
         }
         let mut prev = luminance(&ctx, &mixer);
         let mut deltas = Vec::with_capacity(MEASURE);
@@ -1015,7 +1022,9 @@ fn liquid_light_agitation_survives_being_automated() {
                 .deck
                 .generator_params
                 .set_float("agitation", automate(frame));
-            render_once(&ctx, &mut mixer);
+            // `automate` keys the LFO off the measurement index, while the clock
+            // continues from the warmup, so both stay monotonic.
+            render_at(&ctx, &mut mixer, WARMUP + frame);
             let cur = luminance(&ctx, &mixer);
             deltas.push(mean_delta(&prev, &cur));
             prev = cur;
@@ -1120,14 +1129,18 @@ fn liquid_light_dish_rotation_changes_speed_rather_than_position() {
         a.iter().zip(b).map(|(x, y)| (x - y).abs()).sum::<f32>() / a.len() as f32
     };
 
-    for _ in 0..WARMUP {
-        render_once(&ctx, &mut mixer);
+    // Deterministic clock, for the same reason as the agitation test above: this
+    // grades between-frame change, so wall-clock frame cost would be part of the
+    // measurement. That test tripped its identical "proves nothing" guard on
+    // Windows; this one has not yet, which is luck rather than a difference.
+    for frame in 0..WARMUP {
+        render_at(&ctx, &mut mixer, frame);
     }
 
     let mut prev = luminance(&ctx, &mixer);
     let mut baseline = 0.0f32;
-    for _ in 0..BASELINE_FRAMES {
-        render_once(&ctx, &mut mixer);
+    for frame in 0..BASELINE_FRAMES {
+        render_at(&ctx, &mut mixer, WARMUP + frame);
         let cur = luminance(&ctx, &mixer);
         baseline += mean_delta(&prev, &cur);
         prev = cur;
@@ -1144,7 +1157,7 @@ fn liquid_light_dish_rotation_changes_speed_rather_than_position() {
         .deck
         .generator_params
         .set_float("swirl", 0.45);
-    render_once(&ctx, &mut mixer);
+    render_at(&ctx, &mut mixer, WARMUP + BASELINE_FRAMES);
     let jump = mean_delta(&prev, &luminance(&ctx, &mixer));
 
     assert!(
