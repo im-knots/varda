@@ -1265,6 +1265,26 @@ fn additive_filter_emits_above_display_white() {
 /// directly comparable; the outer two were measured on the current one.
 #[test]
 fn chroma_flow_auto_palette_does_not_lurch_on_smooth_input() {
+    /// One configuration's delta distribution, not just its ratio, so a failure
+    /// says what the frames actually did.
+    struct Spike {
+        ratio: f32,
+        median: f32,
+        p95: f32,
+        lo: f32,
+        hi: f32,
+    }
+
+    impl std::fmt::Display for Spike {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(
+                f,
+                "ratio {:.2} (median {:.6}, p95 {:.6}, min {:.6}, max {:.6})",
+                self.ratio, self.median, self.p95, self.lo, self.hi
+            )
+        }
+    }
+
     const SW: u32 = 128;
     const SH: u32 = 128;
     const WARMUP: usize = 30;
@@ -1320,7 +1340,7 @@ fn chroma_flow_auto_palette_does_not_lurch_on_smooth_input() {
     //
     // A lurch big enough to matter lifts the whole tail, not one frame, so p95
     // still sees it while no longer being decided by float noise.
-    let spike_ratio = |src_name: &str, manual: bool, stability: f32| -> f32 {
+    let spike_ratio = |src_name: &str, manual: bool, stability: f32| -> Spike {
         let src =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("shaders/{src_name}"));
         let src_shader = varda::isf::ISFShader::from_file(&src).expect("parse source");
@@ -1357,7 +1377,21 @@ fn chroma_flow_auto_palette_does_not_lurch_on_smooth_input() {
             median > 0.0,
             "{src_name} is animated, so frames must differ; got a static image"
         );
-        deltas[deltas.len() * 95 / 100] / median
+        // The absolute figures come back with the ratio, not just the ratio.
+        //
+        // This has now failed on Windows three times reporting exactly 4.64
+        // against 1.95, across two different versions of the shader, and a ratio
+        // alone cannot say why. The shape of the distribution can: a low median
+        // beside a high p95 is repeated frames, a high median is a picture that
+        // never settles, and a spread across stability settings would point at
+        // the palette while a flat one would not.
+        Spike {
+            ratio: deltas[deltas.len() * 95 / 100] / median,
+            median,
+            p95: deltas[deltas.len() * 95 / 100],
+            lo: deltas[0],
+            hi: deltas[deltas.len() - 1],
+        }
     };
 
     for src in ["dull_skull.fs", "liquid_light.fs", "taste_of_noise.fs"] {
@@ -1365,16 +1399,24 @@ fn chroma_flow_auto_palette_does_not_lurch_on_smooth_input() {
         // that control up used to make the picture measurably *less* steady,
         // which is the opposite of what it promises, and a single reading at the
         // default would not have caught it.
-        let auto = [0.0f32, 0.5, 1.0]
+        let per: Vec<Spike> = [0.0f32, 0.5, 1.0]
             .into_iter()
             .map(|stability| spike_ratio(src, false, stability))
-            .fold(0.0f32, f32::max);
-        let manual = spike_ratio(src, true, 0.5);
+            .collect();
+        let auto = per.iter().map(|s| s.ratio).fold(0.0f32, f32::max);
+        let manual_spike = spike_ratio(src, true, 0.5);
+        let manual = manual_spike.ratio;
+        let mut detail = String::new();
+        for (spike, stab) in per.iter().zip([0.0f32, 0.5, 1.0]) {
+            use std::fmt::Write as _;
+            let _ = write!(detail, "\n    stability {stab:.1}: {spike}");
+        }
         assert!(
             auto < manual * MAX_SPIKE_RATIO,
-            "{src}: auto palette lurched — worst frame changed {auto:.2}x the \
-             median, against {manual:.2}x with the palette held fixed. An anchor jumped \
-             and regraded the whole frame at once."
+            "{src}: auto palette lurched. The p95 frame changed {auto:.2}x the \
+             median, against {manual:.2}x with the palette held fixed, so an anchor \
+             jumped and regraded the whole frame at once.\
+             \n  auto:{detail}\n    manual (fixed palette): {manual_spike}"
         );
     }
 }
@@ -1421,6 +1463,10 @@ fn chroma_flow_auto_palette_is_carried_between_frames() {
     /// while the later background motion is identical, so the ratio separates
     /// them by 2.1x. This threshold sits in the middle of that gap.
     const MIN_RESIDUAL: f32 = 0.40;
+    /// How much a frame delta may exceed the one before it. Easing decays, so
+    /// the true value is 1.0; measured on Metal the worst step is 0.99. The
+    /// allowance is for readback noise, not for a real rise.
+    const MAX_RISE: f32 = 1.35;
 
     let Some(ctx) = headless_gpu() else {
         return;
@@ -1467,23 +1513,26 @@ fn chroma_flow_auto_palette_is_carried_between_frames() {
         a.iter().zip(b).map(|(x, y)| (x - y).abs()).sum::<f32>() / a.len() as f32
     };
 
+    // Every consecutive frame, not just two windows, because the *shape* of the
+    // sequence says more than any single pair.
     render_at(&ctx, &mut mixer, 1);
-    let f1 = luminance(&ctx, &mixer);
-    render_at(&ctx, &mut mixer, 2);
-    let f2 = luminance(&ctx, &mixer);
-    let early = mean_delta(&f1, &f2);
-
-    for frame in 3..=LATE {
+    let mut prev = luminance(&ctx, &mixer);
+    let mut deltas = Vec::with_capacity(LATE);
+    for frame in 2..=(LATE + 1) {
         render_at(&ctx, &mut mixer, frame);
+        let cur = luminance(&ctx, &mixer);
+        deltas.push(mean_delta(&prev, &cur));
+        prev = cur;
     }
-    let before = luminance(&ctx, &mixer);
-    render_at(&ctx, &mut mixer, LATE + 1);
-    let late = mean_delta(&before, &luminance(&ctx, &mixer));
 
+    let early = deltas[0];
+    let late = deltas[LATE - 1];
     assert!(
         early > 0.0,
         "the palette never moved even at the start, so this proves nothing"
     );
+
+    // 1. It has to still be moving late, which is what carried state buys.
     let residual = late / early;
     assert!(
         residual >= MIN_RESIDUAL,
@@ -1491,8 +1540,37 @@ fn chroma_flow_auto_palette_is_carried_between_frames() {
          and every flow control zeroed, movement fell from {early:.6} to \
          {late:.6} ({residual:.4} of the start) by frame {LATE}. An eased palette \
          is still seeking here; one re-derived each frame is already final. Check \
-         that the PERSISTENT paletteBuf survives the frame."
+         that the PERSISTENT paletteBuf survives the frame.\n  sequence: {deltas:.6?}"
     );
+
+    // 2. And it has to move *every* frame, decaying smoothly.
+    //
+    // This is the part aimed at what Windows is actually reporting. A p95 of
+    // 4.64x the median, while the fixed palette scores 1.95x on both platforms,
+    // is the signature of a palette that updates on some frames and not others:
+    // the frames it sits out move only as much as the source does, dragging the
+    // median down, and the frame it catches up on carries several frames of
+    // easing at once, pushing the tail up. Nothing about that shows in a test
+    // that only compares two windows, which is why the first version of this
+    // test would have passed straight through it.
+    //
+    // Easing is a decaying exponential, so each delta should be no larger than
+    // the one before. The seed frame is excluded: the buffer starts cleared, so
+    // frame 1 to 2 is a partial step and frame 2 to 3 is legitimately larger.
+    for (i, pair) in deltas.windows(2).enumerate().skip(1) {
+        assert!(
+            pair[1] <= pair[0] * MAX_RISE,
+            "the auto palette stutters: frame delta rose from {:.8} to {:.8} \
+             ({:.2}x) at step {}. An eased palette decays monotonically, so a \
+             rise means the palette sat out a frame and caught up on the next. \
+             Check that the palette pass runs, and lands, every frame.\
+             \n  sequence: {deltas:.8?}",
+            pair[0],
+            pair[1],
+            pair[1] / pair[0],
+            i + 1
+        );
+    }
 }
 
 /// Render `source`, optionally through Chroma Flow, capturing the luminance
