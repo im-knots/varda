@@ -15,72 +15,141 @@ use crate::channel::DeckRenderFps;
 use crate::engine::{CommandResult, EngineCommand};
 use crate::usecases::api::{SharedState, command_response};
 
-/// Strip `..` components from a path to prevent directory traversal attacks.
-/// If the path can be canonicalized (i.e. it exists), use the canonical form;
-/// otherwise strip `..` components manually and return the cleaned path.
-fn sanitize_path(p: &std::path::Path) -> std::path::PathBuf {
-    if let Ok(canonical) = p.canonicalize() {
-        return canonical;
-    }
-    // File doesn't exist yet or can't be resolved — strip traversal components
+/// Remove every `..` component, joining what remains.
+///
+/// Pure: no filesystem access, so it behaves identically on every platform and
+/// can be tested exhaustively without touching disk.
+fn strip_parent_dirs(p: &std::path::Path) -> std::path::PathBuf {
     p.components()
         .filter(|c| !matches!(c, std::path::Component::ParentDir))
         .collect()
 }
 
+/// Resolve a caller-supplied media path.
+///
+/// If the path resolves on disk, `canonicalize` gives the real target. If it
+/// does not, fall back to [`strip_parent_dirs`] so a request naming a missing
+/// file cannot walk upward through the tree on its way to the error.
+fn sanitize_path(p: &std::path::Path) -> std::path::PathBuf {
+    p.canonicalize().unwrap_or_else(|_| strip_parent_dirs(p))
+}
+
 #[cfg(test)]
 mod sanitize_path_tests {
-    use super::sanitize_path;
+    use super::{sanitize_path, strip_parent_dirs};
     use std::path::{Component, Path, PathBuf};
-
-    /// A path guaranteed not to exist on disk, so `canonicalize` fails and the
-    /// deterministic `..`-stripping branch runs (no filesystem dependency).
-    fn nonexistent(p: &str) -> PathBuf {
-        let path = PathBuf::from(p);
-        assert!(
-            path.canonicalize().is_err(),
-            "test path unexpectedly exists"
-        );
-        path
-    }
 
     fn has_parent_dir(p: &Path) -> bool {
         p.components().any(|c| matches!(c, Component::ParentDir))
     }
 
+    // The stripping half is pure, so these assert on it directly rather than
+    // going through `sanitize_path` and hoping the filesystem declines to
+    // resolve the input.
+    //
+    // These tests used to do exactly that, via a helper that asserted its input
+    // did not exist. It passed everywhere for as long as Varda's tests only ran
+    // on macOS and Linux, and failed the first time they ran on Windows:
+    // `nope_zzz/..` does not exist on POSIX, which resolves `..` against real
+    // directories and so needs `nope_zzz` to be there, but Win32 collapses `..`
+    // textually before the filesystem sees the path, leaving the current
+    // directory, which certainly does exist. The precondition was never a fact
+    // about the input; it was a fact about POSIX.
+
     #[test]
     fn strips_all_parent_dir_components() {
-        let cleaned = sanitize_path(&nonexistent(
-            "/varda_test_nope/foo/../bar/../../baz_zzz_missing",
-        ));
+        let cleaned = strip_parent_dirs(Path::new("/base/foo/../bar/../../baz"));
         assert!(!has_parent_dir(&cleaned), "'..' survived: {cleaned:?}");
     }
 
     #[test]
     fn retains_non_traversal_components() {
-        let cleaned = sanitize_path(&nonexistent("../../secret_zzz_missing_dir/asset.png"));
+        let cleaned = strip_parent_dirs(Path::new("../../secret/asset.png"));
         assert!(!has_parent_dir(&cleaned));
-        // The real, non-traversal segments must be preserved.
-        let s = cleaned.to_string_lossy();
-        assert!(s.contains("secret_zzz_missing_dir"), "lost segment: {s}");
-        assert!(s.contains("asset.png"), "lost filename: {s}");
+        assert_eq!(cleaned, PathBuf::from("secret/asset.png"));
     }
 
     #[test]
     fn normal_relative_path_passes_through_unchanged() {
-        let cleaned = sanitize_path(&nonexistent("assets_zzz_missing/textures/tile.png"));
-        assert_eq!(
-            cleaned,
-            PathBuf::from("assets_zzz_missing/textures/tile.png")
+        let original = Path::new("assets/textures/tile.png");
+        assert_eq!(strip_parent_dirs(original), original);
+    }
+
+    #[test]
+    fn a_trailing_parent_dir_leaves_the_preceding_component() {
+        // Named for what it does. The old name claimed "reduces to empty" while
+        // asserting the opposite.
+        assert_eq!(strip_parent_dirs(Path::new("foo/..")), PathBuf::from("foo"));
+    }
+
+    #[test]
+    fn nothing_but_parent_dirs_reduces_to_empty() {
+        assert_eq!(strip_parent_dirs(Path::new("../../..")), PathBuf::new());
+    }
+
+    #[test]
+    fn stripping_is_not_resolving() {
+        // Worth pinning down, because the difference is easy to misread.
+        // Dropping `..` does not cancel the component before it: `/etc/../var`
+        // becomes `/etc/var`, a third path that is neither the input nor its
+        // normalized form. That is what "strip" means here, and it is the safe
+        // direction (it can only ever move *down* the tree), but it does mean a
+        // caller's legitimate relative path can come back naming something else
+        // when the original does not resolve.
+        let cleaned = strip_parent_dirs(Path::new("/etc/../var/log"));
+        assert_eq!(cleaned, PathBuf::from("/etc/var/log"));
+
+        // The root itself has to survive, or an absolute path would quietly
+        // turn into a relative one.
+        assert!(cleaned.is_absolute(), "lost the root: {cleaned:?}");
+    }
+
+    // And one test for the branch that does touch disk, on a path built to
+    // exist rather than one hoped not to.
+
+    #[test]
+    fn an_existing_path_is_resolved_rather_than_stripped() {
+        // The input has to be one where resolving and stripping *disagree*, or
+        // the test cannot tell whether `canonicalize` ran at all. A tempdir path
+        // is already canonical, so `<tmp>/clip.png` passes either way.
+        //
+        // `<tmp>/sub/../clip.png` does not: resolving gives `<tmp>/clip.png`,
+        // which is the real file, while stripping gives `<tmp>/sub/clip.png`,
+        // which is not.
+        let dir = tempfile::tempdir().expect("tempdir");
+        // macOS puts tempdirs under a symlinked `/var`, so canonicalize the root
+        // too and compare like with like.
+        let root = dir.path().canonicalize().expect("canonicalize tempdir");
+        std::fs::create_dir(root.join("sub")).expect("create sub");
+        let real = root.join("clip.png");
+        std::fs::write(&real, b"x").expect("write");
+
+        let resolved = sanitize_path(&root.join("sub").join("..").join("clip.png"));
+        assert_eq!(resolved, real, "not resolved to the real file");
+        assert!(!has_parent_dir(&resolved));
+        assert_ne!(
+            resolved,
+            root.join("sub").join("clip.png"),
+            "took the stripping branch on a path that resolves"
         );
     }
 
     #[test]
-    fn bare_parent_dir_reduces_to_empty() {
-        let cleaned = sanitize_path(&nonexistent("nope_zzz/.."));
-        // ".." is stripped; only the leading normal component remains.
-        assert!(!has_parent_dir(&cleaned));
-        assert_eq!(cleaned, PathBuf::from("nope_zzz"));
+    fn a_missing_path_falls_back_to_stripping() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // `<tmp>/sub/../gone.png`: `sub` does not exist, so POSIX cannot resolve
+        // it; Win32 collapses it to `<tmp>/gone.png`, which does not exist
+        // either. Neither platform can canonicalize this, so both take the
+        // stripping branch.
+        let missing = dir.path().join("sub").join("..").join("gone.png");
+
+        let resolved = sanitize_path(&missing);
+        assert!(!has_parent_dir(&resolved), "'..' survived: {resolved:?}");
+        assert_eq!(
+            resolved.file_name(),
+            Some(std::ffi::OsStr::new("gone.png")),
+            "lost the filename: {resolved:?}"
+        );
     }
 }
 

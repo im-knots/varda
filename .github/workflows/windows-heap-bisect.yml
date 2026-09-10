@@ -29,45 +29,50 @@ name: windows heap bisect
 # implementation, and `Backends::all()` on Windows also brings up the Vulkan
 # loader and a WGL context.
 #
-# ROUND 3 tried to reproduce instead of bisecting. `tests/gpu_context_stress.rs`
+# ROUND 3 tried to reproduce instead of bisecting: `tests/gpu_context_stress.rs`
 # built GPU contexts on four threads at once, with the backend set and setup
-# stage under environment control. **All four cells were green**, including the
-# production `new_headless` path. So concurrent context creation is not it.
+# stage under environment control. **All four cells green.** Concurrent context
+# creation is not it.
 #
-# That is a useful negative, because of *how* the reproducer differed from the
-# suite: it built contexts and dropped them. It never compiled a shader.
+# ROUND 4 added the thing Round 3 had left out, shader compilation: parallel
+# `create_render_pipeline`, a serial control, a process-global mutex around
+# pipeline creation, and a run forced onto DXC instead of FXC. **All four cells
+# green.** Concurrent FXC is not it either.
 #
-# ROUND 4, below, closes that gap. On DX12 `create_render_pipeline` is where
-# naga emits HLSL and wgpu-hal calls `D3DCompile` in `d3dcompiler_47.dll`, and
-# wgpu-hal holds no lock around that call (see wgpu-hal 30.0.0
-# `src/dx12/shader_compilation.rs`). Every `Instance` loads the library
-# separately, but Windows reference counts modules, so all of them are calling
-# into one copy of FXC with one set of globals. FXC is the compiler in play
-# here: `Dx12Compiler::Auto` looks for `dxcompiler.dll` and falls back to FXC,
-# and the runner is unlikely to have DXC on PATH (the step below reports
-# whether it does, so this is checked rather than assumed).
+# THREE HYPOTHESES, THREE WRONG ANSWERS. Each fit the evidence when proposed.
+# That is the signal to stop guessing where the corruption is and use tooling
+# that reports where it is.
 #
-#   pipelines parallel : context + shader compile on four threads. The
-#                        hypothesis. A crash here ends the search.
-#   pipelines serial   : the control. Same total compiles, one thread.
-#   parallel, locked   : identical to the first, with a process-global mutex
-#                        around `create_render_pipeline` and nothing else
-#                        changed. Green here against a crash there is proof,
-#                        and shows the shape of a fix.
-#   parallel, DXC      : forces `dxcompiler.dll` instead of FXC. Green here
-#                        names FXC directly. Note this cannot be done with
-#                        `WGPU_DX12_COMPILER`: that is only read by
-#                        `BackendOptions::from_env_or_default`, and
-#                        `new_headless` calls `BackendOptions::default`, so
-#                        Varda ignores it. The test selects the compiler itself.
+# One thing the earlier rounds did establish, and it makes this affordable: the
+# crash lands **within seconds**, after roughly eight completed tests.
+# Instrumentation that would be ruinous across a 2586-test run is cheap across
+# one that dies almost immediately.
 #
-# Neither explicit compiler setting falls back if it will not load, so the DXC
-# cell fails loudly rather than quietly re-testing FXC.
+# ROUND 5 runs the test binary under `cdb` so the debugger, not the harness,
+# reports the fault:
 #
-# If every cell is clean again, the hypothesis is wrong and the next lever is
-# Full Page Heap (`gflags /p /enable <exe> /full`) plus `LocalDumps` and
-# `cdb -c "!analyze -v"`, or `-Zsanitizer=address` on nightly, which reports the
-# bad access and its allocation without a debugger. See spec/roadmap.md.
+#   cdb                : catch the exception and print a stack. Cheapest, and it
+#                        may name the culprit on its own.
+#   cdb + page heap    : full page heap makes the *corrupting write* fault at the
+#                        instruction that does it, instead of some later,
+#                        innocent allocation noticing the damage. This is the
+#                        cell most likely to end it. It is also the most memory
+#                        hungry, and this job has hit ERROR_COMMITMENT_LIMIT
+#                        before, so the plain cdb cell above is the fallback.
+#   two threads        : does it still crash at --test-threads=2? A threshold
+#                        distinguishes contention on a shared resource from a
+#                        race that needs only two participants.
+#   app:: only         : narrowing. Round 2 showed both halves crash, so many
+#                        subsets should. Finding a small one that does is worth
+#                        a cell.
+#
+# Debug info is raised to line tables for this round. At `debug=0` the Windows
+# job's backtraces are not merely sparse, they are **wrong**: a panic in
+# `decks.rs` printed frames attributed to `sequences::move_step`. Anyone reading
+# that log is sent to the wrong file.
+#
+# Page heap is enabled through the Image File Execution Options registry key
+# rather than `gflags`, so it needs no extra tooling; the runner is admin.
 
 # TEMPORARY: runs as a PR check so it can be triggered from this branch.
 #
@@ -96,30 +101,30 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: pipelines parallel
-            threads: 4
-            iters: 8
-            lock: ""
-            compiler: ""
-          - name: pipelines serial
-            threads: 1
-            iters: 32
-            lock: ""
-            compiler: ""
-          - name: pipelines parallel, compile locked
-            threads: 4
-            iters: 8
-            lock: "1"
-            compiler: ""
-          - name: pipelines parallel, DXC
-            threads: 4
-            iters: 8
-            lock: ""
-            compiler: "dxc"
+          - name: cdb
+            pageheap: "0"
+            filter: ""
+            threads: "4"
+          - name: cdb + page heap
+            pageheap: "1"
+            filter: ""
+            threads: "4"
+          - name: two threads
+            pageheap: "0"
+            filter: ""
+            threads: "2"
+          - name: app only
+            pageheap: "0"
+            filter: "app::"
+            threads: "4"
     env:
       # Same memory settings as test.yml: the runner has a small paging file and
       # full debug info made rustc fail to mmap its own rlibs.
-      CARGO_PROFILE_TEST_DEBUG: "0"
+      #
+      # `line-tables-only` rather than test.yml's `0`. A debugging round needs
+      # symbols that point at the right file, and this is the cheapest setting
+      # that gives them.
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
       CARGO_BUILD_JOBS: "2"
     steps:
       - uses: actions/checkout@v5
@@ -155,71 +160,64 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
 
-      # Report the adapter before stressing it, so a runner whose adapter changed
-      # is visible in the log rather than inferred from a different crash. Same
-      # feature set as the Run step below on purpose, so both share one build.
-      - name: Report adapter
-        run: cargo test --no-default-features --lib spout::capability -- --nocapture
-
-      # Which compiler `Dx12Compiler::Auto` will pick is the premise of this
-      # whole round, so measure it rather than assuming. If DXC turns out to be
-      # on PATH already then FXC was never in play and the hypothesis is dead
-      # before the cells run.
-      - name: Is DXC on PATH
-        shell: pwsh
-        continue-on-error: true
-        run: |
-          $found = Get-Command dxcompiler.dll -ErrorAction SilentlyContinue
-          if ($found) { Write-Host "dxcompiler.dll found: $($found.Source)" }
-          else { Write-Host "dxcompiler.dll NOT on PATH, so Auto falls back to FXC" }
-          Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin" -Filter dxcompiler.dll -Recurse -ErrorAction SilentlyContinue |
-            Select-Object -First 5 -ExpandProperty FullName
-
-      # The DXC cell needs the library importable. The Windows SDK ships it, so
-      # put its bin directory on PATH. If it is genuinely absent the cell fails
-      # rather than silently re-running FXC, because an explicit compiler choice
-      # does not fall back.
-      - name: Put DXC on PATH
-        if: matrix.compiler == 'dxc'
+      - name: Install Debugging Tools for Windows
         shell: pwsh
         run: |
-          $dll = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin" -Filter dxcompiler.dll -Recurse -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
-          if (-not $dll) { Write-Host "::error::no dxcompiler.dll in the Windows SDK"; exit 1 }
-          Write-Host "using $($dll.FullName)"
-          echo $dll.DirectoryName >> $env:GITHUB_PATH
+          # cdb is not on the runner by default. The SDK installer takes a
+          # feature list, so this pulls the debuggers and nothing else.
+          $url = "https://go.microsoft.com/fwlink/?linkid=2320463"
+          Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\sdksetup.exe"
+          Start-Process -Wait -FilePath "$env:TEMP\sdksetup.exe" `
+            -ArgumentList "/quiet","/norestart","/features","OptionId.WindowsDesktopDebuggers"
+          $cdb = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe" -ErrorAction SilentlyContinue
+          if (-not $cdb) { Write-Host "::error::cdb.exe was not installed"; exit 1 }
+          Write-Host "cdb: $($cdb.FullName)"
+          echo $cdb.DirectoryName >> $env:GITHUB_PATH
 
-      # Minimal features on purpose. The reproducer needs only the renderer, and
-      # every feature left out is one fewer confound (and a much shorter build).
-      # If every cell here is clean, re-run with the suite's own
-      # `face-detection,screen-capture` before concluding the hypothesis is dead.
-      #
-      # `--test-threads=1` is about the harness, not the subject: it keeps the
-      # reproducers from overlapping each other. The parallelism under test is
-      # inside the test, set by VARDA_STRESS_THREADS.
-      - name: Run
+      # Build separately so the run step can hand the test executable straight to
+      # the debugger. Running `cargo test` under cdb would debug cargo, not the
+      # test binary it spawns.
+      - name: Build test binary
+        run: cargo test --no-default-features --features face-detection,screen-capture --lib --no-run
+
+      - name: Enable full page heap
+        if: matrix.pageheap == '1'
+        shell: pwsh
+        run: |
+          # Image File Execution Options is keyed on the file name, and cargo
+          # stamps a hash into it, so resolve the name rather than hardcoding it.
+          $exe = Get-ChildItem target\debug\deps\varda-*.exe |
+            Where-Object { $_.Name -notmatch '\.d$' } |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          Write-Host "enabling page heap for $($exe.Name)"
+          $key = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$($exe.Name)"
+          New-Item -Path $key -Force | Out-Null
+          # FLG_HEAP_PAGE_ALLOCS, then full page heap (0x3) rather than light
+          # (0x1): full faults on the bad write, light only notices at free.
+          New-ItemProperty -Path $key -Name GlobalFlag -Value 0x02000000 -PropertyType DWord -Force | Out-Null
+          New-ItemProperty -Path $key -Name PageHeapFlags -Value 0x3 -PropertyType DWord -Force | Out-Null
+
+      - name: Run under cdb
         shell: pwsh
         env:
-          VARDA_STRESS_THREADS: ${{ matrix.threads }}
-          VARDA_STRESS_ITERS: ${{ matrix.iters }}
-          VARDA_STRESS_LOCK_COMPILE: ${{ matrix.lock }}
-          VARDA_STRESS_COMPILER: ${{ matrix.compiler }}
+          VARDA_SKIP_GOLDEN_SNAPSHOTS: 1
         run: |
-          # An empty env var is still *set* on Windows, and the test only checks
-          # presence, so clear the ones this cell does not want.
-          if (-not "${{ matrix.lock }}") { Remove-Item Env:VARDA_STRESS_LOCK_COMPILE -ErrorAction SilentlyContinue }
-          if (-not "${{ matrix.compiler }}") { Remove-Item Env:VARDA_STRESS_COMPILER -ErrorAction SilentlyContinue }
-          $failed = 0
-          for ($i = 1; $i -le 3; $i++) {
-            Write-Host "--- attempt $i of 3 ---"
-            cargo test --no-default-features --test gpu_context_stress `
-              -- --ignored --nocapture --test-threads=1 parallel_pipelines
-            if ($LASTEXITCODE -ne 0) {
-              Write-Host "::error::crashed or failed on attempt $i (exit $LASTEXITCODE)"
-              $failed = 1
-              break
-            }
-          }
-          # A single crash is the finding; report it as a failure so the matrix
-          # cell is unambiguous at a glance.
-          exit $failed
+          $exe = Get-ChildItem target\debug\deps\varda-*.exe |
+            Where-Object { $_.Name -notmatch '\.d$' } |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          Write-Host "debugging $($exe.FullName)"
+
+          # -g / -G skip the initial and final breakpoints so a clean run is not
+          # mistaken for a hang. `sxe` promotes the two faults we have actually
+          # seen to first-chance breaks, so the debugger stops at the fault
+          # rather than after the stack has unwound. `!analyze -v` names it,
+          # `~*kP` gives every thread's stack, which is the part the harness
+          # could never show: the crashing thread is not the one that printed.
+          $cmds = "sxe av; sxe ch; g; .echo ==== ANALYZE ====; !analyze -v; .echo ==== ALL THREADS ====; ~*kP; q"
+          $testArgs = "--test-threads=${{ matrix.threads }}"
+          if ("${{ matrix.filter }}") { $testArgs = "${{ matrix.filter }} $testArgs" }
+
+          cdb -g -G -c $cmds $exe.FullName $testArgs.Split(" ")
+          # cdb's exit code is the debuggee's, so a crash shows up as a failed
+          # cell while the analysis above stays in the log either way.
+          exit $LASTEXITCODE
