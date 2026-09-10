@@ -1,0 +1,26 @@
+# Check every text file out with LF on every platform.
+#
+# Without this, Git for Windows defaults to `core.autocrlf=true`, so a Windows
+# checkout converts LF to CRLF. Anything that compares generated text against a
+# checked-in file then fails on Windows and only on Windows, which is how
+# `tests/api_docs.rs` failed the first time Varda's tests ran there: the
+# reference table it renders uses `\n`, the file it read back had `\r\n`.
+#
+# Regenerating, as that test's own panic message suggests, would not have fixed
+# it. The regenerated file is LF, and the next checkout converts it back.
+#
+# Repository content is already LF, having been committed from macOS and Linux,
+# so this changes checkout behaviour rather than any stored content.
+* text=auto eol=lf
+
+# The exception. This is a Windows CI script, and CRLF is what it gets today
+# under `core.autocrlf`; pinning it keeps that exactly as it is rather than
+# changing a working build script as a side effect of a docs fix.
+*.ps1 text eol=crlf
+
+# Never translate these.
+*.png binary
+*.jpg binary
+*.ico binary
+*.icns binary
+*.wgsl text eol=lf

@@ -361,8 +361,8 @@ fn parallel_pipelines() {
 /// is the set that was executing when the process died. At two threads it named
 /// exactly two:
 ///
-///   app::commands::tests::a_timecode_patch_over_the_bus_leaves_the_undo_stack_alone
-///   app::commands::tests::choosing_a_timecode_signal_reaches_the_reader
+///   `app::commands::tests::a_timecode_patch_over_the_bus_leaves_the_undo_stack_alone`
+///   `app::commands::tests::choosing_a_timecode_signal_reaches_the_reader`
 ///
 /// Both are timecode tests, which is a red herring: each only sets a preference
 /// in memory. What they share is their fixture. Both call `headless_app()`,
@@ -376,7 +376,7 @@ fn parallel_pipelines() {
 /// Three cells across two, four and eight threads all agreed, and the
 /// correlation is exact: **fourteen of fourteen in flight tests build an app,
 /// and every test that finished builds none.** The page heap cell also died
-/// with ACCESS_VIOLATION rather than HEAP_CORRUPTION, which is page heap doing
+/// with `ACCESS_VIOLATION` rather than `HEAP_CORRUPTION`, which is page heap doing
 /// its job: the corrupting write happens *here*, rather than being noticed here
 /// after happening somewhere else.
 ///
@@ -391,7 +391,11 @@ fn parallel_pipelines() {
 ///               COM and an `MFStartup` refcount.
 ///   `screencap` `ScreenCaptureManager::new`. Windows Graphics Capture, which
 ///               calls `CoIncrementMTAUsage` to pin the process into the MTA.
-///   `midi`      `MidiDeviceManager::new`, which enumerates MIDI ports.
+///   `midi`      `MidiDeviceManager::new`, which enumerates MIDI ports. **This
+///               is the one that crashed**, and it now holds a process wide lock,
+///               so this stage validates that fix.
+///   `midi_in`   midir's input enumeration directly, underneath that lock.
+///   `midi_out`  midir's output enumeration directly, underneath that lock.
 ///   `app`       the whole thing, matching the fixture that crashed.
 ///
 /// The COM ones are grouped deliberately. Three separate subsystems put this
@@ -420,6 +424,33 @@ fn parallel_app_construction() {
             true
         }
         "midi" => varda::midi::MidiDeviceManager::new().is_ok(),
+
+        // The two below call midir directly, underneath the process wide lock
+        // that `MidiDeviceManager::scan_devices` now holds. That is the point:
+        // `midi` above validates the fix, while these two keep reproducing the
+        // underlying fault and say which half of the enumeration owns it, which
+        // is what an upstream report needs.
+        //
+        // A CI runner usually has no MIDI *inputs* but does have one output,
+        // the GS Wavetable Synth, so `midi_out` is the likelier of the two.
+        "midi_in" => {
+            let Ok(client) = midir::MidiInput::new("varda stress in") else {
+                return false;
+            };
+            for port in &client.ports() {
+                let _ = client.port_name(port);
+            }
+            true
+        }
+        "midi_out" => {
+            let Ok(client) = midir::MidiOutput::new("varda stress out") else {
+                return false;
+            };
+            for port in &client.ports() {
+                let _ = client.port_name(port);
+            }
+            true
+        }
         _ => {
             let Ok(gpu) = varda::renderer::GpuContext::new_headless() else {
                 return false;

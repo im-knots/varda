@@ -68,47 +68,38 @@ name: windows heap bisect
 # GPU half, so the suspect is **two concurrent `VardaApp::new` calls**: audio
 # (cpal into WASAPI, so COM), OSC, the shader registry, and the rest of startup.
 #
-# ROUND 6's remaining cells corroborated it exactly. At eight threads, eight
-# tests were in flight and **all eight build an app**; at four with page heap,
-# four, likewise. Across three cells that is fourteen of fourteen, while every
-# test that *finished* builds no app. The page heap cell also died with
-# ACCESS_VIOLATION rather than HEAP_CORRUPTION, which is page heap working as
-# intended: the corrupting write happens during app construction rather than
-# merely being noticed there.
+# ROUND 6's remaining cells corroborated it exactly: fourteen of fourteen in
+# flight tests build an app, every test that finished builds none, and the page
+# heap cell died with ACCESS_VIOLATION rather than HEAP_CORRUPTION, meaning the
+# corrupting write happens during app construction rather than being noticed
+# there.
 #
-# ROUND 7, below, says which part, using
-# `parallel_app_construction` in `tests/gpu_context_stress.rs`.
-# `VARDA_STRESS_APP_STAGE` chooses how far into startup to go:
+# ROUND 7 ran one cell per startup subsystem. **`midi` was the only red one.**
+# Four threads calling `MidiDeviceManager::new` died with
+# STATUS_ACCESS_VIOLATION on attempt one, while camera (Media Foundation),
+# screencap (WGC), audio (WASAPI), gpu, and even the whole `app` fixture all
+# passed. So it is MIDI enumeration, and none of the COM theories.
 #
-#   app       : the whole fixture, to confirm the reproducer reproduces at all.
-#   camera    : `CameraManager::new`. Not feature gated, so it runs in every
-#               build. nokhwa on Windows is Media Foundation: COM, plus an
-#               `MFStartup` refcount shared across the process.
-#   screencap : `ScreenCaptureManager::new`. Windows Graphics Capture, which
-#               calls `CoIncrementMTAUsage` to pin the process into the MTA.
-#   audio     : `AudioManager::new`, which enumerates devices. cpal into WASAPI,
-#               which is COM again.
-#   midi      : `MidiDeviceManager::new`, which enumerates ports.
-#   gpu       : the control. Round 3 cleared it, so a crash here would mean
-#               something about this job differs from that one.
+# The fault is under midir 0.11's winmm backend, which Varda does not control:
+# `MidiInput::new` there does nothing at all, and `ports()` reaches the driver
+# through `midiInGetDevCapsW` and `midiInMessage` (DRV_QUERYDEVICEINTERFACE).
+# So the fix is a process wide lock in `MidiDeviceManager::scan_devices`.
 #
-# The three COM cells are the point. Three unrelated subsystems each put this
-# process into a COM apartment during startup, none of them coordinating with
-# the others, and mixing apartment models is a classic source of exactly this.
+# ROUND 8, below, does two jobs at once:
 #
-# This is a confirmation step, not another hypothesis. The names came from
-# measurement rather than from reasoning about which subsystem looked risky,
-# which is what the previous five rounds did, unsuccessfully.
+#   midi       : the exact cell that crashed, now behind the lock. Green here
+#                validates the fix. **This is a reproducer whose baseline
+#                crashed on attempt one**, so unlike the full suite, where a
+#                green run proves very little, green here means something.
+#   midi_in    : midir's input enumeration called directly, underneath the lock.
+#   midi_out   : midir's output enumeration, likewise. A CI runner usually has no
+#                MIDI inputs but does have one output, the GS Wavetable Synth, so
+#                this is the likelier of the two. Whichever crashes is what an
+#                upstream report should name.
+#   app        : the whole fixture, which is what the suite actually does.
 #
-# Round 6's other cells matter for how this one is sized. Two threads crashed,
-# **four threads passed all three attempts**, eight threads crashed, and four
-# threads with page heap crashed. Four passing is not a threshold, it is a race
-# whose window three runs happened to miss: if the per run crash chance were
-# even one in two, surviving three runs has probability 0.125.
-#
-# The consequence is that **a green cell proves very little**, here or when
-# validating a fix. So this round runs many more constructions than the suite
-# ever does, and repeats more times.
+# `test.yml` also has its parallelism restored in this change, so the real suite
+# is the other half of the validation.
 
 # TEMPORARY: runs as a PR check so it can be triggered from this branch.
 #
@@ -137,23 +128,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: app (the fixture that crashed)
-            stage: app
-            threads: "4"
-          - name: camera (Media Foundation)
-            stage: camera
-            threads: "4"
-          - name: screencap (WGC, CoIncrementMTAUsage)
-            stage: screencap
-            threads: "4"
-          - name: audio (WASAPI)
-            stage: audio
-            threads: "4"
-          - name: midi
+          # Validation. This is the exact cell that crashed on attempt 1 of 5;
+          # `scan_devices` now holds a process wide lock, so it should be green.
+          - name: midi (the fix)
             stage: midi
             threads: "4"
-          - name: gpu (control, cleared in round 3)
-            stage: gpu
+          # Narrowing, for the upstream report. Both call midir directly,
+          # underneath that lock, so they should keep crashing.
+          - name: midir input enumeration (raw)
+            stage: midi_in
+            threads: "4"
+          - name: midir output enumeration (raw)
+            stage: midi_out
+            threads: "4"
+          # The whole fixture, which is what the test suite actually does.
+          - name: app (the fixture that crashed)
+            stage: app
             threads: "4"
     env:
       # Same memory settings as test.yml: the runner has a small paging file and

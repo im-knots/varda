@@ -357,6 +357,39 @@ impl MidiDeviceManager {
     /// `MidiInput`/`MidiOutput` clients used to enumerate ports. Failures to
     /// connect to an individual port are logged and skipped, not returned.
     pub fn scan_devices(&mut self) -> anyhow::Result<()> {
+        // Serialize the whole scan across the process.
+        //
+        // Enumerating MIDI ports concurrently crashes on Windows. Measured, not
+        // guessed: four threads calling `MidiDeviceManager::new` at once die
+        // with STATUS_ACCESS_VIOLATION, while the same reproducer building GPU
+        // contexts, cameras, screen capture and audio managers stays clean. This
+        // is what had been taking down the Windows test suite.
+        //
+        // The fault is under `midir` 0.11's winmm backend, which we do not
+        // control: `MidiInput::new` there does nothing at all, and `ports()`
+        // goes through `midiInGetDevCapsW` and `midiInMessage`
+        // (DRV_QUERYDEVICEINTERFACE), which reach the driver directly. So the
+        // lock goes here, at our boundary.
+        //
+        // It covers the whole function, not just the two enumeration blocks:
+        // `connect_input` and `connect_output` below build their own
+        // `MidiInput`/`MidiOutput` and enumerate again.
+        //
+        // Production never contends this. A release build enumerates once in
+        // `VardaApp::new` and again only on an explicit `RescanMidi` command,
+        // both on the app thread, and nothing spawns a thread that touches MIDI.
+        // The cost when uncontended is one atomic. Keeping it is cheap insurance
+        // against a future background rescan turning a test only fault into a
+        // shipping one.
+        //
+        // Poisoning is ignored deliberately: a panic in some other scan says
+        // nothing about the driver's state, and wedging MIDI for the rest of the
+        // session would be worse than the risk.
+        static ENUMERATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = ENUMERATION
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
         // Disconnect existing connections by dropping them
         self.input_connections.clear();
         self.output_connections.clear();

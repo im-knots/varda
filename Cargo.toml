@@ -250,6 +250,11 @@ keyboard-types = ["dep:keyboard-types"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
+# Already a normal dependency; repeated here so `tests/gpu_context_stress.rs`
+# can call it directly, underneath `MidiDeviceManager`'s serialization, and so
+# narrow the Windows enumeration crash to a specific midir call for reporting
+# upstream. Same version, so this costs no extra build.
+midir = "0.11"
 egui_kittest = { version = "0.36", features = ["wgpu", "snapshot"] }
 tempfile = "3.27.0"
 tower = { version = "0.5.3", features = ["util"] }
