@@ -1004,6 +1004,18 @@ fn liquid_light_agitation_survives_being_automated() {
         deck.generator_params.set_float("flow_speed", 0.5);
         deck.generator_params.set_float("agitation", automate(0));
         mixer.channel_mut(0).unwrap().add_deck(deck);
+        // Decks default to adaptive skipping keyed on wall-clock render cost, and
+        // a skipped frame repeats the previous picture. Under a software
+        // rasterizer everything is over budget, so nearly every frame is skipped
+        // and the median delta below is exactly zero: this test failed on Windows
+        // with a parked delta of 0.000000, tripping its own "proves nothing"
+        // guard on a shader that was animating perfectly well.
+        //
+        // The chroma_flow test one screen down has pinned this since it was
+        // written; these two had not. Note the rotation test's *mean* baseline
+        // survived where this *median* one did not, which is what a mostly
+        // skipped run looks like.
+        mixer.channel_mut(0).unwrap().decks[0].render_fps = varda::channel::DeckRenderFps::Fixed(0);
 
         // `render_at`, not `render_once`: this grades how the picture changes
         // *between* frames, so it needs the free-running clock stepped in equal
@@ -1118,6 +1130,9 @@ fn liquid_light_dish_rotation_changes_speed_rather_than_position() {
     deck.generator_params.set_float("flow_speed", 1.0);
     deck.generator_params.set_float("swirl", 0.4);
     mixer.channel_mut(0).unwrap().add_deck(deck);
+    // Same reason as the agitation test above: no adaptive skipping, so the
+    // metric grades the shader rather than the scheduler.
+    mixer.channel_mut(0).unwrap().decks[0].render_fps = varda::channel::DeckRenderFps::Fixed(0);
 
     let luminance = |ctx: &GpuContext, mixer: &Mixer| -> Vec<f32> {
         read_back(ctx, mixer, SW, SH)
@@ -1362,6 +1377,122 @@ fn chroma_flow_auto_palette_does_not_lurch_on_smooth_input() {
              and regraded the whole frame at once."
         );
     }
+}
+
+/// The auto palette must be *state*, carried between frames, not a fresh
+/// derivation each frame.
+///
+/// This exists because the lurch test one screen up cannot see any of that.
+/// Checked by deliberately breaking the shader on macOS: with the temporal
+/// easing deleted, with the nearest-anchor pairing bypassed, and with **both**
+/// gone, `chroma_flow_auto_palette_does_not_lurch_on_smooth_input` still passes.
+/// Its content never produces the near-tied candidates those mitigations exist
+/// to survive, so on the platform this shader is developed on it cannot tell the
+/// shipped shader from one with every anti-lurch measure removed. It only bites
+/// on Windows, where it has been failing at 4.64x against an allowed 1.3x, and a
+/// green run locally proves nothing.
+///
+/// Grading the mechanism instead of a symptom needs the palette to be the only
+/// thing moving, which takes holding still everything that normally is:
+///
+/// * A static source. `gradient.fs` has `anim_speed` defaulting to zero, so its
+///   phase accumulator never advances, and it still carries three colours.
+/// * Chroma Flow's own warp, zoom, drift and trail, all zeroed. The first
+///   attempt at this test left them running and was **inert**, passing with
+///   persistence broken and with easing removed, because whole-frame luminance
+///   delta is dominated by the flow rather than by the palette.
+///
+/// With those held, every remaining frame-to-frame change is the palette easing
+/// toward its target. A palette that is carried keeps moving for many frames. A
+/// palette re-derived per frame, which is what happens if `paletteBuf` does not
+/// persist, is final at frame one and the picture goes still.
+#[test]
+fn chroma_flow_auto_palette_is_carried_between_frames() {
+    const W: u32 = 64;
+    const H: u32 = 64;
+    /// `tau` is 0.5s at full stability and a frame is 1/60s, so an easing
+    /// palette is nowhere near settled by here.
+    const LATE: usize = 10;
+    /// Movement at LATE as a fraction of movement at the start.
+    ///
+    /// Measured, not chosen: the shipped shader scores 0.586, and both ways of
+    /// breaking it, no persistence and no easing, score 0.275. A palette that
+    /// snaps has roughly double the first-frame movement of one that eases,
+    /// while the later background motion is identical, so the ratio separates
+    /// them by 2.1x. This threshold sits in the middle of that gap.
+    const MIN_RESIDUAL: f32 = 0.40;
+
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+
+    let fx_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders/chroma_flow.fs");
+    let src_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders/gradient.fs");
+    let src_shader = varda::isf::ISFShader::from_file(&src_path).expect("parse gradient.fs");
+    let fx_shader = varda::isf::ISFShader::from_file(&fx_path).expect("parse chroma_flow.fs");
+
+    let mut mixer = Mixer::new(&ctx, W, H).expect("mixer");
+    mixer.set_tonemap_mode(&ctx.queue, TonemapMode::Bypass);
+    let deck = Deck::new(&ctx, src_shader, W, H).expect("deck");
+    {
+        let ch = mixer.channel_mut(0).expect("channel 0");
+        ch.add_deck(deck);
+        let mut fx = varda::deck::Effect::new(&ctx, fx_shader).expect("deck effect");
+        fx.params.set_bool("palette_mode", false);
+        fx.params.set_float("palette_stability", 1.0);
+        // Everything that moves a pixel for any reason other than the palette.
+        for still in [
+            "zoom",
+            "rotate",
+            "drift_x",
+            "drift_y",
+            "warp_amount",
+            "flow_speed",
+            "group_shear",
+            "trail",
+        ] {
+            fx.params.set_float(still, 0.0);
+        }
+        ch.decks[0].deck.add_effect(fx);
+        ch.decks[0].render_fps = varda::channel::DeckRenderFps::Fixed(0);
+    }
+
+    let luminance = |ctx: &GpuContext, mixer: &Mixer| -> Vec<f32> {
+        read_back(ctx, mixer, W, H)
+            .iter()
+            .map(|p| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2])
+            .collect()
+    };
+    let mean_delta = |a: &[f32], b: &[f32]| -> f32 {
+        a.iter().zip(b).map(|(x, y)| (x - y).abs()).sum::<f32>() / a.len() as f32
+    };
+
+    render_at(&ctx, &mut mixer, 1);
+    let f1 = luminance(&ctx, &mixer);
+    render_at(&ctx, &mut mixer, 2);
+    let f2 = luminance(&ctx, &mixer);
+    let early = mean_delta(&f1, &f2);
+
+    for frame in 3..=LATE {
+        render_at(&ctx, &mut mixer, frame);
+    }
+    let before = luminance(&ctx, &mixer);
+    render_at(&ctx, &mut mixer, LATE + 1);
+    let late = mean_delta(&before, &luminance(&ctx, &mixer));
+
+    assert!(
+        early > 0.0,
+        "the palette never moved even at the start, so this proves nothing"
+    );
+    let residual = late / early;
+    assert!(
+        residual >= MIN_RESIDUAL,
+        "the auto palette is not carried between frames: with the source static \
+         and every flow control zeroed, movement fell from {early:.6} to \
+         {late:.6} ({residual:.4} of the start) by frame {LATE}. An eased palette \
+         is still seeking here; one re-derived each frame is already final. Check \
+         that the PERSISTENT paletteBuf survives the frame."
+    );
 }
 
 /// Render `source`, optionally through Chroma Flow, capturing the luminance
