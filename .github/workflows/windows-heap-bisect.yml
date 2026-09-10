@@ -25,8 +25,20 @@ name: windows heap bisect
 # via gflags on the narrowed binary (memory hungry, so narrow first), then
 # -Zsanitizer=address on nightly. See spec/roadmap.md.
 
+# TEMPORARY: runs as a PR check so it can be triggered from this branch.
+#
+# `workflow_dispatch` renders a Run button only for workflows already on the
+# default branch, and `gh workflow run` fails for the same reason, so a manual
+# trigger is not available until this lands on main.
+#
+# **Remove the `pull_request` trigger before merging.** This job is expected to
+# fail: it exists to reproduce a crash, so leaving it on would put a permanent
+# red X on every PR and train people to ignore it. Once on main, the Run button
+# appears and its "Use workflow from" dropdown can target any branch.
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
