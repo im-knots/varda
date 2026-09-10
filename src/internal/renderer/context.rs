@@ -205,6 +205,9 @@ fn resolve_headless_presentation(
     if let Some(resolved) = super::subprocess::RecordingPlan::resolved_for_target(target, request) {
         return resolved;
     }
+    if matches!(target, OutputTarget::SpoutSender { .. }) {
+        return spout_presentation(request);
+    }
     let (pixel_format, color_profile, alpha_mode, fallback_reason) = match target {
         OutputTarget::NdiSend { .. } => (
             PresentationPixelFormat::Uyvy,
@@ -225,6 +228,9 @@ fn resolve_headless_presentation(
         | OutputTarget::RtmpStream { .. } => {
             unreachable!("ffmpeg targets resolve through their own plan above")
         }
+        OutputTarget::SpoutSender { .. } => {
+            unreachable!("Spout resolves through spout_presentation above")
+        }
         OutputTarget::Windowed | OutputTarget::Display { .. } => (
             PresentationPixelFormat::Rgba8,
             PresentationColorProfile::SrgbFull,
@@ -240,6 +246,48 @@ fn resolve_headless_presentation(
         alpha_mode,
         fallback_reason,
     )
+}
+
+/// What a Spout sender can carry.
+///
+/// Unlike Syphon, which is BGRA8 and nothing else, Spout's shared textures can be
+/// `R10G10B10A2` as well, so ten-bit SDR is a real option here rather than a
+/// fallback warning.
+///
+/// There is no HDR mode and there will not be one. Spout shares a texture and
+/// carries no transfer function, primaries, or mastering metadata, so declaring a
+/// float format and calling it HDR would be a private convention no receiver
+/// could honour. That is the same reasoning that rules out NDI HDR in
+/// /spec/hdr-output.md.
+///
+/// Eight-bit is listed first because order decides where a blocked request
+/// lands: an HDR request degrades to the first non-HDR entry, and BGRA8 is the
+/// interoperable one. A ten-bit request still matches exactly, since `resolve`
+/// looks for an exact depth and transfer before it considers the order.
+/// See /spec/spout-output.md § Presentation contract.
+fn spout_presentation(request: PresentationRequest) -> ResolvedPresentation {
+    let formats = vec![
+        PresentationFormat {
+            depth: PresentationDepth::Sdr8,
+            transfer: PresentationTransfer::Sdr,
+            pixel_format: PresentationPixelFormat::Bgra8,
+            color_profile: PresentationColorProfile::SrgbFull,
+            alpha_mode: AlphaMode::Premultiplied,
+        },
+        PresentationFormat {
+            depth: PresentationDepth::Sdr10,
+            transfer: PresentationTransfer::Sdr,
+            pixel_format: PresentationPixelFormat::Rgb10A2,
+            color_profile: PresentationColorProfile::SrgbFull,
+            alpha_mode: AlphaMode::Premultiplied,
+        },
+    ];
+    PresentationCapabilities::new(
+        formats,
+        Some("Spout carries pixels with no transfer signalling; HDR cannot be expressed".into()),
+    )
+    .resolve(request)
+    .expect("Spout always offers the BGRA8 fallback")
 }
 
 /// Every presentation mode, with the reason a headless target cannot deliver it.
@@ -2231,6 +2279,83 @@ mod tests {
                 "the only legitimate remaining obstacle is the installed encoder: {reason}"
             );
         }
+    }
+
+    /// Spout carries more than Syphon does, and the picker should say so.
+    ///
+    /// Syphon is BGRA8 and nothing else, so its ten-bit request is a fallback
+    /// warning. Spout's shared textures can be `R10G10B10A2`, so ten-bit is a
+    /// real choice there. Copying the Syphon contract would have undersold it.
+    #[test]
+    fn spout_offers_ten_bit_where_syphon_cannot() {
+        use crate::engine::value::render::{OutputTarget, PresentationMode};
+        let spout = OutputTarget::SpoutSender {
+            sender_name: "Varda".into(),
+        };
+        let syphon = OutputTarget::SyphonServer {
+            server_name: "Varda".into(),
+        };
+        assert_eq!(
+            deliverable(&spout),
+            vec![PresentationMode::Sdr8, PresentationMode::Sdr10]
+        );
+        assert_eq!(deliverable(&syphon), vec![PresentationMode::Sdr8]);
+    }
+
+    /// Spout shares a texture and carries no transfer signalling, so there is no
+    /// HDR mode to offer and the reason has to say that rather than blame a
+    /// codec the user could change.
+    #[test]
+    fn spout_blocks_hdr_and_explains_that_it_carries_no_transfer() {
+        use crate::engine::value::render::{
+            OutputTarget, PresentationMode, PresentationRequest, PresentationTransfer,
+        };
+        let target = OutputTarget::SpoutSender {
+            sender_name: "Varda".into(),
+        };
+        for mode in [
+            PresentationMode::Hdr10,
+            PresentationMode::Hlg,
+            PresentationMode::Edr,
+        ] {
+            assert!(
+                !deliverable(&target).contains(&mode),
+                "{mode:?} must not be selectable on Spout"
+            );
+        }
+        let resolved = super::resolve_headless_presentation(
+            PresentationRequest::default().with_mode(PresentationMode::Hdr10),
+            &target,
+        );
+        assert_eq!(
+            resolved.transfer,
+            PresentationTransfer::Sdr,
+            "an HDR request must degrade rather than be published as HDR"
+        );
+        let reason = resolved.fallback_reason.expect("HDR is blocked");
+        assert!(
+            reason.contains("transfer signalling"),
+            "the reason should name what Spout cannot carry: {reason}"
+        );
+    }
+
+    /// The degrade lands on the interoperable format, not merely the best one.
+    ///
+    /// Every Spout receiver understands BGRA8; a ten-bit surface handed to one
+    /// that assumes BGRA8 is misread rather than refused, so an HDR request must
+    /// not silently become ten-bit.
+    #[test]
+    fn an_hdr_request_on_spout_degrades_to_eight_bit_not_ten() {
+        use crate::engine::value::render::{
+            OutputTarget, PresentationDepth, PresentationMode, PresentationRequest,
+        };
+        let resolved = super::resolve_headless_presentation(
+            PresentationRequest::default().with_mode(PresentationMode::Hdr10),
+            &OutputTarget::SpoutSender {
+                sender_name: "Varda".into(),
+            },
+        );
+        assert_eq!(resolved.resolved, PresentationDepth::Sdr8);
     }
 
     /// EDR is a display monitoring contract. No container, codec, or stream

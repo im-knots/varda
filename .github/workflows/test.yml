@@ -3,9 +3,6 @@ name: test
 on:
   pull_request:
     branches: [main]
-    # Allowlist: docs, README, CONTRIBUTING, LICENSE, and .gitignore are
-    # omitted on purpose so PRs that only touch them skip this workflow.
-    # GitHub forbids combining `paths` with `paths-ignore` on one event.
     paths:
       - 'src/**'
       - 'tests/**'
@@ -25,12 +22,7 @@ env:
 jobs:
   test-linux:
     name: test (linux)
-    # Scoped to this job on purpose. It turns tests/common/mod.rs's no-adapter
-    # skip into a hard failure, which is only safe where the adapter is pinned,
-    # and lavapipe is installed below. At workflow level it would also apply to
-    # test (windows), where whether wgpu finds an adapter at all is one of the
-    # things being measured, and the job would fail on that unknown instead of
-    # reporting it.
+    # Scoped to this job on purpose.
     env:
       VARDA_REQUIRE_GPU: 1
     # ubuntu-24.04 (glibc 2.39) required: ort's prebuilt ONNX Runtime
@@ -138,8 +130,19 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
 
-      - name: Report Spout capability
+      # Its own step so the report reaches the log even when the suite below
+      # fails, and so a Spout regression is named rather than buried among two
+      # thousand other tests. The runner's adapter is Microsoft Basic Render
+      # Driver (WARP) and the whole D3D11On12 bridge works on it, which is why
+      # this now asserts rather than reports. See spec/spout-output.md.
+      - name: Spout capability
         run: cargo test --no-default-features --features face-detection,html,screen-capture --lib spout::capability -- --nocapture
 
+      # Enabled now that the step above has confirmed wgpu finds a Dx12 adapter
+      # here. Without it a runner that lost its adapter would skip every GPU test
+      # and still report green, which is the failure mode the Linux job's own
+      # comment warns about.
       - name: Run test suite
+        env:
+          VARDA_REQUIRE_GPU: 1
         run: cargo test --no-default-features --features face-detection,html,screen-capture

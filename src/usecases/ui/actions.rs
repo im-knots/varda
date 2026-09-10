@@ -89,6 +89,8 @@ pub enum LibraryDrag {
     Ndi(String),
     /// Syphon server (server name)
     Syphon(String),
+    /// Spout sender (sender name). The Windows counterpart to `Syphon`.
+    Spout(String),
     /// SRT network source (url, mode)
     Srt(String, crate::stream::SrtMode),
     /// HLS stream source (url)

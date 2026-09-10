@@ -246,27 +246,70 @@ impl std::fmt::Display for Report {
 mod tests {
     use super::*;
 
-    /// Prints the report. Deliberately not assertions yet: this exists to find
-    /// out what a runner without a GPU can do, and a test that fails on an
-    /// unknown teaches nothing. Run it with `--nocapture`.
+    /// Every step of the bridge Spout needs, asserted.
+    ///
+    /// This began as a report with no assertions, because whether a machine
+    /// without a GPU could do any of it was unknown and a test that fails on an
+    /// unknown teaches nothing. It is known now. Measured on a GitHub Actions
+    /// `windows-latest` runner, whose adapter is `Microsoft Basic Render Driver`,
+    /// which is WARP:
+    ///
+    /// ```text
+    /// adapter        : Microsoft Basic Render Driver (Dx12)
+    /// D3D11On12      : Worked
+    /// shared texture : Worked
+    /// share handle   : Worked
+    /// reopen shared  : Worked
+    /// wrap D3D12     : Worked
+    /// ```
+    ///
+    /// So the whole bridge works on a software adapter, and Spout's backend can
+    /// be developed against CI rather than blind. That also settles the
+    /// contradiction in Microsoft's own reference for
+    /// `D3D11_RESOURCE_MISC_SHARED`, which says WARP does not support shared
+    /// resources and then that the limitation was lifted in Windows 8: the
+    /// permissive note is the one that holds.
+    ///
+    /// The report is still printed, because when this does fail the numbers are
+    /// what a reader needs. Run with `--nocapture` to see it.
     #[test]
-    fn report_spout_capability_on_this_machine() {
+    fn the_d3d11on12_bridge_works_on_this_machine() {
         let Ok(context) = crate::renderer::context::GpuContext::new_headless() else {
             eprintln!("no GPU adapter, skipping Spout capability probe");
             return;
         };
         let report = probe(&context);
         eprintln!("\n=== Spout capability ===\n{report}");
-        // The one thing that is already known and worth catching: if the probe
-        // reaches the shared-texture step at all, a legacy handle must follow.
-        // Spout writes that handle into shared memory as a u32, so a failure
-        // here is a protocol problem rather than a driver quirk.
-        if report.shared_texture == Step::Worked {
-            assert_ne!(
-                report.share_handle,
-                Step::NotAttempted,
-                "a shared texture with no handle would leave nothing to publish"
+
+        // Conditional on the backend rather than asserting it. wgpu builds its
+        // instance with `Backends::all()`, so a machine that prefers Vulkan is a
+        // legitimate configuration; Spout simply cannot run there, and the
+        // manager reports unavailable rather than failing. What is asserted is
+        // the implication that matters: given Dx12, the bridge must work.
+        if !report.is_dx12 {
+            eprintln!(
+                "backend is {}, not Dx12; Spout cannot run here",
+                report.backend
             );
+            return;
         }
+
+        assert_eq!(report.d3d11on12, Step::Worked, "D3D11On12 bridge");
+        assert_eq!(
+            report.shared_texture,
+            Step::Worked,
+            "shared texture creation"
+        );
+        assert_eq!(report.share_handle, Step::Worked, "legacy share handle");
+        assert_eq!(
+            report.reopen,
+            Step::Worked,
+            "reopening a shared handle (receive)"
+        );
+        assert_eq!(
+            report.wrap_d3d12,
+            Step::Worked,
+            "wrapping a D3D12 texture (send)"
+        );
     }
 }

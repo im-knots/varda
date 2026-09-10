@@ -401,6 +401,11 @@ pub enum EngineCommand {
         channel_uuid: String,
         server_name: String,
     },
+    /// The Windows counterpart to [`Self::AddSyphonDeck`].
+    AddSpoutDeck {
+        channel_uuid: String,
+        sender_name: String,
+    },
     AddSrtDeck {
         channel_uuid: String,
         url: String,
@@ -1151,6 +1156,8 @@ pub enum EngineCommand {
     // ── Device Scanning ────────────────────────────────────────
     RescanNdi,
     RescanSyphon,
+    /// The Windows counterpart to [`Self::RescanSyphon`].
+    RescanSpout,
     RescanCameras,
     RescanDepthSensors,
     /// Re-enumerate displays and windows. Manual: window lists churn constantly

@@ -317,6 +317,18 @@ pub(super) fn handle_library_dnd(ui: &egui::Ui, data: &UIData, actions: &mut UIA
                     });
                 }
 
+                let spout_key = egui::Id::new("__lib_dnd_spout_name");
+                let spout_name: Option<String> = ctx.memory(|mem| mem.data.get_temp(spout_key));
+                if let Some(spout_name) = spout_name {
+                    log::info!(
+                        "Library drop (deferred): Spout '{spout_name}' -> ch {channel_uuid}"
+                    );
+                    actions.commands.push(EngineCommand::AddSpoutDeck {
+                        channel_uuid: channel_uuid.clone(),
+                        sender_name: spout_name,
+                    });
+                }
+
                 let srt_key = egui::Id::new("__lib_dnd_srt_config");
                 let srt_config: Option<(String, crate::stream::SrtMode)> =
                     ctx.memory(|mem| mem.data.get_temp(srt_key));
@@ -460,6 +472,8 @@ pub(super) fn handle_library_dnd(ui: &egui::Ui, data: &UIData, actions: &mut UIA
                     .remove::<String>(egui::Id::new("__lib_dnd_ndi_name"));
                 mem.data
                     .remove::<String>(egui::Id::new("__lib_dnd_syph_name"));
+                mem.data
+                    .remove::<String>(egui::Id::new("__lib_dnd_spout_name"));
                 mem.data
                     .remove::<(String, crate::stream::SrtMode)>(egui::Id::new(
                         "__lib_dnd_srt_config",

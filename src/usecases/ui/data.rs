@@ -539,6 +539,10 @@ pub struct UIData {
     pub syphon_sources: Vec<String>,
     /// Whether Syphon framework is available
     pub syphon_available: bool,
+    /// Discovered Spout senders (names)
+    pub spout_sources: Vec<String>,
+    /// Whether Spout can run here
+    pub spout_available: bool,
     /// SRT library source configs for the library panel
     pub srt_library_configs: Vec<SrtLibraryEntry>,
     /// HLS library source configs

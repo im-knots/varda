@@ -802,9 +802,13 @@ fn render_stream_config(
                 .selected_text(egui::RichText::new(current_proto).small())
                 .width(80.0)
                 .show_ui(ui, |ui| {
-                    // `mut` is required on macOS for the Syphon push below; on other
-                    // platforms that push is compiled out, leaving the binding unused-mut.
-                    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+                    // Syphon and Spout are each pushed only on their own platform,
+                    // so on Linux neither push compiles and the binding is
+                    // unused-mut.
+                    #[cfg_attr(
+                        not(any(target_os = "macos", target_os = "windows")),
+                        allow(unused_mut)
+                    )]
                     let mut protocols: Vec<(&str, OutputTarget)> = vec![
                         (
                             "SRT",
@@ -852,6 +856,16 @@ fn render_stream_config(
                         "Syphon",
                         OutputTarget::SyphonServer {
                             server_name: "Varda".to_string(),
+                        },
+                    ));
+                    // Offered only on Windows, for the same reason Syphon is
+                    // offered only on macOS: a target that can never resolve is a
+                    // dead control. See /spec/spout-output.md.
+                    #[cfg(target_os = "windows")]
+                    protocols.push((
+                        "Spout",
+                        OutputTarget::SpoutSender {
+                            sender_name: "Varda".to_string(),
                         },
                     ));
                     for (label, default_target) in &protocols {
@@ -1135,6 +1149,31 @@ fn render_stream_config(
                             output_uuid: output_uuid.to_string(),
                             target: OutputTarget::SyphonServer {
                                 server_name: current_name,
+                            },
+                        });
+                    }
+                }
+            });
+        }
+        OutputTarget::SpoutSender { sender_name } if !output.is_active => {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Name:").small());
+                let name_id = egui::Id::new(format!("spout_name_{output_uuid}"));
+                let mut current_name: String = ui
+                    .data(|d| d.get_temp(name_id))
+                    .unwrap_or_else(|| sender_name.clone());
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut current_name)
+                        .desired_width(140.0)
+                        .font(egui::TextStyle::Small),
+                );
+                if response.lost_focus() || response.changed() {
+                    ui.data_mut(|d| d.insert_temp(name_id, current_name.clone()));
+                    if response.lost_focus() {
+                        actions.commands.push(EngineCommand::SetOutputTarget {
+                            output_uuid: output_uuid.to_string(),
+                            target: OutputTarget::SpoutSender {
+                                sender_name: current_name,
                             },
                         });
                     }

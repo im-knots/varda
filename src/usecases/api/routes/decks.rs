@@ -995,6 +995,29 @@ pub async fn add_syphon_deck(
 }
 
 #[derive(Deserialize, ToSchema)]
+pub struct SpoutSourceBody {
+    /// Name of the Spout sender to receive.
+    pub sender_name: String,
+}
+#[utoipa::path(post, path = "/api/channels/{channel_uuid}/decks/spout", params(("channel_uuid" = String, Path, description = "Channel UUID")), request_body = SpoutSourceBody, responses((status = 200, body = CommandResult), (status = 404, description = "Channel not found")), tag = "Decks")]
+pub async fn add_spout_deck(
+    State(s): State<SharedState>,
+    Path(channel_uuid): Path<String>,
+    Json(b): Json<SpoutSourceBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::AddSpoutDeck {
+            channel_uuid,
+            sender_name: b.sender_name,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
 pub struct SrtSourceBody {
     /// SRT stream URL.
     pub url: String,

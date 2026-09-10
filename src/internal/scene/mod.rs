@@ -497,6 +497,8 @@ pub enum SourceConfig {
     Ndi { name: String },
     /// Syphon inter-app video source (matched by server name on restore, macOS only)
     Syphon { name: String },
+    /// Spout inter-app video source (matched by sender name on restore, Windows only)
+    Spout { name: String },
     /// SRT network video source (url + mode, reconnected on restore)
     Srt { url: String, mode: String },
     /// HLS stream source (reconnected on restore)
@@ -797,6 +799,9 @@ pub enum OutputTargetConfig {
     SyphonServer {
         server_name: String,
     },
+    SpoutSender {
+        sender_name: String,
+    },
 }
 
 /// Serializable output configuration (unified model).
@@ -983,6 +988,11 @@ impl SourceConfig {
             SourceConfig::Ndi { name } => {
                 if name.trim().is_empty() {
                     errors.push(format!("{prefix}: NDI name is empty"));
+                }
+            }
+            SourceConfig::Spout { name } => {
+                if name.trim().is_empty() {
+                    errors.push(format!("{prefix}: Spout name is empty"));
                 }
             }
             SourceConfig::Syphon { name } => {

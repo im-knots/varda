@@ -1002,6 +1002,43 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                 ui.add_space(4.0);
             }
 
+            // === SPOUT SENDERS ===
+            // Mirrors the Syphon section above. `spout_available` is false off
+            // Windows, so the whole section simply does not appear there, which
+            // is the same treatment Syphon gets on Linux.
+            if data.spout_available {
+                let spout_header =
+                    egui::RichText::new(format!("🔗 Spout Senders ({})", data.spout_sources.len()))
+                        .strong();
+                egui::CollapsingHeader::new(spout_header)
+                    .id_salt("lib_spout")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        if ui.small_button("🔄 Rescan").clicked() {
+                            actions.commands.push(EngineCommand::RescanSpout);
+                        }
+                        if data.spout_sources.is_empty() {
+                            ui.label(egui::RichText::new("No Spout senders found").small().weak());
+                        }
+                        for (i, name) in data.spout_sources.iter().enumerate() {
+                            let item_id = egui::Id::new(("lib_spout", i));
+                            ui.dnd_drag_source(item_id, LibraryDrag::Spout(name.clone()), |ui| {
+                                ui.label(egui::RichText::new(format!("  🔗 {name}")).size(12.0));
+                            });
+                            if ui.ctx().is_being_dragged(item_id) {
+                                ui.ctx().memory_mut(|mem| {
+                                    mem.data.insert_temp(
+                                        egui::Id::new("__lib_dnd_spout_name"),
+                                        name.clone(),
+                                    );
+                                });
+                            }
+                        }
+                    });
+
+                ui.add_space(4.0);
+            }
+
             // === DECK PRESETS ===
             if !data.deck_presets.is_empty() {
                 let deck_preset_header =

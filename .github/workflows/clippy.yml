@@ -3,9 +3,6 @@ name: clippy
 on:
   pull_request:
     branches: [main]
-    # Allowlist: docs, README, CONTRIBUTING, LICENSE, and .gitignore are
-    # omitted on purpose so PRs that only touch them skip this workflow.
-    # GitHub forbids combining `paths` with `paths-ignore` on one event.
     paths:
       - 'src/**'
       - 'tests/**'
@@ -20,12 +17,6 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
-# Clippy only analyses code that compiles for the *host* target, so a
-# `#[cfg(target_os = ...)]` block is invisible to every other platform's run. A
-# Linux-only job therefore cannot see the macOS or Windows branches — and those
-# branches do exist (NDI library loading, CLI install, shader search paths,
-# Syphon restore). Each supported platform gets its own job so the pedantic gate
-# covers all of them.
 jobs:
   clippy-linux:
     name: clippy (linux)
@@ -70,10 +61,6 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
 
-      # `clippy::pedantic` is enabled as warn-by-default in Cargo.toml's
-      # `[lints.clippy]` (with a documented allow-list), so `-D warnings` gates
-      # pedantic here too. Keeping the lint config in Cargo.toml rather than in
-      # this flag means a local `cargo clippy` reproduces CI exactly.
       - name: Run clippy (pedantic)
         run: cargo clippy --all-targets -- -D warnings
 
@@ -124,10 +111,7 @@ jobs:
           key: vcpkg-windows-x64-${{ hashFiles('.github/workflows/release.yml') }}
           restore-keys: vcpkg-windows-x64-
 
-      # `ffmpeg-next` and `shaderc` are unconditional dependencies, so even a
-      # `--no-default-features` check needs FFmpeg headers and libclang. This
-      # mirrors the release job's setup; the NDI runtime is omitted because the
-      # SDK is `dlopen`'d at runtime rather than linked.
+      # `ffmpeg-next` and `shaderc` are unconditional dependencies
       - name: Install vcpkg FFmpeg
         shell: pwsh
         run: |
@@ -147,10 +131,5 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
 
-      # Feature set matches the Windows release build: `depth` (libfreenect) has
-      # no vcpkg port, so it is excluded and the other defaults re-added. See
-      # spec/depth-sensors.md § Platform Support. `screen-capture` stays in —
-      # its Windows backend is pure-Rust `windows` bindings needing no vcpkg
-      # port, and this job is the only place that backend gets compiled.
       - name: Run clippy (pedantic)
         run: cargo clippy --all-targets --no-default-features --features face-detection,html,screen-capture -- -D warnings

@@ -624,6 +624,8 @@ pub(crate) fn build_ui_data(
         ndi_available: engine.ndi_available,
         syphon_sources: engine.syphon_sources.clone(),
         syphon_available: engine.syphon_available,
+        spout_sources: engine.spout_sources.clone(),
+        spout_available: engine.spout_available,
         srt_library_configs: engine
             .stream_receivers
             .iter()

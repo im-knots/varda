@@ -346,6 +346,8 @@ impl UIData {
             ndi_available: false,
             syphon_sources: vec![],
             syphon_available: false,
+            spout_available: false,
+            spout_sources: vec![],
             srt_library_configs: vec![],
             hls_library_configs: vec![],
             dash_library_configs: vec![],

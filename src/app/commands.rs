@@ -857,6 +857,10 @@ impl VardaApp {
                 channel_uuid,
                 server_name,
             } => self.cmd_add_syphon_deck(&channel_uuid, &server_name),
+            EngineCommand::AddSpoutDeck {
+                channel_uuid,
+                sender_name,
+            } => self.cmd_add_spout_deck(&channel_uuid, &sender_name),
             EngineCommand::AddSrtDeck {
                 channel_uuid,
                 url,
@@ -1521,6 +1525,15 @@ impl VardaApp {
                     CommandResult::OkWithData {
                         data: serde_json::json!([] as [String; 0]),
                     }
+                }
+            }
+            EngineCommand::RescanSpout => {
+                // Same contract as RescanSyphon: discover inline and answer with
+                // the fresh list, so a probe is one non-racy call. No platform
+                // gate is needed because discovery is a no-op off Windows.
+                self.external_io.spout_manager.discover();
+                CommandResult::OkWithData {
+                    data: serde_json::json!(self.external_io.spout_manager.discovered_sources()),
                 }
             }
             EngineCommand::RescanCameras => {

@@ -849,6 +849,11 @@ pub enum OutputTarget {
     NdiSend { sender_name: String },
     /// Publish frames via Syphon (macOS inter-app sharing)
     SyphonServer { server_name: String },
+    /// Publish frames via Spout (Windows inter-app sharing).
+    ///
+    /// The Windows counterpart to [`Self::SyphonServer`], and like it, only ever
+    /// resolvable on its own platform. See /spec/spout-output.md.
+    SpoutSender { sender_name: String },
 }
 
 impl OutputTarget {
@@ -916,6 +921,7 @@ impl std::fmt::Display for OutputTarget {
             OutputTarget::RtmpStream { url, codec, .. } => write!(f, "RTMP [{codec}]: {url}"),
             OutputTarget::NdiSend { sender_name } => write!(f, "NDI: {sender_name}"),
             OutputTarget::SyphonServer { server_name } => write!(f, "Syphon: {server_name}"),
+            OutputTarget::SpoutSender { sender_name } => write!(f, "Spout: {sender_name}"),
         }
     }
 }

@@ -528,6 +528,7 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `POST` | `/api/channels/{channel_uuid}/decks/rtmp` |  |
 | `POST` | `/api/channels/{channel_uuid}/decks/shader` |  |
 | `POST` | `/api/channels/{channel_uuid}/decks/solid` |  |
+| `POST` | `/api/channels/{channel_uuid}/decks/spout` |  |
 | `POST` | `/api/channels/{channel_uuid}/decks/srt` |  |
 | `POST` | `/api/channels/{channel_uuid}/decks/syphon` |  |
 | `POST` | `/api/channels/{channel_uuid}/decks/tap` |  |

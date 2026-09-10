@@ -318,6 +318,9 @@ pub enum ExternalSourceKind {
     Camera(crate::camera::CameraId),
     Ndi(usize),
     Syphon(usize),
+    /// Spout receiver index. The Windows counterpart to `Syphon`.
+    /// See /spec/spout-output.md.
+    Spout(usize),
     Srt(usize),
     Hls(usize),
     Dash(usize),
@@ -342,6 +345,7 @@ impl ExternalSourceKind {
             Self::Camera(_) => "camera",
             Self::Ndi(_) => "ndi",
             Self::Syphon(_) => "syphon",
+            Self::Spout(_) => "spout",
             Self::Srt(_) => "srt",
             Self::Hls(_) => "hls",
             Self::Dash(_) => "dash",
@@ -359,6 +363,7 @@ impl ExternalSourceKind {
             Self::Camera(_) => "Camera",
             Self::Ndi(_) => "NDI",
             Self::Syphon(_) => "Syphon",
+            Self::Spout(_) => "Spout",
             Self::Srt(_) | Self::Hls(_) | Self::Dash(_) | Self::Rtmp(_) => "Stream",
             Self::Html(_) => "HTML",
             Self::DepthSensor(_) => "Depth Sensor",
@@ -1160,6 +1165,17 @@ impl Deck {
         match &self.source {
             DeckSource::ExternalSource {
                 kind: ExternalSourceKind::Syphon(idx),
+                ..
+            } => Some(*idx),
+            _ => None,
+        }
+    }
+
+    /// Get the Spout receiver index (if source is Spout)
+    pub fn spout_receiver_idx(&self) -> Option<usize> {
+        match &self.source {
+            DeckSource::ExternalSource {
+                kind: ExternalSourceKind::Spout(idx),
                 ..
             } => Some(*idx),
             _ => None,

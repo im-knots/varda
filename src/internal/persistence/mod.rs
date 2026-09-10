@@ -527,6 +527,16 @@ pub fn snapshot_scene(
                                 .to_string();
                             SourceConfig::Syphon { name }
                         }
+                        "spout" => {
+                            // Same 🔗 prefix as Syphon: both are inter-app
+                            // texture shares and the label is the sender name.
+                            let name = slot
+                                .deck
+                                .source_name()
+                                .trim_start_matches("🔗 ")
+                                .to_string();
+                            SourceConfig::Spout { name }
+                        }
                         "srt" => {
                             let url = slot
                                 .deck
@@ -833,6 +843,9 @@ fn target_to_config(target: &OutputTarget) -> OutputTargetConfig {
         OutputTarget::SyphonServer { server_name } => OutputTargetConfig::SyphonServer {
             server_name: server_name.clone(),
         },
+        OutputTarget::SpoutSender { sender_name } => OutputTargetConfig::SpoutSender {
+            sender_name: sender_name.clone(),
+        },
     }
 }
 
@@ -927,6 +940,9 @@ fn config_to_target(config: &OutputTargetConfig) -> OutputTarget {
         },
         OutputTargetConfig::SyphonServer { server_name } => OutputTarget::SyphonServer {
             server_name: server_name.clone(),
+        },
+        OutputTargetConfig::SpoutSender { sender_name } => OutputTarget::SpoutSender {
+            sender_name: sender_name.clone(),
         },
     }
 }
@@ -1056,6 +1072,17 @@ pub struct PendingSyphonDeck {
     pub config: crate::scene::DeckConfig,
 }
 
+/// A Spout deck waiting for its sender, the Windows counterpart to
+/// [`PendingSyphonDeck`].
+#[derive(Debug, Clone)]
+pub struct PendingSpoutDeck {
+    /// UUID of the channel this deck belongs to, for the same reason as
+    /// [`PendingSyphonDeck::channel_uuid`]: positional indices go stale.
+    pub channel_uuid: String,
+    /// Full persisted deck config, carrying the `Spout { name }` source.
+    pub config: crate::scene::DeckConfig,
+}
+
 /// Restore result — contains reconstructed mixer.
 /// Surfaces and outputs are loaded separately from stage.json.
 pub struct RestoreResult {
@@ -1063,6 +1090,8 @@ pub struct RestoreResult {
     pub warnings: Vec<String>,
     /// Syphon decks deferred for late binding (see `PendingSyphonDeck`).
     pub pending_syphon: Vec<PendingSyphonDeck>,
+    /// Spout decks deferred for late binding (see `PendingSpoutDeck`).
+    pub pending_spout: Vec<PendingSpoutDeck>,
 }
 
 /// Reconstruct live state from a `SceneConfig`.
@@ -1093,6 +1122,7 @@ pub fn restore_scene(
     // stays empty, so `mut` would be flagged as unused there.
     #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
     let mut pending_syphon: Vec<PendingSyphonDeck> = Vec::new();
+    let mut pending_spout: Vec<PendingSpoutDeck> = Vec::new();
     let mut mixer = Mixer::new(context, render_width, render_height)?;
 
     // Clear default channels — we'll create from config
@@ -1136,6 +1166,30 @@ pub fn restore_scene(
                 {
                     log::debug!("Skipping Syphon deck '{name}' on non-macOS restore");
                 }
+                continue;
+            }
+            // Spout is the same story on Windows: the producer may not be
+            // publishing yet, so the deck late-binds when its sender appears.
+            if let SourceConfig::Spout { name } = &deck_config.source {
+                // Queued on every platform rather than only Windows: the list is
+                // inert elsewhere, because `reconcile_spout` returns immediately
+                // when the manager reports unavailable. Gating the push instead
+                // would make `pending_spout` conditionally mutable, which is a
+                // platform-shaped wart for no behavioural gain.
+                if cfg!(target_os = "windows") {
+                    log::info!(
+                        "Spout deck '{}' on channel {} deferred to late-bind \
+                         (auto-attaches when the sender appears)",
+                        name,
+                        channel.name
+                    );
+                } else {
+                    log::debug!("Spout deck '{name}' cannot bind off Windows");
+                }
+                pending_spout.push(PendingSpoutDeck {
+                    channel_uuid: channel.uuid().to_string(),
+                    config: deck_config.clone(),
+                });
                 continue;
             }
             match restore_deck(
@@ -1342,6 +1396,7 @@ pub fn restore_scene(
         mixer,
         warnings,
         pending_syphon,
+        pending_spout,
     })
 }
 
@@ -1638,6 +1693,13 @@ pub(crate) fn restore_deck(
                 "Syphon source '{name}' not available for restore"
             ));
         }
+        SourceConfig::Spout { name } => {
+            // Reached only if the deferred path above was bypassed: a Spout deck
+            // binds through the pending list once its sender appears.
+            return Err(anyhow::anyhow!(
+                "Spout source '{name}' binds at runtime, not at restore"
+            ));
+        }
         SourceConfig::Srt { url, mode } => {
             let srt_mode = match mode.as_str() {
                 "listener" => crate::stream::SrtMode::Listener,
@@ -1868,6 +1930,9 @@ pub(crate) fn source_configs_match(deck: &Deck, config: &SourceConfig) -> bool {
         }
         ("ndi", SourceConfig::Ndi { name }) => deck.source_name().trim_start_matches("📡 ") == name,
         ("syphon", SourceConfig::Syphon { name }) => {
+            deck.source_name().trim_start_matches("🔗 ") == name
+        }
+        ("spout", SourceConfig::Spout { name }) => {
             deck.source_name().trim_start_matches("🔗 ") == name
         }
         ("srt", SourceConfig::Srt { url, .. }) => {
