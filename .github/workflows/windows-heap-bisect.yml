@@ -13,17 +13,30 @@ name: windows heap bisect
 # Windows tests had never run before that phase, so "already there" means it
 # shipped in v0.4.0 and v0.5.0.
 #
-#   without spout : the whole lib suite, in parallel, minus Spout.
-#                   Crashes here mean it is pre-existing and unrelated.
-#   spout only    : the 24 Spout tests, in parallel, repeatedly. They are the
-#                   newest unsafe code in the tree and they touch machine-global
-#                   named objects, so they are the prime suspect on priors.
+# ROUND 1 ANSWERED IT: `spout only` passed twenty consecutive parallel runs and
+# `without spout` crashed on attempt one. The fault is **pre-existing**, not from
+# Phase 58, which means it shipped in v0.4.0 and v0.5.0.
 #
-# Both run whatever the other does (`fail-fast: false`); the pair of results is
-# the answer, not either one alone. Next levers if this is inconclusive, in
-# order: vary --test-threads to find a contention threshold, then Full Page Heap
-# via gflags on the narrowed binary (memory hungry, so narrow first), then
-# -Zsanitizer=address on nightly. See spec/roadmap.md.
+# ROUND 2, below, is a binary split aimed at the leading hypothesis rather than a
+# blind bisect. `GpuContext::new_headless` is called by hundreds of tests, and on
+# a runner every one of them builds a full D3D12 device on WARP, a *software*
+# adapter. Dozens created and torn down concurrently is a load nothing else in
+# this project puts on it.
+#
+#   renderer only : internal::renderer in parallel. Crashes here point at wgpu
+#                   or WARP device churn.
+#   no renderer   : everything else in parallel. Crashes here rule that out.
+#
+# Neither crashing is also a result: it would mean the fault needs two subsystems
+# running at once, and the next split has to be by pairs rather than by area.
+#
+# Both cells run whatever the other does (`fail-fast: false`), and each repeats,
+# so "did not crash" is distinguishable from "did not crash this time".
+#
+# Later levers, in order: vary --test-threads for a contention threshold, then
+# Full Page Heap (memory hungry, so narrow first), then -Zsanitizer=address on
+# nightly, which reports the bad access and its allocation without a debugger.
+# See spec/roadmap.md.
 
 # TEMPORARY: runs as a PR check so it can be triggered from this branch.
 #
@@ -54,12 +67,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: without spout
-            filter: "--skip spout"
-            repeat: 1
-          - name: spout only
-            filter: "spout::"
-            repeat: 20
+          - name: renderer only
+            filter: "internal::renderer"
+            repeat: 3
+          - name: no renderer
+            filter: "--skip internal::renderer --skip spout"
+            repeat: 3
     env:
       # Same memory settings as test.yml: the runner has a small paging file and
       # full debug info made rustc fail to mmap its own rlibs.
