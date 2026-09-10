@@ -98,6 +98,20 @@ jobs:
     name: test (windows)
     runs-on: windows-latest
     timeout-minutes: 90
+    env:
+      # The runner has 16 GB and a small paging file. The first attempt died in
+      # rustc, not the linker, mmapping dependency rlibs:
+      # `os error 1455: The paging file is too small for this operation`,
+      # surfacing as `E0786: found invalid metadata files`.
+      #
+      # Debug info is the bulk of those rlibs: measured locally, one `libvarda`
+      # rlib is ~425 MB at `debuginfo=2`. Dropping it shrinks every artefact
+      # rustc has to map, and a backtrace from a CI failure is worth less than
+      # the assertion message anyway.
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      # And halve how many of those rustc processes hold memory at once. Slower,
+      # but the job is bounded by linking rather than by CPU.
+      CARGO_BUILD_JOBS: "2"
     steps:
       - uses: actions/checkout@v5
 
@@ -136,13 +150,19 @@ jobs:
       # Driver (WARP) and the whole D3D11On12 bridge works on it, which is why
       # this now asserts rather than reports. See spec/spout-output.md.
       - name: Spout capability
-        run: cargo test --no-default-features --features face-detection,html,screen-capture --lib spout::capability -- --nocapture
+        run: cargo test --no-default-features --features face-detection,screen-capture --lib spout::capability -- --nocapture
 
       # Enabled now that the step above has confirmed wgpu finds a Dx12 adapter
       # here. Without it a runner that lost its adapter would skip every GPU test
       # and still report green, which is the failure mode the Linux job's own
       # comment warns about.
+      # `html` is deliberately absent, unlike `clippy (windows)` and the release
+      # build. Servo's `libscript` alone is ~486 MB per debug rlib and dominates
+      # both the build time and the memory that broke this job. Nothing is lost:
+      # clippy (windows) still type-checks the feature and the release job still
+      # builds it, and the HtmlManager surface compiles without it, so the
+      # integration and persistence tests around HTML decks still run here.
       - name: Run test suite
         env:
           VARDA_REQUIRE_GPU: 1
-        run: cargo test --no-default-features --features face-detection,html,screen-capture
+        run: cargo test --no-default-features --features face-detection,screen-capture
