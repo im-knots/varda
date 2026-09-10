@@ -351,3 +351,81 @@ fn parallel_pipelines() {
         }
     });
 }
+
+// ── Round 7: whole-app construction ─────────────────────────────────
+
+/// Build a full headless `VardaApp` on several threads at once.
+///
+/// This is not a hypothesis. Round 6 ran the Windows suite with libtest's JSON
+/// output and asked which tests had *started* and never reported a result, which
+/// is the set that was executing when the process died. At two threads it named
+/// exactly two:
+///
+///   app::commands::tests::a_timecode_patch_over_the_bus_leaves_the_undo_stack_alone
+///   app::commands::tests::choosing_a_timecode_signal_reaches_the_reader
+///
+/// Both are timecode tests, which is a red herring: each only sets a preference
+/// in memory. What they share is their fixture. Both call `headless_app()`,
+/// which is `GpuContext::new_headless()` followed by `VardaApp::new`, and the
+/// crash landed five tests into a 2590 test run, while two of those overlapped.
+///
+/// Round 3 already cleared the GPU half: four threads building contexts, on all
+/// backends and on DX12 alone, passed every cell. So the suspect is `VardaApp::new`,
+/// which starts audio, OSC, the shader registry and the rest of the app.
+///
+/// Three cells across two, four and eight threads all agreed, and the
+/// correlation is exact: **fourteen of fourteen in flight tests build an app,
+/// and every test that finished builds none.** The page heap cell also died
+/// with ACCESS_VIOLATION rather than HEAP_CORRUPTION, which is page heap doing
+/// its job: the corrupting write happens *here*, rather than being noticed here
+/// after happening somewhere else.
+///
+/// `VARDA_STRESS_APP_STAGE` picks how much of startup to run, so one CI run says
+/// which subsystem rather than another round of guessing:
+///
+///   `gpu`       GPU context only. Round 3 cleared this; it is the control.
+///   `audio`     `AudioManager::new`. Enumerates devices, so cpal into WASAPI on
+///               Windows, which means COM.
+///   `camera`    `CameraManager::new`. Not feature gated, so it runs in every
+///               build. nokhwa on Windows is Media Foundation, which also means
+///               COM and an `MFStartup` refcount.
+///   `screencap` `ScreenCaptureManager::new`. Windows Graphics Capture, which
+///               calls `CoIncrementMTAUsage` to pin the process into the MTA.
+///   `midi`      `MidiDeviceManager::new`, which enumerates MIDI ports.
+///   `app`       the whole thing, matching the fixture that crashed.
+///
+/// The COM ones are grouped deliberately. Three separate subsystems put this
+/// process into a COM apartment during startup, none of them coordinating, and
+/// mixing apartment models is a classic source of exactly this failure.
+#[test]
+#[ignore = "reproducer: builds whole apps at once and may crash the process"]
+fn parallel_app_construction() {
+    let stage = std::env::var("VARDA_STRESS_APP_STAGE").unwrap_or_else(|_| "app".into());
+    println!("app stage: {stage}");
+
+    stress("app", move |_t, _i| match stage.as_str() {
+        "gpu" => varda::renderer::GpuContext::new_headless().is_ok(),
+        "audio" => {
+            let mgr = varda::audio::AudioManager::new();
+            // Read something off it so the construction cannot be optimized out.
+            let _ = mgr.devices().len();
+            true
+        }
+        "camera" => {
+            let _mgr = varda::camera::CameraManager::new();
+            true
+        }
+        "screencap" => {
+            let _mgr = varda::screen_capture::ScreenCaptureManager::new();
+            true
+        }
+        "midi" => varda::midi::MidiDeviceManager::new().is_ok(),
+        _ => {
+            let Ok(gpu) = varda::renderer::GpuContext::new_headless() else {
+                return false;
+            };
+            let config = varda::testing::headless_config();
+            varda::app::VardaApp::new(gpu, &config).is_ok()
+        }
+    });
+}

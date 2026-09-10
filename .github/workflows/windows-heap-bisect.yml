@@ -48,48 +48,67 @@ name: windows heap bisect
 # Instrumentation that would be ruinous across a 2586-test run is cheap across
 # one that dies almost immediately.
 #
-# ROUND 5 tried to run the binary under `cdb`. **The install step failed on
-# every cell**: `cdb` is not on the runner image (actions/runner-images#942 asks
-# for it), and the SDK fwlink used to fetch it was a guess that returned an HTML
-# page, which then would not execute. Nothing was learned about the crash.
+# ROUND 5 never ran: every cell died installing `cdb`, via an SDK fwlink that
+# was a guess and returned an HTML page.
 #
-# ROUND 6 drops the debugger entirely, because the harness can answer the
-# question by itself.
+# ROUND 6 dropped the debugger and asked the harness instead. libtest prints a
+# test when it *finishes*, which is why five rounds had been reading the names of
+# tests that survived. Its JSON format also emits an event when a test *starts*,
+# so started-minus-finished is exactly what was in flight when the process died.
 #
-# The reason every round so far has been reading tea leaves is that **the last
-# test printed is not the test that crashed**: libtest's normal output prints a
-# test when it *finishes*, so the crashing test, still running, never appears.
+# **IT WORKED.** The two thread cell died with STATUS_HEAP_CORRUPTION five tests
+# into a 2590 test run and named the two that were executing:
 #
-# But libtest's JSON format also emits an event when a test **starts**:
+#   app::commands::tests::a_timecode_patch_over_the_bus_leaves_the_undo_stack_alone
+#   app::commands::tests::choosing_a_timecode_signal_reaches_the_reader
 #
-#   { "type": "test", "event": "started", "name": "..." }
-#   { "type": "test", "name": "...", "event": "ok" }
+# Timecode is a red herring; each only sets a preference in memory. What they
+# share is their fixture: both call `headless_app()`, which is
+# `GpuContext::new_headless()` then `VardaApp::new`. Round 3 already cleared the
+# GPU half, so the suspect is **two concurrent `VardaApp::new` calls**: audio
+# (cpal into WASAPI, so COM), OSC, the shader registry, and the rest of startup.
 #
-# So the tests that started and never reported a result are exactly the ones in
-# flight when the process died. At four threads that is at most four names, out
-# of 2586. Verified locally: the events stream as tests run rather than being
-# batched at the end, and Rust line buffers stdout even through a pipe (checked
-# with a program that prints and then calls `abort`), so everything up to the
-# fault survives the crash.
+# ROUND 6's remaining cells corroborated it exactly. At eight threads, eight
+# tests were in flight and **all eight build an app**; at four with page heap,
+# four, likewise. Across three cells that is fourteen of fourteen, while every
+# test that *finished* builds no app. The page heap cell also died with
+# ACCESS_VIOLATION rather than HEAP_CORRUPTION, which is page heap working as
+# intended: the corrupting write happens during app construction rather than
+# merely being noticed there.
 #
-# `--format=json` needs `-Zunstable-options`, hence `RUSTC_BOOTSTRAP=1`. It is
-# set **only for the run**, never for the build: it is part of the build
-# fingerprint, so setting it during compilation would evict the whole cache. And
-# keeping the stable compiler matters on its own, because a nightly toolchain
-# would be a different binary that might not crash.
+# ROUND 7, below, says which part, using
+# `parallel_app_construction` in `tests/gpu_context_stress.rs`.
+# `VARDA_STRESS_APP_STAGE` chooses how far into startup to go:
 #
-#   four threads  : the configuration that has been crashing.
-#   two threads   : fewer tests in flight, so a sharper answer, if it still dies.
-#   eight threads : more pressure. Likely to crash sooner, and a wider in-flight
-#                   set is still a small set.
-#   page heap     : full page heap makes the *corrupting write* fault where it
-#                   happens rather than when a later, innocent allocation
-#                   notices. No debugger needed for that to help: it moves the
-#                   crash closer to the culprit, so the in-flight list gets more
-#                   informative. Enabled through the Image File Execution
-#                   Options registry key, which needs no tooling.
+#   app       : the whole fixture, to confirm the reproducer reproduces at all.
+#   camera    : `CameraManager::new`. Not feature gated, so it runs in every
+#               build. nokhwa on Windows is Media Foundation: COM, plus an
+#               `MFStartup` refcount shared across the process.
+#   screencap : `ScreenCaptureManager::new`. Windows Graphics Capture, which
+#               calls `CoIncrementMTAUsage` to pin the process into the MTA.
+#   audio     : `AudioManager::new`, which enumerates devices. cpal into WASAPI,
+#               which is COM again.
+#   midi      : `MidiDeviceManager::new`, which enumerates ports.
+#   gpu       : the control. Round 3 cleared it, so a crash here would mean
+#               something about this job differs from that one.
 #
-# If this names a small set, the next step is to run just those tests together.
+# The three COM cells are the point. Three unrelated subsystems each put this
+# process into a COM apartment during startup, none of them coordinating with
+# the others, and mixing apartment models is a classic source of exactly this.
+#
+# This is a confirmation step, not another hypothesis. The names came from
+# measurement rather than from reasoning about which subsystem looked risky,
+# which is what the previous five rounds did, unsuccessfully.
+#
+# Round 6's other cells matter for how this one is sized. Two threads crashed,
+# **four threads passed all three attempts**, eight threads crashed, and four
+# threads with page heap crashed. Four passing is not a threshold, it is a race
+# whose window three runs happened to miss: if the per run crash chance were
+# even one in two, surviving three runs has probability 0.125.
+#
+# The consequence is that **a green cell proves very little**, here or when
+# validating a fix. So this round runs many more constructions than the suite
+# ever does, and repeats more times.
 
 # TEMPORARY: runs as a PR check so it can be triggered from this branch.
 #
@@ -118,18 +137,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: four threads
+          - name: app (the fixture that crashed)
+            stage: app
             threads: "4"
-            pageheap: "0"
-          - name: two threads
-            threads: "2"
-            pageheap: "0"
-          - name: eight threads
-            threads: "8"
-            pageheap: "0"
-          - name: four threads + page heap
+          - name: camera (Media Foundation)
+            stage: camera
             threads: "4"
-            pageheap: "1"
+          - name: screencap (WGC, CoIncrementMTAUsage)
+            stage: screencap
+            threads: "4"
+          - name: audio (WASAPI)
+            stage: audio
+            threads: "4"
+          - name: midi
+            stage: midi
+            threads: "4"
+          - name: gpu (control, cleared in round 3)
+            stage: gpu
+            threads: "4"
     env:
       # Same memory settings as test.yml: the runner has a small paging file and
       # full debug info made rustc fail to mmap its own rlibs.
@@ -138,24 +163,6 @@ jobs:
       # get printed points at the right file.
       CARGO_PROFILE_TEST_DEBUG: line-tables-only
       CARGO_BUILD_JOBS: "2"
-      # Set for the build as well as the run, deliberately.
-      #
-      # The first attempt set it only for the run and launched the test
-      # executable directly, to keep it out of the build fingerprint and so
-      # preserve the cargo cache. That failed on every cell with exit 0xC0000135
-      # (STATUS_DLL_NOT_FOUND) before a single test started: `cargo test` sets up
-      # the library search path that the binary needs, and launching the exe
-      # directly does without it.
-      #
-      # So the run goes through cargo, which means cargo must see the same
-      # environment at build time or it rebuilds anyway. The cost is that this
-      # job cannot share `test (windows)`'s cache. That is a slower build in
-      # exchange for a job that runs at all.
-      #
-      # Nightly would avoid the variable entirely, and is the wrong trade: it
-      # would be a different compiler producing a different binary, which might
-      # not crash.
-      RUSTC_BOOTSTRAP: "1"
     steps:
       - uses: actions/checkout@v5
 
@@ -192,69 +199,46 @@ jobs:
 
       # Built separately from the run so RUSTC_BOOTSTRAP stays out of the build
       # fingerprint. Setting it here would evict the cargo cache every time.
+      # Same features as `test (windows)`, which is where the crash was seen.
+      # `face-detection` in particular pulls ONNX Runtime into the process, and
+      # `VardaApp::new` is the thing under test, so a narrower feature set could
+      # come back green without meaning anything.
       - name: Build test binary
-        run: cargo test --no-default-features --features face-detection,screen-capture --lib --no-run
+        run: cargo test --features face-detection,screen-capture --no-default-features --test gpu_context_stress --no-run
 
-      - name: Enable full page heap
-        if: matrix.pageheap == '1'
-        shell: pwsh
-        run: |
-          # Image File Execution Options is keyed on file name, and cargo stamps
-          # a hash into it, so resolve the name rather than hardcoding it.
-          $exe = Get-ChildItem target\debug\deps\varda-*.exe |
-            Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          Write-Host "enabling page heap for $($exe.Name)"
-          $key = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$($exe.Name)"
-          New-Item -Path $key -Force | Out-Null
-          # FLG_HEAP_PAGE_ALLOCS, then full page heap (0x3) rather than light
-          # (0x1): full faults on the bad write, light only notices at free.
-          New-ItemProperty -Path $key -Name GlobalFlag -Value 0x02000000 -PropertyType DWord -Force | Out-Null
-          New-ItemProperty -Path $key -Name PageHeapFlags -Value 0x3 -PropertyType DWord -Force | Out-Null
-
-      - name: Run and report what was in flight
+      - name: Run
         shell: pwsh
         env:
           VARDA_SKIP_GOLDEN_SNAPSHOTS: 1
-          VARDA_REQUIRE_GPU: 1
+          VARDA_STRESS_APP_STAGE: ${{ matrix.stage }}
+          VARDA_STRESS_THREADS: ${{ matrix.threads }}
+          # Sized against measurement, not a guess. Locally one construction
+          # takes ~0.8s at four threads, so 64 iterations is ~256 constructions
+          # in ~3.5 minutes, and five attempts is ~17 minutes inside a 60 minute
+          # timeout. A full suite run takes ~4 minutes and makes far fewer
+          # concurrent constructions, so this is roughly seven times the
+          # exposure per minute.
+          VARDA_STRESS_ITERS: "64"
         run: |
-          # Known NTSTATUS values, so a failure is named rather than left as a
-          # signed decimal to squint at. 0xC0000135 is here because this job hit
-          # it: it is a loader failure, not a crash, and it looks alarming.
           $names = @{
             "-1073741819" = "0xC0000005 STATUS_ACCESS_VIOLATION";
             "-1073741571" = "0xC00000FD STATUS_STACK_OVERFLOW";
             "-1073740940" = "0xC0000374 STATUS_HEAP_CORRUPTION";
             "-1073741515" = "0xC0000135 STATUS_DLL_NOT_FOUND (the binary did not start; not the bug)";
-            "-1073741510" = "0xC000013A control-C";
           }
 
           $failed = 0
-          for ($attempt = 1; $attempt -le 3; $attempt++) {
-            Write-Host "--- attempt $attempt of 3 ---"
-            $log = "events-$attempt.jsonl"
-
-            # Through cargo, not the exe directly. See the RUSTC_BOOTSTRAP note
-            # above: the direct launch fails in the loader. Cargo's own progress
-            # goes to stderr, so stdout is the harness's JSON, and stderr keeps
-            # the crash message visible in the log.
-            cargo test --no-default-features --features face-detection,screen-capture --lib `
-              -- -Zunstable-options --format=json --test-threads=${{ matrix.threads }} > $log
+          for ($attempt = 1; $attempt -le 5; $attempt++) {
+            Write-Host "--- attempt $attempt of 5 ---"
+            cargo test --no-default-features --features face-detection,screen-capture --test gpu_context_stress `
+              -- --ignored --nocapture --test-threads=1 parallel_app_construction
             $code = $LASTEXITCODE
-
-            # `.github/scripts/inflight_tests.py` does the parsing. It lives in a
-            # file, not inline here, so it can be run against real logs locally:
-            # it is checked against a clean run, a run killed mid-flight, a log
-            # whose final line was cut in half, and an empty log.
-            python .github/scripts/inflight_tests.py $log
             if ($code -eq 0) { continue }
 
             $named = $names["$code"]
             if (-not $named) { $named = "unrecognized" }
-            Write-Host "==== last 15 events ===="
-            Get-Content $log -Tail 15 | ForEach-Object { Write-Host "  $_" }
             Write-Host "::error::attempt $attempt died with exit $code ($named)"
             $failed = 1
             break
           }
-          # The crash is the finding, so report it as a failed cell.
           exit $failed
