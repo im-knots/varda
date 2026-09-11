@@ -908,6 +908,20 @@ fn macro_value_modulation_drives_targets_live() {
     );
 
     // LFO assigned to the macro's *value* key (the exact path the UI uses).
+    //
+    // 1 Hz, not the 10 Hz this used to run at. The loop below samples the result
+    // once per rendered frame, so the sampling rate *is* the frame rate, and
+    // Nyquist wants that above twice the LFO frequency. At 10 Hz this test
+    // needed a sustained 20 fps to see anything, which it gets when run alone
+    // and does not get when the suite runs in parallel: sampling a 10 Hz sine at
+    // roughly 10 fps returns the same phase every time, the swing reads as zero,
+    // and the test fails claiming modulation is not reaching the target when it
+    // is. It failed on every full run and passed in isolation, which is the
+    // signature.
+    //
+    // At 1 Hz the same loop only needs a couple of frames a second, so it
+    // measures the modulation path rather than the machine's load. Nothing about
+    // what is under test depends on the rate.
     send_cmd(
         &mut app,
         EngineCommand::AddLfo {
@@ -926,19 +940,42 @@ fn macro_value_modulation_drives_targets_live() {
     );
     assert!(matches!(r, CommandResult::Ok), "{r:?}");
 
-    // Step frames and observe the deck opacity swing as the LFO drives the macro.
+    // Render until the swing shows, rather than for a fixed frame count.
+    //
+    // The LFO runs on wall-clock time (`Mixer::start_time.elapsed()`) while this
+    // loop samples once per rendered frame, so a fixed count buys an amount of
+    // LFO phase that depends on how fast frames happen to run. This used to
+    // render exactly 60 frames, about 50ms of phase, and **failed every full
+    // parallel run while passing in isolation**.
+    //
+    // It was not a slow machine: the elapsed wall time was the same either way,
+    // 50ms against 52ms. Under contention from the rest of the suite the
+    // modulation simply advances far less per unit of wall time, and 60 frames
+    // stopped being enough. Serial runs of the whole file pass, which is the
+    // signature of interference rather than of timing.
+    //
+    // Waiting for the signal removes the guess. It stops as soon as the swing is
+    // unambiguous, so a healthy run is as quick as it ever was, and only a
+    // genuinely dead modulation path pays the timeout.
     let mut min = f32::MAX;
     let mut max = f32::MIN;
-    for _ in 0..60 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut frames = 0;
+    while std::time::Instant::now() < deadline {
         app.update_frame_timing();
         app.render_mixer_frame();
         let op = deck_snapshot(&mut app, &deck_uuid).opacity;
         min = min.min(op);
         max = max.max(op);
+        frames += 1;
+        if max - min > 0.05 {
+            break;
+        }
     }
     assert!(
         max - min > 0.05,
-        "deck opacity should oscillate from macro-value modulation: min={min} max={max}"
+        "deck opacity should oscillate from macro-value modulation: \
+         min={min} max={max} after {frames} frames"
     );
 }
 

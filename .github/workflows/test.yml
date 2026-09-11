@@ -3,9 +3,6 @@ name: test
 on:
   pull_request:
     branches: [main]
-    # Allowlist: docs, README, CONTRIBUTING, LICENSE, and .gitignore are
-    # omitted on purpose so PRs that only touch them skip this workflow.
-    # GitHub forbids combining `paths` with `paths-ignore` on one event.
     paths:
       - 'src/**'
       - 'tests/**'
@@ -18,28 +15,16 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: 1
-  # The adapter is pinned by VK_DRIVER_FILES, exported to $GITHUB_ENV by the
-  # install step below because the ICD path is discovered rather than fixed.
-  #
-  # Note WGPU_BACKEND is deliberately *not* set: `GpuContext::new_headless`
-  # builds its instance with `Backends::all()` and never reads it, and the one
-  # thing that did honour it (egui_kittest, via egui-wgpu's `Backends::from_env`)
-  # no longer runs here. Loader-level pinning is what actually constrains this.
-  #
-  # Turn `tests/common/mod.rs`'s no-adapter skip into a hard failure. Without
-  # this the entire GPU suite reports green on a runner with a broken driver.
-  VARDA_REQUIRE_GPU: 1
-  # Exclude the egui golden-image tests. Their reference PNGs are rendered on a
-  # developer's Metal GPU and lavapipe rounds a few pixels differently, so the
-  # comparison is cross-renderer and needs a tolerance wide enough to hide real
-  # regressions. They stay a local-only check — see tests/ui_snapshots.rs. Every
-  # other GPU suite below runs for real on lavapipe.
+  RUST_BACKTRACE: 
+  # Exclude the egui golden-image tests. 
   VARDA_SKIP_GOLDEN_SNAPSHOTS: 1
 
 jobs:
-  test:
-    name: test
+  test-linux:
+    name: test (linux)
+    # Scoped to this job on purpose.
+    env:
+      VARDA_REQUIRE_GPU: 1
     # ubuntu-24.04 (glibc 2.39) required: ort's prebuilt ONNX Runtime
     # references __isoc23_strtol / __isoc23_strtoull / __isoc23_strtoll
     # which only exist in glibc >= 2.38. ubuntu-22.04 (glibc 2.35) fails.
@@ -74,11 +59,6 @@ jobs:
           test -e /usr/lib/x86_64-linux-gnu/libfreenect.so \
             || { echo "::error::libfreenect-dev did not provide libfreenect.so"; exit 1; }
 
-      # GitHub runners have no GPU. lavapipe (Mesa's software Vulkan
-      # implementation) provides the headless adapter that the render, engine,
-      # and egui snapshot suites need. Without it they all skip and the job is
-      # green having tested nothing. egui_kittest already prefers a CPU adapter
-      # over a hardware one, so its snapshot renderer picks lavapipe unaided.
       - name: Install lavapipe (software Vulkan)
         run: |
           sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
@@ -111,8 +91,105 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
 
-      # The whole suite, not a curated subset: with an adapter present there is
-      # no GPU-free/GPU-gated split to maintain, and a newly added GPU test is
-      # covered without anyone remembering to list it here.
       - name: Run test suite
         run: cargo test --workspace
+
+  test-windows:
+    name: test (windows)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      # The runner has 16 GB and a small paging file. The first attempt died in
+      # rustc, not the linker, mmapping dependency rlibs:
+      # `os error 1455: The paging file is too small for this operation`,
+      # surfacing as `E0786: found invalid metadata files`.
+      #
+      # Three changes went in together to fix that: this setting, the job count
+      # below, and dropping the `html` feature. **Which one was load bearing has
+      # not been established**, and an earlier comment here credited this one on
+      # reasoning alone. Two things argue against it. Cargo builds dependencies
+      # of test targets with the `dev` profile, so this does not touch the
+      # dependency rlibs that rustc was failing to map. And the effect measured
+      # on the test target itself is small: 180 MB at `0`, 201 MB at
+      # `line-tables-only`, 210 MB at `2` (macOS, where debug info is not linked
+      # into the executable, so treat it as a lower bound rather than a
+      # transferable number).
+      #
+      # Dropping `html` is the better candidate: Servo's `libscript` alone is
+      # ~486 MB per debug rlib and takes a large dependency tree with it.
+      #
+      # Kept at `0` because it is cheap and harmless, not because it is proven.
+      # Note the cost: at `0` on MSVC there is no PDB, so a crash inside the
+      # harness gives an unusable stack. A real failure here already printed
+      # frames from the wrong module entirely. Raise this to `line-tables-only`
+      # when debugging.
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      # And halve how many of those rustc processes hold memory at once. Slower,
+      # but the job is bounded by linking rather than by CPU.
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: C:\vcpkg\installed
+          key: vcpkg-windows-x64-${{ hashFiles('.github/workflows/release.yml') }}
+          restore-keys: vcpkg-windows-x64-
+
+      - name: Install vcpkg FFmpeg
+        shell: pwsh
+        run: |
+          vcpkg install ffmpeg:x64-windows
+          echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
+
+      - name: Install LLVM (for shaderc)
+        run: choco install llvm -y
+        shell: cmd
+
+      - name: Set build environment
+        shell: pwsh
+        run: |
+          echo "LIBCLANG_PATH=C:\Program Files\LLVM\lib" >> $env:GITHUB_ENV
+          echo "PKG_CONFIG_PATH=C:\vcpkg\installed\x64-windows\lib\pkgconfig" >> $env:GITHUB_ENV
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      # Its own step so the report reaches the log even when the suite below
+      # fails, and so a Spout regression is named rather than buried among two
+      # thousand other tests. The runner's adapter is Microsoft Basic Render
+      # Driver (WARP) and the whole D3D11On12 bridge works on it, which is why
+      # this now asserts rather than reports. See spec/spout-output.md.
+      - name: Spout capability
+        run: cargo test --no-default-features --features face-detection,screen-capture --lib spout::capability -- --nocapture
+
+      # Enabled now that the step above has confirmed wgpu finds a Dx12 adapter
+      # here. Without it a runner that lost its adapter would skip every GPU test
+      # and still report green, which is the failure mode the Linux job's own
+      # comment warns about.
+      # `html` is deliberately absent, unlike `clippy (windows)` and the release
+      # build. Servo's `libscript` alone is ~486 MB per debug rlib and dominates
+      # both the build time and the memory that broke this job. Nothing is lost:
+      # clippy (windows) still type-checks the feature and the release job still
+      # builds it, and the HtmlManager surface compiles without it, so the
+      # integration and persistence tests around HTML decks still run here.
+      # Parallelism restored. It was pinned to `--test-threads=1` while chasing a
+      # STATUS_HEAP_CORRUPTION that only appeared under concurrent execution.
+      #
+      # The cause is now identified and fixed: **concurrent MIDI enumeration**.
+      # Four threads calling `MidiDeviceManager::new` at once die with
+      # STATUS_ACCESS_VIOLATION inside midir 0.11's winmm backend, which Varda
+      # does not control, so `scan_devices` now holds a process wide lock. Camera,
+      # screen capture, audio and GPU construction were all cleared by the same
+      # reproducer. See spec/roadmap.md and .github/workflows/windows-heap-bisect.yml.
+      #
+      # Serial execution was never a fix, only a way to make the log readable, and
+      # it cost roughly four minutes a run on a 2586 test suite.
+      - name: Run test suite
+        env:
+          VARDA_REQUIRE_GPU: 1
+        run: cargo test --no-default-features --features face-detection,screen-capture

@@ -114,6 +114,21 @@ mat2 gUnskew = mat2(1.0, 0.0, 0.0, 1.0);
 
 mat2 rot2(in float a) { float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }
 
+/// 2x2 inverse, written out rather than calling `inverse()`.
+///
+/// naga has no HLSL lowering for the builtin: translating this shader for DX12
+/// fails with `Unimplemented("write_expr_math Inverse")`, so the pipeline comes
+/// back invalid on Windows while every other backend is fine. The closed form is
+/// three multiplies and a reciprocal, and for a 2x2 it is exactly what a library
+/// implementation would do anyway.
+///
+/// Columns, GLSL order: `m[0]` is the first column, so `m[0][0]` is a, `m[0][1]`
+/// is b, `m[1][0]` is c, `m[1][1]` is d.
+mat2 inverse2(mat2 m) {
+    float det = m[0][0] * m[1][1] - m[1][0] * m[0][1];
+    return mat2(m[1][1], -m[0][1], -m[1][0], m[0][0]) / det;
+}
+
 float hash21(vec2 p) { return fract(sin(dot(p, vec2(27.609, 57.583))) * 43758.5453); }
 
 float hash31(vec3 p) {
@@ -485,7 +500,7 @@ void main() {
     // the inverse() out of the march.
     vec2 sk = mix(vec2(0.0), vec2(-0.5, 0.5), clamp(skew_amount, 0.0, 1.0));
     gSkew = mat2(1, -sk.y, -sk.x, 1);
-    gUnskew = inverse(gSkew);
+    gUnskew = inverse2(gSkew);
 
     vec3 ro = vec3(0.0, 0.0, PHASE_TIME_0 * 1.5);
     ro.xy += path(ro.z);

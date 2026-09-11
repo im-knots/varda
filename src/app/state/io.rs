@@ -54,6 +54,75 @@ impl VardaApp {
         }
     }
 
+    /// Attach a Spout sender to a channel as a live deck.
+    ///
+    /// The Windows counterpart to [`Self::cmd_add_syphon_deck`], and idempotent
+    /// for the same reason: a reconnecting controller and the reconcile pass can
+    /// both try to bind the same sender, and they must converge on one deck.
+    ///
+    /// Not `cfg`-gated, because `SpoutManager` reports unavailable off Windows,
+    /// so the command simply refuses there rather than failing to compile.
+    /// See /spec/spout-output.md.
+    pub fn cmd_add_spout_deck(&mut self, channel_uuid: &str, sender_name: &str) -> CommandResult {
+        let channel_idx = match self.resolve_channel(channel_uuid) {
+            Ok(idx) => idx,
+            Err(e) => return e.into(),
+        };
+        let display_name = format!("🔗 {sender_name}");
+        if let Some(ch) = self.mixer.channels().get(channel_idx)
+            && ch
+                .decks
+                .iter()
+                .any(|s| s.deck.source_name() == display_name)
+        {
+            log::debug!(
+                "Spout deck '{sender_name}' already present on channel {channel_idx}; add is a no-op"
+            );
+            return CommandResult::Ok;
+        }
+        let Some(receiver_idx) = self
+            .external_io
+            .spout_manager
+            .start_receive(sender_name, &self.context.device)
+        else {
+            return CommandResult::Err {
+                code: ErrorCode::Unavailable,
+                message: "Spout is unavailable on this system".into(),
+            };
+        };
+        let (src_w, src_h) = self
+            .external_io
+            .spout_manager
+            .client_dimensions(receiver_idx)
+            .unwrap_or((1920, 1080));
+        match crate::deck::Deck::new_from_spout(
+            &self.context,
+            receiver_idx,
+            sender_name,
+            src_w,
+            src_h,
+            self.render_width,
+            self.render_height,
+        ) {
+            Ok(deck) => {
+                let uuid = deck.uuid().to_string();
+                if let Some(ch) = self.mixer.channel_mut(channel_idx) {
+                    ch.add_deck(deck);
+                    CommandResult::OkWithId { uuid }
+                } else {
+                    CommandResult::Err {
+                        code: ErrorCode::NotFound,
+                        message: "Channel not found".into(),
+                    }
+                }
+            }
+            Err(e) => CommandResult::Err {
+                code: ErrorCode::InternalError,
+                message: e.to_string(),
+            },
+        }
+    }
+
     pub fn cmd_add_syphon_deck(&mut self, channel_uuid: &str, server_name: &str) -> CommandResult {
         #[cfg(target_os = "macos")]
         let channel_idx = match self.resolve_channel(channel_uuid) {
@@ -586,6 +655,88 @@ impl VardaApp {
                     );
                     // Requeue to retry on the next reconcile.
                     self.external_io.pending_syphon.push(p);
+                }
+            }
+        }
+    }
+
+    /// Rediscover Spout senders and late-bind any deck waiting for one.
+    ///
+    /// The Windows counterpart to [`Self::reconcile_syphon`], and the same two
+    /// jobs: keep the library list fresh so a producer that starts after Varda is
+    /// noticed, and attach decks deferred at restore once their sender appears.
+    ///
+    /// Runs unconditionally because discovery is a no-op off Windows, which keeps
+    /// the render loop free of a platform gate.
+    pub fn reconcile_spout(&mut self) {
+        const SCAN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+        if !self.external_io.spout_manager.is_available() {
+            return;
+        }
+        if self.external_io.last_spout_scan.elapsed() < SCAN_INTERVAL {
+            return;
+        }
+        self.external_io.last_spout_scan = std::time::Instant::now();
+        self.external_io.spout_manager.discover();
+
+        if self.external_io.pending_spout.is_empty() {
+            return;
+        }
+        let available: std::collections::HashSet<String> = self
+            .external_io
+            .spout_manager
+            .sources()
+            .iter()
+            .map(|s| s.name.clone())
+            .collect();
+        let mut ready: Vec<crate::persistence::PendingSpoutDeck> = Vec::new();
+        self.external_io
+            .pending_spout
+            .retain(|p| match &p.config.source {
+                crate::scene::SourceConfig::Spout { name } if available.contains(name) => {
+                    ready.push(p.clone());
+                    false
+                }
+                _ => true,
+            });
+
+        for p in ready {
+            let crate::scene::SourceConfig::Spout { name } = &p.config.source else {
+                continue;
+            };
+            let sender_name = name.clone();
+            let channel_uuid = p.channel_uuid.clone();
+            match self.cmd_add_spout_deck(&channel_uuid, &sender_name) {
+                CommandResult::Ok
+                | CommandResult::OkWithId { .. }
+                | CommandResult::OkWithData { .. } => {
+                    let display_name = format!("🔗 {sender_name}");
+                    if let Ok(ch_idx) = self.resolve_channel(&channel_uuid)
+                        && let Some(ch) = self.mixer.channel_mut(ch_idx)
+                        && let Some(slot) = ch
+                            .decks
+                            .iter_mut()
+                            .find(|s| s.deck.source_name() == display_name)
+                    {
+                        slot.opacity = p.config.opacity;
+                        slot.blend_mode = p.config.blend_mode.into();
+                        slot.mute = p.config.mute;
+                        slot.solo = p.config.solo;
+                        slot.z_index = p.config.z_index;
+                    }
+                    log::info!("Spout deck '{sender_name}' late-bound to channel {channel_uuid}");
+                }
+                CommandResult::Err { code, message } => {
+                    if code == ErrorCode::NotFound {
+                        log::info!(
+                            "Dropping Spout late-bind for '{sender_name}': channel {channel_uuid} no longer exists"
+                        );
+                        continue;
+                    }
+                    log::warn!(
+                        "Spout late-bind for '{sender_name}' (channel {channel_uuid}) failed: {message}; will retry"
+                    );
+                    self.external_io.pending_spout.push(p);
                 }
             }
         }

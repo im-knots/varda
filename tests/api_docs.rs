@@ -131,17 +131,30 @@ fn splice(existing: &str, generated: &str) -> String {
     format!("{}{}{}", &existing[..begin], generated, &existing[end..])
 }
 
+/// Compare on content, not on how the file happened to be checked out.
+///
+/// `render_reference` emits `\n`, and `read_to_string` returns the file's bytes
+/// untranslated. On a Windows checkout with `core.autocrlf=true` the file has
+/// `\r\n`, so a byte comparison fails there and only there, reporting the docs
+/// as stale when they are identical. `.gitattributes` now pins LF everywhere,
+/// which is the real fix; this keeps the test honest in a clone made before it
+/// existed.
+fn normalize(s: &str) -> String {
+    s.replace("\r\n", "\n")
+}
+
 #[test]
 fn route_reference_is_up_to_date() {
     let path = manifest_path("docs/13-api.md");
     let existing = std::fs::read_to_string(&path).expect("read docs/13-api.md");
     let updated = splice(&existing, &render_reference());
 
-    if existing == updated {
+    if normalize(&existing) == normalize(&updated) {
         return;
     }
     if std::env::var_os("UPDATE_API_DOCS").is_some() {
-        std::fs::write(&path, updated).expect("write docs/13-api.md");
+        // LF on write, matching `.gitattributes`.
+        std::fs::write(&path, normalize(&updated)).expect("write docs/13-api.md");
         return;
     }
     panic!(

@@ -215,6 +215,7 @@ varda [OPTIONS]
     --no-osc                Disable OSC input
     --no-ndi                Disable NDI discovery and sending
     --no-syphon             Disable Syphon (macOS only)
+    --no-spout              Disable Spout (Windows only)
     --no-html               Disable HTML deck sources (skips Servo rendering)
     --no-screen-capture     Disable screen / window capture deck sources
                             (no Screen Recording permission is ever requested)

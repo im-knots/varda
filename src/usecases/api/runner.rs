@@ -64,7 +64,8 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::decks::add_solid_color_deck, routes::decks::add_camera_deck,
         routes::decks::move_deck, routes::decks::reorder_deck, routes::decks::set_scaling_mode, routes::decks::set_transparent, routes::decks::set_render_fps,
         routes::decks::set_transition, routes::decks::set_param,
-        routes::decks::add_ndi_deck, routes::decks::add_syphon_deck,
+        routes::decks::add_ndi_deck, routes::decks::add_spout_deck,
+        routes::decks::add_syphon_deck,
         routes::decks::add_srt_deck, routes::decks::add_hls_deck, routes::decks::add_dash_deck, routes::decks::add_rtmp_deck,
         routes::decks::add_html_deck, routes::decks::reload_html_deck,
         routes::decks::set_html_interactive,
@@ -667,6 +668,10 @@ pub fn build_router(shared: SharedState) -> Router {
         .route(
             "/api/channels/{channel_uuid}/decks/syphon",
             axum::routing::post(routes::decks::add_syphon_deck),
+        )
+        .route(
+            "/api/channels/{channel_uuid}/decks/spout",
+            axum::routing::post(routes::decks::add_spout_deck),
         )
         .route(
             "/api/channels/{channel_uuid}/decks/srt",

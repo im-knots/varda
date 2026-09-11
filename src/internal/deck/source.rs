@@ -1134,6 +1134,31 @@ impl Deck {
         )
     }
 
+    /// Create a new deck from a Spout sender (Windows inter-app sharing).
+    ///
+    /// # Errors
+    ///
+    /// Propagates errors from [`Deck::new_from_external`].
+    pub fn new_from_spout(
+        context: &GpuContext,
+        receiver_idx: usize,
+        sender_name: &str,
+        source_width: u32,
+        source_height: u32,
+        width: u32,
+        height: u32,
+    ) -> Result<Self> {
+        Self::new_from_external(
+            context,
+            ExternalSourceKind::Spout(receiver_idx),
+            format!("🔗 {sender_name}"),
+            source_width,
+            source_height,
+            width,
+            height,
+        )
+    }
+
     /// Create a new deck from an SRT network source.
     ///
     /// # Errors

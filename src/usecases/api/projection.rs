@@ -333,6 +333,8 @@ pub(crate) mod tests {
             ndi_available: true,
             syphon_sources: vec![],
             syphon_available: false,
+            spout_available: false,
+            spout_sources: vec![],
             stream_receivers: vec![],
             analyzers: vec![],
             macros: vec![],

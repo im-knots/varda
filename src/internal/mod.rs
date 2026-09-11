@@ -25,6 +25,10 @@ pub mod registry;
 pub mod renderer;
 pub mod scene;
 pub mod screen_capture;
+// The Spout protocol module is pure and builds everywhere so its wire-format
+// tests run on the development machine; the D3D backend it will gain is Windows
+// only. See /spec/spout-output.md § Verification.
+pub mod spout;
 pub mod stream;
 pub mod surface;
 #[cfg(target_os = "macos")]

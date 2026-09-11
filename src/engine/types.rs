@@ -126,6 +126,10 @@ pub struct EngineState {
     pub syphon_sources: Vec<String>,
     /// Whether Syphon framework is available
     pub syphon_available: bool,
+    /// Discovered Spout senders (names)
+    pub spout_sources: Vec<String>,
+    /// Whether Spout can run here: Windows, and wgpu on the Dx12 backend
+    pub spout_available: bool,
     /// Active stream receiver configs (url, mode, connected)
     pub stream_receivers: Vec<StreamReceiverSnapshot>,
     pub analyzers: Vec<AnalyzerTypeInfo>,
@@ -1035,6 +1039,8 @@ mod tests {
             ndi_available: false,
             syphon_sources: vec![],
             syphon_available: false,
+            spout_available: false,
+            spout_sources: vec![],
             stream_receivers: vec![],
             analyzers: vec![],
             can_undo: false,
@@ -1122,6 +1128,8 @@ mod tests {
             ndi_available: false,
             syphon_sources: vec![],
             syphon_available: false,
+            spout_available: false,
+            spout_sources: vec![],
             stream_receivers: vec![],
             analyzers: vec![],
             can_undo: false,

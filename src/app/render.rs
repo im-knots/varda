@@ -52,6 +52,7 @@ struct HeadlessDeliverySinks<'a> {
     ndi_manager: &'a mut crate::ndi::NdiManager,
     #[cfg(target_os = "macos")]
     syphon_manager: &'a mut crate::syphon::SyphonManager,
+    spout_manager: &'a mut crate::spout::SpoutManager,
     audio_manager: &'a mut crate::audio::AudioManager,
     notifications: &'a mut crate::notifications::NotificationSystem,
     /// Master render rate, resolved through `encoder_fps` so an uncapped stage
@@ -361,6 +362,11 @@ impl VardaApp {
         #[cfg(target_os = "macos")]
         self.external_io.syphon_manager.update(&self.context.device);
 
+        // Spout, the Windows counterpart. Both calls are no-ops off Windows, so
+        // this needs no gate. See /spec/spout-output.md.
+        self.reconcile_spout();
+        self.external_io.spout_manager.update(&self.context.device);
+
         // Update stream receiver frames
         self.external_io.stream_manager.update(&self.context.queue);
 
@@ -390,6 +396,9 @@ impl VardaApp {
                         }
                         #[cfg(not(target_os = "macos"))]
                         ExternalSourceKind::Syphon(_) => None,
+                        ExternalSourceKind::Spout(idx) => {
+                            self.external_io.spout_manager.texture_view(idx).cloned()
+                        }
                         ExternalSourceKind::Srt(idx)
                         | ExternalSourceKind::Hls(idx)
                         | ExternalSourceKind::Dash(idx)
@@ -668,6 +677,7 @@ impl VardaApp {
             ndi_manager: &mut self.external_io.ndi_manager,
             #[cfg(target_os = "macos")]
             syphon_manager: &mut self.external_io.syphon_manager,
+            spout_manager: &mut self.external_io.spout_manager,
             audio_manager: &mut self.audio_manager,
             notifications: &mut self.session.notifications,
             encoder_fps: crate::app::state::encoder_fps(self.target_fps),
@@ -1113,6 +1123,13 @@ impl VardaApp {
             #[cfg(not(target_os = "macos"))]
             let is_syphon = false;
 
+            // Spout publishes GPU-side for the same reason, so it skips the
+            // readback too.
+            let is_spout = matches!(
+                &h.target,
+                crate::renderer::context::OutputTarget::SpoutSender { .. }
+            );
+
             let is_ndi_p216 = matches!(
                 (&h.target, &h.resolved_presentation.pixel_format),
                 (
@@ -1207,6 +1224,18 @@ impl VardaApp {
                 );
             }
 
+            if let crate::renderer::context::OutputTarget::SpoutSender { ref sender_name } =
+                h.target
+            {
+                sinks.spout_manager.publish_frame_gpu(
+                    context,
+                    sender_name,
+                    &h.texture_view,
+                    h.width,
+                    h.height,
+                );
+            }
+
             // Fold in any completed light measurement. Asynchronous like every
             // other readback, so a frame's numbers arrive a frame or two later,
             // which is immaterial for a running maximum.
@@ -1218,6 +1247,7 @@ impl VardaApp {
 
             // Deliver previous frame's readback data to target
             if !is_syphon
+                && !is_spout
                 && !is_ndi_p216
                 && let Some(frame_data) = h.readback.try_read(&context.device)
             {

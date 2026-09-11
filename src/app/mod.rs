@@ -89,6 +89,10 @@ pub struct AppConfig {
     #[arg(long = "no-syphon")]
     pub syphon_disabled: bool,
 
+    /// Disable Spout (Windows only)
+    #[arg(long = "no-spout")]
+    pub spout_disabled: bool,
+
     /// Disable HTML deck sources (skips Servo rendering)
     #[arg(long = "no-html")]
     pub html_disabled: bool,
@@ -213,6 +217,16 @@ pub(crate) struct ExternalIO {
     pub ndi_manager: crate::ndi::NdiManager,
     #[cfg(target_os = "macos")]
     pub syphon_manager: crate::syphon::SyphonManager,
+    /// Spout, the Windows counterpart. Unlike Syphon this is not `cfg`-gated:
+    /// the manager compiles everywhere and reports unavailable off Windows, so
+    /// the surrounding integration, persistence and UI code needs no gating.
+    /// See /spec/spout-output.md.
+    pub spout_manager: crate::spout::SpoutManager,
+    /// Spout decks restored from the workspace whose sender is not yet
+    /// publishing, late-bound on the render thread.
+    pub pending_spout: Vec<crate::persistence::PendingSpoutDeck>,
+    /// Throttle for periodic Spout re-discovery on the render thread.
+    pub last_spout_scan: std::time::Instant,
     /// Syphon decks restored from the workspace whose server is not yet
     /// published. The render thread auto-binds them once the server appears
     /// (`VardaApp::reconcile_syphon`). See `persistence::PendingSyphonDeck`.
@@ -558,6 +572,14 @@ impl VardaApp {
                 pending_syphon: Vec::new(),
                 #[cfg(target_os = "macos")]
                 last_syphon_scan: std::time::Instant::now(),
+                spout_manager: if config.spout_disabled {
+                    log::info!("Spout disabled by CLI flag");
+                    crate::spout::SpoutManager::new_disabled()
+                } else {
+                    crate::spout::SpoutManager::new()
+                },
+                pending_spout: Vec::new(),
+                last_spout_scan: std::time::Instant::now(),
                 stream_manager: crate::stream::StreamManager::new(),
                 stream_library: Vec::new(),
                 hls_library: Vec::new(),

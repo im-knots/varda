@@ -205,6 +205,9 @@ fn resolve_headless_presentation(
     if let Some(resolved) = super::subprocess::RecordingPlan::resolved_for_target(target, request) {
         return resolved;
     }
+    if matches!(target, OutputTarget::SpoutSender { .. }) {
+        return spout_presentation(request);
+    }
     let (pixel_format, color_profile, alpha_mode, fallback_reason) = match target {
         OutputTarget::NdiSend { .. } => (
             PresentationPixelFormat::Uyvy,
@@ -225,6 +228,9 @@ fn resolve_headless_presentation(
         | OutputTarget::RtmpStream { .. } => {
             unreachable!("ffmpeg targets resolve through their own plan above")
         }
+        OutputTarget::SpoutSender { .. } => {
+            unreachable!("Spout resolves through spout_presentation above")
+        }
         OutputTarget::Windowed | OutputTarget::Display { .. } => (
             PresentationPixelFormat::Rgba8,
             PresentationColorProfile::SrgbFull,
@@ -240,6 +246,48 @@ fn resolve_headless_presentation(
         alpha_mode,
         fallback_reason,
     )
+}
+
+/// What a Spout sender can carry.
+///
+/// Unlike Syphon, which is BGRA8 and nothing else, Spout's shared textures can be
+/// `R10G10B10A2` as well, so ten-bit SDR is a real option here rather than a
+/// fallback warning.
+///
+/// There is no HDR mode and there will not be one. Spout shares a texture and
+/// carries no transfer function, primaries, or mastering metadata, so declaring a
+/// float format and calling it HDR would be a private convention no receiver
+/// could honour. That is the same reasoning that rules out NDI HDR in
+/// /spec/hdr-output.md.
+///
+/// Eight-bit is listed first because order decides where a blocked request
+/// lands: an HDR request degrades to the first non-HDR entry, and BGRA8 is the
+/// interoperable one. A ten-bit request still matches exactly, since `resolve`
+/// looks for an exact depth and transfer before it considers the order.
+/// See /spec/spout-output.md § Presentation contract.
+fn spout_presentation(request: PresentationRequest) -> ResolvedPresentation {
+    let formats = vec![
+        PresentationFormat {
+            depth: PresentationDepth::Sdr8,
+            transfer: PresentationTransfer::Sdr,
+            pixel_format: PresentationPixelFormat::Bgra8,
+            color_profile: PresentationColorProfile::SrgbFull,
+            alpha_mode: AlphaMode::Premultiplied,
+        },
+        PresentationFormat {
+            depth: PresentationDepth::Sdr10,
+            transfer: PresentationTransfer::Sdr,
+            pixel_format: PresentationPixelFormat::Rgb10A2,
+            color_profile: PresentationColorProfile::SrgbFull,
+            alpha_mode: AlphaMode::Premultiplied,
+        },
+    ];
+    PresentationCapabilities::new(
+        formats,
+        Some("Spout carries pixels with no transfer signalling; HDR cannot be expressed".into()),
+    )
+    .resolve(request)
+    .expect("Spout always offers the BGRA8 fallback")
 }
 
 /// Every presentation mode, with the reason a headless target cannot deliver it.
@@ -302,6 +350,47 @@ pub struct WindowSurface {
     pub size: winit::dpi::PhysicalSize<u32>,
 }
 
+/// Which backends to ask wgpu for, in the order that decides ties.
+///
+/// **Windows gets DX12 alone, on purpose.** With `Backends::all()`, wgpu
+/// registers Vulkan before DX12 and then sorts adapters by device type with a
+/// *stable* sort. A discrete GPU reports `DiscreteGpu` on both backends, so the
+/// keys tie and enumeration order wins: Vulkan, on essentially every machine
+/// with normal drivers.
+///
+/// That silently disables Spout. The bridge needs a real `ID3D12Device` through
+/// `as_hal::<Dx12>`, which returns `None` on a Vulkan device, so
+/// `SpoutManager` marks itself unavailable and the feature is dead for the users
+/// it was built for. `WGPU_BACKEND` cannot rescue it either, since that is only
+/// read by `InstanceDescriptor::from_env_or_default`, which this does not call.
+///
+/// Requiring D3D is what every Spout implementation does. `KlakSpout`, the Unity
+/// plugin, states it outright: "currently supports only Direct3D 11 and 12;
+/// other graphics APIs such as OpenGL or Vulkan aren't available", and makes
+/// users change Unity's graphics API by hand. Notch says the same. The Rust
+/// `spout2-rs` crate exposes `dx`, `dx12` and `gl` and no Vulkan. Spout itself
+/// has never had a Vulkan path: the request has been open since 2021. Choosing
+/// the backend here means a Varda user never has to know any of that.
+///
+/// Everywhere else keeps `all()`, so macOS still gets Metal and Linux still gets
+/// Vulkan. See [`fallback_backends`] for what happens if DX12 is absent.
+fn preferred_backends() -> wgpu::Backends {
+    if cfg!(target_os = "windows") {
+        wgpu::Backends::DX12
+    } else {
+        wgpu::Backends::all()
+    }
+}
+
+/// What to try when [`preferred_backends`] finds no adapter at all.
+///
+/// A Windows machine with no D3D12 is unusual but not impossible: a very old
+/// GPU, a stripped container, a remote session. Losing Spout there is much
+/// better than refusing to start, so the second attempt asks for everything.
+fn fallback_backends() -> wgpu::Backends {
+    wgpu::Backends::all()
+}
+
 impl GpuContext {
     /// Create a GPU context + window surface from a window.
     ///
@@ -334,16 +423,47 @@ impl GpuContext {
         winit::dpi::PhysicalSize<u32>,
     )> {
         let size = window.inner_size();
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
-            flags: wgpu::InstanceFlags::default(),
-            backend_options: wgpu::BackendOptions::default(),
-            display: None,
-            memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
-        });
-        let surface = instance
-            .create_surface(window)
-            .context("Failed to create surface")?;
+
+        let build = |backends: wgpu::Backends| {
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                backends,
+                flags: wgpu::InstanceFlags::default(),
+                backend_options: wgpu::BackendOptions::default(),
+                display: None,
+                memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
+            });
+            let surface = instance.create_surface(window)?;
+            Ok::<_, wgpu::CreateSurfaceError>((instance, surface))
+        };
+
+        let (instance, surface) =
+            build(preferred_backends()).context("Failed to create surface")?;
+
+        // Probe for an adapter that can actually drive this surface before
+        // committing. A backend can exist and still present nothing usable, and
+        // finding that out here means one honest fallback rather than a failure
+        // later that looks like a driver problem. See `fallback_backends`.
+        if preferred_backends() != fallback_backends() {
+            let usable =
+                pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    compatible_surface: Some(&surface),
+                    force_fallback_adapter: false,
+                    apply_limit_buckets: false,
+                }));
+            if usable.is_err() {
+                log::warn!(
+                    "No surface-compatible adapter on {:?}; retrying on every backend. \
+                     Spout needs Dx12 and will report unavailable.",
+                    preferred_backends()
+                );
+                drop(surface);
+                let (instance, surface) =
+                    build(fallback_backends()).context("Failed to create surface")?;
+                return Ok((instance, surface, size));
+            }
+        }
+
         Ok((instance, surface, size))
     }
 
@@ -533,20 +653,48 @@ impl GpuContext {
     /// headless device request fails.
     pub fn new_headless() -> Result<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
+            backends: preferred_backends(),
             flags: wgpu::InstanceFlags::default(),
             backend_options: wgpu::BackendOptions::default(),
             display: None,
             memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
         });
 
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: None,
-            force_fallback_adapter: false,
-            apply_limit_buckets: false,
-        }))
-        .context("Failed to find GPU adapter for headless context")?;
+        let headless_adapter = |instance: &wgpu::Instance| {
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: None,
+                force_fallback_adapter: false,
+                apply_limit_buckets: false,
+            }))
+        };
+
+        // Second attempt on the widest set, so a machine without the preferred
+        // backend still starts. See `fallback_backends`.
+        let (instance, adapter) = match headless_adapter(&instance) {
+            Ok(adapter) => (instance, adapter),
+            Err(_) if preferred_backends() != fallback_backends() => {
+                log::warn!(
+                    "No adapter on {:?}; retrying on every backend. Spout needs Dx12 \
+                     and will report unavailable.",
+                    preferred_backends()
+                );
+                let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                    backends: fallback_backends(),
+                    flags: wgpu::InstanceFlags::default(),
+                    backend_options: wgpu::BackendOptions::default(),
+                    display: None,
+                    memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
+                });
+                let adapter = headless_adapter(&instance)
+                    .context("Failed to find GPU adapter for headless context")?;
+                (instance, adapter)
+            }
+            Err(e) => {
+                return Err(anyhow::Error::new(e))
+                    .context("Failed to find GPU adapter for headless context");
+            }
+        };
 
         log::info!("Using GPU: {}", adapter.get_info().name);
         log::info!("Backend: {:?}", adapter.get_info().backend);
@@ -2231,6 +2379,83 @@ mod tests {
                 "the only legitimate remaining obstacle is the installed encoder: {reason}"
             );
         }
+    }
+
+    /// Spout carries more than Syphon does, and the picker should say so.
+    ///
+    /// Syphon is BGRA8 and nothing else, so its ten-bit request is a fallback
+    /// warning. Spout's shared textures can be `R10G10B10A2`, so ten-bit is a
+    /// real choice there. Copying the Syphon contract would have undersold it.
+    #[test]
+    fn spout_offers_ten_bit_where_syphon_cannot() {
+        use crate::engine::value::render::{OutputTarget, PresentationMode};
+        let spout = OutputTarget::SpoutSender {
+            sender_name: "Varda".into(),
+        };
+        let syphon = OutputTarget::SyphonServer {
+            server_name: "Varda".into(),
+        };
+        assert_eq!(
+            deliverable(&spout),
+            vec![PresentationMode::Sdr8, PresentationMode::Sdr10]
+        );
+        assert_eq!(deliverable(&syphon), vec![PresentationMode::Sdr8]);
+    }
+
+    /// Spout shares a texture and carries no transfer signalling, so there is no
+    /// HDR mode to offer and the reason has to say that rather than blame a
+    /// codec the user could change.
+    #[test]
+    fn spout_blocks_hdr_and_explains_that_it_carries_no_transfer() {
+        use crate::engine::value::render::{
+            OutputTarget, PresentationMode, PresentationRequest, PresentationTransfer,
+        };
+        let target = OutputTarget::SpoutSender {
+            sender_name: "Varda".into(),
+        };
+        for mode in [
+            PresentationMode::Hdr10,
+            PresentationMode::Hlg,
+            PresentationMode::Edr,
+        ] {
+            assert!(
+                !deliverable(&target).contains(&mode),
+                "{mode:?} must not be selectable on Spout"
+            );
+        }
+        let resolved = super::resolve_headless_presentation(
+            PresentationRequest::default().with_mode(PresentationMode::Hdr10),
+            &target,
+        );
+        assert_eq!(
+            resolved.transfer,
+            PresentationTransfer::Sdr,
+            "an HDR request must degrade rather than be published as HDR"
+        );
+        let reason = resolved.fallback_reason.expect("HDR is blocked");
+        assert!(
+            reason.contains("transfer signalling"),
+            "the reason should name what Spout cannot carry: {reason}"
+        );
+    }
+
+    /// The degrade lands on the interoperable format, not merely the best one.
+    ///
+    /// Every Spout receiver understands BGRA8; a ten-bit surface handed to one
+    /// that assumes BGRA8 is misread rather than refused, so an HDR request must
+    /// not silently become ten-bit.
+    #[test]
+    fn an_hdr_request_on_spout_degrades_to_eight_bit_not_ten() {
+        use crate::engine::value::render::{
+            OutputTarget, PresentationDepth, PresentationMode, PresentationRequest,
+        };
+        let resolved = super::resolve_headless_presentation(
+            PresentationRequest::default().with_mode(PresentationMode::Hdr10),
+            &OutputTarget::SpoutSender {
+                sender_name: "Varda".into(),
+            },
+        );
+        assert_eq!(resolved.resolved, PresentationDepth::Sdr8);
     }
 
     /// EDR is a display monitoring contract. No container, codec, or stream

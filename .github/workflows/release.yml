@@ -198,10 +198,7 @@ jobs:
 
       - name: Build release binary
         shell: pwsh
-        # The `depth` feature (Kinect v1 via libfreenect) is excluded on Windows:
-        # libfreenect v1 has no vcpkg port and needs a manual libusb-win32/CMake
-        # build. The other defaults (face-detection, html, screen-capture) are
-        # re-added explicitly. See spec/depth-sensors.md ("Platform Support").
+        # The `depth` feature (Kinect v1 via libfreenect) is excluded on Windows
         run: cargo build --release --no-default-features --features face-detection,html,screen-capture
 
       - name: Package portable ZIP
@@ -220,18 +217,13 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: write
-      # Provenance attestation: `id-token` mints the OIDC token the attestation
-      # is signed with, `attestations` writes it to the repository's store.
+      # Provenance attestation
       id-token: write
       attestations: write
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v5
 
-      # Binds each released artifact to the commit and workflow that produced it,
-      # verifiable with `gh attestation verify <file> --repo im-knots/varda`.
-      # Varda is not code-signed: this attests what was built rather than who paid
-      # a vendor to vouch for it. See /spec/release-strategy.md.
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
         with:
