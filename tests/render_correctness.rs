@@ -68,7 +68,33 @@ fn render_at(ctx: &GpuContext, mixer: &mut Mixer, frame: usize) {
     render_frame(ctx, mixer, Some(frame as f32 / FPS));
 }
 
+/// Take the frame scheduler out of every measurement in this file.
+///
+/// Decks default to `DeckRenderFps::Auto`, which skips a deck when its
+/// wall-clock render cost is over budget, and a skipped deck repeats its
+/// previous picture. Under a software rasterizer everything is over budget, so
+/// the skipping is not occasional, it is most frames.
+///
+/// That has now broken three tests here in two different disguises. The
+/// `liquid_light` pair measured a *median* frame delta and got exactly zero, since
+/// most frames repeated. `tap_latency_does_not_depend_on_channel_order` asked
+/// what a tap showed on frame two and got black, because the deck it taps never
+/// rendered on frame one. Both looked like shader or tap bugs and were neither.
+///
+/// Pinning this centrally rather than per test, because the failure mode is
+/// invisible at the call site: a test does not mention the scheduler, it just
+/// quietly measures it. Any test in this file that cares which frame something
+/// happened on was exposed, whether or not it has failed yet.
+fn disable_frame_skipping(mixer: &mut Mixer) {
+    for channel in mixer.channels_mut() {
+        for slot in &mut channel.decks {
+            slot.render_fps = varda::channel::DeckRenderFps::Fixed(0);
+        }
+    }
+}
+
 fn render_frame(ctx: &GpuContext, mixer: &mut Mixer, free_run_time: Option<f32>) {
+    disable_frame_skipping(mixer);
     let audio = AudioData::default();
     let audio_values = AudioValues {
         sources: std::collections::HashMap::default(),
@@ -1310,6 +1336,13 @@ fn chroma_flow_auto_palette_does_not_lurch_on_smooth_input() {
     /// why the *tail* moved, not to widen this. A tail that shifts is the effect
     /// changing behaviour, which is what the test is for.
     const MAX_SPIKE_RATIO: f32 = 1.3;
+    /// The control settings graded, lowest to highest.
+    const STABILITIES: [f32; 3] = [0.0, 0.5, 1.0];
+    /// Slack on "steadier as the control rises". Metal reads 1.93 / 1.94 / 1.93,
+    /// flat within noise, so a small rise between neighbours is measurement
+    /// rather than inversion. A real inversion is far larger: the regression
+    /// this guards against scored 1.81 rising to 4.64.
+    const MONOTONIC_TOLERANCE: f32 = 1.15;
 
     let Some(ctx) = headless_gpu() else {
         return;
@@ -1399,24 +1432,53 @@ fn chroma_flow_auto_palette_does_not_lurch_on_smooth_input() {
         // that control up used to make the picture measurably *less* steady,
         // which is the opposite of what it promises, and a single reading at the
         // default would not have caught it.
-        let per: Vec<Spike> = [0.0f32, 0.5, 1.0]
+        let per: Vec<Spike> = STABILITIES
             .into_iter()
             .map(|stability| spike_ratio(src, false, stability))
             .collect();
-        let auto = per.iter().map(|s| s.ratio).fold(0.0f32, f32::max);
         let manual_spike = spike_ratio(src, true, 0.5);
         let manual = manual_spike.ratio;
         let mut detail = String::new();
-        for (spike, stab) in per.iter().zip([0.0f32, 0.5, 1.0]) {
+        for (spike, stab) in per.iter().zip(STABILITIES) {
             use std::fmt::Write as _;
             let _ = write!(detail, "\n    stability {stab:.1}: {spike}");
         }
+        let report = format!("\n  auto:{detail}\n    manual (fixed palette): {manual_spike}");
+
+        // 1. Steadier as the control goes up, which is the promise in the name.
+        //
+        // This used to assert the *worst* stability setting against a fixed
+        // palette, and that is a stronger claim than the control makes. At
+        // stability 0.0 the palette is asked to react in about five frames, so
+        // when an anchor genuinely changes it is supposed to follow visibly. The
+        // old form only ever passed because on Metal the anchors do not change
+        // during the window at all, which makes every setting look identical and
+        // the assertion vacuous. Windows, where they do change, reported
+        // 4.64 / 2.80 / 1.81 across the three settings: the control working,
+        // failing a test that could not tell the difference.
+        for (i, pair) in per.windows(2).enumerate() {
+            assert!(
+                pair[1].ratio <= pair[0].ratio * MONOTONIC_TOLERANCE,
+                "{src}: Palette Stability is inverted. Raising it from {:.1} to \
+                 {:.1} made the picture *less* steady, {:.2}x against {:.2}x. \
+                 That is the opposite of what the control promises.{report}",
+                STABILITIES[i],
+                STABILITIES[i + 1],
+                pair[0].ratio,
+                pair[1].ratio
+            );
+        }
+
+        // 2. And at the top of the control, an auto palette has to be as steady
+        //    as one that never moves. This is where the anchors-jumped failure
+        //    would show: an anchor that hops regardless of stability lands here.
+        let steadiest = per.last().expect("STABILITIES is not empty");
         assert!(
-            auto < manual * MAX_SPIKE_RATIO,
-            "{src}: auto palette lurched. The p95 frame changed {auto:.2}x the \
-             median, against {manual:.2}x with the palette held fixed, so an anchor \
-             jumped and regraded the whole frame at once.\
-             \n  auto:{detail}\n    manual (fixed palette): {manual_spike}"
+            steadiest.ratio < manual * MAX_SPIKE_RATIO,
+            "{src}: auto palette lurched even at full stability. The p95 frame \
+             changed {:.2}x the median, against {manual:.2}x with the palette held \
+             fixed, so an anchor jumped and regraded the whole frame at once.{report}",
+            steadiest.ratio
         );
     }
 }
@@ -1571,6 +1633,164 @@ fn chroma_flow_auto_palette_is_carried_between_frames() {
             i + 1
         );
     }
+}
+
+/// Settle, then jitter the fixture's two rivals back and forth across the point
+/// where they swap, returning the median per-frame change.
+fn tie_bait_jitter(ctx: &GpuContext, mixer: &mut Mixer, size: (u32, u32)) -> f32 {
+    const SETTLE: usize = 30;
+    const SWEEP: usize = 40;
+    let (w, h) = size;
+
+    let luminance = |mixer: &Mixer| -> Vec<f32> {
+        read_back(ctx, mixer, w, h)
+            .iter()
+            .map(|p| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2])
+            .collect()
+    };
+    let mean_delta = |a: &[f32], b: &[f32]| -> f32 {
+        a.iter().zip(b).map(|(x, y)| (x - y).abs()).sum::<f32>() / a.len() as f32
+    };
+    let set_tie = |mixer: &mut Mixer, v: f32| {
+        mixer.channel_mut(0).expect("channel 0").decks[0]
+            .deck
+            .generator_params
+            .set_float("tie", v);
+    };
+
+    set_tie(mixer, 0.5);
+    for frame in 0..SETTLE {
+        render_at(ctx, mixer, frame);
+    }
+    let mut prev = luminance(mixer);
+
+    let mut deltas = Vec::with_capacity(SWEEP);
+    for step in 0..SWEEP {
+        #[allow(clippy::cast_precision_loss)]
+        let tie = 0.5 + 0.5 * ((step as f32) * std::f32::consts::TAU / 8.0).sin();
+        set_tie(mixer, tie);
+        render_at(ctx, mixer, SETTLE + step);
+        let cur = luminance(mixer);
+        deltas.push(mean_delta(&prev, &cur));
+        prev = cur;
+    }
+    deltas.sort_by(|a, b| a.partial_cmp(b).expect("no NaN frames"));
+    deltas[deltas.len() / 2]
+}
+
+/// An anchor must hand over, not flap.
+///
+/// The palette is chosen by greedy farthest-point over a grid of samples. That
+/// is a selection, and a *memoryless* selection flaps: when two candidates sit
+/// near the cut, every wobble in the content swaps which one is in the palette,
+/// a completely different colour arrives, and the frame regrades. The pairing in
+/// `palettePass` cannot absorb it, because pairing re-matches a reordered set
+/// and this is a changed set.
+///
+/// Real content reaches that cut only by luck, which made this untestable for a
+/// long time. `dull_skull` reaches it on the DX12 backend and not on Metal, so
+/// the lurch test above failed on Windows and could not be reproduced anywhere
+/// else, and two attempted fixes were graded against a test with nothing to
+/// detect. `tests/shaders/palette_tie_bait.fs` removes the luck: flat blocks on
+/// the exact grid the extraction samples, with two of them sliding through the
+/// point where they swap.
+///
+/// Three things had to be right before this measured anything, each costing a
+/// round to find:
+///
+/// * **A wide enough swing.** The first fixture moved the two distances by 1.5%,
+///   inside the 2% `SELECTION_MARGIN`, which was already suppressing the swap.
+/// * **Jitter, not a sweep.** Sliding past the crossing once swaps the winner
+///   once and easing hides it. Content that wobbles around the cut is what makes
+///   a memoryless selection flap.
+/// * **The right reference.** Flapping lifts the whole distribution rather than
+///   adding a tail, so p95-over-median, which the lurch test uses, is blind to
+///   it: measured, 2.4x while flapping against 3.0x while healthy, the wrong way
+///   round. What flapping does show is the picture moving far more than the
+///   content it is grading.
+#[test]
+fn chroma_flow_palette_hands_over_rather_than_flapping() {
+    const W: u32 = 64;
+    const H: u32 = 64;
+    /// How much more the graded picture may move than the content it grades.
+    ///
+    /// Measured on the palette's fastest setting: **4.3x with hysteresis, 350x
+    /// without**. The gap is nearly two orders of magnitude, so this sits far
+    /// from both ends rather than being tuned against either.
+    const MAX_CHASE: f32 = 20.0;
+
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+
+    let src =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/shaders/palette_tie_bait.fs");
+    let fx_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders/chroma_flow.fs");
+
+    let build = |graded: bool| -> Mixer {
+        let mut mixer = Mixer::new(&ctx, W, H).expect("mixer");
+        mixer.set_tonemap_mode(&ctx.queue, TonemapMode::Bypass);
+        let deck = Deck::new(
+            &ctx,
+            varda::isf::ISFShader::from_file(&src).expect("parse tie-bait fixture"),
+            W,
+            H,
+        )
+        .expect("deck");
+        let ch = mixer.channel_mut(0).expect("channel 0");
+        ch.add_deck(deck);
+        if !graded {
+            return mixer;
+        }
+        let fx_shader = varda::isf::ISFShader::from_file(&fx_path).expect("parse chroma_flow.fs");
+        let mut fx = varda::deck::Effect::new(&ctx, fx_shader).expect("deck effect");
+        fx.params.set_bool("palette_mode", false);
+        // Two groups: the centre sample, and one slot for the two rivals to
+        // contest. With more slots both are simply included, the pairing absorbs
+        // the reorder, and nothing can jump.
+        fx.params.set_float("palette_size", 2.0);
+        // The fastest setting, where a jump is least disguised by easing.
+        fx.params.set_float("palette_stability", 0.0);
+        for still in [
+            "zoom",
+            "rotate",
+            "drift_x",
+            "drift_y",
+            "warp_amount",
+            "flow_speed",
+            "group_shear",
+        ] {
+            fx.params.set_float(still, 0.0);
+        }
+        // Show the palette plainly. At their defaults `barrier_level` holds the
+        // darker rival back from being graded at all and `color_preservation`
+        // blends the source back over the anchor; together they hid the effect
+        // completely and cost a round to notice.
+        fx.params.set_float("barrier_level", 0.0);
+        fx.params.set_float("color_preservation", 0.0);
+        fx.params.set_float("edge_blend_width", 0.0);
+        ch.decks[0].deck.add_effect(fx);
+        mixer
+    };
+
+    let mut plain = build(false);
+    let content = tie_bait_jitter(&ctx, &mut plain, (W, H));
+    let mut graded = build(true);
+    let auto = tie_bait_jitter(&ctx, &mut graded, (W, H));
+
+    assert!(
+        content > 0.0,
+        "the content never moved at all, so this proves nothing"
+    );
+    let ratio = auto / content;
+    assert!(
+        ratio <= MAX_CHASE,
+        "the auto palette flaps: while two candidates jitter across the point \
+         where they swap, the graded picture moves {auto:.6} per frame while the \
+         content itself moves only {content:.6} ({ratio:.1}x). The selection is \
+         changing which colour is in the palette every time the ranking crosses, \
+         instead of keeping the one already on screen."
+    );
 }
 
 /// Render `source`, optionally through Chroma Flow, capturing the luminance

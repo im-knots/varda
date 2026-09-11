@@ -263,6 +263,21 @@ void loadPalette(out vec3 pal[MAX_PALETTE]) {
 /// behaves identically; the value only has to sit between them.
 #define SELECTION_MARGIN 0.02
 
+/// How much better a challenger must be to take an incumbent's place.
+///
+/// Eight percent of a squared colour distance, about four percent of a distance.
+/// Two anchors that far apart are different colours by any measure, so on
+/// ordinary content, where the ranking is not close, this changes nothing: the
+/// same candidates win by the same margins. It only decides cases that were
+/// coin flips, and it decides them in favour of the picture already on screen.
+#define STICKINESS 0.08
+
+/// How close a candidate must sit to an existing anchor to count as that anchor,
+/// as a squared distance. 0.01 is a distance of 0.1, so a candidate has to be
+/// essentially the colour already shown, not merely in the same region of the
+/// gamut.
+#define STICKY_RADIUS 0.01
+
 // A candidate stands for a whole region of the picture, so estimating it from a
 // single texel makes it track that texel's noise: on live video the value moves
 // every frame and the palette inherits the flicker. A short cross average costs
@@ -277,8 +292,11 @@ vec3 sampleRegion(vec2 c) {
     return s / 5.0;
 }
 
-// Greedy farthest-point selection over a 5x5 grid, for maximum colour diversity.
-void extractAutoPalette(int numGroups, out vec3 pal[MAX_PALETTE]) {
+/// Greedy farthest-point selection over a 5x5 grid, for maximum colour diversity.
+///
+/// `prev` is the palette already on screen, and `hasPrev` says whether it holds
+/// anything yet. They are here for hysteresis: see `STICKINESS`.
+void extractAutoPalette(int numGroups, vec3 prev[MAX_PALETTE], bool hasPrev, out vec3 pal[MAX_PALETTE]) {
     vec3 candidates[NUM_CANDIDATES];
     for (int y = 0; y < 5; y++) {
         for (int x = 0; x < 5; x++) {
@@ -320,8 +338,32 @@ void extractAutoPalette(int numGroups, out vec3 pal[MAX_PALETTE]) {
             // candidate index instead, which is the same everywhere. Genuine
             // separations are far larger than the margin, so the palette that
             // gets picked is unchanged; only the coin-flips become decisions.
-            if (minDist > bestMinDist + max(bestMinDist, 0.0) * SELECTION_MARGIN) {
-                bestMinDist = minDist;
+            // Hysteresis: a colour the palette already shows defends its place.
+            //
+            // `SELECTION_MARGIN` below settles ties *within* one frame, so the
+            // same inputs always give the same answer. It cannot help across
+            // frames, because this search has no memory: as the picture drifts,
+            // two candidates near the cut swap ranks, one leaves the palette and
+            // a different colour enters, and the whole frame regrades in a
+            // single step. The pairing in `palettePass` cannot absorb that. It
+            // re-matches a *reordered* set, and this is a changed set.
+            //
+            // So a candidate sitting on an existing anchor scores slightly
+            // higher, and a challenger has to be clearly better to displace it
+            // rather than merely luckier. Reproduced and measured with
+            // tests/shaders/palette_tie_bait.fs.
+            float score = minDist;
+            if (hasPrev) {
+                float toPrev = 1e10;
+                for (int p = 0; p < MAX_PALETTE; p++) {
+                    if (p >= numGroups) continue;
+                    vec3 dp = candidates[c] - prev[p];
+                    toPrev = min(toPrev, dot(dp, dp));
+                }
+                if (toPrev < STICKY_RADIUS) score *= 1.0 + STICKINESS;
+            }
+            if (score > bestMinDist + max(bestMinDist, 0.0) * SELECTION_MARGIN) {
+                bestMinDist = score;
                 bestIdx = c;
             }
         }
@@ -342,17 +384,20 @@ void extractAutoPalette(int numGroups, out vec3 pal[MAX_PALETTE]) {
 vec4 palettePass(int numGroups) {
     int slot = clamp(int(floor(uv.x * float(MAX_PALETTE))), 0, MAX_PALETTE - 1);
 
-    vec3 targets[MAX_PALETTE];
-    extractAutoPalette(numGroups, targets);
-
     // Alpha doubles as the "this buffer holds a palette" flag. A persistent
     // target starts cleared, so the first frame has to seed rather than ease out
     // of black.
     vec4 mine = readPaletteSlot(slot);
-    if (mine.a < 0.5) return vec4(targets[slot], 1.0);
+    bool hasPrev = mine.a >= 0.5;
 
+    // Read before extracting, because the extraction now uses it.
     vec3 prev[MAX_PALETTE];
     for (int i = 0; i < MAX_PALETTE; i++) prev[i] = readPaletteSlot(i).rgb;
+
+    vec3 targets[MAX_PALETTE];
+    extractAutoPalette(numGroups, prev, hasPrev, targets);
+
+    if (!hasPrev) return vec4(targets[slot], 1.0);
 
     // Confident pairs first, rather than slot 0 first.
     //
