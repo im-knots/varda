@@ -48,7 +48,9 @@ half = "2.6"
 # Shader compilation (build-from-source ensures static linking — avoids
 # libshaderc_shared.dylib runtime errors when users have Homebrew shaderc)
 shaderc = { version = "0.10", features = ["build-from-source"] }
-naga = { version = "30.0", features = ["spv-in", "wgsl-out"] }
+# `hlsl-out` is here so tests can run the same translation DX12 does, from any
+# platform. It adds a backend, not a crate.
+naga = { version = "30.0", features = ["spv-in", "wgsl-out", "hlsl-out"] }
 
 # ISF metadata parsing
 serde = { version = "1.0", features = ["derive"] }
@@ -167,6 +169,19 @@ block2                   = { version = "0.6", optional = true }
 # Windows Graphics Capture for the Windows screen/window capture backend
 # (spec/screen-capture.md). Microsoft-maintained, so no third-party binding.
 [target.'cfg(target_os = "windows")'.dependencies]
+# Statically linked DXC, so DX12 never falls back to FXC.
+#
+# `Dx12Compiler::Auto` prefers static DXC when it is compiled in and otherwise
+# looks for `dxcompiler.dll`, falling back to FXC when neither is there. A CI
+# runner has neither, so it gets FXC, which is old, unmaintained and **unrolls
+# loops aggressively**. `oscilloscope.fs` has three 129-iteration loops and a
+# 12x12 nested one full of trig, which is fine as SPIR-V on Metal and Vulkan and
+# far too much once unrolled: its pipeline came back invalid on Windows while
+# naga's HLSL translation of it succeeds locally.
+#
+# Windows only, and static rather than the DLL so there is nothing to ship
+# alongside the binary.
+wgpu = { version = "30.0", features = ["static-dxc"] }
 # Non-optional on Windows, mirroring the objc2 family on macOS: two separate
 # subsystems need it now, screen capture (spec/screen-capture.md) and Spout
 # (spec/spout-output.md), and Spout's module has no reason to inherit the
