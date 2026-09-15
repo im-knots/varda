@@ -197,7 +197,12 @@ for _pass in 1 2 3; do
   for fw_dylib in "$FRAMEWORKS"/*.dylib; do
     deps=$(otool -L "$fw_dylib" | tail -n +2 | awk '{print $1}')
     for dep_path in $deps; do
-      case "$dep_path" in /usr/*|/System/*) continue ;; esac
+      # Skip macOS system libraries only. This must NOT be /usr/* : Intel Homebrew
+      # installs under /usr/local/Cellar, so the broader pattern silently skipped every
+      # transitive dependency on the x86_64 build, leaving its references pointing at
+      # absolute Cellar paths and its Frameworks/ empty of them. Invisible on arm64,
+      # where Homebrew is /opt/homebrew.
+      case "$dep_path" in /usr/lib/*|/System/*) continue ;; esac
       dep_name=$(basename "$dep_path")
       # Already bundled? Just rewrite the reference if needed
       if [ -f "$FRAMEWORKS/$dep_name" ]; then

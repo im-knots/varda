@@ -256,12 +256,6 @@ CTL
   # ---------------------------------------------------------------------------
   rpm)
     echo "==> Building .rpm"
-    # The Vulkan loader is packaged under different names across the RPM distributions.
-    case "$DISTRO_ID" in
-      fedora)         VULKAN_PKG="vulkan-loader" ;;
-      opensuse*|sles) VULKAN_PKG="libvulkan1" ;;
-      *)              VULKAN_PKG="vulkan-loader" ;;
-    esac
     RPMTOP="$(mktemp -d)"
     mkdir -p "$RPMTOP"/{BUILD,RPMS,SOURCES,SPECS,BUILDROOT}
 
@@ -284,11 +278,15 @@ Summary:        Live visual mixer and router
 License:        MIT
 URL:            https://github.com/im-knots/varda
 BuildArch:      x86_64
-# Neither is named by a SONAME, so rpm's find-requires cannot derive them.
-# ffmpeg: shelled out to for SRT and recording output.
-# vulkan loader: dlopened by wgpu; without it there is no GPU device.
-Requires:       ffmpeg
-Requires:       $VULKAN_PKG
+# Neither of these is derivable by rpm's find-requires: the ffmpeg executable is shelled
+# out to for SRT and recording output, and libvulkan is dlopened by wgpu.
+#
+# Expressed as a file dependency and a soname dependency rather than package names,
+# because the names differ across RPM distributions (vulkan-loader on Fedora, libvulkan1
+# on openSUSE). rpm resolves both against whatever package actually provides them, so a
+# naming difference stops being something this script has to know about.
+Requires:       /usr/bin/ffmpeg
+Requires:       libvulkan.so.1()(64bit)
 %description
 $DESCRIPTION
 %install

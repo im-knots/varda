@@ -9,6 +9,11 @@ pkgver=@VERSION@
 pkgrel=1
 pkgdesc="Live visual mixer and router for VJ performance and installation art"
 arch=('x86_64')
+# makepkg.conf ships `lto` in its default OPTIONS. Under LTO the glslopt C++ sources that
+# webrender's build script links are compiled to LLVM bitcode, and the link then fails on
+# undefined glslopt_* symbols. Nothing here needs LTO; cargo's release profile already
+# applies its own.
+options=('!lto')
 url="https://github.com/im-knots/varda"
 license=('MIT')
 depends=(

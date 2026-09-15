@@ -22,29 +22,34 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-linux:
+  linux:
     name: Linux ${{ matrix.name }}
     runs-on: ubuntu-latest
-    # Report every target rather than stopping at the first break: which ones fail is the
-    # diagnosis. One target failing is usually that distribution's packaging; all of them
-    # failing is usually the build itself.
+    # Build AND smoke in one job per target, rather than two matrices chained by `needs`.
+    # A job that needs a matrix waits for every row of it, so one failing build row used
+    # to skip the entire smoke matrix, and a green target could not report its smoke
+    # result until every other target's build passed. Each row now stands alone.
+    #
+    # The clean-container property is preserved and is in fact more obvious here: the
+    # smoke step is a second `docker run` from the same image, so it starts from the
+    # pristine distribution with none of the build dependencies installed.
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: 'Debian 13',    image: 'debian:13',              artifact: 'linux-debian13' }
-          - { name: 'Ubuntu 24.04', image: 'ubuntu:24.04',           artifact: 'linux-ubuntu2404' }
-          - { name: 'Ubuntu 26.04', image: 'ubuntu:26.04',           artifact: 'linux-ubuntu2604' }
-          - { name: 'Fedora 44',    image: 'fedora:44',              artifact: 'linux-fedora44' }
-          - { name: 'openSUSE',     image: 'opensuse/leap:16.0',    artifact: 'linux-opensuse' }
-          - { name: 'Arch',         image: 'archlinux:latest',       artifact: 'linux-arch' }
+          - { name: 'Debian 13',    image: 'debian:13',           artifact: 'linux-debian13' }
+          - { name: 'Ubuntu 24.04', image: 'ubuntu:24.04',        artifact: 'linux-ubuntu2404' }
+          - { name: 'Ubuntu 26.04', image: 'ubuntu:26.04',        artifact: 'linux-ubuntu2604' }
+          - { name: 'Fedora 44',    image: 'fedora:44',           artifact: 'linux-fedora44' }
+          - { name: 'openSUSE',     image: 'opensuse/leap:16.0',  artifact: 'linux-opensuse' }
+          - { name: 'Arch',         image: 'archlinux:latest',    artifact: 'linux-arch' }
     steps:
       - uses: actions/checkout@v5
 
       # The distribution is a container on an ubuntu-latest runner rather than the job's
       # own `container:`. GitHub's JavaScript actions need nodejs inside the container,
       # and the Arch, Fedora and openSUSE base images do not ship it. Running docker
-      # ourselves keeps checkout and upload on the host where node exists.
+      # ourselves keeps checkout and upload on the host, where node exists.
       - name: Build package on ${{ matrix.name }}
         run: |
           docker run --rm -v "$PWD:/work" -w /work "${{ matrix.image }}" \
@@ -54,38 +59,17 @@ jobs:
                        --outdir dist"
           ls -lh dist/
 
+      # Before the smoke, so a failing smoke still leaves the package attached to the run
+      # for inspection.
       - name: Upload artifact
         uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.artifact }}
           path: dist/*
 
-  smoke-linux:
-    name: Linux smoke ${{ matrix.name }}
-    needs: [build-linux]
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { name: 'Debian 13',    image: 'debian:13',           artifact: 'linux-debian13' }
-          - { name: 'Ubuntu 24.04', image: 'ubuntu:24.04',        artifact: 'linux-ubuntu2404' }
-          - { name: 'Ubuntu 26.04', image: 'ubuntu:26.04',        artifact: 'linux-ubuntu2604' }
-          - { name: 'Fedora 44',    image: 'fedora:44',           artifact: 'linux-fedora44' }
-          - { name: 'openSUSE',     image: 'opensuse/leap:16.0', artifact: 'linux-opensuse' }
-          - { name: 'Arch',         image: 'archlinux:latest',    artifact: 'linux-arch' }
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Download package
-        uses: actions/download-artifact@v5
-        with:
-          name: ${{ matrix.artifact }}
-          path: dist
-
-      # A clean container, not the one that built it: installing through the
-      # distribution's package manager is what proves the declared dependencies are
-      # complete. See spec/release-strategy.md section 12.
+      # Fresh container from the same image. Installing through the distribution's own
+      # package manager is what proves the declared dependencies are complete.
+      # See spec/release-strategy.md section 12.
       - name: Install and run on ${{ matrix.name }}
         run: |
           PKG="$(ls dist/* | head -1)"

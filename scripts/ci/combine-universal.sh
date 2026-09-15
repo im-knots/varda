@@ -40,7 +40,8 @@ for arm64_dylib in "$ARM64_APP/Contents/Frameworks/"*.dylib; do
     arm64_archs=$(lipo -info "$arm64_dylib" 2>/dev/null | sed 's/.*: //')
     x86_archs=$(lipo -info "$x86_dylib" 2>/dev/null | sed 's/.*: //')
     if [ "$arm64_archs" = "$x86_archs" ]; then
-      echo "    WARN: $basename has same arch in both builds ($arm64_archs), keeping arm64 copy"
+      echo "::error::$basename is $arm64_archs in both builds; one slice was built for the wrong architecture"
+      MISSING_SLICES=$((${MISSING_SLICES:-0} + 1))
     else
       echo "    lipo: $basename"
       lipo -create "$arm64_dylib" "$x86_dylib" -output "Varda.app/Contents/Frameworks/$basename"
@@ -53,10 +54,19 @@ for arm64_dylib in "$ARM64_APP/Contents/Frameworks/"*.dylib; do
       echo "    lipo: $basename (x86 match: $(basename "$x86_match"))"
       lipo -create "$arm64_dylib" "$x86_match" -output "Varda.app/Contents/Frameworks/$basename"
     else
-      echo "    WARN: no x86_64 match for $basename, keeping arm64-only"
+      # Fatal, not a warning. An app advertised as universal that carries a
+      # single-architecture dylib fails at dyld load time on the other architecture,
+      # which is a user's problem rather than ours if it ships.
+      echo "::error::no x86_64 match for $basename; the universal app would be incomplete"
+      MISSING_SLICES=$((${MISSING_SLICES:-0} + 1))
     fi
   fi
 done
+
+if [ "${MISSING_SLICES:-0}" -ne 0 ]; then
+  echo "::error::${MISSING_SLICES} dylib(s) could not be made universal"
+  exit 1
+fi
 
 # Add any x86-only dylibs that don't exist in arm64
 for x86_dylib in "$X86_APP/Contents/Frameworks/"*.dylib; do

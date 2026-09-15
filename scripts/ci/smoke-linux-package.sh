@@ -12,6 +12,10 @@
 set -euo pipefail
 
 PKG="${1:?Usage: smoke-linux-package.sh <path-to-package>}"
+# Absolute, because a bare relative path is ambiguous to apt: `apt install dist/x.deb`
+# is parsed as package `dist` from release `x.deb`, not as a file. Only a path with a
+# leading / or ./ is treated as a local package.
+PKG="$(cd "$(dirname "$PKG")" && pwd)/$(basename "$PKG")"
 
 # Read fields in a subshell rather than sourcing os-release into this one. It defines
 # VERSION, NAME and more, and sourcing a third-party file over this script's own
@@ -42,6 +46,13 @@ case "$DISTRO_ID" in
     dnf install -y "$PKG"
     ;;
   opensuse*|sles)
+    # Packman, same as the build container. Stock Leap has no ffmpeg, so the package's
+    # /usr/bin/ffmpeg dependency is unresolvable without it. A user installing Varda on
+    # Leap needs this repository too, which is why the smoke adds it rather than
+    # pre-installing ffmpeg: it tests the instructions the README gives.
+    LEAP_VER="$(os_release_field VERSION_ID)"
+    zypper --non-interactive --gpg-auto-import-keys addrepo -cfp 90 \
+      "https://ftp.gwdg.de/pub/linux/misc/packman/suse/openSUSE_Leap_${LEAP_VER}/" packman || true
     zypper --non-interactive --gpg-auto-import-keys refresh
     zypper --non-interactive install --allow-unsigned-rpm "$PKG"
     ;;
@@ -57,7 +68,7 @@ case "$DISTRO_ID" in
     install -d -o builder /tmp/build
     cp "$PKG" /tmp/build/PKGBUILD
     chown builder /tmp/build/PKGBUILD
-    su builder -c 'cd /tmp/build && makepkg -si --noconfirm'
+    su builder -c 'cd /tmp/build && makepkg -si --noconfirm --nocheck'
     ;;
   *)
     echo "::error::no install path for '$DISTRO_ID'"
@@ -103,12 +114,21 @@ echo "==> Checking the shader library installed"
 # /usr/bin/varda resolves shaders at ../share/varda/shaders. If packaging and
 # BUNDLED_SHADERS_RELATIVE drift apart, Varda starts with an empty shader library and
 # nothing else here would notice.
-count="$(find /usr/share/varda/shaders -name '*.fs' 2>/dev/null | wc -l)"
-if [ "$count" -lt 100 ]; then
-  echo "FAIL: found $count bundled shaders under /usr/share/varda/shaders, expected the full library"
+# Guard the directory before counting. Under `set -euo pipefail` a find over a missing
+# directory fails the pipeline, which kills this script mid-check with no message at all
+# rather than reporting the thing it was looking for.
+SHADER_DIR=/usr/share/varda/shaders
+if [ ! -d "$SHADER_DIR" ]; then
+  echo "FAIL: $SHADER_DIR does not exist; the package did not install the shader library"
   failed=1
 else
-  echo "  ok: $count shaders installed"
+  count="$(find "$SHADER_DIR" -name '*.fs' | wc -l | tr -d ' ')"
+  if [ "${count:-0}" -lt 100 ]; then
+    echo "FAIL: found $count bundled shaders under $SHADER_DIR, expected the full library"
+    failed=1
+  else
+    echo "  ok: $count shaders installed"
+  fi
 fi
 
 echo "==> Launching"
