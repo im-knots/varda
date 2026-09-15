@@ -764,7 +764,8 @@ impl UIRunner {
             }
             // Selection itself is applied in `UILayoutState::apply_selections` with every other
             // selection, so lighting cannot fall out of step with the rest.
-            self.layout.prune_lighting_selection(varda.lighting.show());
+            self.layout
+                .prune_lighting_selection(|id| varda.mixer_ref().find_lighting_deck(id).is_some());
             let resolution_changed = engine_outcome.resolution_changed;
             varda.update_controller_leds();
 

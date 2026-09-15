@@ -57,7 +57,7 @@ pub use role::{Role, RoleGroup, SmoothingClass};
 pub use router::{LightingRouteError, apply as apply_lighting_param, is_lighting_path};
 pub use runtime::LightingRuntime;
 pub use sample::{PROGRAM_KEY, SAMPLE_EDGE, SampledFrame, SampledFrames};
-pub use show::{ChannelDecks, LightingShow};
+pub use show::LightingShow;
 pub use smoother::RoleSmoother;
 pub use snapshot::{
     FixtureView, LightingSnapshot, PaletteView, PatchEntryView, SlotOwnerView, UniverseView,

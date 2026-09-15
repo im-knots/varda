@@ -184,6 +184,16 @@ pub struct ChannelConfig {
     #[serde(default)]
     pub decks: Vec<DeckConfig>,
 
+    /// This channel's lighting decks.
+    ///
+    /// Beside the video decks, not in a parallel structure keyed by channel UUID. The separation
+    /// between the two halves of the graph is at the **type** level, not the container level: a
+    /// channel owns everything in it, and deleting one takes its lighting with it rather than
+    /// leaving orphans for a sweep to find.
+    /// See /spec/lighting-routing.md § Decision: One Mixer, One Channel, Two Composite Backends.
+    #[serde(default)]
+    pub lighting_decks: Vec<crate::dmx::LightingDeck>,
+
     #[serde(default)]
     pub effects: Vec<EffectConfig>,
 
@@ -1383,6 +1393,7 @@ mod tests {
                 }],
                 effects: vec![],
                 modulation: vec![],
+                lighting_decks: Vec::new(),
             }],
             crossfader: 0.0,
             active_transition: Some("dissolve".into()),
@@ -1784,6 +1795,7 @@ mod tests {
                 opacity: 0.9,
                 blend_mode: BlendModeConfig::Add,
                 decks: vec![],
+                lighting_decks: Vec::new(),
                 effects: vec![],
                 modulation: vec![],
             }],
@@ -1844,6 +1856,7 @@ mod tests {
                 }],
                 effects: vec![],
                 modulation: vec![],
+                lighting_decks: Vec::new(),
             }],
             crossfader: 0.5,
             active_transition: None,
@@ -1918,6 +1931,7 @@ mod tests {
             opacity: 2.0,
             blend_mode: BlendModeConfig::Normal,
             decks: vec![],
+            lighting_decks: Vec::new(),
             effects: vec![],
             modulation: vec![],
         };

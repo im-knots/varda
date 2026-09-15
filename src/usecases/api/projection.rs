@@ -217,6 +217,7 @@ pub(crate) mod tests {
                     effects: vec![],
                     render_time_ms: 0.5,
                     active_deck_count: 1,
+                    lighting_decks: Vec::new(),
                 }],
                 crossfader: 0.5,
                 auto_crossfade_active: false,

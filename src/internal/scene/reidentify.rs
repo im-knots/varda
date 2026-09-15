@@ -284,6 +284,7 @@ mod tests {
             opacity: 1.0,
             blend_mode: BlendModeConfig::Normal,
             decks: vec![a_deck("deck0001"), a_deck("deck0002")],
+            lighting_decks: Vec::new(),
             effects: vec![an_effect("fx000009")],
             modulation: Vec::new(),
         };

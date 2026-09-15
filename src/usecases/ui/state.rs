@@ -353,11 +353,13 @@ impl UILayoutState {
     /// Without this, removing the selected lighting deck left the bottom bar pinned to "That
     /// lighting deck is gone" — and because the bottom bar checks lighting before video, no
     /// other deck's detail could be opened again for the rest of the session.
-    pub fn prune_lighting_selection(&mut self, show: &crate::dmx::LightingShow) {
+    /// Takes a liveness predicate rather than the mixer: this needs one bit of information, and
+    /// asking for the whole mixer would drag a GPU context into a test about selection state.
+    pub fn prune_lighting_selection(&mut self, is_alive: impl Fn(uuid::Uuid) -> bool) {
         let Some(uuid) = self.selected_lighting_deck.as_deref() else {
             return;
         };
-        let alive = uuid::Uuid::parse_str(uuid).is_ok_and(|id| show.find_deck(id).is_some());
+        let alive = uuid::Uuid::parse_str(uuid).is_ok_and(is_alive);
         if !alive {
             self.selected_lighting_deck = None;
         }
@@ -524,24 +526,22 @@ mod preview_channel_tests {
     /// "That lighting deck is gone" forever.
     #[test]
     fn removing_the_selected_lighting_deck_releases_the_bottom_bar() {
-        let mut show = crate::dmx::LightingShow::default();
         let deck = crate::dmx::LightingDeck::new(crate::dmx::Look::new("Wash"));
+        let live = deck.id;
         let uuid = deck.id.to_string();
-        show.decks_mut("ch-1").push(deck);
 
         let mut layout = UILayoutState {
             selected_lighting_deck: Some(uuid.clone()),
             ..Default::default()
         };
-        layout.prune_lighting_selection(&show);
+        layout.prune_lighting_selection(|id| id == live);
         assert_eq!(
             layout.selected_lighting_deck,
             Some(uuid),
             "a live deck must stay selected"
         );
 
-        show.decks_mut("ch-1").clear();
-        layout.prune_lighting_selection(&show);
+        layout.prune_lighting_selection(|_| false);
         assert_eq!(
             layout.selected_lighting_deck, None,
             "a removed deck must release the bottom bar"
@@ -555,7 +555,7 @@ mod preview_channel_tests {
             selected_lighting_deck: Some("not-a-uuid".to_string()),
             ..Default::default()
         };
-        layout.prune_lighting_selection(&crate::dmx::LightingShow::default());
+        layout.prune_lighting_selection(|_| true);
         assert_eq!(layout.selected_lighting_deck, None);
     }
 }

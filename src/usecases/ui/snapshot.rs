@@ -146,6 +146,8 @@ pub(crate) fn build_ui_data(
                 opacity: ch.opacity,
                 blend_mode: ch.blend_mode,
                 decks,
+                lighting_deck_uuids: ch.lighting_decks.iter().map(|d| d.id.to_string()).collect(),
+                lighting_decks: ch.lighting_decks.clone(),
                 effects,
             }
         })
@@ -632,16 +634,6 @@ pub(crate) fn build_ui_data(
                 )
             })
             .collect(),
-        lighting_deck_uuids: {
-            let show = app.lighting.show();
-            let mut map = std::collections::HashMap::new();
-            for entry in &show.channel_decks {
-                for (i, deck) in entry.decks.iter().enumerate() {
-                    map.insert((entry.channel.clone(), i), deck.id.to_string());
-                }
-            }
-            map
-        },
         arrangement_pixels_per_second: layout.arrangement_pixels_per_second,
         arrangement_scroll: layout.arrangement_scroll,
         arrangement_scroll_y: layout.arrangement_scroll_y,

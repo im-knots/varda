@@ -309,6 +309,17 @@ pub struct ChannelUIInfo {
     pub opacity: f32,
     pub blend_mode: BlendMode,
     pub decks: Vec<DeckUIInfo>,
+    /// This channel's lighting decks, beside its video decks.
+    ///
+    /// The channel owns both, so the UI reads both from the same place rather than joining a
+    /// parallel map on channel UUID.
+    pub lighting_decks: Vec<crate::dmx::LightingDeck>,
+    /// Those decks' ids in string form, index for index.
+    ///
+    /// Presentation-layer derived data, not a second source of truth: a `LightingDeck` carries a
+    /// `Uuid` and the arrangement's lane rows borrow `&str`, so the formatted form has to outlive
+    /// the frame somewhere. It lives beside the decks it describes.
+    pub lighting_deck_uuids: Vec<String>,
     pub effects: Vec<EffectInfo>,
 }
 
@@ -506,9 +517,6 @@ pub struct UIData {
     pub lighting_group_sources: Vec<(String, Option<String>)>,
     /// Lighting deck UUIDs as strings, keyed by (channel, index within that channel).
     ///
-    /// Interned here because arrangement lane rows borrow `&str` while a deck's identity is a
-    /// `Uuid`, so the string has to outlive the row.
-    pub lighting_deck_uuids: std::collections::HashMap<(String, usize), String>,
     /// Timeline horizontal zoom, in pixels per second of show time.
     pub arrangement_pixels_per_second: f32,
     /// Show position at the timeline's left edge.

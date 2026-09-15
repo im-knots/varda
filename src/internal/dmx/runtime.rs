@@ -38,7 +38,7 @@ pub struct LightingRuntime {
     palettes: PaletteSet,
     /// Live channel opacities, supplied by the mixer each tick. Shared control state: the mixer
     /// owns channel opacity once and both composite backends read it.
-    channels: Vec<(String, f32)>,
+    channels: Vec<LightingChannel>,
     /// The latest downsampled video frame for each sampled source, supplied by the render path.
     ///
     /// Held rather than fetched so the merge stays a pure function of state: the render thread
@@ -230,24 +230,23 @@ impl LightingRuntime {
                 continue;
             };
             // A Program group hears every channel, so every channel with a sampled deck needs a
-            // frame; a Channel group needs only its own.
-            let heard: Vec<String> = match source {
-                super::look::GroupSource::Program => self
-                    .show
-                    .channel_decks
+            // frame; a Channel group needs only its own. The channels come from the mixer, which
+            // owns them and the decks in them.
+            for channel in &self.channels {
+                let heard = match source {
+                    super::look::GroupSource::Program => true,
+                    super::look::GroupSource::Channel { uuid } => *uuid == channel.key,
+                };
+                if !heard {
+                    continue;
+                }
+                if channel
+                    .decks
                     .iter()
-                    .map(|c| c.channel.clone())
-                    .collect(),
-                super::look::GroupSource::Channel { uuid } => vec![uuid.clone()],
-            };
-            for key in heard {
-                let samples = self
-                    .show
-                    .decks(&key)
-                    .iter()
-                    .any(|d| !d.content.samples().is_empty());
-                if samples && !out.contains(&key) {
-                    out.push(key);
+                    .any(|d| !d.content.samples().is_empty())
+                    && !out.contains(&channel.key)
+                {
+                    out.push(channel.key.clone());
                 }
             }
         }
@@ -275,6 +274,23 @@ impl LightingRuntime {
         &self.show
     }
 
+    /// Mutable show state, for edits that do not change the patch.
+    ///
+    /// Palettes and saved looks only — lighting *decks* belong to the mixer's channels, so a
+    /// caller reaching for a deck through here is reaching in the wrong place.
+    pub fn show_mut(&mut self) -> &mut LightingShow {
+        &mut self.show
+    }
+
+    /// Republish the monitoring snapshot after an in-place edit.
+    ///
+    /// Edits that reach deck content or a saved look go through `&mut` accessors rather than a
+    /// clone-and-set, so there is no `set_show` to piggyback the refresh on.
+    pub fn refresh(&mut self) {
+        self.rebuild_palettes();
+        self.refresh_snapshot();
+    }
+
     pub fn set_show(&mut self, show: LightingShow) {
         self.show = show;
         self.rebuild_palettes();
@@ -283,7 +299,12 @@ impl LightingRuntime {
 
     /// Channel opacities from the mixer. Shared control state: the mixer owns channel opacity
     /// once and both composite backends read the same numbers.
-    pub fn set_channels(&mut self, channels: Vec<(String, f32)>) {
+    /// The channels, each with its crossfader-weighted opacity and the lighting decks it owns.
+    ///
+    /// The mixer owns channels and everything in them; the lighting runtime is handed a view
+    /// each tick, exactly as it is handed opacity. It keeps no parallel map of its own — that
+    /// shape is what made a deleted channel leave orphaned decks behind.
+    pub fn set_channels(&mut self, channels: Vec<LightingChannel>) {
         self.channels = channels;
     }
 
@@ -531,16 +552,8 @@ impl LightingRuntime {
         // Merge the looks, then let the programmer overwrite. Whatever the performer's hands
         // are touching outranks every deck until released.
         let fixtures: Vec<Uuid> = rig.fixtures.iter().map(|f| f.id).collect();
-        let channels: Vec<LightingChannel> = self
-            .channels
-            .iter()
-            .map(|(id, opacity)| LightingChannel {
-                key: id.clone(),
-                opacity: *opacity,
-                decks: self.show.decks(id).to_vec(),
-            })
-            .collect();
-        // No look map: each deck carries its own content, so there is nothing to resolve.
+        // The channels as the mixer handed them over, decks included.
+        let channels = self.channels.clone();
         let positions: std::collections::HashMap<Uuid, Option<[f32; 2]>> =
             rig.fixtures.iter().map(|f| (f.id, f.position)).collect();
         let palettes = &self.palettes;
@@ -936,7 +949,6 @@ mod tests {
     fn a_look_in_a_deck_reaches_the_wire() {
         use crate::dmx::look::{AttrValue, Group, Look};
         use crate::dmx::merge::LightingDeck;
-        use crate::dmx::show::LightingShow;
 
         let d = profile_dir();
         let fixture = par("a", 1);
@@ -955,10 +967,11 @@ mod tests {
         let mut look = Look::new("red wash");
         look.set(Role::Red, AttrValue::literal(1.0));
         let channel = "abc12345".to_string();
-        let mut show = LightingShow::default();
-        show.decks_mut(&channel).push(LightingDeck::new(look));
-        rt.set_show(show);
-        rt.set_channels(vec![(channel.clone(), 1.0)]);
+        rt.set_channels(vec![LightingChannel {
+            key: channel.clone(),
+            opacity: 1.0,
+            decks: vec![LightingDeck::new(look)],
+        }]);
 
         tick_to_snapshot(&mut rt);
         let s = rt.snapshot();
@@ -976,7 +989,6 @@ mod tests {
     fn channel_opacity_fades_the_lighting_deck() {
         use crate::dmx::look::{AttrValue, Group, Look};
         use crate::dmx::merge::LightingDeck;
-        use crate::dmx::show::LightingShow;
 
         let d = profile_dir();
         let fixture = par("a", 1);
@@ -994,11 +1006,11 @@ mod tests {
         let mut look = Look::new("red");
         look.set(Role::Red, AttrValue::literal(1.0));
         let channel = "abc12345".to_string();
-        let mut show = LightingShow::default();
-        show.decks_mut(&channel).push(LightingDeck::new(look));
-        rt.set_show(show);
-
-        rt.set_channels(vec![(channel.clone(), 0.0)]);
+        rt.set_channels(vec![LightingChannel {
+            key: channel.clone(),
+            opacity: 0.0,
+            decks: vec![LightingDeck::new(look)],
+        }]);
         for _ in 0..120 {
             rt.tick(1.0 / 60.0, true, &|_, _| None);
         }
@@ -1019,7 +1031,6 @@ mod tests {
     fn the_programmer_outranks_a_look() {
         use crate::dmx::look::{AttrValue, Group, Look};
         use crate::dmx::merge::LightingDeck;
-        use crate::dmx::show::LightingShow;
 
         let d = profile_dir();
         let fixture = par("a", 1);
@@ -1037,10 +1048,11 @@ mod tests {
         let mut look = Look::new("dim red");
         look.set(Role::Red, AttrValue::literal(0.2));
         let channel = "abc12345".to_string();
-        let mut show = LightingShow::default();
-        show.decks_mut(&channel).push(LightingDeck::new(look));
-        rt.set_show(show);
-        rt.set_channels(vec![(channel.clone(), 1.0)]);
+        rt.set_channels(vec![LightingChannel {
+            key: channel.clone(),
+            opacity: 1.0,
+            decks: vec![LightingDeck::new(look)],
+        }]);
 
         rt.set_role(fixture_id, Role::Red, 1.0);
         for _ in 0..120 {

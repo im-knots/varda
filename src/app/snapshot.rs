@@ -257,6 +257,7 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                 opacity: ch.opacity,
                 blend_mode: ch.blend_mode,
                 decks,
+                lighting_decks: ch.lighting_decks.clone(),
                 effects: ch_effects,
                 render_time_ms: ch.render_time_ms,
                 active_deck_count: ch.active_deck_count,

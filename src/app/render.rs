@@ -222,8 +222,7 @@ impl VardaApp {
         // resize) does not hand the smoother a dt that snaps every fixture.
         // Channel opacity is control state the mixer owns once; the lighting merge reads the
         // same numbers the GPU compositor does.
-        let opacities = self.mixer.effective_channel_opacities_by_uuid();
-        self.lighting.set_channels(opacities);
+        self.lighting.set_channels(self.mixer.lighting_channels());
 
         // A modulated look samples the same modulation engine the GPU path does. The borrow is
         // split explicitly so the sampler can read the mixer while the lighting runtime is held

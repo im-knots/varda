@@ -272,12 +272,15 @@ pub(super) fn render_arrangement(ui: &mut egui::Ui, data: &UIData, actions: &mut
 /// empty scene, and would leave nowhere to drop a first region.
 /// Borrow a lighting deck's UUID string for the lifetime of `data`.
 ///
-/// The lane row holds `&str` rather than `String`, and a deck's UUID is a `Uuid` in the show,
-/// so the string has to live somewhere. It lives in the interned cache below, which is keyed by
-/// the deck's own identity and therefore stable across frames.
+/// The lane row holds `&str` rather than `String`, and a deck's UUID is a `Uuid`, so the string
+/// has to live somewhere. It lives in the interned cache below, keyed by the deck's own identity
+/// and therefore stable across frames.
 fn lighting_deck_uuid<'a>(data: &'a UIData, channel: &str, index: usize) -> Option<&'a str> {
-    data.lighting_deck_uuids
-        .get(&(channel.to_owned(), index))
+    data.channels
+        .iter()
+        .find(|c| c.uuid == channel)?
+        .lighting_deck_uuids
+        .get(index)
         .map(String::as_str)
 }
 
@@ -312,7 +315,7 @@ fn build_rows(data: &UIData) -> Vec<Row<'_>> {
         // Lighting lanes sit below the video lanes of the same channel, matching the band order
         // in Performance mode so the two views agree about what is where.
         {
-            for (idx, deck) in data.lighting_show.decks(&ch.uuid).iter().enumerate() {
+            for (idx, deck) in ch.lighting_decks.iter().enumerate() {
                 let Some(uuid) = lighting_deck_uuid(data, &ch.uuid, idx) else {
                     continue;
                 };
@@ -2000,9 +2003,13 @@ mod tests {
 
         let deck = crate::dmx::LightingDeck::new(crate::dmx::Look::new("Deep Blue"));
         let deck_id = deck.id;
-        data.lighting_show.decks_mut(&channel_uuid).push(deck);
-        data.lighting_deck_uuids
-            .insert((channel_uuid.clone(), 0), deck_id.to_string());
+        let ch = data
+            .channels
+            .iter_mut()
+            .find(|c| c.uuid == channel_uuid)
+            .expect("channel");
+        ch.lighting_deck_uuids.push(deck_id.to_string());
+        ch.lighting_decks.push(deck);
 
         let rows = build_rows(&data);
         let lighting: Vec<&LaneRow<'_>> = rows
@@ -2028,9 +2035,13 @@ mod tests {
         data.lighting_show.looks.push(look);
         let deck = crate::dmx::LightingDeck::new(crate::dmx::Look::new("l"));
         let deck_id = deck.id;
-        data.lighting_show.decks_mut(&channel_uuid).push(deck);
-        data.lighting_deck_uuids
-            .insert((channel_uuid.clone(), 0), deck_id.to_string());
+        let ch = data
+            .channels
+            .iter_mut()
+            .find(|c| c.uuid == channel_uuid)
+            .expect("channel");
+        ch.lighting_deck_uuids.push(deck_id.to_string());
+        ch.lighting_decks.push(deck);
 
         let rows = build_rows(&data);
         // Scope to the first channel's span: a later channel's video lanes come after this
@@ -2086,9 +2097,13 @@ mod tests {
         let channel_uuid = data.channels[0].uuid.clone();
         let deck = crate::dmx::LightingDeck::new(crate::dmx::Look::new("Lighting"));
         let deck_id = deck.id;
-        data.lighting_show.decks_mut(&channel_uuid).push(deck);
-        data.lighting_deck_uuids
-            .insert((channel_uuid.clone(), 0), deck_id.to_string());
+        let ch = data
+            .channels
+            .iter_mut()
+            .find(|c| c.uuid == channel_uuid)
+            .expect("channel");
+        ch.lighting_deck_uuids.push(deck_id.to_string());
+        ch.lighting_decks.push(deck);
 
         let rows = build_rows(&data);
         let lane = rows

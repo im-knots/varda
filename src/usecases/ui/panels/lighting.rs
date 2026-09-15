@@ -766,7 +766,13 @@ pub(super) fn render_lighting_column(
     data: &UIData,
     actions: &mut UIActions,
 ) {
-    let decks = data.lighting_show.decks(channel_uuid).to_vec();
+    // The channel's own lighting decks. The channel owns them, so there is no map to join.
+    let decks = data
+        .channels
+        .iter()
+        .find(|c| c.uuid == channel_uuid)
+        .map(|c| c.lighting_decks.clone())
+        .unwrap_or_default();
 
     let dragging = lighting_drag_in_flight(ui.ctx());
     // Hover is tested against the rect this column published last frame, not `ui.max_rect()`:
@@ -1109,7 +1115,12 @@ pub(super) fn render_lighting_deck_detail(
     let Ok(deck_id) = uuid::Uuid::parse_str(uuid) else {
         return;
     };
-    let Some((channel, deck)) = data.lighting_show.find_deck(deck_id) else {
+    let Some((channel, deck)) = data.channels.iter().find_map(|c| {
+        c.lighting_decks
+            .iter()
+            .find(|d| d.id == deck_id)
+            .map(|d| (c.uuid.clone(), d))
+    }) else {
         ui.label(
             egui::RichText::new("That lighting deck is gone")
                 .small()
@@ -1117,7 +1128,7 @@ pub(super) fn render_lighting_deck_detail(
         );
         return;
     };
-    let channel = channel.to_string();
+    let channel = channel.clone();
     let deck = deck.clone();
     let look = Some(deck.content.clone());
 
@@ -1742,7 +1753,10 @@ mod tests {
             let deck = crate::dmx::LightingDeck::new(look.clone());
             let uuid = deck.id.to_string();
             data.lighting_show.looks.push(look);
-            data.lighting_show.decks_mut("ch-1").push(deck);
+            data.channels[0]
+                .lighting_deck_uuids
+                .push(deck.id.to_string());
+            data.channels[0].lighting_decks.push(deck);
 
             let mut actions = UIActions::new();
             let mut harness = egui_kittest::Harness::builder()
@@ -1761,7 +1775,7 @@ mod tests {
 
             // The card, at the size it is drawn in the LIGHTS band.
             let mut card_actions = UIActions::new();
-            let card_deck = data.lighting_show.decks("ch-1")[0].clone();
+            let card_deck = data.channels[0].lighting_decks[0].clone();
             let mut card = egui_kittest::Harness::builder()
                 .with_size(egui::vec2(170.0, 160.0))
                 .build_ui(|ui| {
@@ -1993,7 +2007,10 @@ mod tests {
         let deck = crate::dmx::LightingDeck::new(look.clone());
         let uuid = deck.id.to_string();
         data.lighting_show.looks.push(look);
-        data.lighting_show.decks_mut("ch-1").push(deck);
+        data.channels[0]
+            .lighting_deck_uuids
+            .push(deck.id.to_string());
+        data.channels[0].lighting_decks.push(deck);
 
         let mut actions = UIActions::new();
         let mut harness = egui_kittest::Harness::new_ui(|ui| {
@@ -2024,8 +2041,8 @@ mod tests {
 
         let look = crate::dmx::Look::new("wash");
         data.lighting_show.looks.push(look);
-        data.lighting_show
-            .decks_mut("abc12345")
+        data.channels[0]
+            .lighting_decks
             .push(crate::dmx::LightingDeck::new(crate::dmx::Look::new("Wash")));
         assert!(lights_band_offered(&ctx, &data));
     }
@@ -2094,7 +2111,10 @@ mod tests {
         let mut data = UIData::test_fixture();
         let deck = crate::dmx::LightingDeck::new(crate::dmx::Look::new("l"));
         let uuid = deck.id.to_string();
-        data.lighting_show.decks_mut("abc12345").push(deck);
+        data.channels[0]
+            .lighting_deck_uuids
+            .push(deck.id.to_string());
+        data.channels[0].lighting_decks.push(deck);
         let mut actions = UIActions::new();
         let _h = egui_kittest::Harness::new_ui(|ui| {
             render_lighting_deck_detail(ui, &uuid, &data, &mut actions);

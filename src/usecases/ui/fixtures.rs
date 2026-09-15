@@ -139,6 +139,8 @@ impl UIData {
             opacity: 1.0,
             blend_mode: BlendMode::Normal,
             decks: vec![alpha_lower, alpha_upper],
+            lighting_decks: Vec::new(),
+            lighting_deck_uuids: Vec::new(),
             effects: vec![(
                 "cfx00001".to_string(),
                 "ch_effect".to_string(),
@@ -219,6 +221,8 @@ impl UIData {
             opacity: 1.0,
             blend_mode: BlendMode::Normal,
             decks: vec![beta_lower, beta_upper],
+            lighting_decks: Vec::new(),
+            lighting_deck_uuids: Vec::new(),
             effects: vec![],
         };
 
@@ -237,7 +241,6 @@ impl UIData {
             lighting_group_names: Vec::new(),
             lighting_group_members: Vec::new(),
             lighting_group_sources: Vec::new(),
-            lighting_deck_uuids: std::collections::HashMap::new(),
             generators: vec![
                 ("test_generator_a".to_string(), 0),
                 ("test_generator_b".to_string(), 1),

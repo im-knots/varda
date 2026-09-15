@@ -364,6 +364,8 @@ pub struct ChannelSnapshot {
     pub opacity: f32,
     pub blend_mode: BlendMode,
     pub decks: Vec<DeckSnapshot>,
+    /// This channel's lighting decks, beside its video decks.
+    pub lighting_decks: Vec<crate::dmx::LightingDeck>,
     pub effects: Vec<EffectSnapshot>,
     /// Smoothed render time for this channel in milliseconds
     pub render_time_ms: f32,
@@ -1206,6 +1208,7 @@ mod tests {
             opacity: 0.75,
             blend_mode: BlendMode::Add,
             decks: vec![],
+            lighting_decks: Vec::new(),
             effects: vec![],
             render_time_ms: 1.5,
             active_deck_count: 2,

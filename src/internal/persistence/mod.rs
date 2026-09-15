@@ -727,6 +727,7 @@ pub fn snapshot_scene(
                 opacity: ch.opacity,
                 blend_mode: ch.blend_mode.into(),
                 decks,
+                lighting_decks: ch.lighting_decks.clone(),
                 effects,
                 // A scene serializes the modulation engine whole, so recipes are
                 // only filled when a channel travels alone. See
@@ -1172,6 +1173,8 @@ pub fn restore_scene(
         }
         channel.opacity = ch_config.opacity;
         channel.blend_mode = ch_config.blend_mode.into();
+        // Lighting decks restore with the channel that owns them, beside its video decks.
+        channel.lighting_decks.clone_from(&ch_config.lighting_decks);
 
         for deck_config in &ch_config.decks {
             // Externally-owned Syphon decks are resolved at runtime, not at

@@ -1997,6 +1997,8 @@ fn click_remove_channel_with_three_channels() {
         opacity: 1.0,
         blend_mode: BlendMode::Normal,
         decks: vec![],
+        lighting_decks: Vec::new(),
+        lighting_deck_uuids: Vec::new(),
         effects: vec![],
     });
     data.channel_count = 3;

@@ -412,6 +412,14 @@ pub struct Channel {
     /// Decks in this channel
     pub decks: Vec<DeckSlot>,
 
+    /// Lighting decks in this channel.
+    ///
+    /// Beside the video decks, because the separation between the two halves of the graph is at
+    /// the **type** level, not the container level. A channel owns everything in it: deleting one
+    /// takes its lighting with it rather than leaving orphans keyed by UUID in a parallel map.
+    /// See /spec/lighting-routing.md § Decision: One Mixer, One Channel, Two Composite Backends.
+    pub lighting_decks: Vec<crate::dmx::LightingDeck>,
+
     /// Per-channel effect chain (applied to composited deck output)
     pub effects: Vec<Effect>,
 
@@ -486,6 +494,7 @@ impl Channel {
             uuid: crate::deck::generate_short_uuid(),
             name,
             decks: Vec::new(),
+            lighting_decks: Vec::new(),
             effects: Vec::new(),
             opacity: 1.0,
             blend_mode: BlendMode::Normal,

@@ -114,6 +114,18 @@ impl VardaApp {
         }
     }
 
+    /// A look by id, wherever it lives: deck content in the mixer, saved looks in the library.
+    ///
+    /// Deck content comes first because that is what the editor addresses — every command from
+    /// the deck detail names the content's own id. The library is searched too so a saved look
+    /// can still be renamed.
+    fn find_look_mut(&mut self, id: uuid::Uuid) -> Option<&mut crate::dmx::Look> {
+        if self.mixer.find_deck_look_mut(id).is_some() {
+            return self.mixer.find_deck_look_mut(id);
+        }
+        self.lighting.show_mut().look_mut(id)
+    }
+
     fn set_look_value(
         &mut self,
         look: &str,
@@ -143,12 +155,11 @@ impl VardaApp {
                 };
             }
         };
-        let mut show = self.lighting.show().clone();
-        let Some(entry) = show.look_mut(look_id) else {
+        let Some(entry) = self.find_look_mut(look_id) else {
             return Self::not_found("look", look);
         };
         entry.set(role, attr);
-        self.lighting.set_show(show);
+        self.lighting.refresh();
         CommandResult::Ok
     }
 
@@ -214,8 +225,7 @@ impl VardaApp {
         // source: what the programmer is holding is what gets stored.
         let source = held[0].1;
 
-        let mut show = self.lighting.show().clone();
-        let Some(entry) = show.look_mut(look_id) else {
+        let Some(entry) = self.find_look_mut(look_id) else {
             return Self::not_found("look", look);
         };
         let mut stored = 0usize;
@@ -223,7 +233,7 @@ impl VardaApp {
             entry.set(role, crate::dmx::AttrValue::literal(value));
             stored += 1;
         }
-        self.lighting.set_show(show);
+        self.lighting.refresh();
         CommandResult::OkWithData {
             data: serde_json::json!({ "stored_roles": stored }),
         }
@@ -553,8 +563,7 @@ impl VardaApp {
                 let Ok(deck_id) = uuid::Uuid::parse_str(&deck) else {
                     return Self::bad_uuid(&deck);
                 };
-                let mut show = self.lighting.show().clone();
-                let Some((_, found)) = show.find_deck(deck_id) else {
+                let Some((_, found)) = self.mixer.find_lighting_deck(deck_id) else {
                     return Self::not_found("lighting deck", &deck);
                 };
                 // An independent copy under a fresh id: saving a preset must not tie the deck to
@@ -563,20 +572,19 @@ impl VardaApp {
                 saved.id = uuid::Uuid::new_v4();
                 saved.name = name;
                 let uuid = saved.id.to_string();
-                show.looks.push(saved);
-                self.lighting.set_show(show);
+                self.lighting.show_mut().looks.push(saved);
+                self.lighting.refresh();
                 CommandResult::OkWithId { uuid }
             }
             EngineCommand::RenameLook { uuid, name } => {
                 let Ok(id) = uuid::Uuid::parse_str(&uuid) else {
                     return Self::bad_uuid(&uuid);
                 };
-                let mut show = self.lighting.show().clone();
-                let Some(look) = show.look_mut(id) else {
+                let Some(look) = self.find_look_mut(id) else {
                     return Self::not_found("look", &uuid);
                 };
                 look.name = name;
-                self.lighting.set_show(show);
+                self.lighting.refresh();
                 CommandResult::Ok
             }
             EngineCommand::SetLookValue {
@@ -591,20 +599,18 @@ impl VardaApp {
                 else {
                     return Self::bad_uuid(&look);
                 };
-                let mut show = self.lighting.show().clone();
-                let Some(entry) = show.look_mut(look_id) else {
+                let Some(entry) = self.find_look_mut(look_id) else {
                     return Self::not_found("look", &look);
                 };
                 entry.clear(role);
-                self.lighting.set_show(show);
+                self.lighting.refresh();
                 CommandResult::Ok
             }
             EngineCommand::AddLightingDeck { channel, look } => {
                 let Ok(look_id) = uuid::Uuid::parse_str(&look) else {
                     return Self::bad_uuid(&look);
                 };
-                let mut show = self.lighting.show().clone();
-                let Some(source) = show.looks.iter().find(|l| l.id == look_id) else {
+                let Some(source) = self.lighting.show().look(look_id) else {
                     return Self::not_found("look", &look);
                 };
                 // A copy under a fresh id, so two decks made from one saved Look are edited
@@ -613,8 +619,9 @@ impl VardaApp {
                 content.id = uuid::Uuid::new_v4();
                 let deck = crate::dmx::LightingDeck::new(content);
                 let uuid = deck.id.to_string();
-                show.decks_mut(&channel).push(deck);
-                self.lighting.set_show(show);
+                if !self.mixer.add_lighting_deck(&channel, deck) {
+                    return Self::not_found("channel", &channel);
+                }
                 CommandResult::OkWithId { uuid }
             }
             EngineCommand::AddLightingDeckBlank { channel } => {
@@ -622,9 +629,9 @@ impl VardaApp {
                 // preset either; this used to push an untitled "Lighting" entry every time.
                 let deck = crate::dmx::LightingDeck::new(crate::dmx::Look::new("Lighting"));
                 let uuid = deck.id.to_string();
-                let mut show = self.lighting.show().clone();
-                show.decks_mut(&channel).push(deck);
-                self.lighting.set_show(show);
+                if !self.mixer.add_lighting_deck(&channel, deck) {
+                    return Self::not_found("channel", &channel);
+                }
                 CommandResult::OkWithId { uuid }
             }
             EngineCommand::SampleLookRole { look, role, gain } => {
@@ -633,12 +640,11 @@ impl VardaApp {
                 else {
                     return Self::bad_uuid(&look);
                 };
-                let mut show = self.lighting.show().clone();
-                let Some(entry) = show.look_mut(look_id) else {
+                let Some(entry) = self.find_look_mut(look_id) else {
                     return Self::not_found("look", &look);
                 };
                 entry.sample(role, gain);
-                self.lighting.set_show(show);
+                self.lighting.refresh();
                 CommandResult::Ok
             }
             EngineCommand::SetFixturePosition { uuid, position } => {
@@ -667,8 +673,7 @@ impl VardaApp {
                 else {
                     return Self::bad_uuid(&look);
                 };
-                let mut show = self.lighting.show().clone();
-                let Some(entry) = show.look_mut(look_id) else {
+                let Some(entry) = self.find_look_mut(look_id) else {
                     return Self::not_found("look", &look);
                 };
                 if source.is_empty() {
@@ -691,7 +696,7 @@ impl VardaApp {
                         },
                     });
                 }
-                self.lighting.set_show(show);
+                self.lighting.refresh();
                 CommandResult::Ok
             }
             EngineCommand::SetLightingGroupSource { uuid, source } => {
@@ -718,16 +723,9 @@ impl VardaApp {
                 let Ok(id) = uuid::Uuid::parse_str(&uuid) else {
                     return Self::bad_uuid(&uuid);
                 };
-                let mut show = self.lighting.show().clone();
-                let before: usize = show.channel_decks.iter().map(|c| c.decks.len()).sum();
-                for entry in &mut show.channel_decks {
-                    entry.decks.retain(|d| d.id != id);
-                }
-                let after: usize = show.channel_decks.iter().map(|c| c.decks.len()).sum();
-                if before == after {
+                if !self.mixer.remove_lighting_deck(id) {
                     return Self::not_found("lighting deck", &uuid);
                 }
-                self.lighting.set_show(show);
                 CommandResult::Ok
             }
             EngineCommand::UpdateLightingDeck {
@@ -742,8 +740,7 @@ impl VardaApp {
                 let Ok(id) = uuid::Uuid::parse_str(&uuid) else {
                     return Self::bad_uuid(&uuid);
                 };
-                let mut show = self.lighting.show().clone();
-                let Some(deck) = show.find_deck_mut(id) else {
+                let Some(deck) = self.mixer.find_lighting_deck_mut(id) else {
                     return Self::not_found("lighting deck", &uuid);
                 };
                 if let Some(v) = level {
@@ -764,26 +761,16 @@ impl VardaApp {
                 if let Some(v) = ltp_transition {
                     deck.ltp_transition = v;
                 }
-                self.lighting.set_show(show);
+                self.lighting.refresh();
                 CommandResult::Ok
             }
             EngineCommand::MoveLightingDeck { uuid, channel } => {
                 let Ok(id) = uuid::Uuid::parse_str(&uuid) else {
                     return Self::bad_uuid(&uuid);
                 };
-                let mut show = self.lighting.show().clone();
-                let mut moved = None;
-                for entry in &mut show.channel_decks {
-                    if let Some(pos) = entry.decks.iter().position(|d| d.id == id) {
-                        moved = Some(entry.decks.remove(pos));
-                        break;
-                    }
-                }
-                let Some(deck) = moved else {
+                if !self.mixer.move_lighting_deck(id, &channel) {
                     return Self::not_found("lighting deck", &uuid);
-                };
-                show.decks_mut(&channel).push(deck);
-                self.lighting.set_show(show);
+                }
                 CommandResult::Ok
             }
             EngineCommand::AddLightingGroup { name, fixtures } => {
