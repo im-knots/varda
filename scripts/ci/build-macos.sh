@@ -53,36 +53,45 @@ if [ "$SKIP_DEPS" = false ]; then
   brew tap homebrew-ffmpeg/ffmpeg
   brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-srt
   brew install cmake pkg-config create-dmg
-  # libfreenect (Kinect v1) backs the default-on `depth` feature on the arm64
-  # slice. See spec/depth-sensors.md. The x86_64 slice builds
-  # --no-default-features, so depth (and libfreenect) is excluded there.
+  # libfreenect (Kinect v1) backs the `depth` feature, which both slices now carry:
+  # the x86_64 slice is built natively on a macos-15-intel runner, where Homebrew
+  # provides an x86_64 libfreenect. See spec/depth-sensors.md.
   brew install libfreenect
 fi
 
-# Cargo feature flags for a given target. The face-detection feature pulls in
-# ONNX Runtime, which has no x86_64 macOS dylib, so disable it on that slice
-# (see spec/plugin-architecture.md, decision 5). The html feature is also
-# disabled on x86_64: although Servo's software RenderingContext compiles for
-# x86_64, Servo deck-creation hangs under Rosetta at runtime, so the Intel slice
-# ships without HTML (matches .github/workflows/release.yml) — see
-# spec/html-source.md ("Platform Support"). HTML is Apple-Silicon-native only on
-# macOS (plus Linux x86_64).
+# Cargo feature flags for a given target.
+#
+# Two features are off on x86_64, each for its own reason:
+#   face-detection - ONNX Runtime has no x86_64 macOS dylib.
+#                    See spec/plugin-architecture.md (decision 5).
+#   html           - Servo's start_render blocks indefinitely on x86_64 and never
+#                    returns a frame. See spec/html-source.md ("Platform Support").
+#                    That was observed under Rosetta, which was the only way to run
+#                    the slice before the macos-15-intel runner existed. It stays off
+#                    until someone retests it on native Intel hardware.
+#
+# depth and screen-capture are NOT in that list. They were lost to a blunt
+# --no-default-features back when this slice was cross-compiled, with no reason
+# recorded for either. libfreenect builds for x86_64 and ScreenCaptureKit is
+# available on Intel Macs, so a native Intel build keeps both. Before this, the
+# "universal" DMG gave Intel users a Varda with no screen capture and no depth
+# sensors, and nothing said so.
 cargo_features_for() {
   case "$1" in
-    x86_64-apple-darwin) echo "--no-default-features" ;;
+    x86_64-apple-darwin) echo "--no-default-features --features depth,screen-capture" ;;
     *) echo "" ;;
   esac
 }
 
-# Homebrew's arm64 prefix (/opt/homebrew/lib) is not on the default linker
-# search path, so the `depth` feature's `-lfreenect` won't resolve without it.
-# Only the default-feature (arm64) slice pulls in libfreenect; the x86_64 slice
-# builds --no-default-features, so we scope the search path to the native build.
+# Homebrew's prefix is not on the default linker search path, so the `depth`
+# feature's `-lfreenect` will not resolve without it. Both slices now enable depth,
+# so this keys off the feature rather than off which slice is being built.
 link_env_for() {
-  case "$(cargo_features_for "$1")" in
-    *--no-default-features*) echo "" ;;
-    *) echo "LIBRARY_PATH=$(brew --prefix)/lib:${LIBRARY_PATH:-}" ;;
-  esac
+  local features
+  features="$(cargo_features_for "$1")"
+  if [[ "$features" != *--no-default-features* || "$features" == *depth* ]]; then
+    echo "LIBRARY_PATH=$(brew --prefix)/lib:${LIBRARY_PATH:-}"
+  fi
 }
 
 # --- Build architectures ---

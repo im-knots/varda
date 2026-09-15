@@ -48,16 +48,31 @@ Download the latest release from the [Releases page](https://github.com/im-knots
    This removes the macOS quarantine flag. Varda is not yet signed with an Apple Developer certificate, so Gatekeeper will block it without this step.
 4. Launch Varda — on first run it will prompt for your password to install the `varda` CLI command to `/usr/local/bin/`
 
-### Linux (Portable Tarball)
+### Linux (Native Packages)
 
-1. Download `Varda-Linux-x86_64.tar.gz`
-2. Extract and run:
-   ```bash
-   tar xzf Varda-Linux-x86_64.tar.gz
-   cd Varda-Linux-x86_64
-   ./varda
-   ```
-   Put the folder anywhere — on a USB drive, in your home directory, wherever. FFmpeg and codec libs are bundled.
+Varda ships a package built for each distribution, so your package manager installs its
+dependencies for you and keeps them patched. Download the one matching your distro from
+the [latest release](https://github.com/im-knots/varda/releases/latest).
+
+| Distribution | Package | Install |
+|---|---|---|
+| Debian 13, MX Linux, AV Linux | `varda_<version>_amd64_debian13.deb` | `sudo apt install ./varda_*.deb` |
+| Ubuntu 26.04, Mint 23+, Pop!_OS 26.04, Zorin, Ubuntu Studio | `varda_<version>_amd64_ubuntu2604.deb` | `sudo apt install ./varda_*.deb` |
+| Ubuntu 24.04, Mint 22.x, Pop!_OS 24.04 | `varda_<version>_amd64_ubuntu2404.deb` | `sudo apt install ./varda_*.deb` |
+| Fedora 44, Nobara, Ultramarine | `varda-<version>.x86_64.rpm` | `sudo dnf install ./varda-*.rpm` |
+| openSUSE Leap 16 | `varda-<version>.x86_64.rpm` | `sudo zypper install ./varda-*.rpm` |
+| Arch, CachyOS, Manjaro, EndeavourOS, Garuda | AUR | `yay -S varda` (or `paru -S varda`) |
+
+Then run `varda` from anywhere.
+
+Arch and its derivatives build from the AUR rather than installing a binary, on purpose:
+a rolling distribution changes library versions continuously, and a package rebuilt on
+your machine always matches what you actually have.
+
+**On any other distribution** (openSUSE Tumbleweed, Gentoo, Void, NixOS, Alpine, Slackware), build from source
+with the instructions below. Varda no longer ships a portable tarball; it required
+bundling every dependency, which meant shipping libraries frozen at release time that
+your distribution could neither update nor security-patch.
 
 ### Windows (Portable ZIP)
 
@@ -85,13 +100,42 @@ Requires [Rust](https://rustup.rs/) (stable) and a GPU with Metal (macOS) or Vul
 ### Ubuntu / Debian
 
 ```bash
-sudo apt install build-essential cmake pkg-config libvulkan-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavdevice-dev libsrt-gnutls-dev libasound2-dev libv4l-dev libfreenect-dev libpipewire-0.3-dev libshaderc-dev libwayland-dev libxkbcommon-dev libx11-dev libxrandr-dev libxi-dev libgtk-3-dev
+sudo apt install build-essential cmake pkg-config libvulkan-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libsrt-gnutls-dev libasound2-dev libv4l-dev libfreenect-dev libpipewire-0.3-dev libshaderc-dev libwayland-dev libxkbcommon-dev libx11-dev libxrandr-dev libxi-dev libgtk-3-dev
 ```
 
 `libpipewire-0.3-dev` (screen capture on Wayland) and `libfreenect-dev` (depth
 sensors) back default-on features, so omitting them fails the build rather than
 quietly disabling anything. Both are in Ubuntu's `universe` component — run
 `sudo add-apt-repository universe` first if `apt` cannot find them.
+
+### Fedora / Nobara
+
+```bash
+sudo dnf install gcc-c++ cmake pkgconf-pkg-config vulkan-loader-devel ffmpeg-devel srt-devel alsa-lib-devel libv4l-devel libfreenect-devel pipewire-devel libshaderc-devel wayland-devel libxkbcommon-devel libX11-devel libXrandr-devel libXi-devel gtk3-devel
+```
+
+`ffmpeg-devel` comes from RPM Fusion, which Fedora does not enable by default:
+
+```bash
+sudo dnf install https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm
+```
+
+### Arch / CachyOS / Manjaro
+
+```bash
+sudo pacman -S --needed base-devel cmake pkgconf vulkan-icd-loader ffmpeg srt alsa-lib v4l-utils libfreenect pipewire shaderc wayland libxkbcommon libx11 libxrandr libxi gtk3
+```
+
+Or just build the AUR package, which does all of this for you: `yay -S varda`.
+
+### openSUSE
+
+```bash
+sudo zypper install -t pattern devel_C_C++ && sudo zypper install cmake pkgconf vulkan-devel ffmpeg-7-libavcodec-devel ffmpeg-7-libavformat-devel srt-devel alsa-devel libv4l-devel pipewire-devel shaderc-devel wayland-devel libxkbcommon-devel libX11-devel libXrandr-devel libXi-devel gtk3-devel
+```
+
+openSUSE's FFmpeg lives in the Packman repository. `libfreenect` is not packaged, so
+build with `--no-default-features` minus `depth` if you do not need Kinect v1 support.
 
 ```bash
 cargo build --release

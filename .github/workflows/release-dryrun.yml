@@ -1,0 +1,55 @@
+name: Release dry run
+
+# TEMPORARY. Runs the full release build and smoke matrix on a pull request without
+# publishing anything, so the per-distro packaging and the macOS/Windows smoke rows can
+# be proven green before they gate a real release.
+#
+# REMOVE THIS FILE once the matrix has gone green on a tag. It calls the same reusable
+# workflow release.yml does, so deleting it loses no coverage; it only stops paying for a
+# full ten-row matrix on every pull request.
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: v
+        # Cargo.toml's version, unsuffixed. These artifacts are thrown away, and a
+        # suffix would have to satisfy three packaging formats at once: rpm forbids '-'
+        # in Version, and makepkg forbids both '-' and '~' in pkgver. Not worth it.
+        run: |
+          V="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Building dry-run artifacts as $V"
+
+  artifacts:
+    name: Artifacts
+    needs: [version]
+    # The PR head SHA, not a tag: the Arch PKGBUILD fetches and checksums a source
+    # archive, and v<version> does not exist until release time. GitHub serves
+    # /archive/<sha>.tar.gz for any commit, which makes the Arch row testable here.
+    uses: ./.github/workflows/build-artifacts.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      source-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+  summary:
+    name: Dry run summary
+    needs: [artifacts]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report
+        run: |
+          echo "### Release dry run: ${{ needs.artifacts.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Built and smoke-tested every release artifact. Nothing was published." >> "$GITHUB_STEP_SUMMARY"
+          echo "Artifacts are attached to this run for manual inspection." >> "$GITHUB_STEP_SUMMARY"
+          [ "${{ needs.artifacts.result }}" = "success" ]

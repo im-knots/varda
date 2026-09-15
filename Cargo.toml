@@ -78,7 +78,18 @@ pollster = "0.4"
 cpal = "0.17.3"
 rustfft = "6.4.1"
 crossbeam-channel = "0.5.15"
-ffmpeg-next = "9.0.0"
+# `device` (libavdevice) and `filter` (libavfilter) are default features Varda never
+# uses: FFmpeg is touched only in internal/video/{mod,hap}.rs and internal/stream/mod.rs.
+# Linking them cost 32 of the 76 host libraries the v0.6.0 Linux tarball required,
+# including libSDL2, libjack, libopenal, libplacebo and six Flite voice libraries.
+# `format` is kept deliberately: every stream protocol (SRT, HLS, DASH, RTMP) is
+# libavformat. See spec/release-strategy.md section 4.
+ffmpeg-next = { version = "9.0.0", default-features = false, features = [
+    "codec",
+    "format",
+    "software-resampling",
+    "software-scaling",
+] }
 rosc = "0.11.4"
 image = "0.25.10"
 rfd = "0.17.2"

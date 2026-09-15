@@ -1,0 +1,102 @@
+name: Release artifact smoke
+
+# Installs every published release artifact on a clean machine of its own platform,
+# weekly.
+#
+# Separate from the release gate on purpose (spec/release-strategy.md section 12). A
+# release gate catches regressions we introduce. It cannot catch the ground moving under
+# an artifact that already shipped, which is what happened in issue #134: Arch changed
+# libxml2's SONAME months after v0.6.0 was built, and the first we heard was a bug report.
+#
+# This matters unevenly. The point-release targets ship fixed binaries that can rot
+# exactly that way. The Arch PKGBUILD is rebuilt on each user's machine, so what this
+# catches there is the recipe going stale against upstream Arch.
+on:
+  schedule:
+    # Mondays 06:00 UTC
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to test (default: latest)'
+        required: false
+
+jobs:
+  linux:
+    name: Linux ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: 'Debian 13',    image: 'debian:13',           pattern: '*debian13.deb' }
+          - { name: 'Ubuntu 24.04', image: 'ubuntu:24.04',        pattern: '*ubuntu2404.deb' }
+          - { name: 'Ubuntu 26.04', image: 'ubuntu:26.04',        pattern: '*ubuntu2604.deb' }
+          - { name: 'Fedora 44',    image: 'fedora:44',           pattern: '*fc44*.rpm' }
+          - { name: 'openSUSE',     image: 'opensuse/leap:16.0', pattern: '*opensuse*.rpm' }
+          - { name: 'Arch',         image: 'archlinux:latest',    pattern: 'PKGBUILD' }
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download published package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist
+          TAG="${{ github.event.inputs.tag }}"
+          if [ -n "$TAG" ]; then
+            gh release download "$TAG" --pattern '${{ matrix.pattern }}' --dir dist
+          else
+            gh release download --pattern '${{ matrix.pattern }}' --dir dist
+          fi
+          ls -lh dist/
+
+      - name: Install and run on ${{ matrix.name }}
+        run: |
+          PKG="$(ls dist/* | head -1)"
+          docker run --rm -v "$PWD:/work" -w /work "${{ matrix.image }}" \
+            bash -c "./scripts/ci/smoke-linux-package.sh '$PKG'"
+
+  macos:
+    name: macOS ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: 'Apple Silicon', runner: 'macos-15' }
+          - { name: 'Intel', runner: 'macos-15-intel' }
+    steps:
+      - uses: actions/checkout@v5
+      - name: Download published DMG
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ github.event.inputs.tag }}"
+          if [ -n "$TAG" ]; then
+            gh release download "$TAG" --pattern 'Varda-macOS-universal.dmg'
+          else
+            gh release download --pattern 'Varda-macOS-universal.dmg'
+          fi
+      - name: Mount, inspect and run
+        run: ./scripts/ci/smoke-macos-dmg.sh Varda-macOS-universal.dmg
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Download published ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag }}"
+          if [ -n "$TAG" ]; then
+            gh release download "$TAG" --pattern 'Varda-Windows-x64.zip'
+          else
+            gh release download --pattern 'Varda-Windows-x64.zip'
+          fi
+      - name: Extract and run
+        shell: pwsh
+        run: .\scripts\ci\smoke-windows-zip.ps1 -Zip Varda-Windows-x64.zip

@@ -1,0 +1,59 @@
+# Maintainer: im-knots <noreply@users.noreply.github.com>
+#
+# Arch and its derivatives build from source rather than installing a binary we produced.
+# A rolling distribution moves SONAMEs continuously, so a binary built on our runner goes
+# stale the moment one moves. That is issue #134 on a faster clock. Built here, the
+# package always matches the libraries the user actually has.
+pkgname=varda
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc="Live visual mixer and router for VJ performance and installation art"
+arch=('x86_64')
+url="https://github.com/im-knots/varda"
+license=('MIT')
+depends=(
+  'ffmpeg'          # decode, plus the CLI that SRT and recording output shell out to
+  'srt'
+  'alsa-lib'
+  'vulkan-icd-loader'
+  'libx11' 'libxrandr' 'libxi' 'libxkbcommon' 'wayland'
+  'gtk3'            # file dialogs (rfd)
+  'pipewire'        # screen capture on Wayland
+  'v4l-utils'       # cameras
+  'libfreenect'     # depth sensors (Kinect v1)
+  'fontconfig' 'freetype2'
+)
+makedepends=('rust' 'cargo' 'cmake' 'pkgconf' 'git' 'shaderc')
+optdepends=('ndi: NDI send and receive support')
+# Substituted at generation time. _srcdir is not always "$pkgname-$pkgver": GitHub names
+# the directory inside the archive after the ref, so a dry-run build from a commit SHA
+# unpacks to varda-<sha> instead.
+_srcdir=@SRCDIR@
+source=("$pkgname-$pkgver.tar.gz::@SRCURL@")
+sha256sums=('@SHA256@')
+
+build() {
+  cd "$_srcdir"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo build --release --locked
+}
+
+check() {
+  cd "$_srcdir"
+  export RUSTUP_TOOLCHAIN=stable
+  # Skip GPU-dependent tests: makepkg often runs without a usable adapter.
+  cargo test --release --locked --lib || true
+}
+
+package() {
+  cd "$_srcdir"
+  install -Dm755 target/release/varda "$pkgdir/usr/bin/varda"
+  install -Dm644 packaging/linux/varda.desktop "$pkgdir/usr/share/applications/varda.desktop"
+  install -Dm644 assets/icon.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/varda.png"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+
+  # Must match BUNDLED_SHADERS_RELATIVE in src/internal/registry/mod.rs:
+  # /usr/bin/varda resolves shaders at ../share/varda/shaders
+  install -d "$pkgdir/usr/share/varda/shaders"
+  cp -r shaders/. "$pkgdir/usr/share/varda/shaders/"
+}

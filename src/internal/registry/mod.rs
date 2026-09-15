@@ -428,40 +428,38 @@ impl Default for ShaderRegistry {
     }
 }
 
+/// Where the bundled shaders sit relative to the executable's own directory.
+///
+/// Relative rather than absolute so a prefix install (`/opt/varda/bin/varda`) resolves
+/// the same way a system one (`/usr/bin/varda`) does.
+// Linux: FHS layout from a native package. /usr/bin/varda -> /usr/share/varda/shaders.
+#[cfg(target_os = "linux")]
+const BUNDLED_SHADERS_RELATIVE: &str = "../share/varda/shaders";
+// macOS .app: Contents/MacOS/varda -> Contents/Resources/shaders.
+#[cfg(target_os = "macos")]
+const BUNDLED_SHADERS_RELATIVE: &str = "../Resources/shaders";
+// Windows portable ZIP: shaders/ next to varda.exe.
+#[cfg(target_os = "windows")]
+const BUNDLED_SHADERS_RELATIVE: &str = "shaders";
+// Anything else gets the FHS layout, which is the best guess available.
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+const BUNDLED_SHADERS_RELATIVE: &str = "../share/varda/shaders";
+
+/// Resolve the bundled shader directory for a given executable directory.
+///
+/// Split from `get_bundled_shader_path` so the layout rule is testable without
+/// depending on where the test binary happens to live.
+fn bundled_shaders_for(exe_dir: &Path) -> Option<PathBuf> {
+    let dir = exe_dir.join(BUNDLED_SHADERS_RELATIVE);
+    dir.is_dir().then_some(dir)
+}
+
 /// Get the bundled shader path relative to the current executable.
-/// Used when Varda is packaged as a .app (macOS) or `AppImage` (Linux).
+/// Used when Varda is installed from a native package (Linux), or packaged as a
+/// .app (macOS) or portable ZIP (Windows).
 pub fn get_bundled_shader_path() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    let exe_dir = exe.parent()?;
-
-    // macOS .app: exe is at Contents/MacOS/varda, shaders at Contents/Resources/shaders
-    #[cfg(target_os = "macos")]
-    {
-        let app_resources = exe_dir.join("../Resources/shaders");
-        if app_resources.is_dir() {
-            return Some(app_resources);
-        }
-    }
-
-    // Linux portable tarball: exe is at bin/varda, shaders at shaders/
-    #[cfg(target_os = "linux")]
-    {
-        let tarball_shaders = exe_dir.join("../shaders");
-        if tarball_shaders.is_dir() {
-            return Some(tarball_shaders);
-        }
-    }
-
-    // Windows portable: shaders/ next to varda.exe
-    #[cfg(target_os = "windows")]
-    {
-        let exe_shaders = exe_dir.join("shaders");
-        if exe_shaders.is_dir() {
-            return Some(exe_shaders);
-        }
-    }
-
-    None
+    bundled_shaders_for(exe.parent()?)
 }
 
 /// Get the default library paths for the current platform
@@ -509,6 +507,39 @@ pub fn get_default_library_paths() -> Vec<PathBuf> {
 mod tests {
     use super::*;
     use std::fs;
+
+    /// The packaged layout has to resolve, or an installed Varda ships with no shader
+    /// library at all. Pre-0.7 this looked for the portable tarball's `../shaders`,
+    /// which `/usr/bin/varda` never matches.
+    #[test]
+    fn bundled_shaders_resolve_from_the_packaged_layout() {
+        let root = tempfile::tempdir().unwrap();
+        let exe_dir = root.path().join("usr/bin");
+        let shaders = root.path().join("usr").join(
+            BUNDLED_SHADERS_RELATIVE
+                .strip_prefix("../")
+                .unwrap_or(BUNDLED_SHADERS_RELATIVE),
+        );
+        fs::create_dir_all(&exe_dir).unwrap();
+        fs::create_dir_all(&shaders).unwrap();
+
+        let found = bundled_shaders_for(&exe_dir).expect("packaged layout should resolve");
+        assert_eq!(
+            found.canonicalize().unwrap(),
+            shaders.canonicalize().unwrap()
+        );
+    }
+
+    /// A missing directory is not an error. Dev builds have no bundled tier and fall
+    /// through to the CWD and workspace tiers instead.
+    #[test]
+    fn bundled_shaders_are_absent_rather_than_wrong_when_not_installed() {
+        let root = tempfile::tempdir().unwrap();
+        let exe_dir = root.path().join("target/release");
+        fs::create_dir_all(&exe_dir).unwrap();
+
+        assert!(bundled_shaders_for(&exe_dir).is_none());
+    }
 
     fn write_shader(dir: &Path, name: &str, category: &str, is_filter: bool) {
         let input = if is_filter {
