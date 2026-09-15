@@ -473,6 +473,39 @@ pub struct UIData {
     pub arrangement_mode_open: bool,
     /// The scene's arrangement, absent in a Performance-only scene.
     pub arrangement: Option<crate::engine::types::ArrangementSnapshot>,
+    /// DMX lighting: the same snapshot `/api/state/lighting` serves. Read only, exactly like
+    /// every other UI view of engine state. See /spec/lighting-routing.md § API Parity.
+    pub lighting: crate::dmx::LightingSnapshot,
+    /// Profile references available to patch, for the fixture picker.
+    pub lighting_profiles: Vec<String>,
+    /// Mode names per profile reference, so the patch form can offer the modes a chosen profile
+    /// actually defines instead of asking an operator to type one.
+    ///
+    /// Shared by `Arc`: indexing the bundled library parses hundreds of files, so it is built
+    /// once and cloning it per frame is a refcount bump.
+    pub lighting_profile_modes: std::sync::Arc<std::collections::HashMap<String, Vec<String>>>,
+    /// The show half of lighting: looks, palettes, decks per channel, master.
+    pub lighting_show: crate::dmx::LightingShow,
+    /// Whether the LIGHTS band is expanded in the central area.
+    pub lights_band_open: bool,
+    /// Whether the VIDEO band is expanded.
+    pub video_band_open: bool,
+    /// Fraction of the central area given to VIDEO when both bands are open.
+    pub band_split: f32,
+    /// Currently selected lighting deck, for the bottom bar.
+    pub selected_lighting_deck: Option<String>,
+    /// Group UUIDs in the rig, for store targets and the look editor.
+    pub lighting_groups: Vec<String>,
+    /// Fixture groups as `(uuid, name, member count)`, for the library tree.
+    pub lighting_group_names: Vec<(String, String, usize)>,
+    /// Group membership, so a group's parameter column can offer the union of what its members
+    /// can actually do. Keyed by group UUID, holding fixture UUIDs.
+    pub lighting_group_members: Vec<(String, Vec<String>)>,
+    /// Lighting deck UUIDs as strings, keyed by (channel, index within that channel).
+    ///
+    /// Interned here because arrangement lane rows borrow `&str` while a deck's identity is a
+    /// `Uuid`, so the string has to outlive the row.
+    pub lighting_deck_uuids: std::collections::HashMap<(String, usize), String>,
     /// Timeline horizontal zoom, in pixels per second of show time.
     pub arrangement_pixels_per_second: f32,
     /// Show position at the timeline's left edge.

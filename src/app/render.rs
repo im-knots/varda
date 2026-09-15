@@ -215,6 +215,71 @@ impl VardaApp {
                 / self.frame_stats.fps_history.len() as f32;
         }
         self.frame_stats.system_monitor.update();
+
+        // Lighting rides the same frame clock as everything else. Ticked here rather than in
+        // the render path because it drives no GPU work and must keep running headless, where
+        // there is no render at all. Clamped so a long stall (a shader recompile, a window
+        // resize) does not hand the smoother a dt that snaps every fixture.
+        // Channel opacity is control state the mixer owns once; the lighting merge reads the
+        // same numbers the GPU compositor does.
+        let opacities = self.mixer.effective_channel_opacities_by_uuid();
+        self.lighting.set_channels(opacities);
+
+        // A modulated look samples the same modulation engine the GPU path does. The borrow is
+        // split explicitly so the sampler can read the mixer while the lighting runtime is held
+        // mutably, and it lasts only for the tick: nothing is cloned per frame and the runtime
+        // keeps no reference into the mixer afterwards.
+        let (lighting, mixer) = (&mut self.lighting, &self.mixer);
+        lighting.tick(dt.clamp(0.0, 0.1), false, &|uuid, offset| {
+            mixer.modulation().sample_at_phase_offset(uuid, offset)
+        });
+    }
+
+    /// Downsample and enqueue a readback for every source a sampled lighting deck follows.
+    ///
+    /// Costs nothing when nothing is sampled: `sampled_sources` is empty, `sync` drops every
+    /// held resource, and the method returns without touching the GPU.
+    fn capture_light_samples(&mut self) {
+        let sources = self.lighting.sampled_sources();
+        if let Err(error) = self.light_sampler.sync(&self.context.device, &sources) {
+            log::warn!("Lighting sampler unavailable: {error}");
+            return;
+        }
+        if sources.is_empty() {
+            return;
+        }
+
+        let program_key = Self::master_program_key(&self.mixer);
+        let mut encoder =
+            self.context
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("light sample capture"),
+                });
+        let mut captured = false;
+        for key in &sources {
+            let view = if key == crate::app::state::light_sampler::LightSampler::program_key() {
+                Some(self.mixer.program_view(program_key))
+            } else {
+                self.mixer
+                    .channels()
+                    .iter()
+                    .find(|ch| ch.uuid() == key)
+                    .map(|ch| &ch.composite_view)
+            };
+            // A channel that has since been removed simply stops producing frames; the merge
+            // keeps the last one until `drain` prunes it.
+            if let Some(view) = view {
+                self.light_sampler
+                    .capture(&self.context.device, &mut encoder, key, view);
+                captured = true;
+            }
+        }
+        if captured {
+            self.context.submit(std::iter::once(encoder.finish()));
+        }
+        self.light_sampler
+            .drain(&self.context.device, &mut self.lighting);
     }
 
     /// Collect all analyzer scalar values from all decks into a flat lookup table.
@@ -273,22 +338,10 @@ impl VardaApp {
         }
 
         // Compute effective channel opacities to determine which cameras are needed
-        let channel_count = self.mixer.channel_count();
-        let crossfader = self.mixer.crossfader();
-        let two_ch_buf: [f32; 2];
-        let n_ch_buf: Vec<f32>;
-        let effective_opacities: &[f32] = if channel_count == 2 {
-            two_ch_buf = [
-                (1.0 - crossfader) * self.mixer.channel_opacity(0),
-                crossfader * self.mixer.channel_opacity(1),
-            ];
-            &two_ch_buf
-        } else {
-            n_ch_buf = (0..channel_count)
-                .map(|i| self.mixer.channel_opacity(i))
-                .collect();
-            &n_ch_buf
-        };
+        // One implementation, shared with the lighting merge. See
+        // `Mixer::effective_channel_opacities`.
+        let opacity_buf = self.mixer.effective_channel_opacities();
+        let effective_opacities: &[f32] = &opacity_buf;
 
         // Collect camera IDs needed by visible channels. Cued (previewed)
         // channels are included even at zero opacity so their live camera inputs
@@ -592,6 +645,11 @@ impl VardaApp {
 
     /// Render content to all outputs (windowed + headless) using the surface layout.
     pub fn render_outputs(&mut self) {
+        // Sampled lighting: downsample whatever a pixel-mapped deck follows and enqueue its
+        // readback. Taken before the outputs consume the composites, so the lights see the same
+        // frame the audience does. See /spec/lighting-routing.md § Sampled.
+        self.capture_light_samples();
+
         let context = &self.context;
 
         // Prepare sub-mixes for any Channels(...) sources

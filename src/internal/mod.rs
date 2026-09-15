@@ -7,6 +7,7 @@ pub mod cli_install;
 pub mod clock;
 pub mod deck;
 pub mod depth;
+pub mod dmx;
 pub mod html;
 pub mod isf;
 pub mod keymap;

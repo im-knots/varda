@@ -223,6 +223,20 @@ impl UIData {
         };
 
         UIData {
+            lighting: crate::dmx::LightingSnapshot::default(),
+            lighting_profiles: Vec::new(),
+            lighting_profile_modes: std::sync::Arc::default(),
+            lighting_show: crate::dmx::LightingShow::default(),
+            // Matches `UILayoutState::default()`. A fixture that disagrees with the real
+            // default tests a configuration no user ever has.
+            lights_band_open: true,
+            video_band_open: true,
+            band_split: 0.5,
+            selected_lighting_deck: None,
+            lighting_groups: Vec::new(),
+            lighting_group_names: Vec::new(),
+            lighting_group_members: Vec::new(),
+            lighting_deck_uuids: std::collections::HashMap::new(),
             generators: vec![
                 ("test_generator_a".to_string(), 0),
                 ("test_generator_b".to_string(), 1),

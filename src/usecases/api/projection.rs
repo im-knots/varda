@@ -172,6 +172,7 @@ pub(crate) mod tests {
     };
     pub(crate) fn make_test_state() -> EngineState {
         EngineState {
+            lighting: crate::dmx::LightingSnapshot::default(),
             mixer: MixerSnapshot {
                 channels: vec![ChannelSnapshot {
                     idx: 0,

@@ -10,6 +10,7 @@
 #   ├── bin/varda          (the actual binary)
 #   ├── lib/               (bundled FFmpeg, codec, SRT shared libs)
 #   ├── shaders/
+#   ├── fixtures/
 #   ├── LICENSE
 #   └── FFMPEG-LICENSE
 set -euo pipefail
@@ -55,7 +56,7 @@ fi
 
 STAGE="Varda-Linux-x86_64"
 rm -rf "$STAGE"
-mkdir -p "$STAGE/bin" "$STAGE/lib" "$STAGE/shaders"
+mkdir -p "$STAGE/bin" "$STAGE/lib" "$STAGE/shaders" "$STAGE/fixtures"
 
 echo "==> Preparing portable directory..."
 
@@ -64,6 +65,9 @@ cp target/release/varda "$STAGE/bin/varda"
 
 # Shaders
 cp -r shaders/* "$STAGE/shaders/"
+# Bundled fixture profiles, resolved from ../fixtures relative to bin/varda.
+# See src/internal/dmx/mod.rs::bundled_fixture_path.
+cp -r fixtures/* "$STAGE/fixtures/"
 
 # Launcher script
 cat > "$STAGE/varda" << 'WRAPPER_EOF'

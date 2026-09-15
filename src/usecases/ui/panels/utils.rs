@@ -286,8 +286,216 @@ fn hue_to_channel(p: f32, q: f32, mut t: f32) -> f32 {
     p
 }
 
+/// How a channel lane is currently being interacted with, deciding which border it wears.
+///
+/// Extracted so the VIDEO and LIGHTS bands cannot drift apart: a channel lane crosses both, and
+/// two lookalike frame blocks would eventually stop looking alike. Both bands call this.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct LaneBorder {
+    /// A droppable item is in flight and the pointer is over this lane.
+    pub hovered: bool,
+    /// A droppable item is in flight somewhere, so every lane hints that it will accept it.
+    pub drag_active: bool,
+    /// This lane's channel is the selected one.
+    pub selected: bool,
+}
+
+/// The border a channel lane wears, in the priority the desk reads it: direct hover beats the
+/// ambient drag hint, which beats selection, which beats the resting hairline.
+///
+/// The resting hairline is what draws the vertical rules between channels. A lane rendered
+/// without it loses its column boundary entirely, which is why this is never `Stroke::NONE`.
+pub(super) fn channel_lane_frame(accent: egui::Color32, state: LaneBorder) -> egui::Frame {
+    let base = egui::Frame::default().corner_radius(4.0).inner_margin(2.0);
+    if state.hovered {
+        base.fill(accent.linear_multiply(0.15))
+            .stroke(egui::Stroke::new(2.0_f32, accent))
+    } else if state.drag_active {
+        base.fill(accent.linear_multiply(0.08))
+            .stroke(egui::Stroke::new(1.5_f32, accent.linear_multiply(0.5)))
+    } else if state.selected {
+        base.stroke(egui::Stroke::new(2.0_f32, accent.linear_multiply(0.6)))
+    } else {
+        base.stroke(egui::Stroke::new(
+            1.0_f32,
+            egui::Color32::from_rgb(50, 50, 60),
+        ))
+    }
+}
+
+/// The geometry of a deck card, shared by every deck.
+///
+/// A lighting deck is a deck — the same card, the same size, the same rows — so the layout lives
+/// here rather than being measured out twice. Only the preview's *contents* differ: video draws
+/// its rendered texture, lighting draws what the rig is currently emitting.
+/// See /spec/lighting-routing.md § Performance-Mode UI.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct DeckCard {
+    pub preview: egui::Vec2,
+    pub slider_width: f32,
+    pub padding: f32,
+    pub spacing: f32,
+    pub name_row_h: f32,
+    pub button_row_h: f32,
+}
+
+impl DeckCard {
+    /// A square budget, so a 16:9 project keeps the 100×56 card it has always had while a
+    /// portrait one grows downward to 56×100 instead of being squashed.
+    pub fn new(render_width: u32, render_height: u32) -> Self {
+        Self {
+            preview: preview_size(egui::vec2(100.0, 100.0), render_width, render_height),
+            slider_width: 18.0,
+            padding: 4.0,
+            spacing: 4.0,
+            name_row_h: 16.0,
+            button_row_h: 20.0,
+        }
+    }
+
+    /// Preview plus the vertical level fader beside it.
+    pub fn inner_width(self) -> f32 {
+        self.preview.x + self.slider_width + 8.0
+    }
+
+    pub fn size(self) -> egui::Vec2 {
+        egui::vec2(
+            self.inner_width() + self.padding * 2.0,
+            self.padding
+                + self.preview.y
+                + self.spacing
+                + self.name_row_h
+                + self.spacing
+                + self.button_row_h
+                + self.padding,
+        )
+    }
+
+    pub fn preview_rect(self, card: egui::Rect) -> egui::Rect {
+        egui::Rect::from_min_size(
+            card.min + egui::vec2(self.padding, self.padding),
+            self.preview,
+        )
+    }
+
+    pub fn slider_rect(self, card: egui::Rect) -> egui::Rect {
+        let preview = self.preview_rect(card);
+        egui::Rect::from_min_size(
+            egui::pos2(preview.max.x + 2.0, card.min.y + self.padding),
+            egui::vec2(self.slider_width, self.preview.y),
+        )
+    }
+
+    pub fn name_pos(self, card: egui::Rect) -> egui::Pos2 {
+        egui::pos2(
+            card.min.x + self.padding,
+            card.min.y + self.padding + self.preview.y + self.spacing,
+        )
+    }
+
+    pub fn button_rect(self, card: egui::Rect) -> egui::Rect {
+        egui::Rect::from_min_size(
+            egui::pos2(
+                card.min.x + self.padding,
+                self.name_pos(card).y + self.name_row_h + self.spacing,
+            ),
+            egui::vec2(self.inner_width(), self.button_row_h),
+        )
+    }
+}
+
+/// The card's background and border, identical for every deck.
+pub(super) fn paint_deck_card_frame(
+    painter: &egui::Painter,
+    card: egui::Rect,
+    border: egui::Stroke,
+    bg_alpha: u8,
+) {
+    painter.rect_filled(
+        card,
+        4.0,
+        egui::Color32::from_rgba_unmultiplied(25, 25, 35, bg_alpha),
+    );
+    painter.rect_stroke(card, 4.0, border, egui::StrokeKind::Outside);
+}
+
 #[cfg(test)]
 mod tests {
+
+    /// The resting border is what draws the vertical rules between channel columns. A lane with
+    /// no stroke has no column boundary, which is exactly how the LIGHTS band shipped looking
+    /// like one undivided field.
+    #[test]
+    fn a_resting_lane_still_draws_its_column_rule() {
+        let frame = channel_lane_frame(channel_color(0), LaneBorder::default());
+        assert!(
+            frame.stroke.width > 0.0,
+            "a resting lane must still draw a border, or channels stop reading as columns"
+        );
+        assert_ne!(frame.stroke.color, egui::Color32::TRANSPARENT);
+    }
+
+    /// Every state draws a border. The point of the helper is that no state can be the one that
+    /// silently loses the column rule.
+    #[test]
+    fn every_lane_state_draws_a_border() {
+        for state in [
+            LaneBorder::default(),
+            LaneBorder {
+                hovered: true,
+                drag_active: true,
+                selected: false,
+            },
+            LaneBorder {
+                hovered: false,
+                drag_active: true,
+                selected: false,
+            },
+            LaneBorder {
+                hovered: false,
+                drag_active: false,
+                selected: true,
+            },
+        ] {
+            let frame = channel_lane_frame(channel_color(2), state);
+            assert!(frame.stroke.width > 0.0, "{state:?} drew no border");
+        }
+    }
+
+    /// Hover and the ambient drag hint are the only states that tint the lane; a resting or
+    /// merely-selected lane must not, or the LIGHTS band's own wash would be overpainted.
+    #[test]
+    fn only_an_active_drag_tints_the_lane() {
+        assert_eq!(
+            channel_lane_frame(channel_color(0), LaneBorder::default()).fill,
+            egui::Color32::TRANSPARENT
+        );
+        assert_eq!(
+            channel_lane_frame(
+                channel_color(0),
+                LaneBorder {
+                    hovered: false,
+                    drag_active: false,
+                    selected: true
+                }
+            )
+            .fill,
+            egui::Color32::TRANSPARENT
+        );
+        assert_ne!(
+            channel_lane_frame(
+                channel_color(0),
+                LaneBorder {
+                    hovered: true,
+                    drag_active: true,
+                    selected: false
+                }
+            )
+            .fill,
+            egui::Color32::TRANSPARENT
+        );
+    }
+
     use super::*;
 
     #[test]

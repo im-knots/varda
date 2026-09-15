@@ -116,7 +116,7 @@ echo "==> Building .app bundle..."
 rm -rf Varda.app
 mkdir -p Varda.app/Contents/MacOS
 mkdir -p Varda.app/Contents/Frameworks
-mkdir -p Varda.app/Contents/Resources/shaders
+mkdir -p Varda.app/Contents/Resources/shaders Varda.app/Contents/Resources/fixtures
 mkdir -p Varda.app/Contents/Resources/licenses
 
 cp varda-universal Varda.app/Contents/MacOS/varda
@@ -124,6 +124,10 @@ cp assets/icon.png Varda.app/Contents/Resources/varda.png
 
 # Bundle shaders
 cp -r shaders/* Varda.app/Contents/Resources/shaders/
+
+# Bundle fixture profiles, resolved from ../Resources/fixtures relative to Contents/MacOS/varda.
+# See src/internal/dmx/mod.rs::bundled_fixture_path.
+cp -r fixtures/* Varda.app/Contents/Resources/fixtures/
 
 # Bundle FFmpeg dylibs and fix load paths using @rpath (Apple-recommended approach).
 # See: https://developer.apple.com/forums/thread/736728

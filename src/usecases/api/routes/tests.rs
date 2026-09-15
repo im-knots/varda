@@ -105,6 +105,489 @@ mod tests {
         (status, json)
     }
 
+    // ── Lighting (DMX) ──────────────────────────────────────────────
+    //
+    // /spec/lighting-routing.md § API Parity requires a success and an error case per route.
+    // An installation operator repatching headless has no window to click in, so anything the
+    // UI can do must be reachable here.
+
+    /// A router whose engine rejects every command, for the error half of each pair.
+    fn router_with_rejecting_engine(message: &'static str) -> axum::Router {
+        let state = make_test_state();
+        let (cmd_tx, mut cmd_rx) =
+            tokio::sync::mpsc::unbounded_channel::<crate::engine::CommandEnvelope>();
+        tokio::spawn(async move {
+            while let Some((_cmd, reply_tx)) = cmd_rx.recv().await {
+                if let Some(tx) = reply_tx {
+                    let _ = tx.send(CommandResult::Err {
+                        code: crate::engine::ErrorCode::InvalidInput,
+                        message: message.to_string(),
+                    });
+                }
+            }
+        });
+        let shared = SharedState {
+            command_tx: cmd_tx,
+            engine_state: std::sync::Arc::new(std::sync::RwLock::new(Some(state))),
+        };
+        crate::usecases::api::runner::build_router(shared)
+    }
+
+    async fn delete_json(app: axum::Router, path: &str) -> (StatusCode, serde_json::Value) {
+        let response = app
+            .oneshot(Request::delete(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+        (status, json)
+    }
+
+    async fn patch_json(
+        app: axum::Router,
+        path: &str,
+        body: serde_json::Value,
+    ) -> (StatusCode, serde_json::Value) {
+        let response = app
+            .oneshot(
+                Request::patch(path)
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, json)
+    }
+
+    #[tokio::test]
+    async fn test_state_lighting_reports_a_disabled_rig_by_default() {
+        let (status, json) = get_json(router_with_state(), "/api/state/lighting").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["enabled"], false);
+        assert!(json["fixtures"].is_array());
+        assert!(json["universes"].is_array());
+    }
+
+    #[tokio::test]
+    async fn test_add_fixture_ok() {
+        let (status, _) = post_json(
+            router_with_mock_engine(),
+            "/api/lighting/fixtures",
+            serde_json::json!({
+                "name": "par-1",
+                "profile": "generic/rgbw",
+                "mode": "4ch",
+                "universe": 1,
+                "address": 1
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_add_fixture_rejected_patch_reports_the_reason() {
+        let (status, json) = post_json(
+            router_with_rejecting_engine("par-2: DMX 3 in universe 1 is already claimed"),
+            "/api/lighting/fixtures",
+            serde_json::json!({
+                "name": "par-2",
+                "profile": "generic/rgbw",
+                "mode": "4ch",
+                "universe": 1,
+                "address": 3
+            }),
+        )
+        .await;
+        assert_ne!(status, StatusCode::OK);
+        assert!(
+            json.to_string().contains("already claimed"),
+            "the API must surface why the patch failed, got {json}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_add_fixture_defaults_universe_and_address() {
+        // Only name, profile and mode are required; a bare body must still patch.
+        let (status, _) = post_json(
+            router_with_mock_engine(),
+            "/api/lighting/fixtures",
+            serde_json::json!({ "name": "par", "profile": "generic/rgbw", "mode": "4ch" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_update_fixture_ok() {
+        let (status, _) = patch_json(
+            router_with_mock_engine(),
+            "/api/lighting/fixtures/11111111-1111-1111-1111-111111111111",
+            serde_json::json!({ "address": 17, "invert_pan": true }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_update_fixture_unknown_uuid_errors() {
+        let (status, json) = patch_json(
+            router_with_rejecting_engine("no fixture with uuid deadbeef"),
+            "/api/lighting/fixtures/deadbeef",
+            serde_json::json!({ "address": 17 }),
+        )
+        .await;
+        assert_ne!(status, StatusCode::OK);
+        assert!(json.to_string().contains("no fixture"), "got {json}");
+    }
+
+    #[tokio::test]
+    async fn test_remove_fixture_ok() {
+        let (status, _) = delete_json(
+            router_with_mock_engine(),
+            "/api/lighting/fixtures/11111111-1111-1111-1111-111111111111",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_remove_fixture_unknown_uuid_errors() {
+        let (status, _) = delete_json(
+            router_with_rejecting_engine("no fixture with uuid deadbeef"),
+            "/api/lighting/fixtures/deadbeef",
+        )
+        .await;
+        assert_ne!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_blackout_ok() {
+        let (status, _) = post_json(
+            router_with_mock_engine(),
+            "/api/lighting/blackout",
+            serde_json::json!({ "value": true }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_blackout_rejects_a_malformed_body() {
+        let (status, _) = post_json(
+            router_with_mock_engine(),
+            "/api/lighting/blackout",
+            serde_json::json!({ "not_value": true }),
+        )
+        .await;
+        assert_ne!(
+            status,
+            StatusCode::OK,
+            "a missing field must not default to false"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_set_enabled_ok() {
+        let (status, _) = post_json(
+            router_with_mock_engine(),
+            "/api/lighting/enabled",
+            serde_json::json!({ "value": true }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_set_enabled_with_an_unresolvable_patch_errors() {
+        let (status, json) = post_json(
+            router_with_rejecting_engine("par-1: profile \"nope/missing\" failed to load"),
+            "/api/lighting/enabled",
+            serde_json::json!({ "value": true }),
+        )
+        .await;
+        assert_ne!(status, StatusCode::OK);
+        assert!(json.to_string().contains("failed to load"), "got {json}");
+    }
+
+    // ── Lighting: looks, decks, palettes ────────────────────────────
+
+    async fn put_json_at(
+        app: axum::Router,
+        path: &str,
+        body: serde_json::Value,
+    ) -> (StatusCode, serde_json::Value) {
+        let response = app
+            .oneshot(
+                Request::put(path)
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, json)
+    }
+
+    const LOOK: &str = "22222222-2222-2222-2222-222222222222";
+    const DECK: &str = "33333333-3333-3333-3333-333333333333";
+    const PALETTE: &str = "44444444-4444-4444-4444-444444444444";
+
+    #[tokio::test]
+    async fn test_add_look_ok() {
+        let (status, _) = post_json(
+            router_with_mock_engine(),
+            "/api/lighting/looks",
+            serde_json::json!({ "name": "Deep Blue" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_remove_look_unknown_errors() {
+        let (status, _) = delete_json(
+            router_with_rejecting_engine("no look with uuid deadbeef"),
+            &format!("/api/lighting/looks/{LOOK}"),
+        )
+        .await;
+        assert_ne!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_set_look_value_literal_ok() {
+        let (status, _) = put_json_at(
+            router_with_mock_engine(),
+            &format!("/api/lighting/looks/{LOOK}/value"),
+            serde_json::json!({
+                "target_kind": "group", "target": DECK, "role": "blue", "value": 0.8
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_set_look_value_palette_reference_ok() {
+        let (status, _) = put_json_at(
+            router_with_mock_engine(),
+            &format!("/api/lighting/looks/{LOOK}/value"),
+            serde_json::json!({
+                "target_kind": "group", "target": DECK, "role": "pan", "palette": PALETTE
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_set_look_value_with_neither_value_nor_palette_errors() {
+        let (status, json) = put_json_at(
+            router_with_rejecting_engine("one of value or palette is required"),
+            &format!("/api/lighting/looks/{LOOK}/value"),
+            serde_json::json!({ "target_kind": "group", "target": DECK, "role": "blue" }),
+        )
+        .await;
+        assert_ne!(status, StatusCode::OK);
+        assert!(json.to_string().contains("required"), "got {json}");
+    }
+
+    #[tokio::test]
+    async fn test_add_lighting_deck_ok() {
+        let (status, _) = post_json(
+            router_with_mock_engine(),
+            "/api/lighting/decks",
+            serde_json::json!({ "channel": DECK, "look": LOOK }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_add_lighting_deck_unknown_look_errors() {
+        let (status, json) = post_json(
+            router_with_rejecting_engine("no look with uuid deadbeef"),
+            "/api/lighting/decks",
+            serde_json::json!({ "channel": DECK, "look": LOOK }),
+        )
+        .await;
+        assert_ne!(status, StatusCode::OK);
+        assert!(json.to_string().contains("no look"), "got {json}");
+    }
+
+    #[tokio::test]
+    async fn test_update_lighting_deck_ok() {
+        let (status, _) = patch_json(
+            router_with_mock_engine(),
+            &format!("/api/lighting/decks/{DECK}"),
+            serde_json::json!({ "level": 0.5, "blend": "lighten", "ltp_transition": "snap" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_update_lighting_deck_rejects_an_unknown_blend() {
+        let (status, _) = patch_json(
+            router_with_mock_engine(),
+            &format!("/api/lighting/decks/{DECK}"),
+            serde_json::json!({ "blend": "not_a_blend" }),
+        )
+        .await;
+        assert_ne!(
+            status,
+            StatusCode::OK,
+            "an unknown blend must not silently default"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_remove_lighting_deck_ok() {
+        let (status, _) = delete_json(
+            router_with_mock_engine(),
+            &format!("/api/lighting/decks/{DECK}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_add_palette_ok() {
+        let (status, _) = post_json(
+            router_with_mock_engine(),
+            "/api/lighting/palettes",
+            serde_json::json!({ "name": "Deep Blue", "kind": "color" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_add_palette_unknown_kind_errors() {
+        let (status, json) = post_json(
+            router_with_rejecting_engine("unknown palette kind \"sideways\""),
+            "/api/lighting/palettes",
+            serde_json::json!({ "name": "x", "kind": "sideways" }),
+        )
+        .await;
+        assert_ne!(status, StatusCode::OK);
+        assert!(
+            json.to_string().contains("unknown palette kind"),
+            "got {json}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_set_palette_default_and_override() {
+        let (status, _) = put_json_at(
+            router_with_mock_engine(),
+            &format!("/api/lighting/palettes/{PALETTE}/value"),
+            serde_json::json!({ "role": "blue", "value": 0.8 }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "role-space default");
+
+        let (status, _) = put_json_at(
+            router_with_mock_engine(),
+            &format!("/api/lighting/palettes/{PALETTE}/value"),
+            serde_json::json!({ "role": "pan", "value": 0.3, "fixture": DECK }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "per-fixture override");
+    }
+
+    #[tokio::test]
+    async fn test_remove_palette_unknown_errors() {
+        let (status, _) = delete_json(
+            router_with_rejecting_engine("no palette with uuid deadbeef"),
+            &format!("/api/lighting/palettes/{PALETTE}"),
+        )
+        .await;
+        assert_ne!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_master_and_release_ok() {
+        let (status, _) = post_json(
+            router_with_mock_engine(),
+            "/api/lighting/master",
+            serde_json::json!({ "value": 0.5 }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, _) = post_json(
+            router_with_mock_engine(),
+            "/api/lighting/release",
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_store_to_look_ok() {
+        let (status, _) = post_json(
+            router_with_mock_engine(),
+            &format!("/api/lighting/looks/{LOOK}/store"),
+            serde_json::json!({ "target_kind": "group", "target": DECK }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    /// Storing nothing must report rather than silently writing an empty look.
+    #[tokio::test]
+    async fn test_store_to_look_with_an_empty_programmer_errors() {
+        let (status, json) = post_json(
+            router_with_rejecting_engine("the programmer is empty; set some values first"),
+            &format!("/api/lighting/looks/{LOOK}/store"),
+            serde_json::json!({ "target_kind": "group", "target": DECK }),
+        )
+        .await;
+        assert_ne!(status, StatusCode::OK);
+        assert!(
+            json.to_string().contains("programmer is empty"),
+            "got {json}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_store_to_palette_ok() {
+        let (status, _) = post_json(
+            router_with_mock_engine(),
+            &format!("/api/lighting/palettes/{PALETTE}/store"),
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_store_to_palette_unknown_errors() {
+        let (status, _) = post_json(
+            router_with_rejecting_engine("no palette with uuid deadbeef"),
+            &format!("/api/lighting/palettes/{PALETTE}/store"),
+            serde_json::json!({}),
+        )
+        .await;
+        assert_ne!(status, StatusCode::OK);
+    }
+
     // ── Runtime state routes ────────────────────────────────────────
 
     #[tokio::test]

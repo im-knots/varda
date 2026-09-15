@@ -174,8 +174,16 @@ impl VardaApp {
             Err(e) => return e.into(),
         };
         let mixer = &mut self.mixer;
-        let scene =
-            crate::persistence::snapshot_scene(mixer, None, self.render_width, self.render_height);
+        let scene = crate::persistence::snapshot_scene(
+            mixer,
+            None,
+            self.render_width,
+            self.render_height,
+            // A preset captures a deck or a channel, not the rig. Carrying the whole
+            // lighting show into one would make recalling a shader preset silently
+            // replace every look in the scene.
+            &crate::dmx::LightingShow::default(),
+        );
         let Some(ch_config) = scene.channels.get(channel_idx) else {
             return CommandResult::Err {
                 code: ErrorCode::NotFound,

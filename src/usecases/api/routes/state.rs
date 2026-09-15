@@ -75,6 +75,12 @@ state_route!(
     |s: &crate::engine::EngineState| s.outputs.surfaces.clone()
 );
 state_route!(
+    lighting,
+    "/api/state/lighting",
+    "DMX lighting state: patched fixtures, transport health, last transmitted universes annotated by owning fixture and channel, patch warnings, and dark/stuck watchdog flags.",
+    |s: &crate::engine::EngineState| s.lighting.clone()
+);
+state_route!(
     registry,
     "/api/state/registry",
     "Shader registry: generator and filter shader names with their indices.",

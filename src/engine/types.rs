@@ -130,6 +130,12 @@ pub struct EngineState {
     pub spout_sources: Vec<String>,
     /// Whether Spout can run here: Windows, and wgpu on the Dx12 backend
     pub spout_available: bool,
+    /// DMX lighting: patched rig, transport health, last transmitted universes, watchdog.
+    ///
+    /// Always present. `enabled` is false when no fixture is patched, which is the default and
+    /// the common case, so this costs an idle scene one small struct.
+    /// See /spec/lighting-routing.md § API Parity.
+    pub lighting: crate::dmx::LightingSnapshot,
     /// Active stream receiver configs (url, mode, connected)
     pub stream_receivers: Vec<StreamReceiverSnapshot>,
     pub analyzers: Vec<AnalyzerTypeInfo>,
@@ -1040,6 +1046,7 @@ mod tests {
             syphon_sources: vec![],
             syphon_available: false,
             spout_available: false,
+            lighting: crate::dmx::LightingSnapshot::default(),
             spout_sources: vec![],
             stream_receivers: vec![],
             analyzers: vec![],
@@ -1129,6 +1136,7 @@ mod tests {
             syphon_sources: vec![],
             syphon_available: false,
             spout_available: false,
+            lighting: crate::dmx::LightingSnapshot::default(),
             spout_sources: vec![],
             stream_receivers: vec![],
             analyzers: vec![],

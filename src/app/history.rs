@@ -101,6 +101,7 @@ mod tests {
     fn make_scene(crossfader: f32) -> SceneConfig {
         SceneConfig {
             version: 2,
+            lighting: crate::dmx::LightingShow::default(),
             channels: vec![],
             crossfader,
             active_transition: None,

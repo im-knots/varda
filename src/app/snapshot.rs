@@ -710,6 +710,7 @@ pub(crate) fn build_engine_state(app: &VardaApp) -> EngineState {
         syphon_available: false,
         spout_sources: app.external_io.spout_manager.discovered_sources(),
         spout_available: app.external_io.spout_manager.is_available(),
+        lighting: app.lighting.snapshot().clone(),
         stream_receivers: build_stream_receiver_snapshots(app),
         analyzers: app.available_analyzers(),
         macros: app.macro_snapshot(),

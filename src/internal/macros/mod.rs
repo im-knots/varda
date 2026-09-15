@@ -304,6 +304,15 @@ pub struct MacroBank {
     /// layer drains this each frame (see `param_router` + `app/inputs.rs`).
     #[serde(skip)]
     pending_actions: Vec<GlobalAction>,
+    /// Runtime-only queue of macro targets that belong to a different router.
+    ///
+    /// The mixer router cannot reach the lighting runtime, so a macro target such as
+    /// `fixture/<uuid>/red` is queued here and drained by the app layer, exactly as global
+    /// actions are. This is what lets **one knob drive visual parameters and lighting
+    /// parameters at once**, which is the point of exposing fixture roles as parameter paths
+    /// at all. See /spec/lighting-routing.md § Design Principles.
+    #[serde(skip)]
+    pending_foreign: Vec<(String, f32)>,
 }
 
 impl MacroBank {
@@ -365,6 +374,16 @@ impl MacroBank {
         std::mem::take(&mut self.pending_actions)
     }
 
+    /// Queue a macro target for a router this one cannot reach.
+    pub fn queue_foreign_target(&mut self, path: String, value: f32) {
+        self.pending_foreign.push((path, value));
+    }
+
+    /// Drain macro targets bound for another router, for the app layer to dispatch.
+    pub fn take_pending_foreign(&mut self) -> Vec<(String, f32)> {
+        std::mem::take(&mut self.pending_foreign)
+    }
+
     /// Generate the next default macro name ("Macro 1", "Macro 2", …), avoiding
     /// collisions with existing "Macro N" names.
     fn next_macro_name(&self) -> String {
@@ -384,6 +403,39 @@ impl MacroBank {
 
 #[cfg(test)]
 mod tests {
+
+    /// A macro binds one control to many parameter paths. Lighting paths reach a different
+    /// router, so they are queued for the app layer rather than applied inline. This queue is
+    /// what makes **one knob drive visual parameters and lighting parameters at once**.
+    #[test]
+    fn foreign_targets_queue_and_drain_once() {
+        let mut bank = MacroBank::new();
+        assert!(bank.take_pending_foreign().is_empty());
+
+        bank.queue_foreign_target("fixture/abc/red".into(), 1.0);
+        bank.queue_foreign_target("lighting/master".into(), 0.5);
+
+        let drained = bank.take_pending_foreign();
+        assert_eq!(drained.len(), 2);
+        assert_eq!(drained[0].0, "fixture/abc/red");
+        assert!((drained[1].1 - 0.5).abs() < f32::EPSILON);
+
+        assert!(
+            bank.take_pending_foreign().is_empty(),
+            "draining must not replay targets on the next frame"
+        );
+    }
+
+    /// The queue is runtime state, not show data: a saved macro bank must not carry half-applied
+    /// parameter writes into the next session.
+    #[test]
+    fn the_foreign_queue_is_not_persisted() {
+        let mut bank = MacroBank::new();
+        bank.queue_foreign_target("fixture/abc/red".into(), 1.0);
+        let text = serde_json::to_string(&bank).unwrap();
+        let restored: MacroBank = serde_json::from_str(&text).unwrap();
+        assert!(restored.pending_foreign.is_empty());
+    }
     use super::*;
 
     // ── Curves ───────────────────────────────────────────────────────

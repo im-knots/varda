@@ -105,6 +105,13 @@ pub enum LibraryDrag {
     DeckPreset(usize),
     /// Channel preset from library (index into `preset_library.channel_presets`)
     ChannelPreset(usize),
+    /// A blank lighting deck.
+    ///
+    /// The lighting counterpart of dragging a source into a channel: you get a deck, then say
+    /// what lights are in it and what they do in the bottom bar.
+    LightingDeck,
+    /// A saved look: the lighting equivalent of a deck preset.
+    Look(String),
 }
 
 /// Drag payload for moving a deck to another channel or reordering it within

@@ -33,6 +33,15 @@ pub struct UISession {
     /// Channel UUID to open a video file dialog for (deferred to outside egui frame)
     pub open_video_dialog_for_channel: Option<String>,
     pub notifications_to_dismiss: Vec<usize>,
+    /// A lighting deck the performer clicked, to fill the bottom bar with its look editor.
+    pub select_lighting_deck: Option<String>,
+    /// Band expand/collapse toggles, applied to layout state after the frame.
+    pub toggle_lights_band: bool,
+    /// Open the LIGHTS band outright (rather than toggling), when a deck lands in it.
+    pub open_lights_band: bool,
+    pub toggle_video_band: bool,
+    /// New band split ratio when the divider is dragged.
+    pub band_split: Option<f32>,
     /// Info notifications to push (e.g. "Copied URL to clipboard")
     pub info_notifications: Vec<String>,
     /// MIDI learn: toggle learn mode on/off
@@ -128,6 +137,11 @@ impl UISession {
             open_image_dialog_for_channel: None,
             open_video_dialog_for_channel: None,
             notifications_to_dismiss: Vec::new(),
+            select_lighting_deck: None,
+            toggle_lights_band: false,
+            open_lights_band: false,
+            toggle_video_band: false,
+            band_split: None,
             info_notifications: Vec::new(),
             midi_learn_toggle: false,
             midi_learn_select: None,

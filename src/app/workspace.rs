@@ -69,6 +69,7 @@ impl VardaApp {
                 Some(&self.transport_config()),
                 self.render_width,
                 self.render_height,
+                self.lighting.show(),
             );
             match scene.save(self.session.workspace.scene_path()) {
                 Ok(()) => log::info!(
@@ -112,6 +113,11 @@ impl VardaApp {
             self.output.domemaster_resolution,
         );
         stage.timecode = self.timecode_config();
+        // The rig is venue state, saved alongside surfaces and the timecode patch.
+        stage.lighting = self.lighting.config().clone();
+        stage.lights_band_open = layout.lights_band_open;
+        stage.video_band_open = layout.video_band_open;
+        stage.band_split = layout.band_split;
         match stage.save(self.session.workspace.stage_path()) {
             Ok(()) => log::info!(
                 "Saved stage to {}",
@@ -186,9 +192,16 @@ impl VardaApp {
                         dome_mode_active: prefs.dome_mode_active,
                         dome_preset: prefs.dome_preset,
                         dome_geometry: prefs.dome_geometry,
+                        lights_band_open: prefs.lights_band_open,
+                        video_band_open: prefs.video_band_open,
+                        band_split: prefs.band_split,
                         ..UILayoutState::default()
                     });
                     self.apply_timecode_config(&prefs.timecode);
+                    // Resolves the patch and starts the driver, or reports its findings and
+                    // runs inert. An unpatchable rig must not stop the workspace loading:
+                    // the operator still has video to run.
+                    self.lighting.set_config(prefs.lighting);
                     self.output.surface_manager = prefs.surfaces;
                     // Set before `ensure_domemaster` below, which builds at
                     // whatever this says.
@@ -253,6 +266,11 @@ impl VardaApp {
                     ) {
                         Ok(result) => {
                             self.mixer = result.mixer;
+                            // The show half of lighting: looks, palettes, decks, master. The
+                            // rig itself comes from `stage.json` and is not touched by a scene
+                            // load, so loading a show into a different venue keeps that
+                            // venue's fixtures.
+                            self.lighting.set_show(scene_config.lighting.clone());
                             // How the show counts frames and where it loops are
                             // authored; where it was stopped is not, so the
                             // position stays at zero and the arrangement stays
@@ -403,6 +421,10 @@ impl VardaApp {
 
         // (b2) Macros — cheap clone (config changes are undoable; live turns are not)
         self.mixer.set_macros(target.macros.clone());
+
+        // (b2a) Lighting show — looks, palettes, decks and master. The rig itself is venue
+        // state and is not touched here: undoing a scene edit must not repatch the room.
+        self.lighting.set_show(target.lighting.clone());
 
         // (b3) Arrangement — cheap clone. Regions and lanes are edited through
         // the undo stack like any other scene data; the transport's *position*
@@ -758,6 +780,7 @@ impl VardaApp {
             Some(&self.transport_config()),
             self.render_width,
             self.render_height,
+            self.lighting.show(),
         );
         let d = crate::persistence::StagePrefs::default();
         let stage = crate::persistence::snapshot_stage(
@@ -786,6 +809,7 @@ impl VardaApp {
             Some(&self.transport_config()),
             self.render_width,
             self.render_height,
+            self.lighting.show(),
         );
         let stage = crate::persistence::snapshot_stage(
             &self.output.surface_manager,
@@ -1349,6 +1373,7 @@ mod tests {
         // Build a minimal SceneConfig with different crossfader
         let scene = crate::scene::SceneConfig {
             version: 3,
+            lighting: crate::dmx::LightingShow::default(),
             channels: vec![
                 crate::scene::ChannelConfig {
                     uuid: crate::deck::generate_short_uuid(),

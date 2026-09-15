@@ -747,6 +747,24 @@ impl UIRunner {
             }
 
             varda.apply_ui_actions(&ui_actions);
+
+            // Band and lighting-selection state is UI-local layout, applied here rather than in
+            // the engine, matching how every other layout toggle is handled.
+            if ui_actions.session.toggle_lights_band {
+                self.layout.lights_band_open = !self.layout.lights_band_open;
+            }
+            if ui_actions.session.open_lights_band {
+                self.layout.lights_band_open = true;
+            }
+            if ui_actions.session.toggle_video_band {
+                self.layout.video_band_open = !self.layout.video_band_open;
+            }
+            if let Some(split) = ui_actions.session.band_split {
+                self.layout.band_split = split.clamp(0.15, 0.85);
+            }
+            // Selection itself is applied in `UILayoutState::apply_selections` with every other
+            // selection, so lighting cannot fall out of step with the rest.
+            self.layout.prune_lighting_selection(varda.lighting.show());
             let resolution_changed = engine_outcome.resolution_changed;
             varda.update_controller_leds();
 

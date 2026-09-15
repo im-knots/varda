@@ -40,6 +40,11 @@ Copy-Item "target\release\varda.exe" "$StageDir\varda.exe"
 Write-Host "==> Copying shaders..."
 Copy-Item -Recurse "shaders" "$StageDir\shaders"
 
+# --- Copy bundled fixture profiles ---
+# Resolved from fixtures\ beside varda.exe. See src/internal/dmx/mod.rs::bundled_fixture_path.
+Write-Host "==> Copying fixture profiles..."
+Copy-Item -Recurse "fixtures" "$StageDir\fixtures"
+
 # --- Copy FFmpeg DLLs from vcpkg ---
 $VcpkgBin = "C:\vcpkg\installed\x64-windows\bin"
 Write-Host "==> Copying FFmpeg DLLs from $VcpkgBin..."

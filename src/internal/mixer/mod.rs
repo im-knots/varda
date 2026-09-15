@@ -711,6 +711,42 @@ impl Mixer {
     }
 
     /// Current crossfader position (0.0 = Ch 0, 1.0 = Ch 1).
+    /// Effective opacity per channel, crossfader folded in.
+    ///
+    /// The single source of truth for how much each channel contributes. Both composite
+    /// backends read it: the GPU path uses it to weight textures, the lighting merge uses it to
+    /// weight decks. Two implementations of this rule would drift, and the symptom would be
+    /// lights and video disagreeing about where a crossfade is.
+    ///
+    /// With exactly two channels the crossfader is active and splits between them. With three or
+    /// more it hides and channels mix on their own opacity alone.
+    #[must_use]
+    pub fn effective_channel_opacities(&self) -> Vec<f32> {
+        let count = self.channel_count();
+        if count == 2 {
+            let crossfader = self.crossfader();
+            return vec![
+                (1.0 - crossfader) * self.channel_opacity(0),
+                crossfader * self.channel_opacity(1),
+            ];
+        }
+        (0..count).map(|i| self.channel_opacity(i)).collect()
+    }
+
+    /// Effective opacity per channel, paired with the channel UUID.
+    ///
+    /// UUID-keyed because lighting decks are stored per channel UUID, so a reorder cannot
+    /// silently rebind them to a different channel. The identifier is Varda's short 8-character
+    /// form, not a full RFC 4122 UUID.
+    #[must_use]
+    pub fn effective_channel_opacities_by_uuid(&self) -> Vec<(String, f32)> {
+        self.effective_channel_opacities()
+            .into_iter()
+            .zip(self.channels())
+            .map(|(opacity, channel)| (channel.uuid().to_owned(), opacity))
+            .collect()
+    }
+
     pub fn crossfader(&self) -> f32 {
         self.crossfader
     }

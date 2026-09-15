@@ -73,6 +73,279 @@ fn transport_rejected(err: crate::transport::TransportError) -> CommandResult {
 }
 
 impl VardaApp {
+    fn bad_uuid(text: &str) -> CommandResult {
+        CommandResult::Err {
+            code: ErrorCode::InvalidInput,
+            message: format!("{text:?} is not a uuid"),
+        }
+    }
+
+    fn not_found(kind: &str, uuid: &str) -> CommandResult {
+        CommandResult::Err {
+            code: ErrorCode::NotFound,
+            message: format!("no {kind} with uuid {uuid}"),
+        }
+    }
+
+    fn parse_target(kind: &str, uuid: &str) -> Option<crate::dmx::LookTarget> {
+        let id = uuid::Uuid::parse_str(uuid).ok()?;
+        match kind {
+            "group" => Some(crate::dmx::LookTarget::Group { id }),
+            "fixture" => Some(crate::dmx::LookTarget::Fixture { id }),
+            _ => None,
+        }
+    }
+
+    fn parse_palette_kind(kind: &str) -> Option<crate::dmx::PaletteKind> {
+        match kind {
+            // The British spelling is still accepted on input: the API is lenient about how a
+            // caller spells it, while everything Varda writes is American.
+            "color" | "colour" => Some(crate::dmx::PaletteKind::Color),
+            "beam" => Some(crate::dmx::PaletteKind::Beam),
+            "position" => Some(crate::dmx::PaletteKind::Position),
+            _ => None,
+        }
+    }
+
+    /// File a palette into the storage its kind belongs to.
+    ///
+    /// Color and beam travel with the show; position belongs to the venue, because "Downstage
+    /// Centre" is a different set of angles in every room. The caller never chooses.
+    fn store_palette(&mut self, palette: crate::dmx::Palette) {
+        if palette.kind.is_show_state() {
+            let mut show = self.lighting.show().clone();
+            show.palettes.push(palette);
+            self.lighting.set_show(show);
+        } else {
+            let mut config = self.lighting.config().clone();
+            config.palettes.push(palette);
+            self.lighting.set_config(config);
+        }
+    }
+
+    fn set_look_value(
+        &mut self,
+        look: &str,
+        target_kind: &str,
+        target: &str,
+        role: &str,
+        value: Option<f32>,
+        palette: Option<&str>,
+    ) -> CommandResult {
+        let Ok(look_id) = uuid::Uuid::parse_str(look) else {
+            return Self::bad_uuid(look);
+        };
+        let Some(target) = Self::parse_target(target_kind, target) else {
+            return CommandResult::Err {
+                code: ErrorCode::InvalidInput,
+                message: format!("bad target {target_kind:?}/{target:?}"),
+            };
+        };
+        let Some(role) = crate::dmx::Role::parse(role) else {
+            return CommandResult::Err {
+                code: ErrorCode::InvalidInput,
+                message: format!("unknown role {role:?}"),
+            };
+        };
+        let attr = match (palette, value) {
+            (Some(p), _) => match uuid::Uuid::parse_str(p) {
+                Ok(id) => crate::dmx::AttrValue::palette(id),
+                Err(_) => return Self::bad_uuid(p),
+            },
+            (None, Some(v)) => crate::dmx::AttrValue::literal(v),
+            (None, None) => {
+                return CommandResult::Err {
+                    code: ErrorCode::InvalidInput,
+                    message: "one of value or palette is required".into(),
+                };
+            }
+        };
+        let mut show = self.lighting.show().clone();
+        let Some(entry) = show.look_mut(look_id) else {
+            return Self::not_found("look", look);
+        };
+        entry.set(target, role, attr);
+        self.lighting.set_show(show);
+        CommandResult::Ok
+    }
+
+    fn set_palette_value(
+        &mut self,
+        palette: &str,
+        role: &str,
+        value: f32,
+        fixture: Option<&str>,
+    ) -> CommandResult {
+        let Ok(palette_id) = uuid::Uuid::parse_str(palette) else {
+            return Self::bad_uuid(palette);
+        };
+        let Some(role) = crate::dmx::Role::parse(role) else {
+            return CommandResult::Err {
+                code: ErrorCode::InvalidInput,
+                message: format!("unknown role {role:?}"),
+            };
+        };
+
+        let mut show = self.lighting.show().clone();
+        let mut config = self.lighting.config().clone();
+        let found = show
+            .palettes
+            .iter_mut()
+            .chain(config.palettes.iter_mut())
+            .find(|p| p.id == palette_id);
+        let Some(entry) = found else {
+            return Self::not_found("palette", palette);
+        };
+
+        match fixture {
+            Some(text) => {
+                let Ok(id) = uuid::Uuid::parse_str(text) else {
+                    return Self::bad_uuid(text);
+                };
+                entry.set_override(crate::dmx::OverrideKey::Fixture { id }, role, value);
+            }
+            None => entry.set_default(role, value),
+        }
+        self.lighting.set_show(show);
+        self.lighting.set_config(config);
+        CommandResult::Ok
+    }
+
+    /// Commit the programmer into a look.
+    ///
+    /// A group target stores one shared value, read from its first member that holds programmer
+    /// values: a look says "front truss is blue", not "fixture 3 is blue".
+    fn store_programmer_to_look(
+        &mut self,
+        look: &str,
+        target_kind: &str,
+        target: &str,
+    ) -> CommandResult {
+        let Ok(look_id) = uuid::Uuid::parse_str(look) else {
+            return Self::bad_uuid(look);
+        };
+        let Some(look_target) = Self::parse_target(target_kind, target) else {
+            return CommandResult::Err {
+                code: ErrorCode::InvalidInput,
+                message: format!("bad target {target_kind:?}/{target:?}"),
+            };
+        };
+
+        let held = self.lighting.programmer_fixtures();
+        if held.is_empty() {
+            return CommandResult::Err {
+                code: ErrorCode::InvalidInput,
+                message: "the programmer is empty; set some values first".into(),
+            };
+        }
+        // Read from the first fixture holding values. For a group this is the shared value; for
+        // a single fixture target it is that fixture's own.
+        let source = match look_target {
+            crate::dmx::LookTarget::Fixture { id } => {
+                let Some(values) = self.lighting.programmer_for(id) else {
+                    return CommandResult::Err {
+                        code: ErrorCode::InvalidInput,
+                        message: format!("fixture {id} holds no programmer values"),
+                    };
+                };
+                values
+            }
+            crate::dmx::LookTarget::Group { .. } => held[0].1,
+        };
+
+        let mut show = self.lighting.show().clone();
+        let Some(entry) = show.look_mut(look_id) else {
+            return Self::not_found("look", look);
+        };
+        let mut stored = 0usize;
+        for (role, value) in source.iter() {
+            entry.set(look_target, role, crate::dmx::AttrValue::literal(value));
+            stored += 1;
+        }
+        self.lighting.set_show(show);
+        CommandResult::OkWithData {
+            data: serde_json::json!({ "stored_roles": stored }),
+        }
+    }
+
+    /// Commit the programmer into a palette.
+    ///
+    /// Position stores a per-fixture override for every fixture in the programmer, because two
+    /// heads at opposite ends of a truss need different angles to hit the same spot. Color and
+    /// beam store a role-space default, which then covers every fixture carrying those roles
+    /// without anyone authoring an entry per type.
+    fn store_programmer_to_palette(&mut self, palette: &str) -> CommandResult {
+        let Ok(palette_id) = uuid::Uuid::parse_str(palette) else {
+            return Self::bad_uuid(palette);
+        };
+        let held = self.lighting.programmer_fixtures();
+        if held.is_empty() {
+            return CommandResult::Err {
+                code: ErrorCode::InvalidInput,
+                message: "the programmer is empty; set some values first".into(),
+            };
+        }
+
+        let mut show = self.lighting.show().clone();
+        let mut config = self.lighting.config().clone();
+        let found = show
+            .palettes
+            .iter_mut()
+            .chain(config.palettes.iter_mut())
+            .find(|p| p.id == palette_id);
+        let Some(entry) = found else {
+            return Self::not_found("palette", palette);
+        };
+
+        let per_fixture = entry.kind.is_per_fixture();
+        let mut stored = 0usize;
+        if per_fixture {
+            for (fixture, values) in &held {
+                for (role, value) in values.iter() {
+                    entry.set_override(
+                        crate::dmx::OverrideKey::Fixture { id: *fixture },
+                        role,
+                        value,
+                    );
+                    stored += 1;
+                }
+            }
+        } else {
+            for (role, value) in held[0].1.iter() {
+                entry.set_default(role, value);
+                stored += 1;
+            }
+        }
+        self.lighting.set_show(show);
+        self.lighting.set_config(config);
+        CommandResult::OkWithData {
+            data: serde_json::json!({ "stored_roles": stored, "per_fixture": per_fixture }),
+        }
+    }
+
+    /// Turn the lighting runtime's patch findings into a command result.
+    ///
+    /// A structural error reports back to the caller rather than only being logged: an API
+    /// client repatching headless has no toast to read, and per /spec/lighting-routing.md the
+    /// two consumers must learn the same things. Warnings are not failures.
+    fn lighting_result(&self) -> CommandResult {
+        let errors = self.lighting.errors();
+        if errors.is_empty() {
+            return CommandResult::Ok;
+        }
+        CommandResult::Err {
+            code: ErrorCode::InvalidInput,
+            message: errors
+                .iter()
+                .map(|m| match &m.fixture {
+                    Some(f) => format!("{f}: {}", m.text),
+                    None => m.text.clone(),
+                })
+                .collect::<Vec<_>>()
+                .join("; "),
+        }
+    }
+
     /// Execute a command on behalf of the windowed GUI, returning a typed,
     /// in-process [`CommandOutcome`] instead of the serializable wire
     /// [`CommandResult`]. Deck-creating commands surface their location + UUID
@@ -182,6 +455,566 @@ impl VardaApp {
         use crate::modulation::ModulationSource;
         match cmd {
             // ── Mixer ────────────────────────────────────────
+            // ── Lighting (DMX) ─────────────────────────────────────
+            EngineCommand::SetLightingConfig(config) => {
+                self.lighting.set_config(*config);
+                self.lighting_result()
+            }
+            EngineCommand::SetLightingEnabled(on) => {
+                let mut config = self.lighting.config().clone();
+                config.enabled = on;
+                self.lighting.set_config(config);
+                self.lighting_result()
+            }
+            EngineCommand::SetLightingBlackout(on) => {
+                self.lighting.set_blackout(on);
+                CommandResult::Ok
+            }
+            EngineCommand::AddFixture {
+                name,
+                profile,
+                mode,
+                universe,
+                address,
+            } => {
+                let mut fixture = crate::dmx::Fixture::new(name, profile, mode);
+                fixture.universe = universe;
+                fixture.address = address;
+                let uuid = fixture.id.to_string();
+                let mut config = self.lighting.config().clone();
+                config.fixtures.push(fixture);
+                self.lighting.set_config(config);
+                match self.lighting_result() {
+                    CommandResult::Ok => CommandResult::OkWithId { uuid },
+                    other => other,
+                }
+            }
+            EngineCommand::RemoveFixture { uuid } => {
+                let mut config = self.lighting.config().clone();
+                let before = config.fixtures.len();
+                config.fixtures.retain(|f| f.id.to_string() != uuid);
+                if config.fixtures.len() == before {
+                    return CommandResult::Err {
+                        code: ErrorCode::NotFound,
+                        message: format!("no fixture with uuid {uuid}"),
+                    };
+                }
+                self.lighting.set_config(config);
+                self.lighting_result()
+            }
+            EngineCommand::UpdateFixture {
+                uuid,
+                name,
+                profile,
+                mode,
+                universe,
+                address,
+                invert_pan,
+                invert_tilt,
+                swap_pan_tilt,
+            } => {
+                let mut config = self.lighting.config().clone();
+                let Some(fixture) = config
+                    .fixtures
+                    .iter_mut()
+                    .find(|f| f.id.to_string() == uuid)
+                else {
+                    return CommandResult::Err {
+                        code: ErrorCode::NotFound,
+                        message: format!("no fixture with uuid {uuid}"),
+                    };
+                };
+                if let Some(v) = name {
+                    fixture.name = v;
+                }
+                if let Some(v) = profile {
+                    fixture.profile = v;
+                }
+                if let Some(v) = mode {
+                    fixture.mode = v;
+                }
+                if let Some(v) = universe {
+                    fixture.universe = v;
+                }
+                if let Some(v) = address {
+                    fixture.address = v;
+                }
+                if let Some(v) = invert_pan {
+                    fixture.invert_pan = v;
+                }
+                if let Some(v) = invert_tilt {
+                    fixture.invert_tilt = v;
+                }
+                if let Some(v) = swap_pan_tilt {
+                    fixture.swap_pan_tilt = v;
+                }
+                self.lighting.set_config(config);
+                self.lighting_result()
+            }
+            EngineCommand::SetLightingShow(show) => {
+                self.lighting.set_show(*show);
+                CommandResult::Ok
+            }
+            EngineCommand::SetLightingMaster(value) => {
+                self.lighting.set_master(value);
+                CommandResult::Ok
+            }
+            EngineCommand::ReleaseLightingProgrammer => {
+                self.lighting.release_all();
+                CommandResult::Ok
+            }
+            EngineCommand::AddLook { name } => {
+                let look = crate::dmx::Look::new(name);
+                let uuid = look.id.to_string();
+                let mut show = self.lighting.show().clone();
+                show.looks.push(look);
+                self.lighting.set_show(show);
+                CommandResult::OkWithId { uuid }
+            }
+            EngineCommand::RemoveLook { uuid } => {
+                let Ok(id) = uuid::Uuid::parse_str(&uuid) else {
+                    return Self::bad_uuid(&uuid);
+                };
+                let mut show = self.lighting.show().clone();
+                let before = show.looks.len();
+                show.looks.retain(|l| l.id != id);
+                if show.looks.len() == before {
+                    return Self::not_found("look", &uuid);
+                }
+                // Decks keep their content: a deck owns a *copy*, so deleting the saved Look is
+                // deleting a preset, not the decks made from it. Deleting a video deck preset
+                // does not delete the decks either.
+                // See /spec/lighting-routing.md § A deck owns its content.
+                self.lighting.set_show(show);
+                CommandResult::Ok
+            }
+            EngineCommand::SaveLook { deck, name } => {
+                let Ok(deck_id) = uuid::Uuid::parse_str(&deck) else {
+                    return Self::bad_uuid(&deck);
+                };
+                let mut show = self.lighting.show().clone();
+                let Some((_, found)) = show.find_deck(deck_id) else {
+                    return Self::not_found("lighting deck", &deck);
+                };
+                // An independent copy under a fresh id: saving a preset must not tie the deck to
+                // the library entry it produced.
+                let mut saved = found.content.clone();
+                saved.id = uuid::Uuid::new_v4();
+                saved.name = name;
+                let uuid = saved.id.to_string();
+                show.looks.push(saved);
+                self.lighting.set_show(show);
+                CommandResult::OkWithId { uuid }
+            }
+            EngineCommand::RenameLook { uuid, name } => {
+                let Ok(id) = uuid::Uuid::parse_str(&uuid) else {
+                    return Self::bad_uuid(&uuid);
+                };
+                let mut show = self.lighting.show().clone();
+                let Some(look) = show.look_mut(id) else {
+                    return Self::not_found("look", &uuid);
+                };
+                look.name = name;
+                self.lighting.set_show(show);
+                CommandResult::Ok
+            }
+            EngineCommand::SetLookValue {
+                look,
+                target_kind,
+                target,
+                role,
+                value,
+                palette,
+            } => self.set_look_value(
+                &look,
+                &target_kind,
+                &target,
+                &role,
+                value,
+                palette.as_deref(),
+            ),
+            EngineCommand::ClearLookValue {
+                look,
+                target_kind,
+                target,
+                role,
+            } => {
+                let (Ok(look_id), Some(target), Some(role)) = (
+                    uuid::Uuid::parse_str(&look),
+                    Self::parse_target(&target_kind, &target),
+                    crate::dmx::Role::parse(&role),
+                ) else {
+                    return Self::bad_uuid(&look);
+                };
+                let mut show = self.lighting.show().clone();
+                let Some(entry) = show.look_mut(look_id) else {
+                    return Self::not_found("look", &look);
+                };
+                entry.clear(target, role);
+                self.lighting.set_show(show);
+                CommandResult::Ok
+            }
+            EngineCommand::AddLightingDeck { channel, look } => {
+                let Ok(look_id) = uuid::Uuid::parse_str(&look) else {
+                    return Self::bad_uuid(&look);
+                };
+                let mut show = self.lighting.show().clone();
+                let Some(source) = show.looks.iter().find(|l| l.id == look_id) else {
+                    return Self::not_found("look", &look);
+                };
+                // A copy under a fresh id, so two decks made from one saved Look are edited
+                // independently. See /spec/lighting-routing.md § A deck owns its content.
+                let mut content = source.clone();
+                content.id = uuid::Uuid::new_v4();
+                let deck = crate::dmx::LightingDeck::new(content);
+                let uuid = deck.id.to_string();
+                show.decks_mut(&channel).push(deck);
+                self.lighting.set_show(show);
+                CommandResult::OkWithId { uuid }
+            }
+            EngineCommand::AddLightingDeckBlank { channel } => {
+                // Nothing is added to the library. Creating a video deck does not create a deck
+                // preset either; this used to push an untitled "Lighting" entry every time.
+                let deck = crate::dmx::LightingDeck::new(crate::dmx::Look::new("Lighting"));
+                let uuid = deck.id.to_string();
+                let mut show = self.lighting.show().clone();
+                show.decks_mut(&channel).push(deck);
+                self.lighting.set_show(show);
+                CommandResult::OkWithId { uuid }
+            }
+            EngineCommand::SetLookTarget {
+                look,
+                target_kind,
+                target,
+                included,
+            } => {
+                let (Ok(look_id), Some(look_target)) = (
+                    uuid::Uuid::parse_str(&look),
+                    Self::parse_target(&target_kind, &target),
+                ) else {
+                    return Self::bad_uuid(&look);
+                };
+                let mut show = self.lighting.show().clone();
+                let Some(entry) = show.look_mut(look_id) else {
+                    return Self::not_found("look", &look);
+                };
+                if included {
+                    // A newly included target adopts the roles the look already drives, so
+                    // adding a fixture to a deck lights it the same way as its siblings rather
+                    // than adding a silent member.
+                    let roles = entry.roles();
+                    if roles.is_empty() {
+                        entry.set(
+                            look_target,
+                            crate::dmx::Role::Dimmer,
+                            crate::dmx::AttrValue::literal(1.0),
+                        );
+                    } else {
+                        let existing: Vec<(crate::dmx::Role, crate::dmx::AttrValue)> = roles
+                            .iter()
+                            .filter_map(|r| {
+                                entry
+                                    .assignments()
+                                    .iter()
+                                    .find(|a| a.role == *r)
+                                    .map(|a| (*r, a.value))
+                            })
+                            .collect();
+                        for (role, value) in existing {
+                            entry.set(look_target, role, value);
+                        }
+                    }
+                } else {
+                    entry.remove_target(look_target);
+                }
+                self.lighting.set_show(show);
+                CommandResult::Ok
+            }
+            EngineCommand::SampleLookRole {
+                look,
+                target_kind,
+                target,
+                role,
+                source,
+                gain,
+            } => {
+                let (Ok(look_id), Some(look_target), Some(role)) = (
+                    uuid::Uuid::parse_str(&look),
+                    Self::parse_target(&target_kind, &target),
+                    crate::dmx::Role::parse(&role),
+                ) else {
+                    return Self::bad_uuid(&look);
+                };
+                let source = match source.as_str() {
+                    "program" => crate::dmx::SampleSource::Program,
+                    "own_channel" | "" => crate::dmx::SampleSource::OwnChannel,
+                    other => return Self::bad_uuid(other),
+                };
+                let mut show = self.lighting.show().clone();
+                let Some(entry) = show.look_mut(look_id) else {
+                    return Self::not_found("look", &look);
+                };
+                entry.sample(look_target, role, source, gain);
+                self.lighting.set_show(show);
+                CommandResult::Ok
+            }
+            EngineCommand::SetFixturePosition { uuid, position } => {
+                let Ok(id) = uuid::Uuid::parse_str(&uuid) else {
+                    return Self::bad_uuid(&uuid);
+                };
+                let mut config = self.lighting.config().clone();
+                let Some(fixture) = config.fixtures.iter_mut().find(|f| f.id == id) else {
+                    return Self::not_found("fixture", &uuid);
+                };
+                fixture.position = position.map(|p| [p[0].clamp(0.0, 1.0), p[1].clamp(0.0, 1.0)]);
+                self.lighting.set_config(config);
+                CommandResult::Ok
+            }
+            EngineCommand::BindLookRole {
+                look,
+                target_kind,
+                target,
+                role,
+                source,
+                base,
+                amount,
+                spread,
+                spread_mode,
+            } => {
+                let (Ok(look_id), Some(look_target), Some(role)) = (
+                    uuid::Uuid::parse_str(&look),
+                    Self::parse_target(&target_kind, &target),
+                    crate::dmx::Role::parse(&role),
+                ) else {
+                    return Self::bad_uuid(&look);
+                };
+                let mut show = self.lighting.show().clone();
+                let Some(entry) = show.look_mut(look_id) else {
+                    return Self::not_found("look", &look);
+                };
+                if source.is_empty() {
+                    // Releasing a binding hands the role back to a static value at its base, so
+                    // the fixture holds where the automation left it rather than going dark.
+                    entry.set(look_target, role, crate::dmx::AttrValue::literal(base));
+                } else {
+                    entry.bind(crate::dmx::ModulatedBinding {
+                        target: look_target,
+                        role,
+                        source,
+                        base,
+                        amount,
+                        spread: crate::dmx::Spread {
+                            amount: spread,
+                            mode: match spread_mode.as_str() {
+                                "symmetric" => crate::dmx::SpreadMode::Symmetric,
+                                "random" => crate::dmx::SpreadMode::Random,
+                                _ => crate::dmx::SpreadMode::Linear,
+                            },
+                        },
+                    });
+                }
+                self.lighting.set_show(show);
+                CommandResult::Ok
+            }
+            EngineCommand::AddLightingDeckForGroup { channel, group } => {
+                let Ok(group_id) = uuid::Uuid::parse_str(&group) else {
+                    return Self::bad_uuid(&group);
+                };
+                let Some(group_name) = self
+                    .lighting
+                    .config()
+                    .groups
+                    .iter()
+                    .find(|g| g.id == group_id)
+                    .map(|g| g.name.clone())
+                else {
+                    return Self::not_found("group", &group);
+                };
+
+                // Seeded lit rather than empty, so dropping a group into a channel produces
+                // visible light immediately, the way dropping a shader produces a visible deck.
+                // Roles the fixtures do not carry are simply never written.
+                let mut look = crate::dmx::Look::new(group_name);
+                let target = crate::dmx::LookTarget::Group { id: group_id };
+                for role in [
+                    crate::dmx::Role::Dimmer,
+                    crate::dmx::Role::Red,
+                    crate::dmx::Role::Green,
+                    crate::dmx::Role::Blue,
+                    crate::dmx::Role::White,
+                ] {
+                    look.set(target, role, crate::dmx::AttrValue::literal(1.0));
+                }
+                let deck = crate::dmx::LightingDeck::new(look);
+                let uuid = deck.id.to_string();
+
+                let mut show = self.lighting.show().clone();
+                show.decks_mut(&channel).push(deck);
+                self.lighting.set_show(show);
+                CommandResult::OkWithId { uuid }
+            }
+            EngineCommand::RemoveLightingDeck { uuid } => {
+                let Ok(id) = uuid::Uuid::parse_str(&uuid) else {
+                    return Self::bad_uuid(&uuid);
+                };
+                let mut show = self.lighting.show().clone();
+                let before: usize = show.channel_decks.iter().map(|c| c.decks.len()).sum();
+                for entry in &mut show.channel_decks {
+                    entry.decks.retain(|d| d.id != id);
+                }
+                let after: usize = show.channel_decks.iter().map(|c| c.decks.len()).sum();
+                if before == after {
+                    return Self::not_found("lighting deck", &uuid);
+                }
+                self.lighting.set_show(show);
+                CommandResult::Ok
+            }
+            EngineCommand::UpdateLightingDeck {
+                uuid,
+                level,
+                blend,
+                mute,
+                solo,
+                independent,
+                ltp_transition,
+            } => {
+                let Ok(id) = uuid::Uuid::parse_str(&uuid) else {
+                    return Self::bad_uuid(&uuid);
+                };
+                let mut show = self.lighting.show().clone();
+                let Some(deck) = show.find_deck_mut(id) else {
+                    return Self::not_found("lighting deck", &uuid);
+                };
+                if let Some(v) = level {
+                    deck.level = v.clamp(0.0, 1.0);
+                }
+                if let Some(v) = blend {
+                    deck.blend = v;
+                }
+                if let Some(v) = mute {
+                    deck.mute = v;
+                }
+                if let Some(v) = solo {
+                    deck.solo = v;
+                }
+                if let Some(v) = independent {
+                    deck.independent = v;
+                }
+                if let Some(v) = ltp_transition {
+                    deck.ltp_transition = v;
+                }
+                self.lighting.set_show(show);
+                CommandResult::Ok
+            }
+            EngineCommand::MoveLightingDeck { uuid, channel } => {
+                let Ok(id) = uuid::Uuid::parse_str(&uuid) else {
+                    return Self::bad_uuid(&uuid);
+                };
+                let mut show = self.lighting.show().clone();
+                let mut moved = None;
+                for entry in &mut show.channel_decks {
+                    if let Some(pos) = entry.decks.iter().position(|d| d.id == id) {
+                        moved = Some(entry.decks.remove(pos));
+                        break;
+                    }
+                }
+                let Some(deck) = moved else {
+                    return Self::not_found("lighting deck", &uuid);
+                };
+                show.decks_mut(&channel).push(deck);
+                self.lighting.set_show(show);
+                CommandResult::Ok
+            }
+            EngineCommand::AddLightingGroup { name, fixtures } => {
+                let mut group = crate::dmx::Group::new(name);
+                group.members = fixtures
+                    .iter()
+                    .filter_map(|f| uuid::Uuid::parse_str(f).ok())
+                    .collect();
+                let uuid = group.id.to_string();
+                let mut config = self.lighting.config().clone();
+                config.groups.push(group);
+                self.lighting.set_config(config);
+                CommandResult::OkWithId { uuid }
+            }
+            EngineCommand::RemoveLightingGroup { uuid } => {
+                let Ok(id) = uuid::Uuid::parse_str(&uuid) else {
+                    return Self::bad_uuid(&uuid);
+                };
+                let mut config = self.lighting.config().clone();
+                let before = config.groups.len();
+                config.groups.retain(|g| g.id != id);
+                if config.groups.len() == before {
+                    return Self::not_found("group", &uuid);
+                }
+                self.lighting.set_config(config);
+                CommandResult::Ok
+            }
+            EngineCommand::SetLightingGroupMembers { uuid, fixtures } => {
+                let Ok(id) = uuid::Uuid::parse_str(&uuid) else {
+                    return Self::bad_uuid(&uuid);
+                };
+                let mut config = self.lighting.config().clone();
+                let Some(group) = config.groups.iter_mut().find(|g| g.id == id) else {
+                    return Self::not_found("group", &uuid);
+                };
+                // Order is the axis modulation spread fans across, so it is the caller's order
+                // that is stored rather than patch order.
+                group.members = fixtures
+                    .iter()
+                    .filter_map(|f| uuid::Uuid::parse_str(f).ok())
+                    .collect();
+                self.lighting.set_config(config);
+                CommandResult::Ok
+            }
+            EngineCommand::AddPalette { name, kind } => {
+                let Some(kind) = Self::parse_palette_kind(&kind) else {
+                    return CommandResult::Err {
+                        code: ErrorCode::InvalidInput,
+                        message: format!("unknown palette kind {kind:?}"),
+                    };
+                };
+                let palette = crate::dmx::Palette::new(name, kind);
+                let uuid = palette.id.to_string();
+                self.store_palette(palette);
+                CommandResult::OkWithId { uuid }
+            }
+            EngineCommand::RemovePalette { uuid } => {
+                let Ok(id) = uuid::Uuid::parse_str(&uuid) else {
+                    return Self::bad_uuid(&uuid);
+                };
+                let mut show = self.lighting.show().clone();
+                let before = show.palettes.len();
+                show.palettes.retain(|p| p.id != id);
+                let removed_from_show = show.palettes.len() != before;
+                self.lighting.set_show(show);
+
+                let mut config = self.lighting.config().clone();
+                let before = config.palettes.len();
+                config.palettes.retain(|p| p.id != id);
+                let removed_from_venue = config.palettes.len() != before;
+                self.lighting.set_config(config);
+
+                if removed_from_show || removed_from_venue {
+                    CommandResult::Ok
+                } else {
+                    Self::not_found("palette", &uuid)
+                }
+            }
+            EngineCommand::SetPaletteValue {
+                palette,
+                role,
+                value,
+                fixture,
+            } => self.set_palette_value(&palette, &role, value, fixture.as_deref()),
+            EngineCommand::StoreProgrammerToLook {
+                look,
+                target_kind,
+                target,
+            } => self.store_programmer_to_look(&look, &target_kind, &target),
+            EngineCommand::StoreProgrammerToPalette { palette } => {
+                self.store_programmer_to_palette(&palette)
+            }
             EngineCommand::SetCrossfader(pos) => {
                 self.set_crossfader(pos);
                 CommandResult::Ok
@@ -2227,8 +3060,8 @@ mod tests {
     }
 
     /// And the whole loop over the bus: randomize moves the shader, undo puts it
-    /// back. `plasma` declares one ranged float and two colours, so this also
-    /// pins the colour exclusion — a randomize must not repaint the palette.
+    /// back. `plasma` declares one ranged float and two colors, so this also
+    /// pins the color exclusion — a randomize must not repaint the palette.
     #[test]
     fn randomizing_over_the_bus_is_one_undo_from_the_prior_look() {
         let Some(mut app) = headless_app() else {
@@ -2242,7 +3075,7 @@ mod tests {
             return;
         };
 
-        // Speed and the palette, the ranged float and an excluded colour.
+        // Speed and the palette, the ranged float and an excluded color.
         let look = |app: &super::VardaApp| {
             let (ch, dk) = app.mixer_ref().find_deck_by_uuid(&uuid).expect("the deck");
             let params = &app.mixer_ref().channels()[ch].decks[dk]
@@ -2273,7 +3106,7 @@ mod tests {
         assert_ne!(after.0, before.0, "a ranged float is what randomize is for");
         assert_eq!(
             after.1, before.1,
-            "colours are excluded: a palette is chosen, not stumbled upon"
+            "colors are excluded: a palette is chosen, not stumbled upon"
         );
 
         let layout = crate::usecases::ui::UILayoutState::default();

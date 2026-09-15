@@ -306,6 +306,35 @@ pub fn channel_opacity_param_key(channel_uuid: &str) -> String {
     key
 }
 
+/// The parameter key the modulation engine addresses a lighting deck's level by.
+///
+/// A lighting deck's level is deck opacity under a different name, so it automates through the
+/// same envelope mechanism: a region compiles to breakpoints, and the arrangement drives it
+/// exactly as it drives a video deck. Keyed distinctly so a lighting deck and a video deck that
+/// happen to share a UUID prefix cannot collide.
+/// See /spec/lighting-routing.md § Arrangement Mode.
+pub fn lighting_level_param_key(deck_uuid: &str) -> String {
+    let mut key = String::with_capacity(deck_uuid.len() + 12);
+    write_lighting_level_param_key(&mut key, deck_uuid);
+    key
+}
+
+/// [`lighting_level_param_key`] into a reused buffer, for the per-frame path.
+pub fn write_lighting_level_param_key(buf: &mut String, deck_uuid: &str) {
+    buf.clear();
+    buf.push_str("light_");
+    buf.push_str(deck_uuid);
+    buf.push_str(":level");
+}
+
+/// The parameter key for a fixture role driven by an automation lane.
+///
+/// Mirrors the router path so a curve drawn in the arrangement and a knob twisted by hand reach
+/// the same place.
+pub fn fixture_role_param_key(fixture_uuid: &str, role: &str) -> String {
+    format!("fixture_{fixture_uuid}:{role}")
+}
+
 /// Compile a lane's regions into breakpoints on its opacity envelope.
 ///
 /// This is the whole region mechanism. Because the result is an ordinary
@@ -374,6 +403,39 @@ pub fn compile_regions(regions: &[RegionConfig]) -> Vec<Breakpoint> {
 
 #[cfg(test)]
 mod tests {
+
+    /// A lighting deck's level automates through the same envelope mechanism a video deck's
+    /// opacity does, so regions, locates and loop wraps all work with no new machinery.
+    #[test]
+    fn lighting_level_keys_are_distinct_from_deck_opacity_keys() {
+        let uuid = "abc123";
+        assert_ne!(
+            lighting_level_param_key(uuid),
+            opacity_param_key(uuid),
+            "a lighting deck and a video deck must never share an envelope"
+        );
+        assert!(lighting_level_param_key(uuid).contains(uuid));
+        assert!(lighting_level_param_key(uuid).ends_with(":level"));
+    }
+
+    #[test]
+    fn the_buffered_lighting_key_matches_the_allocating_one() {
+        let mut buf = String::from("stale contents");
+        write_lighting_level_param_key(&mut buf, "abc123");
+        assert_eq!(buf, lighting_level_param_key("abc123"));
+    }
+
+    #[test]
+    fn fixture_role_keys_are_unique_per_role() {
+        assert_ne!(
+            fixture_role_param_key("abc", "pan"),
+            fixture_role_param_key("abc", "tilt")
+        );
+        assert_ne!(
+            fixture_role_param_key("abc", "pan"),
+            fixture_role_param_key("def", "pan")
+        );
+    }
     use super::*;
     use crate::modulation::evaluate_envelope;
 

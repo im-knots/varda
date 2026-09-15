@@ -66,6 +66,22 @@ pub struct UILayoutState {
     pub selected_sequence_step: Option<(usize, usize)>,
     /// Currently selected macro (by UUID) for detail view in bottom bar
     pub selected_macro: Option<String>,
+    /// Whether the LIGHTS band is expanded in the central area.
+    ///
+    /// Collapsed is the default, and with it collapsed the layout is today's layout: same
+    /// radiating split, same channel widths, same full central height. Adding lighting costs a
+    /// user who does not run lights a thin strip and nothing else.
+    /// See /spec/lighting-routing.md § Performance-Mode UI.
+    pub lights_band_open: bool,
+    /// Whether the VIDEO band is expanded. A lighting-only installation collapses it.
+    pub video_band_open: bool,
+    /// Fraction of the central area given to the VIDEO band when both are open.
+    ///
+    /// Defaults to an equal split, which assumes nothing about how a given performer works.
+    /// The divider is there to be moved, and the ratio persists in `stage.json`.
+    pub band_split: f32,
+    /// Currently selected lighting deck (by UUID) for detail view in the bottom bar.
+    pub selected_lighting_deck: Option<String>,
     /// Whether the full-screen stage editor is open (replaces deck view)
     pub stage_editor_open: bool,
     /// Stage editor grid size (normalized, e.g. 0.05 = 20 divisions)
@@ -107,6 +123,12 @@ pub struct UILayoutState {
 impl Default for UILayoutState {
     fn default() -> Self {
         Self {
+            // Open. The channel's lighting section is part of the channel; a performer who does
+            // not use it collapses it once.
+            lights_band_open: true,
+            video_band_open: true,
+            band_split: 0.5,
+            selected_lighting_deck: None,
             selected_deck: None,
             selected_channel: None,
             selected_master: false,
@@ -178,6 +200,7 @@ impl UILayoutState {
             self.selected_sequence = None;
             self.selected_sequence_step = None;
             self.selected_macro = None;
+            self.selected_lighting_deck = None;
         }
         if let Some(ch) = session.select_channel {
             self.selected_channel = Some(ch);
@@ -186,6 +209,7 @@ impl UILayoutState {
             self.selected_sequence = None;
             self.selected_sequence_step = None;
             self.selected_macro = None;
+            self.selected_lighting_deck = None;
         }
         if session.select_master {
             self.selected_master = true;
@@ -194,6 +218,7 @@ impl UILayoutState {
             self.selected_sequence = None;
             self.selected_sequence_step = None;
             self.selected_macro = None;
+            self.selected_lighting_deck = None;
         }
         if let Some(seq) = session.select_sequence {
             self.selected_sequence = Some(seq);
@@ -202,6 +227,7 @@ impl UILayoutState {
             self.selected_channel = None;
             self.selected_master = false;
             self.selected_macro = None;
+            self.selected_lighting_deck = None;
         }
         if let Some(step) = session.select_sequence_step {
             self.selected_sequence_step = Some(step);
@@ -215,6 +241,23 @@ impl UILayoutState {
             self.selected_master = false;
             self.selected_sequence = None;
             self.selected_sequence_step = None;
+            self.selected_lighting_deck = None;
+        }
+        // A lighting deck takes the bottom bar the same way a video deck does, so it belongs in
+        // this block with the rest rather than in a branch of its own. Living outside it was why
+        // selecting a video deck left a lighting deck selected: nothing cleared it, and the
+        // bottom bar checks lighting first, so the video detail could never be reached again.
+        if let Some(uuid) = &session.select_lighting_deck {
+            // An empty string is the close button: clear rather than select nothing.
+            self.selected_lighting_deck = (!uuid.is_empty()).then(|| uuid.clone());
+            if !uuid.is_empty() {
+                self.selected_deck = None;
+                self.selected_channel = None;
+                self.selected_master = false;
+                self.selected_sequence = None;
+                self.selected_sequence_step = None;
+                self.selected_macro = None;
+            }
         }
         if session.deselect_macro {
             self.selected_macro = None;
@@ -305,6 +348,21 @@ impl UILayoutState {
         }
     }
 
+    /// Drop a lighting-deck selection whose deck no longer exists.
+    ///
+    /// Without this, removing the selected lighting deck left the bottom bar pinned to "That
+    /// lighting deck is gone" — and because the bottom bar checks lighting before video, no
+    /// other deck's detail could be opened again for the rest of the session.
+    pub fn prune_lighting_selection(&mut self, show: &crate::dmx::LightingShow) {
+        let Some(uuid) = self.selected_lighting_deck.as_deref() else {
+            return;
+        };
+        let alive = uuid::Uuid::parse_str(uuid).is_ok_and(|id| show.find_deck(id).is_some());
+        if !alive {
+            self.selected_lighting_deck = None;
+        }
+    }
+
     /// Fix up selection indices after a channel is removed.
     pub fn fixup_channel_removal(&mut self, removed_ch: usize) {
         if let Some((sel_ch, _)) = self.selected_deck {
@@ -374,5 +432,130 @@ mod preview_channel_tests {
             ..Default::default()
         };
         assert_eq!(layout.preview_channels(), vec![0]);
+    }
+
+    /// Selecting a video deck must release the bottom bar from a lighting deck.
+    ///
+    /// The bottom bar checks lighting before video, so a lighting selection that nothing cleared
+    /// masked every video deck's detail for the rest of the session.
+    #[test]
+    fn selecting_a_video_deck_clears_a_lighting_deck_selection() {
+        let mut layout = UILayoutState {
+            selected_lighting_deck: Some("deck-1".to_string()),
+            ..Default::default()
+        };
+        let mut actions = UIActions::new();
+        actions.session.select_deck = Some((0, 0));
+        layout.apply_selections(&actions);
+        assert_eq!(layout.selected_lighting_deck, None);
+        assert_eq!(layout.selected_deck, Some((0, 0)));
+    }
+
+    /// And the reverse: a lighting deck takes the bar from a video deck.
+    #[test]
+    fn selecting_a_lighting_deck_clears_a_video_deck_selection() {
+        let mut layout = UILayoutState {
+            selected_deck: Some((0, 0)),
+            ..Default::default()
+        };
+        let mut actions = UIActions::new();
+        actions.session.select_lighting_deck = Some("deck-1".to_string());
+        layout.apply_selections(&actions);
+        assert_eq!(layout.selected_deck, None);
+        assert_eq!(layout.selected_lighting_deck, Some("deck-1".to_string()));
+    }
+
+    /// Every other selection releases a lighting deck too, so none of them can be the one that
+    /// leaves the bottom bar stuck.
+    #[test]
+    fn every_selection_releases_a_lighting_deck() {
+        type Select = Box<dyn Fn(&mut UIActions)>;
+        let cases: Vec<(&str, Select)> = vec![
+            (
+                "deck",
+                Box::new(|a: &mut UIActions| a.session.select_deck = Some((0, 0))),
+            ),
+            (
+                "channel",
+                Box::new(|a: &mut UIActions| a.session.select_channel = Some(0)),
+            ),
+            (
+                "master",
+                Box::new(|a: &mut UIActions| a.session.select_master = true),
+            ),
+            (
+                "sequence",
+                Box::new(|a: &mut UIActions| a.session.select_sequence = Some(0)),
+            ),
+            (
+                "macro",
+                Box::new(|a: &mut UIActions| a.session.select_macro = Some("m".to_string())),
+            ),
+        ];
+        for (name, apply) in cases {
+            let mut layout = UILayoutState {
+                selected_lighting_deck: Some("deck-1".to_string()),
+                ..Default::default()
+            };
+            let mut actions = UIActions::new();
+            apply(&mut actions);
+            layout.apply_selections(&actions);
+            assert_eq!(
+                layout.selected_lighting_deck, None,
+                "selecting a {name} left a lighting deck holding the bottom bar"
+            );
+        }
+    }
+
+    /// The close button.
+    #[test]
+    fn an_empty_uuid_closes_the_lighting_detail() {
+        let mut layout = UILayoutState {
+            selected_lighting_deck: Some("deck-1".to_string()),
+            ..Default::default()
+        };
+        let mut actions = UIActions::new();
+        actions.session.select_lighting_deck = Some(String::new());
+        layout.apply_selections(&actions);
+        assert_eq!(layout.selected_lighting_deck, None);
+    }
+
+    /// Removing the selected lighting deck must release the bottom bar, not pin it to
+    /// "That lighting deck is gone" forever.
+    #[test]
+    fn removing_the_selected_lighting_deck_releases_the_bottom_bar() {
+        let mut show = crate::dmx::LightingShow::default();
+        let deck = crate::dmx::LightingDeck::new(crate::dmx::Look::new("Wash"));
+        let uuid = deck.id.to_string();
+        show.decks_mut("ch-1").push(deck);
+
+        let mut layout = UILayoutState {
+            selected_lighting_deck: Some(uuid.clone()),
+            ..Default::default()
+        };
+        layout.prune_lighting_selection(&show);
+        assert_eq!(
+            layout.selected_lighting_deck,
+            Some(uuid),
+            "a live deck must stay selected"
+        );
+
+        show.decks_mut("ch-1").clear();
+        layout.prune_lighting_selection(&show);
+        assert_eq!(
+            layout.selected_lighting_deck, None,
+            "a removed deck must release the bottom bar"
+        );
+    }
+
+    /// A short channel uuid is not a v4 uuid, so the parse must not be what decides this.
+    #[test]
+    fn an_unparseable_lighting_selection_is_pruned() {
+        let mut layout = UILayoutState {
+            selected_lighting_deck: Some("not-a-uuid".to_string()),
+            ..Default::default()
+        };
+        layout.prune_lighting_selection(&crate::dmx::LightingShow::default());
+        assert_eq!(layout.selected_lighting_deck, None);
     }
 }

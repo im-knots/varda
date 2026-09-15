@@ -50,6 +50,11 @@ pub(super) struct StageEditorState {
     pub(super) circle_sides: u32,
     /// Currently selected surface UUIDs (supports multi-select)
     pub(super) selected_surfaces: std::collections::BTreeSet<String>,
+    /// Lamps selected on the canvas. Separate from `selected_surfaces` because the gizmo, the
+    /// warp editor and every surface gesture key off that set, and a lamp is not a surface.
+    pub(super) selected_fixtures: std::collections::BTreeSet<String>,
+    /// The lamp currently being dragged to a new place on the stage.
+    pub(super) dragging_fixture: Option<String>,
     /// Drag state for vertex editing in select mode
     pub(super) dragging_vertex: Option<(String, usize, usize)>, // (surface_uuid, contour_idx, vertex_idx)
     /// Drag state for moving whole surface in select mode

@@ -85,6 +85,214 @@ pub type CommandEnvelope = (
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub enum EngineCommand {
     // ── Mixer ──────────────────────────────────────────────────
+    // ── Lighting (DMX) ─────────────────────────────────────────
+    // Structure, not values. Live fixture values ride the parameter router
+    // (`fixture/<uuid>/<role>`), which gives MIDI, OSC, and automation parity for free.
+    // See /spec/lighting-routing.md § API Parity.
+    /// Replace the whole lighting configuration and re-resolve the patch.
+    SetLightingConfig(Box<crate::dmx::LightingConfig>),
+    /// Add a fixture to the patch. Returns its new UUID.
+    AddFixture {
+        name: String,
+        profile: String,
+        mode: String,
+        universe: u16,
+        address: u16,
+    },
+    /// Remove a fixture by UUID.
+    RemoveFixture {
+        uuid: String,
+    },
+    /// Repatch one fixture. Fields left `None` are unchanged.
+    UpdateFixture {
+        uuid: String,
+        name: Option<String>,
+        profile: Option<String>,
+        mode: Option<String>,
+        universe: Option<u16>,
+        address: Option<u16>,
+        invert_pan: Option<bool>,
+        invert_tilt: Option<bool>,
+        swap_pan_tilt: Option<bool>,
+    },
+    /// Latching lighting blackout.
+    SetLightingBlackout(bool),
+    /// Enable or disable the whole lighting subsystem.
+    SetLightingEnabled(bool),
+    /// Replace the show half of lighting state: looks, palettes, decks, master.
+    SetLightingShow(Box<crate::dmx::LightingShow>),
+    /// Create a look. Returns its new UUID.
+    AddLook {
+        name: String,
+    },
+    RemoveLook {
+        uuid: String,
+    },
+    RenameLook {
+        uuid: String,
+        name: String,
+    },
+    /// Copy a lighting deck's content into the saved-look library.
+    ///
+    /// The counterpart of `SaveDeckPreset`. The deck keeps its own content; the library gets an
+    /// independent copy. See /spec/lighting-routing.md § A deck owns its content.
+    SaveLook {
+        deck: String,
+        name: String,
+    },
+    /// Set one role of one target inside a look.
+    SetLookValue {
+        look: String,
+        /// `group` or `fixture`.
+        target_kind: String,
+        target: String,
+        role: String,
+        /// A literal value, or `None` when `palette` is given.
+        value: Option<f32>,
+        /// A palette UUID to reference instead of a literal.
+        palette: Option<String>,
+    },
+    ClearLookValue {
+        look: String,
+        target_kind: String,
+        target: String,
+        role: String,
+    },
+    /// Instantiate a look as a lighting deck in a channel. Returns the deck UUID.
+    AddLightingDeck {
+        channel: String,
+        look: String,
+    },
+    /// Create an empty lighting deck in a channel.
+    ///
+    /// The lighting counterpart of dragging a source into a channel: you get a deck, and you
+    /// say what lights are in it and what they do in the bottom bar. Returns the deck UUID.
+    AddLightingDeckBlank {
+        channel: String,
+    },
+    /// Add or remove a fixture or group from a lighting deck's look.
+    SetLookTarget {
+        look: String,
+        /// `group` or `fixture`.
+        target_kind: String,
+        target: String,
+        /// False removes every value this look holds for that target.
+        included: bool,
+    },
+    /// Drive one role of one target by sampling video at each fixture's place on the stage.
+    ///
+    /// The pixel-mapping edge: a lighting deck whose source is video. `source` is `own_channel`
+    /// or `program`. See /spec/lighting-routing.md § Sampled.
+    SampleLookRole {
+        look: String,
+        target_kind: String,
+        target: String,
+        role: String,
+        /// `own_channel` or `program`.
+        source: String,
+        gain: f32,
+    },
+    /// Where a fixture stands, in normalized stage coordinates. Venue state.
+    SetFixturePosition {
+        uuid: String,
+        /// `None` unplaces it, returning it to the derived grid.
+        position: Option<[f32; 2]>,
+    },
+    /// Drive one role of one target from a modulation source, optionally fanned across a group.
+    BindLookRole {
+        look: String,
+        target_kind: String,
+        target: String,
+        role: String,
+        /// Modulation source UUID. Empty releases the binding back to a static value.
+        source: String,
+        base: f32,
+        amount: f32,
+        spread: f32,
+        /// `linear`, `symmetric` or `random`.
+        spread_mode: String,
+    },
+    /// Drop a group of fixtures into a channel: create a look targeting that group and a deck
+    /// playing it, in one action.
+    ///
+    /// This is the workflow dragging a group from the library produces. It exists as one command
+    /// rather than two because the caller cannot sequence them: it does not know the new look's
+    /// UUID until the first has been applied.
+    AddLightingDeckForGroup {
+        channel: String,
+        group: String,
+    },
+    RemoveLightingDeck {
+        uuid: String,
+    },
+    /// Update a lighting deck. Fields left `None` are unchanged.
+    UpdateLightingDeck {
+        uuid: String,
+        level: Option<f32>,
+        blend: Option<crate::dmx::LightingBlend>,
+        mute: Option<bool>,
+        solo: Option<bool>,
+        independent: Option<bool>,
+        ltp_transition: Option<crate::dmx::LtpTransition>,
+    },
+    /// Move a lighting deck to another channel, preserving its settings.
+    MoveLightingDeck {
+        uuid: String,
+        channel: String,
+    },
+    /// Create a fixture group from a list of fixture UUIDs.
+    AddLightingGroup {
+        name: String,
+        fixtures: Vec<String>,
+    },
+    RemoveLightingGroup {
+        uuid: String,
+    },
+    /// Replace a group's membership.
+    SetLightingGroupMembers {
+        uuid: String,
+        fixtures: Vec<String>,
+    },
+    /// Create a palette. `kind` is `colour`, `beam` or `position`.
+    AddPalette {
+        name: String,
+        kind: String,
+    },
+    RemovePalette {
+        uuid: String,
+    },
+    /// Store a value into a palette, either as the role-space default or as a keyed override.
+    SetPaletteValue {
+        palette: String,
+        role: String,
+        value: f32,
+        /// When given, store as an override for this fixture rather than as the default.
+        fixture: Option<String>,
+    },
+    /// Global lighting intensity scalar.
+    SetLightingMaster(f32),
+    /// Release every programmer value, handing control back to the looks.
+    ReleaseLightingProgrammer,
+    /// Store what the programmer holds into a look.
+    ///
+    /// The console workflow is select, set, store: set values by hand, then commit them. This
+    /// is the "store" half, and it reads the programmer rather than taking values inline so a
+    /// client and the window commit exactly what the performer is looking at.
+    StoreProgrammerToLook {
+        look: String,
+        /// `group` or `fixture`. A group stores one shared value read from its first member.
+        target_kind: String,
+        target: String,
+    },
+    /// Store what the programmer holds into a palette.
+    ///
+    /// A position palette stores a per-fixture override for every fixture in the programmer,
+    /// because two heads need different angles to hit the same spot. A colour or beam palette
+    /// stores a role-space default read from the first fixture, which then covers every fixture
+    /// carrying those roles.
+    StoreProgrammerToPalette {
+        palette: String,
+    },
     SetCrossfader(f32),
     SetTonemapMode(crate::engine::value::render::TonemapMode),
     LoadLut {

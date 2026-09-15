@@ -11,6 +11,7 @@ mod deck_detail;
 mod dnd;
 mod effects;
 mod library;
+mod lighting;
 mod macros;
 mod midi;
 mod mixer;
