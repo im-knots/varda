@@ -40,6 +40,9 @@ case "${ID:-unknown}" in
     # The Arch artifact is a PKGBUILD, so this builds it the way a user would. makepkg
     # refuses to run as root, hence the unprivileged build user.
     pacman -Syu --noconfirm --needed base-devel sudo git
+    # libfreenect is an AUR dependency of the package. An AUR helper (yay, paru) resolves
+    # this automatically for a real user; plain makepkg does not, so install it first.
+    ./scripts/ci/install-aur-package.sh libfreenect
     useradd -m builder 2>/dev/null || true
     echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
     install -d -o builder /tmp/build

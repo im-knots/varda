@@ -20,7 +20,8 @@ depends=(
   'gtk3'            # file dialogs (rfd)
   'pipewire'        # screen capture on Wayland
   'v4l-utils'       # cameras
-  'libfreenect'     # depth sensors (Kinect v1)
+  'libfreenect'     # AUR. Depth sensors (Kinect v1). An AUR helper resolves this;
+                    # plain makepkg does not, so install it first if building by hand.
   'fontconfig' 'freetype2'
 )
 makedepends=('rust' 'cargo' 'cmake' 'pkgconf' 'git' 'shaderc')

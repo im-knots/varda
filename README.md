@@ -123,10 +123,17 @@ sudo dnf install https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-releas
 ### Arch / CachyOS / Manjaro
 
 ```bash
-sudo pacman -S --needed base-devel cmake pkgconf vulkan-icd-loader ffmpeg srt alsa-lib v4l-utils libfreenect pipewire shaderc wayland libxkbcommon libx11 libxrandr libxi gtk3
+sudo pacman -S --needed base-devel cmake pkgconf vulkan-icd-loader ffmpeg srt alsa-lib v4l-utils pipewire shaderc wayland libxkbcommon libx11 libxrandr libxi gtk3
 ```
 
-Or just build the AUR package, which does all of this for you: `yay -S varda`.
+`libfreenect` (Kinect v1 depth sensors) is in the AUR rather than core/extra, so install
+it first:
+
+```bash
+yay -S libfreenect     # or: paru -S libfreenect
+```
+
+Or build the AUR package, which handles all of this for you: `yay -S varda`.
 
 ### openSUSE
 

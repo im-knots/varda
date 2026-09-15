@@ -62,19 +62,34 @@ echo "    version: $VERSION  format: $FORMAT  target: $TARGET_ID"
 
 # --- Cargo features per target ---
 # Independent builds let a target drop one feature rather than be dropped entirely
-# (spec section 5, "Per-target feature degradation").
+# (spec section 5, "Per-target feature degradation"). The bar is high: a feature goes only
+# when the dependency cannot be obtained on that distribution at all. openSUSE is the one
+# case today, where libfreenect is in no repository serving Leap 16. Arch gets it from the
+# AUR (see below); Debian, Ubuntu and Fedora package it directly.
 CARGO_ARGS=(--release)
 case "$DISTRO_ID" in
   opensuse*|sles)
-    # libfreenect is not packaged for openSUSE, so the `depth` feature cannot link.
-    echo "    note: building without 'depth' (libfreenect unavailable on openSUSE)"
+    echo "    note: building without 'depth' (libfreenect is not packaged for openSUSE)"
     CARGO_ARGS+=(--no-default-features --features face-detection,html,screen-capture)
     ;;
 esac
 
 # --- Build dependencies ---
 # Kept here rather than in the workflow so the dependency list and the distribution
-# detection above stay in one place. These mirror the per-distro instructions in README.
+# detection above stay in one place.
+#
+# These are NOT just the README's build instructions. The README assumes a developer's
+# machine or a GitHub runner image, where several things are already present that a bare
+# distribution container does not have, so they are explicit here:
+#
+#   clang + libclang - bindgen needs libclang.so at build time (libspa-sys for the
+#                      screen-capture PipeWire backend, among others).
+#   OpenSSL headers  - openssl-sys resolves the system OpenSSL through pkg-config.
+#                      Reached via native-tls, for the WebSocket/HTTP API stack.
+#   python3          - mozjs_sys (SpiderMonkey, under the `html` feature) builds with it.
+#
+# Anything added here because a container build failed belongs in this list, not in a
+# workflow step: the container is the only place the requirement is visible.
 install_build_deps() {
   case "$DISTRO_ID" in
     debian|ubuntu)
@@ -83,6 +98,7 @@ install_build_deps() {
       apt-get install -y --no-install-recommends \
         build-essential cmake pkg-config curl ca-certificates git \
         dpkg-dev debhelper fakeroot lintian \
+        clang libclang-dev libssl-dev python3 \
         libvulkan-dev \
         libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev \
         libsrt-gnutls-dev libasound2-dev libv4l-dev libfreenect-dev \
@@ -94,6 +110,7 @@ install_build_deps() {
         "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm"
       dnf install -y \
         gcc-c++ cmake pkgconf-pkg-config curl ca-certificates git rpm-build rpmdevtools \
+        clang clang-devel openssl-devel python3 \
         vulkan-loader-devel \
         ffmpeg-devel srt-devel alsa-lib-devel libv4l-devel libfreenect-devel \
         pipewire-devel libshaderc-devel \
@@ -109,6 +126,7 @@ install_build_deps() {
       zypper --non-interactive install -t pattern devel_C_C++ || true
       zypper --non-interactive install \
         cmake pkgconf curl ca-certificates git rpm-build \
+        clang clang-devel libopenssl-devel python3 \
         vulkan-devel \
         ffmpeg-7-libavcodec-devel ffmpeg-7-libavformat-devel ffmpeg-7-libavutil-devel \
         ffmpeg-7-libswscale-devel ffmpeg-7-libswresample-devel \
@@ -118,9 +136,14 @@ install_build_deps() {
     arch|cachyos|manjaro|endeavouros)
       pacman -Syu --noconfirm --needed \
         base-devel cmake pkgconf curl git \
+        clang openssl python \
         vulkan-icd-loader \
-        ffmpeg srt alsa-lib v4l-utils libfreenect pipewire shaderc \
+        ffmpeg srt alsa-lib v4l-utils pipewire shaderc \
         wayland libxkbcommon libx11 libxrandr libxi gtk3
+      # libfreenect is AUR-only on Arch. Build it rather than drop the `depth` feature:
+      # a dependency living in a different repository is not a reason to ship Arch users
+      # a Varda without depth sensors.
+      "$SCRIPT_DIR/install-aur-package.sh" libfreenect
       ;;
   esac
 }
