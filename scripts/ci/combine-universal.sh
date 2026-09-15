@@ -10,6 +10,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
+RENAMED=()
 ARM64_APP="${1:?Usage: combine-universal.sh <arm64-app-dir> <x86-app-dir>}"
 X86_APP="${2:?Usage: combine-universal.sh <arm64-app-dir> <x86-app-dir>}"
 
@@ -51,7 +52,13 @@ for arm64_dylib in "$ARM64_APP/Contents/Frameworks/"*.dylib; do
     lib_prefix=$(echo "$basename" | sed 's/\.[0-9].*/.dylib/')
     x86_match=$(find "$X86_APP/Contents/Frameworks/" -name "${lib_prefix%.dylib}*" -maxdepth 1 | head -1)
     if [ -n "$x86_match" ]; then
+      # The two Homebrew installs resolved different versions of the same library
+      # (x265 217 on arm64, 216 on Intel, say), so the slices have different filenames.
+      # Merge into the arm64 name and record the rename: the x86_64 slice's load commands
+      # still point at its own filename and have to be repointed, or dyld looks for a file
+      # that is about to not exist.
       echo "    lipo: $basename (x86 match: $(basename "$x86_match"))"
+      RENAMED+=("$(basename "$x86_match")=$basename")
       lipo -create "$arm64_dylib" "$x86_match" -output "Varda.app/Contents/Frameworks/$basename"
     else
       # Fatal, not a warning. An app advertised as universal that carries a
@@ -63,6 +70,19 @@ for arm64_dylib in "$ARM64_APP/Contents/Frameworks/"*.dylib; do
   fi
 done
 
+# Repoint references from the x86_64-only filename to the merged one, across the main
+# binary and every bundled dylib. Without this the Intel slice asks dyld for a library
+# that was merged away, and the only alternative is shipping a second thin copy of it.
+for rename in ${RENAMED[@]+"${RENAMED[@]}"}; do
+  from="${rename%%=*}"
+  to="${rename##*=}"
+  echo "    repoint: @rpath/$from -> @rpath/$to"
+  install_name_tool -change "@rpath/$from" "@rpath/$to" Varda.app/Contents/MacOS/varda 2>/dev/null || true
+  for fw in Varda.app/Contents/Frameworks/*.dylib; do
+    install_name_tool -change "@rpath/$from" "@rpath/$to" "$fw" 2>/dev/null || true
+  done
+done
+
 if [ "${MISSING_SLICES:-0}" -ne 0 ]; then
   echo "::error::${MISSING_SLICES} dylib(s) could not be made universal"
   exit 1
@@ -71,6 +91,16 @@ fi
 # Add any x86-only dylibs that don't exist in arm64
 for x86_dylib in "$X86_APP/Contents/Frameworks/"*.dylib; do
   basename=$(basename "$x86_dylib")
+  # Skip anything already merged under the arm64 filename above; copying it here would
+  # put a thin x86_64 duplicate of a library the bundle already carries universally.
+  skip=false
+  for rename in ${RENAMED[@]+"${RENAMED[@]}"}; do
+    [ "${rename%%=*}" = "$basename" ] && skip=true
+  done
+  if [ "$skip" = true ]; then
+    echo "    skip x86-only duplicate: $basename (merged as ${rename##*=})"
+    continue
+  fi
   if [ ! -f "Varda.app/Contents/Frameworks/$basename" ]; then
     echo "    copy x86-only: $basename"
     cp "$x86_dylib" "Varda.app/Contents/Frameworks/$basename"

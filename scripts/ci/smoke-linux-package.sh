@@ -31,6 +31,16 @@ echo "==> $(os_release_field PRETTY_NAME)"
 echo "    glibc: $(getconf GNU_LIBC_VERSION 2>/dev/null || echo unknown)"
 echo "    package: $(basename "$PKG")"
 
+# Print the declared dependencies before installing. When a check below reports something
+# missing, this is what settles whether the package failed to declare it or the
+# distribution failed to install it.
+echo "==> Declared dependencies"
+case "$DISTRO_ID" in
+  debian|ubuntu)   dpkg-deb -f "$PKG" Depends 2>/dev/null | tr ',' '\n' | sed 's/^ */    /' ;;
+  fedora|opensuse*|sles) rpm -qpR "$PKG" 2>/dev/null | sed 's/^/    /' ;;
+  *)               echo "    (source recipe)" ;;
+esac
+
 echo "==> Installing"
 case "$DISTRO_ID" in
   debian|ubuntu)
@@ -103,10 +113,24 @@ fi
 
 # wgpu dlopens libvulkan.so.1. It never appears in ldd output, and `varda --version`
 # returns before any GPU work, so nothing else here would notice it missing.
-if ldconfig -p 2>/dev/null | grep -q 'libvulkan\.so\.1'; then
+#
+# Deliberately not `ldconfig -p 2>/dev/null | grep`: that reports a missing or failing
+# ldconfig as an absent library, which is a different bug wearing the same error message.
+vulkan_found=false
+if command -v ldconfig >/dev/null 2>&1; then
+  if ldconfig -p | grep -q 'libvulkan\.so\.1'; then
+    vulkan_found=true
+  fi
+else
+  echo "  note: no ldconfig here, checking the filesystem instead"
+  for d in /usr/lib64 /usr/lib /lib64 /lib /usr/lib/x86_64-linux-gnu; do
+    if [ -e "$d/libvulkan.so.1" ]; then vulkan_found=true; break; fi
+  done
+fi
+if [ "$vulkan_found" = true ]; then
   echo "  ok: Vulkan loader present"
 else
-  echo "FAIL: libvulkan.so.1 not installed; the package did not declare the Vulkan loader"
+  echo "FAIL: libvulkan.so.1 is not installed (see declared dependencies above)"
   failed=1
 fi
 
@@ -122,7 +146,14 @@ if [ ! -d "$SHADER_DIR" ]; then
   echo "FAIL: $SHADER_DIR does not exist; the package did not install the shader library"
   failed=1
 else
-  count="$(find "$SHADER_DIR" -name '*.fs' | wc -l | tr -d ' ')"
+  # Plain globbing rather than find: the openSUSE Leap image ships no findutils, and a
+  # smoke test should not need a package installed in order to count files. Two levels
+  # covers the layout (shaders/*.fs plus subdirectories such as character_atlases/), and
+  # avoids globstar, which bash 3 does not have.
+  shopt -s nullglob
+  shader_files=("$SHADER_DIR"/*.fs "$SHADER_DIR"/*/*.fs)
+  count=${#shader_files[@]}
+  shopt -u nullglob
   if [ "${count:-0}" -lt 100 ]; then
     echo "FAIL: found $count bundled shaders under $SHADER_DIR, expected the full library"
     failed=1

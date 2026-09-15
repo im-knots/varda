@@ -29,7 +29,11 @@ depends=(
                     # plain makepkg does not, so install it first if building by hand.
   'fontconfig' 'freetype2'
 )
-makedepends=('rust' 'cargo' 'cmake' 'pkgconf' 'git' 'shaderc')
+makedepends=(
+  'rust' 'cargo' 'cmake' 'pkgconf' 'git' 'shaderc'
+  'clang'   # bindgen needs libclang.so (libspa-sys, for the PipeWire capture backend)
+  'python'  # mozjs_sys (SpiderMonkey, under the `html` feature) builds with it
+)
 optdepends=('ndi: NDI send and receive support')
 # Substituted at generation time. _srcdir is not always "$pkgname-$pkgver": GitHub names
 # the directory inside the archive after the ref, so a dry-run build from a commit SHA
