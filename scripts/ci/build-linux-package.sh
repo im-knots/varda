@@ -42,9 +42,21 @@ if [ -z "$VERSION" ]; then
 fi
 VERSION="${VERSION#v}"
 
-. /etc/os-release
-DISTRO_ID="${ID:-unknown}"
-DISTRO_VER="${VERSION_ID:-rolling}"
+# Read os-release fields in a subshell rather than sourcing the file into this one.
+# /etc/os-release defines VERSION (e.g. "13 (trixie)"), NAME, PRETTY_NAME and a dozen
+# other names, and sourcing it clobbered this script's own $VERSION with the
+# distribution's, producing `Version: 13 (trixie)` in the control file. It is a
+# third-party file that may define anything, so nothing from it reaches this shell
+# except the three fields asked for by name.
+os_release_field() {
+  ( . /etc/os-release && eval "printf '%s' \"\${$1-}\"" )
+}
+
+DISTRO_ID="$(os_release_field ID)"
+DISTRO_ID="${DISTRO_ID:-unknown}"
+DISTRO_VER="$(os_release_field VERSION_ID)"
+DISTRO_VER="${DISTRO_VER:-rolling}"
+DISTRO_PRETTY="$(os_release_field PRETTY_NAME)"
 
 # TARGET_ID goes in the filename so a user can tell which package is theirs, and FORMAT
 # selects the packaging path below.
@@ -57,7 +69,7 @@ case "$DISTRO_ID" in
   *) echo "::error::unsupported distribution '$DISTRO_ID' (see spec/release-strategy.md section 5)"; exit 1 ;;
 esac
 
-echo "==> ${PRETTY_NAME:-$DISTRO_ID $DISTRO_VER}"
+echo "==> ${DISTRO_PRETTY:-$DISTRO_ID $DISTRO_VER}"
 echo "    version: $VERSION  format: $FORMAT  target: $TARGET_ID"
 
 # --- Cargo features per target ---
@@ -217,8 +229,12 @@ CTL
     fi
     echo "    computed Depends: $SHLIB_DEPS"
 
-    # ffmpeg is a runtime dependency that no DT_NEEDED entry names: SRT and recording
-    # output shell out to the executable (internal/renderer/subprocess.rs).
+    # Two runtime dependencies have no DT_NEEDED entry, so dpkg-shlibdeps structurally
+    # cannot find them and they have to be declared by hand:
+    #   ffmpeg    - SRT and recording output shell out to the executable
+    #               (internal/renderer/subprocess.rs).
+    #   libvulkan1 - wgpu dlopens libvulkan.so.1. Without it Varda starts and then cannot
+    #               create a GPU device at all, which is the whole program.
     cat > "$STAGE/DEBIAN/control" <<CTL
 Package: varda
 Version: $VERSION
@@ -227,7 +243,7 @@ Maintainer: im-knots <noreply@users.noreply.github.com>
 Section: video
 Priority: optional
 Homepage: https://github.com/im-knots/varda
-Depends: $SHLIB_DEPS, ffmpeg
+Depends: $SHLIB_DEPS, ffmpeg, libvulkan1
 Description: Live visual mixer and router
 $(echo "$DESCRIPTION" | sed 's/^/ /')
 CTL
@@ -240,6 +256,12 @@ CTL
   # ---------------------------------------------------------------------------
   rpm)
     echo "==> Building .rpm"
+    # The Vulkan loader is packaged under different names across the RPM distributions.
+    case "$DISTRO_ID" in
+      fedora)         VULKAN_PKG="vulkan-loader" ;;
+      opensuse*|sles) VULKAN_PKG="libvulkan1" ;;
+      *)              VULKAN_PKG="vulkan-loader" ;;
+    esac
     RPMTOP="$(mktemp -d)"
     mkdir -p "$RPMTOP"/{BUILD,RPMS,SOURCES,SPECS,BUILDROOT}
 
@@ -247,6 +269,14 @@ CTL
     # packaging and, crucially, its automatic find-requires pass, which derives Requires
     # from the binary's SONAMEs the same way dpkg-shlibdeps does.
     cat > "$RPMTOP/SPECS/varda.spec" <<SPEC
+# The binary is already built and stripped by cargo, so there is nothing for rpmbuild's
+# debuginfo pass to work from. Left on, find-debuginfo runs anyway and fails the build on
+# an empty debugsourcefiles.list, and its -debuginfo subpackage would also land a second
+# .rpm in RPMS for the copy step below to pick up.
+%global debug_package %{nil}
+# With no debuginfo package, the build-id symlinks under /usr/lib/.build-id have nothing
+# to point at and land unpackaged, which rpmbuild treats as an error.
+%global _build_id_links none
 Name:           varda
 Version:        $VERSION
 Release:        1%{?dist}
@@ -254,8 +284,11 @@ Summary:        Live visual mixer and router
 License:        MIT
 URL:            https://github.com/im-knots/varda
 BuildArch:      x86_64
-# Shelled out to for SRT and recording output; no SONAME names it, so declare it.
+# Neither is named by a SONAME, so rpm's find-requires cannot derive them.
+# ffmpeg: shelled out to for SRT and recording output.
+# vulkan loader: dlopened by wgpu; without it there is no GPU device.
 Requires:       ffmpeg
+Requires:       $VULKAN_PKG
 %description
 $DESCRIPTION
 %install
@@ -267,16 +300,24 @@ cp -a $STAGE/. %{buildroot}/
 /usr/share/varda
 /usr/share/applications/varda.desktop
 /usr/share/icons/hicolor/256x256/apps/varda.png
-/usr/share/licenses/varda/LICENSE
+/usr/share/licenses/varda
 %changelog
 * $(LC_ALL=C date '+%a %b %d %Y') im-knots <noreply@users.noreply.github.com> - $VERSION-1
 - Release $VERSION
 SPEC
 
     rpmbuild --define "_topdir $RPMTOP" -bb "$RPMTOP/SPECS/varda.spec"
+
+    mapfile -t built < <(find "$RPMTOP/RPMS" -name '*.rpm' ! -name '*debuginfo*' ! -name '*debugsource*')
+    if [ "${#built[@]}" -ne 1 ]; then
+      echo "::error::expected exactly one rpm, found ${#built[@]}:"
+      printf '    %s\n' "${built[@]}"
+      exit 1
+    fi
     PKG="$OUTDIR/varda-${VERSION}-1.${TARGET_ID}.x86_64.rpm"
-    find "$RPMTOP/RPMS" -name '*.rpm' -exec cp {} "$PKG" \;
-    rpm -qpR "$PKG"
+    cp "${built[0]}" "$PKG"
+    echo "==> Requires:"
+    rpm -qpR "$PKG" | sed 's/^/    /'
     rm -rf "$RPMTOP"
     ;;
 

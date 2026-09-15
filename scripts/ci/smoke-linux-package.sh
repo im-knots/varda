@@ -13,13 +13,22 @@ set -euo pipefail
 
 PKG="${1:?Usage: smoke-linux-package.sh <path-to-package>}"
 
-. /etc/os-release
-echo "==> ${PRETTY_NAME:-${NAME:-unknown}}"
+# Read fields in a subshell rather than sourcing os-release into this one. It defines
+# VERSION, NAME and more, and sourcing a third-party file over this script's own
+# variables is how the build script came to emit `Version: 13 (trixie)` into a .deb
+# control file.
+os_release_field() {
+  ( . /etc/os-release && eval "printf '%s' \"\${$1-}\"" )
+}
+DISTRO_ID="$(os_release_field ID)"
+DISTRO_ID="${DISTRO_ID:-unknown}"
+
+echo "==> $(os_release_field PRETTY_NAME)"
 echo "    glibc: $(getconf GNU_LIBC_VERSION 2>/dev/null || echo unknown)"
 echo "    package: $(basename "$PKG")"
 
 echo "==> Installing"
-case "${ID:-unknown}" in
+case "$DISTRO_ID" in
   debian|ubuntu)
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
@@ -51,7 +60,7 @@ case "${ID:-unknown}" in
     su builder -c 'cd /tmp/build && makepkg -si --noconfirm'
     ;;
   *)
-    echo "::error::no install path for '${ID:-unknown}'"
+    echo "::error::no install path for '$DISTRO_ID'"
     exit 1
     ;;
 esac
@@ -70,12 +79,23 @@ else
   echo "  ok: every DT_NEEDED entry resolves"
 fi
 
-# ffmpeg is a declared dependency that no SONAME names. If the declaration is missing,
-# Varda starts fine and then fails at showtime when someone hits record.
+# Dependencies with no SONAME reference. dpkg-shlibdeps and rpm find-requires
+# structurally cannot derive these, so the package declares them by hand and they have to
+# be verified by hand here. Both fail late and confusingly when a declaration is dropped:
+# Varda installs, starts, and then cannot record or cannot render.
 if command -v ffmpeg >/dev/null 2>&1; then
   echo "  ok: ffmpeg present ($(ffmpeg -version 2>/dev/null | head -1))"
 else
   echo "FAIL: ffmpeg not installed; the package did not declare it"
+  failed=1
+fi
+
+# wgpu dlopens libvulkan.so.1. It never appears in ldd output, and `varda --version`
+# returns before any GPU work, so nothing else here would notice it missing.
+if ldconfig -p 2>/dev/null | grep -q 'libvulkan\.so\.1'; then
+  echo "  ok: Vulkan loader present"
+else
+  echo "FAIL: libvulkan.so.1 not installed; the package did not declare the Vulkan loader"
   failed=1
 fi
 
