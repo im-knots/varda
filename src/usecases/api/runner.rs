@@ -143,7 +143,16 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::state::mixer, routes::state::audio,
         routes::state::modulation, routes::state::macros,
         routes::state::outputs, routes::state::surfaces,
-        routes::state::registry, routes::state::midi,
+        routes::state::registry, routes::state::midi, routes::state::lighting,
+        routes::lighting::add_fixture, routes::lighting::update_fixture,
+        routes::lighting::remove_fixture, routes::lighting::set_blackout,
+        routes::lighting::set_enabled, routes::lighting::set_master,
+        routes::lighting::release_programmer, routes::lighting::add_look,
+        routes::lighting::remove_look, routes::lighting::set_look_value,
+        routes::lighting::add_lighting_deck, routes::lighting::update_lighting_deck,
+        routes::lighting::remove_lighting_deck, routes::lighting::add_palette,
+        routes::lighting::remove_palette, routes::lighting::set_palette_value,
+        routes::lighting::store_to_look, routes::lighting::store_to_palette,
         routes::state::cameras, routes::state::depth,
         routes::state::clock, routes::state::ndi,
         routes::state::transport, routes::state::timecode,
@@ -246,7 +255,7 @@ pub struct ApiDoc;
 
 /// Build the axum router with all routes and middleware.
 pub fn build_router(shared: SharedState) -> Router {
-    use axum::routing::get;
+    use axum::routing::{get, patch, post};
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -264,6 +273,63 @@ pub fn build_router(shared: SharedState) -> Router {
         .route("/api/state/macros", get(routes::state::macros))
         .route("/api/state/outputs", get(routes::state::outputs))
         .route("/api/state/surfaces", get(routes::state::surfaces))
+        .route("/api/state/lighting", get(routes::state::lighting))
+        .route(
+            "/api/lighting/fixtures",
+            post(routes::lighting::add_fixture),
+        )
+        .route(
+            "/api/lighting/fixtures/{uuid}",
+            patch(routes::lighting::update_fixture).delete(routes::lighting::remove_fixture),
+        )
+        .route(
+            "/api/lighting/blackout",
+            post(routes::lighting::set_blackout),
+        )
+        .route("/api/lighting/enabled", post(routes::lighting::set_enabled))
+        .route("/api/lighting/master", post(routes::lighting::set_master))
+        .route(
+            "/api/lighting/release",
+            post(routes::lighting::release_programmer),
+        )
+        .route("/api/lighting/looks", post(routes::lighting::add_look))
+        .route(
+            "/api/lighting/looks/{uuid}",
+            axum::routing::delete(routes::lighting::remove_look),
+        )
+        .route(
+            "/api/lighting/looks/{uuid}/value",
+            axum::routing::put(routes::lighting::set_look_value),
+        )
+        .route(
+            "/api/lighting/looks/{uuid}/store",
+            post(routes::lighting::store_to_look),
+        )
+        .route(
+            "/api/lighting/palettes/{uuid}/store",
+            post(routes::lighting::store_to_palette),
+        )
+        .route(
+            "/api/lighting/decks",
+            post(routes::lighting::add_lighting_deck),
+        )
+        .route(
+            "/api/lighting/decks/{uuid}",
+            patch(routes::lighting::update_lighting_deck)
+                .delete(routes::lighting::remove_lighting_deck),
+        )
+        .route(
+            "/api/lighting/palettes",
+            post(routes::lighting::add_palette),
+        )
+        .route(
+            "/api/lighting/palettes/{uuid}",
+            axum::routing::delete(routes::lighting::remove_palette),
+        )
+        .route(
+            "/api/lighting/palettes/{uuid}/value",
+            axum::routing::put(routes::lighting::set_palette_value),
+        )
         .route("/api/state/registry", get(routes::state::registry))
         .route("/api/state/midi", get(routes::state::midi))
         .route("/api/state/cameras", get(routes::state::cameras))

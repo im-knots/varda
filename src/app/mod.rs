@@ -323,6 +323,14 @@ pub struct VardaApp {
     /// Edge-detect for the arrangement blackout notice, so a deliberate
     /// blackout reports once rather than every frame it lasts.
     pub(crate) arrangement_blackout_reported: bool,
+    /// DMX lighting. Lives in the engine, never in the UI layer, so a headless run drives
+    /// lights identically to a windowed one. See /spec/lighting-routing.md § API Parity.
+    pub(crate) lighting: crate::dmx::LightingRuntime,
+    /// Downsamples and reads back the video a sampled lighting deck follows.
+    ///
+    /// Holds nothing until a deck actually samples something.
+    /// See /spec/lighting-routing.md § Sampled.
+    pub(crate) light_sampler: crate::app::state::light_sampler::LightSampler,
 
     // ── Domain sub-structs ───────────────────────────────────────
     pub(crate) input: InputSubsystem,
@@ -518,6 +526,13 @@ impl VardaApp {
         Ok(Self {
             mixer,
             audio_manager,
+            // Starts empty and disabled. `stage.json` supplies the real rig when the workspace
+            // loads, via SetLightingConfig, the same path the API and UI both use.
+            light_sampler: crate::app::state::light_sampler::LightSampler::new(),
+            lighting: crate::dmx::LightingRuntime::new(
+                crate::dmx::LightingConfig::default(),
+                crate::dmx::bundled_profile_dirs(workspace.root()),
+            ),
             camera_manager: CameraManager::new(),
             depth_manager: DepthSensorManager::new(),
             // Constructed disabled rather than merely inert, so `--no-screen-capture`

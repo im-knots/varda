@@ -49,6 +49,15 @@ pub struct SceneConfig {
     #[serde(default)]
     pub macros: MacroBank,
 
+    /// The show half of lighting: looks, colour and beam palettes, lighting decks, master.
+    ///
+    /// Show state, because these are artistic choices that travel between venues. The rig
+    /// itself (fixtures, groups, position palettes, transports) is venue state and lives in
+    /// `stage.json`. Additive and defaulted, so every existing scene file loads unchanged.
+    /// See /spec/lighting-routing.md § Persistence.
+    #[serde(default)]
+    pub lighting: crate::dmx::LightingShow,
+
     /// Transition sequences (channel-to-channel automation). Multiple named sequences.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transition_sequences: Vec<TransitionSequenceConfig>,
@@ -174,6 +183,16 @@ pub struct ChannelConfig {
 
     #[serde(default)]
     pub decks: Vec<DeckConfig>,
+
+    /// This channel's lighting decks.
+    ///
+    /// Beside the video decks, not in a parallel structure keyed by channel UUID. The separation
+    /// between the two halves of the graph is at the **type** level, not the container level: a
+    /// channel owns everything in it, and deleting one takes its lighting with it rather than
+    /// leaving orphans for a sweep to find.
+    /// See /spec/lighting-routing.md § Decision: One Mixer, One Channel, Two Composite Backends.
+    #[serde(default)]
+    pub lighting_decks: Vec<crate::dmx::LightingDeck>,
 
     #[serde(default)]
     pub effects: Vec<EffectConfig>,
@@ -1200,6 +1219,50 @@ impl SceneConfig {
 
 #[cfg(test)]
 mod tests {
+
+    /// Every existing `scene.json` predates the lighting show entirely. The field is defaulted,
+    /// so such a file must load unchanged and gain an empty show rather than failing.
+    #[test]
+    fn a_scene_without_lighting_still_loads() {
+        let text = r#"{"version": 4, "channels": [], "crossfader": 0.0}"#;
+        let scene: SceneConfig = serde_json::from_str(text).expect("old scene.json must load");
+        assert!(scene.lighting.is_empty());
+        assert!(
+            (scene.lighting.master - 1.0).abs() < f32::EPSILON,
+            "a missing master must load at unity, not silently dark"
+        );
+    }
+
+    #[test]
+    fn the_lighting_show_round_trips_through_scene_json() {
+        let mut scene = SceneConfig {
+            version: SceneConfig::CURRENT_VERSION,
+            lighting: crate::dmx::LightingShow::default(),
+            channels: vec![],
+            crossfader: 0.0,
+            active_transition: None,
+            master_effects: vec![],
+            modulation: ModulationEngine::default(),
+            macros: MacroBank::default(),
+            transition_sequences: vec![],
+            render_width: None,
+            render_height: None,
+            tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
+            active_lut: None,
+            arrangement: None,
+            transport: crate::scene::TransportConfig::default(),
+        };
+        scene
+            .lighting
+            .looks
+            .push(crate::dmx::Look::new("Deep Blue"));
+        scene.lighting.master = 0.75;
+        let text = serde_json::to_string(&scene).unwrap();
+        let back: SceneConfig = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.lighting.looks.len(), 1);
+        assert_eq!(back.lighting.looks[0].name, "Deep Blue");
+        assert!((back.lighting.master - 0.75).abs() < f32::EPSILON);
+    }
     use super::*;
 
     // ── Program / channel tap ────────────────────────────────────────
@@ -1277,6 +1340,7 @@ mod tests {
     fn scene_config_roundtrip_empty() {
         let scene = SceneConfig {
             version: 2,
+            lighting: crate::dmx::LightingShow::default(),
             channels: vec![],
             crossfader: 0.5,
             active_transition: None,
@@ -1302,6 +1366,7 @@ mod tests {
     fn scene_config_roundtrip_with_channels() {
         let scene = SceneConfig {
             version: 2,
+            lighting: crate::dmx::LightingShow::default(),
             channels: vec![ChannelConfig {
                 uuid: crate::deck::generate_short_uuid(),
                 name: "Ch 0".into(),
@@ -1328,6 +1393,7 @@ mod tests {
                 }],
                 effects: vec![],
                 modulation: vec![],
+                lighting_decks: Vec::new(),
             }],
             crossfader: 0.0,
             active_transition: Some("dissolve".into()),
@@ -1356,6 +1422,7 @@ mod tests {
     fn scene_config_roundtrip_with_effects() {
         let scene = SceneConfig {
             version: 2,
+            lighting: crate::dmx::LightingShow::default(),
             channels: vec![],
             crossfader: 0.0,
             active_transition: None,
@@ -1721,12 +1788,14 @@ mod tests {
 
         let scene = SceneConfig {
             version: 2,
+            lighting: crate::dmx::LightingShow::default(),
             channels: vec![ChannelConfig {
                 uuid: crate::deck::generate_short_uuid(),
                 name: "Test Ch".into(),
                 opacity: 0.9,
                 blend_mode: BlendModeConfig::Add,
                 decks: vec![],
+                lighting_decks: Vec::new(),
                 effects: vec![],
                 modulation: vec![],
             }],
@@ -1760,6 +1829,7 @@ mod tests {
     fn validate_valid_scene() {
         let scene = SceneConfig {
             version: 2,
+            lighting: crate::dmx::LightingShow::default(),
             channels: vec![ChannelConfig {
                 uuid: crate::deck::generate_short_uuid(),
                 name: "Ch 0".into(),
@@ -1786,6 +1856,7 @@ mod tests {
                 }],
                 effects: vec![],
                 modulation: vec![],
+                lighting_decks: Vec::new(),
             }],
             crossfader: 0.5,
             active_transition: None,
@@ -1807,6 +1878,7 @@ mod tests {
     fn validate_crossfader_out_of_range() {
         let mut scene = SceneConfig {
             version: 2,
+            lighting: crate::dmx::LightingShow::default(),
             channels: vec![],
             crossfader: 1.5,
             active_transition: None,
@@ -1831,6 +1903,7 @@ mod tests {
     fn validate_render_dims_zero() {
         let scene = SceneConfig {
             version: 2,
+            lighting: crate::dmx::LightingShow::default(),
             channels: vec![],
             crossfader: 0.0,
             active_transition: None,
@@ -1858,6 +1931,7 @@ mod tests {
             opacity: 2.0,
             blend_mode: BlendModeConfig::Normal,
             decks: vec![],
+            lighting_decks: Vec::new(),
             effects: vec![],
             modulation: vec![],
         };

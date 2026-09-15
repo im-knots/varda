@@ -141,6 +141,26 @@ fn render_right_panel_body(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAct
 
         ui.add_space(4.0);
 
+        // Directly under Tonemap, because the two are the same kind of control for the two
+        // halves of the show: the tonemap is how video is graded, the palette is the colour
+        // vocabulary the lights are spoken in. Reading them together is how a performer keeps
+        // the room one look rather than two.
+        //
+        // A palette cannot live inside a Look — a value used by exactly one look is just a
+        // value, and the whole point of a palette is that editing it moves every look
+        // referencing it at once. See /spec/lighting-routing.md § Palettes.
+        let palettes = data.lighting.palettes.len();
+        egui::CollapsingHeader::new(
+            egui::RichText::new(format!("🎨 Lighting Palette ({palettes})")).strong(),
+        )
+        .id_salt("rp_lighting_palettes")
+        .default_open(false)
+        .show(ui, |ui| {
+            super::lighting::render_palette_section(ui, data, actions);
+        });
+
+        ui.add_space(4.0);
+
         egui::CollapsingHeader::new(egui::RichText::new("〰 Modulation").strong())
             .default_open(false)
             .show(ui, |ui| {
@@ -170,6 +190,36 @@ fn render_right_panel_body(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAct
             .show(ui, |ui| {
                 render_surface_editor(ui, data, actions);
             });
+
+        ui.add_space(4.0);
+
+        // Only the transport. What lights exist and how they are grouped is show content and
+        // is authored on the deck, in the bottom bar, the way a shader's parameters are. What
+        // stays here is the output plumbing: is DMX running and is it healthy.
+        // See /spec/lighting-routing.md § Performance-Mode UI.
+        // A lamp is a physical device that emits light onto the stage, which makes it an output
+        // — the same kind of thing as a projector. What profile it is, what address it answers
+        // on and which universe carries it is therefore output configuration and lives here with
+        // the other outputs. Where it *stands* is stage information and lives on the stage
+        // canvas, exactly as a projector's position does.
+        // See /spec/lighting-routing.md § The Stage holds both kinds of physical thing.
+        let lights = data.lighting.patch.len();
+        egui::CollapsingHeader::new(
+            egui::RichText::new(format!("🔦 DMX Output ({lights})")).strong(),
+        )
+        .id_salt("rp_dmx_output")
+        // Open while there are no lights: a collapsed section would hide the only way to add
+        // the first one, which is the same trap the LIGHTS band fell into three times.
+        .default_open(lights == 0)
+        .show(ui, |ui| {
+            super::lighting::render_transport_section(ui, data, actions);
+            ui.add_space(4.0);
+            ui.separator();
+            super::lighting::render_messages(ui, &data.lighting);
+            super::lighting::render_fixture_list(ui, data, actions);
+            ui.add_space(4.0);
+            super::lighting::render_add_fixture(ui, data, actions);
+        });
 
         ui.add_space(4.0);
 
@@ -205,6 +255,44 @@ fn render_right_panel_body(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAct
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui_kittest::kittest::Queryable;
+
+    /// Fixtures are outputs, so the patch lives here with the transport. Where a lamp *stands*
+    /// is stage information and lives on the stage canvas — see
+    /// `the_stage_editor_is_where_lamps_are_placed`.
+    #[test]
+    fn the_right_panel_configures_lights_as_outputs() {
+        let data = UIData::test_fixture();
+        let mut actions = UIActions::new();
+        let mut harness = egui_kittest::Harness::new_ui(|ui| {
+            render_right_panel_body(ui, &data, &mut actions);
+        });
+        harness.run();
+        assert!(
+            harness.query_by_label("🔦 DMX Output (0)").is_some(),
+            "the DMX transport is offered nowhere at all"
+        );
+        // Ordering is the point of where the palette sits: it must read with Tonemap, not be
+        // filed under the transport it has nothing to do with.
+        assert!(
+            harness.query_by_label("🎨 Lighting Palette (0)").is_some(),
+            "the lighting palette is offered nowhere at all"
+        );
+        assert!(
+            harness.query_by_label("➕ Add light").is_some(),
+            "a fixture is an output and is configured with the other outputs"
+        );
+        for banned in ["🔦 Lighting Rig (0)", "🎨 Palettes (0)"] {
+            assert!(
+                harness.query_by_label(banned).is_none(),
+                "patching is deck content and must not be in the right panel: {banned}"
+            );
+        }
+        assert!(
+            harness.query_by_label("📺 Outputs").is_some(),
+            "DMX output should sit with the other outputs, which are missing"
+        );
+    }
 
     #[test]
     fn render_right_panel_smoke() {

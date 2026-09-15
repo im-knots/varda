@@ -806,6 +806,24 @@ impl ModulationEngine {
     }
 
     /// Get current value for a source by UUID
+    /// Sample a source at a phase offset in turns, for lighting spread.
+    ///
+    /// Returns the source's current value at offset 0, and a phase-shifted value for periodic
+    /// sources. `None` when the source does not exist, or is not periodic and the offset is
+    /// non-zero: an audio band or an ADSR has no meaningful "same signal a quarter turn later",
+    /// so the lighting merge fans those uniformly instead.
+    /// See /spec/lighting-routing.md § Lighting Deck Source Types.
+    #[must_use]
+    pub fn sample_at_phase_offset(&self, uuid: &str, offset: f32) -> Option<f32> {
+        let entry = self.find_source_by_uuid(uuid)?;
+        if offset == 0.0 {
+            return Some(self.current_value_for(uuid));
+        }
+        entry
+            .source
+            .sample_at_phase_offset(self.prev_time.unwrap_or(0.0), offset)
+    }
+
     pub fn current_value_for(&self, uuid: &str) -> f32 {
         self.sources
             .iter()

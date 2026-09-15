@@ -146,6 +146,8 @@ pub(crate) fn build_ui_data(
                 opacity: ch.opacity,
                 blend_mode: ch.blend_mode,
                 decks,
+                lighting_deck_uuids: ch.lighting_decks.iter().map(|d| d.id.to_string()).collect(),
+                lighting_decks: ch.lighting_decks.clone(),
                 effects,
             }
         })
@@ -585,6 +587,53 @@ pub(crate) fn build_ui_data(
         stage_editor_open: layout.stage_editor_open,
         arrangement_mode_open: layout.arrangement_mode_open,
         arrangement: engine.arrangement.clone(),
+        lighting: engine.lighting.clone(),
+        lighting_profiles: app.lighting.library().available(),
+        lighting_profile_modes: app.lighting.profile_modes(),
+        lighting_show: app.lighting.show().clone(),
+        lights_band_open: layout.lights_band_open,
+        video_band_open: layout.video_band_open,
+        band_split: layout.band_split,
+        selected_lighting_deck: layout.selected_lighting_deck.clone(),
+        lighting_groups: app
+            .lighting
+            .config()
+            .groups
+            .iter()
+            .map(|g| g.id.to_string())
+            .collect(),
+        lighting_group_names: app
+            .lighting
+            .config()
+            .groups
+            .iter()
+            .map(|g| (g.id.to_string(), g.name.clone(), g.members.len()))
+            .collect(),
+        lighting_group_sources: app
+            .lighting
+            .config()
+            .groups
+            .iter()
+            .map(|g| {
+                let source = g.source.as_ref().map(|s| match s {
+                    crate::dmx::GroupSource::Program => "program".to_string(),
+                    crate::dmx::GroupSource::Channel { uuid } => uuid.clone(),
+                });
+                (g.id.to_string(), source)
+            })
+            .collect(),
+        lighting_group_members: app
+            .lighting
+            .config()
+            .groups
+            .iter()
+            .map(|g| {
+                (
+                    g.id.to_string(),
+                    g.members.iter().map(ToString::to_string).collect(),
+                )
+            })
+            .collect(),
         arrangement_pixels_per_second: layout.arrangement_pixels_per_second,
         arrangement_scroll: layout.arrangement_scroll,
         arrangement_scroll_y: layout.arrangement_scroll_y,

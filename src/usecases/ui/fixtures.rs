@@ -139,6 +139,8 @@ impl UIData {
             opacity: 1.0,
             blend_mode: BlendMode::Normal,
             decks: vec![alpha_lower, alpha_upper],
+            lighting_decks: Vec::new(),
+            lighting_deck_uuids: Vec::new(),
             effects: vec![(
                 "cfx00001".to_string(),
                 "ch_effect".to_string(),
@@ -219,10 +221,26 @@ impl UIData {
             opacity: 1.0,
             blend_mode: BlendMode::Normal,
             decks: vec![beta_lower, beta_upper],
+            lighting_decks: Vec::new(),
+            lighting_deck_uuids: Vec::new(),
             effects: vec![],
         };
 
         UIData {
+            lighting: crate::dmx::LightingSnapshot::default(),
+            lighting_profiles: Vec::new(),
+            lighting_profile_modes: std::sync::Arc::default(),
+            lighting_show: crate::dmx::LightingShow::default(),
+            // Matches `UILayoutState::default()`. A fixture that disagrees with the real
+            // default tests a configuration no user ever has.
+            lights_band_open: true,
+            video_band_open: true,
+            band_split: 0.5,
+            selected_lighting_deck: None,
+            lighting_groups: Vec::new(),
+            lighting_group_names: Vec::new(),
+            lighting_group_members: Vec::new(),
+            lighting_group_sources: Vec::new(),
             generators: vec![
                 ("test_generator_a".to_string(), 0),
                 ("test_generator_b".to_string(), 1),

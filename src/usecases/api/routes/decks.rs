@@ -303,7 +303,7 @@ pub struct AddVideoDeckBody {
 
 #[derive(Deserialize, ToSchema)]
 pub struct AddSolidColorDeckBody {
-    /// RGBA colour as four floats in 0.0–1.0.
+    /// RGBA color as four floats in 0.0–1.0.
     pub color: [f32; 4],
 }
 

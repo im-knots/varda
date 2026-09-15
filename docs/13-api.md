@@ -593,6 +593,29 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `GET` | `/api/library/syphon` | Names of the Syphon servers discovered by the last scan. |
 | `GET` | `/api/library/transitions` | Names of the transition shaders the crossfader can use. |
 
+### Lighting
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/lighting/blackout` | Set the latching lighting blackout. |
+| `POST` | `/api/lighting/decks` | Instantiate a look as a lighting deck in a channel. |
+| `PATCH` | `/api/lighting/decks/{uuid}` | Update a lighting deck, or move it to another channel. |
+| `DELETE` | `/api/lighting/decks/{uuid}` | Remove a lighting deck. |
+| `POST` | `/api/lighting/enabled` | Enable or disable the whole lighting subsystem. |
+| `POST` | `/api/lighting/fixtures` | Patch a fixture into the rig. |
+| `PATCH` | `/api/lighting/fixtures/{uuid}` | Repatch a fixture. Fields omitted from the body are left unchanged. |
+| `DELETE` | `/api/lighting/fixtures/{uuid}` | Remove a fixture from the rig. |
+| `POST` | `/api/lighting/looks` | Create a look. |
+| `DELETE` | `/api/lighting/looks/{uuid}` | Delete a look, and any lighting decks playing it. |
+| `POST` | `/api/lighting/looks/{uuid}/store` | Commit what the programmer holds into a look. |
+| `PUT` | `/api/lighting/looks/{uuid}/value` | Set one role of one target inside a look, as a literal or a palette reference. |
+| `POST` | `/api/lighting/master` | Set the global lighting intensity scalar. |
+| `POST` | `/api/lighting/palettes` | Create a palette. Its kind decides whether it is saved with the show or the venue. |
+| `DELETE` | `/api/lighting/palettes/{uuid}` | Remove a palette. Looks referencing it become inert rather than dark. |
+| `POST` | `/api/lighting/palettes/{uuid}/store` | Commit what the programmer holds into a palette. |
+| `PUT` | `/api/lighting/palettes/{uuid}/value` | Store a value into a palette, as the role-space default or as a per-fixture override. |
+| `POST` | `/api/lighting/release` | Release every programmer value, handing control back to the looks. |
+
 ### Macros
 
 | Method | Path | Description |
@@ -764,6 +787,7 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `GET` | `/api/state/cameras` | Camera devices discovered by the last scan. |
 | `GET` | `/api/state/clock` | Clock state: resolved BPM, beat phase, active source, and detected clock sources. |
 | `GET` | `/api/state/depth` | Depth sensors discovered by the last scan. |
+| `GET` | `/api/state/lighting` | DMX lighting state: patched fixtures, transport health, last transmitted universes annotated by owning fixture and channel, patch warnings, and dark/stuck watchdog flags. |
 | `GET` | `/api/state/macros` | Every macro control with its kind, current value, and parameter targets. |
 | `GET` | `/api/state/midi` | MIDI state: devices, mappings, and whether learn mode is active. |
 | `GET` | `/api/state/mixer` | Mixer state: channels, crossfader position, master effects, active transition, and sequences. |

@@ -3,24 +3,47 @@
 use super::super::{LibraryDrag, UIActions, UIData};
 use crate::engine::EngineCommand;
 
-/// egui memory key carrying the dragged capture target from the library panel
-/// to the deferred drop handler in `panels/dnd.rs`.
-pub(crate) const CAPTURE_DND_KEY: &str = "__lib_dnd_capture_target";
+/// egui memory key carrying the dragged library payload to the deferred drop handler in
+/// `panels/dnd.rs`.
+///
+/// One key for every library item, not one per kind. egui discards the live drag payload on
+/// release, so it has to be stashed where the drop handler can still read it — but a key per
+/// kind meant every library item needed a matching stash site, read site and cleanup site, and a
+/// missing one failed in silence. The blank Lighting Deck shipped exactly that way: it set its
+/// key on drag and the cleanup cleared it on release, and nothing in between ever read it.
+///
+/// With a single key the drop handler is one exhaustive `match`, so a payload nothing consumes
+/// is a compile error rather than a drop that does nothing.
+pub(crate) const PAYLOAD_DND_KEY: &str = "__lib_dnd_payload";
 
-/// egui memory key carrying the dragged tap source to the deferred drop handler.
-pub(crate) const TAP_DND_KEY: &str = "__lib_dnd_tap_source";
+/// A draggable library row: the one way to make something draggable into a channel.
+///
+/// Starting the drag and stashing the payload happen together here so they cannot come apart,
+/// which is the failure every per-kind key invited.
+pub(super) fn drag_source<R>(
+    ui: &mut egui::Ui,
+    item_id: egui::Id,
+    payload: LibraryDrag,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::Response {
+    let resp = ui
+        .dnd_drag_source(item_id, payload.clone(), add_contents)
+        .response;
+    if ui.ctx().is_being_dragged(item_id) {
+        ui.ctx().memory_mut(|mem| {
+            mem.data
+                .insert_temp(egui::Id::new(PAYLOAD_DND_KEY), payload);
+        });
+    }
+    resp
+}
 
 /// One draggable tap row.
 fn tap_row(ui: &mut egui::Ui, label: &str, payload: crate::scene::TapSourceConfig) {
     let item_id = egui::Id::new(("lib_tap", label));
-    ui.dnd_drag_source(item_id, LibraryDrag::Tap(payload.clone()), |ui| {
+    drag_source(ui, item_id, LibraryDrag::Tap(payload), |ui| {
         ui.label(egui::RichText::new(format!("  🔁 {label}")).size(12.0));
     });
-    if ui.ctx().is_being_dragged(item_id) {
-        ui.ctx().memory_mut(|mem| {
-            mem.data.insert_temp(egui::Id::new(TAP_DND_KEY), payload);
-        });
-    }
 }
 
 /// Render the screen-recording permission state and its call to action.
@@ -80,7 +103,7 @@ fn capture_target_row(
     } else {
         format!("  🖥 {}", target.label)
     };
-    ui.dnd_drag_source(item_id, LibraryDrag::ScreenCapture(payload.clone()), |ui| {
+    drag_source(ui, item_id, LibraryDrag::ScreenCapture(payload), |ui| {
         let mut rich = egui::RichText::new(text).size(12.0);
         if target.is_varda {
             rich = rich.color(egui::Color32::from_rgb(200, 170, 240));
@@ -88,12 +111,6 @@ fn capture_target_row(
         ui.label(rich)
             .on_hover_text(format!("{}×{}", target.width, target.height));
     });
-    if ui.ctx().is_being_dragged(item_id) {
-        ui.ctx().memory_mut(|mem| {
-            mem.data
-                .insert_temp(egui::Id::new(CAPTURE_DND_KEY), payload);
-        });
-    }
 }
 
 /// Render a stream/URL library entry as a single row.
@@ -117,7 +134,7 @@ fn stream_row(
                 .on_hover_text("Remove from library")
                 .clicked();
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.dnd_drag_source(item_id, payload, |ui| {
+                drag_source(ui, item_id, payload, |ui| {
                     ui.label(egui::RichText::new("●").color(status_color));
                     ui.add(
                         egui::Label::new(egui::RichText::new(text.clone()).size(12.0)).truncate(),
@@ -152,768 +169,501 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
             mouse_wheel: true,
         })
         .show(ui, |ui| {
-            // === GENERATORS ===
-            let gen_header =
-                egui::RichText::new(format!("🎨 Generators ({})", data.generators.len())).strong();
-            egui::CollapsingHeader::new(gen_header)
-                .id_salt("lib_generators")
-                .default_open(false)
-                .show(ui, |ui| {
-                    for (name, gen_idx) in &data.generators {
-                        let item_id = egui::Id::new(("lib_gen", *gen_idx));
-                        let resp = ui
-                            .dnd_drag_source(item_id, LibraryDrag::Generator(*gen_idx), |ui| {
-                                ui.label(egui::RichText::new(format!("  ◆ {name}")).size(12.0));
-                            })
-                            .response;
-                        // Store generator index in temp memory so the deferred drop handler can use it
-                        if ui.ctx().is_being_dragged(item_id) {
-                            ui.ctx().memory_mut(|mem| {
-                                mem.data
-                                    .insert_temp(egui::Id::new("__lib_dnd_gen_idx"), *gen_idx);
-                            });
-                        }
-                        // Fallback: double-click adds to first channel
-                        if resp.double_clicked()
-                            && let Some(ch) = data.channels.first()
-                        {
-                            actions.session.shader_to_add = Some((ch.uuid.clone(), *gen_idx));
-                        }
-                        resp.on_hover_text(
-                            "Drag to a channel to create a deck, or double-click to add to Ch 0",
-                        );
-                    }
-                });
-
-            ui.add_space(4.0);
-
-            // === EFFECTS ===
-            let fx_header =
-                egui::RichText::new(format!("🔮 Effects ({})", data.filters.len())).strong();
-            egui::CollapsingHeader::new(fx_header)
-                .id_salt("lib_effects")
-                .default_open(false)
-                .show(ui, |ui| {
-                    for (name, filter_idx) in &data.filters {
-                        let item_id = egui::Id::new(("lib_fx", *filter_idx));
-                        ui.dnd_drag_source(item_id, LibraryDrag::Effect(*filter_idx), |ui| {
-                            ui.label(egui::RichText::new(format!("  ◇ {name}")).size(12.0));
-                        });
-                        // Store effect filter index in temp memory for deferred drop handler
-                        if ui.ctx().is_being_dragged(item_id) {
-                            ui.ctx().memory_mut(|mem| {
-                                mem.data
-                                    .insert_temp(egui::Id::new("__lib_dnd_fx_idx"), *filter_idx);
-                            });
-                        }
-                    }
-                });
-
-            ui.add_space(4.0);
-
-            // === IMAGES ===
-            let img_header = egui::RichText::new("🖼 Images").strong();
-            egui::CollapsingHeader::new(img_header)
-                .default_open(false)
-                .show(ui, |ui| {
-                    ui.label(
-                        egui::RichText::new("Load image files as deck sources")
-                            .small()
-                            .weak(),
-                    );
-                    for ch in &data.channels {
-                        if ui.button(format!("📁 Load to {}", ch.name)).clicked() {
-                            actions.session.open_image_dialog_for_channel = Some(ch.uuid.clone());
-                        }
-                    }
-                });
-
-            ui.add_space(4.0);
-
-            // === VIDEO ===
-            let vid_header = egui::RichText::new("🎬 Video").strong();
-            egui::CollapsingHeader::new(vid_header)
-                .default_open(false)
-                .show(ui, |ui| {
-                    ui.label(
-                        egui::RichText::new("Load video files as deck sources")
-                            .small()
-                            .weak(),
-                    );
-                    for ch in &data.channels {
-                        if ui.button(format!("📁 Load to {}", ch.name)).clicked() {
-                            actions.session.open_video_dialog_for_channel = Some(ch.uuid.clone());
-                        }
-                    }
-                });
-
-            ui.add_space(4.0);
-
-            // === CAMERAS ===
-            let cam_header =
-                egui::RichText::new(format!("📹 Cameras ({})", data.cameras.len())).strong();
-            egui::CollapsingHeader::new(cam_header)
-                .id_salt("lib_cameras")
-                .default_open(false)
-                .show(ui, |ui| {
-                    if ui.small_button("🔄 Rescan").clicked() {
-                        actions.commands.push(EngineCommand::RescanCameras);
-                    }
-                    if data.cameras.is_empty() {
-                        ui.label(egui::RichText::new("No cameras detected").small().weak());
-                    }
-                    for (name, cam_id) in &data.cameras {
-                        let item_id = egui::Id::new(("lib_cam", *cam_id));
-                        ui.dnd_drag_source(item_id, LibraryDrag::Camera(*cam_id), |ui| {
-                            ui.label(egui::RichText::new(format!("  📹 {name}")).size(12.0));
-                        });
-                        if ui.ctx().is_being_dragged(item_id) {
-                            ui.ctx().memory_mut(|mem| {
-                                mem.data
-                                    .insert_temp(egui::Id::new("__lib_dnd_cam_id"), *cam_id);
-                            });
-                        }
-                    }
-                });
-
-            ui.add_space(4.0);
-
-            // === DEPTH SENSORS ===
-            let depth_header =
-                egui::RichText::new(format!("🛰 Depth Sensors ({})", data.depth_sensors.len()))
-                    .strong();
-            egui::CollapsingHeader::new(depth_header)
-                .id_salt("lib_depth_sensors")
-                .default_open(false)
-                .show(ui, |ui| {
-                    if ui.small_button("🔄 Rescan").clicked() {
-                        actions.commands.push(EngineCommand::RescanDepthSensors);
-                    }
-                    if data.depth_sensors.is_empty() {
-                        ui.label(
-                            egui::RichText::new("No depth sensors detected")
-                                .small()
-                                .weak(),
-                        );
-                    }
-                    for (name, sensor_id) in &data.depth_sensors {
-                        let item_id = egui::Id::new(("lib_depth", *sensor_id));
-                        ui.dnd_drag_source(item_id, LibraryDrag::DepthSensor(*sensor_id), |ui| {
-                            ui.label(egui::RichText::new(format!("  🛰 {name}")).size(12.0));
-                        });
-                        if ui.ctx().is_being_dragged(item_id) {
-                            ui.ctx().memory_mut(|mem| {
-                                mem.data.insert_temp(
-                                    egui::Id::new("__lib_dnd_depth_sensor_id"),
-                                    *sensor_id,
-                                );
-                            });
-                        }
-                    }
-                });
-
-            ui.add_space(4.0);
-
-            // === SCREEN CAPTURE ===
-            // Targets are split into Displays and Windows, and Varda's own
-            // windows are marked so self-capture is an informed choice rather
-            // than an accidental mirror. See spec/screen-capture.md § UI.
-            let capture_header =
-                egui::RichText::new(format!("🖥 Screen Capture ({})", data.capture_targets.len()))
-                    .strong();
-            egui::CollapsingHeader::new(capture_header)
-                .id_salt("lib_screen_capture")
-                .default_open(false)
-                .show(ui, |ui| {
-                    if !data.screen_capture_available {
-                        ui.label(
-                            egui::RichText::new("Screen capture is disabled in this build")
-                                .small()
-                                .weak(),
-                        );
-                        return;
-                    }
-
-                    if ui.small_button("🔄 Rescan").clicked() {
-                        actions.commands.push(EngineCommand::RescanCaptureTargets);
-                    }
-
-                    render_capture_permission(ui, actions, &data.screen_capture_permission);
-
-                    let (displays, windows): (Vec<_>, Vec<_>) = data
-                        .capture_targets
-                        .iter()
-                        .partition(|t| t.kind == "display");
-
-                    if displays.is_empty() && windows.is_empty() {
-                        ui.label(
-                            egui::RichText::new("No capture targets — press Rescan")
-                                .small()
-                                .weak(),
-                        );
-                    }
-
-                    if !displays.is_empty() {
-                        ui.label(egui::RichText::new("Displays").small().weak());
-                        for t in &displays {
-                            capture_target_row(
-                                ui,
-                                t,
-                                crate::scene::CaptureTargetConfig::Display {
-                                    name: t.label.clone(),
-                                },
-                            );
-                        }
-                    }
-
-                    if !windows.is_empty() {
-                        ui.add_space(2.0);
-                        ui.label(egui::RichText::new("Windows").small().weak());
-                        for t in &windows {
-                            capture_target_row(
-                                ui,
-                                t,
-                                crate::scene::CaptureTargetConfig::Window {
-                                    app: t.app.clone().unwrap_or_default(),
-                                    title: t.title.clone().unwrap_or_default(),
-                                },
-                            );
-                        }
-                    }
-                });
-
-            ui.add_space(4.0);
-
-            // === TAPS ===
-            // Built from the live channel list rather than a device scan, so
-            // there is nothing to rescan. See spec/program-tap.md § UI.
-            let tap_header =
-                egui::RichText::new(format!("🔁 Taps ({})", data.channels.len() + 1)).strong();
-            egui::CollapsingHeader::new(tap_header)
-                .id_salt("lib_taps")
-                .default_open(false)
-                .show(ui, |ui| {
-                    ui.label(
-                        egui::RichText::new("Varda's own output, one frame behind.")
-                            .small()
-                            .weak(),
-                    );
-                    tap_row(
-                        ui,
-                        "Master Program",
-                        crate::scene::TapSourceConfig::MasterProgram,
-                    );
-                    for ch in &data.channels {
-                        tap_row(
-                            ui,
-                            &ch.name,
-                            crate::scene::TapSourceConfig::Channel {
-                                uuid: ch.uuid.clone(),
-                            },
-                        );
-                    }
-                });
-
-            ui.add_space(4.0);
-
-            // === STREAM SOURCES (grouped) ===
-            {
-                let total_streams = data.ndi_sources.len()
-                    + data.srt_library_configs.len()
-                    + data.hls_library_configs.len()
-                    + data.dash_library_configs.len()
-                    + data.rtmp_library_configs.len();
-                let stream_header =
-                    egui::RichText::new(format!("📡 Stream Sources ({total_streams})")).strong();
-                egui::CollapsingHeader::new(stream_header)
-                    .id_salt("lib_streams")
-                    .default_open(false)
+            // Two top-level trees. Visuals and lighting are the same workflow (find content,
+            // drag it into the channel it belongs with, shape it in the bottom bar), so they
+            // sit side by side rather than lighting being bolted onto a different panel.
+            // See /spec/lighting-routing.md § Performance-Mode UI.
+            let visuals_open = ui
+                .ctx()
+                .data_mut(|d| d.get_temp::<bool>(egui::Id::new("lib_visuals_open")))
+                .unwrap_or(true);
+            let visuals =
+                egui::CollapsingHeader::new(egui::RichText::new("🎞 Visuals").heading().size(14.0))
+                    .id_salt("lib_visuals")
+                    .default_open(visuals_open)
                     .show(ui, |ui| {
-                        // — NDI —
-                        let ndi_header =
-                            egui::RichText::new(format!("NDI ({})", data.ndi_sources.len()))
-                                .strong();
-                        egui::CollapsingHeader::new(ndi_header)
-                            .id_salt("lib_ndi")
-                            .default_open(false)
-                            .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    if ui.small_button("🔄 Rescan").clicked() {
-                                        actions.commands.push(EngineCommand::RescanNdi);
-                                    }
-                                    if !data.ndi_available {
-                                        ui.label(
-                                            egui::RichText::new("(SDK not found)").small().weak(),
-                                        );
-                                    }
+                        render_visuals_library(ui, data, actions);
+                    });
+            ui.ctx().data_mut(|d| {
+                d.insert_temp(egui::Id::new("lib_visuals_open"), visuals.openness > 0.5);
+            });
+
+            ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(2.0);
+
+            egui::CollapsingHeader::new(egui::RichText::new("💡 Lighting").heading().size(14.0))
+                .id_salt("lib_lighting")
+                .default_open(true)
+                .show(ui, |ui| {
+                    render_lighting_library(ui, data, actions);
+                });
+        });
+}
+
+// ── Lighting library ────────────────────────────────────────────────────────
+
+/// The lighting half of the library.
+///
+/// The same shape as the visuals half, and nothing else: a thing you drag into a channel to make
+/// a deck, and presets for decks you liked. What the rig physically is — which fixtures are
+/// patched at which addresses — is venue setup, not performance material, and lives beside Stage
+/// Layout in the right panel. The library is what you reach for mid-show.
+/// See /spec/lighting-routing.md § Performance-Mode UI.
+pub(super) fn render_lighting_library(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
+    // The way in. A blank deck rather than a pre-authored look, because lighting content is
+    // authored on the deck the way a shader's parameters are, not imported like a media file.
+    let item_id = egui::Id::new("lib_lighting_deck");
+    let resp = drag_source(ui, item_id, LibraryDrag::LightingDeck, |ui| {
+        ui.label(egui::RichText::new("  ◆ Lighting Deck").size(12.0).strong());
+    });
+    resp.on_hover_text(
+        "Drag to a channel, then say which lights are in it and what they do in the bottom bar",
+    );
+
+    ui.add_space(6.0);
+
+    let looks = data.lighting_show.looks.len();
+    egui::CollapsingHeader::new(egui::RichText::new(format!("💡 Looks ({looks})")).strong())
+        .id_salt("lib_looks")
+        .default_open(looks > 0)
+        .show(ui, |ui| {
+            if data.lighting_show.looks.is_empty() {
+                ui.label(
+                    egui::RichText::new("  Save a lighting deck to keep its look")
+                        .small()
+                        .color(egui::Color32::from_rgb(120, 120, 130)),
+                );
+            }
+            for look in &data.lighting_show.looks {
+                let uuid = look.id.to_string();
+                let drag_id = egui::Id::new(("lib_look", &uuid));
+                let referenced = look
+                    .assignments()
+                    .iter()
+                    .filter(|a| a.value.is_reference())
+                    .count();
+                let mut label = format!("  ◇ {}", look.name);
+                if !look.bindings().is_empty() {
+                    label.push_str(" ~");
+                }
+                if referenced > 0 {
+                    use std::fmt::Write as _;
+                    let _ = write!(label, " @{referenced}");
+                }
+                let resp = drag_source(ui, drag_id, LibraryDrag::Look(uuid.clone()), |ui| {
+                    ui.label(egui::RichText::new(label).size(12.0));
+                });
+                resp.on_hover_text("A saved lighting deck. Drag to a channel to use it again")
+                    .context_menu(|ui| {
+                        if ui.button("Delete look").clicked() {
+                            actions
+                                .commands
+                                .push(crate::engine::EngineCommand::RemoveLook {
+                                    uuid: uuid.clone(),
                                 });
-                                if data.ndi_sources.is_empty() {
-                                    ui.label(
-                                        egui::RichText::new("No NDI sources found").small().weak(),
-                                    );
-                                }
-                                for (i, name) in data.ndi_sources.iter().enumerate() {
-                                    let item_id = egui::Id::new(("lib_ndi", i));
-                                    ui.dnd_drag_source(
-                                        item_id,
-                                        LibraryDrag::Ndi(name.clone()),
-                                        |ui| {
-                                            ui.label(
-                                                egui::RichText::new(format!("  📡 {name}"))
-                                                    .size(12.0),
-                                            );
-                                        },
-                                    );
-                                    if ui.ctx().is_being_dragged(item_id) {
-                                        ui.ctx().memory_mut(|mem| {
-                                            mem.data.insert_temp(
-                                                egui::Id::new("__lib_dnd_ndi_name"),
-                                                name.clone(),
-                                            );
-                                        });
-                                    }
-                                }
-                            });
+                            ui.close();
+                        }
+                    });
+            }
+        });
+}
 
-                        ui.add_space(4.0);
+/// The visuals half of the library: generators, effects, media, captures, taps, streams, presets.
+///
+/// Extracted from `render_library_panel` when lighting was added beside it, so the panel itself
+/// is a two-tree shell and each tree owns its own content.
+fn render_visuals_library(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
+    // === GENERATORS ===
+    let gen_header =
+        egui::RichText::new(format!("🎨 Generators ({})", data.generators.len())).strong();
+    egui::CollapsingHeader::new(gen_header)
+        .id_salt("lib_generators")
+        .default_open(false)
+        .show(ui, |ui| {
+            for (name, gen_idx) in &data.generators {
+                let item_id = egui::Id::new(("lib_gen", *gen_idx));
+                let resp = drag_source(ui, item_id, LibraryDrag::Generator(*gen_idx), |ui| {
+                    ui.label(egui::RichText::new(format!("  ◆ {name}")).size(12.0));
+                });
+                // Fallback: double-click adds to first channel
+                if resp.double_clicked()
+                    && let Some(ch) = data.channels.first()
+                {
+                    actions.session.shader_to_add = Some((ch.uuid.clone(), *gen_idx));
+                }
+                resp.on_hover_text(
+                    "Drag to a channel to create a deck, or double-click to add to Ch 0",
+                );
+            }
+        });
 
-                        // — SRT —
-                        let srt_header = egui::RichText::new(format!(
-                            "SRT ({})",
-                            data.srt_library_configs.len()
-                        ))
-                        .strong();
-                        egui::CollapsingHeader::new(srt_header)
-                            .id_salt("lib_srt")
-                            .default_open(false)
-                            .show(ui, |ui| {
-                                // "+ Add SRT" button with inline config
-                                let adding_id = ui.id().with("srt_adding");
-                                let url_id = ui.id().with("srt_url_input");
-                                let mode_id = ui.id().with("srt_mode_input");
-                                let is_adding: bool =
-                                    ui.data(|d| d.get_temp(adding_id)).unwrap_or(false);
+    ui.add_space(4.0);
 
-                                if is_adding {
-                                    let mut url: String = ui
-                                        .data(|d| d.get_temp(url_id))
-                                        .unwrap_or_else(|| "srt://127.0.0.1:9001".to_string());
-                                    let mut mode_idx: usize =
-                                        ui.data(|d| d.get_temp(mode_id)).unwrap_or(1);
+    // === EFFECTS ===
+    let fx_header = egui::RichText::new(format!("🔮 Effects ({})", data.filters.len())).strong();
+    egui::CollapsingHeader::new(fx_header)
+        .id_salt("lib_effects")
+        .default_open(false)
+        .show(ui, |ui| {
+            for (name, filter_idx) in &data.filters {
+                let item_id = egui::Id::new(("lib_fx", *filter_idx));
+                drag_source(ui, item_id, LibraryDrag::Effect(*filter_idx), |ui| {
+                    ui.label(egui::RichText::new(format!("  ◇ {name}")).size(12.0));
+                });
+            }
+        });
 
-                                    ui.horizontal(|ui| {
-                                        ui.label("URL:");
-                                        ui.text_edit_singleline(&mut url);
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.label("Mode:");
-                                        egui::ComboBox::from_id_salt("srt_mode_combo")
-                                            .selected_text(if mode_idx == 0 {
-                                                "Listener"
-                                            } else {
-                                                "Caller"
-                                            })
-                                            .show_ui(ui, |ui| {
-                                                ui.selectable_value(&mut mode_idx, 0, "Listener");
-                                                ui.selectable_value(&mut mode_idx, 1, "Caller");
-                                            });
-                                    });
-                                    ui.horizontal(|ui| {
-                                        if ui.small_button("✓ Add").clicked() && !url.is_empty() {
-                                            let mode = if mode_idx == 0 {
-                                                crate::stream::SrtMode::Listener
-                                            } else {
-                                                crate::stream::SrtMode::Caller
-                                            };
-                                            // Add to library only — user drags to channel to create deck
-                                            actions.commands.push(
-                                                EngineCommand::AddStreamLibraryEntry {
-                                                    url: url.clone(),
-                                                    mode,
-                                                },
-                                            );
-                                            ui.data_mut(|d| d.insert_temp(adding_id, false));
-                                        }
-                                        if ui.small_button("✕ Cancel").clicked() {
-                                            ui.data_mut(|d| d.insert_temp(adding_id, false));
-                                        }
-                                    });
+    ui.add_space(4.0);
 
-                                    ui.data_mut(|d| {
-                                        d.insert_temp(url_id, url);
-                                        d.insert_temp(mode_id, mode_idx);
-                                    });
-                                } else if ui.small_button("+ Add SRT").clicked() {
-                                    ui.data_mut(|d| d.insert_temp(adding_id, true));
-                                }
+    // === IMAGES ===
+    let img_header = egui::RichText::new("🖼 Images").strong();
+    egui::CollapsingHeader::new(img_header)
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new("Load image files as deck sources")
+                    .small()
+                    .weak(),
+            );
+            for ch in &data.channels {
+                if ui.button(format!("📁 Load to {}", ch.name)).clicked() {
+                    actions.session.open_image_dialog_for_channel = Some(ch.uuid.clone());
+                }
+            }
+        });
 
-                                // Existing SRT configs as draggable cards
-                                for (i, entry) in data.srt_library_configs.iter().enumerate() {
-                                    let item_id = egui::Id::new(("lib_srt", i));
-                                    let status_color = if entry.connected {
-                                        egui::Color32::from_rgb(100, 220, 100)
-                                    } else {
-                                        egui::Color32::from_rgb(120, 120, 120)
-                                    };
-                                    let mode = entry.mode;
-                                    let url = entry.url.clone();
-                                    if stream_row(
-                                        ui,
-                                        item_id,
-                                        LibraryDrag::Srt(url.clone(), mode),
-                                        status_color,
-                                        format!("📺 {url}"),
-                                    ) {
-                                        actions.commands.push(
-                                            EngineCommand::RemoveStreamLibraryEntry {
-                                                url: url.clone(),
-                                            },
-                                        );
-                                    }
-                                    ui.label(
-                                        egui::RichText::new(format!("  Mode: {}", entry.mode))
-                                            .size(10.0)
-                                            .weak(),
-                                    );
-                                    if ui.ctx().is_being_dragged(item_id) {
-                                        ui.ctx().memory_mut(|mem| {
-                                            mem.data.insert_temp(
-                                                egui::Id::new("__lib_dnd_srt_config"),
-                                                (url, mode),
-                                            );
-                                        });
-                                    }
-                                }
-                            });
+    ui.add_space(4.0);
 
-                        ui.add_space(4.0);
+    // === VIDEO ===
+    let vid_header = egui::RichText::new("🎬 Video").strong();
+    egui::CollapsingHeader::new(vid_header)
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new("Load video files as deck sources")
+                    .small()
+                    .weak(),
+            );
+            for ch in &data.channels {
+                if ui.button(format!("📁 Load to {}", ch.name)).clicked() {
+                    actions.session.open_video_dialog_for_channel = Some(ch.uuid.clone());
+                }
+            }
+        });
 
-                        // — HLS —
-                        let hls_header = egui::RichText::new(format!(
-                            "HLS ({})",
-                            data.hls_library_configs.len()
-                        ))
-                        .strong();
-                        egui::CollapsingHeader::new(hls_header)
-                            .id_salt("lib_hls")
-                            .default_open(false)
-                            .show(ui, |ui| {
-                                let adding_id = ui.id().with("hls_adding");
-                                let url_id = ui.id().with("hls_url_input");
-                                let is_adding: bool =
-                                    ui.data(|d| d.get_temp(adding_id)).unwrap_or(false);
+    ui.add_space(4.0);
 
-                                if is_adding {
-                                    let mut url: String =
-                                        ui.data(|d| d.get_temp(url_id)).unwrap_or_else(|| {
-                                            "https://example.com/stream.m3u8".to_string()
-                                        });
-                                    ui.horizontal(|ui| {
-                                        ui.label("URL:");
-                                        ui.text_edit_singleline(&mut url);
-                                    });
-                                    ui.horizontal(|ui| {
-                                        if ui.small_button("✓ Add").clicked() && !url.is_empty() {
-                                            actions.commands.push(
-                                                EngineCommand::AddHlsLibraryEntry {
-                                                    url: url.clone(),
-                                                },
-                                            );
-                                            ui.data_mut(|d| d.insert_temp(adding_id, false));
-                                        }
-                                        if ui.small_button("✕ Cancel").clicked() {
-                                            ui.data_mut(|d| d.insert_temp(adding_id, false));
-                                        }
-                                    });
-                                    ui.data_mut(|d| {
-                                        d.insert_temp(url_id, url);
-                                    });
-                                } else if ui.small_button("+ Add HLS").clicked() {
-                                    ui.data_mut(|d| d.insert_temp(adding_id, true));
-                                }
+    // === CAMERAS ===
+    let cam_header = egui::RichText::new(format!("📹 Cameras ({})", data.cameras.len())).strong();
+    egui::CollapsingHeader::new(cam_header)
+        .id_salt("lib_cameras")
+        .default_open(false)
+        .show(ui, |ui| {
+            if ui.small_button("🔄 Rescan").clicked() {
+                actions.commands.push(EngineCommand::RescanCameras);
+            }
+            if data.cameras.is_empty() {
+                ui.label(egui::RichText::new("No cameras detected").small().weak());
+            }
+            for (name, cam_id) in &data.cameras {
+                let item_id = egui::Id::new(("lib_cam", *cam_id));
+                drag_source(ui, item_id, LibraryDrag::Camera(*cam_id), |ui| {
+                    ui.label(egui::RichText::new(format!("  📹 {name}")).size(12.0));
+                });
+            }
+        });
 
-                                for (i, entry) in data.hls_library_configs.iter().enumerate() {
-                                    let item_id = egui::Id::new(("lib_hls", i));
-                                    let status_color = if entry.connected {
-                                        egui::Color32::from_rgb(100, 220, 100)
-                                    } else {
-                                        egui::Color32::from_rgb(180, 180, 180)
-                                    };
-                                    let url = entry.url.clone();
-                                    if stream_row(
-                                        ui,
-                                        item_id,
-                                        LibraryDrag::Hls(url.clone()),
-                                        status_color,
-                                        format!("📡 {url}"),
-                                    ) {
-                                        actions.commands.push(
-                                            EngineCommand::RemoveHlsLibraryEntry {
-                                                url: url.clone(),
-                                            },
-                                        );
-                                    }
-                                    if ui.ctx().is_being_dragged(item_id) {
-                                        ui.ctx().memory_mut(|mem| {
-                                            mem.data.insert_temp(
-                                                egui::Id::new("__lib_dnd_hls_url"),
-                                                url,
-                                            );
-                                        });
-                                    }
-                                }
-                            });
+    ui.add_space(4.0);
 
-                        ui.add_space(4.0);
+    // === DEPTH SENSORS ===
+    let depth_header =
+        egui::RichText::new(format!("🛰 Depth Sensors ({})", data.depth_sensors.len())).strong();
+    egui::CollapsingHeader::new(depth_header)
+        .id_salt("lib_depth_sensors")
+        .default_open(false)
+        .show(ui, |ui| {
+            if ui.small_button("🔄 Rescan").clicked() {
+                actions.commands.push(EngineCommand::RescanDepthSensors);
+            }
+            if data.depth_sensors.is_empty() {
+                ui.label(
+                    egui::RichText::new("No depth sensors detected")
+                        .small()
+                        .weak(),
+                );
+            }
+            for (name, sensor_id) in &data.depth_sensors {
+                let item_id = egui::Id::new(("lib_depth", *sensor_id));
+                drag_source(ui, item_id, LibraryDrag::DepthSensor(*sensor_id), |ui| {
+                    ui.label(egui::RichText::new(format!("  🛰 {name}")).size(12.0));
+                });
+            }
+        });
 
-                        // — DASH —
-                        let dash_header = egui::RichText::new(format!(
-                            "DASH ({})",
-                            data.dash_library_configs.len()
-                        ))
-                        .strong();
-                        egui::CollapsingHeader::new(dash_header)
-                            .id_salt("lib_dash")
-                            .default_open(false)
-                            .show(ui, |ui| {
-                                let adding_id = ui.id().with("dash_adding");
-                                let url_id = ui.id().with("dash_url_input");
-                                let is_adding: bool =
-                                    ui.data(|d| d.get_temp(adding_id)).unwrap_or(false);
+    ui.add_space(4.0);
 
-                                if is_adding {
-                                    let mut url: String =
-                                        ui.data(|d| d.get_temp(url_id)).unwrap_or_else(|| {
-                                            "https://example.com/stream.mpd".to_string()
-                                        });
-                                    ui.horizontal(|ui| {
-                                        ui.label("URL:");
-                                        ui.text_edit_singleline(&mut url);
-                                    });
-                                    ui.horizontal(|ui| {
-                                        if ui.small_button("✓ Add").clicked() && !url.is_empty() {
-                                            actions.commands.push(
-                                                EngineCommand::AddDashLibraryEntry {
-                                                    url: url.clone(),
-                                                },
-                                            );
-                                            ui.data_mut(|d| d.insert_temp(adding_id, false));
-                                        }
-                                        if ui.small_button("✕ Cancel").clicked() {
-                                            ui.data_mut(|d| d.insert_temp(adding_id, false));
-                                        }
-                                    });
-                                    ui.data_mut(|d| {
-                                        d.insert_temp(url_id, url);
-                                    });
-                                } else if ui.small_button("+ Add DASH").clicked() {
-                                    ui.data_mut(|d| d.insert_temp(adding_id, true));
-                                }
-
-                                for (i, entry) in data.dash_library_configs.iter().enumerate() {
-                                    let item_id = egui::Id::new(("lib_dash", i));
-                                    let status_color = if entry.connected {
-                                        egui::Color32::from_rgb(100, 220, 100)
-                                    } else {
-                                        egui::Color32::from_rgb(180, 180, 180)
-                                    };
-                                    let url = entry.url.clone();
-                                    if stream_row(
-                                        ui,
-                                        item_id,
-                                        LibraryDrag::Dash(url.clone()),
-                                        status_color,
-                                        format!("📡 {url}"),
-                                    ) {
-                                        actions.commands.push(
-                                            EngineCommand::RemoveDashLibraryEntry {
-                                                url: url.clone(),
-                                            },
-                                        );
-                                    }
-                                    if ui.ctx().is_being_dragged(item_id) {
-                                        ui.ctx().memory_mut(|mem| {
-                                            mem.data.insert_temp(
-                                                egui::Id::new("__lib_dnd_dash_url"),
-                                                url,
-                                            );
-                                        });
-                                    }
-                                }
-                            });
-
-                        ui.add_space(4.0);
-
-                        // — RTMP —
-                        let rtmp_header = egui::RichText::new(format!(
-                            "RTMP ({})",
-                            data.rtmp_library_configs.len()
-                        ))
-                        .strong();
-                        egui::CollapsingHeader::new(rtmp_header)
-                            .id_salt("lib_rtmp")
-                            .default_open(false)
-                            .show(ui, |ui| {
-                                let adding_id = ui.id().with("rtmp_adding");
-                                let url_id = ui.id().with("rtmp_url_input");
-                                let mode_id = ui.id().with("rtmp_mode_input");
-                                let is_adding: bool =
-                                    ui.data(|d| d.get_temp(adding_id)).unwrap_or(false);
-
-                                if is_adding {
-                                    let mut mode: crate::stream::RtmpMode = ui
-                                        .data(|d| d.get_temp(mode_id))
-                                        .unwrap_or(crate::stream::RtmpMode::Pull);
-                                    let prev_mode: crate::stream::RtmpMode = ui
-                                        .data(|d| d.get_temp(ui.id().with("rtmp_prev_mode")))
-                                        .unwrap_or(crate::stream::RtmpMode::Pull);
-                                    let listen_port = 1935 + data.rtmp_library_configs.len();
-                                    let auto_listen_url =
-                                        format!("rtmp://0.0.0.0:{listen_port}/live/stream");
-                                    let mut url: String =
-                                        ui.data(|d| d.get_temp(url_id)).unwrap_or_else(|| {
-                                            if mode == crate::stream::RtmpMode::Listen {
-                                                auto_listen_url.clone()
-                                            } else {
-                                                "rtmp://".to_string()
-                                            }
-                                        });
-                                    // Auto-update URL when mode changes
-                                    if mode != prev_mode {
-                                        if mode == crate::stream::RtmpMode::Listen {
-                                            url.clone_from(&auto_listen_url);
-                                        } else if prev_mode == crate::stream::RtmpMode::Listen {
-                                            url = "rtmp://".to_string();
-                                        }
-                                    }
-                                    ui.horizontal(|ui| {
-                                        ui.label("Mode:");
-                                        egui::ComboBox::from_id_salt("rtmp_mode_combo")
-                                            .selected_text(mode.to_string())
-                                            .width(80.0)
-                                            .show_ui(ui, |ui| {
-                                                if ui
-                                                    .selectable_label(
-                                                        mode == crate::stream::RtmpMode::Pull,
-                                                        "Pull",
-                                                    )
-                                                    .clicked()
-                                                {
-                                                    mode = crate::stream::RtmpMode::Pull;
-                                                }
-                                                if ui
-                                                    .selectable_label(
-                                                        mode == crate::stream::RtmpMode::Listen,
-                                                        "Listen",
-                                                    )
-                                                    .clicked()
-                                                {
-                                                    mode = crate::stream::RtmpMode::Listen;
-                                                }
-                                            });
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.label("URL:");
-                                        ui.add(
-                                            egui::TextEdit::singleline(&mut url)
-                                                .desired_width(200.0),
-                                        );
-                                    });
-                                    if mode == crate::stream::RtmpMode::Listen {
-                                        ui.label(
-                                            egui::RichText::new(
-                                                "OBS → rtmp://YOUR_IP:PORT/live/stream",
-                                            )
-                                            .weak()
-                                            .small(),
-                                        );
-                                    }
-                                    ui.horizontal(|ui| {
-                                        if ui.small_button("✓ Add").clicked() && !url.is_empty() {
-                                            actions.commands.push(
-                                                EngineCommand::AddRtmpLibraryEntry {
-                                                    url: url.clone(),
-                                                    mode,
-                                                },
-                                            );
-                                            ui.data_mut(|d| d.insert_temp(adding_id, false));
-                                        }
-                                        if ui.small_button("✕ Cancel").clicked() {
-                                            ui.data_mut(|d| d.insert_temp(adding_id, false));
-                                        }
-                                    });
-                                    ui.data_mut(|d| {
-                                        d.insert_temp(url_id, url);
-                                        d.insert_temp(mode_id, mode);
-                                        d.insert_temp(ui.id().with("rtmp_prev_mode"), mode);
-                                    });
-                                } else if ui.small_button("+ Add RTMP").clicked() {
-                                    ui.data_mut(|d| d.insert_temp(adding_id, true));
-                                }
-
-                                for (i, entry) in data.rtmp_library_configs.iter().enumerate() {
-                                    let item_id = egui::Id::new(("lib_rtmp", i));
-                                    let status_color = if entry.connected {
-                                        egui::Color32::from_rgb(100, 220, 100)
-                                    } else {
-                                        egui::Color32::from_rgb(180, 180, 180)
-                                    };
-                                    let url = entry.url.clone();
-                                    let mode = entry.mode;
-                                    if stream_row(
-                                        ui,
-                                        item_id,
-                                        LibraryDrag::Rtmp(url.clone(), mode),
-                                        status_color,
-                                        format!("📺 {url} ({mode})"),
-                                    ) {
-                                        actions.commands.push(
-                                            EngineCommand::RemoveRtmpLibraryEntry {
-                                                url: url.clone(),
-                                            },
-                                        );
-                                    }
-                                    if ui.ctx().is_being_dragged(item_id) {
-                                        ui.ctx().memory_mut(|mem| {
-                                            mem.data.insert_temp(
-                                                egui::Id::new("__lib_dnd_rtmp_config"),
-                                                (url, mode),
-                                            );
-                                        });
-                                    }
-                                }
-                            });
-                    }); // end Stream Sources
-
-                ui.add_space(4.0);
+    // === SCREEN CAPTURE ===
+    // Targets are split into Displays and Windows, and Varda's own
+    // windows are marked so self-capture is an informed choice rather
+    // than an accidental mirror. See spec/screen-capture.md § UI.
+    let capture_header =
+        egui::RichText::new(format!("🖥 Screen Capture ({})", data.capture_targets.len())).strong();
+    egui::CollapsingHeader::new(capture_header)
+        .id_salt("lib_screen_capture")
+        .default_open(false)
+        .show(ui, |ui| {
+            if !data.screen_capture_available {
+                ui.label(
+                    egui::RichText::new("Screen capture is disabled in this build")
+                        .small()
+                        .weak(),
+                );
+                return;
             }
 
-            // === HTML SOURCES ===
-            {
-                let html_header = egui::RichText::new(format!(
-                    "🌐 HTML Sources ({})",
-                    data.html_library_configs.len()
-                ))
-                .strong();
-                egui::CollapsingHeader::new(html_header)
-                    .id_salt("lib_html")
+            if ui.small_button("🔄 Rescan").clicked() {
+                actions.commands.push(EngineCommand::RescanCaptureTargets);
+            }
+
+            render_capture_permission(ui, actions, &data.screen_capture_permission);
+
+            let (displays, windows): (Vec<_>, Vec<_>) = data
+                .capture_targets
+                .iter()
+                .partition(|t| t.kind == "display");
+
+            if displays.is_empty() && windows.is_empty() {
+                ui.label(
+                    egui::RichText::new("No capture targets — press Rescan")
+                        .small()
+                        .weak(),
+                );
+            }
+
+            if !displays.is_empty() {
+                ui.label(egui::RichText::new("Displays").small().weak());
+                for t in &displays {
+                    capture_target_row(
+                        ui,
+                        t,
+                        crate::scene::CaptureTargetConfig::Display {
+                            name: t.label.clone(),
+                        },
+                    );
+                }
+            }
+
+            if !windows.is_empty() {
+                ui.add_space(2.0);
+                ui.label(egui::RichText::new("Windows").small().weak());
+                for t in &windows {
+                    capture_target_row(
+                        ui,
+                        t,
+                        crate::scene::CaptureTargetConfig::Window {
+                            app: t.app.clone().unwrap_or_default(),
+                            title: t.title.clone().unwrap_or_default(),
+                        },
+                    );
+                }
+            }
+        });
+
+    ui.add_space(4.0);
+
+    // === TAPS ===
+    // Built from the live channel list rather than a device scan, so
+    // there is nothing to rescan. See spec/program-tap.md § UI.
+    let tap_header = egui::RichText::new(format!("🔁 Taps ({})", data.channels.len() + 1)).strong();
+    egui::CollapsingHeader::new(tap_header)
+        .id_salt("lib_taps")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new("Varda's own output, one frame behind.")
+                    .small()
+                    .weak(),
+            );
+            tap_row(
+                ui,
+                "Master Program",
+                crate::scene::TapSourceConfig::MasterProgram,
+            );
+            for ch in &data.channels {
+                tap_row(
+                    ui,
+                    &ch.name,
+                    crate::scene::TapSourceConfig::Channel {
+                        uuid: ch.uuid.clone(),
+                    },
+                );
+            }
+        });
+
+    ui.add_space(4.0);
+
+    // === STREAM SOURCES (grouped) ===
+    {
+        let total_streams = data.ndi_sources.len()
+            + data.srt_library_configs.len()
+            + data.hls_library_configs.len()
+            + data.dash_library_configs.len()
+            + data.rtmp_library_configs.len();
+        let stream_header =
+            egui::RichText::new(format!("📡 Stream Sources ({total_streams})")).strong();
+        egui::CollapsingHeader::new(stream_header)
+            .id_salt("lib_streams")
+            .default_open(false)
+            .show(ui, |ui| {
+                // — NDI —
+                let ndi_header =
+                    egui::RichText::new(format!("NDI ({})", data.ndi_sources.len())).strong();
+                egui::CollapsingHeader::new(ndi_header)
+                    .id_salt("lib_ndi")
                     .default_open(false)
                     .show(ui, |ui| {
-                        let adding_id = ui.id().with("html_adding");
-                        let url_id = ui.id().with("html_url_input");
+                        ui.horizontal(|ui| {
+                            if ui.small_button("🔄 Rescan").clicked() {
+                                actions.commands.push(EngineCommand::RescanNdi);
+                            }
+                            if !data.ndi_available {
+                                ui.label(egui::RichText::new("(SDK not found)").small().weak());
+                            }
+                        });
+                        if data.ndi_sources.is_empty() {
+                            ui.label(egui::RichText::new("No NDI sources found").small().weak());
+                        }
+                        for (i, name) in data.ndi_sources.iter().enumerate() {
+                            let item_id = egui::Id::new(("lib_ndi", i));
+                            drag_source(ui, item_id, LibraryDrag::Ndi(name.clone()), |ui| {
+                                ui.label(egui::RichText::new(format!("  📡 {name}")).size(12.0));
+                            });
+                        }
+                    });
+
+                ui.add_space(4.0);
+
+                // — SRT —
+                let srt_header =
+                    egui::RichText::new(format!("SRT ({})", data.srt_library_configs.len()))
+                        .strong();
+                egui::CollapsingHeader::new(srt_header)
+                    .id_salt("lib_srt")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        // "+ Add SRT" button with inline config
+                        let adding_id = ui.id().with("srt_adding");
+                        let url_id = ui.id().with("srt_url_input");
+                        let mode_id = ui.id().with("srt_mode_input");
                         let is_adding: bool = ui.data(|d| d.get_temp(adding_id)).unwrap_or(false);
 
                         if is_adding {
                             let mut url: String = ui
                                 .data(|d| d.get_temp(url_id))
-                                .unwrap_or_else(|| "https://example.com/visuals.html".to_string());
+                                .unwrap_or_else(|| "srt://127.0.0.1:9001".to_string());
+                            let mut mode_idx: usize = ui.data(|d| d.get_temp(mode_id)).unwrap_or(1);
+
+                            ui.horizontal(|ui| {
+                                ui.label("URL:");
+                                ui.text_edit_singleline(&mut url);
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Mode:");
+                                egui::ComboBox::from_id_salt("srt_mode_combo")
+                                    .selected_text(if mode_idx == 0 {
+                                        "Listener"
+                                    } else {
+                                        "Caller"
+                                    })
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(&mut mode_idx, 0, "Listener");
+                                        ui.selectable_value(&mut mode_idx, 1, "Caller");
+                                    });
+                            });
+                            ui.horizontal(|ui| {
+                                if ui.small_button("✓ Add").clicked() && !url.is_empty() {
+                                    let mode = if mode_idx == 0 {
+                                        crate::stream::SrtMode::Listener
+                                    } else {
+                                        crate::stream::SrtMode::Caller
+                                    };
+                                    // Add to library only — user drags to channel to create deck
+                                    actions.commands.push(EngineCommand::AddStreamLibraryEntry {
+                                        url: url.clone(),
+                                        mode,
+                                    });
+                                    ui.data_mut(|d| d.insert_temp(adding_id, false));
+                                }
+                                if ui.small_button("✕ Cancel").clicked() {
+                                    ui.data_mut(|d| d.insert_temp(adding_id, false));
+                                }
+                            });
+
+                            ui.data_mut(|d| {
+                                d.insert_temp(url_id, url);
+                                d.insert_temp(mode_id, mode_idx);
+                            });
+                        } else if ui.small_button("+ Add SRT").clicked() {
+                            ui.data_mut(|d| d.insert_temp(adding_id, true));
+                        }
+
+                        // Existing SRT configs as draggable cards
+                        for (i, entry) in data.srt_library_configs.iter().enumerate() {
+                            let item_id = egui::Id::new(("lib_srt", i));
+                            let status_color = if entry.connected {
+                                egui::Color32::from_rgb(100, 220, 100)
+                            } else {
+                                egui::Color32::from_rgb(120, 120, 120)
+                            };
+                            let mode = entry.mode;
+                            let url = entry.url.clone();
+                            if stream_row(
+                                ui,
+                                item_id,
+                                LibraryDrag::Srt(url.clone(), mode),
+                                status_color,
+                                format!("📺 {url}"),
+                            ) {
+                                actions
+                                    .commands
+                                    .push(EngineCommand::RemoveStreamLibraryEntry {
+                                        url: url.clone(),
+                                    });
+                            }
+                            ui.label(
+                                egui::RichText::new(format!("  Mode: {}", entry.mode))
+                                    .size(10.0)
+                                    .weak(),
+                            );
+                        }
+                    });
+
+                ui.add_space(4.0);
+
+                // — HLS —
+                let hls_header =
+                    egui::RichText::new(format!("HLS ({})", data.hls_library_configs.len()))
+                        .strong();
+                egui::CollapsingHeader::new(hls_header)
+                    .id_salt("lib_hls")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        let adding_id = ui.id().with("hls_adding");
+                        let url_id = ui.id().with("hls_url_input");
+                        let is_adding: bool = ui.data(|d| d.get_temp(adding_id)).unwrap_or(false);
+
+                        if is_adding {
+                            let mut url: String = ui
+                                .data(|d| d.get_temp(url_id))
+                                .unwrap_or_else(|| "https://example.com/stream.m3u8".to_string());
                             ui.horizontal(|ui| {
                                 ui.label("URL:");
                                 ui.text_edit_singleline(&mut url);
                             });
                             ui.horizontal(|ui| {
                                 if ui.small_button("✓ Add").clicked() && !url.is_empty() {
-                                    actions.commands.push(EngineCommand::AddHtmlLibraryEntry {
+                                    actions.commands.push(EngineCommand::AddHlsLibraryEntry {
                                         url: url.clone(),
                                     });
                                     ui.data_mut(|d| d.insert_temp(adding_id, false));
@@ -925,13 +675,13 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                             ui.data_mut(|d| {
                                 d.insert_temp(url_id, url);
                             });
-                        } else if ui.small_button("+ Add HTML").clicked() {
+                        } else if ui.small_button("+ Add HLS").clicked() {
                             ui.data_mut(|d| d.insert_temp(adding_id, true));
                         }
 
-                        for (i, entry) in data.html_library_configs.iter().enumerate() {
-                            let item_id = egui::Id::new(("lib_html", i));
-                            let status_color = if entry.active {
+                        for (i, entry) in data.hls_library_configs.iter().enumerate() {
+                            let item_id = egui::Id::new(("lib_hls", i));
+                            let status_color = if entry.connected {
                                 egui::Color32::from_rgb(100, 220, 100)
                             } else {
                                 egui::Color32::from_rgb(180, 180, 180)
@@ -940,184 +690,394 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                             if stream_row(
                                 ui,
                                 item_id,
-                                LibraryDrag::Html(url.clone()),
+                                LibraryDrag::Hls(url.clone()),
                                 status_color,
-                                format!("🌐 {url}"),
+                                format!("📡 {url}"),
+                            ) {
+                                actions.commands.push(EngineCommand::RemoveHlsLibraryEntry {
+                                    url: url.clone(),
+                                });
+                            }
+                        }
+                    });
+
+                ui.add_space(4.0);
+
+                // — DASH —
+                let dash_header =
+                    egui::RichText::new(format!("DASH ({})", data.dash_library_configs.len()))
+                        .strong();
+                egui::CollapsingHeader::new(dash_header)
+                    .id_salt("lib_dash")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        let adding_id = ui.id().with("dash_adding");
+                        let url_id = ui.id().with("dash_url_input");
+                        let is_adding: bool = ui.data(|d| d.get_temp(adding_id)).unwrap_or(false);
+
+                        if is_adding {
+                            let mut url: String = ui
+                                .data(|d| d.get_temp(url_id))
+                                .unwrap_or_else(|| "https://example.com/stream.mpd".to_string());
+                            ui.horizontal(|ui| {
+                                ui.label("URL:");
+                                ui.text_edit_singleline(&mut url);
+                            });
+                            ui.horizontal(|ui| {
+                                if ui.small_button("✓ Add").clicked() && !url.is_empty() {
+                                    actions.commands.push(EngineCommand::AddDashLibraryEntry {
+                                        url: url.clone(),
+                                    });
+                                    ui.data_mut(|d| d.insert_temp(adding_id, false));
+                                }
+                                if ui.small_button("✕ Cancel").clicked() {
+                                    ui.data_mut(|d| d.insert_temp(adding_id, false));
+                                }
+                            });
+                            ui.data_mut(|d| {
+                                d.insert_temp(url_id, url);
+                            });
+                        } else if ui.small_button("+ Add DASH").clicked() {
+                            ui.data_mut(|d| d.insert_temp(adding_id, true));
+                        }
+
+                        for (i, entry) in data.dash_library_configs.iter().enumerate() {
+                            let item_id = egui::Id::new(("lib_dash", i));
+                            let status_color = if entry.connected {
+                                egui::Color32::from_rgb(100, 220, 100)
+                            } else {
+                                egui::Color32::from_rgb(180, 180, 180)
+                            };
+                            let url = entry.url.clone();
+                            if stream_row(
+                                ui,
+                                item_id,
+                                LibraryDrag::Dash(url.clone()),
+                                status_color,
+                                format!("📡 {url}"),
                             ) {
                                 actions
                                     .commands
-                                    .push(EngineCommand::RemoveHtmlLibraryEntry {
+                                    .push(EngineCommand::RemoveDashLibraryEntry {
                                         url: url.clone(),
                                     });
                             }
-                            if ui.ctx().is_being_dragged(item_id) {
-                                ui.ctx().memory_mut(|mem| {
-                                    mem.data
-                                        .insert_temp(egui::Id::new("__lib_dnd_html_url"), url);
-                                });
-                            }
                         }
                     });
 
                 ui.add_space(4.0);
-            }
 
-            // === SYPHON SERVERS ===
-            if data.syphon_available {
-                let syph_header = egui::RichText::new(format!(
-                    "🔗 Syphon Servers ({})",
-                    data.syphon_sources.len()
-                ))
-                .strong();
-                egui::CollapsingHeader::new(syph_header)
-                    .id_salt("lib_syphon")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        if ui.small_button("🔄 Rescan").clicked() {
-                            actions.commands.push(EngineCommand::RescanSyphon);
-                        }
-                        if data.syphon_sources.is_empty() {
-                            ui.label(
-                                egui::RichText::new("No Syphon servers found")
-                                    .small()
-                                    .weak(),
-                            );
-                        }
-                        for (i, name) in data.syphon_sources.iter().enumerate() {
-                            let item_id = egui::Id::new(("lib_syph", i));
-                            ui.dnd_drag_source(item_id, LibraryDrag::Syphon(name.clone()), |ui| {
-                                ui.label(egui::RichText::new(format!("  🔗 {name}")).size(12.0));
-                            });
-                            if ui.ctx().is_being_dragged(item_id) {
-                                ui.ctx().memory_mut(|mem| {
-                                    mem.data.insert_temp(
-                                        egui::Id::new("__lib_dnd_syph_name"),
-                                        name.clone(),
-                                    );
-                                });
-                            }
-                        }
-                    });
-
-                ui.add_space(4.0);
-            }
-
-            // === SPOUT SENDERS ===
-            // Mirrors the Syphon section above. `spout_available` is false off
-            // Windows, so the whole section simply does not appear there, which
-            // is the same treatment Syphon gets on Linux.
-            if data.spout_available {
-                let spout_header =
-                    egui::RichText::new(format!("🔗 Spout Senders ({})", data.spout_sources.len()))
+                // — RTMP —
+                let rtmp_header =
+                    egui::RichText::new(format!("RTMP ({})", data.rtmp_library_configs.len()))
                         .strong();
-                egui::CollapsingHeader::new(spout_header)
-                    .id_salt("lib_spout")
+                egui::CollapsingHeader::new(rtmp_header)
+                    .id_salt("lib_rtmp")
                     .default_open(false)
                     .show(ui, |ui| {
-                        if ui.small_button("🔄 Rescan").clicked() {
-                            actions.commands.push(EngineCommand::RescanSpout);
-                        }
-                        if data.spout_sources.is_empty() {
-                            ui.label(egui::RichText::new("No Spout senders found").small().weak());
-                        }
-                        for (i, name) in data.spout_sources.iter().enumerate() {
-                            let item_id = egui::Id::new(("lib_spout", i));
-                            ui.dnd_drag_source(item_id, LibraryDrag::Spout(name.clone()), |ui| {
-                                ui.label(egui::RichText::new(format!("  🔗 {name}")).size(12.0));
+                        let adding_id = ui.id().with("rtmp_adding");
+                        let url_id = ui.id().with("rtmp_url_input");
+                        let mode_id = ui.id().with("rtmp_mode_input");
+                        let is_adding: bool = ui.data(|d| d.get_temp(adding_id)).unwrap_or(false);
+
+                        if is_adding {
+                            let mut mode: crate::stream::RtmpMode = ui
+                                .data(|d| d.get_temp(mode_id))
+                                .unwrap_or(crate::stream::RtmpMode::Pull);
+                            let prev_mode: crate::stream::RtmpMode = ui
+                                .data(|d| d.get_temp(ui.id().with("rtmp_prev_mode")))
+                                .unwrap_or(crate::stream::RtmpMode::Pull);
+                            let listen_port = 1935 + data.rtmp_library_configs.len();
+                            let auto_listen_url =
+                                format!("rtmp://0.0.0.0:{listen_port}/live/stream");
+                            let mut url: String =
+                                ui.data(|d| d.get_temp(url_id)).unwrap_or_else(|| {
+                                    if mode == crate::stream::RtmpMode::Listen {
+                                        auto_listen_url.clone()
+                                    } else {
+                                        "rtmp://".to_string()
+                                    }
+                                });
+                            // Auto-update URL when mode changes
+                            if mode != prev_mode {
+                                if mode == crate::stream::RtmpMode::Listen {
+                                    url.clone_from(&auto_listen_url);
+                                } else if prev_mode == crate::stream::RtmpMode::Listen {
+                                    url = "rtmp://".to_string();
+                                }
+                            }
+                            ui.horizontal(|ui| {
+                                ui.label("Mode:");
+                                egui::ComboBox::from_id_salt("rtmp_mode_combo")
+                                    .selected_text(mode.to_string())
+                                    .width(80.0)
+                                    .show_ui(ui, |ui| {
+                                        if ui
+                                            .selectable_label(
+                                                mode == crate::stream::RtmpMode::Pull,
+                                                "Pull",
+                                            )
+                                            .clicked()
+                                        {
+                                            mode = crate::stream::RtmpMode::Pull;
+                                        }
+                                        if ui
+                                            .selectable_label(
+                                                mode == crate::stream::RtmpMode::Listen,
+                                                "Listen",
+                                            )
+                                            .clicked()
+                                        {
+                                            mode = crate::stream::RtmpMode::Listen;
+                                        }
+                                    });
                             });
-                            if ui.ctx().is_being_dragged(item_id) {
-                                ui.ctx().memory_mut(|mem| {
-                                    mem.data.insert_temp(
-                                        egui::Id::new("__lib_dnd_spout_name"),
-                                        name.clone(),
-                                    );
-                                });
+                            ui.horizontal(|ui| {
+                                ui.label("URL:");
+                                ui.add(egui::TextEdit::singleline(&mut url).desired_width(200.0));
+                            });
+                            if mode == crate::stream::RtmpMode::Listen {
+                                ui.label(
+                                    egui::RichText::new("OBS → rtmp://YOUR_IP:PORT/live/stream")
+                                        .weak()
+                                        .small(),
+                                );
+                            }
+                            ui.horizontal(|ui| {
+                                if ui.small_button("✓ Add").clicked() && !url.is_empty() {
+                                    actions.commands.push(EngineCommand::AddRtmpLibraryEntry {
+                                        url: url.clone(),
+                                        mode,
+                                    });
+                                    ui.data_mut(|d| d.insert_temp(adding_id, false));
+                                }
+                                if ui.small_button("✕ Cancel").clicked() {
+                                    ui.data_mut(|d| d.insert_temp(adding_id, false));
+                                }
+                            });
+                            ui.data_mut(|d| {
+                                d.insert_temp(url_id, url);
+                                d.insert_temp(mode_id, mode);
+                                d.insert_temp(ui.id().with("rtmp_prev_mode"), mode);
+                            });
+                        } else if ui.small_button("+ Add RTMP").clicked() {
+                            ui.data_mut(|d| d.insert_temp(adding_id, true));
+                        }
+
+                        for (i, entry) in data.rtmp_library_configs.iter().enumerate() {
+                            let item_id = egui::Id::new(("lib_rtmp", i));
+                            let status_color = if entry.connected {
+                                egui::Color32::from_rgb(100, 220, 100)
+                            } else {
+                                egui::Color32::from_rgb(180, 180, 180)
+                            };
+                            let url = entry.url.clone();
+                            let mode = entry.mode;
+                            if stream_row(
+                                ui,
+                                item_id,
+                                LibraryDrag::Rtmp(url.clone(), mode),
+                                status_color,
+                                format!("📺 {url} ({mode})"),
+                            ) {
+                                actions
+                                    .commands
+                                    .push(EngineCommand::RemoveRtmpLibraryEntry {
+                                        url: url.clone(),
+                                    });
                             }
                         }
                     });
+            }); // end Stream Sources
 
-                ui.add_space(4.0);
-            }
+        ui.add_space(4.0);
+    }
 
-            // === DECK PRESETS ===
-            if !data.deck_presets.is_empty() {
-                let deck_preset_header =
-                    egui::RichText::new(format!("💾 Deck Presets ({})", data.deck_presets.len()))
-                        .strong();
-                egui::CollapsingHeader::new(deck_preset_header)
-                    .id_salt("lib_deck_presets")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        for (idx, name) in data.deck_presets.iter().enumerate() {
-                            let item_id = egui::Id::new(("lib_deck_preset", idx));
-                            let resp = ui
-                                .dnd_drag_source(item_id, LibraryDrag::DeckPreset(idx), |ui| {
-                                    ui.label(egui::RichText::new(format!("  ◈ {name}")).size(12.0));
-                                })
-                                .response;
-                            if ui.ctx().is_being_dragged(item_id) {
-                                ui.ctx().memory_mut(|mem| {
-                                    mem.data.insert_temp(
-                                        egui::Id::new("__lib_dnd_deck_preset_idx"),
-                                        idx,
-                                    );
-                                });
-                            }
-                            if resp.double_clicked()
-                                && let Some(ch) = data.channels.first()
-                            {
-                                actions.commands.push(EngineCommand::LoadDeckPreset {
-                                    channel_uuid: ch.uuid.clone(),
-                                    preset_name: name.clone(),
-                                });
-                            }
-                            resp.on_hover_text("Drag to a channel to load this deck preset");
+    // === HTML SOURCES ===
+    {
+        let html_header = egui::RichText::new(format!(
+            "🌐 HTML Sources ({})",
+            data.html_library_configs.len()
+        ))
+        .strong();
+        egui::CollapsingHeader::new(html_header)
+            .id_salt("lib_html")
+            .default_open(false)
+            .show(ui, |ui| {
+                let adding_id = ui.id().with("html_adding");
+                let url_id = ui.id().with("html_url_input");
+                let is_adding: bool = ui.data(|d| d.get_temp(adding_id)).unwrap_or(false);
+
+                if is_adding {
+                    let mut url: String = ui
+                        .data(|d| d.get_temp(url_id))
+                        .unwrap_or_else(|| "https://example.com/visuals.html".to_string());
+                    ui.horizontal(|ui| {
+                        ui.label("URL:");
+                        ui.text_edit_singleline(&mut url);
+                    });
+                    ui.horizontal(|ui| {
+                        if ui.small_button("✓ Add").clicked() && !url.is_empty() {
+                            actions
+                                .commands
+                                .push(EngineCommand::AddHtmlLibraryEntry { url: url.clone() });
+                            ui.data_mut(|d| d.insert_temp(adding_id, false));
+                        }
+                        if ui.small_button("✕ Cancel").clicked() {
+                            ui.data_mut(|d| d.insert_temp(adding_id, false));
                         }
                     });
+                    ui.data_mut(|d| {
+                        d.insert_temp(url_id, url);
+                    });
+                } else if ui.small_button("+ Add HTML").clicked() {
+                    ui.data_mut(|d| d.insert_temp(adding_id, true));
+                }
 
-                ui.add_space(4.0);
-            }
+                for (i, entry) in data.html_library_configs.iter().enumerate() {
+                    let item_id = egui::Id::new(("lib_html", i));
+                    let status_color = if entry.active {
+                        egui::Color32::from_rgb(100, 220, 100)
+                    } else {
+                        egui::Color32::from_rgb(180, 180, 180)
+                    };
+                    let url = entry.url.clone();
+                    if stream_row(
+                        ui,
+                        item_id,
+                        LibraryDrag::Html(url.clone()),
+                        status_color,
+                        format!("🌐 {url}"),
+                    ) {
+                        actions
+                            .commands
+                            .push(EngineCommand::RemoveHtmlLibraryEntry { url: url.clone() });
+                    }
+                }
+            });
 
-            // === CHANNEL PRESETS ===
-            if !data.channel_presets.is_empty() {
-                let ch_preset_header = egui::RichText::new(format!(
-                    "💾 Channel Presets ({})",
-                    data.channel_presets.len()
-                ))
+        ui.add_space(4.0);
+    }
+
+    // === SYPHON SERVERS ===
+    if data.syphon_available {
+        let syph_header =
+            egui::RichText::new(format!("🔗 Syphon Servers ({})", data.syphon_sources.len()))
                 .strong();
-                egui::CollapsingHeader::new(ch_preset_header)
-                    .id_salt("lib_ch_presets")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        for (idx, name) in data.channel_presets.iter().enumerate() {
-                            let item_id = egui::Id::new(("lib_ch_preset", idx));
-                            let resp = ui
-                                .dnd_drag_source(item_id, LibraryDrag::ChannelPreset(idx), |ui| {
-                                    ui.label(egui::RichText::new(format!("  ◈ {name}")).size(12.0));
-                                })
-                                .response;
-                            if ui.ctx().is_being_dragged(item_id) {
-                                ui.ctx().memory_mut(|mem| {
-                                    mem.data
-                                        .insert_temp(egui::Id::new("__lib_dnd_ch_preset_idx"), idx);
-                                });
-                            }
-                            if resp.double_clicked() {
-                                actions.commands.push(EngineCommand::LoadChannelPreset {
-                                    target_channel_uuid: None,
-                                    preset_name: name.clone(),
-                                });
-                            }
-                            resp.on_hover_text("Double-click to add this channel to the mixer");
-                        }
+        egui::CollapsingHeader::new(syph_header)
+            .id_salt("lib_syphon")
+            .default_open(false)
+            .show(ui, |ui| {
+                if ui.small_button("🔄 Rescan").clicked() {
+                    actions.commands.push(EngineCommand::RescanSyphon);
+                }
+                if data.syphon_sources.is_empty() {
+                    ui.label(
+                        egui::RichText::new("No Syphon servers found")
+                            .small()
+                            .weak(),
+                    );
+                }
+                for (i, name) in data.syphon_sources.iter().enumerate() {
+                    let item_id = egui::Id::new(("lib_syph", i));
+                    drag_source(ui, item_id, LibraryDrag::Syphon(name.clone()), |ui| {
+                        ui.label(egui::RichText::new(format!("  🔗 {name}")).size(12.0));
                     });
-            }
-        });
+                }
+            });
+
+        ui.add_space(4.0);
+    }
+
+    // === SPOUT SENDERS ===
+    // Mirrors the Syphon section above. `spout_available` is false off
+    // Windows, so the whole section simply does not appear there, which
+    // is the same treatment Syphon gets on Linux.
+    if data.spout_available {
+        let spout_header =
+            egui::RichText::new(format!("🔗 Spout Senders ({})", data.spout_sources.len()))
+                .strong();
+        egui::CollapsingHeader::new(spout_header)
+            .id_salt("lib_spout")
+            .default_open(false)
+            .show(ui, |ui| {
+                if ui.small_button("🔄 Rescan").clicked() {
+                    actions.commands.push(EngineCommand::RescanSpout);
+                }
+                if data.spout_sources.is_empty() {
+                    ui.label(egui::RichText::new("No Spout senders found").small().weak());
+                }
+                for (i, name) in data.spout_sources.iter().enumerate() {
+                    let item_id = egui::Id::new(("lib_spout", i));
+                    drag_source(ui, item_id, LibraryDrag::Spout(name.clone()), |ui| {
+                        ui.label(egui::RichText::new(format!("  🔗 {name}")).size(12.0));
+                    });
+                }
+            });
+
+        ui.add_space(4.0);
+    }
+
+    // === DECK PRESETS ===
+    if !data.deck_presets.is_empty() {
+        let deck_preset_header =
+            egui::RichText::new(format!("💾 Deck Presets ({})", data.deck_presets.len())).strong();
+        egui::CollapsingHeader::new(deck_preset_header)
+            .id_salt("lib_deck_presets")
+            .default_open(false)
+            .show(ui, |ui| {
+                for (idx, name) in data.deck_presets.iter().enumerate() {
+                    let item_id = egui::Id::new(("lib_deck_preset", idx));
+                    let resp = drag_source(ui, item_id, LibraryDrag::DeckPreset(idx), |ui| {
+                        ui.label(egui::RichText::new(format!("  ◈ {name}")).size(12.0));
+                    });
+                    if resp.double_clicked()
+                        && let Some(ch) = data.channels.first()
+                    {
+                        actions.commands.push(EngineCommand::LoadDeckPreset {
+                            channel_uuid: ch.uuid.clone(),
+                            preset_name: name.clone(),
+                        });
+                    }
+                    resp.on_hover_text("Drag to a channel to load this deck preset");
+                }
+            });
+
+        ui.add_space(4.0);
+    }
+
+    // === CHANNEL PRESETS ===
+    if !data.channel_presets.is_empty() {
+        let ch_preset_header = egui::RichText::new(format!(
+            "💾 Channel Presets ({})",
+            data.channel_presets.len()
+        ))
+        .strong();
+        egui::CollapsingHeader::new(ch_preset_header)
+            .id_salt("lib_ch_presets")
+            .default_open(false)
+            .show(ui, |ui| {
+                for (idx, name) in data.channel_presets.iter().enumerate() {
+                    let item_id = egui::Id::new(("lib_ch_preset", idx));
+                    let resp = drag_source(ui, item_id, LibraryDrag::ChannelPreset(idx), |ui| {
+                        ui.label(egui::RichText::new(format!("  ◈ {name}")).size(12.0));
+                    });
+                    if resp.double_clicked() {
+                        actions.commands.push(EngineCommand::LoadChannelPreset {
+                            target_channel_uuid: None,
+                            preset_name: name.clone(),
+                        });
+                    }
+                    resp.on_hover_text("Double-click to add this channel to the mixer");
+                }
+            });
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui_kittest::kittest::Queryable;
 
     #[test]
     fn render_library_panel_smoke() {
@@ -1126,6 +1086,46 @@ mod tests {
         let _harness = egui_kittest::Harness::new_ui(|ui| {
             render_library_panel(ui, &data, &mut actions);
         });
+    }
+
+    /// The library is performance material. Patching a fixture is venue setup and belongs
+    /// beside Stage Layout in the right panel, so none of it may appear here.
+    ///
+    /// Asserted against the rendered widget tree rather than by reading the source, because
+    /// every previous round of this feature was reasoned about correctly and shipped wrong.
+    #[test]
+    fn the_lighting_library_offers_no_rig_setup() {
+        let data = UIData::test_fixture();
+        let mut actions = UIActions::new();
+        let mut harness = egui_kittest::Harness::new_ui(|ui| {
+            render_lighting_library(ui, &data, &mut actions);
+        });
+        harness.run();
+        for banned in ["🔦 Rig (0)", "➕ Add light", "💡 Lights", "Groups"] {
+            assert!(
+                harness.query_by_label(banned).is_none(),
+                "library still offers rig setup: {banned}"
+            );
+        }
+    }
+
+    /// The other half of the same contract: what the library *must* keep offering.
+    #[test]
+    fn the_lighting_library_offers_a_deck_and_its_looks() {
+        let data = UIData::test_fixture();
+        let mut actions = UIActions::new();
+        let mut harness = egui_kittest::Harness::new_ui(|ui| {
+            render_lighting_library(ui, &data, &mut actions);
+        });
+        harness.run();
+        assert!(
+            harness.query_by_label("  ◆ Lighting Deck").is_some(),
+            "the way into lighting is gone from the library"
+        );
+        assert!(
+            harness.query_by_label("💡 Looks (0)").is_some(),
+            "deck presets are gone from the library"
+        );
     }
 
     #[test]

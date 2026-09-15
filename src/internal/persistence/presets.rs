@@ -203,6 +203,7 @@ mod tests {
             opacity: 1.0,
             blend_mode: BlendModeConfig::Normal,
             decks: vec![sample_deck_config()],
+            lighting_decks: Vec::new(),
             effects: vec![],
             modulation: vec![],
         }

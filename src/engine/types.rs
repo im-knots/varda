@@ -130,6 +130,12 @@ pub struct EngineState {
     pub spout_sources: Vec<String>,
     /// Whether Spout can run here: Windows, and wgpu on the Dx12 backend
     pub spout_available: bool,
+    /// DMX lighting: patched rig, transport health, last transmitted universes, watchdog.
+    ///
+    /// Always present. `enabled` is false when no fixture is patched, which is the default and
+    /// the common case, so this costs an idle scene one small struct.
+    /// See /spec/lighting-routing.md § API Parity.
+    pub lighting: crate::dmx::LightingSnapshot,
     /// Active stream receiver configs (url, mode, connected)
     pub stream_receivers: Vec<StreamReceiverSnapshot>,
     pub analyzers: Vec<AnalyzerTypeInfo>,
@@ -358,6 +364,8 @@ pub struct ChannelSnapshot {
     pub opacity: f32,
     pub blend_mode: BlendMode,
     pub decks: Vec<DeckSnapshot>,
+    /// This channel's lighting decks, beside its video decks.
+    pub lighting_decks: Vec<crate::dmx::LightingDeck>,
     pub effects: Vec<EffectSnapshot>,
     /// Smoothed render time for this channel in milliseconds
     pub render_time_ms: f32,
@@ -1040,6 +1048,7 @@ mod tests {
             syphon_sources: vec![],
             syphon_available: false,
             spout_available: false,
+            lighting: crate::dmx::LightingSnapshot::default(),
             spout_sources: vec![],
             stream_receivers: vec![],
             analyzers: vec![],
@@ -1129,6 +1138,7 @@ mod tests {
             syphon_sources: vec![],
             syphon_available: false,
             spout_available: false,
+            lighting: crate::dmx::LightingSnapshot::default(),
             spout_sources: vec![],
             stream_receivers: vec![],
             analyzers: vec![],
@@ -1198,6 +1208,7 @@ mod tests {
             opacity: 0.75,
             blend_mode: BlendMode::Add,
             decks: vec![],
+            lighting_decks: Vec::new(),
             effects: vec![],
             render_time_ms: 1.5,
             active_deck_count: 2,

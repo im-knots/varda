@@ -57,6 +57,8 @@ pub(super) fn render_bottom_panel(ui: &mut egui::Ui, data: &UIData, actions: &mu
         super::sequence::render_sequence_detail(ui, seq_idx, data, actions);
     } else if let Some(uuid) = data.selected_macro.clone() {
         super::macros::render_macro_detail(ui, &uuid, data, actions);
+    } else if let Some(uuid) = data.selected_lighting_deck.clone() {
+        super::lighting::render_lighting_deck_detail(ui, &uuid, data, actions);
     } else {
         render_selected_deck_detail(ui, data, actions);
     }

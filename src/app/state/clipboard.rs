@@ -133,11 +133,14 @@ impl VardaApp {
         include_arrangement: bool,
     ) -> Result<ClipboardPayload, CommandResult> {
         let (channel_idx, deck_idx) = self.resolve_deck(deck_uuid).map_err(CommandResult::from)?;
+        // A clipboard slice is a subset of a scene; the lighting show is not part of what is
+        // being copied, so it is deliberately empty here.
         let scene = crate::persistence::snapshot_scene(
             &self.mixer,
             None,
             self.render_width,
             self.render_height,
+            &crate::dmx::LightingShow::default(),
         );
         let mut config = scene
             .channels
@@ -179,11 +182,14 @@ impl VardaApp {
     /// Shared with channel-preset saving, which is where the gap showed: only
     /// decks carried recipes, so a channel's own effects arrived unmodulated.
     pub(crate) fn channel_config(&self, channel_idx: usize) -> Option<ChannelConfig> {
+        // A clipboard slice is a subset of a scene; the lighting show is not part of what is
+        // being copied, so it is deliberately empty here.
         let scene = crate::persistence::snapshot_scene(
             &self.mixer,
             None,
             self.render_width,
             self.render_height,
+            &crate::dmx::LightingShow::default(),
         );
         let mut config = scene.channels.get(channel_idx).cloned()?;
 

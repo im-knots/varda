@@ -1,0 +1,117 @@
+{
+  "$schema": "https://raw.githubusercontent.com/OpenLightingProject/open-fixture-library/master/schemas/fixture.json",
+  "name": "RevueLED 120 COB RGBWW",
+  "shortName": "SVRevue120RGBWW",
+  "categories": ["Color Changer"],
+  "meta": {
+    "authors": ["RAZAKANIRINA", "pade", "Luke Nelson"],
+    "createDate": "2019-04-15",
+    "lastModifyDate": "2025-08-29"
+  },
+  "links": {
+    "manual": [
+      "https://images.static-thomann.de/pics/atg/atgdata/document/manual/414200_c_414200_r2_en_online.pdf"
+    ],
+    "productPage": [
+      "https://www.thomann.de/intl/stairville_revueled_120_cob_rgb_ww_dmx.htm"
+    ],
+    "video": [
+      "https://www.thomann.de/gb/thomanntv_video_stairville_revueled_120_cob_rgb_6191.html"
+    ]
+  },
+  "physical": {
+    "dimensions": [258, 164, 557],
+    "weight": 5.5,
+    "power": 150,
+    "DMXconnector": "3-pin",
+    "bulb": {
+      "type": "120W COB RGBWW LED"
+    },
+    "lens": {
+      "degreesMinMax": [50, 50]
+    }
+  },
+  "availableChannels": {
+    "Red": {
+      "defaultValue": 0,
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Red"
+      }
+    },
+    "Green": {
+      "defaultValue": 0,
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Green"
+      }
+    },
+    "Blue": {
+      "defaultValue": 0,
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Blue"
+      }
+    },
+    "Warm White": {
+      "defaultValue": 0,
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Warm White"
+      }
+    },
+    "Dimmer": {
+      "defaultValue": 0,
+      "capability": {
+        "type": "Intensity"
+      }
+    },
+    "Strobe": {
+      "defaultValue": 0,
+      "capabilities": [
+        {
+          "dmxRange": [0, 9],
+          "type": "ShutterStrobe",
+          "shutterEffect": "Open"
+        },
+        {
+          "dmxRange": [10, 255],
+          "type": "ShutterStrobe",
+          "shutterEffect": "Strobe",
+          "speedStart": "0%",
+          "speedEnd": "100%"
+        }
+      ]
+    },
+    "Auto Programs": {
+      "defaultValue": 0,
+      "capabilities": [
+        {
+          "dmxRange": [0, 9],
+          "type": "NoFunction"
+        },
+        {
+          "dmxRange": [10, 255],
+          "type": "Effect",
+          "effectName": "Built-in automatic show programs",
+          "helpWanted": "What programs are available and at which DMX values?"
+        }
+      ]
+    }
+  },
+  "modes": [
+    {
+      "name": "7-channel",
+      "shortName": "7ch",
+      "channels": [
+        "Red",
+        "Green",
+        "Blue",
+        "Warm White",
+        "Dimmer",
+        "Strobe",
+        "Auto Programs"
+      ]
+    }
+  ]
+}

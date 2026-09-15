@@ -472,6 +472,15 @@ pub fn apply_param_by_path(
                 .apply_input(macro_uuid, value)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Macro, macro_uuid))?;
             for (target_path, target_value) in fanout {
+                // A lighting target belongs to a router this one cannot reach, so queue it for
+                // the app layer rather than dropping it. Without this a macro bound to both a
+                // deck opacity and a fixture role would silently drive only the deck.
+                if crate::dmx::is_lighting_path(&target_path) {
+                    mixer
+                        .macros_mut()
+                        .queue_foreign_target(target_path, target_value);
+                    continue;
+                }
                 if let Err(e) = apply_param_by_path(mixer, &target_path, target_value) {
                     // A macro target may reference a deleted/absent entity; log at
                     // debug rather than failing the whole macro turn.
@@ -1032,6 +1041,7 @@ fn toggle_param_value(val: &mut ParamValue) {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     /// A control surface writes a path and the modulation graph is keyed by

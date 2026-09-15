@@ -72,6 +72,28 @@ pub struct StagePrefs {
     /// patched. Venue data: the cable belongs to the room, not to the show.
     #[serde(default)]
     pub timecode: crate::timecode::TimecodeConfig,
+    /// DMX lighting rig: fixtures, patch, transports, profile directories.
+    ///
+    /// Venue data for the same reason the timecode patch is: the rig belongs to the room. A
+    /// show travels between venues and resolves its looks against whatever rig is loaded.
+    /// `#[serde(default)]` on every field means an existing `.varda/stage.json` loads unchanged
+    /// and gains an empty, disabled rig.
+    #[serde(default)]
+    pub lighting: crate::dmx::LightingConfig,
+    /// Whether the LIGHTS band is expanded, and how the central area is divided.
+    ///
+    /// Editor preference, so it rides `stage.json` with grid size and panel visibility. The
+    /// performer drags the divider once and it stays.
+    #[serde(default = "default_true")]
+    pub lights_band_open: bool,
+    #[serde(default = "default_true")]
+    pub video_band_open: bool,
+    #[serde(default = "default_band_split")]
+    pub band_split: f32,
+}
+
+fn default_band_split() -> f32 {
+    0.5
 }
 
 fn default_grid_size() -> f32 {
@@ -100,6 +122,10 @@ impl Default for StagePrefs {
             surfaces: crate::surface::SurfaceManager::default(),
             outputs: Vec::new(),
             timecode: crate::timecode::TimecodeConfig::default(),
+            lighting: crate::dmx::LightingConfig::default(),
+            lights_band_open: true,
+            video_band_open: true,
+            band_split: default_band_split(),
         }
     }
 }
@@ -459,6 +485,7 @@ pub fn snapshot_scene(
     transport: Option<&crate::scene::TransportConfig>,
     render_width: u32,
     render_height: u32,
+    lighting: &crate::dmx::LightingShow,
 ) -> SceneConfig {
     let channels = mixer
         .channels()
@@ -700,6 +727,7 @@ pub fn snapshot_scene(
                 opacity: ch.opacity,
                 blend_mode: ch.blend_mode.into(),
                 decks,
+                lighting_decks: ch.lighting_decks.clone(),
                 effects,
                 // A scene serializes the modulation engine whole, so recipes are
                 // only filled when a channel travels alone. See
@@ -765,6 +793,7 @@ pub fn snapshot_scene(
 
     SceneConfig {
         version: SceneConfig::CURRENT_VERSION,
+        lighting: lighting.clone(),
         channels,
         crossfader: mixer.crossfader(),
         active_transition,
@@ -1042,9 +1071,13 @@ pub fn snapshot_stage(
         domemaster_resolution,
         surfaces: surface_manager.clone(),
         outputs,
-        // Filled by the caller: the timecode patch is not derived from the
-        // stage geometry this function is given.
+        // Filled by the caller: neither the timecode patch nor the lighting rig is derived
+        // from the stage geometry this function is given.
         timecode: crate::timecode::TimecodeConfig::default(),
+        lighting: crate::dmx::LightingConfig::default(),
+        lights_band_open: true,
+        video_band_open: true,
+        band_split: default_band_split(),
     }
 }
 
@@ -1140,6 +1173,8 @@ pub fn restore_scene(
         }
         channel.opacity = ch_config.opacity;
         channel.blend_mode = ch_config.blend_mode.into();
+        // Lighting decks restore with the channel that owns them, beside its video decks.
+        channel.lighting_decks.clone_from(&ch_config.lighting_decks);
 
         for deck_config in &ch_config.decks {
             // Externally-owned Syphon decks are resolved at runtime, not at
@@ -1966,6 +2001,44 @@ pub(crate) fn source_configs_match(deck: &Deck, config: &SourceConfig) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    /// An existing `.varda/stage.json` predates the lighting rig entirely. Every lighting field
+    /// carries `#[serde(default)]`, so such a file must load unchanged and gain an empty,
+    /// disabled rig rather than failing.
+    #[test]
+    fn a_stage_file_without_lighting_still_loads() {
+        let text = r#"{
+            "grid_size": 0.05,
+            "snap": true,
+            "library_panel_open": false,
+            "right_panel_open": true,
+            "stage_editor_open": false,
+            "dome_preview_open": false,
+            "dome_mode_active": false
+        }"#;
+        let prefs: StagePrefs = serde_json::from_str(text).expect("old stage.json must load");
+        assert!(!prefs.lighting.enabled);
+        assert!(prefs.lighting.fixtures.is_empty());
+        assert!(prefs.lighting.transports.is_empty());
+    }
+
+    /// The rig must survive a save and load, CID included: a changing CID makes sACN receivers
+    /// see a second competing source for the same universe.
+    #[test]
+    fn the_lighting_rig_round_trips_through_stage_json() {
+        let mut prefs = StagePrefs::default();
+        prefs.lighting.enabled = true;
+        prefs
+            .lighting
+            .fixtures
+            .push(crate::dmx::Fixture::new("par-1", "generic/rgbw", "4ch"));
+        let cid = prefs.lighting.cid;
+        let text = serde_json::to_string(&prefs).unwrap();
+        let back: StagePrefs = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.lighting.fixtures.len(), 1);
+        assert_eq!(back.lighting.fixtures[0].name, "par-1");
+        assert_eq!(back.lighting.cid, cid);
+    }
     use super::*;
     use crate::renderer::GpuContext;
     use std::collections::HashMap;
@@ -2088,7 +2161,7 @@ mod tests {
         mixer.channels_mut().push(ch);
 
         // Snapshot and verify source match
-        let config = snapshot_scene(&mixer, None, 64, 64);
+        let config = snapshot_scene(&mixer, None, 64, 64, &crate::dmx::LightingShow::default());
         let deck_ref = &mixer.channels()[0].decks[0].deck;
         assert!(source_configs_match(
             deck_ref,

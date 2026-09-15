@@ -68,37 +68,45 @@ pub(super) fn render_central_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
             .id_salt("central_channel_scroll")
             .show(ui, |ui| {
                 ui.horizontal_top(|ui| {
-                    for i in 0..left_count {
-                        if let Some(ch) = data.channels.get(i) {
-                            render_channel_column_scrolled(
-                                ui,
-                                ch,
-                                data,
-                                actions,
-                                ch_card_width,
-                                panel_height,
-                            );
-                        }
-                    }
+                    // The scrolling layout carries the same two bands as the radiating one.
+                    // Dropping them here would mean a rig with enough channels to overflow
+                    // silently loses its lighting half.
+                    let side = ch_card_width * left_count as f32;
+                    ui.allocate_ui(egui::vec2(side, panel_height), |ui| {
+                        render_side_bands(
+                            ui,
+                            side,
+                            panel_height,
+                            0..left_count,
+                            0.0,
+                            preset_hint_threshold,
+                            ch_card_width,
+                            true,
+                            data,
+                            actions,
+                        );
+                    });
                     ui.separator();
                     ui.vertical(|ui| {
                         ui.set_width(center_width);
                         render_center_stack(ui, data, actions);
                     });
                     ui.separator();
-                    for i in 0..right_count {
-                        let ch_idx = left_count + i;
-                        if let Some(ch) = data.channels.get(ch_idx) {
-                            render_channel_column_scrolled(
-                                ui,
-                                ch,
-                                data,
-                                actions,
-                                ch_card_width,
-                                panel_height,
-                            );
-                        }
-                    }
+                    let right_side = ch_card_width * right_count as f32;
+                    ui.allocate_ui(egui::vec2(right_side, panel_height), |ui| {
+                        render_side_bands(
+                            ui,
+                            right_side,
+                            panel_height,
+                            left_count..num_channels,
+                            0.0,
+                            preset_hint_threshold,
+                            ch_card_width,
+                            false,
+                            data,
+                            actions,
+                        );
+                    });
                 });
             });
     } else {
@@ -112,27 +120,23 @@ pub(super) fn render_central_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
 
-            // Left side: hint on far left, channels adjacent to mixer
+            // Left side: hint on far left, channels adjacent to mixer. The side is a vertical
+            // stack of bands so the channel lane crosses both, while the mixer column beside it
+            // spans the full height as one constant.
+            // See /spec/lighting-routing.md § Two bands, crossed by the channel lanes.
             ui.allocate_ui(egui::vec2(side_width, panel_height), |ui| {
-                ui.horizontal_top(|ui| {
-                    if empty_each > preset_hint_threshold {
-                        render_new_channel_drop_zone(ui, empty_each, data, actions, 0);
-                    } else if empty_each > 1.0 {
-                        ui.add_space(empty_each);
-                    }
-                    for i in 0..left_count {
-                        if let Some(ch) = data.channels.get(i) {
-                            render_channel_column_scrolled(
-                                ui,
-                                ch,
-                                data,
-                                actions,
-                                ch_card_width,
-                                panel_height,
-                            );
-                        }
-                    }
-                });
+                render_side_bands(
+                    ui,
+                    side_width,
+                    panel_height,
+                    0..left_count,
+                    empty_each,
+                    preset_hint_threshold,
+                    ch_card_width,
+                    true,
+                    data,
+                    actions,
+                );
             });
 
             // Center column — force vertical layout (parent is horizontal_top)
@@ -148,26 +152,160 @@ pub(super) fn render_central_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
             // Right side: channels adjacent to mixer, hint on far right
             ui.allocate_ui(egui::vec2(side_width, panel_height), |ui| {
                 ui.separator();
-                ui.horizontal_top(|ui| {
-                    for i in 0..right_count {
-                        let ch_idx = left_count + i;
-                        if let Some(ch) = data.channels.get(ch_idx) {
-                            render_channel_column_scrolled(
-                                ui,
-                                ch,
-                                data,
-                                actions,
-                                ch_card_width,
-                                panel_height,
-                            );
-                        }
-                    }
-                    if empty_each > preset_hint_threshold {
-                        render_new_channel_drop_zone(ui, empty_each, data, actions, 1);
-                    }
-                });
+                render_side_bands(
+                    ui,
+                    side_width,
+                    panel_height,
+                    left_count..num_channels,
+                    empty_each,
+                    preset_hint_threshold,
+                    ch_card_width,
+                    false,
+                    data,
+                    actions,
+                );
             });
         });
+    }
+}
+
+/// Render one side of the radiating layout as a vertical stack of bands.
+///
+/// The channel lanes run through both bands while the mixer column beside them spans the whole
+/// height, which is what makes `Ch A` read as one channel rather than two stacked containers.
+/// A collapsed band gives its height to the other, so with LIGHTS collapsed this is byte for
+/// byte the layout Varda had before lighting existed.
+///
+/// The margin at the outer edge is **one** drop zone spanning both bands, drawn beside the band
+/// stack rather than inside each band. It is universal: a shader or a lighting deck released
+/// anywhere in it creates a channel and lands in the correct half. Drawing it per-band made two
+/// stacked zones with a seam between them, which is not what an empty margin is.
+/// See /spec/lighting-routing.md § Two bands, crossed by the channel lanes.
+#[allow(clippy::too_many_arguments)]
+fn render_side_bands(
+    ui: &mut egui::Ui,
+    side_width: f32,
+    panel_height: f32,
+    channels: std::ops::Range<usize>,
+    empty_each: f32,
+    preset_hint_threshold: f32,
+    ch_card_width: f32,
+    hint_first: bool,
+    data: &UIData,
+    actions: &mut UIActions,
+) {
+    use super::lighting::{
+        band_heights, lights_band_expanded, lights_band_offered, render_collapsed_band,
+    };
+
+    let (video_height, lights_height) = band_heights(ui.ctx(), data, panel_height);
+    let lights_expanded = lights_band_expanded(ui.ctx(), data);
+    // Offered as soon as there is anything lighting-related in the scene, so the collapsed strip
+    // is always there to click once a rig or a lighting deck exists.
+    let offer_lights = lights_band_offered(ui.ctx(), data);
+
+    // `side` is the margin's identity, and there is exactly one per side: 0 left, 1 right.
+    let side = usize::from(!hint_first);
+
+    ui.horizontal_top(|ui| {
+        if hint_first {
+            render_side_hint(
+                ui,
+                empty_each,
+                preset_hint_threshold,
+                panel_height,
+                data,
+                actions,
+                side,
+            );
+        }
+
+        ui.vertical(|ui| {
+            // ── VIDEO band ──────────────────────────────────────────────
+            if data.video_band_open {
+                ui.allocate_ui(egui::vec2(side_width, video_height), |ui| {
+                    ui.horizontal_top(|ui| {
+                        for i in channels.clone() {
+                            if let Some(ch) = data.channels.get(i) {
+                                render_channel_column_scrolled(
+                                    ui,
+                                    ch,
+                                    data,
+                                    actions,
+                                    ch_card_width,
+                                    video_height,
+                                );
+                            }
+                        }
+                    });
+                });
+            } else if hint_first {
+                let mut open = data.video_band_open;
+                if render_collapsed_band(ui, "VIDEO", false, &mut open) {
+                    actions.session.toggle_video_band = true;
+                }
+            }
+
+            // ── LIGHTS band ─────────────────────────────────────────────
+            if !offer_lights {
+                return;
+            }
+            if lights_expanded {
+                ui.allocate_ui(egui::vec2(side_width, lights_height), |ui| {
+                    ui.horizontal_top(|ui| {
+                        for i in channels.clone() {
+                            if let Some(ch) = data.channels.get(i) {
+                                super::lighting::render_lighting_column(
+                                    ui,
+                                    &ch.uuid,
+                                    ch.ch_idx,
+                                    ch_card_width,
+                                    lights_height,
+                                    data,
+                                    actions,
+                                );
+                            }
+                        }
+                    });
+                });
+            } else if hint_first {
+                let mut open = data.lights_band_open;
+                if render_collapsed_band(ui, "LIGHTS", true, &mut open) {
+                    actions.session.toggle_lights_band = true;
+                }
+            }
+        });
+
+        if !hint_first {
+            render_side_hint(
+                ui,
+                empty_each,
+                preset_hint_threshold,
+                panel_height,
+                data,
+                actions,
+                side,
+            );
+        }
+    });
+}
+
+/// The empty-space hint at the outer edge of a side.
+///
+/// `height` is the whole panel's, not one band's: this is a single zone spanning both bands.
+fn render_side_hint(
+    ui: &mut egui::Ui,
+    empty_each: f32,
+    threshold: f32,
+    height: f32,
+    data: &UIData,
+    actions: &mut UIActions,
+    side: usize,
+) {
+    if empty_each > threshold {
+        render_new_channel_drop_zone(ui, empty_each, height, data, actions, side);
+    } else if empty_each > 1.0 {
+        ui.add_space(empty_each);
     }
 }
 
@@ -558,49 +696,19 @@ pub(super) fn render_channel_column(
         let fx_hovering = has_fx_drag && ui.rect_contains_pointer(ui.max_rect());
         let is_ch_selected = data.selected_channel == Some(ch_idx);
 
-        // Always show a bordered box — glow when a relevant drag is active, intensify on hover
-        let frame = if is_hovering {
-            // Direct hover — strong highlight
-            egui::Frame::default()
-                .fill(accent.linear_multiply(0.15))
-                .stroke(egui::Stroke::new(2.0_f32, accent))
-                .corner_radius(4.0)
-                .inner_margin(2.0)
-        } else if fx_hovering {
-            let accent = fx_accent();
-            egui::Frame::default()
-                .fill(accent.linear_multiply(0.15))
-                .stroke(egui::Stroke::new(2.0_f32, accent))
-                .corner_radius(4.0)
-                .inner_margin(2.0)
-        } else if has_relevant_drag {
-            // Drag active but not hovering this channel — subtle glow
-            egui::Frame::default()
-                .fill(accent.linear_multiply(0.08))
-                .stroke(egui::Stroke::new(1.5_f32, accent.linear_multiply(0.5)))
-                .corner_radius(4.0)
-                .inner_margin(2.0)
-        } else if has_fx_drag {
-            let accent = fx_accent();
-            egui::Frame::default()
-                .fill(accent.linear_multiply(0.08))
-                .stroke(egui::Stroke::new(1.5_f32, accent.linear_multiply(0.5)))
-                .corner_radius(4.0)
-                .inner_margin(2.0)
-        } else if is_ch_selected {
-            egui::Frame::default()
-                .stroke(egui::Stroke::new(2.0_f32, accent.linear_multiply(0.6)))
-                .corner_radius(4.0)
-                .inner_margin(2.0)
-        } else {
-            egui::Frame::default()
-                .stroke(egui::Stroke::new(
-                    1.0_f32,
-                    egui::Color32::from_rgb(50, 50, 60),
-                ))
-                .corner_radius(4.0)
-                .inner_margin(2.0)
-        };
+        // Always show a bordered box — glow when a relevant drag is active, intensify on hover.
+        // The resting hairline is the vertical rule between channels; the LIGHTS band draws the
+        // same one from the same helper so a lane reads as one column across both bands.
+        // The effect surface wins the accent only when it is the one actually engaged.
+        let fx_lane = (has_fx_drag && !has_relevant_drag) || (fx_hovering && !is_hovering);
+        let frame = super::utils::channel_lane_frame(
+            if fx_lane { fx_accent() } else { accent },
+            super::utils::LaneBorder {
+                hovered: is_hovering || fx_hovering,
+                drag_active: has_relevant_drag || has_fx_drag,
+                selected: is_ch_selected,
+            },
+        );
 
         frame.show(ui, |ui| {
             ui.vertical(|ui| {
@@ -858,6 +966,7 @@ fn channel_context_menu(
 fn render_new_channel_drop_zone(
     ui: &mut egui::Ui,
     max_width: f32,
+    height: f32,
     data: &UIData,
     actions: &mut UIActions,
     side: usize,
@@ -888,14 +997,22 @@ fn render_new_channel_drop_zone(
     }
     // Pre-compute the zone rect from the cursor — ui.max_rect() is too broad
     // (it spans the full remaining horizontal space including adjacent channels)
-    let hint_height = ui.available_height().max(60.0);
+    // The panel's height, not the remaining height of one band: the margin is one zone from the
+    // top of the VIDEO band to the bottom of the LIGHTS band.
+    let hint_height = height.max(60.0);
     let zone_rect = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(max_width, hint_height));
     let is_hovering = relevant_drag
         && ui
             .ctx()
             .input(|i| i.pointer.hover_pos().is_some_and(|p| zone_rect.contains(p)));
 
-    let accent = egui::Color32::from_rgb(100, 200, 255);
+    // The zone wears the colour of what will land in it, so aiming a lighting deck at empty
+    // space reads as "this will make a lighting deck" rather than as the video zone accepting it.
+    let accent = if super::lighting::lighting_drag_in_flight(ui.ctx()) {
+        super::lighting::lighting_accent()
+    } else {
+        egui::Color32::from_rgb(100, 200, 255)
+    };
     let (stroke, fill, label_text, label_color) = if is_hovering {
         // Direct hover — strong highlight (matches channel hover intensity)
         (
@@ -977,29 +1094,16 @@ pub(super) fn render_deck_thumbnail(
     let mut solo = deck.solo;
     let mut mute = deck.mute;
     let is_selected = data.selected_deck == Some((ch_idx, idx));
-    // Square budget, so a 16:9 project keeps the 100×56 card it has always had
-    // while a portrait one grows downward to 56×100 instead of being squashed.
-    let preview = super::utils::preview_size(
-        egui::vec2(100.0, 100.0),
-        data.render_width,
-        data.render_height,
-    );
-    let preview_width = preview.x;
-    let preview_height = preview.y;
-    let slider_width = 18.0;
-    let card_width = preview_width + slider_width + 8.0; // preview + slider + padding
+    // The shared deck-card geometry. A lighting deck draws the same card from the same metrics.
+    let card = super::utils::DeckCard::new(data.render_width, data.render_height);
+    let preview_height = card.preview.y;
+    let slider_width = card.slider_width;
 
     ui.push_id(format!("deck_{ch_idx}_{idx}"), |ui| {
         // Use manual rect-based painting to avoid egui layout overlap issues.
-        // Total card height = preview_height + name_row(16) + button_row(20) + spacing(8) + padding(8)
-        let name_row_h = 16.0;
-        let button_row_h = 20.0;
-        let spacing = 4.0;
-        let padding = 4.0;
-        let total_h =
-            padding + preview_height + spacing + name_row_h + spacing + button_row_h + padding;
+        let padding = card.padding;
 
-        let card_size = egui::vec2(card_width + padding * 2.0, total_h);
+        let card_size = card.size();
         let (card_rect, card_resp) =
             ui.allocate_exact_size(card_size, egui::Sense::click_and_drag());
 
@@ -1099,27 +1203,16 @@ pub(super) fn render_deck_thumbnail(
 
         // Draw card background + border
         let bg_alpha = if card_resp.dragged() { 100 } else { 255 };
-        ui.painter().rect_filled(
+        super::utils::paint_deck_card_frame(
+            ui.painter(),
             card_rect,
-            4.0,
-            egui::Color32::from_rgba_unmultiplied(25, 25, 35, bg_alpha),
-        );
-        ui.painter().rect_stroke(
-            card_rect,
-            4.0,
             egui::Stroke::new(border_width, border_color),
-            egui::StrokeKind::Outside,
+            bg_alpha,
         );
 
         // Row 1: Preview image (left) + vertical opacity slider (right)
-        let preview_rect = egui::Rect::from_min_size(
-            card_rect.min + egui::vec2(padding, padding),
-            egui::vec2(preview_width, preview_height),
-        );
-        let slider_rect = egui::Rect::from_min_size(
-            egui::pos2(preview_rect.max.x + 2.0, card_rect.min.y + padding),
-            egui::vec2(slider_width, preview_height),
-        );
+        let preview_rect = card.preview_rect(card_rect);
+        let slider_rect = card.slider_rect(card_rect);
 
         // Draw preview
         if let Some(&texture_id) = data.deck_preview_textures.get(&deck.uuid) {
@@ -1292,7 +1385,7 @@ pub(super) fn render_deck_thumbnail(
         }
 
         // Row 2: Deck name
-        let name_y = card_rect.min.y + padding + preview_height + spacing;
+        let name_y = card.name_pos(card_rect).y;
         let display_name = super::utils::truncate_chars(&deck.name, 16);
         ui.painter().text(
             egui::pos2(card_rect.min.x + padding, name_y),
@@ -1303,11 +1396,7 @@ pub(super) fn render_deck_thumbnail(
         );
 
         // Row 3: M S x buttons — use a child ui placed at the button row
-        let btn_y = name_y + name_row_h + spacing;
-        let btn_rect = egui::Rect::from_min_size(
-            egui::pos2(card_rect.min.x + padding, btn_y),
-            egui::vec2(card_width, button_row_h),
-        );
+        let btn_rect = card.button_rect(card_rect);
         let mut btn_ui = ui.new_child(egui::UiBuilder::new().max_rect(btn_rect));
         let any_learn = data.midi_learn_active || data.keyboard_learn_active;
         btn_ui.horizontal(|ui| {
@@ -1405,7 +1494,136 @@ pub(super) fn render_deck_thumbnail(
 
 #[cfg(test)]
 mod tests {
+
+    /// A channel owns two drop surfaces: its video column and its lighting zone. The lighting
+    /// one published nothing at first, so a drop there resolved to no channel and was discarded
+    /// in silence. Asserted by rendering and reading the published rect, because reasoning about
+    /// this is exactly what went wrong.
+    #[test]
+    fn the_lighting_zone_publishes_a_drop_rect_for_its_channel() {
+        let data = UIData::test_fixture();
+        let mut actions = UIActions::new();
+        let mut harness = egui_kittest::Harness::new_ui(|ui| {
+            render_central_panel(ui, &data, &mut actions);
+        });
+        harness.run();
+
+        let ctx = harness.ctx.clone();
+        for ch in &data.channels {
+            let key = egui::Id::new(super::super::lighting::LIGHT_DROP_RECT_KEY).with(ch.ch_idx);
+            let rect = ctx.memory(|mem| mem.data.get_temp::<egui::Rect>(key));
+            let rect = rect
+                .unwrap_or_else(|| panic!("channel {} published no lighting drop rect", ch.ch_idx));
+            assert!(
+                rect.width() > 0.0 && rect.height() > 0.0,
+                "channel {} lighting rect is empty: {rect:?}",
+                ch.ch_idx
+            );
+        }
+    }
+
+    /// The video column's rect must survive the lighting zone publishing its own, or dropping a
+    /// shader onto a channel would stop working.
+    #[test]
+    fn both_drop_surfaces_coexist() {
+        let data = UIData::test_fixture();
+        let mut actions = UIActions::new();
+        let mut harness = egui_kittest::Harness::new_ui(|ui| {
+            render_central_panel(ui, &data, &mut actions);
+        });
+        harness.run();
+
+        let ctx = harness.ctx.clone();
+        let ch_idx = data.channels[0].ch_idx;
+        let video = ctx.memory(|mem| {
+            mem.data
+                .get_temp::<egui::Rect>(egui::Id::new("ch_drop_rect").with(ch_idx))
+        });
+        let lights = ctx.memory(|mem| {
+            mem.data.get_temp::<egui::Rect>(
+                egui::Id::new(super::super::lighting::LIGHT_DROP_RECT_KEY).with(ch_idx),
+            )
+        });
+        assert!(video.is_some(), "video column must still publish its rect");
+        assert!(lights.is_some(), "lighting zone must publish its own");
+    }
+
+    /// The lighting section is part of a channel, present whether or not anything is in it.
+    ///
+    /// Asserted by rendering rather than by reasoning about the gating, because two earlier
+    /// versions of this were logically fine and still showed nothing on screen.
+    #[test]
+    fn the_lighting_band_renders_in_an_empty_scene() {
+        let data = UIData::test_fixture();
+        let ctx = egui::Context::default();
+        assert!(
+            super::super::lighting::lights_band_offered(&ctx, &data),
+            "a channel's lighting section is always offered"
+        );
+        assert!(
+            super::super::lighting::lights_band_expanded(&ctx, &data),
+            "and open by default, since the layout default is open"
+        );
+
+        // And it must actually render on an empty scene, not merely be permitted to.
+        let mut actions = UIActions::new();
+        let mut harness = egui_kittest::Harness::new_ui(|ui| {
+            render_central_panel(ui, &data, &mut actions);
+        });
+        harness.run();
+    }
+
+    /// The scrolling layout carries the same bands, so a rig with enough channels to overflow
+    /// does not silently lose its lighting half.
+    #[test]
+    fn the_overflow_layout_renders_the_lighting_band_too() {
+        let mut data = UIData::test_fixture();
+        // Enough channels that the radiating layout gives way to horizontal scroll.
+        while data.channels.len() < 12 {
+            let mut extra = data.channels[0].clone();
+            extra.ch_idx = data.channels.len();
+            extra.uuid = format!("ch{:06}", data.channels.len());
+            extra.name = format!("Ch {}", data.channels.len());
+            data.channels.push(extra);
+        }
+        let mut actions = UIActions::new();
+        let mut harness = egui_kittest::Harness::new_ui(|ui| {
+            ui.set_max_width(600.0);
+            render_central_panel(ui, &data, &mut actions);
+        });
+        harness.run();
+    }
     use super::*;
+
+    /// Render the mixer band to a PNG so the layout can be looked at rather than reasoned about.
+    ///
+    /// Ignored by default: a development aid, not a contract. Run with
+    /// `SHOT_DIR=/tmp/shots cargo test --lib -- --ignored render_band_to_png --nocapture`.
+    #[test]
+    #[ignore = "development aid: writes PNGs to $SHOT_DIR rather than asserting"]
+    fn render_band_to_png() {
+        for dragging in [false, true] {
+            let mut data = UIData::test_fixture();
+            data.lights_band_open = true;
+            data.video_band_open = true;
+
+            let mut actions = UIActions::new();
+            let mut harness = egui_kittest::Harness::builder()
+                .with_size(egui::vec2(1360.0, 520.0))
+                .build_ui(|ui| {
+                    if dragging {
+                        egui::DragAndDrop::set_payload(ui.ctx(), LibraryDrag::LightingDeck);
+                    }
+                    render_central_panel(ui, &data, &mut actions);
+                });
+            harness.run();
+            harness.run();
+            let name = if dragging { "dragging" } else { "idle" };
+            let path = format!("{}/band_{name}.png", std::env::var("SHOT_DIR").unwrap());
+            harness.render().expect("render").save(&path).expect("save");
+            println!("wrote {path}");
+        }
+    }
 
     #[test]
     fn render_central_panel_smoke() {

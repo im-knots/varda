@@ -15,6 +15,7 @@
 mod arrangement;
 pub(crate) mod clipboard;
 mod io;
+pub mod light_sampler;
 mod outputs;
 mod presets;
 pub(crate) mod recorder;

@@ -711,6 +711,131 @@ impl Mixer {
     }
 
     /// Current crossfader position (0.0 = Ch 0, 1.0 = Ch 1).
+    /// Effective opacity per channel, crossfader folded in.
+    ///
+    /// The single source of truth for how much each channel contributes. Both composite
+    /// backends read it: the GPU path uses it to weight textures, the lighting merge uses it to
+    /// weight decks. Two implementations of this rule would drift, and the symptom would be
+    /// lights and video disagreeing about where a crossfade is.
+    ///
+    /// With exactly two channels the crossfader is active and splits between them. With three or
+    /// more it hides and channels mix on their own opacity alone.
+    #[must_use]
+    pub fn effective_channel_opacities(&self) -> Vec<f32> {
+        let count = self.channel_count();
+        if count == 2 {
+            let crossfader = self.crossfader();
+            return vec![
+                (1.0 - crossfader) * self.channel_opacity(0),
+                crossfader * self.channel_opacity(1),
+            ];
+        }
+        (0..count).map(|i| self.channel_opacity(i)).collect()
+    }
+
+    /// Effective opacity per channel, paired with the channel UUID.
+    ///
+    /// UUID-keyed because lighting decks are stored per channel UUID, so a reorder cannot
+    /// silently rebind them to a different channel. The identifier is Varda's short 8-character
+    /// form, not a full RFC 4122 UUID.
+    #[must_use]
+    pub fn effective_channel_opacities_by_uuid(&self) -> Vec<(String, f32)> {
+        self.effective_channel_opacities()
+            .into_iter()
+            .zip(self.channels())
+            .map(|(opacity, channel)| (channel.uuid().to_owned(), opacity))
+            .collect()
+    }
+
+    /// Every channel as the lighting merge sees it: its UUID, its crossfader-weighted opacity,
+    /// and the lighting decks it owns.
+    ///
+    /// The mixer owns channels and everything in them, so this is the one place lighting decks
+    /// come from. The lighting runtime keeps no parallel map — that shape is what let a deleted
+    /// channel leave orphaned decks behind.
+    /// See /spec/lighting-routing.md § Decision: One Mixer, One Channel, Two Composite Backends.
+    #[must_use]
+    pub fn lighting_channels(&self) -> Vec<crate::dmx::LightingChannel> {
+        self.effective_channel_opacities()
+            .into_iter()
+            .zip(self.channels())
+            .map(|(opacity, channel)| crate::dmx::LightingChannel {
+                key: channel.uuid().to_owned(),
+                opacity,
+                decks: channel.lighting_decks.clone(),
+            })
+            .collect()
+    }
+
+    /// Add a lighting deck to one channel. False when no channel has that UUID.
+    pub fn add_lighting_deck(&mut self, channel: &str, deck: crate::dmx::LightingDeck) -> bool {
+        let Some(ch) = self.channels.iter_mut().find(|c| c.uuid() == channel) else {
+            return false;
+        };
+        ch.lighting_decks.push(deck);
+        true
+    }
+
+    /// Remove a lighting deck by id, wherever it lives.
+    pub fn remove_lighting_deck(&mut self, deck: uuid::Uuid) -> bool {
+        for ch in &mut self.channels {
+            if let Some(pos) = ch.lighting_decks.iter().position(|d| d.id == deck) {
+                ch.lighting_decks.remove(pos);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Move a lighting deck to another channel, preserving its settings.
+    pub fn move_lighting_deck(&mut self, deck: uuid::Uuid, channel: &str) -> bool {
+        let mut taken = None;
+        for ch in &mut self.channels {
+            if let Some(pos) = ch.lighting_decks.iter().position(|d| d.id == deck) {
+                taken = Some(ch.lighting_decks.remove(pos));
+                break;
+            }
+        }
+        let Some(deck) = taken else { return false };
+        self.add_lighting_deck(channel, deck)
+    }
+
+    /// A lighting deck and the UUID of the channel holding it.
+    #[must_use]
+    pub fn find_lighting_deck(
+        &self,
+        deck: uuid::Uuid,
+    ) -> Option<(&str, &crate::dmx::LightingDeck)> {
+        self.channels.iter().find_map(|ch| {
+            ch.lighting_decks
+                .iter()
+                .find(|d| d.id == deck)
+                .map(|d| (ch.uuid(), d))
+        })
+    }
+
+    pub fn find_lighting_deck_mut(
+        &mut self,
+        deck: uuid::Uuid,
+    ) -> Option<&mut crate::dmx::LightingDeck> {
+        self.channels
+            .iter_mut()
+            .flat_map(|ch| &mut ch.lighting_decks)
+            .find(|d| d.id == deck)
+    }
+
+    /// A look owned by some deck, by the look's own id.
+    ///
+    /// Deck content is addressed by its own id — every command from the deck detail names it —
+    /// so this is how an edit reaches the deck that owns it.
+    pub fn find_deck_look_mut(&mut self, look: uuid::Uuid) -> Option<&mut crate::dmx::Look> {
+        self.channels
+            .iter_mut()
+            .flat_map(|ch| &mut ch.lighting_decks)
+            .map(|d| &mut d.content)
+            .find(|l| l.id == look)
+    }
+
     pub fn crossfader(&self) -> f32 {
         self.crossfader
     }

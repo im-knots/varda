@@ -7,6 +7,7 @@ mod geometry;
 mod gizmo;
 mod hit_test;
 mod interaction;
+mod lights;
 mod state;
 mod surface_editor;
 mod toolbar;
@@ -23,6 +24,13 @@ use crate::renderer::dome::DomemasterResolution;
 use crate::renderer::slicer::DomePreset;
 use hit_test::CanvasGeometry;
 use state::{StageEditorMode, StageEditorState};
+
+/// egui memory key under which the stage canvas publishes its screen rect.
+const LIGHTS_PANEL_WIDTH: f32 = 250.0;
+
+fn canvas_rect_id() -> egui::Id {
+    egui::Id::new("__stage_canvas_rect")
+}
 
 /// Full-screen stage editor — replaces the deck view
 // cx_px/cy_px, raw_sx/raw_sy and friends are the clearest names for this canvas geometry.
@@ -252,9 +260,11 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
     }
 
     // ── 2D Polygon mode: original canvas ──
-    // Main canvas — fill available space
-    let canvas_width = ui.available_width();
+    // The canvas, with the lights panel beside it. Both halves of the stage are edited here:
+    // surfaces on the canvas, lamps on the same canvas, and what lamps exist in the panel.
+    // See /spec/lighting-routing.md § The Stage holds both kinds of physical thing.
     let canvas_height = ui.available_height().max(200.0);
+    let canvas_width = (ui.available_width() - LIGHTS_PANEL_WIDTH - 8.0).max(200.0);
     let (canvas_rect, canvas_response) = ui.allocate_exact_size(
         egui::vec2(canvas_width, canvas_height),
         egui::Sense::click_and_drag(),
@@ -262,21 +272,52 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
     let grid_size = data.stage_editor_grid_size;
     let geom = CanvasGeometry::new(canvas_rect, grid_size, data.stage_editor_snap);
 
+    // Published so a test can address the canvas itself rather than the panel that contains it.
+    // The canvas shares its row with the lights panel, so panel-relative pixel coordinates stop
+    // meaning what they used to the moment anything else is added beside it.
+    ui.ctx().memory_mut(|mem| {
+        mem.data.insert_temp(canvas_rect_id(), canvas_rect);
+    });
+
     let painter = ui.painter_at(canvas_rect);
 
     canvas::paint(&painter, &canvas_response, data, &state, geom);
+    // Lamps paint on top of surfaces: a lamp is a small thing standing in front of a large one,
+    // and the stage plot is unreadable if a surface covers it.
+    lights::paint(&painter, data, geom, &state.selected_fixtures);
 
     // --- Interaction handling ---
-    interaction::handle_canvas(
+    // Lamps are offered the gesture first, for the same reason they paint last: a surface would
+    // otherwise swallow every click meant for a light standing on it.
+    let lamp_took_it = lights::handle(
         ui,
-        &painter,
         &canvas_response,
         data,
         actions,
-        &mut state,
+        &mut state.dragging_fixture,
+        &mut state.selected_fixtures,
         geom,
     );
+    if !lamp_took_it {
+        interaction::handle_canvas(
+            ui,
+            &painter,
+            &canvas_response,
+            data,
+            actions,
+            &mut state,
+            geom,
+        );
+    }
     interaction::handle_keyboard(ui, data, actions, &mut state);
+
+    // The lights panel, beside the canvas.
+    let panel_rect = egui::Rect::from_min_size(
+        egui::pos2(canvas_rect.right() + 8.0, canvas_rect.top()),
+        egui::vec2(LIGHTS_PANEL_WIDTH, canvas_height),
+    );
+    let mut panel_ui = ui.new_child(egui::UiBuilder::new().max_rect(panel_rect));
+    lights::render_panel(&mut panel_ui, data, actions, &mut state.selected_fixtures);
 
     // Publish the current selection so the bottom detail bar can edit the
     // selected surface's warp (8i.5).
@@ -293,6 +334,7 @@ mod tests {
     use super::super::super::SurfaceUI;
     use super::state::DrawingTool;
     use super::*;
+    use egui_kittest::kittest::Queryable;
 
     // ── Tool state-machine characterization ─────────────────────────
     //
@@ -327,7 +369,11 @@ mod tests {
                     }
                     let mut actions = UIActions::new();
                     render_stage_editor(ui, &data, &mut actions);
-                    probe.content = Some(ui.min_rect());
+                    // The canvas, not the whole panel: the lights panel shares this row.
+                    probe.content = ui
+                        .ctx()
+                        .memory(|mem| mem.data.get_temp::<egui::Rect>(canvas_rect_id()))
+                        .or_else(|| Some(ui.min_rect()));
                     probe.state = ui.memory(|mem| mem.data.get_temp::<StageEditorState>(state_id));
                     probe.commands.extend(actions.commands);
                 },
@@ -337,6 +383,18 @@ mod tests {
 
     /// A point inside the canvas, `up` pixels above its bottom edge. `up` must
     /// stay under 200 — the canvas's guaranteed minimum height.
+    /// A point on the canvas in normalized canvas coordinates.
+    ///
+    /// Prefer this to `canvas_pt` for anything positional: the canvas shares its row with the
+    /// lights panel, so its pixel width is not the panel's and changes whenever the layout does.
+    /// A surface's own coordinates are normalized, so a test that says 0.6 stays true.
+    fn canvas_frac(canvas: egui::Rect, nx: f32, ny: f32) -> egui::Pos2 {
+        egui::pos2(
+            canvas.left() + nx * canvas.width(),
+            canvas.top() + ny * canvas.height(),
+        )
+    }
+
     fn canvas_pt(content: egui::Rect, right: f32, up: f32) -> egui::Pos2 {
         assert!(
             up < 200.0,
@@ -569,6 +627,79 @@ mod tests {
         );
     }
 
+    /// Render the stage editor to a PNG so the layout can be looked at rather than reasoned
+    /// about. Run with `SHOT_DIR=/tmp/shots cargo test --lib -- --ignored render_stage_to_png
+    /// --nocapture`.
+    #[test]
+    #[ignore = "development aid: writes PNGs to $SHOT_DIR rather than asserting"]
+    fn render_stage_to_png() {
+        let mut data = UIData::test_fixture();
+        data.surfaces = vec![
+            SurfaceUI::test_quad("a", 0.3, 0.35, 0.34, 0.4),
+            SurfaceUI::test_quad("b", 0.72, 0.35, 0.3, 0.4),
+        ];
+        for i in 0..6 {
+            #[allow(clippy::cast_precision_loss)]
+            let x = 0.12 + i as f32 * 0.15;
+            let id = uuid::Uuid::new_v4().to_string();
+            data.lighting.fixtures.push(crate::dmx::FixtureView {
+                id: id.clone(),
+                name: format!("par-{}", i + 1),
+                vendor: "generic".into(),
+                model: "test".into(),
+                mode: "4ch".into(),
+                universe: 1,
+                address: u16::try_from(i * 8 + 1).unwrap_or(1),
+                channel_count: 4,
+                roles: vec!["dimmer".into(), "red".into()],
+                invert_pan: false,
+                invert_tilt: false,
+                swap_pan_tilt: false,
+                position: Some([x, if i % 2 == 0 { 0.12 } else { 0.78 }]),
+            });
+            data.lighting.patch.push(crate::dmx::PatchEntryView {
+                id,
+                name: format!("par-{}", i + 1),
+                profile: "generic/rgbw".into(),
+                mode: "4ch".into(),
+                universe: 1,
+                address: u16::try_from(i * 8 + 1).unwrap_or(1),
+                error: None,
+            });
+        }
+
+        let mut harness = stage_harness(data, tool(DrawingTool::Select));
+        harness.run();
+        harness.run();
+        let path = format!("{}/stage_editor.png", std::env::var("SHOT_DIR").unwrap());
+        harness.render().expect("render").save(&path).expect("save");
+        println!("wrote {path}");
+    }
+
+    /// The stage places lamps and forms groups; it does not patch them.
+    ///
+    /// A lamp is a physical device that emits light onto the stage, which makes it an output —
+    /// the same kind of thing as a projector — so its profile, address and universe are
+    /// configured with the other outputs. Paired with
+    /// `the_right_panel_configures_lights_as_outputs`, which holds the other half.
+    /// See /spec/lighting-routing.md § The Stage holds both kinds of physical thing.
+    #[test]
+    fn the_stage_editor_is_where_lamps_are_placed() {
+        let data = UIData::test_fixture();
+        let mut harness = stage_harness(data, tool(DrawingTool::Select));
+        harness.run();
+        for expected in ["💡 Lights", "Groups"] {
+            assert!(
+                harness.query_by_label(expected).is_some(),
+                "placing and grouping belong to the Stage: {expected}"
+            );
+        }
+        assert!(
+            harness.query_by_label("➕ Add light").is_none(),
+            "a fixture is an output and must not be patched from the stage canvas"
+        );
+    }
+
     /// Companion to the negative case below: proves the marquee machinery works,
     /// so "selects nothing" there is a real result rather than a gesture that
     /// never landed. Selection is by bounding-box intersection, not containment.
@@ -579,10 +710,11 @@ mod tests {
         let mut harness = stage_harness(data, tool(DrawingTool::Select));
         let content = settle(&mut harness);
 
+        // The surface spans 0.3..0.7 on both axes; this marquee overlaps its right edge.
         stage_drag(
             &mut harness,
-            canvas_pt(content, 600.0, 150.0),
-            canvas_pt(content, 900.0, 30.0),
+            canvas_frac(content, 0.60, 0.20),
+            canvas_frac(content, 0.95, 0.80),
         );
 
         let state = harness.state().state.clone().expect("state persisted");

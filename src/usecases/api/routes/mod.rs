@@ -11,6 +11,7 @@ pub mod clipboard;
 pub mod decks;
 pub mod effects;
 pub mod library;
+pub mod lighting;
 pub mod macros;
 pub mod mixer;
 pub mod modulation;

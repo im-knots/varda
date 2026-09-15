@@ -47,7 +47,16 @@ impl VardaApp {
         } else if let Some(uuid) = fired_cue(path, value) {
             fired_cues.push(uuid);
         } else {
-            match crate::param_router::apply_param_by_path(&mut self.mixer, path, value) {
+            // Lighting and the mixer are separate domains with separate routers. Dispatching
+            // on the path prefix keeps it that way, rather than one router learning about both.
+            let routed = if crate::dmx::is_lighting_path(path) {
+                crate::dmx::apply_lighting_param(&mut self.lighting, path, value)
+                    .map_err(|e| e.to_string())
+            } else {
+                crate::param_router::apply_param_by_path(&mut self.mixer, path, value)
+                    .map_err(|e| e.to_string())
+            };
+            match routed {
                 Ok(()) => changed_params.push((path.to_string(), value)),
                 Err(e) => log::warn!("Param route failed ({path}): {e}"),
             }
@@ -330,6 +339,14 @@ impl VardaApp {
         // `macro/<uuid>/value` queue these on the macro bank; here we forward
         // them onto the same pending flags as the MIDI `action/*` paths so the
         // runner dispatches undo/redo/save uniformly.
+        // Macro targets bound for the lighting router. Drained here because the mixer router
+        // cannot reach the lighting runtime; this is what makes one knob drive visuals and
+        // lights together.
+        for (path, value) in self.mixer.macros_mut().take_pending_foreign() {
+            if let Err(e) = crate::dmx::apply_lighting_param(&mut self.lighting, &path, value) {
+                log::debug!("macro lighting target '{path}' skipped: {e}");
+            }
+        }
         for action in self.mixer.macros_mut().take_pending_actions() {
             match action {
                 crate::macros::GlobalAction::Undo => self.midi_pending_undo = true,

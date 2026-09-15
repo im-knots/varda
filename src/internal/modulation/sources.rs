@@ -84,6 +84,54 @@ pub enum ModulationSource {
 }
 
 impl ModulationSource {
+    /// Sample this source at a phase offset, without disturbing its state.
+    ///
+    /// Used by lighting spread to fan one modulator across the fixtures of a group: a sine
+    /// chasing left to right along a truss is the same LFO sampled at rising phase offsets.
+    ///
+    /// Returns `None` for sources with no meaningful phase. An audio band, an ADSR, an
+    /// analyzer, and an automation envelope are not periodic functions of time, so "the same
+    /// signal a quarter turn later" is undefined for them; lighting fans those uniformly across
+    /// the group instead. See /spec/lighting-routing.md § Lighting Deck Source Types.
+    #[must_use]
+    pub fn sample_at_phase_offset(&self, time: f32, offset: f32) -> Option<f32> {
+        let Self::LFO {
+            waveform,
+            frequency,
+            phase,
+            amplitude,
+            bipolar,
+        } = self
+        else {
+            return None;
+        };
+        let t = (time * *frequency + *phase + offset).rem_euclid(1.0);
+        let raw = match waveform {
+            LFOWaveform::Sine => (t * std::f32::consts::TAU).sin(),
+            LFOWaveform::Square => {
+                if t < 0.5 {
+                    1.0
+                } else {
+                    -1.0
+                }
+            }
+            LFOWaveform::Triangle => 1.0 - 4.0 * (t - 0.5).abs(),
+            LFOWaveform::Sawtooth => 2.0 * t - 1.0,
+            LFOWaveform::Random => {
+                // Offset the step index rather than the phase, so a fanned random LFO gives each
+                // fixture a different step of the same sequence instead of the same step.
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let seed = (time * *frequency + offset).floor() as u32;
+                let hash = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                #[allow(clippy::cast_precision_loss)]
+                let unit = hash as f32 / u32::MAX as f32;
+                unit * 2.0 - 1.0
+            }
+        };
+        let scaled = raw * *amplitude;
+        Some(if *bipolar { scaled } else { scaled * 0.5 + 0.5 })
+    }
+
     /// Compare two sources by configuration fields only.
     /// Ignores ADSR runtime state (stage, `stage_time`, gate, `current_level`).
     pub fn config_eq(&self, other: &Self) -> bool {

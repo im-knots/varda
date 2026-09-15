@@ -87,7 +87,19 @@ enum Owner {
 
 /// Everything one deck row needs, so the row renderer does not take a dozen
 /// positional arguments.
+/// Which band a lane belongs to.
+///
+/// A lighting deck's level automates through the same envelope mechanism a video deck's opacity
+/// does, so it is a lane like any other. Only the tint and the selection target differ.
+/// See /spec/lighting-routing.md § Arrangement Mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LaneKind {
+    Video,
+    Lighting,
+}
+
 struct LaneRow<'a> {
+    kind: LaneKind,
     ch_idx: usize,
     deck_idx: usize,
     uuid: &'a str,
@@ -258,6 +270,20 @@ pub(super) fn render_arrangement(ui: &mut egui::Ui, data: &UIData, actions: &mut
 ///
 /// Showing only arranged decks would make an empty arrangement look like an
 /// empty scene, and would leave nowhere to drop a first region.
+/// Borrow a lighting deck's UUID string for the lifetime of `data`.
+///
+/// The lane row holds `&str` rather than `String`, and a deck's UUID is a `Uuid`, so the string
+/// has to live somewhere. It lives in the interned cache below, keyed by the deck's own identity
+/// and therefore stable across frames.
+fn lighting_deck_uuid<'a>(data: &'a UIData, channel: &str, index: usize) -> Option<&'a str> {
+    data.channels
+        .iter()
+        .find(|c| c.uuid == channel)?
+        .lighting_deck_uuids
+        .get(index)
+        .map(String::as_str)
+}
+
 fn build_rows(data: &UIData) -> Vec<Row<'_>> {
     let arrangement = data.arrangement.as_ref();
     let mut rows = Vec::new();
@@ -272,6 +298,7 @@ fn build_rows(data: &UIData) -> Vec<Row<'_>> {
             let curves = deck_automation_rows(data, ch.ch_idx, deck);
             let collapsed = lane.is_some_and(|l| l.collapsed);
             rows.push(Row::Lane(LaneRow {
+                kind: LaneKind::Video,
                 ch_idx: ch.ch_idx,
                 deck_idx: deck.deck_idx,
                 uuid: &deck.uuid,
@@ -285,6 +312,32 @@ fn build_rows(data: &UIData) -> Vec<Row<'_>> {
                 rows.extend(curves.into_iter().map(Row::Automation));
             }
         }
+        // Lighting lanes sit below the video lanes of the same channel, matching the band order
+        // in Performance mode so the two views agree about what is where.
+        {
+            for (idx, deck) in ch.lighting_decks.iter().enumerate() {
+                let Some(uuid) = lighting_deck_uuid(data, &ch.uuid, idx) else {
+                    continue;
+                };
+                let lane = arrangement.and_then(|a| a.config.lane(uuid));
+                let key = crate::arrangement::lighting_level_param_key(uuid);
+                // The deck's own content, which always exists — there is no dangling-look case
+                // to report any more.
+                let name = deck.content.name.as_str();
+                rows.push(Row::Lane(LaneRow {
+                    kind: LaneKind::Lighting,
+                    ch_idx: ch.ch_idx,
+                    deck_idx: idx,
+                    uuid,
+                    name,
+                    regions: lane.map_or(&[], |l| l.regions.as_slice()),
+                    overridden: arrangement.is_some_and(|a| a.overridden_params.contains(&key)),
+                    collapsed: lane.is_some_and(|l| l.collapsed),
+                    has_automation: false,
+                }));
+            }
+        }
+
         // The channel's own fader and its effects belong to the channel rather
         // than to any one deck, so their curves sit directly under the group
         // header.
@@ -1150,11 +1203,20 @@ fn render_lane_row(
         idx: row_idx,
         ..
     } = geom;
-    let selected = data.selected_deck == Some((lane.ch_idx, lane.deck_idx));
+    let selected = match lane.kind {
+        LaneKind::Video => data.selected_deck == Some((lane.ch_idx, lane.deck_idx)),
+        LaneKind::Lighting => data.selected_lighting_deck.as_deref() == Some(lane.uuid),
+    };
     {
         let painter = ui.painter();
         if selected {
-            let tint = channel_color(lane.ch_idx).gamma_multiply(0.35);
+            // Lighting lanes carry the band's warm tint so the arrangement and the performance
+            // view agree visually about which half a lane belongs to.
+            let base = match lane.kind {
+                LaneKind::Video => channel_color(lane.ch_idx),
+                LaneKind::Lighting => egui::Color32::from_rgb(255, 190, 90),
+            };
+            let tint = base.gamma_multiply(0.35);
             painter.rect_filled(header, 2.0, tint);
             painter.rect_filled(track, 0.0, tint.gamma_multiply(0.4));
         }
@@ -1931,6 +1993,131 @@ fn draw_playhead(ui: &egui::Ui, data: &UIData, track_rect: egui::Rect, axis: Tim
 
 #[cfg(test)]
 mod tests {
+
+    /// A lighting deck is a lane like any other, sitting below its channel's video lanes so the
+    /// arrangement and the performance bands agree about what is where.
+    #[test]
+    fn lighting_decks_appear_as_lanes_under_their_channel() {
+        let mut data = UIData::test_fixture();
+        let channel_uuid = data.channels[0].uuid.clone();
+
+        let deck = crate::dmx::LightingDeck::new(crate::dmx::Look::new("Deep Blue"));
+        let deck_id = deck.id;
+        let ch = data
+            .channels
+            .iter_mut()
+            .find(|c| c.uuid == channel_uuid)
+            .expect("channel");
+        ch.lighting_deck_uuids.push(deck_id.to_string());
+        ch.lighting_decks.push(deck);
+
+        let rows = build_rows(&data);
+        let lighting: Vec<&LaneRow<'_>> = rows
+            .iter()
+            .filter_map(|r| match r {
+                Row::Lane(lane) if lane.kind == LaneKind::Lighting => Some(lane),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lighting.len(), 1, "the lighting deck must get a lane");
+        assert_eq!(
+            lighting[0].name, "Deep Blue",
+            "the lane is named by its look"
+        );
+        assert_eq!(lighting[0].uuid, deck_id.to_string());
+    }
+
+    #[test]
+    fn a_lighting_lane_follows_its_channels_video_lanes() {
+        let mut data = UIData::test_fixture();
+        let channel_uuid = data.channels[0].uuid.clone();
+        let look = crate::dmx::Look::new("wash");
+        data.lighting_show.looks.push(look);
+        let deck = crate::dmx::LightingDeck::new(crate::dmx::Look::new("l"));
+        let deck_id = deck.id;
+        let ch = data
+            .channels
+            .iter_mut()
+            .find(|c| c.uuid == channel_uuid)
+            .expect("channel");
+        ch.lighting_deck_uuids.push(deck_id.to_string());
+        ch.lighting_decks.push(deck);
+
+        let rows = build_rows(&data);
+        // Scope to the first channel's span: a later channel's video lanes come after this
+        // channel's lighting lane by construction, and that is correct.
+        let group_starts: Vec<usize> = rows
+            .iter()
+            .enumerate()
+            .filter_map(|(i, r)| matches!(r, Row::Group { .. }).then_some(i))
+            .collect();
+        let start = group_starts[0];
+        let end = group_starts.get(1).copied().unwrap_or(rows.len());
+
+        let lanes: Vec<LaneKind> = rows[start..end]
+            .iter()
+            .filter_map(|r| match r {
+                Row::Lane(lane) => Some(lane.kind),
+                _ => None,
+            })
+            .collect();
+        let first_lighting = lanes
+            .iter()
+            .position(|k| *k == LaneKind::Lighting)
+            .unwrap_or_else(|| panic!("a lighting lane in the first channel, got {lanes:?}"));
+        if let Some(last_video) = lanes.iter().rposition(|k| *k == LaneKind::Video) {
+            assert!(
+                first_lighting > last_video,
+                "lighting lanes belong below their own channel's video lanes: {lanes:?}"
+            );
+        }
+    }
+
+    /// With no rig, the arrangement is exactly what it was before lighting existed.
+    #[test]
+    fn no_lighting_decks_means_no_lighting_lanes() {
+        let data = UIData::test_fixture();
+        let rows = build_rows(&data);
+        assert!(
+            !rows.iter().any(|r| matches!(
+                r,
+                Row::Lane(lane) if lane.kind == LaneKind::Lighting
+            )),
+            "an unpatched scene must produce no lighting lanes"
+        );
+    }
+
+    /// A deck owns its content, so "missing look" is no longer a reachable state. The lane is
+    /// named from the deck's own content, which always exists — including a blank deck the
+    /// performer has not filled in yet.
+    /// See /spec/lighting-routing.md § A deck owns its content.
+    #[test]
+    fn a_lighting_lane_is_named_from_the_decks_own_content() {
+        let mut data = UIData::test_fixture();
+        let channel_uuid = data.channels[0].uuid.clone();
+        let deck = crate::dmx::LightingDeck::new(crate::dmx::Look::new("Lighting"));
+        let deck_id = deck.id;
+        let ch = data
+            .channels
+            .iter_mut()
+            .find(|c| c.uuid == channel_uuid)
+            .expect("channel");
+        ch.lighting_deck_uuids.push(deck_id.to_string());
+        ch.lighting_decks.push(deck);
+
+        let rows = build_rows(&data);
+        let lane = rows
+            .iter()
+            .find_map(|r| match r {
+                Row::Lane(lane) if lane.kind == LaneKind::Lighting => Some(lane),
+                _ => None,
+            })
+            .expect("still a lane");
+        assert_eq!(
+            lane.name, "Lighting",
+            "a blank deck must still be visible, not invisible"
+        );
+    }
     use super::*;
     use egui_kittest::kittest::Queryable;
     use proptest::prelude::*;
