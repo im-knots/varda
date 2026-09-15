@@ -236,6 +236,7 @@ impl UIData {
             lighting_groups: Vec::new(),
             lighting_group_names: Vec::new(),
             lighting_group_members: Vec::new(),
+            lighting_group_sources: Vec::new(),
             lighting_deck_uuids: std::collections::HashMap::new(),
             generators: vec![
                 ("test_generator_a".to_string(), 0),

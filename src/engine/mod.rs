@@ -140,12 +140,9 @@ pub enum EngineCommand {
         deck: String,
         name: String,
     },
-    /// Set one role of one target inside a look.
+    /// Set one role inside a look.
     SetLookValue {
         look: String,
-        /// `group` or `fixture`.
-        target_kind: String,
-        target: String,
         role: String,
         /// A literal value, or `None` when `palette` is given.
         value: Option<f32>,
@@ -154,8 +151,6 @@ pub enum EngineCommand {
     },
     ClearLookValue {
         look: String,
-        target_kind: String,
-        target: String,
         role: String,
     },
     /// Instantiate a look as a lighting deck in a channel. Returns the deck UUID.
@@ -170,26 +165,13 @@ pub enum EngineCommand {
     AddLightingDeckBlank {
         channel: String,
     },
-    /// Add or remove a fixture or group from a lighting deck's look.
-    SetLookTarget {
-        look: String,
-        /// `group` or `fixture`.
-        target_kind: String,
-        target: String,
-        /// False removes every value this look holds for that target.
-        included: bool,
-    },
-    /// Drive one role of one target by sampling video at each fixture's place on the stage.
+    /// Drive one role by sampling the listening group's channel at each member's stage position.
     ///
-    /// The pixel-mapping edge: a lighting deck whose source is video. `source` is `own_channel`
-    /// or `program`. See /spec/lighting-routing.md § Sampled.
+    /// The group already knows which channel it listens to, so there is nothing to configure.
+    /// See /spec/lighting-routing.md § Video.
     SampleLookRole {
         look: String,
-        target_kind: String,
-        target: String,
         role: String,
-        /// `own_channel` or `program`.
-        source: String,
         gain: f32,
     },
     /// Where a fixture stands, in normalized stage coordinates. Venue state.
@@ -198,11 +180,9 @@ pub enum EngineCommand {
         /// `None` unplaces it, returning it to the derived grid.
         position: Option<[f32; 2]>,
     },
-    /// Drive one role of one target from a modulation source, optionally fanned across a group.
+    /// Drive one role from a modulation source, fanned across the listening group's order.
     BindLookRole {
         look: String,
-        target_kind: String,
-        target: String,
         role: String,
         /// Modulation source UUID. Empty releases the binding back to a static value.
         source: String,
@@ -212,15 +192,15 @@ pub enum EngineCommand {
         /// `linear`, `symmetric` or `random`.
         spread_mode: String,
     },
-    /// Drop a group of fixtures into a channel: create a look targeting that group and a deck
-    /// playing it, in one action.
+    /// Point a group at the channel it listens to, or `None` to unroute it.
     ///
-    /// This is the workflow dragging a group from the library produces. It exists as one command
-    /// rather than two because the caller cannot sequence them: it does not know the new look's
-    /// UUID until the first has been applied.
-    AddLightingDeckForGroup {
-        channel: String,
-        group: String,
+    /// The lighting counterpart of `SetSurfaceSource`: the group declares its feed, exactly as a
+    /// surface declares which channel it shows.
+    /// See /spec/lighting-routing.md § A group is the lighting surface.
+    SetLightingGroupSource {
+        uuid: String,
+        /// `program`, a channel UUID, or `None` to unroute the group.
+        source: Option<String>,
     },
     RemoveLightingDeck {
         uuid: String,
@@ -280,9 +260,6 @@ pub enum EngineCommand {
     /// client and the window commit exactly what the performer is looking at.
     StoreProgrammerToLook {
         look: String,
-        /// `group` or `fixture`. A group stores one shared value read from its first member.
-        target_kind: String,
-        target: String,
     },
     /// Store what the programmer holds into a palette.
     ///

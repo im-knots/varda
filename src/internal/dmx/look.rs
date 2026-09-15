@@ -166,7 +166,7 @@ impl Look {
         &self.samples
     }
 
-    /// Drive one role of one target from a video sample, replacing whatever held it.
+    /// Drive one role from a video sample, replacing whatever held it.
     ///
     /// A role is held, driven by a modulator, or sampled — never more than one, or two writers
     /// would fight over the same slot every frame.
@@ -174,16 +174,10 @@ impl Look {
         self.assignments.retain(|a| a.role != role);
         self.bindings.retain(|b| b.role != role);
         if let Some(existing) = self.samples.iter_mut().find(|s| s.role == role) {
-            existing.source = source;
             existing.gain = gain;
             return;
         }
-        self.samples.push(SampledBinding {
-            target,
-            role,
-            source,
-            gain,
-        });
+        self.samples.push(SampledBinding { role, gain });
     }
 
     /// Values held steady.
@@ -216,11 +210,7 @@ impl Look {
         out
     }
 
-    /// Drop every value for one target, static and modulated.
-    ///
-    /// This is deselecting a fixture in the deck's fixture picker.
-
-    /// Add or replace the value for one target and role.
+    /// Add or replace the value for one role.
     pub fn set(&mut self, role: Role, value: AttrValue) {
         // A role is held, driven or sampled — never more than one. Setting a static value
         // releases both of the others, or two writers fight over one slot every frame.
@@ -230,28 +220,24 @@ impl Look {
         if let Some(existing) = assignments.iter_mut().find(|a| a.role == role) {
             existing.value = value;
         } else {
-            assignments.push(LookAssignment {
-                target,
-                role,
-                value,
-            });
+            assignments.push(LookAssignment { role, value });
         }
     }
 
-    /// Remove the value for one target and role, static or modulated.
+    /// Remove the value for one role, however it was driven.
     pub fn clear(&mut self, role: Role) {
         self.assignments.retain(|a| a.role != role);
         self.bindings.retain(|b| b.role != role);
         self.samples.retain(|s| s.role != role);
     }
 
-    /// Drive one target and role from a modulation source.
+    /// Drive one role from a modulation source.
     ///
-    /// Replaces any static or sampled value for the same target and role: a role is held,
-    /// driven or sampled, never more than one.
+    /// Replaces any static or sampled value for the same role: a role is held, driven or
+    /// sampled, never more than one.
     pub fn bind(&mut self, binding: ModulatedBinding) {
-        self.assignments.retain(|a| a.role != role);
-        self.samples.retain(|s| s.role != role);
+        self.assignments.retain(|a| a.role != binding.role);
+        self.samples.retain(|s| s.role != binding.role);
         if let Some(existing) = self.bindings.iter_mut().find(|b| b.role == binding.role) {
             *existing = binding;
         } else {
@@ -278,7 +264,7 @@ pub struct Group {
     /// See /spec/lighting-routing.md § What a source produces.
     #[serde(default)]
     pub members: Vec<Uuid>,
-    /// The channel this group listens to, or `None` while it is unrouted.
+    /// What this group listens to, or `None` while it is unrouted.
     ///
     /// **The group pulls.** A video deck does not name a surface — the surface declares which
     /// channel it shows — and a group is the lighting surface, so it declares its feed the same
@@ -286,7 +272,25 @@ pub struct Group {
     /// them, exactly as a shader produces pixels with no opinion about which wall they land on.
     /// See /spec/lighting-routing.md § A group is the lighting surface.
     #[serde(default)]
-    pub source: Option<String>,
+    pub source: Option<GroupSource>,
+}
+
+/// What a group listens to.
+///
+/// The lighting counterpart of `OutputSource`, and it exists for the same reason a surface can
+/// show either one channel or the master: a group pinned to a single channel would be **deaf to
+/// the crossfader**, so moving from Ch A to Ch B would swap the visuals and leave the lights on
+/// the old song. `Program` is the crossfaded result and is what most groups want.
+/// See /spec/lighting-routing.md § A group is the lighting surface.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum GroupSource {
+    /// Every channel, in order, each at its crossfader-weighted opacity. The default.
+    #[default]
+    Program,
+    /// One channel, whatever the crossfader is doing. For a group that must stay on one song's
+    /// lighting while the visuals move on — house lights, blinders, an audience wash.
+    Channel { uuid: String },
 }
 
 impl Group {
@@ -314,33 +318,31 @@ mod tests {
 
     #[test]
     fn set_adds_then_replaces() {
-        let group = LookTarget::Group { id: Uuid::new_v4() };
         let mut look = Look::new("wash");
-        look.set(group, Role::Red, AttrValue::literal(1.0));
+        look.set(Role::Red, AttrValue::literal(1.0));
         assert_eq!(look.assignments().len(), 1);
-        look.set(group, Role::Red, AttrValue::literal(0.5));
+        look.set(Role::Red, AttrValue::literal(0.5));
         assert_eq!(look.assignments().len(), 1, "must replace, not duplicate");
         assert_eq!(look.assignments()[0].value, AttrValue::literal(0.5));
     }
 
+    /// A look is keyed by role alone now that it names no target, so two roles are two
+    /// assignments and the same role twice is one.
     #[test]
-    fn set_distinguishes_roles_and_targets() {
-        let a = LookTarget::Group { id: Uuid::new_v4() };
-        let b = LookTarget::Group { id: Uuid::new_v4() };
+    fn set_distinguishes_roles() {
         let mut look = Look::new("wash");
-        look.set(a, Role::Red, AttrValue::literal(1.0));
-        look.set(a, Role::Blue, AttrValue::literal(1.0));
-        look.set(b, Role::Red, AttrValue::literal(1.0));
-        assert_eq!(look.assignments().len(), 3);
+        look.set(Role::Red, AttrValue::literal(1.0));
+        look.set(Role::Blue, AttrValue::literal(1.0));
+        look.set(Role::Red, AttrValue::literal(0.5));
+        assert_eq!(look.assignments().len(), 2);
     }
 
     #[test]
     fn clear_removes_only_the_named_assignment() {
-        let target = LookTarget::Group { id: Uuid::new_v4() };
         let mut look = Look::new("wash");
-        look.set(target, Role::Red, AttrValue::literal(1.0));
-        look.set(target, Role::Blue, AttrValue::literal(1.0));
-        look.clear(target, Role::Red);
+        look.set(Role::Red, AttrValue::literal(1.0));
+        look.set(Role::Blue, AttrValue::literal(1.0));
+        look.clear(Role::Red);
         assert_eq!(look.assignments().len(), 1);
         assert_eq!(look.assignments()[0].role, Role::Blue);
     }
@@ -357,53 +359,29 @@ mod tests {
         assert!(!AttrValue::literal(0.5).is_reference());
     }
 
+    /// The order is the axis spread fans across, and it is authored rather than derived — patch
+    /// order is an accident of wiring and physical position cannot express a deliberate shuffle.
+    /// See /spec/lighting-routing.md § What a source produces.
     #[test]
-    fn a_fixture_target_resolves_to_itself() {
-        let id = Uuid::new_v4();
-        assert_eq!(resolve_target(LookTarget::Fixture { id }, &[]), vec![id]);
-    }
-
-    #[test]
-    fn a_group_target_resolves_to_its_members_in_order() {
+    fn a_groups_member_order_is_preserved() {
         let mut group = Group::new("front truss");
         let (a, b, c) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
-        group.members = vec![a, b, c];
-        let id = group.id;
-        assert_eq!(
-            resolve_target(LookTarget::Group { id }, &[group]),
-            vec![a, b, c],
-            "order is the axis spread fans across"
-        );
+        group.members = vec![c, a, b];
+        assert_eq!(group.members, vec![c, a, b]);
     }
 
-    /// Touring a show to a venue with no moving heads must drop the mover looks and keep the
-    /// rest, not fail the load.
+    /// A group starts unrouted: it hears nothing until someone points it at a channel, exactly
+    /// as a new surface shows nothing until it is given a source.
     #[test]
-    fn a_group_missing_from_this_rig_resolves_to_nothing() {
-        assert!(resolve_target(LookTarget::Group { id: Uuid::new_v4() }, &[]).is_empty());
-    }
-
-    #[test]
-    fn an_empty_group_resolves_to_nothing() {
-        let group = Group::new("empty");
-        let id = group.id;
-        assert!(resolve_target(LookTarget::Group { id }, &[group]).is_empty());
+    fn a_new_group_listens_to_nothing() {
+        assert_eq!(Group::new("front truss").source, None);
     }
 
     #[test]
     fn a_look_round_trips_through_json() {
         let mut look = Look::new("Deep Blue");
-        let group = Uuid::new_v4();
-        look.set(
-            LookTarget::Group { id: group },
-            Role::Blue,
-            AttrValue::literal(0.8),
-        );
-        look.set(
-            LookTarget::Group { id: group },
-            Role::Pan,
-            AttrValue::palette(Uuid::new_v4()),
-        );
+        look.set(Role::Blue, AttrValue::literal(0.8));
+        look.set(Role::Pan, AttrValue::palette(Uuid::new_v4()));
         let text = serde_json::to_string(&look).unwrap();
         let back: Look = serde_json::from_str(&text).unwrap();
         assert_eq!(look, back);

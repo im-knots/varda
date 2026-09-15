@@ -46,7 +46,9 @@ pub use config::{LightingConfig, SacnDestinationConfig, TransportConfig};
 pub use driver::{DmxDriver, DriverStatus, Mailbox, RefreshTracker, SharedStatus};
 pub use guard::{WhiteGuardConfig, apply as apply_white_guard};
 pub use library::ProfileLibrary;
-pub use look::{AttrValue, Group, Look, LookAssignment, ModulatedBinding, SampledBinding};
+pub use look::{
+    AttrValue, Group, GroupSource, Look, LookAssignment, ModulatedBinding, SampledBinding,
+};
 pub use merge::{LightingBlend, LightingChannel, LightingDeck, LtpTransition, merge};
 pub use palette::{OverrideKey, Palette, PaletteKind, PaletteSet};
 pub use patch::{Fixture, PatchMessage, PatchedFixture, ResolvedRig, Severity, SlotOwner};

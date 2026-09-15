@@ -155,7 +155,17 @@ impl LightingSnapshot {
             master,
             programmer_roles,
             patch,
+            messages,
         } = input;
+
+        let to_view = |m: &super::patch::PatchMessage| PatchMessageView {
+            severity: match m.severity {
+                Severity::Error => "error".into(),
+                Severity::Warning => "warning".into(),
+            },
+            fixture: m.fixture.clone(),
+            text: m.text.clone(),
+        };
         let palette_views = palette_views(palettes);
 
         let Some(rig) = rig else {
@@ -167,6 +177,7 @@ impl LightingSnapshot {
                 master,
                 programmer_roles,
                 patch,
+                warnings: messages.iter().map(to_view).collect(),
                 ..Self::default()
             };
         };
@@ -238,18 +249,10 @@ impl LightingSnapshot {
             fixtures,
             patch,
             universes,
-            warnings: rig
-                .warnings
-                .iter()
-                .map(|m| PatchMessageView {
-                    severity: match m.severity {
-                        Severity::Error => "error".into(),
-                        Severity::Warning => "warning".into(),
-                    },
-                    fixture: m.fixture.clone(),
-                    text: m.text.clone(),
-                })
-                .collect(),
+            // `messages`, not `rig.warnings`: the runtime copies the rig's findings into it and
+            // then appends transport failures, so a rig that resolved but cannot transmit still
+            // reports why.
+            warnings: messages.iter().map(to_view).collect(),
             watchdog,
             blackout,
             palettes: palette_views,
@@ -275,6 +278,9 @@ pub struct SnapshotInput<'a> {
     /// The patch as configured. Passed separately from `rig` because it must survive a
     /// validation failure, which is exactly when an operator needs to see it.
     pub patch: Vec<PatchEntryView>,
+    /// Patch findings, carried for the same reason: a rig that failed to resolve reports nothing
+    /// of its own, and those findings are the only thing saying why.
+    pub messages: Vec<super::patch::PatchMessage>,
 }
 
 /// Flatten every palette for transport, in a stable order.
@@ -396,6 +402,7 @@ mod tests {
             master: 1.0,
             programmer_roles: 0,
             patch: Vec::new(),
+            messages: Vec::new(),
         });
         assert!(!s.enabled);
         assert!(s.fixtures.is_empty());
@@ -414,6 +421,7 @@ mod tests {
             master: 1.0,
             programmer_roles: 0,
             patch: Vec::new(),
+            messages: Vec::new(),
         });
         assert!(s.blackout);
     }
@@ -431,6 +439,7 @@ mod tests {
             master: 1.0,
             programmer_roles: 0,
             patch: Vec::new(),
+            messages: Vec::new(),
         });
         assert!(s.enabled);
         assert_eq!(s.fixtures.len(), 2);
@@ -457,6 +466,7 @@ mod tests {
             master: 1.0,
             programmer_roles: 0,
             patch: Vec::new(),
+            messages: Vec::new(),
         });
         assert!(s.running && s.healthy);
         assert_eq!(s.packets_sent, 42);
@@ -476,6 +486,7 @@ mod tests {
             master: 1.0,
             programmer_roles: 0,
             patch: Vec::new(),
+            messages: Vec::new(),
         });
         assert_eq!(s.universes.len(), 1);
         assert_eq!(
@@ -508,6 +519,7 @@ mod tests {
             master: 1.0,
             programmer_roles: 0,
             patch: Vec::new(),
+            messages: Vec::new(),
         });
         assert_eq!(s.universes[0].slots[0].value, 255);
         assert_eq!(s.universes[0].slots[1].value, 0);
@@ -529,6 +541,7 @@ mod tests {
                 master: 1.0,
                 programmer_roles: 0,
                 patch: Vec::new(),
+                messages: Vec::new(),
             });
             let ids: Vec<UniverseId> = s.universes.iter().map(|u| u.universe).collect();
             assert_eq!(ids, vec![2, 7, 40]);
@@ -554,6 +567,7 @@ mod tests {
             master: 1.0,
             programmer_roles: 0,
             patch: Vec::new(),
+            messages: Vec::new(),
         });
         assert_eq!(s.watchdog.len(), 1);
         assert_eq!(s.watchdog[0].name, "par-1");
@@ -572,6 +586,7 @@ mod tests {
             master: 1.0,
             programmer_roles: 0,
             patch: Vec::new(),
+            messages: Vec::new(),
         });
         let v = serde_json::to_value(&s).expect("serializable");
         assert_eq!(v["enabled"], true);
@@ -592,6 +607,7 @@ mod tests {
             master: 1.0,
             programmer_roles: 0,
             patch: Vec::new(),
+            messages: Vec::new(),
         });
         assert_eq!(claimed_slot_count(&s.universes[0]), 4);
     }
@@ -613,6 +629,7 @@ mod tests {
             master: 1.0,
             programmer_roles: 0,
             patch: Vec::new(),
+            messages: Vec::new(),
         });
         assert_eq!(s.palettes.len(), 2);
         let blue = s.palettes.iter().find(|p| p.name == "Deep Blue").unwrap();
@@ -641,6 +658,7 @@ mod tests {
                 master: 1.0,
                 programmer_roles: 0,
                 patch: Vec::new(),
+                messages: Vec::new(),
             });
             assert_eq!(s.palettes[0].default_roles, vec!["blue", "green", "red"]);
         }
@@ -659,6 +677,7 @@ mod tests {
             master: 1.0,
             programmer_roles: 0,
             patch: Vec::new(),
+            messages: Vec::new(),
         });
         assert!(!s.enabled, "no fixtures means nothing to light");
         assert!(s.running, "the driver may still be up");

@@ -9,7 +9,6 @@
 
 use super::config::LightingConfig;
 use super::driver::{DmxDriver, DriverStatus};
-use super::guard;
 use super::library::ProfileLibrary;
 use super::merge::{LightingChannel, merge};
 use super::palette::{self, PaletteSet};
@@ -227,16 +226,29 @@ impl LightingRuntime {
         // A sampled deck reads the channel its *listening group* is pointed at. The group already
         // knows which channel that is, so there is nothing to configure and nothing to ask.
         for group in &self.config.groups {
-            let Some(source) = group.source.as_deref() else {
+            let Some(source) = group.source.as_ref() else {
                 continue;
             };
-            let samples = self
-                .show
-                .decks(source)
-                .iter()
-                .any(|d| !d.content.samples().is_empty());
-            if samples && !out.iter().any(|k| k == source) {
-                out.push(source.to_string());
+            // A Program group hears every channel, so every channel with a sampled deck needs a
+            // frame; a Channel group needs only its own.
+            let heard: Vec<String> = match source {
+                super::look::GroupSource::Program => self
+                    .show
+                    .channel_decks
+                    .iter()
+                    .map(|c| c.channel.clone())
+                    .collect(),
+                super::look::GroupSource::Channel { uuid } => vec![uuid.clone()],
+            };
+            for key in heard {
+                let samples = self
+                    .show
+                    .decks(&key)
+                    .iter()
+                    .any(|d| !d.content.samples().is_empty());
+                if samples && !out.contains(&key) {
+                    out.push(key);
+                }
             }
         }
         out
@@ -293,17 +305,16 @@ impl LightingRuntime {
         self.profile_modes = std::sync::Arc::new(self.library.mode_index());
     }
 
-    /// Fatal patch findings, as text. Empty when the rig resolved.
+    /// Fatal patch findings. Empty when the rig resolved.
+    ///
+    /// Returned whole rather than pre-formatted so a caller can render them per fixture — the
+    /// patch editor puts each error on the row it belongs to rather than in one rig-wide list.
     #[must_use]
-    pub fn errors(&self) -> Vec<String> {
+    pub fn errors(&self) -> Vec<PatchMessage> {
         self.messages
             .iter()
             .filter(|m| m.severity == Severity::Error)
-            .map(|m| {
-                m.fixture
-                    .as_deref()
-                    .map_or_else(|| m.text.clone(), |f| format!("{f}: {}", m.text))
-            })
+            .cloned()
             .collect()
     }
 
@@ -357,13 +368,15 @@ impl LightingRuntime {
             .count()
     }
 
-    /// Hand one role back to the looks.
-    pub fn release_role(&mut self, fixture: Uuid, role: Role) {
+    /// Hand one role back to the looks. False when the fixture is not patched.
+    pub fn release_role(&mut self, fixture: Uuid, role: Role) -> bool {
         if let Some(slot) = self.slot_of(fixture)
             && let Some(values) = self.programmer.get_mut(slot)
         {
             values.clear(role);
+            return true;
         }
+        false
     }
 
     /// Release everything the hands are holding.
@@ -373,27 +386,40 @@ impl LightingRuntime {
         }
     }
 
-    /// Fixtures the programmer is holding anything for, in patch order.
+    /// Fixtures the programmer is holding values for, with those values, in patch order.
+    ///
+    /// Pairs rather than ids: every caller needs the values too, and looking them up again by id
+    /// would re-walk the rig once per fixture.
     #[must_use]
-    pub fn programmer_fixtures(&self) -> Vec<Uuid> {
+    pub fn programmer_fixtures(&self) -> Vec<(Uuid, RoleValues)> {
         let Some(rig) = self.rig.as_ref() else {
             return Vec::new();
         };
         rig.fixtures
             .iter()
             .enumerate()
-            .filter(|(i, _)| self.programmer.get(*i).is_some_and(|v| !v.is_empty()))
-            .map(|(_, f)| f.id)
+            .filter_map(|(i, f)| {
+                let values = self.programmer.get(i)?;
+                (!values.is_empty()).then_some((f.id, *values))
+            })
             .collect()
     }
 
     /// What the programmer holds for one fixture.
     #[must_use]
     pub fn programmer_for(&self, fixture: Uuid) -> Option<RoleValues> {
-        self.slot_of(fixture).and_then(|i| self.programmer.get(i)).copied()
+        let values = *self.slot_of(fixture).and_then(|i| self.programmer.get(i))?;
+        // Empty reads as `None`: "the hands are not on this light" and "the hands are on it but
+        // holding nothing" are the same fact, and a caller made to check both will check one.
+        (!values.is_empty()).then_some(values)
     }
 
     /// Global intensity scalar, `lighting/master`.
+    #[must_use]
+    pub fn master(&self) -> f32 {
+        self.show.master
+    }
+
     pub fn set_master(&mut self, value: f32) {
         self.show.master = value.clamp(0.0, 1.0);
     }
@@ -402,11 +428,83 @@ impl LightingRuntime {
     /// un-blackout a rig mid-show.
     pub fn set_blackout(&mut self, on: bool) {
         self.blackout = on;
+        // Structural enough to be visible at once: an operator hitting blackout must see it in
+        // the snapshot now, not on the next divider tick.
+        self.refresh_snapshot();
     }
 
     #[must_use]
     pub fn blackout(&self) -> bool {
         self.blackout
+    }
+
+    /// The patch as configured, each entry carrying the error that stopped it patching.
+    ///
+    /// Built from the config rather than the resolved rig, because a rig that fails validation
+    /// resolves to nothing at all: without this the UI reported "No lights yet" over a config
+    /// holding the very entries that caused the failure, so the bad patch could neither be seen
+    /// nor deleted and the rig stayed dark for good.
+    fn patch_entries(&self) -> Vec<super::snapshot::PatchEntryView> {
+        self.config
+            .fixtures
+            .iter()
+            .map(|f| {
+                let error = self
+                    .messages
+                    .iter()
+                    .find(|m| {
+                        m.severity == Severity::Error && m.fixture.as_deref() == Some(&f.name)
+                    })
+                    .map(|m| m.text.clone());
+                super::snapshot::PatchEntryView {
+                    id: f.id.to_string(),
+                    name: f.name.clone(),
+                    profile: f.profile.clone(),
+                    mode: f.mode.clone(),
+                    universe: f.universe,
+                    address: f.address,
+                    error,
+                }
+            })
+            .collect()
+    }
+
+    fn build_snapshot(&mut self) -> LightingSnapshot {
+        let status = self
+            .driver
+            .as_ref()
+            .map_or_else(DriverStatus::default, DmxDriver::status_snapshot);
+
+        let flags = match &self.rig {
+            Some(rig) => {
+                let pairs: Vec<(String, RoleValues)> = rig
+                    .fixtures
+                    .iter()
+                    .enumerate()
+                    .map(|(i, f)| (f.name.clone(), self.values[i]))
+                    .collect();
+                self.watchdog.tick(&pairs, Instant::now(), self.blackout)
+            }
+            None => Vec::new(),
+        };
+
+        let patch = self.patch_entries();
+        // Findings ride along even when the rig failed to resolve — that is exactly when an
+        // operator needs them, and dropping them is how a bad patch became invisible before.
+        let messages = self.messages.clone();
+        let programmer_roles = self.programmer.iter().map(|v| v.iter().count()).sum();
+        LightingSnapshot::build(super::snapshot::SnapshotInput {
+            rig: self.rig.as_ref(),
+            status: &status,
+            last_frames: &self.last_frames,
+            watchdog: flags,
+            blackout: self.blackout,
+            palettes: &self.palettes,
+            master: self.show.master,
+            programmer_roles,
+            patch,
+            messages,
+        })
     }
 
     /// The monitoring snapshot, rebuilt on a divider rather than every frame.
@@ -472,10 +570,19 @@ impl LightingRuntime {
 
             // Grand master scales intensity only: scaling pan would aim every head at the floor.
             if master < 1.0 {
-                for role in [Role::Dimmer, Role::Red, Role::Green, Role::Blue, Role::White,
-                             Role::Amber, Role::Uv, Role::Lime, Role::Cyan, Role::Magenta,
-                             Role::Yellow]
-                {
+                for role in [
+                    Role::Dimmer,
+                    Role::Red,
+                    Role::Green,
+                    Role::Blue,
+                    Role::White,
+                    Role::Amber,
+                    Role::Uv,
+                    Role::Lime,
+                    Role::Cyan,
+                    Role::Magenta,
+                    Role::Yellow,
+                ] {
                     if let Some(v) = values.get(role) {
                         values.set(role, v * master);
                     }
@@ -486,7 +593,7 @@ impl LightingRuntime {
                 values.zero_all();
             }
 
-            apply_white_guard(guard, &mut values, blackout);
+            super::guard::apply(guard, &mut values, blackout);
             self.smoother.tick(i, &mut values, dt, bypass_smoothing);
             self.values[i] = values;
 
@@ -827,7 +934,7 @@ mod tests {
     /// full opacity, palette-resolved, smoothed, patched, and reaching the universe.
     #[test]
     fn a_look_in_a_deck_reaches_the_wire() {
-        use crate::dmx::look::{AttrValue, Group, Look, LookTarget};
+        use crate::dmx::look::{AttrValue, Group, Look};
         use crate::dmx::merge::LightingDeck;
         use crate::dmx::show::LightingShow;
 
@@ -836,18 +943,17 @@ mod tests {
         let fixture_id = fixture.id;
         let mut group = Group::new("all");
         group.members = vec![fixture_id];
-        let group_id = group.id;
+        // The group is what routes: a deck names nobody, so without a source nothing is heard.
+        group.source = Some(crate::dmx::GroupSource::Channel {
+            uuid: "abc12345".to_string(),
+        });
 
         let mut config = config_with(vec![fixture], true);
         config.groups = vec![group];
         let mut rt = LightingRuntime::new(config, vec![d.path().to_path_buf()]);
 
         let mut look = Look::new("red wash");
-        look.set(
-            LookTarget::Group { id: group_id },
-            Role::Red,
-            AttrValue::literal(1.0),
-        );
+        look.set(Role::Red, AttrValue::literal(1.0));
         let channel = "abc12345".to_string();
         let mut show = LightingShow::default();
         show.decks_mut(&channel).push(LightingDeck::new(look));
@@ -868,7 +974,7 @@ mod tests {
     /// with it, which is what makes a transition take the room with it.
     #[test]
     fn channel_opacity_fades_the_lighting_deck() {
-        use crate::dmx::look::{AttrValue, Group, Look, LookTarget};
+        use crate::dmx::look::{AttrValue, Group, Look};
         use crate::dmx::merge::LightingDeck;
         use crate::dmx::show::LightingShow;
 
@@ -877,17 +983,16 @@ mod tests {
         let fixture_id = fixture.id;
         let mut group = Group::new("all");
         group.members = vec![fixture_id];
-        let group_id = group.id;
+        // The group is what routes: a deck names nobody, so without a source nothing is heard.
+        group.source = Some(crate::dmx::GroupSource::Channel {
+            uuid: "abc12345".to_string(),
+        });
         let mut config = config_with(vec![fixture], true);
         config.groups = vec![group];
         let mut rt = LightingRuntime::new(config, vec![d.path().to_path_buf()]);
 
         let mut look = Look::new("red");
-        look.set(
-            LookTarget::Group { id: group_id },
-            Role::Red,
-            AttrValue::literal(1.0),
-        );
+        look.set(Role::Red, AttrValue::literal(1.0));
         let channel = "abc12345".to_string();
         let mut show = LightingShow::default();
         show.decks_mut(&channel).push(LightingDeck::new(look));
@@ -912,7 +1017,7 @@ mod tests {
     /// The programmer outranks the looks: whatever the performer's hands are touching wins.
     #[test]
     fn the_programmer_outranks_a_look() {
-        use crate::dmx::look::{AttrValue, Group, Look, LookTarget};
+        use crate::dmx::look::{AttrValue, Group, Look};
         use crate::dmx::merge::LightingDeck;
         use crate::dmx::show::LightingShow;
 
@@ -921,17 +1026,16 @@ mod tests {
         let fixture_id = fixture.id;
         let mut group = Group::new("all");
         group.members = vec![fixture_id];
-        let group_id = group.id;
+        // The group is what routes: a deck names nobody, so without a source nothing is heard.
+        group.source = Some(crate::dmx::GroupSource::Channel {
+            uuid: "abc12345".to_string(),
+        });
         let mut config = config_with(vec![fixture], true);
         config.groups = vec![group];
         let mut rt = LightingRuntime::new(config, vec![d.path().to_path_buf()]);
 
         let mut look = Look::new("dim red");
-        look.set(
-            LookTarget::Group { id: group_id },
-            Role::Red,
-            AttrValue::literal(0.2),
-        );
+        look.set(Role::Red, AttrValue::literal(0.2));
         let channel = "abc12345".to_string();
         let mut show = LightingShow::default();
         show.decks_mut(&channel).push(LightingDeck::new(look));

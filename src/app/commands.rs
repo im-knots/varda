@@ -87,15 +87,6 @@ impl VardaApp {
         }
     }
 
-    fn parse_target(kind: &str, uuid: &str) -> Option<crate::dmx::LookTarget> {
-        let id = uuid::Uuid::parse_str(uuid).ok()?;
-        match kind {
-            "group" => Some(crate::dmx::LookTarget::Group { id }),
-            "fixture" => Some(crate::dmx::LookTarget::Fixture { id }),
-            _ => None,
-        }
-    }
-
     fn parse_palette_kind(kind: &str) -> Option<crate::dmx::PaletteKind> {
         match kind {
             // The British spelling is still accepted on input: the API is lenient about how a
@@ -126,20 +117,12 @@ impl VardaApp {
     fn set_look_value(
         &mut self,
         look: &str,
-        target_kind: &str,
-        target: &str,
         role: &str,
         value: Option<f32>,
         palette: Option<&str>,
     ) -> CommandResult {
         let Ok(look_id) = uuid::Uuid::parse_str(look) else {
             return Self::bad_uuid(look);
-        };
-        let Some(target) = Self::parse_target(target_kind, target) else {
-            return CommandResult::Err {
-                code: ErrorCode::InvalidInput,
-                message: format!("bad target {target_kind:?}/{target:?}"),
-            };
         };
         let Some(role) = crate::dmx::Role::parse(role) else {
             return CommandResult::Err {
@@ -164,7 +147,7 @@ impl VardaApp {
         let Some(entry) = show.look_mut(look_id) else {
             return Self::not_found("look", look);
         };
-        entry.set(target, role, attr);
+        entry.set(role, attr);
         self.lighting.set_show(show);
         CommandResult::Ok
     }
@@ -215,20 +198,9 @@ impl VardaApp {
     ///
     /// A group target stores one shared value, read from its first member that holds programmer
     /// values: a look says "front truss is blue", not "fixture 3 is blue".
-    fn store_programmer_to_look(
-        &mut self,
-        look: &str,
-        target_kind: &str,
-        target: &str,
-    ) -> CommandResult {
+    fn store_programmer_to_look(&mut self, look: &str) -> CommandResult {
         let Ok(look_id) = uuid::Uuid::parse_str(look) else {
             return Self::bad_uuid(look);
-        };
-        let Some(look_target) = Self::parse_target(target_kind, target) else {
-            return CommandResult::Err {
-                code: ErrorCode::InvalidInput,
-                message: format!("bad target {target_kind:?}/{target:?}"),
-            };
         };
 
         let held = self.lighting.programmer_fixtures();
@@ -238,20 +210,9 @@ impl VardaApp {
                 message: "the programmer is empty; set some values first".into(),
             };
         }
-        // Read from the first fixture holding values. For a group this is the shared value; for
-        // a single fixture target it is that fixture's own.
-        let source = match look_target {
-            crate::dmx::LookTarget::Fixture { id } => {
-                let Some(values) = self.lighting.programmer_for(id) else {
-                    return CommandResult::Err {
-                        code: ErrorCode::InvalidInput,
-                        message: format!("fixture {id} holds no programmer values"),
-                    };
-                };
-                values
-            }
-            crate::dmx::LookTarget::Group { .. } => held[0].1,
-        };
+        // A look holds role values with no target, so the first fixture the hands are on is the
+        // source: what the programmer is holding is what gets stored.
+        let source = held[0].1;
 
         let mut show = self.lighting.show().clone();
         let Some(entry) = show.look_mut(look_id) else {
@@ -259,7 +220,7 @@ impl VardaApp {
         };
         let mut stored = 0usize;
         for (role, value) in source.iter() {
-            entry.set(look_target, role, crate::dmx::AttrValue::literal(value));
+            entry.set(role, crate::dmx::AttrValue::literal(value));
             stored += 1;
         }
         self.lighting.set_show(show);
@@ -620,37 +581,21 @@ impl VardaApp {
             }
             EngineCommand::SetLookValue {
                 look,
-                target_kind,
-                target,
                 role,
                 value,
                 palette,
-            } => self.set_look_value(
-                &look,
-                &target_kind,
-                &target,
-                &role,
-                value,
-                palette.as_deref(),
-            ),
-            EngineCommand::ClearLookValue {
-                look,
-                target_kind,
-                target,
-                role,
-            } => {
-                let (Ok(look_id), Some(target), Some(role)) = (
-                    uuid::Uuid::parse_str(&look),
-                    Self::parse_target(&target_kind, &target),
-                    crate::dmx::Role::parse(&role),
-                ) else {
+            } => self.set_look_value(&look, &role, value, palette.as_deref()),
+            EngineCommand::ClearLookValue { look, role } => {
+                let (Ok(look_id), Some(role)) =
+                    (uuid::Uuid::parse_str(&look), crate::dmx::Role::parse(&role))
+                else {
                     return Self::bad_uuid(&look);
                 };
                 let mut show = self.lighting.show().clone();
                 let Some(entry) = show.look_mut(look_id) else {
                     return Self::not_found("look", &look);
                 };
-                entry.clear(target, role);
+                entry.clear(role);
                 self.lighting.set_show(show);
                 CommandResult::Ok
             }
@@ -682,79 +627,17 @@ impl VardaApp {
                 self.lighting.set_show(show);
                 CommandResult::OkWithId { uuid }
             }
-            EngineCommand::SetLookTarget {
-                look,
-                target_kind,
-                target,
-                included,
-            } => {
-                let (Ok(look_id), Some(look_target)) = (
-                    uuid::Uuid::parse_str(&look),
-                    Self::parse_target(&target_kind, &target),
-                ) else {
+            EngineCommand::SampleLookRole { look, role, gain } => {
+                let (Ok(look_id), Some(role)) =
+                    (uuid::Uuid::parse_str(&look), crate::dmx::Role::parse(&role))
+                else {
                     return Self::bad_uuid(&look);
                 };
                 let mut show = self.lighting.show().clone();
                 let Some(entry) = show.look_mut(look_id) else {
                     return Self::not_found("look", &look);
                 };
-                if included {
-                    // A newly included target adopts the roles the look already drives, so
-                    // adding a fixture to a deck lights it the same way as its siblings rather
-                    // than adding a silent member.
-                    let roles = entry.roles();
-                    if roles.is_empty() {
-                        entry.set(
-                            look_target,
-                            crate::dmx::Role::Dimmer,
-                            crate::dmx::AttrValue::literal(1.0),
-                        );
-                    } else {
-                        let existing: Vec<(crate::dmx::Role, crate::dmx::AttrValue)> = roles
-                            .iter()
-                            .filter_map(|r| {
-                                entry
-                                    .assignments()
-                                    .iter()
-                                    .find(|a| a.role == *r)
-                                    .map(|a| (*r, a.value))
-                            })
-                            .collect();
-                        for (role, value) in existing {
-                            entry.set(look_target, role, value);
-                        }
-                    }
-                } else {
-                    entry.remove_target(look_target);
-                }
-                self.lighting.set_show(show);
-                CommandResult::Ok
-            }
-            EngineCommand::SampleLookRole {
-                look,
-                target_kind,
-                target,
-                role,
-                source,
-                gain,
-            } => {
-                let (Ok(look_id), Some(look_target), Some(role)) = (
-                    uuid::Uuid::parse_str(&look),
-                    Self::parse_target(&target_kind, &target),
-                    crate::dmx::Role::parse(&role),
-                ) else {
-                    return Self::bad_uuid(&look);
-                };
-                let source = match source.as_str() {
-                    "program" => crate::dmx::SampleSource::Program,
-                    "own_channel" | "" => crate::dmx::SampleSource::OwnChannel,
-                    other => return Self::bad_uuid(other),
-                };
-                let mut show = self.lighting.show().clone();
-                let Some(entry) = show.look_mut(look_id) else {
-                    return Self::not_found("look", &look);
-                };
-                entry.sample(look_target, role, source, gain);
+                entry.sample(role, gain);
                 self.lighting.set_show(show);
                 CommandResult::Ok
             }
@@ -772,8 +655,6 @@ impl VardaApp {
             }
             EngineCommand::BindLookRole {
                 look,
-                target_kind,
-                target,
                 role,
                 source,
                 base,
@@ -781,11 +662,9 @@ impl VardaApp {
                 spread,
                 spread_mode,
             } => {
-                let (Ok(look_id), Some(look_target), Some(role)) = (
-                    uuid::Uuid::parse_str(&look),
-                    Self::parse_target(&target_kind, &target),
-                    crate::dmx::Role::parse(&role),
-                ) else {
+                let (Ok(look_id), Some(role)) =
+                    (uuid::Uuid::parse_str(&look), crate::dmx::Role::parse(&role))
+                else {
                     return Self::bad_uuid(&look);
                 };
                 let mut show = self.lighting.show().clone();
@@ -795,10 +674,9 @@ impl VardaApp {
                 if source.is_empty() {
                     // Releasing a binding hands the role back to a static value at its base, so
                     // the fixture holds where the automation left it rather than going dark.
-                    entry.set(look_target, role, crate::dmx::AttrValue::literal(base));
+                    entry.set(role, crate::dmx::AttrValue::literal(base));
                 } else {
                     entry.bind(crate::dmx::ModulatedBinding {
-                        target: look_target,
                         role,
                         source,
                         base,
@@ -816,42 +694,25 @@ impl VardaApp {
                 self.lighting.set_show(show);
                 CommandResult::Ok
             }
-            EngineCommand::AddLightingDeckForGroup { channel, group } => {
-                let Ok(group_id) = uuid::Uuid::parse_str(&group) else {
-                    return Self::bad_uuid(&group);
+            EngineCommand::SetLightingGroupSource { uuid, source } => {
+                let Ok(id) = uuid::Uuid::parse_str(&uuid) else {
+                    return Self::bad_uuid(&uuid);
                 };
-                let Some(group_name) = self
-                    .lighting
-                    .config()
-                    .groups
-                    .iter()
-                    .find(|g| g.id == group_id)
-                    .map(|g| g.name.clone())
-                else {
-                    return Self::not_found("group", &group);
+                let mut config = self.lighting.config().clone();
+                let Some(group) = config.groups.iter_mut().find(|g| g.id == id) else {
+                    return Self::not_found("group", &uuid);
                 };
-
-                // Seeded lit rather than empty, so dropping a group into a channel produces
-                // visible light immediately, the way dropping a shader produces a visible deck.
-                // Roles the fixtures do not carry are simply never written.
-                let mut look = crate::dmx::Look::new(group_name);
-                let target = crate::dmx::LookTarget::Group { id: group_id };
-                for role in [
-                    crate::dmx::Role::Dimmer,
-                    crate::dmx::Role::Red,
-                    crate::dmx::Role::Green,
-                    crate::dmx::Role::Blue,
-                    crate::dmx::Role::White,
-                ] {
-                    look.set(target, role, crate::dmx::AttrValue::literal(1.0));
-                }
-                let deck = crate::dmx::LightingDeck::new(look);
-                let uuid = deck.id.to_string();
-
-                let mut show = self.lighting.show().clone();
-                show.decks_mut(&channel).push(deck);
-                self.lighting.set_show(show);
-                CommandResult::OkWithId { uuid }
+                // The group declares its feed, exactly as a surface declares which channel it
+                // shows. See /spec/lighting-routing.md § A group is the lighting surface.
+                group.source = source.map(|s| {
+                    if s == "program" {
+                        crate::dmx::GroupSource::Program
+                    } else {
+                        crate::dmx::GroupSource::Channel { uuid: s }
+                    }
+                });
+                self.lighting.set_config(config);
+                CommandResult::Ok
             }
             EngineCommand::RemoveLightingDeck { uuid } => {
                 let Ok(id) = uuid::Uuid::parse_str(&uuid) else {
@@ -1007,11 +868,7 @@ impl VardaApp {
                 value,
                 fixture,
             } => self.set_palette_value(&palette, &role, value, fixture.as_deref()),
-            EngineCommand::StoreProgrammerToLook {
-                look,
-                target_kind,
-                target,
-            } => self.store_programmer_to_look(&look, &target_kind, &target),
+            EngineCommand::StoreProgrammerToLook { look } => self.store_programmer_to_look(&look),
             EngineCommand::StoreProgrammerToPalette { palette } => {
                 self.store_programmer_to_palette(&palette)
             }

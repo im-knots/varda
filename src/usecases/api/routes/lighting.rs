@@ -271,8 +271,6 @@ pub async fn set_look_value(
         &state,
         EngineCommand::SetLookValue {
             look: uuid,
-            target_kind: req.target_kind,
-            target: req.target,
             role: req.role,
             value: req.value,
             palette: req.palette,
@@ -422,11 +420,7 @@ pub async fn release_programmer(State(state): State<SharedState>) -> impl IntoRe
 
 /// Body of `POST /api/lighting/looks/{uuid}/store`.
 #[derive(Debug, Deserialize, ToSchema)]
-pub struct StoreToLookRequest {
-    /// `group` or `fixture`.
-    pub target_kind: String,
-    pub target: String,
-}
+pub struct StoreToLookRequest {}
 
 /// Commit what the programmer holds into a look.
 ///
@@ -443,17 +437,9 @@ pub struct StoreToLookRequest {
 pub async fn store_to_look(
     State(state): State<SharedState>,
     Path(uuid): Path<String>,
-    Json(req): Json<StoreToLookRequest>,
+    Json(_req): Json<StoreToLookRequest>,
 ) -> impl IntoResponse {
-    dispatch(
-        &state,
-        EngineCommand::StoreProgrammerToLook {
-            look: uuid,
-            target_kind: req.target_kind,
-            target: req.target,
-        },
-    )
-    .await
+    dispatch(&state, EngineCommand::StoreProgrammerToLook { look: uuid }).await
 }
 
 /// Commit what the programmer holds into a palette.

@@ -1109,7 +1109,7 @@ pub(super) fn render_lighting_deck_detail(
     let Ok(deck_id) = uuid::Uuid::parse_str(uuid) else {
         return;
     };
-    let Some((_, deck)) = data.lighting_show.find_deck(deck_id) else {
+    let Some((channel, deck)) = data.lighting_show.find_deck(deck_id) else {
         ui.label(
             egui::RichText::new("That lighting deck is gone")
                 .small()
@@ -1117,6 +1117,7 @@ pub(super) fn render_lighting_deck_detail(
         );
         return;
     };
+    let channel = channel.to_string();
     let deck = deck.clone();
     let look = Some(deck.content.clone());
 
@@ -1166,48 +1167,218 @@ pub(super) fn render_lighting_deck_detail(
     ui.separator();
 
     // The same left-to-right shape as a video deck: a picture of what this deck is doing, then
-    // one column of parameters per thing it addresses, then the mix. The horizontal scroll is
-    // there for the same reason it is there for effects — a deck can address many groups.
+    // its parameters. The mix sits under the plot, as Blend does in a video deck's params column.
     egui::ScrollArea::horizontal()
         .id_salt(("lighting_deck_hscroll", uuid))
         .show(ui, |ui| {
             ui.horizontal_top(|ui| {
                 if let Some(ref look) = look {
-                    render_stage_column(ui, look, &deck, uuid, data, actions);
+                    render_stage_column(ui, look, &deck, uuid, &channel, data, actions);
                     ui.separator();
-
-                    let targets = look.targets();
-                    if targets.is_empty() {
-                        // Framed like a parameter column, so an empty deck shows the shape the
-                        // parameters will arrive in rather than a loose line of text.
-                        egui::Frame::default()
-                            .inner_margin(6.0)
-                            .corner_radius(4.0)
-                            .fill(ui.visuals().faint_bg_color)
-                            .show(ui, |ui| {
-                                ui.set_min_width(210.0);
-                                ui.set_max_width(240.0);
-                                ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                                    ui.label(egui::RichText::new("Parameters").strong());
-                                    ui.label(
-                                        egui::RichText::new(if data.lighting.fixtures.is_empty() {
-                                            "Patch a light, then click it on the stage"
-                                        } else {
-                                            "Click a light on the stage to start"
-                                        })
-                                        .small()
-                                        .color(egui::Color32::from_rgb(120, 120, 130)),
-                                    );
-                                });
-                            });
-                        ui.separator();
-                    }
-                    for target in &targets {
-                        render_target_params(ui, look, *target, data, actions);
-                    }
+                    // One parameter column, because a deck is one behaviour. A video deck has
+                    // one too; the N-column shape existed only while a deck named its targets.
+                    // See /spec/lighting-routing.md § A deck does not address anything.
+                    render_deck_params(ui, look, data, actions);
                 }
             });
         });
+}
+
+/// Which groups are listening to this deck's channel.
+///
+/// Read-only, and outward: a deck names nobody, so this reports who has pointed themselves at it.
+/// Routing is done in the Stage editor, where the group lives.
+fn render_listeners(ui: &mut egui::Ui, channel: &str, data: &UIData) {
+    let listening: Vec<&str> = data
+        .lighting_group_sources
+        .iter()
+        .filter(|(_, source)| source.as_deref() == Some(channel))
+        .filter_map(|(uuid, _)| {
+            data.lighting_group_names
+                .iter()
+                .find(|(g, _, _)| g == uuid)
+                .map(|(_, name, _)| name.as_str())
+        })
+        .collect();
+
+    ui.label(egui::RichText::new("Heard by").small().strong());
+    if listening.is_empty() {
+        ui.label(
+            egui::RichText::new("nothing yet — point a group at this channel in the Stage editor")
+                .small()
+                .color(egui::Color32::from_rgb(120, 120, 130)),
+        );
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
+        for name in listening {
+            ui.label(
+                egui::RichText::new(format!("◈ {name}"))
+                    .small()
+                    .color(lighting_accent()),
+            );
+        }
+    });
+}
+
+/// The deck's parameters: the roles this behaviour drives.
+///
+/// One column, because a deck is one behaviour. Which lamps hear it is the listening groups'
+/// business, so the roles offered are the union of what the groups on this deck's channel can
+/// actually do — a deck in a channel no group listens to has nothing to offer, and says so.
+///
+/// Rendered through `widgets::render_params`, the same function a shader's uniforms go through,
+/// so modulation, automation, MIDI learn and keyboard learn work on a pan exactly as on a shader
+/// uniform. See /spec/lighting-routing.md § Roles are parameter paths.
+fn render_deck_params(
+    ui: &mut egui::Ui,
+    look: &crate::dmx::Look,
+    data: &UIData,
+    actions: &mut UIActions,
+) {
+    let look_uuid = look.id.to_string();
+    let params = deck_params(look, data);
+
+    egui::Frame::default()
+        .inner_margin(6.0)
+        .corner_radius(4.0)
+        .fill(ui.visuals().faint_bg_color)
+        .show(ui, |ui| {
+            ui.set_min_width(230.0);
+            ui.set_max_width(260.0);
+            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                ui.label(
+                    egui::RichText::new(look.name.as_str())
+                        .strong()
+                        .color(lighting_accent()),
+                );
+                if params.is_empty() {
+                    ui.label(
+                        egui::RichText::new(
+                            "No group listens to this channel yet — point one at it in the Stage \
+                             editor",
+                        )
+                        .small()
+                        .color(egui::Color32::from_rgb(120, 120, 130)),
+                    );
+                    return;
+                }
+
+                let set_look = {
+                    let look_uuid = look_uuid.clone();
+                    move |name: &str, val: ParamValue| {
+                        // Every role is a normalized float. The other variants cannot arise from
+                        // a param this module builds, but the match must be total.
+                        let value = match val {
+                            ParamValue::Float(v) => v,
+                            ParamValue::Bool(b) => f32::from(b),
+                            #[allow(clippy::cast_precision_loss)]
+                            ParamValue::Long(v) => v as f32,
+                            ParamValue::Color(c) => c[0],
+                            ParamValue::Point2D(p) => p[0],
+                        };
+                        EngineCommand::SetLookValue {
+                            look: look_uuid.clone(),
+                            role: name.to_string(),
+                            value: Some(value),
+                            palette: None,
+                        }
+                    }
+                };
+
+                let prefix = format!("look/{look_uuid}");
+                let (assign, unassign, remove, automate) = (
+                    prefix.clone(),
+                    prefix.clone(),
+                    prefix.clone(),
+                    prefix.clone(),
+                );
+
+                widgets::render_params(
+                    ui,
+                    &params,
+                    &data.modulation_sources,
+                    &set_look,
+                    Some(
+                        &|name: &str, source_uuid: &str| EngineCommand::AssignModulation {
+                            target: format!("{assign}/{name}"),
+                            source_id: source_uuid.to_string(),
+                            amount: DEFAULT_ASSIGNMENT_AMOUNT,
+                        },
+                    ),
+                    Some(
+                        &|name: &str, source_uuid: &str| EngineCommand::ClearModulationSource {
+                            target: format!("{unassign}/{name}"),
+                            source_id: source_uuid.to_string(),
+                        },
+                    ),
+                    Some(&|name: &str| EngineCommand::ClearModulation {
+                        target: format!("{remove}/{name}"),
+                    }),
+                    Some(&|name: &str| EngineCommand::AddAutomationLane {
+                        target: format!("{automate}/{name}"),
+                        timebase: crate::timebase::Timebase::Transport,
+                    }),
+                    &mut actions.commands,
+                    &mut actions.session.gesture_active,
+                    &format!("look_{look_uuid}"),
+                    Some(&prefix),
+                    data.midi_learn_active,
+                    &mut actions.session.midi_learn_select,
+                    data.midi_learn_target.as_deref(),
+                    &data.modulation_assignments,
+                    &data.modulation_current_values,
+                    &prefix,
+                    data.keyboard_learn_active,
+                    &mut actions.session.keyboard_learn_select,
+                    data.keyboard_learn_target.as_deref(),
+                );
+            });
+        });
+}
+
+/// The roles a deck can drive: the union of what the listening groups' fixtures declare.
+///
+/// A group offers the union of its members' roles for the same reason it always did — fanning a
+/// value across a mixed group is ordinary, and fixtures that cannot do it ignore it.
+fn deck_params(look: &crate::dmx::Look, data: &UIData) -> Vec<ParamUIInfo> {
+    let mut roles: Vec<String> = Vec::new();
+    for fixture in &data.lighting.fixtures {
+        for role in &fixture.roles {
+            if !roles.iter().any(|r| r == role) {
+                roles.push(role.clone());
+            }
+        }
+    }
+    // Declaration order, so Dimmer leads and the color roles stay together, matching the order an
+    // operator reads them on the fixture itself.
+    roles.sort_by_key(|r| {
+        crate::dmx::Role::ALL
+            .iter()
+            .position(|k| k.as_str() == r)
+            .unwrap_or(usize::MAX)
+    });
+
+    roles
+        .into_iter()
+        .map(|role| {
+            let value = look
+                .assignments()
+                .iter()
+                .find(|a| a.role.as_str() == role)
+                .and_then(|a| a.value.as_literal())
+                .unwrap_or(0.0);
+            ParamUIInfo {
+                name: role.clone(),
+                label: Some(role_label(&role)),
+                value: ParamValue::Float(value),
+                min: Some(0.0),
+                max: Some(1.0),
+                group: role_group_name(&role).map(str::to_string),
+                choices: Vec::new(),
+            }
+        })
+        .collect()
 }
 
 /// The rig, drawn on a stage. The lighting deck's answer to the video deck preview.
@@ -1219,25 +1390,26 @@ pub(super) fn render_lighting_deck_detail(
 /// See /spec/lighting-routing.md § The stage view.
 fn render_stage_column(
     ui: &mut egui::Ui,
-    look: &crate::dmx::Look,
+    _look: &crate::dmx::Look,
     deck: &crate::dmx::LightingDeck,
     deck_uuid: &str,
+    deck_channel: &str,
     data: &UIData,
     actions: &mut UIActions,
 ) {
-    // Which lamps this deck is driving, resolved through its groups. The plot rings them, so a
-    // lamp lit by a neighbouring deck is still visibly not this deck's.
-    let driven: std::collections::BTreeSet<String> = look
-        .targets()
+    // Which lamps hear this deck. The deck names nobody — the groups listening to its channel
+    // do — so this is resolved outward from the channel, not inward from the deck.
+    // See /spec/lighting-routing.md § A group is the lighting surface.
+    let driven: std::collections::BTreeSet<String> = data
+        .lighting_group_sources
         .iter()
-        .flat_map(|t| match t {
-            crate::dmx::LookTarget::Group { id } => data
-                .lighting_group_members
+        .filter(|(_, source)| source.as_deref() == Some(deck_channel))
+        .flat_map(|(uuid, _)| {
+            data.lighting_group_members
                 .iter()
-                .find(|(uuid, _)| *uuid == id.to_string())
+                .find(|(g, _)| g == uuid)
                 .map(|(_, m)| m.clone())
-                .unwrap_or_default(),
-            crate::dmx::LookTarget::Fixture { id } => vec![id.to_string()],
+                .unwrap_or_default()
         })
         .collect();
     let in_look = |id: &str| driven.contains(id);
@@ -1278,7 +1450,7 @@ fn render_stage_column(
                 );
 
                 ui.add_space(4.0);
-                render_group_picker(ui, look, data, actions);
+                render_listeners(ui, deck_channel, data);
 
                 // The deck's own controls, under the picture of what the deck is doing. A video
                 // deck puts Blend at the top of its params column because that column *is* the
@@ -1388,289 +1560,6 @@ fn draw_stage(ui: &egui::Ui, rect: egui::Rect, data: &UIData, in_look: &dyn Fn(&
     }
 }
 
-/// Which groups this deck drives.
-///
-/// The deck's half of the surface relationship: it picks abstract targets by name, and the Stage
-/// decides which lamps those are tonight. Naming a group and choosing its members happens in the
-/// Stage Editor — a deck no more defines the rig than a video deck defines your projectors.
-/// See /spec/lighting-routing.md § A group is the lighting surface.
-fn render_group_picker(
-    ui: &mut egui::Ui,
-    look: &crate::dmx::Look,
-    data: &UIData,
-    actions: &mut UIActions,
-) {
-    ui.label(egui::RichText::new("Drives").small().strong());
-
-    if data.lighting_group_names.is_empty() {
-        ui.label(
-            egui::RichText::new("No groups yet — make one in the Stage editor")
-                .small()
-                .color(egui::Color32::from_rgb(120, 120, 130)),
-        );
-        return;
-    }
-
-    let targets = look.targets();
-    ui.horizontal_wrapped(|ui| {
-        for (uuid, name, members) in &data.lighting_group_names {
-            let on = targets.iter().any(
-                |t| matches!(t, crate::dmx::LookTarget::Group { id } if id.to_string() == *uuid),
-            );
-            if ui
-                .selectable_label(
-                    on,
-                    egui::RichText::new(format!("◈ {name} ({members})")).small(),
-                )
-                .clicked()
-            {
-                actions.commands.push(EngineCommand::SetLookTarget {
-                    look: look.id.to_string(),
-                    target_kind: "group".into(),
-                    target: uuid.clone(),
-                    included: !on,
-                });
-            }
-        }
-    });
-}
-
-/// One target's roles, rendered as parameters.
-///
-/// This is the whole point of the lighting design: a fixture role is a parameter path
-/// (`fixture/<uuid>/<role>`), so it goes through `widgets::render_params` — the same widget a
-/// GLSL shader's uniforms go through — and inherits modulation, automation, MIDI learn and
-/// keyboard learn with no lighting-specific work. A performer who knows how to LFO a shader
-/// parameter already knows how to LFO a pan.
-///
-/// The available roles come from the fixture's own capabilities as declared by its Open Fixture
-/// Library profile, so a 4-channel par offers four parameters and a moving head offers pan, tilt,
-/// zoom, gobo and the rest.
-/// See /spec/lighting-routing.md § Roles are parameter paths.
-fn render_target_params(
-    ui: &mut egui::Ui,
-    look: &crate::dmx::Look,
-    target: crate::dmx::LookTarget,
-    data: &UIData,
-    actions: &mut UIActions,
-) {
-    let (kind, target_uuid) = target_parts(target);
-    let label = target_label(target, data);
-    let params = target_params(look, target, data);
-    if params.is_empty() {
-        return;
-    }
-
-    let look_uuid = look.id.to_string();
-    // The modulation and learn namespace for this target. `fixture/<uuid>` and `group/<uuid>`
-    // are the paths the lighting router already understands, so nothing new is invented here.
-    let path_prefix = format!("{kind}/{target_uuid}");
-
-    egui::Frame::default()
-        .inner_margin(6.0)
-        .corner_radius(4.0)
-        .fill(ui.visuals().faint_bg_color)
-        .show(ui, |ui| {
-            ui.set_min_width(210.0);
-            ui.set_max_width(240.0);
-            ui.vertical(|ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(if kind == "group" {
-                            format!("◈ {label}")
-                        } else {
-                            label.clone()
-                        })
-                        .strong()
-                        .color(lighting_accent()),
-                    );
-                    if ui
-                        .small_button("x")
-                        .on_hover_text("remove from this deck")
-                        .clicked()
-                    {
-                        actions.commands.push(EngineCommand::SetLookTarget {
-                            look: look_uuid.clone(),
-                            target_kind: kind.to_string(),
-                            target: target_uuid.clone(),
-                            included: false,
-                        });
-                    }
-                });
-
-                let set_look = {
-                    let look_uuid = look_uuid.clone();
-                    let kind = kind.to_string();
-                    let target_uuid = target_uuid.clone();
-                    move |name: &str, val: ParamValue| {
-                        // Every role is a normalized float. The other variants cannot arise
-                        // from a param this module builds, but the match must be total.
-                        let value = match val {
-                            ParamValue::Float(v) => v,
-                            ParamValue::Bool(b) => f32::from(b),
-                            #[allow(clippy::cast_precision_loss)]
-                            ParamValue::Long(v) => v as f32,
-                            ParamValue::Color(c) => c[0],
-                            ParamValue::Point2D(p) => p[0],
-                        };
-                        EngineCommand::SetLookValue {
-                            look: look_uuid.clone(),
-                            target_kind: kind.clone(),
-                            target: target_uuid.clone(),
-                            role: name.to_string(),
-                            value: Some(value),
-                            palette: None,
-                        }
-                    }
-                };
-
-                let mod_prefix = path_prefix.clone();
-                let assign_prefix = path_prefix.clone();
-                let unassign_prefix = path_prefix.clone();
-                let remove_prefix = path_prefix.clone();
-                let automate_prefix = path_prefix.clone();
-
-                widgets::render_params(
-                    ui,
-                    &params,
-                    &data.modulation_sources,
-                    &set_look,
-                    Some(
-                        &|name: &str, source_uuid: &str| EngineCommand::AssignModulation {
-                            target: format!("{assign_prefix}/{name}"),
-                            source_id: source_uuid.to_string(),
-                            amount: DEFAULT_ASSIGNMENT_AMOUNT,
-                        },
-                    ),
-                    Some(
-                        &|name: &str, source_uuid: &str| EngineCommand::ClearModulationSource {
-                            target: format!("{unassign_prefix}/{name}"),
-                            source_id: source_uuid.to_string(),
-                        },
-                    ),
-                    Some(&|name: &str| EngineCommand::ClearModulation {
-                        target: format!("{remove_prefix}/{name}"),
-                    }),
-                    Some(&|name: &str| EngineCommand::AddAutomationLane {
-                        target: format!("{automate_prefix}/{name}"),
-                        timebase: crate::timebase::Timebase::Transport,
-                    }),
-                    &mut actions.commands,
-                    &mut actions.session.gesture_active,
-                    &format!("light_{kind}_{target_uuid}"),
-                    Some(&path_prefix),
-                    data.midi_learn_active,
-                    &mut actions.session.midi_learn_select,
-                    data.midi_learn_target.as_deref(),
-                    &data.modulation_assignments,
-                    &data.modulation_current_values,
-                    &mod_prefix,
-                    data.keyboard_learn_active,
-                    &mut actions.session.keyboard_learn_select,
-                    data.keyboard_learn_target.as_deref(),
-                );
-
-                // Spread is the one lighting control with no shader analogue: fanning a
-                // modulator's phase across a group so a sine chases along a truss instead of
-                // pulsing it as one lamp. It belongs on the binding it modifies.
-                let bindings: Vec<_> = look
-                    .bindings()
-                    .iter()
-                    .filter(|b| b.target == target)
-                    .cloned()
-                    .collect();
-                if !bindings.is_empty() {
-                    ui.add_space(2.0);
-                    ui.label(egui::RichText::new("Driven").small().weak());
-                    for binding in &bindings {
-                        render_binding_row(ui, look, binding, data, actions);
-                    }
-                }
-
-                render_sample_row(ui, look, target, actions);
-                render_palette_chips(ui, look, target, data, actions);
-            });
-        });
-}
-
-/// The parameters one target exposes, built from what its fixtures can actually do.
-///
-/// A group offers the union of its members' roles: a parameter that only some members have still
-/// belongs on the group, because fanning a value across a mixed group is ordinary and the
-/// fixtures that cannot do it simply ignore it.
-fn target_params(
-    look: &crate::dmx::Look,
-    target: crate::dmx::LookTarget,
-    data: &UIData,
-) -> Vec<ParamUIInfo> {
-    let mut roles: Vec<String> = Vec::new();
-    for fixture in fixtures_of(target, data) {
-        for role in &fixture.roles {
-            if !roles.iter().any(|r| r == role) {
-                roles.push(role.clone());
-            }
-        }
-    }
-    // Declaration order, so Dimmer leads and the color roles stay together, matching the order
-    // an operator reads them on the fixture itself.
-    roles.sort_by_key(|r| {
-        crate::dmx::Role::ALL
-            .iter()
-            .position(|k| k.as_str() == r)
-            .unwrap_or(usize::MAX)
-    });
-
-    roles
-        .into_iter()
-        .map(|role| {
-            let value = look
-                .assignments()
-                .iter()
-                .find(|a| a.target == target && a.role.as_str() == role)
-                .and_then(|a| a.value.as_literal())
-                .unwrap_or(0.0);
-            ParamUIInfo {
-                name: role.clone(),
-                label: Some(role_label(&role)),
-                value: ParamValue::Float(value),
-                min: Some(0.0),
-                max: Some(1.0),
-                // The role's own group becomes the inspector section, so lighting params are
-                // sectioned the way shader params are.
-                group: role_group_name(&role).map(str::to_string),
-                choices: Vec::new(),
-            }
-        })
-        .collect()
-}
-
-/// The fixtures a target resolves to.
-fn fixtures_of(target: crate::dmx::LookTarget, data: &UIData) -> Vec<&crate::dmx::FixtureView> {
-    match target {
-        crate::dmx::LookTarget::Fixture { id } => data
-            .lighting
-            .fixtures
-            .iter()
-            .filter(|f| f.id == id.to_string())
-            .collect(),
-        crate::dmx::LookTarget::Group { id } => {
-            let Some(members) = data
-                .lighting_group_members
-                .iter()
-                .find(|(uuid, _)| *uuid == id.to_string())
-                .map(|(_, m)| m)
-            else {
-                return Vec::new();
-            };
-            data.lighting
-                .fixtures
-                .iter()
-                .filter(|f| members.contains(&f.id))
-                .collect()
-        }
-    }
-}
-
 fn role_label(role: &str) -> String {
     let mut out = String::with_capacity(role.len());
     for (i, ch) in role.chars().enumerate() {
@@ -1694,172 +1583,6 @@ fn role_group_name(role: &str) -> Option<&'static str> {
         crate::dmx::RoleGroup::Beam => "Beam",
         crate::dmx::RoleGroup::Control => "Control",
     })
-}
-
-/// Making this target's color follow the video.
-///
-/// One toggle, because the answer is almost always the same: the lights in this channel follow
-/// the video in this channel. That is the whole "these visuals go with these lights" workflow,
-/// and the channel already says which visuals — so there is nothing to configure and no picker
-/// to get wrong. The Program option exists for the case where a performer means the final
-/// output rather than their own channel.
-/// See /spec/lighting-routing.md § Sampled.
-fn render_sample_row(
-    ui: &mut egui::Ui,
-    look: &crate::dmx::Look,
-    target: crate::dmx::LookTarget,
-    actions: &mut UIActions,
-) {
-    // The color roles, which is what a pixel map drives. Dimmer rides along so a dimmer-only
-    // par follows the image too.
-    const MAPPED: [crate::dmx::Role; 4] = [
-        crate::dmx::Role::Dimmer,
-        crate::dmx::Role::Red,
-        crate::dmx::Role::Green,
-        crate::dmx::Role::Blue,
-    ];
-
-    let (kind, target_uuid) = target_parts(target);
-    let look_uuid = look.id.to_string();
-
-    let current = look
-        .samples()
-        .iter()
-        .find(|s| s.target == target)
-        .map(|s| s.source);
-    let mut on = current.is_some();
-
-    ui.add_space(2.0);
-    ui.horizontal(|ui| {
-        if ui
-            .checkbox(&mut on, egui::RichText::new("🎬 Follow video").small())
-            .on_hover_text(
-                "this target's color is sampled from video at each light's place on the stage",
-            )
-            .changed()
-        {
-            for role in MAPPED {
-                if on {
-                    actions.commands.push(EngineCommand::SampleLookRole {
-                        look: look_uuid.clone(),
-                        target_kind: kind.to_string(),
-                        target: target_uuid.clone(),
-                        role: role.as_str().to_string(),
-                        source: "own_channel".into(),
-                        gain: 1.0,
-                    });
-                } else {
-                    // Releasing hands the role back to a literal at zero rather than leaving it
-                    // holding the last sampled frame forever.
-                    actions.commands.push(EngineCommand::SetLookValue {
-                        look: look_uuid.clone(),
-                        target_kind: kind.to_string(),
-                        target: target_uuid.clone(),
-                        role: role.as_str().to_string(),
-                        value: Some(0.0),
-                        palette: None,
-                    });
-                }
-            }
-        }
-
-        if let Some(source) = current {
-            let program = source == crate::dmx::SampleSource::Program;
-            let mut selected = program;
-            if ui
-                .selectable_label(selected, egui::RichText::new("program").small())
-                .on_hover_text("follow the final program instead of this channel")
-                .clicked()
-            {
-                selected = !program;
-                let source = if selected { "program" } else { "own_channel" };
-                for role in MAPPED {
-                    actions.commands.push(EngineCommand::SampleLookRole {
-                        look: look_uuid.clone(),
-                        target_kind: kind.to_string(),
-                        target: target_uuid.clone(),
-                        role: role.as_str().to_string(),
-                        source: source.into(),
-                        gain: 1.0,
-                    });
-                }
-            }
-        }
-    });
-}
-
-/// Palette chips: which of this target's roles follow a palette.
-///
-/// A palette reference is the reason a palette exists — one edit moving every look that uses it
-/// — so linking one has to be reachable from the parameter it applies to, not from a separate
-/// editor. Clicking a palette links every role that palette covers; clicking it again unlinks.
-fn render_palette_chips(
-    ui: &mut egui::Ui,
-    look: &crate::dmx::Look,
-    target: crate::dmx::LookTarget,
-    data: &UIData,
-    actions: &mut UIActions,
-) {
-    if data.lighting.palettes.is_empty() {
-        return;
-    }
-    let (kind, target_uuid) = target_parts(target);
-    let look_uuid = look.id.to_string();
-
-    ui.add_space(2.0);
-    ui.label(egui::RichText::new("Palettes").small().weak());
-    ui.horizontal_wrapped(|ui| {
-        for palette in &data.lighting.palettes {
-            // Linked when every role this palette covers is following it on this target.
-            let covered = &palette.default_roles;
-            let linked = !covered.is_empty()
-                && covered.iter().all(|role| {
-                    look.assignments().iter().any(|a| {
-                        a.target == target
-                            && a.role.as_str() == role
-                            && a.value.palette_id().map(|id| id.to_string()).as_deref()
-                                == Some(palette.id.as_str())
-                    })
-                });
-
-            let resp = ui.selectable_label(
-                linked,
-                egui::RichText::new(format!("◇ {}", palette.name)).small(),
-            );
-            if resp.clicked() {
-                if covered.is_empty() {
-                    continue;
-                }
-                for role in covered {
-                    actions.commands.push(if linked {
-                        // Unlink to a literal, so releasing a palette does not also go dark.
-                        EngineCommand::SetLookValue {
-                            look: look_uuid.clone(),
-                            target_kind: kind.to_string(),
-                            target: target_uuid.clone(),
-                            role: role.clone(),
-                            value: Some(0.0),
-                            palette: None,
-                        }
-                    } else {
-                        EngineCommand::SetLookValue {
-                            look: look_uuid.clone(),
-                            target_kind: kind.to_string(),
-                            target: target_uuid.clone(),
-                            role: role.clone(),
-                            value: None,
-                            palette: Some(palette.id.clone()),
-                        }
-                    });
-                }
-            }
-            if covered.is_empty() {
-                resp.on_hover_text("this palette holds no values yet — set one in the right panel");
-            } else {
-                resp.on_hover_text(format!("follows {}", covered.join(", ")));
-            }
-        }
-    });
 }
 
 /// Level, blend, transition and the flags: how this deck mixes.
@@ -1977,135 +1700,6 @@ fn render_deck_mix(
     }
 }
 
-/// Which lights this deck drives.
-/// One automated role: its source, depth, and how it fans across a group.
-fn render_binding_row(
-    ui: &mut egui::Ui,
-    look: &crate::dmx::Look,
-    binding: &crate::dmx::ModulatedBinding,
-    data: &UIData,
-    actions: &mut UIActions,
-) {
-    let (target_kind, target_uuid) = target_parts(binding.target);
-    let look_uuid = look.id.to_string();
-    let push = |actions: &mut UIActions, b: crate::dmx::ModulatedBinding| {
-        actions.commands.push(EngineCommand::BindLookRole {
-            look: look_uuid.clone(),
-            target_kind: target_kind.into(),
-            target: target_uuid.clone(),
-            role: b.role.as_str().into(),
-            source: b.source.clone(),
-            base: b.base,
-            amount: b.amount,
-            spread: b.spread.amount,
-            spread_mode: match b.spread.mode {
-                crate::dmx::SpreadMode::Symmetric => "symmetric".into(),
-                crate::dmx::SpreadMode::Random => "random".into(),
-                crate::dmx::SpreadMode::Linear => "linear".into(),
-            },
-        });
-    };
-
-    ui.horizontal(|ui| {
-        ui.add_sized(
-            [92.0, 18.0],
-            egui::Label::new(
-                egui::RichText::new(format!("~ {}", binding.role.as_str()))
-                    .small()
-                    .color(lighting_accent()),
-            ),
-        );
-
-        let source_name = data
-            .modulation_sources
-            .iter()
-            .enumerate()
-            .find(|(_, m)| m.uuid == binding.source)
-            .map_or_else(|| "(missing)".to_string(), |(i, m)| m.label(i));
-        egui::ComboBox::from_id_salt((look.id, binding.role.as_str(), "src"))
-            .selected_text(source_name)
-            .width(80.0)
-            .show_ui(ui, |ui| {
-                for (i, source) in data.modulation_sources.iter().enumerate() {
-                    if ui
-                        .selectable_label(source.uuid == binding.source, source.label(i))
-                        .clicked()
-                    {
-                        let mut next = binding.clone();
-                        next.source.clone_from(&source.uuid);
-                        push(actions, next);
-                    }
-                }
-            });
-
-        let mut amount = binding.amount;
-        if ui
-            .add(
-                egui::DragValue::new(&mut amount)
-                    .speed(0.01)
-                    .range(0.0..=1.0),
-            )
-            .on_hover_text("depth")
-            .changed()
-        {
-            let mut next = binding.clone();
-            next.amount = amount;
-            push(actions, next);
-        }
-
-        let mut spread = binding.spread.amount;
-        if ui
-            .add(
-                egui::DragValue::new(&mut spread)
-                    .speed(0.01)
-                    .range(0.0..=4.0),
-            )
-            .on_hover_text("spread: turns of phase fanned across the group, so a sine chases")
-            .changed()
-        {
-            let mut next = binding.clone();
-            next.spread.amount = spread;
-            push(actions, next);
-        }
-
-        if ui
-            .small_button("=")
-            .on_hover_text("hold this value instead of driving it")
-            .clicked()
-        {
-            let mut next = binding.clone();
-            next.source.clear();
-            push(actions, next);
-        }
-    });
-}
-
-fn target_label(target: crate::dmx::LookTarget, data: &UIData) -> String {
-    match target {
-        crate::dmx::LookTarget::Group { id } => data
-            .lighting_group_names
-            .iter()
-            .find(|(uuid, _, _)| *uuid == id.to_string())
-            .map_or_else(
-                || "(missing group)".to_string(),
-                |(_, name, _)| name.clone(),
-            ),
-        crate::dmx::LookTarget::Fixture { id } => data
-            .lighting
-            .fixtures
-            .iter()
-            .find(|f| f.id == id.to_string())
-            .map_or_else(|| "(missing fixture)".to_string(), |f| f.name.clone()),
-    }
-}
-
-fn target_parts(target: crate::dmx::LookTarget) -> (&'static str, String) {
-    match target {
-        crate::dmx::LookTarget::Group { id } => ("group", id.to_string()),
-        crate::dmx::LookTarget::Fixture { id } => ("fixture", id.to_string()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use egui_kittest::kittest::Queryable;
@@ -2141,15 +1735,10 @@ mod tests {
                 data.lighting.fixtures.push(f);
             }
             let mut look = crate::dmx::Look::new("Wash");
-            if let Some(f) = data.lighting.fixtures.first() {
-                look.set(
-                    crate::dmx::LookTarget::Fixture {
-                        id: uuid::Uuid::parse_str(&f.id).unwrap(),
-                    },
-                    crate::dmx::Role::Dimmer,
-                    crate::dmx::AttrValue::literal(1.0),
-                );
-            }
+            look.set(
+                crate::dmx::Role::Dimmer,
+                crate::dmx::AttrValue::literal(1.0),
+            );
             let deck = crate::dmx::LightingDeck::new(look.clone());
             let uuid = deck.id.to_string();
             data.lighting_show.looks.push(look);
@@ -2257,24 +1846,17 @@ mod tests {
         }
     }
 
-    /// Where a performer says what their rig is. The user's words: "the top row is these three
-    /// swivel movers, the sides are these two strips". That sentence is spoken on the deck.
-    /// A fixture's parameters come from what the fixture can actually do, as declared by its
-    /// Open Fixture Library profile — so a 4-channel par offers four and a mover offers pan and
-    /// tilt too. This is what makes the mental model the same as a shader's uniforms.
+    /// A deck's parameters come from what the rig can actually do, as declared by the fixtures'
+    /// Open Fixture Library profiles — not from a target, because a deck names none.
     #[test]
-    fn a_fixtures_parameters_come_from_its_capabilities() {
+    fn deck_parameters_come_from_the_rigs_capabilities() {
         let mut data = UIData::test_fixture();
         data.lighting.fixtures.push(fixture_view(
             "f1",
             "par",
             &["dimmer", "red", "green", "blue"],
         ));
-        let id = uuid::Uuid::new_v4();
-        data.lighting.fixtures[0].id = id.to_string();
-
-        let look = crate::dmx::Look::new("Wash");
-        let params = target_params(&look, crate::dmx::LookTarget::Fixture { id }, &data);
+        let params = deck_params(&crate::dmx::Look::new("Wash"), &data);
         let names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["dimmer", "red", "green", "blue"], "{names:?}");
     }
@@ -2284,13 +1866,12 @@ mod tests {
     #[test]
     fn parameters_are_ordered_the_way_a_fixture_is_read() {
         let mut data = UIData::test_fixture();
-        let id = uuid::Uuid::new_v4();
-        let mut f = fixture_view("f1", "mover", &["tilt", "red", "dimmer", "pan"]);
-        f.id = id.to_string();
-        data.lighting.fixtures.push(f);
-
-        let look = crate::dmx::Look::new("Wash");
-        let params = target_params(&look, crate::dmx::LookTarget::Fixture { id }, &data);
+        data.lighting.fixtures.push(fixture_view(
+            "f1",
+            "mover",
+            &["tilt", "red", "dimmer", "pan"],
+        ));
+        let params = deck_params(&crate::dmx::Look::new("Wash"), &data);
         let names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["dimmer", "red", "pan", "tilt"], "{names:?}");
     }
@@ -2300,13 +1881,12 @@ mod tests {
     #[test]
     fn parameters_are_sectioned_by_role_group() {
         let mut data = UIData::test_fixture();
-        let id = uuid::Uuid::new_v4();
-        let mut f = fixture_view("f1", "mover", &["dimmer", "red", "pan", "zoom"]);
-        f.id = id.to_string();
-        data.lighting.fixtures.push(f);
-
-        let look = crate::dmx::Look::new("Wash");
-        let params = target_params(&look, crate::dmx::LookTarget::Fixture { id }, &data);
+        data.lighting.fixtures.push(fixture_view(
+            "f1",
+            "mover",
+            &["dimmer", "red", "pan", "zoom"],
+        ));
+        let params = deck_params(&crate::dmx::Look::new("Wash"), &data);
         let group = |name: &str| {
             params
                 .iter()
@@ -2319,24 +1899,18 @@ mod tests {
         assert_eq!(group("zoom").as_deref(), Some("Beam"));
     }
 
-    /// A group offers the union of its members' roles: fanning a value across a mixed group is
-    /// ordinary, and the members that cannot do it simply ignore it.
+    /// The union of what the rig can do, so a mixed rig offers every role some fixture carries.
+    /// Fixtures that cannot do one simply ignore it.
     #[test]
-    fn a_group_offers_the_union_of_what_its_members_can_do() {
+    fn parameters_are_the_union_of_a_mixed_rig() {
         let mut data = UIData::test_fixture();
-        let (par, mover) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
-        let mut a = fixture_view("f1", "par", &["dimmer", "red"]);
-        a.id = par.to_string();
-        let mut b = fixture_view("f2", "mover", &["dimmer", "pan", "tilt"]);
-        b.id = mover.to_string();
-        data.lighting.fixtures.extend([a, b]);
-
-        let gid = uuid::Uuid::new_v4();
-        data.lighting_group_members
-            .push((gid.to_string(), vec![par.to_string(), mover.to_string()]));
-
-        let look = crate::dmx::Look::new("Wash");
-        let params = target_params(&look, crate::dmx::LookTarget::Group { id: gid }, &data);
+        data.lighting
+            .fixtures
+            .push(fixture_view("f1", "par", &["dimmer", "red"]));
+        data.lighting
+            .fixtures
+            .push(fixture_view("f2", "mover", &["dimmer", "pan", "tilt"]));
+        let params = deck_params(&crate::dmx::Look::new("Wash"), &data);
         let names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["dimmer", "red", "pan", "tilt"], "{names:?}");
     }
@@ -2409,11 +1983,11 @@ mod tests {
         }
     }
 
-    /// The deck picks *which groups* it drives and does not define the rig. A deck defining the
-    /// rig is a video deck defining your projector setup — it makes the deck venue-specific.
+    /// A deck names no target and does not define the rig. It reports which groups hear it, the
+    /// way a video deck has no idea which surfaces show it.
     /// See /spec/lighting-routing.md § A group is the lighting surface.
     #[test]
-    fn the_deck_detail_drives_groups_and_does_not_patch() {
+    fn the_deck_detail_names_no_target_and_does_not_patch() {
         let mut data = UIData::test_fixture();
         let look = crate::dmx::Look::new("Wash");
         let deck = crate::dmx::LightingDeck::new(look.clone());
@@ -2426,9 +2000,10 @@ mod tests {
             render_lighting_deck_detail(ui, &uuid, &data, &mut actions);
         });
         harness.run();
+        // A deck names nobody; it reports who has pointed themselves at its channel.
         assert!(
-            harness.query_by_label("Drives").is_some(),
-            "the deck must offer the groups it drives"
+            harness.query_by_label("Heard by").is_some(),
+            "the deck must report which groups hear it"
         );
         for banned in ["➕ Add light", "💡 Lights", "Groups"] {
             assert!(

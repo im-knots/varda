@@ -4,7 +4,7 @@
 //! composite through this rather than through the GPU. One control model, two backends.
 //! See /spec/lighting-routing.md § Mixing.
 
-use super::look::{AttrValue, Group, Look};
+use super::look::{AttrValue, Group, GroupSource, Look};
 use super::role::{Role, RoleGroup};
 use super::values::RoleValues;
 use serde::{Deserialize, Serialize};
@@ -207,87 +207,95 @@ pub fn merge(
     // same way a video deck never names a surface.
     // See /spec/lighting-routing.md § A group is the lighting surface.
     for group in groups {
-        let Some(source) = group.source.as_deref() else {
-            continue;
-        };
-        let Some(channel) = channels.iter().find(|c| c.key == source) else {
+        let Some(source) = group.source.as_ref() else {
             continue;
         };
         if group.members.is_empty() {
             continue;
         }
+        // `Program` hears every channel in order, each already carrying its crossfader-weighted
+        // opacity — which is what keeps lighting on the crossfader. A `Channel` group hears one.
+        let heard: Vec<&LightingChannel> = match source {
+            GroupSource::Program => channels.iter().collect(),
+            GroupSource::Channel { uuid } => channels.iter().filter(|c| &c.key == uuid).collect(),
+        };
 
-        for deck in &channel.decks {
-            let weight = deck_weight(deck, channel.opacity, soloing);
-            if weight <= 0.0 {
-                continue;
-            }
-            let look = &deck.content;
-
-            for (position, fixture) in group.members.iter().copied().enumerate() {
-                let Some(&slot) = index.get(&fixture) else {
+        for channel in heard {
+            for deck in &channel.decks {
+                let weight = deck_weight(deck, channel.opacity, soloing);
+                if weight <= 0.0 {
                     continue;
-                };
+                }
+                let look = &deck.content;
 
-                // Held values: the same at every index, which is what makes this a wash.
-                for assignment in look.assignments() {
-                    let Some(value) = resolver(assignment.value, fixture, assignment.role) else {
+                for (position, fixture) in group.members.iter().copied().enumerate() {
+                    let Some(&slot) = index.get(&fixture) else {
                         continue;
                     };
-                    apply(
-                        &mut out[slot],
-                        assignment.role,
-                        value,
-                        weight,
-                        deck.blend.resolve(assignment.role),
-                        deck.ltp_transition,
-                    );
-                }
 
-                // Modulated values, fanned across the group's *authored* order. Not patch order
-                // and not physical position: a shuffled order is a deliberate technique, and
-                // deriving phase from anything else would delete it.
-                for binding in look.bindings() {
-                    let offset = binding.spread.offset_for(position, group.members.len());
-                    // A non-periodic source has no meaningful phase, so it fans uniformly:
-                    // sampling at offset 0 gives every member the same current value.
-                    let sampled = modulation(&binding.source, offset)
-                        .or_else(|| modulation(&binding.source, 0.0));
-                    let Some(sampled) = sampled else { continue };
-                    let value = (binding.base + sampled * binding.amount).clamp(0.0, 1.0);
-                    apply(
-                        &mut out[slot],
-                        binding.role,
-                        value,
-                        weight,
-                        deck.blend.resolve(binding.role),
-                        deck.ltp_transition,
-                    );
-                }
+                    // Held values: the same at every index, which is what makes this a wash.
+                    for assignment in look.assignments() {
+                        let Some(value) = resolver(assignment.value, fixture, assignment.role)
+                        else {
+                            continue;
+                        };
+                        apply(
+                            &mut out[slot],
+                            assignment.role,
+                            value,
+                            weight,
+                            deck.blend.resolve(assignment.role),
+                            deck.ltp_transition,
+                        );
+                    }
 
-                // Sampled values: the one case where the space is *physical* rather than
-                // authored. The group already knows which channel it listens to, so there is
-                // nothing to configure — the frame is that channel's.
-                if !look.samples().is_empty()
-                    && let Some(frame) = frames.get(source)
+                    // Modulated values, fanned across the group's *authored* order. Not patch order
+                    // and not physical position: a shuffled order is a deliberate technique, and
+                    // deriving phase from anything else would delete it.
+                    for binding in look.bindings() {
+                        let offset = binding.spread.offset_for(position, group.members.len());
+                        // A non-periodic source has no meaningful phase, so it fans uniformly:
+                        // sampling at offset 0 gives every member the same current value.
+                        let sampled = modulation(&binding.source, offset)
+                            .or_else(|| modulation(&binding.source, 0.0));
+                        let Some(sampled) = sampled else { continue };
+                        let value = (binding.base + sampled * binding.amount).clamp(0.0, 1.0);
+                        apply(
+                            &mut out[slot],
+                            binding.role,
+                            value,
+                            weight,
+                            deck.blend.resolve(binding.role),
+                            deck.ltp_transition,
+                        );
+                    }
+
+                    // Sampled values: the one case where the space is *physical* rather than
+                    // authored. The group already knows which channel it listens to, so there is
+                    // nothing to configure — the frame is that channel's.
+                    if !look.samples().is_empty()
+                    // The frame of the channel actually being heard: a Program group samples
+                    // whichever channel this deck lives in, which is what a pixel map means.
+                    && let Some(frame) = frames.get(&channel.key)
                     // An unplaced fixture has no point to read, so it is skipped rather than
                     // defaulted to the middle of the frame, where every unplaced light in the
                     // rig would show one colour and look deliberate.
                     && let Some(point) = positions.get(&fixture).copied().flatten()
                     && let Some(rgb) = frame.sample(point)
-                {
-                    for binding in look.samples() {
-                        let Some(value) = super::sample::component(binding.role, rgb) else {
-                            continue;
-                        };
-                        apply(
-                            &mut out[slot],
-                            binding.role,
-                            (value * binding.gain).clamp(0.0, 1.0),
-                            weight,
-                            deck.blend.resolve(binding.role),
-                            deck.ltp_transition,
-                        );
+                    {
+                        for binding in look.samples() {
+                            let Some(value) = super::sample::component(binding.role, rgb) else {
+                                continue;
+                            };
+                            apply(
+                                &mut out[slot],
+                                binding.role,
+                                (value * binding.gain).clamp(0.0, 1.0),
+                                weight,
+                                deck.blend.resolve(binding.role),
+                                deck.ltp_transition,
+                            );
+                        }
                     }
                 }
             }
@@ -343,7 +351,6 @@ fn apply(
 
 #[cfg(test)]
 mod tests {
-    use super::super::look::LookTarget;
     use super::*;
 
     fn literal_resolver(value: AttrValue, _f: Uuid, _r: Role) -> Option<f32> {
@@ -360,10 +367,17 @@ mod tests {
         positions: HashMap<Uuid, Option<[f32; 2]>>,
     }
 
+    /// A rig whose one group listens to `ch-1`, which is the channel `channel()` builds.
+    ///
+    /// The group is what routes: a deck names nobody, so a harness with no listening group would
+    /// merge to nothing no matter what the decks hold.
     fn rig(n: usize) -> Rig {
         let fixtures: Vec<Uuid> = (0..n).map(|_| Uuid::new_v4()).collect();
         let mut all = Group::new("all");
         all.members.clone_from(&fixtures);
+        all.source = Some(GroupSource::Channel {
+            uuid: "ch-1".to_string(),
+        });
         // Placed left to right across the plot, which is how a truss is rigged and what makes a
         // horizontal gradient readable as one.
         #[allow(clippy::cast_precision_loss)]
@@ -388,24 +402,16 @@ mod tests {
     }
 
     impl Rig {
-        fn group_id(&self) -> Uuid {
-            self.groups[0].id
-        }
         /// A look setting one role across the whole rig.
         ///
         /// Returned by value: a deck owns its content, so handing the same look to two decks is
         /// two independent copies, which is exactly the property under test.
-        fn look(&self, role: Role, value: f32) -> Look {
+        fn look(role: Role, value: f32) -> Look {
             let mut look = Look::new("l");
-            look.set(
-                LookTarget::Group {
-                    id: self.group_id(),
-                },
-                role,
-                AttrValue::literal(value),
-            );
+            look.set(role, AttrValue::literal(value));
             look
         }
+
         fn merge(&self, channels: &[LightingChannel]) -> Vec<RoleValues> {
             self.merge_with(channels, &|_, _| None)
         }
@@ -457,8 +463,8 @@ mod tests {
     #[test]
     fn two_intensity_decks_take_the_highest_not_the_sum() {
         let r = rig(1);
-        let dim = r.look(Role::Dimmer, 0.4);
-        let bright = r.look(Role::Dimmer, 0.7);
+        let dim = Rig::look(Role::Dimmer, 0.4);
+        let bright = Rig::look(Role::Dimmer, 0.7);
         let out = r.merge(&[channel(
             1.0,
             vec![LightingDeck::new(dim), LightingDeck::new(bright)],
@@ -471,8 +477,8 @@ mod tests {
     #[test]
     fn two_position_decks_let_the_later_one_take_over() {
         let r = rig(1);
-        let left = r.look(Role::Pan, 0.0);
-        let right = r.look(Role::Pan, 1.0);
+        let left = Rig::look(Role::Pan, 0.0);
+        let right = Rig::look(Role::Pan, 1.0);
         let out = r.merge(&[channel(
             1.0,
             vec![LightingDeck::new(left), LightingDeck::new(right)],
@@ -484,8 +490,8 @@ mod tests {
     #[test]
     fn a_half_level_ltp_deck_crossfades_rather_than_snapping() {
         let r = rig(1);
-        let left = r.look(Role::Pan, 0.0);
-        let right = r.look(Role::Pan, 1.0);
+        let left = Rig::look(Role::Pan, 0.0);
+        let right = Rig::look(Role::Pan, 1.0);
         let mut top = LightingDeck::new(right);
         top.level = 0.5;
         let out = r.merge(&[channel(1.0, vec![LightingDeck::new(left), top])]);
@@ -501,8 +507,8 @@ mod tests {
     #[test]
     fn add_sums_and_clamps() {
         let r = rig(1);
-        let a = r.look(Role::Red, 0.6);
-        let b = r.look(Role::Red, 0.7);
+        let a = Rig::look(Role::Red, 0.6);
+        let b = Rig::look(Role::Red, 0.7);
         let mut second = LightingDeck::new(b);
         second.blend = LightingBlend::Add;
         let mut first = LightingDeck::new(a);
@@ -517,8 +523,8 @@ mod tests {
     #[test]
     fn multiply_limits_and_never_raises() {
         let r = rig(1);
-        let base = r.look(Role::Dimmer, 1.0);
-        let limit = r.look(Role::Dimmer, 0.25);
+        let base = Rig::look(Role::Dimmer, 1.0);
+        let limit = Rig::look(Role::Dimmer, 0.25);
         let mut inhibit = LightingDeck::new(limit);
         inhibit.blend = LightingBlend::Multiply;
         let out = r.merge(&[channel(1.0, vec![LightingDeck::new(base), inhibit])]);
@@ -532,8 +538,8 @@ mod tests {
     #[test]
     fn a_multiply_deck_at_zero_level_does_not_inhibit() {
         let r = rig(1);
-        let base = r.look(Role::Dimmer, 1.0);
-        let limit = r.look(Role::Dimmer, 0.0);
+        let base = Rig::look(Role::Dimmer, 1.0);
+        let limit = Rig::look(Role::Dimmer, 0.0);
         let mut inhibit = LightingDeck::new(limit);
         inhibit.blend = LightingBlend::Multiply;
         inhibit.level = 0.0;
@@ -546,7 +552,7 @@ mod tests {
     #[test]
     fn level_scales_an_intensity_contribution() {
         let r = rig(1);
-        let look = r.look(Role::Dimmer, 1.0);
+        let look = Rig::look(Role::Dimmer, 1.0);
         let mut deck = LightingDeck::new(look);
         deck.level = 0.25;
         let out = r.merge(&[channel(1.0, vec![deck])]);
@@ -556,7 +562,7 @@ mod tests {
     #[test]
     fn a_muted_deck_contributes_nothing() {
         let r = rig(1);
-        let look = r.look(Role::Dimmer, 1.0);
+        let look = Rig::look(Role::Dimmer, 1.0);
         let mut deck = LightingDeck::new(look);
         deck.mute = true;
         let out = r.merge(&[channel(1.0, vec![deck])]);
@@ -566,8 +572,8 @@ mod tests {
     #[test]
     fn solo_restricts_contribution_to_soloed_decks() {
         let r = rig(1);
-        let quiet = r.look(Role::Dimmer, 0.2);
-        let loud = r.look(Role::Red, 0.9);
+        let quiet = Rig::look(Role::Dimmer, 0.2);
+        let loud = Rig::look(Role::Red, 0.9);
         let mut soloed = LightingDeck::new(loud);
         soloed.solo = true;
         let out = r.merge(&[channel(1.0, vec![LightingDeck::new(quiet), soloed])]);
@@ -578,8 +584,8 @@ mod tests {
     #[test]
     fn a_muted_solo_deck_does_not_engage_solo_mode() {
         let r = rig(1);
-        let normal = r.look(Role::Dimmer, 0.5);
-        let broken = r.look(Role::Red, 1.0);
+        let normal = Rig::look(Role::Dimmer, 0.5);
+        let broken = Rig::look(Role::Red, 1.0);
         let mut muted_solo = LightingDeck::new(broken);
         muted_solo.solo = true;
         muted_solo.mute = true;
@@ -595,7 +601,7 @@ mod tests {
     #[test]
     fn channel_opacity_scales_a_normal_deck() {
         let r = rig(1);
-        let look = r.look(Role::Dimmer, 1.0);
+        let look = Rig::look(Role::Dimmer, 1.0);
         let out = r.merge(&[channel(0.5, vec![LightingDeck::new(look)])]);
         assert!((out[0].get(Role::Dimmer).unwrap() - 0.5).abs() < 1e-5);
     }
@@ -604,7 +610,7 @@ mod tests {
     #[test]
     fn an_independent_deck_ignores_channel_opacity() {
         let r = rig(1);
-        let look = r.look(Role::Dimmer, 1.0);
+        let look = Rig::look(Role::Dimmer, 1.0);
         let mut deck = LightingDeck::new(look);
         deck.independent = true;
         let out = r.merge(&[channel(0.0, vec![deck])]);
@@ -617,7 +623,7 @@ mod tests {
     #[test]
     fn a_channel_at_zero_opacity_contributes_nothing() {
         let r = rig(1);
-        let look = r.look(Role::Dimmer, 1.0);
+        let look = Rig::look(Role::Dimmer, 1.0);
         let out = r.merge(&[channel(0.0, vec![LightingDeck::new(look)])]);
         assert_eq!(out[0].get(Role::Dimmer), None);
     }
@@ -627,45 +633,56 @@ mod tests {
     #[test]
     fn a_group_look_reaches_every_member() {
         let r = rig(3);
-        let look = r.look(Role::Dimmer, 1.0);
+        let look = Rig::look(Role::Dimmer, 1.0);
         let out = r.merge(&[channel(1.0, vec![LightingDeck::new(look)])]);
         assert!(out.iter().all(|v| v.get(Role::Dimmer).is_some()));
     }
 
+    /// A deck reaches exactly the members of the groups listening to its channel, and nobody
+    /// else. A deck names no target, so this is the only routing there is.
+    /// See /spec/lighting-routing.md § A group is the lighting surface.
     #[test]
-    fn a_fixture_look_reaches_only_that_fixture() {
-        let r = rig(3);
-        let target = r.fixtures[1];
+    fn only_a_listening_groups_members_hear_a_deck() {
+        let mut r = rig(3);
+        // Narrow the listening group to the middle lamp; the other two hear nothing.
+        r.groups[0].members = vec![r.fixtures[1]];
         let mut look = Look::new("one");
-        look.set(
-            LookTarget::Fixture { id: target },
-            Role::Dimmer,
-            AttrValue::literal(1.0),
-        );
+        look.set(Role::Dimmer, AttrValue::literal(1.0));
         let out = r.merge(&[channel(1.0, vec![LightingDeck::new(look)])]);
         assert_eq!(out[0].get(Role::Dimmer), None);
         assert!(out[1].get(Role::Dimmer).is_some());
         assert_eq!(out[2].get(Role::Dimmer), None);
     }
 
-    /// A deck owns its content, so "missing look" is no longer a state that can exist. The
-    /// equivalent is content that drives nothing, which must merge to nothing rather than dark.
+    /// An unrouted group hears nothing at all, exactly as a surface with no source shows nothing.
     #[test]
-    fn a_deck_with_empty_content_contributes_nothing() {
-        let r = rig(1);
-        let out = r.merge(&[channel(1.0, vec![LightingDeck::new(Look::new("empty"))])]);
-        assert!(out[0].is_empty());
+    fn an_unrouted_group_hears_nothing() {
+        let mut r = rig(2);
+        r.groups[0].source = None;
+        let mut look = Look::new("wash");
+        look.set(Role::Dimmer, AttrValue::literal(1.0));
+        let out = r.merge(&[channel(1.0, vec![LightingDeck::new(look)])]);
+        assert!(out.iter().all(|v| v.get(Role::Dimmer).is_none()));
+    }
+
+    /// A group listening to a different channel does not hear this one.
+    #[test]
+    fn a_group_hears_only_the_channel_it_points_at() {
+        let mut r = rig(2);
+        r.groups[0].source = Some(GroupSource::Channel {
+            uuid: "ch-9".to_string(),
+        });
+        let mut look = Look::new("wash");
+        look.set(Role::Dimmer, AttrValue::literal(1.0));
+        let out = r.merge(&[channel(1.0, vec![LightingDeck::new(look)])]);
+        assert!(out.iter().all(|v| v.get(Role::Dimmer).is_none()));
     }
 
     #[test]
     fn an_unresolvable_value_is_skipped_not_zeroed() {
         let r = rig(1);
         let mut look = Look::new("palette");
-        look.set(
-            LookTarget::Group { id: r.group_id() },
-            Role::Red,
-            AttrValue::palette(Uuid::new_v4()),
-        );
+        look.set(Role::Red, AttrValue::palette(Uuid::new_v4()));
         let out = r.merge(&[channel(1.0, vec![LightingDeck::new(look)])]);
         assert_eq!(
             out[0].get(Role::Red),
@@ -674,11 +691,17 @@ mod tests {
         );
     }
 
+    /// A `Program` group hears every channel in order, which is what keeps lighting on the
+    /// crossfader: a group pinned to one channel would be deaf to it and would leave the lights
+    /// on the old song while the visuals moved on.
+    /// See /spec/lighting-routing.md § A group is the lighting surface.
     #[test]
     fn channels_apply_in_order() {
-        let r = rig(1);
-        let first = r.look(Role::Pan, 0.0);
-        let second = r.look(Role::Pan, 1.0);
+        let mut r = rig(1);
+        // Program: every channel, in crossfader order.
+        r.groups[0].source = Some(GroupSource::Program);
+        let first = Rig::look(Role::Pan, 0.0);
+        let second = Rig::look(Role::Pan, 1.0);
         let out = r.merge(&[
             channel(1.0, vec![LightingDeck::new(first)]),
             channel(1.0, vec![LightingDeck::new(second)]),
@@ -703,8 +726,8 @@ mod tests {
     #[test]
     fn snap_takes_over_outright_where_fade_crossfades() {
         let r = rig(1);
-        let left = r.look(Role::Pan, 0.0);
-        let right = r.look(Role::Pan, 1.0);
+        let left = Rig::look(Role::Pan, 0.0);
+        let right = Rig::look(Role::Pan, 1.0);
 
         let mut fading = LightingDeck::new(right.clone());
         fading.level = 0.25;
@@ -724,8 +747,8 @@ mod tests {
     #[test]
     fn snap_still_respects_mute_and_zero_weight() {
         let r = rig(1);
-        let left = r.look(Role::Pan, 0.0);
-        let right = r.look(Role::Pan, 1.0);
+        let left = Rig::look(Role::Pan, 0.0);
+        let right = Rig::look(Role::Pan, 1.0);
         let mut snapping = LightingDeck::new(right);
         snapping.ltp_transition = LtpTransition::Snap;
         snapping.level = 0.0;
@@ -739,8 +762,8 @@ mod tests {
     #[test]
     fn snap_does_not_affect_intensity_which_is_htp() {
         let r = rig(1);
-        let dim = r.look(Role::Dimmer, 0.8);
-        let low = r.look(Role::Dimmer, 0.2);
+        let dim = Rig::look(Role::Dimmer, 0.8);
+        let low = Rig::look(Role::Dimmer, 0.2);
         let mut snapping = LightingDeck::new(low);
         snapping.ltp_transition = LtpTransition::Snap;
         let out = r.merge(&[channel(1.0, vec![LightingDeck::new(dim), snapping])]);
@@ -762,11 +785,10 @@ mod tests {
 
     // ── Modulated looks and spread ───────────────────────────────────
 
-    fn modulated_look(r: &Rig, role: Role, spread: crate::dmx::Spread) -> Look {
+    fn modulated_look(role: Role, spread: crate::dmx::Spread) -> Look {
         use crate::dmx::look::ModulatedBinding;
         let mut look = Look::new("chase");
         look.bindings = vec![ModulatedBinding {
-            target: LookTarget::Group { id: r.group_id() },
             role,
             source: "lfo-1".into(),
             base: 0.0,
@@ -779,7 +801,7 @@ mod tests {
     #[test]
     fn a_modulated_look_drives_every_member() {
         let r = rig(3);
-        let look = modulated_look(&r, Role::Dimmer, crate::dmx::Spread::default());
+        let look = modulated_look(Role::Dimmer, crate::dmx::Spread::default());
         let out = r.merge_with(&[channel(1.0, vec![LightingDeck::new(look)])], &|_, _| {
             Some(0.6)
         });
@@ -796,7 +818,6 @@ mod tests {
     fn spread_gives_each_member_a_different_phase() {
         let r = rig(4);
         let look = modulated_look(
-            &r,
             Role::Dimmer,
             crate::dmx::Spread {
                 amount: 0.75,
@@ -818,7 +839,7 @@ mod tests {
     #[test]
     fn no_spread_samples_every_member_identically() {
         let r = rig(4);
-        let look = modulated_look(&r, Role::Dimmer, crate::dmx::Spread::default());
+        let look = modulated_look(Role::Dimmer, crate::dmx::Spread::default());
         let out = r.merge_with(
             &[channel(1.0, vec![LightingDeck::new(look)])],
             &|_, offset| Some(offset),
@@ -834,7 +855,6 @@ mod tests {
     fn a_non_periodic_source_falls_back_to_its_current_value() {
         let r = rig(3);
         let look = modulated_look(
-            &r,
             Role::Dimmer,
             crate::dmx::Spread {
                 amount: 1.0,
@@ -856,7 +876,7 @@ mod tests {
     #[test]
     fn a_missing_modulation_source_leaves_the_role_inert() {
         let r = rig(2);
-        let look = modulated_look(&r, Role::Dimmer, crate::dmx::Spread::default());
+        let look = modulated_look(Role::Dimmer, crate::dmx::Spread::default());
         let out = r.merge_with(&[channel(1.0, vec![LightingDeck::new(look)])], &|_, _| None);
         assert!(
             out.iter().all(|v| v.get(Role::Dimmer).is_none()),
@@ -870,7 +890,6 @@ mod tests {
         let r = rig(1);
         let mut look = Look::new("shallow");
         look.bindings = vec![ModulatedBinding {
-            target: LookTarget::Group { id: r.group_id() },
             role: Role::Dimmer,
             source: "lfo-1".into(),
             base: 0.5,
@@ -901,12 +920,7 @@ mod tests {
             },
         );
         let mut look = Look::new("map");
-        look.sample(
-            LookTarget::Group { id: r.group_id() },
-            Role::Red,
-            SampleSource::OwnChannel,
-            1.0,
-        );
+        look.sample(Role::Red, 1.0);
         let out = r.merge(&[channel(1.0, vec![LightingDeck::new(look)])]);
         let reds: Vec<f32> = out.iter().map(|v| v.get(Role::Red).unwrap()).collect();
         assert!(
@@ -922,12 +936,7 @@ mod tests {
     fn a_sampled_look_with_no_frame_is_inert_not_dark() {
         let r = rig(2);
         let mut look = Look::new("map");
-        look.sample(
-            LookTarget::Group { id: r.group_id() },
-            Role::Red,
-            SampleSource::OwnChannel,
-            1.0,
-        );
+        look.sample(Role::Red, 1.0);
         let out = r.merge(&[channel(1.0, vec![LightingDeck::new(look)])]);
         assert!(out.iter().all(|v| v.get(Role::Red).is_none()));
     }
@@ -947,12 +956,7 @@ mod tests {
             },
         );
         let mut look = Look::new("map");
-        look.sample(
-            LookTarget::Group { id: r.group_id() },
-            Role::Red,
-            SampleSource::OwnChannel,
-            1.0,
-        );
+        look.sample(Role::Red, 1.0);
         let out = r.merge(&[channel(1.0, vec![LightingDeck::new(look)])]);
         assert!(out[0].get(Role::Red).is_some(), "a placed fixture samples");
         assert!(
@@ -975,12 +979,7 @@ mod tests {
             },
         );
         let mut look = Look::new("map");
-        look.sample(
-            LookTarget::Group { id: r.group_id() },
-            Role::Red,
-            SampleSource::OwnChannel,
-            1.0,
-        );
+        look.sample(Role::Red, 1.0);
         let mut deck = LightingDeck::new(look);
         deck.level = 0.5;
         let out = r.merge(&[channel(1.0, vec![deck])]);
@@ -1001,54 +1000,12 @@ mod tests {
             },
         );
         let mut look = Look::new("map");
-        look.sample(
-            LookTarget::Group { id: r.group_id() },
-            Role::Red,
-            SampleSource::OwnChannel,
-            4.0,
-        );
+        look.sample(Role::Red, 4.0);
         let out = r.merge(&[channel(1.0, vec![LightingDeck::new(look)])]);
         assert!(
             (out[0].get(Role::Red).unwrap() - 1.0).abs() < 1e-5,
             "must clip"
         );
-    }
-
-    /// A sampled deck reads the channel it lives in, with no configuration. "These lights go
-    /// with these visuals" is the workflow, and the channel already says which visuals.
-    #[test]
-    fn own_channel_reads_the_channel_the_deck_lives_in() {
-        let mut r = rig(1);
-        r.frames.insert(
-            "ch-2".to_string(),
-            super::super::sample::SampledFrame {
-                width: 1,
-                height: 1,
-                rgba: vec![255, 0, 0, 255],
-            },
-        );
-        let mut look = Look::new("map");
-        look.sample(
-            LookTarget::Group { id: r.group_id() },
-            Role::Red,
-            SampleSource::OwnChannel,
-            1.0,
-        );
-        let mut ch = channel(1.0, vec![LightingDeck::new(look)]);
-        ch.key = "ch-2".to_string();
-        assert!(r.merge(&[ch]).first().unwrap().get(Role::Red).is_some());
-
-        // The same deck in a channel with no frame stays inert.
-        let mut look = Look::new("map");
-        look.sample(
-            LookTarget::Group { id: r.group_id() },
-            Role::Red,
-            SampleSource::OwnChannel,
-            1.0,
-        );
-        let mut ch = channel(1.0, vec![LightingDeck::new(look)]);
-        ch.key = "ch-9".to_string();
-        assert!(r.merge(&[ch]).first().unwrap().get(Role::Red).is_none());
     }
 
     #[test]

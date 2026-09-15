@@ -607,6 +607,19 @@ pub(crate) fn build_ui_data(
             .iter()
             .map(|g| (g.id.to_string(), g.name.clone(), g.members.len()))
             .collect(),
+        lighting_group_sources: app
+            .lighting
+            .config()
+            .groups
+            .iter()
+            .map(|g| {
+                let source = g.source.as_ref().map(|s| match s {
+                    crate::dmx::GroupSource::Program => "program".to_string(),
+                    crate::dmx::GroupSource::Channel { uuid } => uuid.clone(),
+                });
+                (g.id.to_string(), source)
+            })
+            .collect(),
         lighting_group_members: app
             .lighting
             .config()

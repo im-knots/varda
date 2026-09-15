@@ -501,6 +501,9 @@ pub struct UIData {
     /// Group membership, so a group's parameter column can offer the union of what its members
     /// can actually do. Keyed by group UUID, holding fixture UUIDs.
     pub lighting_group_members: Vec<(String, Vec<String>)>,
+    /// Which channel each group listens to. The group declares its feed, exactly as a surface
+    /// declares which channel it shows.
+    pub lighting_group_sources: Vec<(String, Option<String>)>,
     /// Lighting deck UUIDs as strings, keyed by (channel, index within that channel).
     ///
     /// Interned here because arrangement lane rows borrow `&str` while a deck's identity is a
