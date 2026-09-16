@@ -117,20 +117,53 @@ fi
 # Deliberately not `ldconfig -p 2>/dev/null | grep`: that reports a missing or failing
 # ldconfig as an absent library, which is a different bug wearing the same error message.
 vulkan_found=false
-if command -v ldconfig >/dev/null 2>&1; then
-  if ldconfig -p | grep -q 'libvulkan\.so\.1'; then
-    vulkan_found=true
-  fi
-else
-  echo "  note: no ldconfig here, checking the filesystem instead"
+vulkan_how=""
+# Both checks, not one with the other as fallback: ldconfig's cache and the filesystem can
+# disagree (a fresh install whose trigger has not run yet shows up on disk first), and
+# either one finding it means wgpu's dlopen will succeed.
+if command -v ldconfig >/dev/null 2>&1 && ldconfig -p | grep -q 'libvulkan\.so\.1'; then
+  vulkan_found=true
+  vulkan_how="ldconfig cache"
+fi
+if [ "$vulkan_found" = false ]; then
   for d in /usr/lib64 /usr/lib /lib64 /lib /usr/lib/x86_64-linux-gnu; do
-    if [ -e "$d/libvulkan.so.1" ]; then vulkan_found=true; break; fi
+    if [ -e "$d/libvulkan.so.1" ]; then
+      vulkan_found=true
+      vulkan_how="$d"
+      break
+    fi
   done
 fi
+
 if [ "$vulkan_found" = true ]; then
-  echo "  ok: Vulkan loader present"
+  echo "  ok: Vulkan loader present ($vulkan_how)"
 else
-  echo "FAIL: libvulkan.so.1 is not installed (see declared dependencies above)"
+  echo "FAIL: libvulkan.so.1 is not installed"
+  # Print both halves of the question here rather than leaving it to be inferred: did the
+  # package fail to declare the loader, or did the distribution fail to install it?
+  echo "    declared by the package:"
+  case "$DISTRO_ID" in
+    debian|ubuntu)
+      dpkg-deb -f "$PKG" Depends 2>/dev/null | tr ',' '\n' | grep -i vulkan | sed 's/^ */      /' \
+        || echo "      (nothing matching 'vulkan' in Depends)"
+      ;;
+    fedora|opensuse*|sles)
+      rpm -qpR "$PKG" 2>/dev/null | grep -i vulkan | sed 's/^/      /' \
+        || echo "      (nothing matching 'vulkan' in Requires)"
+      ;;
+  esac
+  echo "    installed on the system:"
+  case "$DISTRO_ID" in
+    debian|ubuntu)
+      dpkg -l 2>/dev/null | grep -i vulkan | sed 's/^/      /' || echo "      (no vulkan packages)"
+      ;;
+    fedora|opensuse*|sles)
+      rpm -qa 2>/dev/null | grep -i vulkan | sed 's/^/      /' || echo "      (no vulkan packages)"
+      ;;
+    *)
+      pacman -Q 2>/dev/null | grep -i vulkan | sed 's/^/      /' || echo "      (no vulkan packages)"
+      ;;
+  esac
   failed=1
 fi
 

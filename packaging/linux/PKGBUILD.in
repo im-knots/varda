@@ -9,11 +9,17 @@ pkgver=@VERSION@
 pkgrel=1
 pkgdesc="Live visual mixer and router for VJ performance and installation art"
 arch=('x86_64')
-# makepkg.conf ships `lto` in its default OPTIONS. Under LTO the glslopt C++ sources that
-# webrender's build script links are compiled to LLVM bitcode, and the link then fails on
-# undefined glslopt_* symbols. Nothing here needs LTO; cargo's release profile already
-# applies its own.
-options=('!lto')
+# Both of these are in makepkg.conf's default OPTIONS and both break this build.
+#
+# !lto   - under LTO the glslopt C++ sources that webrender's build script links compile
+#          to LLVM bitcode, and the link fails on undefined glslopt_* symbols. Nothing
+#          here needs it: cargo's release profile applies its own `lto = "thin"`.
+# !debug - makepkg injects `-C debuginfo=2` to build a -debug package. Applied to
+#          servo-script, Servo's largest crate, on top of codegen-units=1 and the
+#          bitcode cargo's own LTO emits, rustc is killed by the OOM killer (SIGKILL).
+#          The release profile already sets strip = "symbols", so the debug package
+#          would have been empty of anything useful anyway.
+options=('!lto' '!debug')
 url="https://github.com/im-knots/varda"
 license=('MIT')
 depends=(

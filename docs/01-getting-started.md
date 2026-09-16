@@ -37,9 +37,7 @@ a rolling distribution changes library versions continuously, and a package rebu
 your machine always matches what you actually have.
 
 **On any other distribution** (openSUSE Tumbleweed, Gentoo, Void, NixOS, Alpine, Slackware), build from source
-with the instructions below. Varda no longer ships a portable tarball; it required
-bundling every dependency, which meant shipping libraries frozen at release time that
-your distribution could neither update nor security-patch.
+with the instructions below. 
 
 ### Windows (Portable ZIP)
 
