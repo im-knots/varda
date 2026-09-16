@@ -514,12 +514,11 @@ mod tests {
     #[test]
     fn bundled_shaders_resolve_from_the_packaged_layout() {
         let root = tempfile::tempdir().unwrap();
-        let exe_dir = root.path().join("usr/bin");
-        let shaders = root.path().join("usr").join(
-            BUNDLED_SHADERS_RELATIVE
-                .strip_prefix("../")
-                .unwrap_or(BUNDLED_SHADERS_RELATIVE),
-        );
+        let exe_dir = root.path().join("bin");
+        // Lay the directory out by the platform's own rule rather than assuming a shape.
+        // Windows puts shaders beside the executable; the others put them above it, and
+        // an earlier version of this test assumed the `../` and failed on Windows only.
+        let shaders = exe_dir.join(BUNDLED_SHADERS_RELATIVE);
         fs::create_dir_all(&exe_dir).unwrap();
         fs::create_dir_all(&shaders).unwrap();
 
@@ -527,6 +526,47 @@ mod tests {
         assert_eq!(
             found.canonicalize().unwrap(),
             shaders.canonicalize().unwrap()
+        );
+    }
+
+    /// Packaging and this constant have to agree, per platform, or Varda installs and
+    /// starts normally with an empty shader library and nothing else notices. Each pair
+    /// below is where that platform's packaging actually puts the executable and the
+    /// shaders: `/usr/bin` + `/usr/share/varda/shaders` for the Linux packages, the .app
+    /// bundle layout for macOS, and the portable ZIP's flat layout for Windows.
+    #[test]
+    fn bundled_shader_path_matches_what_packaging_installs() {
+        use std::path::Component;
+
+        #[cfg(target_os = "linux")]
+        let (exe_dir, expected) = ("/usr/bin", "/usr/share/varda/shaders");
+        #[cfg(target_os = "macos")]
+        let (exe_dir, expected) = (
+            "/Applications/Varda.app/Contents/MacOS",
+            "/Applications/Varda.app/Contents/Resources/shaders",
+        );
+        #[cfg(target_os = "windows")]
+        let (exe_dir, expected) = (r"C:\Varda", r"C:\Varda\shaders");
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+        let (exe_dir, expected) = ("/usr/bin", "/usr/share/varda/shaders");
+
+        let joined = Path::new(exe_dir).join(BUNDLED_SHADERS_RELATIVE);
+        // Resolve `..` lexically: these paths do not exist on the machine running this.
+        let resolved = joined
+            .components()
+            .fold(PathBuf::new(), |mut acc, component| {
+                if component == Component::ParentDir {
+                    acc.pop();
+                } else {
+                    acc.push(component);
+                }
+                acc
+            });
+
+        assert_eq!(
+            resolved,
+            Path::new(expected),
+            "packaging installs shaders somewhere this constant does not point"
         );
     }
 
