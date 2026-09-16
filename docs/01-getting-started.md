@@ -26,15 +26,25 @@ the [latest release](https://github.com/im-knots/varda/releases/latest).
 | Debian 13, MX Linux, AV Linux | `varda_<version>_amd64_debian13.deb` | `sudo apt install ./varda_*.deb` |
 | Ubuntu 26.04, Mint 23+, Pop!_OS 26.04, Zorin, Ubuntu Studio | `varda_<version>_amd64_ubuntu2604.deb` | `sudo apt install ./varda_*.deb` |
 | Ubuntu 24.04, Mint 22.x, Pop!_OS 24.04 | `varda_<version>_amd64_ubuntu2404.deb` | `sudo apt install ./varda_*.deb` |
-| Fedora 44, Nobara, Ultramarine | `varda-<version>.x86_64.rpm` | `sudo dnf install ./varda-*.rpm` |
-| openSUSE Leap 16 | `varda-<version>.x86_64.rpm` | `sudo zypper install ./varda-*.rpm` |
-| Arch, CachyOS, Manjaro, EndeavourOS, Garuda | AUR | `yay -S varda` (or `paru -S varda`) |
+| Fedora 44, Nobara, Ultramarine | `varda-<version>-1.fc44.x86_64.rpm` | `sudo dnf install ./varda-*.fc44.x86_64.rpm` |
+| openSUSE Leap 16 | `varda-<version>-1.opensuse16.x86_64.rpm` | `sudo zypper install ./varda-*.opensuse16.x86_64.rpm` |
+| Arch, CachyOS, Manjaro, EndeavourOS, Garuda | `PKGBUILD` | see below |
 
 Then run `varda` from anywhere.
 
-Arch and its derivatives build from the AUR rather than installing a binary, on purpose:
-a rolling distribution changes library versions continuously, and a package rebuilt on
-your machine always matches what you actually have.
+Arch and its derivatives build from source rather than installing a binary
+
+Download `PKGBUILD` from the release, then:
+
+```bash
+makepkg -si          # add --nocheck to skip the test suite and build faster
+```
+
+Kinect v1 support needs libfreenect, which Arch does not package at all; the `PKGBUILD`
+builds and statically links it rather than sending you to the AUR for it.
+
+> **Not on the AUR.** AUR registration is closed, so `yay -S varda` is not available.
+> Use the `PKGBUILD` from the release as above.
 
 **On any other distribution** (openSUSE Tumbleweed, Gentoo, Void, NixOS, Alpine, Slackware), build from source
 with the instructions below. 
@@ -48,31 +58,6 @@ with the instructions below.
 No installer required. FFmpeg DLLs and shaders are bundled in the ZIP.
 
 > **Note:** Windows may show a SmartScreen warning because the binary is not code-signed. Click **"More info"** then **"Run anyway"**. You may also need the [Visual C++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe) if it's not already installed (most Windows 10/11 systems have it).
-
-## Workspace & Content
-
-Varda treats the current directory (or `--workspace` path) as the workspace root. Create a project folder and put your content in it:
-
-```
-my-show/
-  shaders/       ← ISF shader files (.fs) — auto-discovered, hot-reloaded on save
-  media/         ← videos and images (loaded via Library panel)
-  .varda/        ← created automatically (scene, stage, presets, mappings, OSC config)
-```
-
-Shaders in `shaders/` appear automatically in the Library panel under **Generators**, **Effects**, or **Transitions** based on their type. Videos and images are loaded through the Library panel's file browser.
-
-**Supported formats:**
-
-| Type | Formats |
-|------|---------|
-| **Shaders** | `.fs` (ISF GLSL 450) |
-| **Video** | Any ffmpeg-supported container/codec — MP4, MOV, MKV, AVI, WebM (H.264, H.265, ProRes, VP9, etc.) |
-| **HAP Video** | MOV with HAP, HAP Alpha, HAP Q, HAP Q Alpha, HAP R — GPU-native decode, no CPU overhead |
-| **Images** | PNG, JPG/JPEG, BMP, TIFF, TGA, WebP |
-| **Vector** | SVG/SVGZ — redrawn at your render resolution, so it stays sharp at any size |
-
-The table above covers local file content. Varda can also route live and network inputs like cameras, NDI, SRT, HLS, DASH, RTMP, screen and window captures, compute shaders, and more. See [Source Types](02-concepts.md#source-types) for the complete list.
 
 ## Build from Source
 
@@ -111,17 +96,18 @@ sudo dnf install https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-releas
 ### Arch / CachyOS / Manjaro
 
 ```bash
-sudo pacman -S --needed base-devel cmake pkgconf vulkan-icd-loader ffmpeg srt alsa-lib v4l-utils pipewire shaderc wayland libxkbcommon libx11 libxrandr libxi gtk3
+sudo pacman -S --needed base-devel cmake pkgconf vulkan-icd-loader ffmpeg srt alsa-lib v4l-utils libusb pipewire shaderc wayland libxkbcommon libx11 libxrandr libxi gtk3
 ```
 
-`libfreenect` (Kinect v1 depth sensors) is in the AUR rather than core/extra, so install
-it first:
+`libfreenect` (Kinect v1 depth sensors) is in no Arch repository. Either install it from
+the AUR (`yay -S libfreenect`) before building, or build without that feature:
 
 ```bash
-yay -S libfreenect     # or: paru -S libfreenect
+cargo build --release --no-default-features --features face-detection,html,screen-capture
 ```
 
-Or build the AUR package, which handles all of this for you: `yay -S varda`.
+The `PKGBUILD` from the release avoids the choice entirely: it builds and statically links
+libfreenect itself (see the install section above).
 
 ### openSUSE
 
@@ -168,6 +154,31 @@ cargo build --release --no-default-features --features face-detection,html,scree
 ```sh
 cargo run --release
 ```
+## Workspace & Content
+
+Varda treats the current directory (or `--workspace` path) as the workspace root. Create a project folder and put your content in it:
+
+```
+my-show/
+  shaders/       ← ISF shader files (.fs) — auto-discovered, hot-reloaded on save
+  media/         ← videos and images (loaded via Library panel)
+  .varda/        ← created automatically (scene, stage, presets, mappings, OSC config)
+```
+
+Shaders in `shaders/` appear automatically in the Library panel under **Generators**, **Effects**, or **Transitions** based on their type. Videos and images are loaded through the Library panel's file browser.
+
+**Supported formats:**
+
+| Type | Formats |
+|------|---------|
+| **Shaders** | `.fs` (ISF GLSL 450) |
+| **Video** | Any ffmpeg-supported container/codec — MP4, MOV, MKV, AVI, WebM (H.264, H.265, ProRes, VP9, etc.) |
+| **HAP Video** | MOV with HAP, HAP Alpha, HAP Q, HAP Q Alpha, HAP R — GPU-native decode, no CPU overhead |
+| **Images** | PNG, JPG/JPEG, BMP, TIFF, TGA, WebP |
+| **Vector** | SVG/SVGZ — redrawn at your render resolution, so it stays sharp at any size |
+
+The table above covers local file content. Varda can also route live and network inputs like cameras, NDI, SRT, HLS, DASH, RTMP, screen and window captures, compute shaders, and more. See [Source Types](02-concepts.md#source-types) for the complete list.
+
 
 ## UI Layout
 

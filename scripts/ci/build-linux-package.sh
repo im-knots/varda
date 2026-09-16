@@ -152,9 +152,11 @@ install_build_deps() {
         vulkan-icd-loader \
         ffmpeg srt alsa-lib v4l-utils pipewire shaderc \
         wayland libxkbcommon libx11 libxrandr libxi gtk3
-      # libfreenect is AUR-only on Arch. Build it rather than drop the `depth` feature:
-      # a dependency living in a different repository is not a reason to ship Arch users
-      # a Varda without depth sensors.
+      # libfreenect is in no Arch repository. The container build needs it the same way
+      # the PKGBUILD does, and for the same reason: `depth` links -lfreenect. This still
+      # uses the AUR copy because it is only building the package here, not installing
+      # one; the published PKGBUILD builds and statically links libfreenect itself, so a
+      # user needs nothing from the AUR.
       "$SCRIPT_DIR/install-aur-package.sh" libfreenect
       ;;
   esac
@@ -334,7 +336,9 @@ SPEC
     case "$REF" in
       v[0-9]*)
         SRC_URL="https://github.com/im-knots/varda/archive/refs/tags/${REF}.tar.gz"
-        SRC_DIR="varda-${REF#v}"
+        # Literal, so the published recipe reads the way an Arch packager expects
+        # rather than carrying a hardcoded version in two places.
+        SRC_DIR='$pkgname-$pkgver'
         ;;
       *)
         SRC_URL="https://github.com/im-knots/varda/archive/${REF}.tar.gz"

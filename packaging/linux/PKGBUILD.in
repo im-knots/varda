@@ -1,16 +1,15 @@
 # Maintainer: im-knots <noreply@users.noreply.github.com>
 #
-# Arch and its derivatives build from source rather than installing a binary we produced.
-# A rolling distribution moves SONAMEs continuously, so a binary built on our runner goes
-# stale the moment one moves. That is issue #134 on a faster clock. Built here, the
-# package always matches the libraries the user actually has.
+# BUILDING THIS BY HAND
+#
+#   makepkg -si             # add --nocheck to skip the test suite
+#
+#
 pkgname=varda
 pkgver=@VERSION@
 pkgrel=1
 pkgdesc="Live visual mixer and router for VJ performance and installation art"
 arch=('x86_64')
-# Both of these are in makepkg.conf's default OPTIONS and both break this build.
-#
 # !lto   - under LTO the glslopt C++ sources that webrender's build script links compile
 #          to LLVM bitcode, and the link fails on undefined glslopt_* symbols. Nothing
 #          here needs it: cargo's release profile applies its own `lto = "thin"`.
@@ -31,34 +30,83 @@ depends=(
   'gtk3'            # file dialogs (rfd)
   'pipewire'        # screen capture on Wayland
   'v4l-utils'       # cameras
-  'libfreenect'     # AUR. Depth sensors (Kinect v1). An AUR helper resolves this;
-                    # plain makepkg does not, so install it first if building by hand.
+  'libusb'          # what the statically linked libfreenect needs at runtime
   'fontconfig' 'freetype2'
 )
 makedepends=(
-  'rust' 'cargo' 'cmake' 'pkgconf' 'git' 'shaderc'
+  'rust'    # provides cargo
+  'cmake' 'pkgconf' 'shaderc'
   'clang'   # bindgen needs libclang.so (libspa-sys, for the PipeWire capture backend)
   'python'  # mozjs_sys (SpiderMonkey, under the `html` feature) builds with it
 )
 optdepends=('ndi: NDI send and receive support')
-# Substituted at generation time. _srcdir is not always "$pkgname-$pkgver": GitHub names
-# the directory inside the archive after the ref, so a dry-run build from a commit SHA
-# unpacks to varda-<sha> instead.
-_srcdir=@SRCDIR@
-source=("$pkgname-$pkgver.tar.gz::@SRCURL@")
-sha256sums=('@SHA256@')
+_srcdir="@SRCDIR@"
+_freenectver=0.7.5
+source=(
+  "$pkgname-$pkgver.tar.gz::@SRCURL@"
+  "libfreenect-$_freenectver.tar.gz::https://github.com/OpenKinect/libfreenect/archive/refs/tags/v$_freenectver.tar.gz"
+)
+sha256sums=(
+  '@SHA256@'
+  '3c668053db726206a8c3a92e92e91ef7a64407968f422b9c4b828d0fd234c866'
+)
 
-build() {
+prepare() {
   cd "$_srcdir"
   export RUSTUP_TOOLCHAIN=stable
-  cargo build --release --locked
+  # Fetch here so build() and check() can run --frozen, per the Arch Rust package
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+# Build libfreenect into a staging prefix inside $srcdir.
+_build_freenect() {
+  local prefix="$srcdir/freenect-prefix"
+  [ -e "$prefix/lib/libfreenect.a" ] && return 0
+
+  cmake -S "$srcdir/libfreenect-$_freenectver" -B "$srcdir/libfreenect-build" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX="$prefix" \
+    -DCMAKE_INSTALL_LIBDIR=lib \
+    -DBUILD_EXAMPLES=OFF \
+    -DBUILD_FAKENECT=OFF \
+    -DBUILD_CPP=OFF \
+    -DBUILD_C_SYNC=OFF \
+    -DBUILD_CV=OFF \
+    -DBUILD_PYTHON=OFF
+  cmake --build "$srcdir/libfreenect-build" --target install -j"$(nproc)"
+9
+  rm -f "$prefix/lib/"libfreenect.so*
+  [ -e "$prefix/lib/libfreenect.a" ] \
+    || { echo "libfreenect static library was not produced" >&2; return 1; }
+}
+
+build() {
+  _build_freenect
+
+  cd "$_srcdir"
+  export RUSTUP_TOOLCHAIN=stable
+  # Keep cargo's output inside the build directory rather than wherever the user's
+  # CARGO_TARGET_DIR happens to point.
+  export CARGO_TARGET_DIR=target
+
+  # Resolve -lfreenect against the staging prefix
+  export LIBRARY_PATH="$srcdir/freenect-prefix/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
+  export PKG_CONFIG_PATH="$srcdir/freenect-prefix/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+  export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-lusb-1.0"
+
+  cargo build --frozen --release
 }
 
 check() {
   cd "$_srcdir"
   export RUSTUP_TOOLCHAIN=stable
-  # Skip GPU-dependent tests: makepkg often runs without a usable adapter.
-  cargo test --release --locked --lib || true
+  export CARGO_TARGET_DIR=target
+  # Same link setup as build(), or the test binaries fail to link.
+  export LIBRARY_PATH="$srcdir/freenect-prefix/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
+  export PKG_CONFIG_PATH="$srcdir/freenect-prefix/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+  export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-lusb-1.0"
+  # GPU-backed tests skip themselves unless VARDA_REQUIRE_GPU is set
+  VARDA_SKIP_GOLDEN_SNAPSHOTS=1 cargo test --frozen --release --lib
 }
 
 package() {
@@ -67,6 +115,8 @@ package() {
   install -Dm644 packaging/linux/varda.desktop "$pkgdir/usr/share/applications/varda.desktop"
   install -Dm644 assets/icon.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/varda.png"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 "$srcdir/libfreenect-$_freenectver/APACHE20" \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE.libfreenect"
 
   # Must match BUNDLED_SHADERS_RELATIVE in src/internal/registry/mod.rs:
   # /usr/bin/varda resolves shaders at ../share/varda/shaders

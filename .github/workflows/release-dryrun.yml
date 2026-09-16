@@ -1,15 +1,29 @@
 name: Release dry run
 
-# TEMPORARY. Runs the full release build and smoke matrix on a pull request without
-# publishing anything, so the per-distro packaging and the macOS/Windows smoke rows can
-# be proven green before they gate a real release.
+# Runs the full release build and smoke matrix on a pull request without publishing
+# anything. It calls the same reusable workflow release.yml does, so what goes green here
+# is the release pipeline itself.
 #
-# REMOVE THIS FILE once the matrix has gone green on a tag. It calls the same reusable
-# workflow release.yml does, so deleting it loses no coverage; it only stops paying for a
-# full ten-row matrix on every pull request.
+# Originally temporary, kept deliberately: the matrix is now green, and this is what stops
+# it silently rotting between releases. Scoped by `paths` so it only runs on changes that
+# can actually break packaging. Everything else pays nothing.
+#
+# Ten rows, the slowest around 30 minutes. Delete this file if that ever stops being worth
+# it; no coverage is lost, the release gate still runs the identical matrix on a tag.
 on:
   pull_request:
     branches: [main]
+    paths:
+      - 'packaging/**'
+      - 'scripts/ci/**'
+      - '.github/workflows/build-artifacts.yml'
+      - '.github/workflows/release-dryrun.yml'
+      - '.github/workflows/release.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      # The shader library is installed by every package and its size is asserted by
+      # every smoke row.
+      - 'shaders/**'
   workflow_dispatch:
 
 jobs:
