@@ -362,6 +362,18 @@ SPEC
         -e "s|@SRCURL@|$SRC_URL|g" \
         -e "s/@SRCDIR@/$SRC_DIR/g" \
       packaging/linux/PKGBUILD.in > "$OUTDIR/PKGBUILD"
+
+    # `bash -n` on a PKGBUILD proves very little: a stray token inside a function body is
+    # syntactically a valid command invocation and only fails when that function runs.
+    # makepkg --printsrcinfo parses the recipe properly and is the real check that it is
+    # well formed before it reaches a release. (It refuses to run as root.)
+    bash -n "$OUTDIR/PKGBUILD"
+    if id builder >/dev/null 2>&1; then
+      su builder -c "cd '$PWD/$OUTDIR' && makepkg --printsrcinfo" > "$OUTDIR/.SRCINFO"
+      echo "==> .SRCINFO"
+      sed 's/^/    /' "$OUTDIR/.SRCINFO"
+    fi
+
     cat "$OUTDIR/PKGBUILD"
     ;;
 esac

@@ -61,12 +61,12 @@ prepare() {
 # Build libfreenect into a staging prefix inside $srcdir.
 _build_freenect() {
   local prefix="$srcdir/freenect-prefix"
-  [ -e "$prefix/lib/libfreenect.a" ] && return 0
+  # build() and check() both need the prefix; only build a second time if it is absent.
+  if [ -e "$prefix/lib/libfreenect.a" ]; then return 0; fi
 
   cmake -S "$srcdir/libfreenect-$_freenectver" -B "$srcdir/libfreenect-build" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$prefix" \
-    -DCMAKE_INSTALL_LIBDIR=lib \
     -DBUILD_EXAMPLES=OFF \
     -DBUILD_FAKENECT=OFF \
     -DBUILD_CPP=OFF \
@@ -74,7 +74,7 @@ _build_freenect() {
     -DBUILD_CV=OFF \
     -DBUILD_PYTHON=OFF
   cmake --build "$srcdir/libfreenect-build" --target install -j"$(nproc)"
-9
+
   rm -f "$prefix/lib/"libfreenect.so*
   [ -e "$prefix/lib/libfreenect.a" ] \
     || { echo "libfreenect static library was not produced" >&2; return 1; }
