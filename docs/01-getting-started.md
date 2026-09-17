@@ -171,7 +171,7 @@ Shaders in `shaders/` appear automatically in the Library panel under **Generato
 
 | Type | Formats |
 |------|---------|
-| **Shaders** | `.fs` (ISF GLSL 450) |
+| **Shaders** | `.fs`, `.comp`  (ISF GLSL 450 fragment and compute) |
 | **Video** | Any ffmpeg-supported container/codec — MP4, MOV, MKV, AVI, WebM (H.264, H.265, ProRes, VP9, etc.) |
 | **HAP Video** | MOV with HAP, HAP Alpha, HAP Q, HAP Q Alpha, HAP R — GPU-native decode, no CPU overhead |
 | **Images** | PNG, JPG/JPEG, BMP, TIFF, TGA, WebP |

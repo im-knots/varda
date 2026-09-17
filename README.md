@@ -37,21 +37,9 @@ Experimental:
 
 Download the latest release from the [Releases page](https://github.com/im-knots/varda/releases).
 
-### macOS (Universal DMG)
+### Linux
 
-1. Download `Varda-macOS-universal.dmg`
-2. Open the DMG and drag **Varda.app** to `/Applications`
-3. Before first launch, open Terminal and run:
-   ```bash
-   xattr -cr /Applications/Varda.app
-   ```
-   This removes the macOS quarantine flag. Varda is not yet signed with an Apple Developer certificate, so Gatekeeper will block it without this step.
-4. Launch Varda — on first run it will prompt for your password to install the `varda` CLI command to `/usr/local/bin/`
-
-### Linux (Native Packages)
-
-Varda ships a package built for each distribution, so your package manager installs its
-dependencies for you and keeps them patched. Download the one matching your distro from
+Varda ships a package built for each distribution. Download the one matching your distro from
 the [latest release](https://github.com/im-knots/varda/releases/latest).
 
 | Distribution | Package | Install |
@@ -65,9 +53,7 @@ the [latest release](https://github.com/im-knots/varda/releases/latest).
 
 Then run `varda` from anywhere.
 
-Arch and its derivatives build from source rather than installing a binary, on purpose: a
-rolling distribution changes library versions continuously, and a package rebuilt on your
-machine always matches what you actually have.
+Arch and its derivatives build from source rather than installing a binary
 
 Download `PKGBUILD` from the release, then:
 
@@ -75,17 +61,22 @@ Download `PKGBUILD` from the release, then:
 makepkg -si          # add --nocheck to skip the test suite and build faster
 ```
 
-Every dependency comes from the official repositories, so that is the whole procedure.
-Kinect v1 support needs libfreenect, which Arch does not package at all; the `PKGBUILD`
-builds and statically links it rather than sending you to the AUR for it.
-
 > **Not on the AUR.** AUR registration is closed, so `yay -S varda` is not available.
 > Use the `PKGBUILD` from the release as above.
 
 **On any other distribution** (openSUSE Tumbleweed, Gentoo, Void, NixOS, Alpine, Slackware), build from source
-with the instructions below. Varda no longer ships a portable tarball; it required
-bundling every dependency, which meant shipping libraries frozen at release time that
-your distribution could neither update nor security-patch.
+with the instructions below.
+
+### macOS (Universal DMG)
+
+1. Download `Varda-macOS-universal.dmg`
+2. Open the DMG and drag **Varda.app** to `/Applications`
+3. Before first launch, open Terminal and run:
+   ```bash
+   xattr -cr /Applications/Varda.app
+   ```
+   This removes the macOS quarantine flag. Varda is not yet signed with an Apple Developer certificate, so Gatekeeper will block it without this step.
+4. Launch Varda — on first run it will prompt for your password to install the `varda` CLI command to `/usr/local/bin/`
 
 ### Windows (Portable ZIP)
 
@@ -97,12 +88,6 @@ No installer required. FFmpeg DLLs and shaders are bundled in the ZIP. NDI is in
 
 > **Note:** Windows may show a SmartScreen warning because the binary is not code-signed. Click **"More info"** then **"Run anyway"**. You may also need the [Visual C++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe) if it's not already installed (most Windows 10/11 systems have it).
 
-All releases bundle FFmpeg and NDI, no extra dependencies needed.
-
-## Getting Started
-See the [manual](docs/README.md) for a complete guide to using Varda.
-
----
 
 ## Build from source
 
@@ -195,6 +180,12 @@ cargo build --release
 ```
 cargo run --release
 ```
+---
+
+## Getting Started
+See the [manual](docs/README.md) for a complete guide to using Varda.
+
+
 
 
 ## CLI flags
