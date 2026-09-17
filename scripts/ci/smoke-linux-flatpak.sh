@@ -25,11 +25,11 @@ echo "==> Installing flatpak itself"
 case "$DISTRO_ID" in
   debian|ubuntu)
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update -qq && apt-get install -y -qq --no-install-recommends flatpak ca-certificates binutils >/dev/null ;;
-  fedora)          dnf install -y -q flatpak binutils >/dev/null ;;
-  opensuse*|sles)  zypper --non-interactive --gpg-auto-import-keys install -y flatpak binutils >/dev/null ;;
+    apt-get update -qq && apt-get install -y -qq --no-install-recommends flatpak ca-certificates >/dev/null ;;
+  fedora)          dnf install -y -q flatpak >/dev/null ;;
+  opensuse*|sles)  zypper --non-interactive --gpg-auto-import-keys install -y flatpak >/dev/null ;;
   arch|cachyos|manjaro|endeavouros)
-                   pacman -Syu --noconfirm --needed --quiet flatpak binutils >/dev/null ;;
+                   pacman -Syu --noconfirm --needed --quiet flatpak >/dev/null ;;
   *) echo "::error::no flatpak install path for '$DISTRO_ID'"; exit 1 ;;
 esac
 
@@ -77,7 +77,11 @@ fi
 # face-detection links ONNX Runtime statically, so its absence is invisible from the
 # outside: Varda starts normally and the analyzer is simply missing. Check the binary
 # carries it, the same way the v0.6.0 artifact was checked.
-if strings -a "$INSTALL_DIR/bin/varda" 2>/dev/null | grep -q 'onnxruntime'; then
+#
+# grep reads the binary directly. `strings -a BIN | grep -q` is a coin flip: grep -q exits
+# at the first match, strings then dies of SIGPIPE, and pipefail reports 141 for a check
+# that succeeded. That shape cost the AppImage matrix a full round of false failures.
+if grep -qa 'onnxruntime' "$INSTALL_DIR/bin/varda"; then
   echo "  ok: ONNX Runtime linked (face-detection present)"
 else
   echo "FAIL: no ONNX Runtime in the binary; face-detection did not build"

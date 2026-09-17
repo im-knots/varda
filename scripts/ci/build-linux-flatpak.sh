@@ -14,6 +14,7 @@ cd "$PROJECT_ROOT"
 
 APPID="io.github.im_knots.varda"
 MANIFEST="packaging/flatpak/$APPID.yml"
+EXCEPTIONS="packaging/flatpak/linter-exceptions.json"
 RUNTIME_VERSION="$(grep -m1 'runtime-version:' "$MANIFEST" | tr -d " '" | cut -d: -f2)"
 
 VERSION=""
@@ -35,10 +36,25 @@ mkdir -p "$OUTDIR"
 
 echo "==> Varda $VERSION Flatpak (runtime $RUNTIME_VERSION)"
 
-# --- Validate the manifest before anything expensive ----------------------------------
+# --- Manifest lint --------------------------------------------------------------------
 # flatpak-builder-lint is Flathub's own manifest linter. It runs in seconds and catches
 # structural mistakes that would otherwise surface half an hour into a build, which is
-# how several rounds of this were spent. Run first, deliberately.
+# how several rounds of this were spent.
+#
+# It runs AFTER cargo-sources.json is generated, not before. The linter shells out to
+# `flatpak-builder --show-manifest`, which resolves the manifest completely, including
+# the `- cargo-sources.json` include. With that file absent, flatpak-builder's
+# load_sources_from_json returns NULL, its deserializer returns FALSE, and the linter
+# reports manifest-json-warnings:
+#
+#   Failed to deserialize "sources" property ... for an object of type "BuilderModule"
+#
+# which reads like a malformed manifest and is really a missing file. Linting a manifest
+# whose sources are not all present is not linting the manifest that gets built.
+#
+# --exceptions is required for --user-exceptions to be consulted at all (cli.py gates it
+# on enable_exceptions). With a user exceptions file set, no remote Flathub lookup is
+# made, so this needs no network beyond installing the linter itself.
 lint_manifest() {
   if ! flatpak info org.flatpak.Builder >/dev/null 2>&1; then
     echo "==> Installing org.flatpak.Builder (for the linter)"
@@ -48,8 +64,14 @@ lint_manifest() {
       return 0
     }
   fi
+  test -f "packaging/flatpak/cargo-sources.json" || {
+    echo "::error::lint_manifest ran before cargo-sources.json was generated"
+    return 1
+  }
   echo "==> Linting the manifest"
-  flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest "$MANIFEST" || {
+  flatpak run --command=flatpak-builder-lint org.flatpak.Builder \
+    --exceptions --user-exceptions "$EXCEPTIONS" \
+    manifest "$MANIFEST" || {
     echo "::error::flatpak-builder-lint rejected the manifest"
     return 1
   }
@@ -86,8 +108,6 @@ done
 printf '    installing %s\n' "${REFS[@]}"
 flatpak install --user --noninteractive flathub "${REFS[@]}"
 
-lint_manifest
-
 # --- Vendor the cargo dependencies ----------------------------------------------------
 # The build sandbox has no network, so every crate must be a declared source.
 # flatpak-cargo-generator reads Cargo.lock, including its checksums, and emits them.
@@ -113,6 +133,10 @@ SRC_COUNT=$(python3 -c "import json;print(len(json.load(open('packaging/flatpak/
 echo "    $SRC_COUNT source entries"
 [ "$SRC_COUNT" -gt 100 ] \
   || { echo "::error::cargo-sources.json has only $SRC_COUNT entries; the generator did not run properly"; exit 1; }
+
+# Every source the manifest names now exists, so the linter sees what flatpak-builder
+# will see. Still before the build, which is the expensive part.
+lint_manifest
 
 # --- Build ----------------------------------------------------------------------------
 echo "==> Building (this compiles Servo; expect it to be slow)"

@@ -40,8 +40,11 @@ finish-args:
   - --socket=pulseaudio
   # Media lives wherever the user keeps it, and a show workspace is an arbitrary directory.
   - --filesystem=host
-  # Screen and window capture go through the portal rather than raw X11.
-  - --talk-name=org.freedesktop.portal.Desktop
+  #
+  # Screen and window capture go through the XDG portal. There is deliberately no
+  # --talk-name for it: Flatpak grants every app access to org.freedesktop.portal.*
+  # unconditionally, so asking is redundant and flatpak-builder-lint rejects it
+  # (finish-args-portal-talk-name).
 
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm22/bin

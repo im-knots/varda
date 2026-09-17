@@ -66,7 +66,10 @@ if [ "$SKIP_BUILD" = false ]; then
 fi
 
 echo "==> Checking the build carries every default feature"
-if strings -a target/release/varda | grep -q 'onnxruntime'; then
+# grep reads the binary directly rather than piping `strings` into `grep -q`: that shape
+# is a coin flip, because grep -q exits at the first match, strings then dies of SIGPIPE,
+# and pipefail reports 141 for a check that actually succeeded.
+if grep -qa 'onnxruntime' target/release/varda; then
   echo "  ok: ONNX Runtime linked (face-detection)"
 else
   echo "::error::no ONNX Runtime in target/release/varda; face-detection did not build"
@@ -183,6 +186,53 @@ for lib in libvulkan.so libGL.so libEGL.so libGLX.so libdrm.so; do
     rm -f "$f"
   done
 done
+
+# --- What this AppImage expects from the host ---------------------------------------
+# Every library the bundle needs but does not carry must be one the AppImage project
+# says hosts provide, i.e. on its excludelist. Anything else is issue #134 again: a
+# dependency nobody bundled and nobody noticed until a user's machine did not have it.
+#
+# This is a static property of the AppDir, so it is decided here in seconds rather than
+# by a distribution matrix half an hour later. The matrix then answers a different
+# question: whether real distributions actually have them.
+echo "==> Checking what the bundle expects from the host"
+EXCLUDELIST="$TOOLS/excludelist"
+if [ ! -s "$EXCLUDELIST" ]; then
+  curl -fsSL -o "$EXCLUDELIST" \
+    https://raw.githubusercontent.com/AppImage/pkg2appimage/master/excludelist || true
+fi
+if [ ! -s "$EXCLUDELIST" ]; then
+  echo "::error::could not fetch the AppImage excludelist; cannot check the closure"
+  exit 1
+fi
+
+# DT_NEEDED across every ELF in the AppDir, minus what the AppDir carries.
+bundled="$({ find "$APPDIR/usr/lib" -mindepth 1 -printf '%f\n' 2>/dev/null || true; } | sort -u)"
+needed="$(
+  { find "$APPDIR/usr/bin" "$APPDIR/usr/lib" -type f 2>/dev/null || true; } \
+    | while read -r f; do objdump -p "$f" 2>/dev/null | awk '/NEEDED/{print $2}'; done \
+    | sort -u
+)"
+from_host="$(comm -23 <(printf '%s\n' "$needed") <(printf '%s\n' "$bundled"))"
+
+# Strip comments and blank lines; entries look like "libfoo.so.1 # justification".
+allowed="$(sed -e 's/#.*//' -e 's/[[:space:]]*$//' "$EXCLUDELIST" | grep -v '^$' | sort -u)"
+
+# Removed on purpose above and deliberately NOT on the excludelist: the AppImage project
+# has no entry for the Vulkan loader, but bundling it breaks GPU detection for the same
+# reason bundling libGL does. Allowed here explicitly so the rule stays visible.
+allowed="$(printf '%s\nlibvulkan.so.1\n' "$allowed" | sort -u)"
+
+unlisted="$(comm -23 <(printf '%s\n' "$from_host") <(printf '%s\n' "$allowed"))"
+if [ -n "$unlisted" ]; then
+  echo "::error::the bundle expects libraries that hosts are not guaranteed to have"
+  printf '%s\n' "$unlisted" | sed 's/^/    /'
+  echo "    Either bundle them, or add them to the AppImage excludelist upstream."
+  exit 1
+fi
+host_count="$(printf '%s\n' "$from_host" | grep -c . || true)"
+echo "  ok: $host_count host libraries, every one on the AppImage excludelist"
+printf '%s\n' "$from_host" | sed 's/^/       /'
 
 echo "==> Building AppImage"
 # Packaged with appimagetool rather than `linuxdeploy --output appimage`. That form runs

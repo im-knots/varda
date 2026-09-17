@@ -154,6 +154,46 @@ else
   bad "Cargo.toml is $CT but Cargo.lock is $CL (run: cargo check --offline)"
 fi
 
+echo "==> Flatpak linter exceptions are narrow"
+# flatpak-builder-lint enforces Flathub submission policy as well as correctness, and
+# Varda does not submit to Flathub, so a small exceptions file is legitimate. What is not
+# legitimate is excepting a check that reports a real defect.
+#
+# manifest-json-warnings is the specific trap: it looks like linter noise and is how
+# flatpak-builder reports that it could not load cargo-sources.json. Excepting it would
+# permanently blind the only check that reads the whole manifest.
+EXC="packaging/flatpak/linter-exceptions.json"
+if ! have python3; then
+  skip "flatpak linter exceptions" "no python3"
+elif [ ! -f "$EXC" ]; then
+  bad "$EXC is missing; the flatpak build passes it to --user-exceptions"
+else
+  EXC_OUT="$(python3 - "$EXC" "$APPID" <<'PYEOF'
+import json, sys
+path, appid = sys.argv[1], sys.argv[2]
+never = {"manifest-json-warnings", "appstream-failed-validation", "desktop-file-failed-validation"}
+try:
+    data = json.load(open(path))
+except Exception as e:
+    print("BAD does not parse: %s" % e); raise SystemExit(0)
+listed = [x for x in data.get(appid, []) if isinstance(x, str)]
+if not listed:
+    print("BAD no exceptions listed for %s; the file would silently do nothing" % appid)
+elif "*" in listed:
+    print("BAD '*' disables the linter entirely")
+elif set(listed) & never:
+    print("BAD excepts a check that reports real defects: %s" % ", ".join(sorted(set(listed) & never)))
+else:
+    print("OK %d exception(s): %s" % (len(listed), ", ".join(listed)))
+PYEOF
+)"
+  if [ "${EXC_OUT%% *}" = "OK" ]; then
+    pass "${EXC_OUT#OK }"
+  else
+    bad "$EXC ${EXC_OUT#BAD }"
+  fi
+fi
+
 echo "==> Shader path constant matches packaging"
 # The packages, the AppDir and the Flatpak all install shaders relative to the binary.
 # If this constant and the install paths drift, Varda starts with an empty library.
