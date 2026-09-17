@@ -14,7 +14,7 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - 'packaging/**'
+      - 'packaging/**'   # includes packaging/flatpak and the AppImage inputs
       - 'scripts/ci/**'
       - '.github/workflows/build-artifacts.yml'
       - '.github/workflows/release-dryrun.yml'

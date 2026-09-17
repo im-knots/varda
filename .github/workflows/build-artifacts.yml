@@ -22,59 +22,99 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  linux:
-    name: Linux ${{ matrix.name }}
+  appimage:
+    name: Linux AppImage
+    runs-on: ubuntu-24.04
+    # Built once, on the oldest glibc we support. An AppImage runs on a host whose glibc is
+    # at least as new as its build machine, and 24.04 is the floor ort's prebuilt ONNX
+    # Runtime already imposes, so this costs nothing that was not already lost.
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install NDI SDK
+        run: |
+          cd /tmp
+          curl -sL https://downloads.ndi.tv/SDK/NDI_SDK_Linux/Install_NDI_SDK_v6_Linux.tar.gz | tar xz
+          echo Y | ./Install_NDI_SDK_v6_Linux.sh >/dev/null
+
+      - name: Build AppImage
+        run: ./scripts/ci/build-linux-appimage.sh --version '${{ inputs.version }}' --outdir dist
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: linux-appimage
+          path: dist/*.AppImage
+
+  smoke-appimage:
+    name: AppImage smoke ${{ matrix.name }}
+    needs: [appimage]
     runs-on: ubuntu-latest
-    # Build AND smoke in one job per target, rather than two matrices chained by `needs`.
-    # A job that needs a matrix waits for every row of it, so one failing build row used
-    # to skip the entire smoke matrix, and a green target could not report its smoke
-    # result until every other target's build passed. Each row now stands alone.
-    #
-    # The clean-container property is preserved and is in fact more obvious here: the
-    # smoke step is a second `docker run` from the same image, so it starts from the
-    # pristine distribution with none of the build dependencies installed.
+    # Every distribution here is a genuinely different test: an AppImage links the host's
+    # glibc, GL, X11 and audio stack. Contrast the Flatpak, whose runtime is identical
+    # everywhere. See spec/release-strategy.md section 12.
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: 'Debian 13',    image: 'debian:13',           artifact: 'linux-debian13' }
-          - { name: 'Ubuntu 24.04', image: 'ubuntu:24.04',        artifact: 'linux-ubuntu2404' }
-          - { name: 'Ubuntu 26.04', image: 'ubuntu:26.04',        artifact: 'linux-ubuntu2604' }
-          - { name: 'Fedora 44',    image: 'fedora:44',           artifact: 'linux-fedora44' }
-          - { name: 'openSUSE',     image: 'opensuse/leap:16.0',  artifact: 'linux-opensuse' }
-          - { name: 'Arch',         image: 'archlinux:latest',    artifact: 'linux-arch' }
+          - { name: 'Debian 13',    image: 'debian:13' }
+          - { name: 'Ubuntu 24.04', image: 'ubuntu:24.04' }
+          - { name: 'Ubuntu 26.04', image: 'ubuntu:26.04' }
+          - { name: 'Fedora 44',    image: 'fedora:44' }
+          - { name: 'openSUSE',     image: 'opensuse/leap:16.0' }
+          - { name: 'Arch',         image: 'archlinux:latest' }
     steps:
       - uses: actions/checkout@v5
-
-      # The distribution is a container on an ubuntu-latest runner rather than the job's
-      # own `container:`. GitHub's JavaScript actions need nodejs inside the container,
-      # and the Arch, Fedora and openSUSE base images do not ship it. Running docker
-      # ourselves keeps checkout and upload on the host, where node exists.
-      - name: Build package on ${{ matrix.name }}
-        run: |
-          docker run --rm -v "$PWD:/work" -w /work "${{ matrix.image }}" \
-            bash -c "./scripts/ci/build-linux-package.sh \
-                       --version '${{ inputs.version }}' \
-                       --source-ref '${{ inputs.source-ref }}' \
-                       --outdir dist"
-          ls -lh dist/
-
-      # Before the smoke, so a failing smoke still leaves the package attached to the run
-      # for inspection.
-      - name: Upload artifact
-        uses: actions/upload-artifact@v5
+      - uses: actions/download-artifact@v5
         with:
-          name: ${{ matrix.artifact }}
-          path: dist/*
+          name: linux-appimage
+          path: dist
 
-      # Fresh container from the same image. Installing through the distribution's own
-      # package manager is what proves the declared dependencies are complete.
-      # See spec/release-strategy.md section 12.
+      - name: Run on ${{ matrix.name }}
+        run: |
+          PKG="$(ls dist/*.AppImage | head -1)"
+          docker run --rm -v "$PWD:/work" -w /work "${{ matrix.image }}" \
+            bash -c "./scripts/ci/smoke-linux-appimage.sh '$PKG'"
+
+  flatpak:
+    name: Linux Flatpak
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build Flatpak
+        run: ./scripts/ci/build-linux-flatpak.sh --version '${{ inputs.version }}' --outdir dist
+      - uses: actions/upload-artifact@v5
+        with:
+          name: linux-flatpak
+          path: dist/*.flatpak
+
+  smoke-flatpak:
+    name: Flatpak smoke ${{ matrix.name }}
+    needs: [flatpak]
+    runs-on: ubuntu-latest
+    # One row per packaging family, not all six. The Flatpak runtime is identical on every
+    # host by construction, so additional rows re-test the host's own flatpak installation
+    # rather than our artifact. See spec/release-strategy.md section 12.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: 'Debian 13 (deb)', image: 'debian:13' }
+          - { name: 'Fedora 44 (rpm)', image: 'fedora:44' }
+          - { name: 'Arch',            image: 'archlinux:latest' }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          name: linux-flatpak
+          path: dist
+
       - name: Install and run on ${{ matrix.name }}
         run: |
-          PKG="$(ls dist/* | head -1)"
-          docker run --rm -v "$PWD:/work" -w /work "${{ matrix.image }}" \
-            bash -c "./scripts/ci/smoke-linux-package.sh '$PKG'"
+          PKG="$(ls dist/*.flatpak | head -1)"
+          docker run --rm --privileged -v "$PWD:/work" -w /work "${{ matrix.image }}" \
+            bash -c "./scripts/ci/smoke-linux-flatpak.sh '$PKG'"
 
   build-macos-arm64:
     name: macOS arm64 (.app)

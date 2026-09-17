@@ -98,7 +98,7 @@ Requires [Rust](https://rustup.rs/) (stable) and a GPU with Metal (macOS) or Vul
 ### Ubuntu / Debian
 
 ```bash
-sudo apt install build-essential cmake pkg-config libvulkan-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libsrt-gnutls-dev libasound2-dev libv4l-dev libfreenect-dev libpipewire-0.3-dev libshaderc-dev libwayland-dev libxkbcommon-dev libx11-dev libxrandr-dev libxi-dev libgtk-3-dev
+sudo apt install build-essential cmake pkg-config libvulkan-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libsrt-gnutls-dev libasound2-dev libv4l-dev libfreenect-dev libpipewire-0.3-dev libwayland-dev libxkbcommon-dev libx11-dev libxrandr-dev libxi-dev libgtk-3-dev
 ```
 
 `libpipewire-0.3-dev` (screen capture on Wayland) and `libfreenect-dev` (depth
@@ -109,7 +109,7 @@ quietly disabling anything. Both are in Ubuntu's `universe` component — run
 ### Fedora / Nobara
 
 ```bash
-sudo dnf install gcc-c++ cmake pkgconf-pkg-config vulkan-loader-devel ffmpeg-devel srt-devel alsa-lib-devel libv4l-devel libfreenect-devel pipewire-devel libshaderc-devel wayland-devel libxkbcommon-devel libX11-devel libXrandr-devel libXi-devel gtk3-devel
+sudo dnf install gcc-c++ cmake pkgconf-pkg-config vulkan-loader-devel ffmpeg-devel srt-devel alsa-lib-devel libv4l-devel libfreenect-devel pipewire-develel wayland-devel libxkbcommon-devel libX11-devel libXrandr-devel libXi-devel gtk3-devel
 ```
 
 `ffmpeg-devel` comes from RPM Fusion, which Fedora does not enable by default:
@@ -121,7 +121,7 @@ sudo dnf install https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-releas
 ### Arch / CachyOS / Manjaro
 
 ```bash
-sudo pacman -S --needed base-devel cmake pkgconf vulkan-icd-loader ffmpeg srt alsa-lib v4l-utils libusb pipewire shaderc wayland libxkbcommon libx11 libxrandr libxi gtk3
+sudo pacman -S --needed base-devel cmake pkgconf vulkan-icd-loader ffmpeg srt alsa-lib v4l-utils libusb pipewire wayland libxkbcommon libx11 libxrandr libxi gtk3
 ```
 
 `libfreenect` (Kinect v1 depth sensors) is in no Arch repository. Either install it from
@@ -137,7 +137,7 @@ libfreenect itself (see the install section above).
 ### openSUSE
 
 ```bash
-sudo zypper install -t pattern devel_C_C++ && sudo zypper install cmake pkgconf vulkan-devel ffmpeg-7-libavcodec-devel ffmpeg-7-libavformat-devel srt-devel alsa-devel libv4l-devel pipewire-devel shaderc-devel wayland-devel libxkbcommon-devel libX11-devel libXrandr-devel libXi-devel gtk3-devel
+sudo zypper install -t pattern devel_C_C++ && sudo zypper install cmake pkgconf vulkan-devel ffmpeg-7-libavcodec-devel ffmpeg-7-libavformat-devel srt-devel alsa-devel libv4l-devel pipewire-devel wayland-devel libxkbcommon-devel libX11-devel libXrandr-devel libXi-devel gtk3-devel
 ```
 
 openSUSE's FFmpeg lives in the Packman repository. `libfreenect` is not packaged, so
