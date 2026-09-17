@@ -64,6 +64,19 @@ echo "==> Checking what it carries"
 # Same assertions as the other artifacts. A Varda that starts with an empty shader library
 # looks healthy and is useless, and nothing else here would notice.
 INSTALL_DIR="$HOME/.local/share/flatpak/app/$APPID/current/active/files"
+# Prove the path before asserting anything about its contents. Every check below reads
+# from here, and if the layout moves they would all report what they look for as missing:
+# no shaders, no ONNX Runtime, no metadata. That is three confident wrong diagnoses for
+# one wrong path.
+if [ ! -d "$INSTALL_DIR" ]; then
+  echo "FAIL: nothing installed at $INSTALL_DIR"
+  echo "    the app is installed, so this is the path shape, not the build:"
+  ls -d "$HOME/.local/share/flatpak/app/$APPID"/* 2>/dev/null | sed 's/^/      /' \
+    || echo "      (no $APPID directory at all)"
+  echo "==> SMOKE TEST FAILED"
+  exit 1
+fi
+
 shopt -s nullglob
 shaders=("$INSTALL_DIR/share/varda/shaders"/*.fs "$INSTALL_DIR/share/varda/shaders"/*/*.fs)
 shopt -u nullglob
@@ -81,7 +94,10 @@ fi
 # grep reads the binary directly. `strings -a BIN | grep -q` is a coin flip: grep -q exits
 # at the first match, strings then dies of SIGPIPE, and pipefail reports 141 for a check
 # that succeeded. That shape cost the AppImage matrix a full round of false failures.
-if grep -qa 'onnxruntime' "$INSTALL_DIR/bin/varda"; then
+if [ ! -f "$INSTALL_DIR/bin/varda" ]; then
+  echo "FAIL: no binary at $INSTALL_DIR/bin/varda"
+  failed=1
+elif grep -qa 'onnxruntime' "$INSTALL_DIR/bin/varda"; then
   echo "  ok: ONNX Runtime linked (face-detection present)"
 else
   echo "FAIL: no ONNX Runtime in the binary; face-detection did not build"

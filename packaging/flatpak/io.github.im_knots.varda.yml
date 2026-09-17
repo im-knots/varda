@@ -12,6 +12,11 @@
 app-id: io.github.im_knots.varda
 runtime: org.freedesktop.Platform
 runtime-version: '26.08'
+# The branch the APP is exported under, which is not the runtime version and does not
+# follow it. Unset, flatpak-builder exports under "master", and `flatpak build-bundle`
+# then cannot find the ref it is asked for. Flathub's convention for a release build is
+# "stable"; scripts/ci/build-linux-flatpak.sh reads this key rather than repeating it.
+default-branch: stable
 sdk: org.freedesktop.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable

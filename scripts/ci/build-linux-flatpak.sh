@@ -16,6 +16,14 @@ APPID="io.github.im_knots.varda"
 MANIFEST="packaging/flatpak/$APPID.yml"
 EXCEPTIONS="packaging/flatpak/linter-exceptions.json"
 RUNTIME_VERSION="$(grep -m1 'runtime-version:' "$MANIFEST" | tr -d " '" | cut -d: -f2)"
+# The branch the app is exported under. Read from the manifest rather than repeated here:
+# the two must agree, and the failure when they do not is an opaque "Refspec not found"
+# AFTER the twenty minute build.
+BRANCH="$(grep -m1 '^default-branch:' "$MANIFEST" | tr -d " '" | cut -d: -f2)"
+if [ -z "$BRANCH" ]; then
+  echo "::error::$MANIFEST sets no default-branch, so flatpak-builder would export under 'master'"
+  exit 1
+fi
 
 VERSION=""
 OUTDIR="dist"
@@ -146,7 +154,20 @@ flatpak-builder --user --disable-rofiles-fuse --force-clean \
 
 PKG="$OUTDIR/Varda-$VERSION-x86_64.flatpak"
 echo "==> Exporting single-file bundle"
-flatpak build-bundle "/tmp/varda-flatpak-repo" "$PKG" "$APPID" "$RUNTIME_VERSION"
+# Confirm the ref exists before asking for it. build-bundle's own error names only the
+# refspec it wanted, which reads like the build failed when the build in fact succeeded
+# and only the branch name was wrong.
+REF="app/$APPID/x86_64/$BRANCH"
+if command -v ostree >/dev/null 2>&1; then
+  if ostree refs --repo=/tmp/varda-flatpak-repo | grep -qx "$REF"; then
+    echo "    $REF"
+  else
+    echo "::error::the build exported no $REF; the repository holds:"
+    ostree refs --repo=/tmp/varda-flatpak-repo | sed 's/^/      /'
+    exit 1
+  fi
+fi
+flatpak build-bundle "/tmp/varda-flatpak-repo" "$PKG" "$APPID" "$BRANCH"
 
 test -f "$PKG" || { echo "::error::no bundle produced"; exit 1; }
 echo "==> Done"

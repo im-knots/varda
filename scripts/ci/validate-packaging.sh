@@ -154,6 +154,21 @@ else
   bad "Cargo.toml is $CT but Cargo.lock is $CL (run: cargo check --offline)"
 fi
 
+echo "==> Flatpak app branch is explicit"
+# Unset, flatpak-builder exports the app under "master" while everything else in the
+# build talks about the runtime version. `flatpak build-bundle` then fails with
+# "Refspec not found" after the full twenty minute build, which reads like the build
+# broke rather than the branch name being wrong.
+FPM="packaging/flatpak/$APPID.yml"
+FP_BRANCH="$(grep -m1 '^default-branch:' "$FPM" | tr -d " '" | cut -d: -f2)"
+if [ -z "$FP_BRANCH" ]; then
+  bad "$FPM sets no default-branch; the app would export under 'master'"
+elif grep -q '^branch:' "$FPM"; then
+  bad "$FPM sets both branch and default-branch; branch wins and the build script reads the other"
+else
+  pass "app exports as app/$APPID/x86_64/$FP_BRANCH"
+fi
+
 echo "==> Flatpak linter exceptions are narrow"
 # flatpak-builder-lint enforces Flathub submission policy as well as correctness, and
 # Varda does not submit to Flathub, so a small exceptions file is legitimate. What is not
