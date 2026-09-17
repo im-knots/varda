@@ -28,6 +28,37 @@ jobs:
             exit 1
           fi
 
+      # The artifacts take their version from the tag, but the binary reports
+      # CARGO_PKG_VERSION. Nothing downstream compares them, so without this a release
+      # can ship a package called 0.7.0 containing a binary that says 0.6.0.
+      #
+      # Cargo.lock records varda's own version too, and the Arch PKGBUILD builds
+      # --frozen. A stale lockfile fails that build with "cannot update the lock file",
+      # ~30 minutes into the matrix. Catching it here costs seconds.
+      - name: Check tag, Cargo.toml and Cargo.lock agree
+        run: |
+          TAG="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          TAG_VERSION="${TAG#v}"
+          CARGO_VERSION="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          LOCK_VERSION="$(grep -A1 '^name = "varda"$' Cargo.lock | grep '^version' | cut -d'"' -f2)"
+
+          echo "tag        : $TAG ($TAG_VERSION)"
+          echo "Cargo.toml : $CARGO_VERSION"
+          echo "Cargo.lock : $LOCK_VERSION"
+
+          fail=0
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "::error::Tag $TAG does not match Cargo.toml version $CARGO_VERSION."
+            echo "::error::The packages would be named $TAG_VERSION and contain a binary reporting $CARGO_VERSION."
+            fail=1
+          fi
+          if [ "$LOCK_VERSION" != "$CARGO_VERSION" ]; then
+            echo "::error::Cargo.lock has varda $LOCK_VERSION but Cargo.toml has $CARGO_VERSION."
+            echo "::error::Run 'cargo check --offline' and commit Cargo.lock: the Arch build uses --frozen and will fail without it."
+            fail=1
+          fi
+          [ "$fail" -eq 0 ]
+
   artifacts:
     name: Artifacts
     needs: [preflight]
