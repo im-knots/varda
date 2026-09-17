@@ -15,6 +15,10 @@ runtime-version: '26.08'
 sdk: org.freedesktop.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
+  # bindgen needs libclang.so at build time (libspa-sys, for the PipeWire screen-capture
+  # backend). The base SDK does not ship it. llvm22 is the extension branched for the
+  # 26.08 runtime; it moves with runtime-version.
+  - org.freedesktop.Sdk.Extension.llvm22
 command: varda
 
 finish-args:
@@ -40,11 +44,14 @@ finish-args:
   - --talk-name=org.freedesktop.portal.Desktop
 
 build-options:
-  append-path: /usr/lib/sdk/rust-stable/bin
+  append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm22/bin
+  prepend-ld-library-path: /usr/lib/sdk/llvm22/lib
   env:
     CARGO_HOME: /run/build/varda/cargo
     # The build has no network; everything cargo needs is vendored by cargo-sources.json.
     CARGO_NET_OFFLINE: 'true'
+    # bindgen locates libclang.so through this rather than a system search path.
+    LIBCLANG_PATH: /usr/lib/sdk/llvm22/lib
 
 modules:
   # --- Shader compilation ---------------------------------------------------------

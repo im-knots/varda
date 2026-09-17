@@ -157,6 +157,24 @@ echo "==> Building AppDir"
   --icon-file "$TOOLS/$APPID.png" \
   --exclude-library "libvulkan.so.1"
 
+# The Vulkan loader arrives transitively rather than directly: Ubuntu's ffmpeg links
+# libavfilter, which links libplacebo, which links libvulkan. --exclude-library did not
+# stop that, so remove it from the staged AppDir before the image is sealed.
+#
+# It must come from the host. A bundled loader reads the host's ICD manifests but is not
+# the host's loader, which is the same reason libGL is on the AppImage excludelist
+# ("known to cause issues if it's bundled"). wgpu dlopens libvulkan.so.1 at runtime and
+# will find the host's once ours is gone; libplacebo is only reachable through ffmpeg's
+# avfilter, which Varda never calls.
+echo "==> Removing host-owned libraries pulled in transitively"
+for lib in libvulkan.so libGL.so libEGL.so libGLX.so libdrm.so; do
+  for f in "$APPDIR/usr/lib/$lib"*; do
+    [ -e "$f" ] || continue
+    echo "    removing $(basename "$f")"
+    rm -f "$f"
+  done
+done
+
 echo "==> Building AppImage"
 export LDAI_RUNTIME_FILE="$TOOLS/runtime-x86_64"
 export LDAI_OUTPUT="$OUTDIR/Varda-$VERSION-x86_64.AppImage"

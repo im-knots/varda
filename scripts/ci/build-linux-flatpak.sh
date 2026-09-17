@@ -45,10 +45,19 @@ fi
 
 echo "==> Adding Flathub and the runtime"
 flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+mapfile -t SDK_EXTENSIONS < <(
+  python3 -c "
+import sys, yaml
+m = yaml.safe_load(open(sys.argv[1]))
+for ext in m.get('sdk-extensions', []):
+    print(ext)
+" "$MANIFEST"
+)
+echo "    sdk extensions: ${SDK_EXTENSIONS[*]:-none}"
 flatpak install --user --noninteractive flathub \
   "org.freedesktop.Platform//$RUNTIME_VERSION" \
   "org.freedesktop.Sdk//$RUNTIME_VERSION" \
-  "org.freedesktop.Sdk.Extension.rust-stable//$RUNTIME_VERSION"
+  ${SDK_EXTENSIONS[@]+"${SDK_EXTENSIONS[@]/%//$RUNTIME_VERSION}"}
 
 # --- Vendor the cargo dependencies ----------------------------------------------------
 # The build sandbox has no network, so every crate must be a declared source.
