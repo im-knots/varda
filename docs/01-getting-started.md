@@ -15,39 +15,35 @@ Download the latest release from the [Releases page](https://github.com/im-knots
    This removes the macOS quarantine flag. Varda is not yet signed with an Apple Developer certificate, so Gatekeeper will block it without this step.
 4. Launch Varda — on first run it will prompt for your password to install the `varda` CLI command to `/usr/local/bin/`
 
-### Linux (Native Packages)
+### Linux (Flatpak or AppImage)
 
-Varda ships a package built for each distribution, so your package manager installs its
-dependencies for you and keeps them patched. Download the one matching your distro from
-the [latest release](https://github.com/im-knots/varda/releases/latest).
-
-| Distribution | Package | Install |
-|---|---|---|
-| Debian 13, MX Linux, AV Linux | `varda_<version>_amd64_debian13.deb` | `sudo apt install ./varda_*.deb` |
-| Ubuntu 26.04, Mint 23+, Pop!_OS 26.04, Zorin, Ubuntu Studio | `varda_<version>_amd64_ubuntu2604.deb` | `sudo apt install ./varda_*.deb` |
-| Ubuntu 24.04, Mint 22.x, Pop!_OS 24.04 | `varda_<version>_amd64_ubuntu2404.deb` | `sudo apt install ./varda_*.deb` |
-| Fedora 44, Nobara, Ultramarine | `varda-<version>-1.fc44.x86_64.rpm` | `sudo dnf install ./varda-*.fc44.x86_64.rpm` |
-| openSUSE Leap 16 | `varda-<version>-1.opensuse16.x86_64.rpm` | `sudo zypper install ./varda-*.opensuse16.x86_64.rpm` |
-| Arch, CachyOS, Manjaro, EndeavourOS, Garuda | `PKGBUILD` | see below |
-
-Then run `varda` from anywhere.
-
-Arch and its derivatives build from source rather than installing a binary
-
-Download `PKGBUILD` from the release, then:
+#### Flatpak
 
 ```bash
-makepkg -si          # add --nocheck to skip the test suite and build faster
+flatpak install --user Varda-<version>-x86_64.flatpak
+flatpak run io.github.im_knots.varda
 ```
 
-Kinect v1 support needs libfreenect, which Arch does not package at all; the `PKGBUILD`
-builds and statically links it rather than sending you to the AUR for it.
+If you have never used Flatpak on this machine, add the remote first:
 
-> **Not on the AUR.** AUR registration is closed, so `yay -S varda` is not available.
-> Use the `PKGBUILD` from the release as above.
+```bash
+flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+```
 
-**On any other distribution** (openSUSE Tumbleweed, Gentoo, Void, NixOS, Alpine, Slackware), build from source
-with the instructions below. 
+#### AppImage
+
+```bash
+chmod +x Varda-<version>-x86_64.AppImage
+./Varda-<version>-x86_64.AppImage
+```
+
+#### Either way
+
+For a `varda` command on your `$PATH`, either alias the AppImage, or for the Flatpak:
+
+```bash
+alias varda='flatpak run io.github.im_knots.varda'
+```
 
 ### Windows (Portable ZIP)
 
@@ -105,9 +101,6 @@ the AUR (`yay -S libfreenect`) before building, or build without that feature:
 ```bash
 cargo build --release --no-default-features --features face-detection,html,screen-capture
 ```
-
-The `PKGBUILD` from the release avoids the choice entirely: it builds and statically links
-libfreenect itself (see the install section above).
 
 ### openSUSE
 

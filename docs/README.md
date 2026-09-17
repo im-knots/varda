@@ -15,7 +15,7 @@ Here you will find everything you need to start throwing those pixels.
 ### Part I — Getting Started
 
 - **1. [Getting Started](01-getting-started.md)**
-  - [Install](01-getting-started.md#install) — macOS DMG, Linux tarball, Windows ZIP
+  - [Install](01-getting-started.md#install) — macOS DMG, Linux Flatpak and AppImage, Windows ZIP
   - [Workspace & Content](01-getting-started.md#workspace--content) — project layout, supported formats
   - [Build from Source](01-getting-started.md#build-from-source)
   - [UI Layout](01-getting-started.md#ui-layout) — panel map

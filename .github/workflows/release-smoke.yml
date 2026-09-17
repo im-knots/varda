@@ -8,9 +8,11 @@ name: Release artifact smoke
 # an artifact that already shipped, which is what happened in issue #134: Arch changed
 # libxml2's SONAME months after v0.6.0 was built, and the first we heard was a bug report.
 #
-# This matters unevenly. The point-release targets ship fixed binaries that can rot
-# exactly that way. The Arch PKGBUILD is rebuilt on each user's machine, so what this
-# catches there is the recipe going stale against upstream Arch.
+# This matters most to the AppImage, which links the host's glibc, GL, X11 and audio
+# stack: every distribution is a genuinely different test, and the ground can move under
+# any of them. The Flatpak runs against a runtime that is identical everywhere, so one
+# row per packaging family is enough; what can still rot there is the runtime version
+# itself disappearing from Flathub.
 on:
   schedule:
     # Mondays 06:00 UTC
@@ -22,40 +24,74 @@ on:
         required: false
 
 jobs:
-  linux:
-    name: Linux ${{ matrix.name }}
+  linux-appimage:
+    name: AppImage ${{ matrix.name }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: 'Debian 13',    image: 'debian:13',           pattern: '*debian13.deb' }
-          - { name: 'Ubuntu 24.04', image: 'ubuntu:24.04',        pattern: '*ubuntu2404.deb' }
-          - { name: 'Ubuntu 26.04', image: 'ubuntu:26.04',        pattern: '*ubuntu2604.deb' }
-          - { name: 'Fedora 44',    image: 'fedora:44',           pattern: '*fc44*.rpm' }
-          - { name: 'openSUSE',     image: 'opensuse/leap:16.0', pattern: '*opensuse*.rpm' }
-          - { name: 'Arch',         image: 'archlinux:latest',    pattern: 'PKGBUILD' }
+          - { name: 'Debian 13',    image: 'debian:13' }
+          - { name: 'Ubuntu 24.04', image: 'ubuntu:24.04' }
+          - { name: 'Ubuntu 26.04', image: 'ubuntu:26.04' }
+          - { name: 'Fedora 44',    image: 'fedora:44' }
+          - { name: 'openSUSE',     image: 'opensuse/leap:16.0' }
+          - { name: 'Arch',         image: 'archlinux:latest' }
     steps:
       - uses: actions/checkout@v5
 
-      - name: Download published package
+      - name: Download the published AppImage
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p dist
           TAG="${{ github.event.inputs.tag }}"
           if [ -n "$TAG" ]; then
-            gh release download "$TAG" --pattern '${{ matrix.pattern }}' --dir dist
+            gh release download "$TAG" --pattern '*.AppImage' --dir dist
           else
-            gh release download --pattern '${{ matrix.pattern }}' --dir dist
+            gh release download --pattern '*.AppImage' --dir dist
           fi
           ls -lh dist/
 
+      - name: Run on ${{ matrix.name }}
+        run: |
+          PKG="$(ls dist/*.AppImage | head -1)"
+          docker run --rm -v "$PWD:/work" -w /work "${{ matrix.image }}" \
+            bash -c "./scripts/ci/smoke-linux-appimage.sh '$PKG'"
+
+  linux-flatpak:
+    name: Flatpak ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: 'Debian 13 (deb)', image: 'debian:13' }
+          - { name: 'Fedora 44 (rpm)', image: 'fedora:44' }
+          - { name: 'Arch',            image: 'archlinux:latest' }
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download the published bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist
+          TAG="${{ github.event.inputs.tag }}"
+          if [ -n "$TAG" ]; then
+            gh release download "$TAG" --pattern '*.flatpak' --dir dist
+          else
+            gh release download --pattern '*.flatpak' --dir dist
+          fi
+          ls -lh dist/
+
+      # --privileged: flatpak run needs bubblewrap, which cannot create user namespaces
+      # in a default container.
       - name: Install and run on ${{ matrix.name }}
         run: |
-          PKG="$(ls dist/* | head -1)"
-          docker run --rm -v "$PWD:/work" -w /work "${{ matrix.image }}" \
-            bash -c "./scripts/ci/smoke-linux-package.sh '$PKG'"
+          PKG="$(ls dist/*.flatpak | head -1)"
+          docker run --rm --privileged -v "$PWD:/work" -w /work "${{ matrix.image }}" \
+            bash -c "./scripts/ci/smoke-linux-flatpak.sh '$PKG'"
 
   macos:
     name: macOS ${{ matrix.name }}

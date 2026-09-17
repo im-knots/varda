@@ -986,7 +986,7 @@ No restart required. Edit shaders in any external editor and see results immedia
 
 Varda loads shaders from a fixed hierarchy, lowest to highest precedence:
 
-1. Bundled shaders (shipped inside the `.app` / AppImage / tarball)
+1. Bundled shaders (shipped inside the `.app`, the AppImage, the Flatpak or the Windows ZIP)
 2. `./shaders/` in the working directory
 3. The workspace `.varda/shaders/`
 4. The platform user shader dir (`~/.local/share/varda/shaders`, `~/Library/Application Support/Varda/Shaders`, `%APPDATA%\Varda\Shaders`)
