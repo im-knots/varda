@@ -120,8 +120,11 @@ modules:
     sources:
       - type: dir
         path: ../..
-      # Generated from Cargo.lock by flatpak-cargo-generator.py. Regenerate whenever
-      # Cargo.lock changes; see scripts/ci/build-linux-flatpak.sh.
+      # Generated from Cargo.lock by flatpak-cargo-generator.py, and NOT committed: it is
+      # ~700 KB that has to track Cargo.lock exactly. scripts/ci/build-linux-flatpak.sh
+      # regenerates it, so building this manifest by hand means running that first.
+      # Roughly 2500 entries for ~1250 crates; the generator needs no network, because
+      # Cargo.lock already carries every checksum.
       - cargo-sources.json
       - type: file
         url: https://github.com/servo/mozjs/releases/download/mozjs-sys-v0.140.8-2/libmozjs-x86_64-unknown-linux-gnu.tar.gz

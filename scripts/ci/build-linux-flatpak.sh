@@ -38,7 +38,9 @@ echo "==> Varda $VERSION Flatpak (runtime $RUNTIME_VERSION)"
 if [ "$SKIP_DEPS" = false ]; then
   echo "==> Installing flatpak-builder"
   sudo apt-get update -qq
-  sudo apt-get install -y -qq flatpak flatpak-builder python3-aiohttp python3-toml >/dev/null
+  sudo apt-get install -y -qq \
+    flatpak flatpak-builder \
+    python3-aiohttp python3-tomlkit python3-yaml >/dev/null
 fi
 
 echo "==> Adding Flathub and the runtime"
@@ -57,6 +59,13 @@ if [ ! -f "$GEN" ]; then
   curl -fsSL -o "$GEN" \
     https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py
 fi
+
+# Check the generator's imports up front. It fails with a bare ModuleNotFoundError
+# otherwise, which reads like a bug in this script rather than a missing package.
+for mod in aiohttp tomlkit yaml; do
+  python3 -c "import $mod" 2>/dev/null \
+    || { echo "::error::python module '$mod' is missing; flatpak-cargo-generator needs it"; exit 1; }
+done
 
 echo "==> Generating cargo-sources.json from Cargo.lock"
 python3 "$GEN" Cargo.lock -o "packaging/flatpak/cargo-sources.json"
