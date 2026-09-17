@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Varda
+GenericName=Live Visual Mixer
+Comment=Live visuals engine for VJ performance and installation art
+Exec=varda
+Icon=varda
+Terminal=false
+Categories=AudioVideo;Video;Graphics;
+Keywords=VJ;visuals;shader;ISF;projection;NDI;video;
+StartupNotify=true

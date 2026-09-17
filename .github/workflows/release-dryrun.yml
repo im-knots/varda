@@ -1,0 +1,69 @@
+name: Release dry run
+
+# Runs the full release build and smoke matrix on a pull request without publishing
+# anything. It calls the same reusable workflow release.yml does, so what goes green here
+# is the release pipeline itself.
+#
+# Originally temporary, kept deliberately: the matrix is now green, and this is what stops
+# it silently rotting between releases. Scoped by `paths` so it only runs on changes that
+# can actually break packaging. Everything else pays nothing.
+#
+# Ten rows, the slowest around 30 minutes. Delete this file if that ever stops being worth
+# it; no coverage is lost, the release gate still runs the identical matrix on a tag.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'packaging/**'
+      - 'scripts/ci/**'
+      - '.github/workflows/build-artifacts.yml'
+      - '.github/workflows/release-dryrun.yml'
+      - '.github/workflows/release.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      # The shader library is installed by every package and its size is asserted by
+      # every smoke row.
+      - 'shaders/**'
+  workflow_dispatch:
+
+jobs:
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: v
+        # Cargo.toml's version, unsuffixed. These artifacts are thrown away, and a
+        # suffix would have to satisfy three packaging formats at once: rpm forbids '-'
+        # in Version, and makepkg forbids both '-' and '~' in pkgver. Not worth it.
+        run: |
+          V="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Building dry-run artifacts as $V"
+
+  artifacts:
+    name: Artifacts
+    needs: [version]
+    # The PR head SHA, not a tag: the Arch PKGBUILD fetches and checksums a source
+    # archive, and v<version> does not exist until release time. GitHub serves
+    # /archive/<sha>.tar.gz for any commit, which makes the Arch row testable here.
+    uses: ./.github/workflows/build-artifacts.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      source-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+  summary:
+    name: Dry run summary
+    needs: [artifacts]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report
+        run: |
+          echo "### Release dry run: ${{ needs.artifacts.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Built and smoke-tested every release artifact. Nothing was published." >> "$GITHUB_STEP_SUMMARY"
+          echo "Artifacts are attached to this run for manual inspection." >> "$GITHUB_STEP_SUMMARY"
+          [ "${{ needs.artifacts.result }}" = "success" ]
