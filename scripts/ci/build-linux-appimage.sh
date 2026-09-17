@@ -77,8 +77,8 @@ fetch() {
 echo "==> Fetching linuxdeploy"
 fetch "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage" \
       "$TOOLS/linuxdeploy"
-fetch "https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage" \
-      "$TOOLS/linuxdeploy-plugin-appimage"
+fetch "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage" \
+      "$TOOLS/appimagetool"
 
 # The statically linked runtime. Pinned explicitly rather than relying on whatever the
 # plugin embeds by default: this artifact's whole value is running on a machine nobody
@@ -176,13 +176,14 @@ for lib in libvulkan.so libGL.so libEGL.so libGLX.so libdrm.so; do
 done
 
 echo "==> Building AppImage"
-export LDAI_RUNTIME_FILE="$TOOLS/runtime-x86_64"
-export LDAI_OUTPUT="$OUTDIR/Varda-$VERSION-x86_64.AppImage"
-export LINUXDEPLOY_OUTPUT_VERSION="$VERSION"
-"$TOOLS/linuxdeploy" --appdir "$APPDIR" --output appimage
+# Packaged with appimagetool rather than `linuxdeploy --output appimage`. That form runs
+# linuxdeploy a second time, which redeploys dependencies and undid the removal above.
+PKG="$OUTDIR/Varda-$VERSION-x86_64.AppImage"
+ARCH=x86_64 "$TOOLS/appimagetool" \
+  --runtime-file "$TOOLS/runtime-x86_64" \
+  "$APPDIR" "$PKG"
 
-# --- Verify --------------------------------------------------------------------------
-PKG="$LDAI_OUTPUT"
+# --- Verify -------------------------------------------------------------------------
 test -f "$PKG" || { echo "::error::no AppImage produced"; exit 1; }
 chmod +x "$PKG"
 

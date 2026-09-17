@@ -111,7 +111,7 @@ futures-lite = "2.6.1"
 uuid = { version = "1.23.1", features = ["v4"] }
 json-patch = "4.2.0"
 utoipa = { version = "5.5.0", features = ["axum_extras"] }
-utoipa-swagger-ui = { version = "9.0.2", features = ["axum"] }
+utoipa-swagger-ui = { version = "9.0.2", features = ["axum", "vendored"] }
 clap = { version = "4.6.1", features = ["derive"] }
 ctrlc = "3.5.2"
 imageproc = "0.26.2"
