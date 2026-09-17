@@ -35,6 +35,27 @@ mkdir -p "$OUTDIR"
 
 echo "==> Varda $VERSION Flatpak (runtime $RUNTIME_VERSION)"
 
+# --- Validate the manifest before anything expensive ----------------------------------
+# flatpak-builder-lint is Flathub's own manifest linter. It runs in seconds and catches
+# structural mistakes that would otherwise surface half an hour into a build, which is
+# how several rounds of this were spent. Run first, deliberately.
+lint_manifest() {
+  if ! flatpak info org.flatpak.Builder >/dev/null 2>&1; then
+    echo "==> Installing org.flatpak.Builder (for the linter)"
+    flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+    flatpak install --user --noninteractive flathub org.flatpak.Builder || {
+      echo "::warning::could not install flatpak-builder-lint; skipping manifest lint"
+      return 0
+    }
+  fi
+  echo "==> Linting the manifest"
+  flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest "$MANIFEST" || {
+    echo "::error::flatpak-builder-lint rejected the manifest"
+    return 1
+  }
+  echo "    manifest passes"
+}
+
 if [ "$SKIP_DEPS" = false ]; then
   echo "==> Installing flatpak-builder"
   sudo apt-get update -qq
@@ -64,6 +85,8 @@ for ext in ${SDK_EXTENSIONS[@]+"${SDK_EXTENSIONS[@]}"}; do
 done
 printf '    installing %s\n' "${REFS[@]}"
 flatpak install --user --noninteractive flathub "${REFS[@]}"
+
+lint_manifest
 
 # --- Vendor the cargo dependencies ----------------------------------------------------
 # The build sandbox has no network, so every crate must be a declared source.

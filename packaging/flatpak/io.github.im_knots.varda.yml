@@ -52,6 +52,11 @@ build-options:
     CARGO_NET_OFFLINE: 'true'
     # bindgen locates libclang.so through this rather than a system search path.
     LIBCLANG_PATH: /usr/lib/sdk/llvm22/lib
+    # Modules install into /app, which is not on rustc's default library search path.
+    # `depth` links -lfreenect against the libfreenect module and the link failed without
+    # this: "rust-lld: error: unable to find library -lfreenect".
+    LIBRARY_PATH: /app/lib
+    PKG_CONFIG_PATH: /app/lib/pkgconfig
 
 modules:
   # --- Shader compilation ---------------------------------------------------------
@@ -110,6 +115,9 @@ modules:
       # so tar and xz cannot read it. Python's stdlib can, which is why this is a script.
       - python3 packaging/flatpak/extract-ort.py
         onnxruntime-x86_64-unknown-linux-gnu.tar.lzma2 /run/build/varda/ort-lib
+      # Fetch before building, per flatpak-cargo-generator's documented usage: a broken
+      # vendor set fails here in seconds rather than after Servo has compiled.
+      - cargo --offline fetch --manifest-path Cargo.toml --verbose
       # Default features: face-detection, html, depth and screen-capture. Every Linux
       # artifact ships the same feature set.
       - cargo --offline build --release

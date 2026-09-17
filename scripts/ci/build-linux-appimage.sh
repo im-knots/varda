@@ -65,6 +65,15 @@ if [ "$SKIP_BUILD" = false ]; then
   cargo build --release
 fi
 
+echo "==> Checking the build carries every default feature"
+if strings -a target/release/varda | grep -q 'onnxruntime'; then
+  echo "  ok: ONNX Runtime linked (face-detection)"
+else
+  echo "::error::no ONNX Runtime in target/release/varda; face-detection did not build"
+  echo "  enabled features come from Cargo.toml's default: face-detection, html, depth, screen-capture"
+  exit 1
+fi
+
 # --- Tooling ------------------------------------------------------------------------
 fetch() {
   local url="$1" dest="$2"

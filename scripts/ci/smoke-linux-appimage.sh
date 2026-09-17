@@ -35,22 +35,28 @@ case "$DISTRO_ID" in
     apt-get install -y -qq --no-install-recommends \
       libx11-6 libxext6 libxrandr2 libxi6 libxcb1 libgl1 libdrm2 \
       libasound2t64 libfontconfig1 libfreetype6 libvulkan1 zlib1g binutils >/dev/null
+    # The t64 transition renamed this; try both rather than pin a name that moves.
+    apt-get install -y -qq --no-install-recommends libpipewire-0.3-0t64 >/dev/null 2>&1 \
+      || apt-get install -y -qq --no-install-recommends libpipewire-0.3-0 >/dev/null
     ;;
   fedora)
     dnf install -y -q \
       libX11 libXext libXrandr libXi libxcb mesa-libGL libdrm \
-      alsa-lib fontconfig freetype vulkan-loader zlib-ng-compat binutils >/dev/null
+      alsa-lib fontconfig freetype vulkan-loader zlib-ng-compat binutils \
+      pipewire-libs >/dev/null
     ;;
   opensuse*|sles)
-    zypper --non-interactive --gpg-auto-import-keys refresh -q
-    zypper --non-interactive install -y \
+    zypper -q --non-interactive --gpg-auto-import-keys refresh
+    zypper -q --non-interactive install -y \
       libX11-6 libXext6 libXrandr2 libXi6 libxcb1 Mesa-libGL1 libdrm2 \
-      libasound2 fontconfig libfreetype6 libvulkan1 binutils >/dev/null
+      libasound2 fontconfig libfreetype6 libvulkan1 binutils \
+      libpipewire-0_3-0 >/dev/null
     ;;
   arch|cachyos|manjaro|endeavouros)
     pacman -Syu --noconfirm --needed --quiet \
       libx11 libxext libxrandr libxi libxcb libglvnd libdrm \
-      alsa-lib fontconfig freetype2 vulkan-icd-loader zlib binutils >/dev/null
+      alsa-lib fontconfig freetype2 vulkan-icd-loader zlib binutils \
+      libpipewire >/dev/null
     ;;
   *) echo "::error::no runtime install path for '$DISTRO_ID'"; exit 1 ;;
 esac
@@ -105,10 +111,18 @@ else
 
   # Statically linked, so its absence is invisible from the outside: Varda starts and the
   # analyzer is simply missing. Every Linux artifact ships the same feature set.
-  if strings -a "$ROOT/usr/bin/varda" 2>/dev/null | grep -q 'onnxruntime'; then
+  if ! command -v strings >/dev/null 2>&1; then
+    echo "  skip: no strings here, cannot check for ONNX Runtime"
+  elif [ ! -f "$ROOT/usr/bin/varda" ]; then
+    echo "FAIL: $ROOT/usr/bin/varda is missing from the extracted AppImage"
+    failed=1
+  elif strings -a "$ROOT/usr/bin/varda" | grep -q 'onnxruntime'; then
     echo "  ok: ONNX Runtime linked (face-detection present)"
   else
     echo "FAIL: no ONNX Runtime in the binary; face-detection did not build"
+    echo "    binary: $(ls -l "$ROOT/usr/bin/varda" | awk '{print $5}') bytes"
+    echo "    a few strings found, for comparison:"
+    strings -a "$ROOT/usr/bin/varda" | grep -iE 'shaderc|wgpu|varda' | head -3 | sed 's/^/      /'
     failed=1
   fi
 

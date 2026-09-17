@@ -22,8 +22,24 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  validate:
+    name: Validate packaging
+    runs-on: ubuntu-latest
+    # Runs first and gates everything. Takes under a minute; the matrix behind it takes
+    # forty minutes an attempt. Most of this pipeline's failed runs were things decidable
+    # here without building anything.
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install validators
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq desktop-file-utils appstream python3-yaml >/dev/null
+      - name: Validate
+        run: ./scripts/ci/validate-packaging.sh
+
   appimage:
     name: Linux AppImage
+    needs: [validate]
     runs-on: ubuntu-24.04
     # Built once, on the oldest glibc we support. An AppImage runs on a host whose glibc is
     # at least as new as its build machine, and 24.04 is the floor ort's prebuilt ONNX
@@ -79,6 +95,7 @@ jobs:
 
   flatpak:
     name: Linux Flatpak
+    needs: [validate]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -118,6 +135,7 @@ jobs:
 
   build-macos-arm64:
     name: macOS arm64 (.app)
+    needs: [validate]
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
@@ -149,6 +167,7 @@ jobs:
 
   build-macos-intel:
     name: macOS x86_64 (.app)
+    needs: [validate]
     # Built natively on Intel hardware rather than cross-compiled. macos-15-intel is
     # available until August 2027, after which GitHub has no x86_64 macOS image and this
     # job has to become a cross-compile again (or the slice gets dropped).
@@ -224,6 +243,7 @@ jobs:
 
   build-windows:
     name: Windows x64 (portable ZIP)
+    needs: [validate]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
