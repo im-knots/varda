@@ -114,7 +114,7 @@ install_build_deps() {
         libvulkan-dev \
         libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev \
         libsrt-gnutls-dev libasound2-dev libv4l-dev libfreenect-dev \
-        libpipewire-0.3-dev libshaderc-dev \
+        libpipewire-0.3-dev \
         libwayland-dev libxkbcommon-dev libx11-dev libxrandr-dev libxi-dev libgtk-3-dev
       ;;
     fedora)
@@ -125,7 +125,7 @@ install_build_deps() {
         clang clang-devel openssl-devel python3 \
         vulkan-loader-devel \
         ffmpeg-devel srt-devel alsa-lib-devel libv4l-devel libfreenect-devel \
-        pipewire-devel libshaderc-devel \
+        pipewire-devel \
         wayland-devel libxkbcommon-devel libX11-devel libXrandr-devel libXi-devel gtk3-devel
       ;;
     opensuse*|sles)
@@ -142,7 +142,7 @@ install_build_deps() {
         vulkan-devel \
         ffmpeg-7-libavcodec-devel ffmpeg-7-libavformat-devel ffmpeg-7-libavutil-devel \
         ffmpeg-7-libswscale-devel ffmpeg-7-libswresample-devel \
-        srt-devel alsa-devel libv4l-devel pipewire-devel shaderc-devel \
+        srt-devel alsa-devel libv4l-devel pipewire-devel \
         wayland-devel libxkbcommon-devel libX11-devel libXrandr-devel libXi-devel gtk3-devel
       ;;
     arch|cachyos|manjaro|endeavouros)
@@ -150,7 +150,7 @@ install_build_deps() {
         base-devel cmake pkgconf curl git \
         clang openssl python \
         vulkan-icd-loader \
-        ffmpeg srt alsa-lib v4l-utils pipewire shaderc \
+        ffmpeg srt alsa-lib v4l-utils pipewire \
         wayland libxkbcommon libx11 libxrandr libxi gtk3
       # libfreenect is in no Arch repository. The container build needs it the same way
       # the PKGBUILD does, and for the same reason: `depth` links -lfreenect. This still
@@ -190,8 +190,12 @@ STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
 install -Dm755 target/release/varda           "$STAGE/usr/bin/varda"
-install -Dm644 packaging/linux/varda.desktop  "$STAGE/usr/share/applications/varda.desktop"
-install -Dm644 assets/icon.png                "$STAGE/usr/share/icons/hicolor/256x256/apps/varda.png"
+install -Dm644 packaging/linux/io.github.im_knots.varda.desktop \
+  "$STAGE/usr/share/applications/io.github.im_knots.varda.desktop"
+install -Dm644 assets/icon.png \
+  "$STAGE/usr/share/icons/hicolor/256x256/apps/io.github.im_knots.varda.png"
+install -Dm644 packaging/linux/varda.metainfo.xml \
+  "$STAGE/usr/share/metainfo/io.github.im_knots.varda.metainfo.xml"
 install -Dm644 LICENSE                        "$STAGE/usr/share/licenses/varda/LICENSE"
 mkdir -p "$STAGE/usr/share/varda/shaders"
 cp -r shaders/* "$STAGE/usr/share/varda/shaders/"
@@ -298,8 +302,9 @@ cp -a $STAGE/. %{buildroot}/
 %files
 /usr/bin/varda
 /usr/share/varda
-/usr/share/applications/varda.desktop
-/usr/share/icons/hicolor/256x256/apps/varda.png
+/usr/share/applications/io.github.im_knots.varda.desktop
+/usr/share/icons/hicolor/256x256/apps/io.github.im_knots.varda.png
+/usr/share/metainfo/io.github.im_knots.varda.metainfo.xml
 /usr/share/licenses/varda
 %changelog
 * $(LC_ALL=C date '+%a %b %d %Y') im-knots <noreply@users.noreply.github.com> - $VERSION-1

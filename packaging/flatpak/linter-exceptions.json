@@ -1,0 +1,23 @@
+{
+  "_comment": [
+    "Checks flatpak-builder-lint reports that Varda knowingly accepts, passed with",
+    "--user-exceptions. See spec/release-strategy.md section 14.",
+    "",
+    "flatpak-builder-lint enforces Flathub's SUBMISSION POLICY, not Flatpak correctness.",
+    "Varda self-distributes a .flatpak bundle and is not submitted to Flathub, so a",
+    "policy check it cannot satisfy is not a defect. Everything else the linter reports",
+    "is still fatal, which is the point of listing exceptions here rather than ignoring",
+    "the linter's exit code.",
+    "",
+    "finish-args-host-filesystem-access: --filesystem=host. Flathub grants this one on",
+    "explanation; the explanation is in the manifest next to the permission. A VJ's media",
+    "and show workspace live at arbitrary paths chosen mid-show, so a portal file chooser",
+    "is not a substitute.",
+    "",
+    "Nothing else belongs here. In particular manifest-json-warnings must stay fatal: it",
+    "is how flatpak-builder reports that it could not load cargo-sources.json."
+  ],
+  "io.github.im_knots.varda": [
+    "finish-args-host-filesystem-access"
+  ]
+}

@@ -25,3 +25,5 @@ tests/media/
 /varda-universal
 /arm64-app/
 /x86-app/
+# Generated from Cargo.lock by scripts/ci/build-linux-flatpak.sh
+packaging/flatpak/cargo-sources.json

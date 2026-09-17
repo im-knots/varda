@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AppStream metadata. Required by Flathub, and validated by linuxdeploy-plugin-appimage
+  when present, so one file serves both Linux artifacts.
+  See spec/release-strategy.md section 13.
+-->
+<component type="desktop-application">
+  <id>io.github.im_knots.varda</id>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+
+  <name>Varda</name>
+  <summary>Live visual mixer and router for VJ performance</summary>
+
+  <description>
+    <p>
+      Varda applies broadcast video workflows to live visuals. Sources (video, cameras,
+      generative shaders, streams, images) flow through a routing graph of decks,
+      channels and surfaces to reach outputs (projectors, streams, recordings).
+    </p>
+    <p>
+      Instead of a clip-launch grid, you control what is live by adjusting opacity, blend
+      modes, crossfaders, mute and solo, and effect chains. When a show has to land the
+      same way every night, the same scene can be laid out against a timeline instead,
+      and you can still take over manual control of any of it while it runs.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Routing matrix: sources through decks, channels, mixer, surfaces, to outputs</li>
+      <li>GLSL and ISF shaders as generators and effects, with hot reload</li>
+      <li>Audio reactivity and a modulation system driving any parameter</li>
+      <li>MIDI, OSC and HTTP control, with macro controls binding one gesture to many parameters</li>
+      <li>NDI, SRT, HLS, DASH and RTMP input and output</li>
+      <li>Projection mapping with edge blending for multi-projector setups</li>
+      <li>16-bit float linear-light pipeline, with 8-bit SDR, 10-bit SDR, HDR10 and HLG per output</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">io.github.im_knots.varda.desktop</launchable>
+  <url type="homepage">https://github.com/im-knots/varda</url>
+  <url type="bugtracker">https://github.com/im-knots/varda/issues</url>
+  <url type="vcs-browser">https://github.com/im-knots/varda</url>
+
+  <developer id="io.github.im_knots">
+    <name>im-knots</name>
+  </developer>
+
+  <content_rating type="oars-1.1" />
+
+  <categories>
+    <category>AudioVideo</category>
+    <category>Video</category>
+  </categories>
+
+  <keywords>
+    <keyword>VJ</keyword>
+    <keyword>visuals</keyword>
+    <keyword>shader</keyword>
+    <keyword>ISF</keyword>
+    <keyword>projection mapping</keyword>
+    <keyword>NDI</keyword>
+  </keywords>
+
+  <!-- Requirements a user cannot discover until the app fails to start. -->
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+  <recommends>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </recommends>
+
+  <releases>
+    <release version="@VERSION@" date="@DATE@"/>
+  </releases>
+</component>

@@ -1,0 +1,164 @@
+# Varda Flatpak manifest. See spec/release-strategy.md sections 5 and 14.
+#
+# The artifact for a VJ installing Varda on their own machine: its dependencies are
+# patched centrally by Flathub through org.freedesktop.Platform, which is the one property
+# no other artifact Varda ships has. The AppImage covers the other case, a venue machine
+# where installing is not an option.
+#
+# Flatpak builds run sandboxed with NO NETWORK, so every input is declared below. Two
+# crates would otherwise fetch at build time, and both are redirected at declared sources:
+#   mozjs_sys  -> MOZJS_ARCHIVE, pointing at a declared archive
+#   ort-sys    -> ORT_LIB_LOCATION, pointing at a library unpacked by extract-ort.py
+app-id: io.github.im_knots.varda
+runtime: org.freedesktop.Platform
+runtime-version: '26.08'
+# The branch the APP is exported under, which is not the runtime version and does not
+# follow it. Unset, flatpak-builder exports under "master", and `flatpak build-bundle`
+# then cannot find the ref it is asked for. Flathub's convention for a release build is
+# "stable"; scripts/ci/build-linux-flatpak.sh reads this key rather than repeating it.
+default-branch: stable
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+  # bindgen needs libclang.so at build time (libspa-sys, for the PipeWire screen-capture
+  # backend). The base SDK does not ship it. llvm22 is the extension branched for the
+  # 26.08 runtime; it moves with runtime-version.
+  - org.freedesktop.Sdk.Extension.llvm22
+command: varda
+
+finish-args:
+  # Varda needs most of what a sandbox exists to prevent, and this should be read as a
+  # statement of fact rather than a request for trust: its value here is the centrally
+  # patched runtime and the universal install, NOT isolation. OBS Studio ships comparable
+  # permissions for the same reasons.
+  #
+  # MIDI controllers (ALSA sequencer), USB DMX interfaces, Kinect, V4L2 cameras, the GPU.
+  # Flatpak has no finer-grained device permission that covers these.
+  - --device=all
+  # NDI discovery, SRT, RTMP, HLS/DASH, the HTTP API and OSC.
+  - --share=network
+  - --share=ipc
+  # Output windows, including to projectors.
+  - --socket=wayland
+  - --socket=fallback-x11
+  # Audio capture for reactivity. Also grants /dev/snd, which is what MIDI needs.
+  - --socket=pulseaudio
+  # Media lives wherever the user keeps it, and a show workspace is an arbitrary directory.
+  - --filesystem=host
+  #
+  # Screen and window capture go through the XDG portal. There is deliberately no
+  # --talk-name for it: Flatpak grants every app access to org.freedesktop.portal.*
+  # unconditionally, so asking is redundant and flatpak-builder-lint rejects it
+  # (finish-args-portal-talk-name).
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm22/bin
+  prepend-ld-library-path: /usr/lib/sdk/llvm22/lib
+  env:
+    CARGO_HOME: /run/build/varda/cargo
+    # The build has no network; everything cargo needs is vendored by cargo-sources.json.
+    CARGO_NET_OFFLINE: 'true'
+    # bindgen locates libclang.so through this rather than a system search path.
+    LIBCLANG_PATH: /usr/lib/sdk/llvm22/lib
+    # Modules install into /app, which is not on rustc's default library search path.
+    # `depth` links -lfreenect against the libfreenect module and the link failed without
+    # this: "rust-lld: error: unable to find library -lfreenect".
+    LIBRARY_PATH: /app/lib
+    PKG_CONFIG_PATH: /app/lib/pkgconfig
+
+modules:
+  # --- Shader compilation ---------------------------------------------------------
+  # Nothing to build here. Varda enables shaderc's `build-from-source` feature
+  # (Cargo.toml), and shaderc-sys VENDORS the whole tree: glslang, shaderc,
+  # spirv-headers and spirv-tools, ~81 MB inside the crate. Its build script returns
+  # early on that feature and never looks for a system library:
+  #
+  #   if config_build_from_source { build_from_source(...); return; }
+  #
+  # So the sources arrive with the vendored crates, cmake is in the SDK, and the result
+  # links statically. Confirmed against the shipped v0.6.0 artifact, which has no
+  # DT_NEEDED shaderc entry and no bundled libshaderc.
+  #
+  # An earlier draft of this manifest built SPIRV-Headers, SPIRV-Tools, glslang and
+  # shaderc as four pinned modules, which was both unnecessary and the likeliest thing
+  # in here to break on a version mismatch.
+
+  # --- Depth sensors ------------------------------------------------------------------
+  # Not in the runtime. Built here for the same reason the Arch PKGBUILD builds it: a
+  # dependency living somewhere inconvenient is not a reason to ship a Varda without
+  # depth sensors.
+  - name: libfreenect
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DBUILD_EXAMPLES=OFF
+      - -DBUILD_FAKENECT=OFF
+      - -DBUILD_CPP=OFF
+      - -DBUILD_C_SYNC=OFF
+      - -DBUILD_PYTHON=OFF
+    sources:
+      - type: git
+        url: https://github.com/OpenKinect/libfreenect.git
+        tag: v0.7.5
+
+  # --- Varda --------------------------------------------------------------------------
+  - name: varda
+    buildsystem: simple
+    build-options:
+      env:
+        # mozjs_sys downloads a prebuilt SpiderMonkey archive at build time. Its build
+        # script treats this variable as a URL base, tries to download, and on failure
+        # falls back to using the value AS A LOCAL PATH:
+        #
+        #   download_archive(Some(&archive)).unwrap_or(PathBuf::from(archive))
+        #
+        # So pointing it at the declared source below works, and works whether the sandbox
+        # has no network or the SDK has no curl. See spec section 14.
+        MOZJS_ARCHIVE: /run/build/varda/libmozjs-x86_64-unknown-linux-gnu.tar.gz
+        # ort-sys would otherwise download ONNX Runtime. Points at the directory
+        # extract-ort.py fills below; ort-sys looks for libonnxruntime.a there and links
+        # it statically (build/static_link/mod.rs).
+        ORT_LIB_LOCATION: /run/build/varda/ort-lib
+    build-commands:
+      # The ONNX Runtime archive is a raw LZMA2 stream rather than an xz-wrapped tarball,
+      # so tar and xz cannot read it. Python's stdlib can, which is why this is a script.
+      - python3 packaging/flatpak/extract-ort.py
+        onnxruntime-x86_64-unknown-linux-gnu.tar.lzma2 /run/build/varda/ort-lib
+      # Fetch before building, per flatpak-cargo-generator's documented usage: a broken
+      # vendor set fails here in seconds rather than after Servo has compiled.
+      - cargo --offline fetch --manifest-path Cargo.toml --verbose
+      # Default features: face-detection, html, depth and screen-capture. Every Linux
+      # artifact ships the same feature set.
+      - cargo --offline build --release
+      - install -Dm755 target/release/varda /app/bin/varda
+      - install -Dm644 packaging/linux/io.github.im_knots.varda.desktop
+        /app/share/applications/io.github.im_knots.varda.desktop
+      - install -Dm644 assets/icon.png
+        /app/share/icons/hicolor/256x256/apps/io.github.im_knots.varda.png
+      - install -Dm644 varda.metainfo.xml
+        /app/share/metainfo/io.github.im_knots.varda.metainfo.xml
+      # /app/bin/varda resolves ../share/varda/shaders, which is BUNDLED_SHADERS_RELATIVE
+      # in src/internal/registry/mod.rs. Same layout as the native packages and the AppDir.
+      - install -d /app/share/varda/shaders
+      - cp -r shaders/. /app/share/varda/shaders/
+    sources:
+      - type: dir
+        path: ../..
+      # Generated from Cargo.lock by flatpak-cargo-generator.py, and NOT committed: it is
+      # ~700 KB that has to track Cargo.lock exactly. scripts/ci/build-linux-flatpak.sh
+      # regenerates it, so building this manifest by hand means running that first.
+      # Roughly 2500 entries for ~1250 crates; the generator needs no network, because
+      # Cargo.lock already carries every checksum.
+      - cargo-sources.json
+      - type: file
+        url: https://github.com/servo/mozjs/releases/download/mozjs-sys-v0.140.8-2/libmozjs-x86_64-unknown-linux-gnu.tar.gz
+        sha256: '063d39ebf29e612e1974e325ccb2760ecc546de5ad8cff6ae064ad78accc1aa4'
+        dest-filename: libmozjs-x86_64-unknown-linux-gnu.tar.gz
+      - type: file
+        path: ../linux/varda.metainfo.xml
+        dest-filename: varda.metainfo.xml
+      # URL and checksum come from ort-sys's own build/download/dist.txt, the "none"
+      # (CPU) variant for this target. Bump both together with the ort dependency.
+      - type: file
+        url: https://cdn.pyke.io/0/pyke:ort-rs/ms@1.24.2/x86_64-unknown-linux-gnu.tar.lzma2
+        sha256: acc1cba79c337594ead1d88ca72516147aa60054c84217b53399a31caa5ba671
+        dest-filename: onnxruntime-x86_64-unknown-linux-gnu.tar.lzma2
