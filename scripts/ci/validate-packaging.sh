@@ -72,12 +72,17 @@ rm -f "$TMP_PKGBUILD"
 
 echo "==> Desktop entry validates"
 DESKTOP=packaging/linux/io.github.im_knots.varda.desktop
-if command -v desktop-file-validate >/dev/null 2>&1; then
-  if desktop-file-validate "$DESKTOP" 2>&1 | grep -q .; then
+if have desktop-file-validate; then
+  DF_OUT="$(desktop-file-validate "$DESKTOP" 2>&1 || true)"
+  if printf '%s' "$DF_OUT" | grep -qE 'error:|warning:'; then
     bad "$DESKTOP"
-    desktop-file-validate "$DESKTOP" 2>&1 | sed 's/^/       /'
+    printf '%s\n' "$DF_OUT" | grep -E 'error:|warning:' | sed 's/^/       /'
   else
     pass "$DESKTOP"
+    # Hints are style advice, not spec violations. Shown, never fatal.
+    if printf '%s' "$DF_OUT" | grep -q 'hint:'; then
+      printf '%s\n' "$DF_OUT" | grep 'hint:' | sed 's/^/       note: /'
+    fi
   fi
 else
   skip "$DESKTOP" "desktop-file-validate not installed"
@@ -125,6 +130,19 @@ elif [ "$META_ID" = "$APPID" ]; then
   skip "app-id in the flatpak manifest" "no yaml module"
 else
   bad "app-id mismatch: metainfo=$META_ID expected=$APPID"
+fi
+
+echo "==> Desktop entry and AppStream agree on categories"
+DESKTOP_CATS="$(grep '^Categories=' "$DESKTOP" | cut -d= -f2 | tr ';' '\n' | grep -v '^$' | sort | tr '\n' ' ')"
+META_CATS="$(python3 -c "
+import xml.etree.ElementTree as E
+r = E.parse('$METAINFO').getroot()
+cats = r.find('categories')
+print(' '.join(sorted(c.text for c in cats)) if cats is not None else '')" 2>/dev/null)"
+if [ "$(echo $DESKTOP_CATS)" = "$(echo $META_CATS)" ]; then
+  pass "categories match ($(echo $DESKTOP_CATS))"
+else
+  bad "categories differ: desktop='$(echo $DESKTOP_CATS)' metainfo='$(echo $META_CATS)'"
 fi
 
 echo "==> Versions agree"

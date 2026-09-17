@@ -6,6 +6,6 @@ Comment=Live visuals engine for VJ performance and installation art
 Exec=varda
 Icon=io.github.im_knots.varda
 Terminal=false
-Categories=AudioVideo;Video;Graphics;
+Categories=AudioVideo;Video;
 Keywords=VJ;visuals;shader;ISF;projection;NDI;video;
 StartupNotify=true
