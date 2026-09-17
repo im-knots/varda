@@ -54,10 +54,16 @@ for ext in m.get('sdk-extensions', []):
 " "$MANIFEST"
 )
 echo "    sdk extensions: ${SDK_EXTENSIONS[*]:-none}"
-flatpak install --user --noninteractive flathub \
-  "org.freedesktop.Platform//$RUNTIME_VERSION" \
-  "org.freedesktop.Sdk//$RUNTIME_VERSION" \
-  ${SDK_EXTENSIONS[@]+"${SDK_EXTENSIONS[@]/%//$RUNTIME_VERSION}"}
+
+REFS=(
+  "org.freedesktop.Platform//$RUNTIME_VERSION"
+  "org.freedesktop.Sdk//$RUNTIME_VERSION"
+)
+for ext in ${SDK_EXTENSIONS[@]+"${SDK_EXTENSIONS[@]}"}; do
+  REFS+=("$ext//$RUNTIME_VERSION")
+done
+printf '    installing %s\n' "${REFS[@]}"
+flatpak install --user --noninteractive flathub "${REFS[@]}"
 
 # --- Vendor the cargo dependencies ----------------------------------------------------
 # The build sandbox has no network, so every crate must be a declared source.
