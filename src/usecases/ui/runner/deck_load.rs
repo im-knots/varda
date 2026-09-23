@@ -1,67 +1,6 @@
-//! Deck preview-texture registration and background deck-load bookkeeping.
-//!
-//! egui texture handles are a presentation concern the engine never touches, so
-//! the deck -> `TextureId` map lives on the delivery side — see
-//! `/spec/app-presentation-boundary.md`.
+//! Background deck-load bookkeeping.
 
-use super::GpuContext;
 use crate::app::render::DeckLoadToken;
-
-/// Register a single deck's preview texture, keyed by its UUID.
-///
-/// Lives here, not on `VardaApp`, because egui texture handles are a
-/// presentation concern the engine never touches — see
-/// `/spec/app-presentation-boundary.md`.
-pub(super) fn register_deck_preview_texture(
-    egui_renderer: &mut egui_wgpu::Renderer,
-    context: &GpuContext,
-    mixer: &crate::mixer::Mixer,
-    deck_uuid: &str,
-    deck_preview_textures: &mut std::collections::HashMap<String, egui::TextureId>,
-) {
-    let Some((ch_idx, deck_idx)) = mixer.find_deck_by_uuid(deck_uuid) else {
-        log::warn!("No deck {deck_uuid} to register a preview texture for");
-        return;
-    };
-    if let Some(slot) = mixer
-        .channels()
-        .get(ch_idx)
-        .and_then(|ch| ch.decks.get(deck_idx))
-    {
-        let texture_id = egui_renderer.register_native_texture(
-            &context.device,
-            &slot.deck.texture_view,
-            wgpu::FilterMode::Linear,
-        );
-        deck_preview_textures.insert(deck_uuid.to_string(), texture_id);
-    }
-}
-
-/// Apply the egui texture post-step for a frame's `apply_engine_actions`
-/// outcomes: register a preview for each newly-created deck. Reorder and
-/// removal need no repair pass — the map is UUID-keyed, so positions shifting
-/// cannot invalidate an entry.
-pub(super) fn apply_deck_texture_outcomes(
-    outcomes: &[crate::engine::CommandOutcome],
-    egui_renderer: &mut egui_wgpu::Renderer,
-    context: &GpuContext,
-    mixer: &crate::mixer::Mixer,
-    deck_preview_textures: &mut std::collections::HashMap<String, egui::TextureId>,
-) {
-    for outcome in outcomes {
-        if let crate::engine::CommandOutcome::DecksCreated { uuids } = outcome {
-            for uuid in uuids {
-                register_deck_preview_texture(
-                    egui_renderer,
-                    context,
-                    mixer,
-                    uuid,
-                    deck_preview_textures,
-                );
-            }
-        }
-    }
-}
 
 /// Target channel of each in-flight background deck load, keyed by the token
 /// handed to `spawn_deck_loads` and echoed back in `DeckLoadResult::token`.

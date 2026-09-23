@@ -208,24 +208,36 @@ impl AudioData {
     }
 }
 
+/// Copy the finite values of `values` into a scratch buffer for median selection.
+fn finite_values(values: &[f32]) -> Vec<f32> {
+    // Non-short-circuiting scan so the common all-finite case stays a memcpy.
+    if values.iter().fold(true, |ok, v| ok & v.is_finite()) {
+        values.to_vec()
+    } else {
+        values.iter().copied().filter(|v| v.is_finite()).collect()
+    }
+}
+
+/// Float comparison for values already known to be finite.
+fn cmp_finite(a: f32, b: f32) -> std::cmp::Ordering {
+    a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal)
+}
+
 /// Compute the adaptive onset threshold from a window of spectral flux values.
 /// Returns `median(flux_history) * ONSET_THRESHOLD_MULTIPLIER + ONSET_THRESHOLD_OFFSET`.
 ///
 /// Uses `select_nth_unstable_by` (quickselect, O(n)) instead of a full sort
 /// to find the median without allocating a new Vec.
 ///
-/// # Panics
-///
-/// Panics if `flux_history` contains a NaN, since the median selection compares
-/// samples with `partial_cmp`. Spectral flux is computed from finite magnitudes,
-/// so this cannot happen for well-formed input.
+/// Non-finite values (a misbehaving driver) are skipped, so every compared value
+/// is finite and the comparison is a total order.
 pub fn compute_onset_threshold(flux_history: &[f32]) -> f32 {
-    if flux_history.is_empty() {
+    let mut buf: Vec<f32> = finite_values(flux_history);
+    if buf.is_empty() {
         return ONSET_THRESHOLD_OFFSET;
     }
-    let mut buf = flux_history.to_vec();
     let mid = buf.len() / 2;
-    buf.select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap());
+    buf.select_nth_unstable_by(mid, |a, b| cmp_finite(*a, *b));
     buf[mid] * ONSET_THRESHOLD_MULTIPLIER + ONSET_THRESHOLD_OFFSET
 }
 
@@ -235,21 +247,17 @@ pub fn compute_onset_threshold(flux_history: &[f32]) -> f32 {
 /// Uses `select_nth_unstable_by` (quickselect, O(n)) for the median, then
 /// filters outliers using the original (unsorted) slice to avoid a second allocation.
 ///
-/// # Panics
-///
-/// Panics if `beat_intervals` contains a NaN, since the median selection compares
-/// intervals with `partial_cmp`. Intervals are derived from monotonic timestamps,
-/// so this cannot happen for well-formed input.
+/// Non-finite intervals are skipped, so every compared value is finite.
 pub fn estimate_bpm(beat_intervals: &[f32]) -> Option<f32> {
-    if beat_intervals.len() < 4 {
+    let mut buf: Vec<f32> = finite_values(beat_intervals);
+    if buf.len() < 4 {
         return None;
     }
-    let mut buf = beat_intervals.to_vec();
     let mid = buf.len() / 2;
-    buf.select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap());
+    buf.select_nth_unstable_by(mid, |a, b| cmp_finite(*a, *b));
     let median = buf[mid];
     // Filter outliers and compute average in a single pass — no intermediate Vec.
-    let (sum, count) = beat_intervals.iter().fold((0.0f32, 0u32), |(s, c), &iv| {
+    let (sum, count) = buf.iter().fold((0.0f32, 0u32), |(s, c), &iv| {
         if (iv - median).abs() / median < TEMPO_TOLERANCE {
             (s + iv, c + 1)
         } else {
@@ -983,6 +991,19 @@ mod tests {
             flux_decrease.abs() < 1e-6,
             "Energy decrease should produce zero flux"
         );
+    }
+
+    #[test]
+    fn onset_threshold_survives_non_finite_flux() {
+        // A driver can deliver NaN/Inf samples; the audio thread must not panic.
+        let flux = [0.1, f32::NAN, 0.3, f32::INFINITY, 0.2];
+        let _ = compute_onset_threshold(&flux);
+    }
+
+    #[test]
+    fn bpm_estimate_survives_non_finite_intervals() {
+        let intervals = [0.5, f32::NAN, 0.5, 0.5, f32::NEG_INFINITY, 0.5];
+        let _ = estimate_bpm(&intervals);
     }
 
     #[test]

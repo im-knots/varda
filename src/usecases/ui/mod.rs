@@ -19,7 +19,7 @@ pub mod widgets;
 #[cfg(any(test, feature = "test-fixtures"))]
 mod fixtures;
 
-pub(crate) use snapshot::build_ui_data;
+pub(crate) use snapshot::{LutCatalog, build_ui_data};
 
 pub use actions::*;
 pub use data::*;

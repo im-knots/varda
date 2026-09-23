@@ -21,6 +21,7 @@ pub(crate) fn build_ui_data(
     channel_preview_textures: &std::collections::HashMap<usize, egui::TextureId>,
     output_preview_textures: &std::collections::HashMap<usize, egui::TextureId>,
     main_output_texture: Option<egui::TextureId>,
+    available_luts: std::sync::Arc<[String]>,
 ) -> crate::usecases::ui::UIData {
     use crate::usecases::ui::{
         AudioDeviceUI, AudioPassthroughUI, AudioUIData, AutoTransitionUI, ChannelUIInfo,
@@ -560,7 +561,7 @@ pub(crate) fn build_ui_data(
         tonemap_mode: engine.mixer.tonemap_mode,
         active_lut_filename: engine.mixer.active_lut.clone(),
         look_lut_filename: engine.mixer.look_lut.clone(),
-        available_luts: list_available_luts(&app.session.workspace),
+        available_luts,
         midi_learn_active: engine.midi.learn_active,
         midi_learn_target: engine.midi.learn_target,
         keyboard_learn_active: app.input.keymap.learn_mode,
@@ -811,10 +812,39 @@ fn effect_snapshot_to_ui(snap: &EffectSnapshot) -> EffectInfo {
     )
 }
 
-/// Scan `.varda/luts/` for available LUT files (.cube, .3dl).
-fn list_available_luts(workspace: &crate::persistence::Workspace) -> Vec<String> {
-    let dir = workspace.luts_dir();
-    let Ok(entries) = std::fs::read_dir(&dir) else {
+/// How long a LUT listing stays fresh. LUTs are copied into `.varda/luts/` by
+/// hand, so a periodic rescan picks them up without a per-frame directory read.
+const LUT_RESCAN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Throttled listing of the LUT files in a workspace's `luts/` directory.
+#[derive(Default)]
+pub(crate) struct LutCatalog {
+    files: std::sync::Arc<[String]>,
+    scanned: Option<(std::path::PathBuf, std::time::Instant)>,
+}
+
+impl LutCatalog {
+    /// The LUT filenames in `dir`, rescanning only when the listing is stale or
+    /// `dir` has changed.
+    pub(crate) fn files(
+        &mut self,
+        dir: &std::path::Path,
+        now: std::time::Instant,
+    ) -> std::sync::Arc<[String]> {
+        let fresh = self.scanned.as_ref().is_some_and(|(scanned_dir, at)| {
+            scanned_dir == dir && now.saturating_duration_since(*at) < LUT_RESCAN_INTERVAL
+        });
+        if !fresh {
+            self.files = scan_luts(dir).into();
+            self.scanned = Some((dir.to_path_buf(), now));
+        }
+        std::sync::Arc::clone(&self.files)
+    }
+}
+
+/// Sorted `.cube` / `.3dl` filenames in `dir`; empty if it cannot be read.
+fn scan_luts(dir: &std::path::Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
         return vec![];
     };
     let mut files: Vec<String> = entries
@@ -829,4 +859,64 @@ fn list_available_luts(workspace: &crate::persistence::Workspace) -> Vec<String>
         .collect();
     files.sort();
     files
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    fn touch(dir: &std::path::Path, name: &str) {
+        std::fs::write(dir.join(name), b"").unwrap();
+    }
+
+    #[test]
+    fn lists_only_lut_files_sorted() {
+        let dir = tempfile::tempdir().unwrap();
+        touch(dir.path(), "b.cube");
+        touch(dir.path(), "a.3DL");
+        touch(dir.path(), "notes.txt");
+
+        let files = LutCatalog::default().files(dir.path(), Instant::now());
+        assert_eq!(&*files, ["a.3DL", "b.cube"]);
+    }
+
+    #[test]
+    fn does_not_rescan_within_the_interval() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut catalog = LutCatalog::default();
+        let t0 = Instant::now();
+        assert!(catalog.files(dir.path(), t0).is_empty());
+
+        touch(dir.path(), "new.cube");
+        assert!(
+            catalog
+                .files(dir.path(), t0 + Duration::from_millis(100))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn rescans_once_stale() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut catalog = LutCatalog::default();
+        let t0 = Instant::now();
+        catalog.files(dir.path(), t0);
+
+        touch(dir.path(), "new.cube");
+        let files = catalog.files(dir.path(), t0 + LUT_RESCAN_INTERVAL);
+        assert_eq!(&*files, ["new.cube"]);
+    }
+
+    #[test]
+    fn rescans_immediately_when_the_directory_changes() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        touch(second.path(), "other.cube");
+        let mut catalog = LutCatalog::default();
+        let t0 = Instant::now();
+        catalog.files(first.path(), t0);
+
+        assert_eq!(&*catalog.files(second.path(), t0), ["other.cube"]);
+    }
 }

@@ -130,8 +130,7 @@ impl VardaApp {
     /// Undo/redo on behalf of the windowed GUI. Uses the UI `layout` to source
     /// cosmetic/dome prefs for the "current" snapshot (the API path uses
     /// defaults), and returns a typed [`CommandOutcome::HistoryRestored`] so the
-    /// runner can re-register textures and sync dome flags. Replaces the runner's
-    /// bespoke inline undo branch (see [`/spec/ui-engine-boundary.md`] Decision #10).
+    /// runner can sync dome flags.
     pub(crate) fn history_gui(
         &mut self,
         layout: &crate::usecases::ui::UILayoutState,
@@ -145,7 +144,6 @@ impl VardaApp {
         };
         match restore {
             Some(r) => CommandOutcome::HistoryRestored {
-                structural_changed: r.structural_changed,
                 dome_layout: DomeLayoutFields {
                     dome_mode_active: r.snapshot.stage.dome_mode_active,
                     dome_preset: r.snapshot.stage.dome_preset,
@@ -2168,13 +2166,10 @@ mod tests {
         assert_eq!(app.mixer_ref().channels()[0].decks.len(), 1);
 
         let outcome = app.history_gui(&layout, true);
-        let CommandOutcome::HistoryRestored {
-            structural_changed, ..
-        } = outcome
-        else {
-            panic!("expected HistoryRestored, got {outcome:?}");
-        };
-        assert!(structural_changed, "adding a deck is a structural change");
+        assert!(
+            matches!(outcome, CommandOutcome::HistoryRestored { .. }),
+            "expected HistoryRestored, got {outcome:?}"
+        );
         assert_eq!(
             app.mixer_ref().channels()[0].decks.len(),
             0,

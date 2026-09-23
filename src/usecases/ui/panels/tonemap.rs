@@ -60,7 +60,7 @@ pub(super) fn render_tonemap_section(ui: &mut egui::Ui, data: &UIData, actions: 
     if ui.radio(look_lut.is_none(), "None").clicked() && look_lut.is_some() {
         actions.commands.push(EngineCommand::UnloadLookLut);
     }
-    for lut_name in &data.available_luts {
+    for lut_name in data.available_luts.iter() {
         let is_active = look_lut == Some(lut_name.as_str());
         if ui.radio(is_active, format!("{lut_name} (look)")).clicked() && !is_active {
             actions.commands.push(EngineCommand::LoadLookLut {
@@ -83,7 +83,7 @@ pub(super) fn render_tonemap_section(ui: &mut egui::Ui, data: &UIData, actions: 
         actions.commands.push(EngineCommand::UnloadLut);
     }
 
-    for lut_name in &data.available_luts {
+    for lut_name in data.available_luts.iter() {
         let is_active = active_lut == Some(lut_name.as_str());
         if ui.radio(is_active, lut_name).clicked() && !is_active {
             actions.commands.push(EngineCommand::LoadLut {

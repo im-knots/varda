@@ -383,17 +383,14 @@ impl VardaApp {
     }
 
     /// Apply a scene diff: compare current mixer state to a target `SceneConfig`
-    /// and patch only what changed. Returns (warnings, `structural_changed`).
-    /// `structural_changed` is true when channels/decks were added/removed/rebuilt
-    /// (requiring texture re-registration).
+    /// and patch only what changed. Returns restore warnings.
     pub fn apply_scene_diff(
         &mut self,
         target: &crate::scene::SceneConfig,
         rw: u32,
         rh: u32,
-    ) -> (Vec<String>, bool) {
+    ) -> Vec<String> {
         let mut warnings = Vec::new();
-        let mut structural = false;
 
         // (a) Crossfader — always cheap
         self.mixer.set_crossfader(target.crossfader);
@@ -497,7 +494,6 @@ impl VardaApp {
                                 &self.registry,
                             );
                             ch.decks[d_idx] = slot;
-                            structural = true;
                         }
                         Err(e) => {
                             warnings.push(format!(
@@ -512,7 +508,6 @@ impl VardaApp {
             // Remove excess decks
             if current_deck_count > target_deck_count {
                 ch.decks.truncate(target_deck_count);
-                structural = true;
             }
 
             // Add missing decks
@@ -540,7 +535,6 @@ impl VardaApp {
                             &self.registry,
                         );
                         ch.decks.push(slot);
-                        structural = true;
                     }
                     Err(e) => {
                         warnings.push(format!(
@@ -564,7 +558,6 @@ impl VardaApp {
         // Remove excess channels
         if current_ch_count > target_ch_count {
             self.mixer.channels_mut().truncate(target_ch_count);
-            structural = true;
         }
 
         // Add missing channels
@@ -619,7 +612,6 @@ impl VardaApp {
                         }
                     }
                     self.mixer.channels_mut().push(channel);
-                    structural = true;
                 }
                 Err(e) => {
                     warnings.push(format!(
@@ -677,7 +669,7 @@ impl VardaApp {
             );
         }
 
-        (warnings, structural)
+        warnings
     }
 
     /// The persisted half of the transport: how this show counts frames and
@@ -831,8 +823,8 @@ impl VardaApp {
         self.session.history.clear();
     }
 
-    /// Restore a history snapshot onto live state (scene + stage), returning
-    /// what changed so a windowed caller can refresh GPU preview textures.
+    /// Restore a history snapshot onto live state (scene + stage), returning the
+    /// restored snapshot so a windowed caller can sync its dome layout flags.
     fn restore_history_snapshot(
         &mut self,
         snapshot: super::history::HistorySnapshot,
@@ -840,7 +832,7 @@ impl VardaApp {
         let rw = self.render_width;
         let rh = self.render_height;
         // Scene half — diff-apply (patches only what changed).
-        let (warnings, structural_changed) = self.apply_scene_diff(&snapshot.scene, rw, rh);
+        let warnings = self.apply_scene_diff(&snapshot.scene, rw, rh);
         // Stage half — restore surfaces + assignments (no window lifecycle).
         // Cosmetic editor prefs are intentionally left untouched; dome layout
         // flags live in UI layout and are restored by the windowed caller.
@@ -849,10 +841,7 @@ impl VardaApp {
         for w in &warnings {
             log::warn!("History restore warning: {w}");
         }
-        super::history::HistoryRestore {
-            snapshot,
-            structural_changed,
-        }
+        super::history::HistoryRestore { snapshot }
     }
 
     /// Undo the most recent undoable action. `current` is the live state to
@@ -1382,7 +1371,7 @@ mod tests {
             arrangement: None,
             transport: crate::scene::TransportConfig::default(),
         };
-        let (warnings, _structural) = app.apply_scene_diff(&scene, 1920, 1080);
+        let warnings = app.apply_scene_diff(&scene, 1920, 1080);
         assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
         let snap = app.mixer_snapshot();
         assert!(

@@ -296,7 +296,7 @@ impl UIData {
             tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
             active_lut_filename: None,
             look_lut_filename: None,
-            available_luts: vec![],
+            available_luts: std::sync::Arc::default(),
             midi_learn_active: false,
             midi_learn_target: None,
             keyboard_learn_active: false,

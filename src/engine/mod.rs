@@ -41,13 +41,9 @@ pub enum CommandOutcome {
     /// One or more decks were created. The GUI registers a preview texture for
     /// each UUID. Mirrors `OkWithId` for the single-deck case.
     DecksCreated { uuids: Vec<String> },
-    /// Undo/redo restored engine state. `structural_changed` tells the GUI to
-    /// re-register all preview textures; `dome_layout` carries the UI-local
-    /// dome flags to sync back into layout state.
-    HistoryRestored {
-        structural_changed: bool,
-        dome_layout: DomeLayoutFields,
-    },
+    /// Undo/redo restored engine state. `dome_layout` carries the UI-local dome
+    /// flags to sync back into layout state.
+    HistoryRestored { dome_layout: DomeLayoutFields },
 }
 
 /// Dome layout flags that live in UI layout state (not engine state) and must

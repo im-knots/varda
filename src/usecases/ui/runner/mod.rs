@@ -25,7 +25,7 @@ pub(crate) use event_loop::WindowHost;
 
 use preview::PreviewEncoder;
 
-use deck_load::{DeckLoadTargets, apply_deck_texture_outcomes, register_deck_preview_texture};
+use deck_load::DeckLoadTargets;
 use detect::{DetectRequest, DetectResponse, spawn_detect_thread};
 
 pub struct UIRunner {
@@ -44,6 +44,7 @@ pub struct UIRunner {
     channel_preview_textures: std::collections::HashMap<usize, egui::TextureId>,
     output_preview_textures: std::collections::HashMap<usize, egui::TextureId>,
     main_output_texture: Option<egui::TextureId>,
+    lut_catalog: crate::usecases::ui::LutCatalog,
     dome_preview_renderer: Option<crate::renderer::dome_preview::DomePreviewRenderer>,
     dome_preview_texture: Option<egui::TextureId>,
     // Camera detection mode state
@@ -132,6 +133,7 @@ impl UIRunner {
             channel_preview_textures: std::collections::HashMap::new(),
             output_preview_textures: std::collections::HashMap::new(),
             main_output_texture: None,
+            lut_catalog: crate::usecases::ui::LutCatalog::default(),
             dome_preview_renderer: None,
             dome_preview_texture: None,
             camera_detect_texture: None,
@@ -356,6 +358,7 @@ impl UIRunner {
         varda.update_notifications();
         varda.process_commands();
         varda.process_inputs();
+        varda.run_pending_global_actions();
 
         // Create pending output windows (API-driven in headless)
         host.create_pending_outputs(varda);
@@ -470,6 +473,10 @@ impl UIRunner {
             &self.channel_preview_textures,
             &self.output_preview_textures,
             self.main_output_texture,
+            self.lut_catalog.files(
+                &varda_ref.session.workspace.luts_dir(),
+                std::time::Instant::now(),
+            ),
         );
         ui_data.can_undo = varda_ref.history_can_undo();
         ui_data.can_redo = varda_ref.history_can_redo();
@@ -571,7 +578,6 @@ impl UIRunner {
 
         // 6a2. Dome camera actions — apply to renderer (not layout state)
         {
-            let dome_resized = false;
             for action in &ui_actions.session.dome_actions {
                 match action {
                     ui::DomeAction::RotateCamera { delta_x, delta_y } => {
@@ -592,17 +598,6 @@ impl UIRunner {
                     _ => {} // Config actions handled by layout.apply_selections
                 }
             }
-            // Handle dome resize if needed
-            if let (Some(renderer), Some(varda)) = (&mut self.dome_preview_renderer, &self.varda) {
-                let context = varda.gpu_context();
-                if let Some(egui_renderer) = &mut self.egui_renderer {
-                    // Check if dome_preview_texture needs re-registration after resize
-                    if dome_resized {
-                        let _ = dome_resized; // suppress unused warning
-                    }
-                    let _ = (context, egui_renderer, renderer); // used below if resize
-                }
-            }
         }
 
         self.apply_camera_detect_actions(&mut ui_actions);
@@ -610,9 +605,6 @@ impl UIRunner {
         // 6b. Engine actions (delegated to VardaApp)
         {
             let Some(varda) = self.varda.as_mut() else {
-                return;
-            };
-            let Some(egui_renderer) = self.egui_renderer.as_mut() else {
                 return;
             };
 
@@ -660,38 +652,22 @@ impl UIRunner {
             }
 
             let engine_outcome = varda.apply_engine_actions(&mut ui_actions);
-            apply_deck_texture_outcomes(
-                &engine_outcome.texture_outcomes,
-                egui_renderer,
-                varda.gpu_context(),
-                varda.mixer_ref(),
-                &mut self.deck_preview_textures,
-            );
 
-            // ── Drain MIDI-triggered global actions ──
-            if std::mem::take(&mut varda.midi_pending_undo) {
-                ui_actions.session.undo_requested = true;
-            }
-            if std::mem::take(&mut varda.midi_pending_redo) {
-                ui_actions.session.redo_requested = true;
-            }
-            if std::mem::take(&mut varda.midi_pending_save) {
-                ui_actions.session.save_requested = true;
-            }
+            // ── Control-surface undo/redo/save join the UI's own requests ──
+            let pending = varda.take_pending_global_actions();
+            ui_actions.session.undo_requested |= pending.undo;
+            ui_actions.session.redo_requested |= pending.redo;
+            ui_actions.session.save_requested |= pending.save;
 
             // ── Undo/redo: restore via the engine's shared timeline ──
             // The restore (scene + stage diff-apply) lives on `VardaApp` so the
             // windowed and headless/API consumers behave identically; the
-            // runner only layers on UI-specific refresh (dome layout flags +
-            // GPU preview texture re-registration).
+            // runner only restores the UI-owned dome layout flags. Preview
+            // registrations follow the restored decks on the next texture sync.
             if ui_actions.session.undo_requested || ui_actions.session.redo_requested {
                 let undo = ui_actions.session.undo_requested;
                 let outcome = varda.history_gui(&self.layout, undo);
-                if let crate::engine::CommandOutcome::HistoryRestored {
-                    structural_changed,
-                    dome_layout,
-                } = outcome
-                {
+                if let crate::engine::CommandOutcome::HistoryRestored { dome_layout } = outcome {
                     // Dome layout flags live in UI layout, not engine state.
                     self.layout.dome_mode_active = dome_layout.dome_mode_active;
                     self.layout.dome_preset = dome_layout.dome_preset;
@@ -699,103 +675,11 @@ impl UIRunner {
 
                     let label = if undo { "↩ Undo" } else { "↪ Redo" };
                     varda.notify_info(label);
-
-                    if structural_changed {
-                        // Structural change: re-register all deck + channel preview textures
-                        self.deck_preview_textures.clear();
-                        self.channel_preview_textures.clear();
-                        let context = varda.gpu_context();
-                        let mixer = varda.mixer_ref();
-                        for (ch_idx, ch) in mixer.channels().iter().enumerate() {
-                            for slot in &ch.decks {
-                                let tex_id = egui_renderer.register_native_texture(
-                                    &context.device,
-                                    &slot.deck.texture_view,
-                                    wgpu::FilterMode::Linear,
-                                );
-                                self.deck_preview_textures
-                                    .insert(slot.deck.uuid().to_string(), tex_id);
-                            }
-                            let ch_tid = egui_renderer.register_native_texture(
-                                &context.device,
-                                &ch.composite_view,
-                                wgpu::FilterMode::Linear,
-                            );
-                            self.channel_preview_textures.insert(ch_idx, ch_tid);
-                        }
-                        if let Some(main_id) = self.main_output_texture {
-                            egui_renderer.update_egui_texture_from_wgpu_texture(
-                                &context.device,
-                                varda.mixer_ref().composite_view(),
-                                wgpu::FilterMode::Linear,
-                                main_id,
-                            );
-                        }
-                        // Re-register output preview textures
-                        self.output_preview_textures.clear();
-                        for (out_idx, output) in varda.outputs_ref().iter().enumerate() {
-                            let view = Self::output_preview_view(output, mixer);
-                            let tid = egui_renderer.register_native_texture(
-                                &context.device,
-                                view,
-                                wgpu::FilterMode::Linear,
-                            );
-                            self.output_preview_textures.insert(out_idx, tid);
-                        }
-                    }
                 }
             }
 
             varda.apply_ui_actions(&ui_actions);
-            let resolution_changed = engine_outcome.resolution_changed;
             varda.update_controller_leds();
-
-            // After resolution change, all GPU textures were recreated —
-            // re-register them with egui so previews point to the new views.
-            if resolution_changed {
-                let context = varda.gpu_context();
-                let mixer = varda.mixer_ref();
-                for (ch_idx, ch) in mixer.channels().iter().enumerate() {
-                    for slot in &ch.decks {
-                        if let Some(&tex_id) = self.deck_preview_textures.get(slot.deck.uuid()) {
-                            egui_renderer.update_egui_texture_from_wgpu_texture(
-                                &context.device,
-                                &slot.deck.texture_view,
-                                wgpu::FilterMode::Linear,
-                                tex_id,
-                            );
-                        }
-                    }
-                    if let Some(&ch_tid) = self.channel_preview_textures.get(&ch_idx) {
-                        egui_renderer.update_egui_texture_from_wgpu_texture(
-                            &context.device,
-                            &ch.composite_view,
-                            wgpu::FilterMode::Linear,
-                            ch_tid,
-                        );
-                    }
-                }
-                if let Some(main_id) = self.main_output_texture {
-                    egui_renderer.update_egui_texture_from_wgpu_texture(
-                        &context.device,
-                        mixer.composite_view(),
-                        wgpu::FilterMode::Linear,
-                        main_id,
-                    );
-                }
-                // Update output preview textures after resolution change
-                for (out_idx, output) in varda.outputs_ref().iter().enumerate() {
-                    if let Some(&tid) = self.output_preview_textures.get(&out_idx) {
-                        let view = Self::output_preview_view(output, mixer);
-                        egui_renderer.update_egui_texture_from_wgpu_texture(
-                            &context.device,
-                            view,
-                            wgpu::FilterMode::Linear,
-                            tid,
-                        );
-                    }
-                }
-            }
 
             // Fix up selection state after channel removal
             if let Some(ch_idx) = engine_outcome.removed_channel {
@@ -890,7 +774,6 @@ impl UIRunner {
                             varda.notify_error(format!("Failed to add deck: {e}"));
                             continue;
                         }
-                        let deck_uuid = deck.uuid().to_string();
                         if let Some(ch) = varda.mixer_mut().channel_mut(ch_idx) {
                             let idx = ch.add_deck(deck);
                             log::info!(
@@ -900,14 +783,6 @@ impl UIRunner {
                                 result.name
                             );
                         }
-                        // Re-borrow for texture registration (separate from mixer borrow)
-                        register_deck_preview_texture(
-                            egui_renderer,
-                            varda.gpu_context(),
-                            varda.mixer_ref(),
-                            &deck_uuid,
-                            &mut self.deck_preview_textures,
-                        );
                     }
                     Err(e) => {
                         log::error!("Background deck load failed for '{}': {}", result.name, e);

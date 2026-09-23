@@ -37,7 +37,7 @@ macro_rules! state_route {
                 // `($field)` needs the parentheses: `#[utoipa::path]` re-emits the
                 // body and drops the invisible grouping around an `expr` capture,
                 // so `$field(&s)` would parse as a call on the closure's body.
-                Ok(s) => Json(serde_json::to_value(($field)(&s)).unwrap()).into_response(),
+                Ok(s) => Json(($field)(&s)).into_response(),
                 Err((status, msg)) => (status, msg).into_response(),
             }
         }
