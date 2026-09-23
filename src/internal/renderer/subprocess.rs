@@ -970,7 +970,9 @@ fn write_stream_player(dir: &str, kind: &str, manifest_filename: &str, short_seg
 /// This prevents the render thread from blocking when ffmpeg's stdin pipe is full
 /// (e.g. SRT listener waiting for a client connection).
 pub struct FfmpegSubprocess {
-    child: Child,
+    /// The ffmpeg process. `None` once a recording's `stop()` has handed it to
+    /// the finalize thread.
+    child: Option<Child>,
     /// Channel sender for frame data → writer thread
     frame_tx: Option<mpsc::SyncSender<Vec<u8>>>,
     /// Writer thread handle
@@ -1602,7 +1604,7 @@ impl FfmpegSubprocess {
         let audio = finalize_audio(prepared, path.to_string())?;
 
         Ok(Self {
-            child,
+            child: Some(child),
             frame_tx: Some(tx),
             writer_thread: Some(writer_thread),
             counters,
@@ -1709,7 +1711,7 @@ impl FfmpegSubprocess {
         let audio = finalize_audio(prepared, url.to_string())?;
 
         Ok(Self {
-            child,
+            child: Some(child),
             frame_tx: Some(tx),
             writer_thread: Some(writer_thread),
             counters,
@@ -1827,7 +1829,7 @@ impl FfmpegSubprocess {
         let audio = finalize_audio(prepared, name.to_string())?;
 
         Ok(Self {
-            child,
+            child: Some(child),
             frame_tx: Some(tx),
             writer_thread: Some(writer_thread),
             counters,
@@ -1931,7 +1933,7 @@ impl FfmpegSubprocess {
         let audio = finalize_audio(prepared, label.clone())?;
 
         Ok(Self {
-            child,
+            child: Some(child),
             frame_tx: Some(tx),
             writer_thread: Some(writer_thread),
             counters,
@@ -2036,7 +2038,7 @@ impl FfmpegSubprocess {
         let audio = finalize_audio(prepared, name.to_string())?;
 
         Ok(Self {
-            child,
+            child: Some(child),
             frame_tx: Some(tx),
             writer_thread: Some(writer_thread),
             counters,
@@ -2124,7 +2126,10 @@ impl FfmpegSubprocess {
             return false;
         }
         // Check if ffmpeg already exited (non-blocking)
-        if let Some(status) = self.child.try_wait().ok().flatten() {
+        let Some(child) = self.child.as_mut() else {
+            return false;
+        };
+        if let Some(status) = child.try_wait().ok().flatten() {
             if !status.success() {
                 self.drain_stderr();
                 log::error!(
@@ -2151,7 +2156,7 @@ impl FfmpegSubprocess {
     /// Each line is classified individually: lines containing error indicators
     /// are logged at ERROR, everything else (version info, codec config) at DEBUG.
     fn drain_stderr(&mut self) {
-        if let Some(mut stderr) = self.child.stderr.take() {
+        if let Some(mut stderr) = self.child.as_mut().and_then(|c| c.stderr.take()) {
             Self::drain_stderr_pipe(&mut stderr, &self.label);
         }
     }
@@ -2182,11 +2187,6 @@ impl FfmpegSubprocess {
     /// on a detached background thread so the caller (UI / main thread) returns
     /// immediately. For streams, kills ffmpeg inline (fast).
     /// Idempotent — safe to call multiple times.
-    ///
-    /// # Panics
-    ///
-    /// On the recording path, panics if the placeholder child process or the
-    /// background finalize thread cannot be spawned.
     pub fn stop(&mut self) {
         if self.stopped {
             return;
@@ -2206,21 +2206,14 @@ impl FfmpegSubprocess {
             // Move all owned resources out of `self` so the thread owns them.
             let mut audio = self.audio.take();
             let writer_thread = self.writer_thread.take();
-            let mut child = std::mem::replace(
-                &mut self.child,
-                // Placeholder — never used again (stopped == true).
-                Command::new("true")
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()
-                    .expect("failed to spawn placeholder"),
-            );
+            let Some(mut child) = self.child.take() else {
+                return;
+            };
             let label = self.label.clone();
             let counters = self.counters.clone();
             let stderr = child.stderr.take();
 
-            std::thread::Builder::new()
+            let finalize = std::thread::Builder::new()
                 .name(format!("ffmpeg-finalize-{label}"))
                 .spawn(move || {
                     const FINALIZE_TIMEOUT: std::time::Duration =
@@ -2275,8 +2268,12 @@ impl FfmpegSubprocess {
                         Self::pad_summary(counters.padded.load(Ordering::Relaxed)),
                         duration.as_secs_f32()
                     );
-                })
-                .expect("failed to spawn ffmpeg finalize thread");
+                });
+            if let Err(e) = finalize {
+                // The writer thread still closes ffmpeg's stdin when the
+                // channel drains, so the container is finalized unsupervised.
+                log::error!("failed to spawn ffmpeg finalize thread: {e}");
+            }
         } else {
             // --- Streaming path: kill immediately (inline, fast) ---
 
@@ -2284,7 +2281,9 @@ impl FfmpegSubprocess {
             //    thread may be blocked on stdin.write_all() (e.g. SRT listener
             //    with a full pipe buffer). Killing the child breaks the pipe,
             //    which unblocks the write and lets the thread exit.
-            let _ = self.child.kill();
+            if let Some(child) = self.child.as_mut() {
+                let _ = child.kill();
+            }
 
             // 3b. Tear down the audio side-channel (socket + writer thread).
             //     Done after the kill so a writer blocked on a full socket sees
@@ -2300,7 +2299,9 @@ impl FfmpegSubprocess {
             }
 
             // 5. Reap the child process
-            let _ = self.child.wait();
+            if let Some(child) = self.child.as_mut() {
+                let _ = child.wait();
+            }
 
             let frames = self.counters.written.load(Ordering::Relaxed);
             let padded = self.counters.padded.load(Ordering::Relaxed);
@@ -3129,6 +3130,26 @@ mod tests {
                 .unwrap();
         sub.stop();
         sub.stop();
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn recording_stop_hands_the_child_to_finalize_without_a_placeholder() {
+        if !ffmpeg_available() {
+            eprintln!("Skipping test: ffmpeg not available");
+            return;
+        }
+        let path = std::env::temp_dir().join("varda_test_no_placeholder.mp4");
+        let path_str = path.to_str().unwrap();
+
+        let mut sub =
+            FfmpegSubprocess::spawn_recording(path_str, &RecordingCodec::H264, 64, 64, 30, None)
+                .unwrap();
+        sub.stop();
+
+        // A placeholder process (e.g. `true`) does not exist on every platform.
+        assert!(sub.child.is_none());
 
         let _ = std::fs::remove_file(path);
     }

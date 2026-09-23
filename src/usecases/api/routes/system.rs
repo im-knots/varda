@@ -21,16 +21,11 @@ pub async fn health() -> impl IntoResponse {
 }
 
 /// The full engine state snapshot.
-///
-/// # Panics
-///
-/// Panics if the published `EngineState` snapshot cannot be serialized to JSON,
-/// which would indicate a bug in the snapshot's `Serialize` implementation.
 #[utoipa::path(get, path = "/api/state", responses((status = 200, description = "Full engine state"), (status = 503, description = "Engine not yet initialized")), tag = "System")]
 pub async fn get_state(State(state): State<SharedState>) -> impl IntoResponse {
     match state.engine_state.read() {
         Ok(guard) => match guard.as_ref() {
-            Some(engine_state) => Json(serde_json::to_value(engine_state).unwrap()).into_response(),
+            Some(engine_state) => Json(engine_state).into_response(),
             None => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "Engine not yet initialized",

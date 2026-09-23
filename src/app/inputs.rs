@@ -5,6 +5,15 @@
 
 use super::VardaApp;
 
+/// Undo/redo/save requested by a control surface (MIDI, OSC, or a macro
+/// trigger) and not yet dispatched.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PendingGlobalActions {
+    pub(crate) undo: bool,
+    pub(crate) redo: bool,
+    pub(crate) save: bool,
+}
+
 /// The cue a control-surface write asks for, if it asks for one.
 ///
 /// `cue/<uuid>/fire` is taken on the rising edge like `deck/<uuid>/trigger`, so
@@ -19,6 +28,31 @@ fn fired_cue(path: &str, value: f32) -> Option<String> {
 }
 
 impl VardaApp {
+    /// Hand the pending control-surface actions to a windowed consumer, which
+    /// runs them against its UI layout. Clears them.
+    pub(crate) fn take_pending_global_actions(&mut self) -> PendingGlobalActions {
+        std::mem::take(&mut self.pending_actions)
+    }
+
+    /// Run the pending control-surface actions through the engine's own command
+    /// arms, for consumers with no UI layout (headless). Clears them.
+    pub(crate) fn run_pending_global_actions(&mut self) {
+        use crate::engine::{CommandResult, EngineCommand};
+        let pending = self.take_pending_global_actions();
+        for (requested, cmd) in [
+            (pending.undo, EngineCommand::Undo),
+            (pending.redo, EngineCommand::Redo),
+            (pending.save, EngineCommand::SaveWorkspace),
+        ] {
+            if !requested {
+                continue;
+            }
+            if let CommandResult::Err { message, .. } = self.execute_command(cmd) {
+                log::info!("Control-surface action not applied: {message}");
+            }
+        }
+    }
+
     /// One normalized write from a control surface, whichever surface it came
     /// from.
     ///
@@ -37,9 +71,9 @@ impl VardaApp {
         if path.starts_with("action/") && value > 0.5 {
             // Global actions — trigger on note-on / CC > 50%
             match path {
-                "action/undo" => self.midi_pending_undo = true,
-                "action/redo" => self.midi_pending_redo = true,
-                "action/save" => self.midi_pending_save = true,
+                "action/undo" => self.pending_actions.undo = true,
+                "action/redo" => self.pending_actions.redo = true,
+                "action/save" => self.pending_actions.save = true,
                 // A pad, so it toggles rather than needing two bindings.
                 "action/record" => self.set_record_armed(!self.record_armed()),
                 _ => log::debug!("Unknown action path: {path}"),
@@ -328,13 +362,13 @@ impl VardaApp {
 
         // Drain macro-triggered global actions. Trigger buttons routed through
         // `macro/<uuid>/value` queue these on the macro bank; here we forward
-        // them onto the same pending flags as the MIDI `action/*` paths so the
-        // runner dispatches undo/redo/save uniformly.
+        // them onto the same pending actions as the MIDI `action/*` paths so
+        // undo/redo/save dispatch uniformly.
         for action in self.mixer.macros_mut().take_pending_actions() {
             match action {
-                crate::macros::GlobalAction::Undo => self.midi_pending_undo = true,
-                crate::macros::GlobalAction::Redo => self.midi_pending_redo = true,
-                crate::macros::GlobalAction::Save => self.midi_pending_save = true,
+                crate::macros::GlobalAction::Undo => self.pending_actions.undo = true,
+                crate::macros::GlobalAction::Redo => self.pending_actions.redo = true,
+                crate::macros::GlobalAction::Save => self.pending_actions.save = true,
             }
         }
 
@@ -608,7 +642,10 @@ mod tests {
             },
         );
         app.process_inputs();
-        assert!(!app.midi_pending_undo, "a release is not a press");
+        assert!(
+            !app.take_pending_global_actions().undo,
+            "a release is not a press"
+        );
 
         osc(
             &mut app,
@@ -618,7 +655,44 @@ mod tests {
             },
         );
         app.process_inputs();
-        assert!(app.midi_pending_undo);
+        assert!(app.take_pending_global_actions().undo);
+        assert!(
+            !app.take_pending_global_actions().undo,
+            "taking an action consumes it"
+        );
+    }
+
+    /// Headless has no UI session to hand the action to, so the engine runs it
+    /// through the same command arm the HTTP API uses.
+    #[test]
+    fn a_controller_undo_runs_without_a_window() {
+        let Some((mut app, deck)) = app_with_a_deck() else {
+            return;
+        };
+        app.command_sender()
+            .send((
+                C::SetDeckOpacity {
+                    deck_uuid: deck,
+                    opacity: 0.25,
+                },
+                None,
+            ))
+            .expect("the receiver is in the app");
+        app.process_commands();
+        assert!((opacity(&mut app) - 0.25).abs() < 1e-4);
+
+        osc(
+            &mut app,
+            OscInput::Param {
+                path: "action/undo".to_string(),
+                value: 1.0,
+            },
+        );
+        app.process_inputs();
+        app.run_pending_global_actions();
+
+        assert!((opacity(&mut app) - 1.0).abs() < 1e-4, "the undo landed");
+        assert!(!app.take_pending_global_actions().undo, "and was consumed");
     }
 
     #[test]

@@ -62,47 +62,25 @@ impl VardaApp {
         // Panels push `EngineCommand`s directly; drain them through the same
         // dispatch as the bus. Ordering within the vec is preserved, so a
         // new-channel library drop enqueues `AddChannel` before its `Add*Deck`
-        // and the deck resolves against the freshly created channel. Deck-
-        // creating / reindexing outcomes are handed back to the caller, which
-        // registers preview textures — all via the typed `CommandOutcome`.
-        let mut resolution_changed = false;
-        let mut texture_outcomes = Vec::new();
+        // and the deck resolves against the freshly created channel.
         let commands = std::mem::take(&mut ui_actions.commands);
         for cmd in commands {
             let is_deck_add = command_is_deck_add(&cmd);
-            // A resolution change recreates every GPU texture; flag it so the
-            // runner re-points its egui texture registrations after the drain.
-            let is_resolution_change = matches!(
-                &cmd,
-                EngineCommand::SetRenderResolution { width, height }
-                    if *width > 0
-                        && *height > 0
-                        && (*width != self.render_width || *height != self.render_height)
-            );
             let outcome = self.execute_command_gui(cmd);
-            if matches!(outcome, CommandOutcome::DecksCreated { .. }) {
-                texture_outcomes.push(outcome.clone());
-            }
             if is_deck_add {
                 self.notify_deck_add_outcome(&outcome);
-            }
-            if is_resolution_change {
-                resolution_changed = true;
             }
         }
 
         EngineActionsOutcome {
             removed_channel: self.apply_remove_channel(ui_actions),
-            resolution_changed,
-            texture_outcomes,
         }
     }
 
     /// Emit the GUI toast for a deck-creating command's outcome — the post-step
     /// that mirrors the old `dispatch_source_deck_add`. The engine logic lives
     /// in the command; this only surfaces success/failure to the notification
-    /// center (preview texture registration is the caller's job — see
-    /// `EngineActionsOutcome::texture_outcomes`).
+    /// center.
     fn notify_deck_add_outcome(&mut self, outcome: &CommandOutcome) {
         match outcome {
             CommandOutcome::DecksCreated { uuids } => {
@@ -156,23 +134,15 @@ impl VardaApp {
     }
 }
 
-/// GUI post-steps the runner applies after [`VardaApp::apply_engine_actions`]:
-/// selection fixup for a removed channel, egui texture re-point after a
-/// render-resolution change, and the deck-texture-relevant command outcomes
-/// to register/free egui preview textures for (both need window-layer state
-/// the engine can't touch — see `/spec/app-presentation-boundary.md`).
+/// GUI post-step the runner applies after [`VardaApp::apply_engine_actions`]:
+/// selection fixup for a removed channel, which needs UI layout state the engine
+/// can't touch.
 pub struct EngineActionsOutcome {
     /// Index of a channel removed this frame (for UI selection fixup).
     pub removed_channel: Option<usize>,
-    /// Whether the render resolution changed (recreated GPU textures).
-    pub resolution_changed: bool,
-    /// `DecksCreated` outcomes from this frame's command drain, in order — the
-    /// caller registers a preview texture for each new deck UUID.
-    pub texture_outcomes: Vec<CommandOutcome>,
 }
 
-/// True for the deck-creating commands the GUI drain toasts + registers a
-/// preview texture for. Mirrors the deck-add arm list in `execute_command_gui`.
+/// True for the deck-creating commands the GUI drain toasts. Mirrors the deck-add arm list in `execute_command_gui`.
 pub(crate) fn command_is_deck_add(cmd: &EngineCommand) -> bool {
     matches!(
         cmd,

@@ -350,10 +350,8 @@ pub struct VardaApp {
     // render gate only, never the compositor. See /spec/channel-preview.md.
     preview_channels: Vec<usize>,
 
-    // ── Pending MIDI-triggered actions (consumed by runner) ──
-    pub(crate) midi_pending_undo: bool,
-    pub(crate) midi_pending_redo: bool,
-    pub(crate) midi_pending_save: bool,
+    // ── Pending control-surface actions (consumed by the runner) ──
+    pending_actions: inputs::PendingGlobalActions,
 
     // ── Shutdown request flag ──────────────────────────────────
     pub(crate) shutdown_requested: bool,
@@ -625,9 +623,7 @@ impl VardaApp {
             render_height: DEFAULT_RENDER_HEIGHT,
             target_fps: config.target_fps,
             preview_channels: Vec::new(),
-            midi_pending_undo: false,
-            midi_pending_redo: false,
-            midi_pending_save: false,
+            pending_actions: inputs::PendingGlobalActions::default(),
             shutdown_requested: false,
         })
     }

@@ -434,7 +434,7 @@ pub struct UIData {
     /// Scene-referred look LUT filename, applied before every output transform.
     pub look_lut_filename: Option<String>,
     /// Available LUT files in .varda/luts/
-    pub available_luts: Vec<String>,
+    pub available_luts: std::sync::Arc<[String]>,
     /// Whether MIDI learn mode is active
     pub midi_learn_active: bool,
     /// The parameter path currently waiting for MIDI learn
