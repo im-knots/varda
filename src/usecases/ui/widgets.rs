@@ -389,19 +389,17 @@ pub fn render_params<S: std::hash::BuildHasher>(
     id_prefix: &str,
     midi_learn_path_prefix: Option<&str>,
     midi_learn_active: bool,
-    midi_learn_select: &mut Option<String>,
     midi_learn_target: Option<&str>,
     mod_assignments: &std::collections::HashMap<String, Vec<ModAssignmentUI>, S>,
     mod_current_values: &std::collections::HashMap<String, f32, S>,
     mod_param_prefix: &str,
     keyboard_learn_active: bool,
-    keyboard_learn_select: &mut Option<crate::keymap::KeyTarget>,
     keyboard_learn_target: Option<&str>,
 ) {
     render_grouped(ui, params, id_prefix, &mut |ui, param| {
         let label = param.label.as_ref().unwrap_or(&param.name);
         // Check if this param is modulated and get color info
-        let mod_key = format!("{}:{}", mod_param_prefix, param.name);
+        let mod_key = format!("{mod_param_prefix}/{}", param.name);
         let assignments = mod_assignments.get(&mod_key);
         let is_modulated = assignments.is_some_and(|a| !a.is_empty());
         // Pick the primary modulator color (first assignment)
@@ -456,7 +454,7 @@ pub fn render_params<S: std::hash::BuildHasher>(
                         let click_id = ui.id().with(("midi_learn_param", &param.name));
                         let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
                         if click_resp.clicked() {
-                            *midi_learn_select = Some(path);
+                            commands.push(EngineCommand::MidiLearnSelect { path });
                         }
                     }
                     // Keyboard learn mode: orange glow + click overlay
@@ -471,8 +469,9 @@ pub fn render_params<S: std::hash::BuildHasher>(
                         let click_id = ui.id().with(("kb_learn_param", &param.name));
                         let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
                         if click_resp.clicked() {
-                            *keyboard_learn_select =
-                                Some(crate::keymap::KeyTarget::ParamPath(path));
+                            commands.push(EngineCommand::KeyboardLearnSelect {
+                                target: crate::keymap::KeyTarget::ParamPath(path),
+                            });
                         }
                     }
                     // Draw modulation ghost indicator on top of slider
@@ -574,18 +573,16 @@ pub fn render_effect_params<S: std::hash::BuildHasher>(
     id_prefix: &str,
     midi_learn_path_prefix: Option<&str>,
     midi_learn_active: bool,
-    midi_learn_select: &mut Option<String>,
     midi_learn_target: Option<&str>,
     mod_assignments: &std::collections::HashMap<String, Vec<ModAssignmentUI>, S>,
     mod_current_values: &std::collections::HashMap<String, f32, S>,
     mod_param_prefix: &str,
     keyboard_learn_active: bool,
-    keyboard_learn_select: &mut Option<crate::keymap::KeyTarget>,
     keyboard_learn_target: Option<&str>,
 ) {
     render_grouped(ui, params, id_prefix, &mut |ui, param| {
         let label = param.label.as_ref().unwrap_or(&param.name);
-        let mod_key = format!("{}:{}", mod_param_prefix, param.name);
+        let mod_key = format!("{mod_param_prefix}/{}", param.name);
         let assignments = mod_assignments.get(&mod_key);
         let is_modulated = assignments.is_some_and(|a| !a.is_empty());
         let mod_label_color = assignments.and_then(|a| a.first()).map(|a| {
@@ -638,7 +635,7 @@ pub fn render_effect_params<S: std::hash::BuildHasher>(
                         let click_id = ui.id().with(("midi_learn_fx_param", &param.name));
                         let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
                         if click_resp.clicked() {
-                            *midi_learn_select = Some(path);
+                            commands.push(EngineCommand::MidiLearnSelect { path });
                         }
                     }
                     // Keyboard learn mode: orange glow + click overlay
@@ -653,8 +650,9 @@ pub fn render_effect_params<S: std::hash::BuildHasher>(
                         let click_id = ui.id().with(("kb_learn_fx_param", &param.name));
                         let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
                         if click_resp.clicked() {
-                            *keyboard_learn_select =
-                                Some(crate::keymap::KeyTarget::ParamPath(path));
+                            commands.push(EngineCommand::KeyboardLearnSelect {
+                                target: crate::keymap::KeyTarget::ParamPath(path),
+                            });
                         }
                     }
                     // Draw modulation ghost indicator

@@ -333,6 +333,10 @@ harness = false
 name = "presentation"
 harness = false
 
+[[bench]]
+name = "engine_snapshot"
+harness = false
+
 
 [profile.release]
 opt-level = 3

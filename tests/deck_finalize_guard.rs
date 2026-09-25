@@ -1,17 +1,13 @@
-//! Guard: every path that constructs a `Deck` must finalize it.
+//! Guard: every deck built from a shader, image, or video is finalized, and
+//! only the engine builds them.
 //!
-//! Post-construction wiring — starting CPU analyzers and acquiring devices a
-//! shader's `PREPROCESSORS` block requires — lives in
-//! `VardaApp::finalize_new_deck`. There are two construction paths and they
-//! silently diverged once already: the synchronous `add_deck` command called the
-//! wiring, and the UI's background loader (`spawn_deck_loads`, completed in
-//! `usecases/ui/runner/`) did not. The symptom was a `depth_sensor` shader
-//! dragged from the Library rendering against blank 1x1 textures with no error
-//! toast and nothing in the log — it just looked like a shader with a flat
-//! background.
-//!
-//! Nothing about that divergence was type-visible, so this is a source guard:
-//! it fails if a third path adds a deck to a channel without finalizing first.
+//! Post-construction wiring (starting CPU analyzers and acquiring devices a
+//! shader's `PREPROCESSORS` block requires) lives in
+//! `VardaApp::finalize_new_deck`. A deck that skips it renders against blank
+//! 1x1 textures with no error. The engine's background loader
+//! (`app/deck_loads.rs`) is the one construction path for every consumer, so
+//! this guard checks it finalizes and reports failures, and that no consumer
+//! builds decks itself.
 //!
 //! Targets are named as directories where possible, and read recursively, so the
 //! guard follows the code when it is split across submodules rather than failing
@@ -51,36 +47,29 @@ fn read(rel: &str) -> String {
 }
 
 #[test]
-fn both_deck_construction_paths_call_finalize_new_deck() {
-    for (file, context) in [
-        ("app/engine_impl.rs", "the synchronous AddDeck command"),
-        ("usecases/ui/runner", "the UI background loader"),
-    ] {
-        let source = read(file);
-        assert!(
-            source.contains("finalize_new_deck"),
-            "{file} ({context}) no longer calls finalize_new_deck — a deck built \
-             there will skip analyzer startup and required-device acquisition"
-        );
-    }
+fn the_engine_loader_finalizes_every_deck_and_reports_failure() {
+    let source = read("app/deck_loads.rs");
+    let idx = source
+        .find("finalize_new_deck")
+        .expect("the engine loader finalizes decks before attaching them");
+    let attach = &source[idx..];
+    assert!(
+        attach.contains("add_deck"),
+        "finalize must run before the deck joins its channel"
+    );
+    assert!(
+        source.contains("Failed to load deck"),
+        "a failed attach must be surfaced to the operator"
+    );
 }
 
 #[test]
-fn background_loader_handles_the_finalize_error() {
-    // Finalization fails when a required preprocessor cannot be satisfied. The
-    // background loader must discard the deck and tell the performer rather than
-    // adding a deck that cannot render.
-    let source = read("usecases/ui/runner");
-    let idx = source
-        .find("finalize_new_deck")
-        .expect("background loader finalizes");
-    let after = &source[idx..(idx + 400).min(source.len())];
-    assert!(
-        after.contains("notify_error"),
-        "the background loader must surface a finalize failure to the performer"
-    );
-    assert!(
-        after.contains("continue"),
-        "the background loader must discard a deck that failed to finalize"
-    );
+fn consumers_do_not_build_decks() {
+    let source = read("usecases");
+    for needle in ["finalize_new_deck", "Deck::new", "Deck::new_from_"] {
+        assert!(
+            !source.contains(needle),
+            "consumers send deck-creating commands; `{needle}` belongs to the engine loader"
+        );
+    }
 }

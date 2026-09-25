@@ -4,12 +4,12 @@
 //! For windowed operation this runs alongside `UIRunner`.
 //! For headless operation this is the primary consumer.
 
-use crate::engine::{CommandEnvelope, EngineState};
+use crate::engine::CommandEnvelope;
 use crate::usecases::api::SharedState;
 use crate::usecases::api::routes;
 
 use axum::Router;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tower_http::cors::{Any, CorsLayer};
 use utoipa::OpenApi;
@@ -24,6 +24,7 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::system::shutdown, routes::system::undo, routes::system::redo,
         routes::decks::generic_command,
         routes::system::set_resolution, routes::system::set_domemaster_resolution,
+        routes::system::set_dome_preset, routes::system::set_dome_geometry,
         routes::system::set_target_fps, routes::system::start_perf_profile,
         routes::system::set_clock_preference,
         routes::system::set_manual_bpm, routes::system::save_workspace,
@@ -140,7 +141,8 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::macros::assign_modulation, routes::macros::clear_modulation,
         routes::macros::clear_modulation_source,
         // Runtime state
-        routes::state::mixer, routes::state::audio,
+        routes::state::mixer, routes::state::audio, routes::state::dome,
+        routes::state::deck_loads,
         routes::state::modulation, routes::state::macros,
         routes::state::outputs, routes::state::surfaces,
         routes::state::registry, routes::state::midi,
@@ -271,6 +273,8 @@ pub fn build_router(shared: SharedState) -> Router {
         .route("/api/state/clock", get(routes::state::clock))
         .route("/api/state/transport", get(routes::state::transport))
         .route("/api/state/timecode", get(routes::state::timecode))
+        .route("/api/state/dome", get(routes::state::dome))
+        .route("/api/state/deck-loads", get(routes::state::deck_loads))
         .route("/api/state/arrangement", get(routes::state::arrangement))
         .route("/api/state/ndi", get(routes::state::ndi))
         .route("/api/state/syphon", get(routes::state::syphon))
@@ -793,7 +797,7 @@ pub fn build_router(shared: SharedState) -> Router {
             axum::routing::post(routes::arrangement::rearm_all),
         )
         .route(
-            "/api/arrangement/rearm/{param_key}",
+            "/api/arrangement/rearm/{*param_key}",
             axum::routing::post(routes::arrangement::rearm_param),
         )
         .route(
@@ -1219,6 +1223,14 @@ pub fn build_router(shared: SharedState) -> Router {
             axum::routing::put(routes::system::set_domemaster_resolution),
         )
         .route(
+            "/api/dome/preset",
+            axum::routing::put(routes::system::set_dome_preset),
+        )
+        .route(
+            "/api/dome/geometry",
+            axum::routing::put(routes::system::set_dome_geometry),
+        )
+        .route(
             "/api/target-fps",
             axum::routing::put(routes::system::set_target_fps),
         )
@@ -1367,7 +1379,7 @@ impl ApiServerHandle {
 pub fn start(
     port: u16,
     command_tx: mpsc::UnboundedSender<CommandEnvelope>,
-    engine_state: Arc<RwLock<Option<EngineState>>>,
+    engine_state: Arc<crate::app::publish::StatePublication>,
 ) -> Option<ApiServerHandle> {
     let shared = SharedState {
         command_tx,
@@ -1442,7 +1454,7 @@ mod tests {
     fn test_build_router_creates_valid_router() {
         let shared = SharedState {
             command_tx: mpsc::unbounded_channel().0,
-            engine_state: Arc::new(RwLock::new(None)),
+            engine_state: Arc::default(),
         };
         // Should not panic
         let _router = build_router(shared);
@@ -1456,7 +1468,7 @@ mod tests {
 
         let shared = SharedState {
             command_tx: mpsc::unbounded_channel().0,
-            engine_state: Arc::new(RwLock::new(None)),
+            engine_state: Arc::default(),
         };
         let app = build_router(shared);
 

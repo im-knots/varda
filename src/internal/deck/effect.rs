@@ -179,7 +179,7 @@ impl Effect {
         let phase_inputs_config = shader.metadata.phase_inputs.clone();
 
         let uuid = crate::deck::generate_short_uuid();
-        let param_prefix = format!("fx_{uuid}");
+        let param_prefix = crate::engine::value::param::effect_param_prefix(&uuid);
 
         Ok(Self {
             uuid,
@@ -203,7 +203,7 @@ impl Effect {
         &self.uuid
     }
 
-    /// The cached `fx_{uuid}` prefix modulation targets are keyed under.
+    /// The cached `effect/<uuid>/param` prefix modulation targets are keyed under.
     pub fn param_prefix(&self) -> &str {
         &self.param_prefix
     }
@@ -211,10 +211,10 @@ impl Effect {
     /// Set the UUID, used during scene restore to preserve identity.
     ///
     /// Rebuilds the modulation prefix in step. Assignments are stored as
-    /// `fx_{uuid}:{param}`, so an effect that comes back under a different
+    /// `effect/<uuid>/param/<param>`, so an effect that comes back under a different
     /// prefix than it was saved with loses every modulation routed at it.
     pub fn set_uuid(&mut self, uuid: String) {
-        self.param_prefix = format!("fx_{uuid}");
+        self.param_prefix = crate::engine::value::param::effect_param_prefix(&uuid);
         self.uuid = uuid;
     }
 

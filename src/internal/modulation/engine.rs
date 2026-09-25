@@ -151,7 +151,7 @@ impl ModulationEngine {
                 mods.retain(|m| m.source_id != uuid);
             }
             // Remove mod-on-mod assignments targeting this source
-            let mod_prefix = format!("mod:{uuid}:");
+            let mod_prefix = crate::engine::value::param::modulator_prefix(uuid);
             self.assignments.retain(|k, _| !k.starts_with(&mod_prefix));
             self.rebuild_uuid_index();
             self.invalidate_order();
@@ -223,13 +223,17 @@ impl ModulationEngine {
         modulator_uuid: &str,
         amount: f32,
     ) {
-        let key = format!("mod:{target_uuid}:{param_name}");
+        let key =
+            crate::engine::value::param::ParamAddress::modulator_param(target_uuid, param_name)
+                .to_string();
         self.assign(&key, modulator_uuid, amount, None);
         // assign() already calls invalidate_order()
     }
 
     pub fn clear_mod_on_mod(&mut self, target_uuid: &str, param_name: &str) {
-        let key = format!("mod:{target_uuid}:{param_name}");
+        let key =
+            crate::engine::value::param::ParamAddress::modulator_param(target_uuid, param_name)
+                .to_string();
         self.assignments.remove(&key);
         self.invalidate_order();
     }
@@ -336,14 +340,14 @@ impl ModulationEngine {
     }
 
     fn get_mod_source_offset(&self, source_uuid: &str, param_name: &str) -> f32 {
-        // Look up "mod:{uuid}:{param}" without allocating a String.
+        // Look up "mod/{uuid}/{param}" without allocating a String.
         // We scan assignments for keys matching this pattern.
-        let prefix = "mod:";
+        let prefix = "mod/";
         for (key, mods) in &self.assignments {
             if key.starts_with(prefix)
                 && key[prefix.len()..].starts_with(source_uuid)
                 && key.len() > prefix.len() + source_uuid.len()
-                && key.as_bytes()[prefix.len() + source_uuid.len()] == b':'
+                && key.as_bytes()[prefix.len() + source_uuid.len()] == b'/'
                 && &key[prefix.len() + source_uuid.len() + 1..] == param_name
             {
                 let mut total = 0.0;
@@ -480,17 +484,17 @@ impl ModulationEngine {
         self.cached_order.clone()
     }
 
-    /// Parse mod-on-mod key: "mod:{uuid}:{param}" → Some(uuid)
+    /// Parse mod-on-mod key: "mod/{uuid}/{param}" → Some(uuid)
     pub(crate) fn parse_mod_target(key: &str) -> Option<&str> {
         // Avoid allocating a Vec for splitn — just find the delimiters.
         let key = key.as_bytes();
-        if key.len() < 5 || &key[..4] != b"mod:" {
+        if key.len() < 5 || &key[..4] != b"mod/" {
             return None;
         }
         let rest = &key[4..];
-        // Find the next ':' separating uuid from param_name
+        // Find the next '/' separating uuid from param_name
         rest.iter()
-            .position(|&b| b == b':')
+            .position(|&b| b == b'/')
             .map(|pos| std::str::from_utf8(&rest[..pos]).unwrap_or(""))
     }
 

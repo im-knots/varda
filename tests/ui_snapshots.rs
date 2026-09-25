@@ -214,7 +214,7 @@ fn snapshot_bottom_bar_video_playback() {
         varda::video::modulation::POSITION,
     ] {
         data.modulation_assignments.insert(
-            format!("deck_{uuid}:{name}"),
+            format!("deck/{uuid}/{name}"),
             vec![varda::usecases::ui::ModAssignmentUI {
                 source_id: "mod00001".to_string(),
                 amount: 0.5,

@@ -683,14 +683,14 @@ impl Deck {
         &self.uuid
     }
 
-    /// Get the cached param prefix ("deck_{uuid}")
+    /// The cached `deck/<uuid>/param` prefix its parameters' modulation keys share.
     pub fn param_prefix(&self) -> &str {
         &self.param_prefix
     }
 
     /// Set the UUID (used during scene restore to preserve identity)
     pub fn set_uuid(&mut self, uuid: String) {
-        self.param_prefix = format!("deck_{uuid}");
+        self.param_prefix = crate::engine::value::param::deck_param_prefix(&uuid);
         self.uuid = uuid;
     }
 

@@ -242,7 +242,7 @@ impl VardaApp {
             .unwrap_or_default();
         extract_modulation_recipes(
             self.mixer.modulation(),
-            Some(&format!("deck_{deck_uuid}")),
+            Some(&crate::engine::value::param::deck_prefix(deck_uuid)),
             &effect_uuids,
         )
     }
@@ -706,7 +706,7 @@ mod tests {
         });
         let lfo = app.mixer_ref().modulation().sources[0].uuid.clone();
         app.execute_command(C::AssignModulation {
-            target: format!("deck_{deck}:opacity"),
+            target: format!("deck/{deck}/opacity"),
             source_id: lfo.clone(),
             amount: 0.5,
         });
@@ -730,7 +730,7 @@ mod tests {
         assert!(
             modulation
                 .assignments_iter()
-                .any(|(key, _)| key == &format!("deck_{copy}:opacity")),
+                .any(|(key, _)| key == &format!("deck/{copy}/opacity")),
             "the copy is modulated too"
         );
     }
@@ -743,7 +743,7 @@ mod tests {
         };
         let deck = a_deck(&mut app);
         app.execute_command(C::AddAutomationLane {
-            target: format!("deck_{deck}:opacity"),
+            target: format!("deck/{deck}/opacity"),
             timebase: crate::timebase::Timebase::Transport,
         });
         assert_eq!(envelope_count(&app), 1);
@@ -902,7 +902,7 @@ mod tests {
         });
         let lfo = app.mixer_ref().modulation().sources[0].uuid.clone();
         app.execute_command(C::AssignModulation {
-            target: format!("fx_{effect}:{param}"),
+            target: format!("effect/{effect}/param/{param}"),
             source_id: lfo.clone(),
             amount: 0.5,
         });
@@ -929,7 +929,7 @@ mod tests {
             app.mixer_ref()
                 .modulation()
                 .assignments_iter()
-                .any(|(key, _)| key == &format!("fx_{}:{param}", copied_effect.uuid)),
+                .any(|(key, _)| key == &format!("effect/{}/param/{param}", copied_effect.uuid)),
             "the copy's effect is modulated too"
         );
     }

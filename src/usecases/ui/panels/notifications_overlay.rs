@@ -2,6 +2,7 @@
 
 use super::super::notifications::notification_color;
 use super::super::{NotificationUI, UIActions};
+use crate::engine::EngineCommand;
 
 pub(super) fn render_notifications(
     ctx: &egui::Context,
@@ -78,7 +79,7 @@ pub(super) fn render_notifications(
         painter.rect_filled(progress_rect, 0.0, accent_color.linear_multiply(0.5));
 
         // Dismiss button ("x") — use an Area so it's clickable
-        let dismiss_id = egui::Id::new(format!("dismiss_notif_{i}"));
+        let dismiss_id = egui::Id::new(("dismiss_notif", notif.id));
         egui::Area::new(dismiss_id)
             .fixed_pos(egui::pos2(
                 toast_rect.right() - 24.0,
@@ -97,7 +98,9 @@ pub(super) fn render_notifications(
                     )
                     .clicked()
                 {
-                    actions.session.notifications_to_dismiss.push(i);
+                    actions
+                        .commands
+                        .push(EngineCommand::DismissNotification { id: notif.id });
                 }
             });
     }

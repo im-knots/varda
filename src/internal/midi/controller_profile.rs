@@ -11,6 +11,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 
 use super::{DeviceId, MidiDeviceManager, MidiKey, MidiMappingStore};
+use crate::engine::value::param::ParamAddress;
 use crate::mixer::Mixer;
 
 // ── Profile Data Model ────────────────────────────────────────────
@@ -582,55 +583,14 @@ impl ControllerLedManager {
 // This is parameter semantics, not device knowledge. It maps parameter
 // state to logical color names that profiles resolve to MIDI values.
 
-/// Resolve a deck slot by its stable UUID, mirroring the parameter router.
-fn deck_slot_by_uuid<'a>(mixer: &'a Mixer, uuid: &str) -> Option<&'a crate::channel::DeckSlot> {
-    let (ch, dk) = mixer.find_deck_by_uuid(uuid)?;
-    mixer.channel(ch).and_then(|c| c.decks.get(dk))
-}
-
-/// Read a parameter value from the mixer. Returns 0.0–1.0 or -1.0 if not found.
-///
-/// Paths use stable UUIDs for channels, decks, and effects, matching the
-/// canonical format emitted by the UI and consumed by `param_router`. Any
-/// unresolved entity yields -1.0, which callers render as the "not found" LED
-/// color.
+/// Read a parameter's normalized value back through the parameter router.
+/// Returns 0.0–1.0, or -1.0 when the path is malformed, unreadable, or names
+/// an entity that no longer exists; callers render that as the "not found" color.
 fn read_param_value(mixer: &Mixer, path: &str) -> f32 {
-    let parts: Vec<&str> = path.split('/').collect();
-    match parts.as_slice() {
-        ["crossfader"] => mixer.crossfader(),
-        ["ch", ch_uuid, "opacity"] => mixer
-            .find_channel_by_uuid(ch_uuid)
-            .and_then(|ch| mixer.channel(ch))
-            .map_or(-1.0, |c| c.opacity),
-        ["deck", uuid, "opacity"] => deck_slot_by_uuid(mixer, uuid).map_or(-1.0, |d| d.opacity),
-        ["deck", uuid, "mute"] => {
-            deck_slot_by_uuid(mixer, uuid).map_or(-1.0, |d| if d.mute { 1.0 } else { 0.0 })
-        }
-        ["deck", uuid, "solo"] => {
-            deck_slot_by_uuid(mixer, uuid).map_or(-1.0, |d| if d.solo { 1.0 } else { 0.0 })
-        }
-        ["deck", uuid, "trigger"] => deck_slot_by_uuid(mixer, uuid).map_or(-1.0, |d| d.opacity),
-        ["deck", uuid, "param", name] => deck_slot_by_uuid(mixer, uuid)
-            .and_then(|d| d.deck.generator_params.get_float(name))
-            .unwrap_or(-1.0),
-        ["deck", uuid, "effect", fx_uuid, "param", name] => deck_slot_by_uuid(mixer, uuid)
-            .and_then(|d| d.deck.effects.iter().find(|e| e.uuid() == *fx_uuid))
-            .and_then(|e| e.params.get_float(name))
-            .unwrap_or(-1.0),
-        ["ch", ch_uuid, "effect", fx_uuid, "param", name] => mixer
-            .find_channel_by_uuid(ch_uuid)
-            .and_then(|ch| mixer.channel(ch))
-            .and_then(|c| c.effects.iter().find(|e| e.uuid() == *fx_uuid))
-            .and_then(|e| e.params.get_float(name))
-            .unwrap_or(-1.0),
-        ["master", "effect", fx_uuid, "param", name] => mixer
-            .master_effects()
-            .iter()
-            .find(|e| e.uuid() == *fx_uuid)
-            .and_then(|e| e.params.get_float(name))
-            .unwrap_or(-1.0),
-        _ => -1.0,
-    }
+    path.parse::<ParamAddress>()
+        .ok()
+        .and_then(|address| crate::param_router::read_param(mixer, &address))
+        .unwrap_or(-1.0)
 }
 
 /// Determine logical LED color from parameter path and current value.
@@ -734,10 +694,8 @@ mod tests {
         assert_eq!(param_value_to_color("ch/aabbccdd/opacity", 1.0), "green");
     }
 
-    // ── LED feedback reader resolves entities by stable UUID (matches
-    //    param_router). Regression guard: the reader previously parsed
-    //    positional indices, so every UUID path returned -1.0 (the
-    //    "not found" color) and LEDs never reflected mapped state.
+    // ── LED feedback reader resolves entities by stable UUID, so a mapped
+    //    control keeps tracking its entity when positions shift.
     #[test]
     fn read_param_value_resolves_by_uuid_and_survives_reorder() {
         use crate::renderer::GpuContext;
@@ -758,7 +716,7 @@ mod tests {
         mixer.channel_mut(0).unwrap().decks[1].opacity = 0.7;
         mixer.channel_mut(0).unwrap().decks[1].mute = true;
 
-        // UUID paths resolve to live values (would be -1.0 under index parsing).
+        // UUID paths resolve to live values.
         assert!((read_param_value(&mixer, &format!("ch/{ch_uuid}/opacity")) - 0.42).abs() < 1e-4);
         assert!(
             (read_param_value(&mixer, &format!("deck/{deck_uuid}/opacity")) - 0.7).abs() < 1e-4

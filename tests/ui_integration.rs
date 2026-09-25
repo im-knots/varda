@@ -48,7 +48,6 @@ struct AccActions {
     // Selection
     select_deck: Option<(usize, usize)>,
     select_channel: Option<usize>,
-    remove_channel: Option<usize>,
 
     // Complex actions — track counts/flags since not all enums derive Clone
     output_create: bool,
@@ -102,15 +101,11 @@ impl AccActions {
         self.toggle_stage_editor |= a.session.toggle_stage_editor;
         self.toggle_arrangement_mode |= a.session.toggle_arrangement_mode;
         self.toggle_snap |= a.session.toggle_snap;
-        if let Some(path) = &a.session.midi_learn_select {
-            self.midi_learn_select = Some(path.clone());
-        }
         self.toggle_arrangement_snap |= a.session.toggle_arrangement_snap;
         self.gesture_active |= a.session.gesture_active;
         if a.session.set_arrangement_zoom.is_some() {
             self.set_arrangement_zoom = a.session.set_arrangement_zoom;
         }
-        self.midi_learn_toggle |= a.session.midi_learn_toggle;
 
         // Options — take latest non-None
         if a.session.select_deck.is_some() {
@@ -118,9 +113,6 @@ impl AccActions {
         }
         if a.session.select_channel.is_some() {
             self.select_channel = a.session.select_channel;
-        }
-        if a.session.remove_channel.is_some() {
-            self.remove_channel = a.session.remove_channel;
         }
 
         // Unified command stream — crossfader, modulation-source adds, etc.
@@ -145,6 +137,10 @@ impl AccActions {
                 EngineCommand::AddStepSequencer { .. } => self.mod_add_step_seq = true,
                 EngineCommand::CreateSequence => self.sequence_create = true,
                 EngineCommand::AddChannel => self.add_channel = true,
+                EngineCommand::MidiLearnToggle => self.midi_learn_toggle = true,
+                EngineCommand::MidiLearnSelect { path } => {
+                    self.midi_learn_select = Some(path.clone());
+                }
                 EngineCommand::CreateOutput => self.output_create = true,
                 EngineCommand::AddSurface { .. }
                 | EngineCommand::AddPolygonSurface { .. }
@@ -948,7 +944,7 @@ fn automated_fixture() -> (UIData, String) {
             timebase: varda::timebase::Timebase::Transport,
         });
     data.modulation_assignments.insert(
-        format!("deck_{deck_uuid}:speed"),
+        format!("deck/{deck_uuid}/param/speed"),
         vec![varda::usecases::ui::ModAssignmentUI {
             source_id: "env-speed".to_string(),
             amount: 1.0,
@@ -1699,7 +1695,7 @@ fn two_curve_fixture() -> UIData {
             timebase: varda::timebase::Timebase::Transport,
         });
     data.modulation_assignments.insert(
-        format!("deck_{other_deck}:scale"),
+        format!("deck/{other_deck}/param/scale"),
         vec![varda::usecases::ui::ModAssignmentUI {
             source_id: "env-scale".to_string(),
             amount: 1.0,

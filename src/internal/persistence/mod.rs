@@ -105,6 +105,27 @@ impl Default for StagePrefs {
 }
 
 impl StagePrefs {
+    /// The stage editor preferences this file carries for the GUI.
+    pub fn editor_prefs(&self) -> crate::engine::value::editor::EditorPrefs {
+        crate::engine::value::editor::EditorPrefs {
+            grid_size: self.grid_size,
+            snap: self.snap,
+            library_panel_open: self.library_panel_open,
+            right_panel_open: self.right_panel_open,
+            stage_editor_open: self.stage_editor_open,
+            dome_preview_open: self.dome_preview_open,
+            dome_mode_active: self.dome_mode_active,
+        }
+    }
+
+    /// The dome projection this file carries.
+    pub fn dome_config(&self) -> crate::engine::value::dome::DomeConfig {
+        crate::engine::value::dome::DomeConfig {
+            preset: self.dome_preset,
+            geometry: self.dome_geometry,
+        }
+    }
+
     /// Validate stage prefs for semantic correctness. Returns a list of errors.
     /// An empty list means the config is valid.
     pub fn validate(&self) -> Vec<String> {
@@ -948,21 +969,11 @@ fn config_to_target(config: &OutputTargetConfig) -> OutputTarget {
 }
 
 /// Build a `StagePrefs` snapshot from live app state (venue-specific: surfaces, outputs, editor prefs).
-// Aggregates many independent live-state sources into one snapshot; no shared invariant to bundle.
-// The bools mirror independent persisted `StagePrefs` toggles one-for-one.
-#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 pub fn snapshot_stage(
     surface_manager: &crate::surface::SurfaceManager,
     outputs_list: &[UnifiedOutput],
-    grid_size: f32,
-    snap: bool,
-    library_panel_open: bool,
-    right_panel_open: bool,
-    stage_editor_open: bool,
-    dome_preview_open: bool,
-    dome_mode_active: bool,
-    dome_preset: crate::renderer::slicer::DomePreset,
-    dome_geometry: crate::renderer::slicer::DomeGeometry,
+    editor: &crate::engine::value::editor::EditorPrefs,
+    dome: &crate::engine::value::dome::DomeConfig,
     domemaster_resolution: crate::renderer::dome::DomemasterResolution,
 ) -> StagePrefs {
     let outputs = outputs_list
@@ -1030,15 +1041,15 @@ pub fn snapshot_stage(
         .collect();
 
     StagePrefs {
-        grid_size,
-        snap,
-        library_panel_open,
-        right_panel_open,
-        stage_editor_open,
-        dome_preview_open,
-        dome_mode_active,
-        dome_preset,
-        dome_geometry,
+        grid_size: editor.grid_size,
+        snap: editor.snap,
+        library_panel_open: editor.library_panel_open,
+        right_panel_open: editor.right_panel_open,
+        stage_editor_open: editor.stage_editor_open,
+        dome_preview_open: editor.dome_preview_open,
+        dome_mode_active: editor.dome_mode_active,
+        dome_preset: dome.preset,
+        dome_geometry: dome.geometry,
         domemaster_resolution,
         surfaces: surface_manager.clone(),
         outputs,
@@ -1976,7 +1987,7 @@ mod tests {
 
     /// A restored effect must answer to the UUID it was saved under.
     ///
-    /// Modulation targets an effect parameter by the key `fx_{uuid}:{param}`,
+    /// Modulation targets an effect parameter by the key `effect/{uuid}/param/{param}`,
     /// and the render path looks that key up through the effect's cached
     /// `param_prefix`. Restore used to write `uuid` directly, leaving the prefix
     /// built from the throwaway UUID `Effect::new` mints. Everything that keys
@@ -2002,7 +2013,7 @@ mod tests {
         assert_eq!(effect.uuid(), "fxsaved1");
         assert_eq!(
             effect.param_prefix(),
-            "fx_fxsaved1",
+            "effect/fxsaved1/param",
             "the prefix modulation is looked up under must follow the restored UUID"
         );
     }
@@ -2018,7 +2029,7 @@ mod tests {
 
         effect.set_uuid("abcd1234".to_string());
         assert_eq!(effect.uuid(), "abcd1234");
-        assert_eq!(effect.param_prefix(), "fx_abcd1234");
+        assert_eq!(effect.param_prefix(), "effect/abcd1234/param");
     }
 
     #[test]

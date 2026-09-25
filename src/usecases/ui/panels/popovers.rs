@@ -54,7 +54,7 @@ pub(super) fn handle_midi_learn_popup(ctx: &egui::Context, data: &UIData, action
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
                     ui.set_min_width(200.0);
                     if ui.button(label).clicked() {
-                        actions.session.midi_learn_toggle = true;
+                        actions.commands.push(EngineCommand::MidiLearnToggle);
                         ctx.memory_mut(|mem| {
                             mem.data.remove::<egui::Pos2>(popup_id);
                             mem.data.remove::<bool>(popup_fresh_id);
@@ -66,7 +66,7 @@ pub(super) fn handle_midi_learn_popup(ctx: &egui::Context, data: &UIData, action
                         "⌨ Enter Keyboard Learn"
                     };
                     if ui.button(kb_label).clicked() {
-                        actions.session.keyboard_learn_toggle = true;
+                        actions.commands.push(EngineCommand::KeyboardLearnToggle);
                         ctx.memory_mut(|mem| {
                             mem.data.remove::<egui::Pos2>(popup_id);
                             mem.data.remove::<bool>(popup_fresh_id);
@@ -954,7 +954,7 @@ mod tests {
             armed.transport.record_armed = true;
             let mut writing = UIData::test_fixture();
             writing.transport.record_armed = true;
-            writing.transport.recording_params = vec!["deck_a:opacity".to_string()];
+            writing.transport.recording_params = vec!["deck/a/opacity".to_string()];
 
             let colours: Vec<egui::Color32> = [&idle, &armed, &writing]
                 .iter()
@@ -1521,8 +1521,18 @@ mod tests {
                 harness.get_by_label(label).click();
                 harness.run();
             }
-            assert_eq!(actions.session.midi_learn_toggle, midi, "{label}");
-            assert_eq!(actions.session.keyboard_learn_toggle, keyboard, "{label}");
+            let sent = |wanted: &EngineCommand| {
+                actions
+                    .commands
+                    .iter()
+                    .any(|c| std::mem::discriminant(c) == std::mem::discriminant(wanted))
+            };
+            assert_eq!(sent(&EngineCommand::MidiLearnToggle), midi, "{label}");
+            assert_eq!(
+                sent(&EngineCommand::KeyboardLearnToggle),
+                keyboard,
+                "{label}"
+            );
         }
     }
 

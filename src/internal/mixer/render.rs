@@ -35,13 +35,14 @@ impl std::ops::Deref for CompositingOpacities {
 fn resolve_deck_key(
     modulation: &crate::modulation::ModulationEngine,
     scratch: &mut String,
-    prefix: &str,
-    name: &str,
+    deck_uuid: &str,
+    relative: &str,
 ) -> Option<crate::modulation::ResolvedModulation> {
     scratch.clear();
-    scratch.push_str(prefix);
-    scratch.push(':');
-    scratch.push_str(name);
+    scratch.push_str("deck/");
+    scratch.push_str(deck_uuid);
+    scratch.push('/');
+    scratch.push_str(relative);
     if !modulation.has_modulation(scratch) {
         return None;
     }
@@ -152,13 +153,13 @@ impl Mixer {
 
                 {
                     let deck = &slot.deck;
-                    let prefix = deck.param_prefix();
+                    let deck_uuid = deck.uuid();
 
                     // Scaling is a property of any deck with a source texture,
                     // not just a video one.
                     if let (Some(current), Some(resolved)) = (
                         deck.scaling_mode(),
-                        resolve_deck_key(modulation, &mut key, prefix, vm::SCALING_MODE),
+                        resolve_deck_key(modulation, &mut key, deck_uuid, vm::SCALING_MODE),
                     ) {
                         let next = crate::param_router::scaling_mode_from_value(
                             vm::discrete_value(&resolved),
@@ -179,25 +180,24 @@ impl Mixer {
                         let speed = if chasing {
                             None
                         } else {
-                            resolve_deck_key(modulation, &mut key, prefix, vm::SPEED)
+                            resolve_deck_key(modulation, &mut key, deck_uuid, vm::SPEED)
                                 .map(|r| vm::effective_speed(snap.speed, &r))
                         };
 
-                        let position = if chasing {
-                            vm::PositionTarget::Free
-                        } else {
-                            resolve_deck_key(modulation, &mut key, prefix, vm::POSITION).map_or(
-                                vm::PositionTarget::Free,
-                                |r| {
-                                    vm::position_target(
-                                        &r,
-                                        snap.in_point,
-                                        snap.effective_out(),
-                                        snap.duration,
-                                    )
-                                },
-                            )
-                        };
+                        let position =
+                            if chasing {
+                                vm::PositionTarget::Free
+                            } else {
+                                resolve_deck_key(modulation, &mut key, deck_uuid, vm::POSITION)
+                                    .map_or(vm::PositionTarget::Free, |r| {
+                                        vm::position_target(
+                                            &r,
+                                            snap.in_point,
+                                            snap.effective_out(),
+                                            snap.duration,
+                                        )
+                                    })
+                            };
 
                         deck.publish_video_modulation(if awake {
                             vm::PlaybackModulation { speed, position }
@@ -207,7 +207,7 @@ impl Mixer {
 
                         if awake {
                             if let Some(r) =
-                                resolve_deck_key(modulation, &mut key, prefix, vm::PLAY)
+                                resolve_deck_key(modulation, &mut key, deck_uuid, vm::PLAY)
                             {
                                 let want = vm::play_gate(&r, snap.playing);
                                 if want != snap.playing {
@@ -215,7 +215,7 @@ impl Mixer {
                                 }
                             }
                             if let Some(r) =
-                                resolve_deck_key(modulation, &mut key, prefix, vm::LOOP_MODE)
+                                resolve_deck_key(modulation, &mut key, deck_uuid, vm::LOOP_MODE)
                             {
                                 let next = crate::param_router::loop_mode_from_value(
                                     vm::discrete_value(&r),

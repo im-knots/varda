@@ -23,16 +23,10 @@ pub async fn health() -> impl IntoResponse {
 /// The full engine state snapshot.
 #[utoipa::path(get, path = "/api/state", responses((status = 200, description = "Full engine state"), (status = 503, description = "Engine not yet initialized")), tag = "System")]
 pub async fn get_state(State(state): State<SharedState>) -> impl IntoResponse {
-    match state.engine_state.read() {
-        Ok(guard) => match guard.as_ref() {
-            Some(engine_state) => Json(engine_state).into_response(),
-            None => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Engine not yet initialized",
-            )
-                .into_response(),
-        },
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "State lock poisoned").into_response(),
+    match super::read_or_error(&state) {
+        // The publication's own serialization, shared with WebSocket clients.
+        Ok(published) => Json(published.json()).into_response(),
+        Err((status, msg)) => (status, msg).into_response(),
     }
 }
 
@@ -80,6 +74,46 @@ pub async fn set_resolution(
         .send_command(EngineCommand::SetRenderResolution {
             width: b.width,
             height: b.height,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct DomePresetBody {
+    /// Projector arrangement the domemaster is rendered for.
+    pub preset: crate::engine::value::dome::DomePreset,
+}
+#[utoipa::path(put, path = "/api/dome/preset", request_body = DomePresetBody, responses((status = 200, body = CommandResult)), tag = "System")]
+pub async fn set_dome_preset(
+    State(state): State<SharedState>,
+    Json(b): Json<DomePresetBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::SetDomePreset { preset: b.preset })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct DomeGeometryBody {
+    /// Dome the domemaster projects onto. Content angles default to zero.
+    pub geometry: crate::engine::value::dome::DomeGeometry,
+}
+#[utoipa::path(put, path = "/api/dome/geometry", request_body = DomeGeometryBody, responses((status = 200, body = CommandResult)), tag = "System")]
+pub async fn set_dome_geometry(
+    State(state): State<SharedState>,
+    Json(b): Json<DomeGeometryBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::SetDomeGeometry {
+            geometry: b.geometry,
         })
         .await
     {
@@ -531,7 +565,7 @@ mod tests {
     fn test_router() -> axum::Router {
         let shared = SharedState {
             command_tx: tokio::sync::mpsc::unbounded_channel().0,
-            engine_state: std::sync::Arc::new(std::sync::RwLock::new(None)),
+            engine_state: std::sync::Arc::default(),
         };
         crate::usecases::api::runner::build_router(shared)
     }

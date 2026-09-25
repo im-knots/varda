@@ -1,6 +1,7 @@
 //! Engine trait implementations for `VardaApp`.
 
 use super::VardaApp;
+use super::deck_loads::DeckSource;
 use super::resolve::EffectChain;
 use crate::deck::{Deck, Effect};
 use crate::depth::preprocess::{AcquiredSensor, DepthPreprocessParams};
@@ -38,12 +39,9 @@ impl VardaApp {
     /// channel: start its CPU analyzers and acquire any device its
     /// `PREPROCESSORS` block requires.
     ///
-    /// **Every** path that builds a deck must call this. There are two — the
-    /// synchronous `add_deck` command and the UI's background loader
-    /// (`spawn_deck_loads`, completed in `usecases/ui/runner.rs`) — and they
-    /// silently diverged: a shader dropped from the Library skipped analyzer
-    /// startup and device acquisition entirely, so a `depth_sensor` shader
-    /// rendered against blank 1x1 textures with no error.
+    /// Every deck built from a shader passes through here: the background
+    /// loader (`deck_loads`) calls it when a deck attaches. Skipping it leaves a
+    /// `depth_sensor` shader rendering against blank 1x1 textures with no error.
     ///
     /// Returns `Err` when a required preprocessor cannot be satisfied; the
     /// caller must discard the deck and surface the message.
@@ -136,70 +134,33 @@ impl MixerCommands for VardaApp {
     }
 
     fn add_deck(&mut self, channel_uuid: &str, shader_name: &str) -> Result<String> {
-        let channel_idx = self.resolve_channel(channel_uuid)?;
-        let generators = self.registry.generators();
-        let shader = generators
+        self.resolve_channel(channel_uuid)?;
+        let shader = self
+            .registry
+            .generators()
             .iter()
             .find(|s| s.name() == shader_name)
+            .map(|s| (*s).clone())
             .context("Shader not found")?;
-        let shader_clone = (*shader).clone();
-        let is_compute = shader_clone.metadata.is_compute();
-        let mut deck = if is_compute {
-            Deck::new_from_compute_shader(
-                &self.context,
-                shader_clone,
-                self.render_width,
-                self.render_height,
-            )?
-        } else {
-            Deck::new(
-                &self.context,
-                shader_clone,
-                self.render_width,
-                self.render_height,
-            )?
-        };
-        // Shared with the UI's background loader — see `finalize_new_deck`.
-        // On failure the deck is dropped and the error surfaces as a toast.
-        self.finalize_new_deck(&mut deck)?;
-        let uuid = deck.uuid().to_string();
-        let ch = self
-            .mixer
-            .channel_mut(channel_idx)
-            .context("Invalid channel")?;
-        let idx = ch.add_deck(deck);
-        log::info!("Added deck {idx} to channel {channel_idx} with shader: {shader_name}");
-        Ok(uuid)
+        self.check_required_preprocessors(&shader.metadata, shader_name)?;
+        crate::depth::preprocess::preflight_for_shader(
+            &self.depth_manager,
+            &shader.metadata,
+            shader_name,
+        )?;
+        Ok(self.spawn_deck_load(channel_uuid, DeckSource::Shader(Box::new(shader))))
     }
 
     fn add_image_deck(&mut self, channel_uuid: &str, path: &std::path::Path) -> Result<String> {
-        let channel_idx = self.resolve_channel(channel_uuid)?;
-        let deck =
-            Deck::new_from_image(&self.context, path, self.render_width, self.render_height)?;
-        let uuid = deck.uuid().to_string();
-        let ch = self
-            .mixer
-            .channel_mut(channel_idx)
-            .context("Invalid channel")?;
-        let name = deck.source_name().to_string();
-        let idx = ch.add_deck(deck);
-        log::info!("Added image deck {idx} to channel {channel_idx}: {name}");
-        Ok(uuid)
+        self.resolve_channel(channel_uuid)?;
+        anyhow::ensure!(path.is_file(), "Image file not found: {}", path.display());
+        Ok(self.spawn_deck_load(channel_uuid, DeckSource::Image(path.to_path_buf())))
     }
 
     fn add_video_deck(&mut self, channel_uuid: &str, path: &std::path::Path) -> Result<String> {
-        let channel_idx = self.resolve_channel(channel_uuid)?;
-        let deck =
-            Deck::new_from_video(&self.context, path, self.render_width, self.render_height)?;
-        let uuid = deck.uuid().to_string();
-        let ch = self
-            .mixer
-            .channel_mut(channel_idx)
-            .context("Invalid channel")?;
-        let name = deck.source_name().to_string();
-        let idx = ch.add_deck(deck);
-        log::info!("Added video deck {idx} to channel {channel_idx}: {name}");
-        Ok(uuid)
+        self.resolve_channel(channel_uuid)?;
+        anyhow::ensure!(path.is_file(), "Video file not found: {}", path.display());
+        Ok(self.spawn_deck_load(channel_uuid, DeckSource::Video(path.to_path_buf())))
     }
 
     fn add_solid_color_deck(&mut self, channel_uuid: &str, color: [f32; 4]) -> Result<String> {
@@ -442,11 +403,11 @@ impl MixerCommands for VardaApp {
         log::info!("Removed deck {deck_uuid} from channel {channel_idx}");
         self.mixer
             .modulation_mut()
-            .remove_assignments_with_prefix(&format!("deck_{deck_uuid}:"));
+            .remove_assignments_with_prefix(&crate::engine::value::param::deck_prefix(deck_uuid));
         for fx_uuid in &effect_uuids {
-            self.mixer
-                .modulation_mut()
-                .remove_assignments_with_prefix(&format!("fx_{fx_uuid}:"));
+            self.mixer.modulation_mut().remove_assignments_with_prefix(
+                &crate::engine::value::param::effect_prefix(fx_uuid),
+            );
         }
         // A lane is where this deck sits in show time, so it leaves with the
         // deck. See /spec/arrangement.md § A lane is a deck.
@@ -583,13 +544,13 @@ impl MixerCommands for VardaApp {
         for uuid in effects {
             self.mixer
                 .modulation_mut()
-                .remove_assignments_with_prefix(&format!("fx_{uuid}:"));
+                .remove_assignments_with_prefix(&crate::engine::value::param::effect_prefix(&uuid));
         }
         // The fader's own curves. A key that can never resolve again would be
         // persisted and reloaded as dead weight.
-        self.mixer
-            .modulation_mut()
-            .remove_assignments_with_prefix(&format!("ch_{channel_uuid}:"));
+        self.mixer.modulation_mut().remove_assignments_with_prefix(
+            &crate::engine::value::param::channel_prefix(channel_uuid),
+        );
 
         if self.mixer.remove_channel(channel_idx) {
             // Selection fixup is handled by the UI consumer (UIRunner)
@@ -720,9 +681,9 @@ impl MixerCommands for VardaApp {
         }
         // The effect's modulation assignments die with it — otherwise they point
         // at a UUID that no longer resolves.
-        self.mixer
-            .modulation_mut()
-            .remove_assignments_with_prefix(&format!("fx_{effect_uuid}:"));
+        self.mixer.modulation_mut().remove_assignments_with_prefix(
+            &crate::engine::value::param::effect_prefix(effect_uuid),
+        );
         Ok(())
     }
 
@@ -1005,7 +966,7 @@ impl MacroCommands for VardaApp {
         // Route through the shared param router so the fan-out (and any global
         // trigger actions, drained in process_inputs) behave identically to a
         // MIDI/OSC-driven `macro/<uuid>/value`.
-        let path = format!("macro/{uuid}/value");
+        let path = crate::engine::value::param::ParamAddress::macro_value(uuid).to_string();
         if let Err(e) = crate::param_router::apply_param_by_path(&mut self.mixer, &path, value) {
             log::debug!("set_macro_value {uuid}: {e}");
         }
@@ -1777,13 +1738,10 @@ mod tests {
     }
 
     #[test]
-    fn background_constructed_decks_are_finalized_too() {
-        // Regression: the UI's background loader builds the `Deck` off-thread
-        // and adds it straight to a channel, bypassing `add_deck`. A
-        // `depth_sensor` shader dropped from the Library therefore skipped
-        // acquisition entirely and rendered blank preprocessor textures with no
-        // error. Both paths now share `finalize_new_deck`; this asserts it
-        // rejects the same case `add_deck` does.
+    fn finalize_rejects_a_deck_whose_required_sensor_is_missing() {
+        // The background loader finalizes decks built off-thread, after the
+        // pre-flight in `add_deck` has passed. A sensor unplugged in between
+        // must still stop the deck from attaching.
         let Some(mut app) = headless_app() else {
             return;
         };

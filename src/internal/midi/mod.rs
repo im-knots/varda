@@ -712,13 +712,6 @@ impl MidiMappingStore {
         }
     }
 
-    /// Enter learn mode for a specific parameter path (legacy — used by main loop).
-    pub fn start_learn(&mut self, param_path: String) {
-        self.learn_mode = true;
-        self.learn_target = Some(param_path);
-        log::info!("MIDI learn mode: waiting for input...");
-    }
-
     /// Cancel learn mode
     pub fn cancel_learn(&mut self) {
         self.learn_mode = false;
@@ -818,7 +811,10 @@ impl MidiMappingStore {
                     continue;
                 }
             };
-            self.set(key, entry.param_path.clone());
+            self.set(
+                key,
+                crate::engine::value::param::canonical_path(&entry.param_path),
+            );
         }
     }
 }

@@ -204,6 +204,9 @@ fn every_registered_route_is_documented() {
 
     let mut undocumented = Vec::new();
     for route in registered_routes(&runner) {
+        // OpenAPI has no multi-segment capture, so a wildcard `{*name}` route is
+        // documented under the plain `{name}`.
+        let route = route.replace("{*", "{");
         if exempt.contains(&route.as_str()) || documented.contains(&route) {
             continue;
         }

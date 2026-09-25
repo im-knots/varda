@@ -101,6 +101,8 @@ curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks/shader \
   -d '{"shader_name": "Sine"}'
 ```
 
+Shader, image, and video decks are built in the background so a large shader or file never stalls the output. The request answers straight away with the new deck's UUID (`{"status": "ok", "uuid": "..."}`), and the deck joins its channel a moment later. Until then a write to that UUID returns `404`. Poll `GET /api/state/deck-loads` to watch it: each entry is `Loading` until the deck attaches and disappears, or `Failed` with the reason, kept for a minute. Errors that can be known up front (an unknown channel or shader, a missing file, a shader that needs a depth sensor when none is connected) still fail the request itself.
+
 ### Add an HTML deck to a channel
 
 ```sh
@@ -159,6 +161,18 @@ curl -X PUT http://localhost:8080/api/params \
 # Remove it — this also clears any modulation assigned to its parameters
 curl -X DELETE http://localhost:8080/api/effects/<effect_uuid>
 ```
+
+### Modulate a parameter
+
+A modulation target is the same path a control surface uses to set the parameter: `deck/<deck_uuid>/param/<name>` for a shader input, `deck/<deck_uuid>/opacity`, `deck/<deck_uuid>/video/speed`, `ch/<ch_uuid>/opacity`, or `effect/<effect_uuid>/param/<name>` for an effect wherever it sits.
+
+```sh
+curl -X POST http://localhost:8080/api/modulation/assign \
+  -H "Content-Type: application/json" \
+  -d '{"target": "deck/<deck_uuid>/param/speed", "source_id": "<lfo_uuid>", "amount": 0.5}'
+```
+
+Targets written before scene version 8 (`deck_<deck_uuid>:speed`, `fx_<effect_uuid>:amount`) are still accepted and stored in the path form. A target that names nothing modulation can drive is refused with `400`.
 
 ### Build a transition sequence
 
@@ -763,7 +777,9 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `GET` | `/api/state/audio` | Audio analysis state: level, band energies, FFT bins, detected BPM, and input devices. |
 | `GET` | `/api/state/cameras` | Camera devices discovered by the last scan. |
 | `GET` | `/api/state/clock` | Clock state: resolved BPM, beat phase, active source, and detected clock sources. |
+| `GET` | `/api/state/deck-loads` | Decks being built in the background, then loads that failed in the last minute with the reason. Shader, image, and video decks answer their create request with a UUID straight away and appear in the mixer once built. |
 | `GET` | `/api/state/depth` | Depth sensors discovered by the last scan. |
+| `GET` | `/api/state/dome` | Dome projection the domemaster is rendered for: projector preset and dome geometry, content rotation included. |
 | `GET` | `/api/state/macros` | Every macro control with its kind, current value, and parameter targets. |
 | `GET` | `/api/state/midi` | MIDI state: devices, mappings, and whether learn mode is active. |
 | `GET` | `/api/state/mixer` | Mixer state: channels, crossfader position, master effects, active transition, and sequences. |
@@ -841,6 +857,8 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `PUT` | `/api/clock/manual-bpm` |  |
 | `PUT` | `/api/clock/preference` |  |
 | `POST` | `/api/command` | Applies any `EngineCommand` sent as JSON and returns its `CommandResult`. |
+| `PUT` | `/api/dome/geometry` |  |
+| `PUT` | `/api/dome/preset` |  |
 | `PUT` | `/api/domemaster/resolution` |  |
 | `GET` | `/api/health` |  |
 | `POST` | `/api/perf-profile` |  |

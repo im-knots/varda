@@ -32,7 +32,7 @@ pub enum DomemasterResolution {
 }
 
 /// Dome hemisphere geometry.
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct DomeGeometry {
     /// Dome radius in arbitrary units (only ratios matter).
     pub radius: f32,
@@ -81,7 +81,7 @@ pub struct DomeSetup {
 }
 
 /// Standard dome projector arrangement presets.
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub enum DomePreset {
     /// Single projector (fisheye lens, aimed at zenith)
     Single,
@@ -97,4 +97,21 @@ pub enum DomePreset {
     Hexa,
     /// 8 projectors (45° apart)
     Octa,
+}
+
+/// The dome projection a domemaster is rendered for: the projector preset and
+/// the dome it projects onto. Engine state, so a headless install can set it.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+pub struct DomeConfig {
+    pub preset: DomePreset,
+    pub geometry: DomeGeometry,
+}
+
+impl Default for DomeConfig {
+    fn default() -> Self {
+        Self {
+            preset: DomePreset::Quad,
+            geometry: DomeGeometry::default(),
+        }
+    }
 }

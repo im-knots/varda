@@ -407,7 +407,7 @@ impl Deck {
         };
 
         let uuid = super::generate_short_uuid();
-        let param_prefix = format!("deck_{uuid}");
+        let param_prefix = crate::engine::value::param::deck_param_prefix(&uuid);
 
         Ok(Self {
             uuid,
@@ -1012,7 +1012,7 @@ impl Deck {
         let generator_params = ShaderParams::from_inputs(&[]);
 
         let uuid = super::generate_short_uuid();
-        let param_prefix = format!("deck_{uuid}");
+        let param_prefix = crate::engine::value::param::deck_param_prefix(&uuid);
 
         Self {
             uuid,
@@ -1380,7 +1380,7 @@ impl Deck {
 
         let now = Instant::now();
         let uuid = super::generate_short_uuid();
-        let param_prefix = format!("deck_{uuid}");
+        let param_prefix = crate::engine::value::param::deck_param_prefix(&uuid);
 
         Ok(Self {
             uuid,

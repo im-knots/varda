@@ -11,6 +11,7 @@
 //! spec/depth-sensor-preprocessor.md.
 
 use crate::analyzer::traits::{AnalyzerSchema, TextureOutputDef};
+use anyhow::Context as _;
 
 /// The ISF `TYPE` string shaders declare to request this preprocessor.
 pub const PREPROCESSOR_TYPE: &str = "depth_sensor";
@@ -212,26 +213,8 @@ pub fn acquire_for_shader(
     metadata: &crate::isf::ISFMetadata,
     shader_name: &str,
 ) -> anyhow::Result<Option<AcquiredSensor>> {
-    let Some(requested) = requested_device(metadata) else {
+    let Some(info) = preflight_for_shader(manager, metadata, shader_name)? else {
         return Ok(None);
-    };
-
-    let detected = manager.devices().len();
-    if detected == 0 {
-        anyhow::bail!(
-            "Shader '{shader_name}' requires a depth sensor — none detected. \
-             Connect a Kinect and use Rescan."
-        );
-    }
-    let Some(info) = manager
-        .devices()
-        .iter()
-        .find(|d| d.id == requested)
-        .cloned()
-    else {
-        anyhow::bail!(
-            "Shader '{shader_name}' requires depth sensor #{requested} — only {detected} detected."
-        );
     };
 
     let (width, height) = super::open_depth_sensor(manager, info.id, device).map_err(|e| {
@@ -250,6 +233,42 @@ pub fn acquire_for_shader(
         name: info.name,
         pipeline: DepthPreprocessPipeline::new(device, width, height),
     }))
+}
+
+/// The detected sensor a shader's `depth_sensor` preprocessor asks for, without
+/// opening it. `Ok(None)` when the shader declares no such preprocessor.
+///
+/// Cheap and read-only, so a deck-creating command can refuse a shader that
+/// cannot load before building it in the background.
+///
+/// # Errors
+///
+/// Returns an error when the shader needs a sensor and none is detected, or the
+/// requested one is not among those detected.
+pub fn preflight_for_shader(
+    manager: &super::DepthSensorManager,
+    metadata: &crate::isf::ISFMetadata,
+    shader_name: &str,
+) -> anyhow::Result<Option<super::DepthDeviceInfo>> {
+    let Some(requested) = requested_device(metadata) else {
+        return Ok(None);
+    };
+    let detected = manager.devices().len();
+    if detected == 0 {
+        anyhow::bail!(
+            "Shader '{shader_name}' requires a depth sensor — none detected. \
+             Connect a Kinect and use Rescan."
+        );
+    }
+    manager
+        .devices()
+        .iter()
+        .find(|d| d.id == requested)
+        .cloned()
+        .map(Some)
+        .with_context(|| {
+            format!("Shader '{shader_name}' requires depth sensor #{requested} — only {detected} detected.")
+        })
 }
 
 /// A sensor reference acquired for a shader, with its ready-to-run pipeline.

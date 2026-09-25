@@ -112,7 +112,7 @@ pub(super) fn render_master_effect_detail(
                                                 let eff_idx_copy = eff_idx;
                                                 let eff_uuid_param = eff_uuid.clone();
                                                 let midi_prefix =
-                                                    format!("master/effect/{eff_uuid}");
+                                                    format!("effect/{eff_uuid}");
                                                 widgets::render_effect_params(
                                                     ui,
                                                     &eff_params.params,
@@ -127,7 +127,7 @@ pub(super) fn render_master_effect_detail(
                                                     Some(&|name: &str, source_uuid: &str| {
                                                         EngineCommand::AssignModulation {
                                                             target: format!(
-                                                                "fx_{eff_uuid_master}:{name}"
+                                                                "effect/{eff_uuid_master}/param/{name}"
                                                             ),
                                                             source_id: source_uuid.to_string(),
                                                             amount: DEFAULT_ASSIGNMENT_AMOUNT,
@@ -136,7 +136,7 @@ pub(super) fn render_master_effect_detail(
                                                     Some(&|name: &str, source_uuid: &str| {
                                                         EngineCommand::ClearModulationSource {
                                                             target: format!(
-                                                                "fx_{eff_uuid_master_unassign}:{name}"
+                                                                "effect/{eff_uuid_master_unassign}/param/{name}"
                                                             ),
                                                             source_id: source_uuid.to_string(),
                                                         }
@@ -144,14 +144,14 @@ pub(super) fn render_master_effect_detail(
                                                     Some(&|name: &str| {
                                                         EngineCommand::ClearModulation {
                                                             target: format!(
-                                                                "fx_{eff_uuid_master_remove}:{name}"
+                                                                "effect/{eff_uuid_master_remove}/param/{name}"
                                                             ),
                                                         }
                                                     }),
                                                     Some(&|name: &str| {
                                                         EngineCommand::AddAutomationLane {
                                                             target: format!(
-                                                                "fx_{eff_uuid_master_automate}:{name}"
+                                                                "effect/{eff_uuid_master_automate}/param/{name}"
                                                             ),
                                                             timebase:
                                                                 crate::timebase::Timebase::Transport,
@@ -162,13 +162,11 @@ pub(super) fn render_master_effect_detail(
                                                     &format!("master_fx_{eff_idx_copy}"),
                                                     Some(&midi_prefix),
                                                     data.midi_learn_active,
-                                                    &mut actions.session.midi_learn_select,
                                                     data.midi_learn_target.as_deref(),
                                                     &data.modulation_assignments,
                                                     &data.modulation_current_values,
-                                                    &format!("fx_{eff_uuid}"),
+                                                    &crate::engine::value::param::effect_param_prefix(eff_uuid),
                                                     data.keyboard_learn_active,
-                                                    &mut actions.session.keyboard_learn_select,
                                                     data.keyboard_learn_target.as_deref(),
                                                 );
                                             }
@@ -401,10 +399,9 @@ pub(super) fn render_channel_effect_detail(
                                             if !eff_params.params.is_empty() {
                                                 let ch_copy = ch_idx;
                                                 let eff_idx_copy = eff_idx;
-                                                let ch_uuid = ch.uuid.clone();
                                                 let eff_uuid_param = eff_uuid.clone();
                                                 let midi_prefix =
-                                                    format!("ch/{ch_uuid}/effect/{eff_uuid}");
+                                                    format!("effect/{eff_uuid}");
                                                 widgets::render_effect_params(
                                                     ui,
                                                     &eff_params.params,
@@ -419,7 +416,7 @@ pub(super) fn render_channel_effect_detail(
                                                     Some(&|name: &str, source_uuid: &str| {
                                                         EngineCommand::AssignModulation {
                                                             target: format!(
-                                                                "fx_{eff_uuid_ch_assign}:{name}"
+                                                                "effect/{eff_uuid_ch_assign}/param/{name}"
                                                             ),
                                                             source_id: source_uuid.to_string(),
                                                             amount: DEFAULT_ASSIGNMENT_AMOUNT,
@@ -428,7 +425,7 @@ pub(super) fn render_channel_effect_detail(
                                                     Some(&|name: &str, source_uuid: &str| {
                                                         EngineCommand::ClearModulationSource {
                                                             target: format!(
-                                                                "fx_{eff_uuid_ch_unassign}:{name}"
+                                                                "effect/{eff_uuid_ch_unassign}/param/{name}"
                                                             ),
                                                             source_id: source_uuid.to_string(),
                                                         }
@@ -436,14 +433,14 @@ pub(super) fn render_channel_effect_detail(
                                                     Some(&|name: &str| {
                                                         EngineCommand::ClearModulation {
                                                             target: format!(
-                                                                "fx_{eff_uuid_ch_remove}:{name}"
+                                                                "effect/{eff_uuid_ch_remove}/param/{name}"
                                                             ),
                                                         }
                                                     }),
                                                     Some(&|name: &str| {
                                                         EngineCommand::AddAutomationLane {
                                                             target: format!(
-                                                                "fx_{eff_uuid_ch_automate}:{name}"
+                                                                "effect/{eff_uuid_ch_automate}/param/{name}"
                                                             ),
                                                             timebase:
                                                                 crate::timebase::Timebase::Transport,
@@ -454,13 +451,11 @@ pub(super) fn render_channel_effect_detail(
                                                     &format!("ch_fx_{ch_copy}_{eff_idx_copy}"),
                                                     Some(&midi_prefix),
                                                     data.midi_learn_active,
-                                                    &mut actions.session.midi_learn_select,
                                                     data.midi_learn_target.as_deref(),
                                                     &data.modulation_assignments,
                                                     &data.modulation_current_values,
-                                                    &format!("fx_{eff_uuid}"),
+                                                    &crate::engine::value::param::effect_param_prefix(eff_uuid),
                                                     data.keyboard_learn_active,
-                                                    &mut actions.session.keyboard_learn_select,
                                                     data.keyboard_learn_target.as_deref(),
                                                 );
                                             }

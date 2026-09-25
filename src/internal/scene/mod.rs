@@ -98,7 +98,7 @@ fn default_version() -> u32 {
 
 impl SceneConfig {
     /// Version written by this build. Bump when adding a migration below.
-    pub const CURRENT_VERSION: u32 = 7;
+    pub const CURRENT_VERSION: u32 = 8;
 
     /// Bring an older scene up to [`Self::CURRENT_VERSION`] in place.
     ///
@@ -113,7 +113,48 @@ impl SceneConfig {
         if self.version < 6 {
             self.migrate_v5_bipolar_amplitude();
         }
+        if self.version < 8 {
+            self.migrate_v7_modulation_keys();
+        }
         self.version = Self::CURRENT_VERSION;
+    }
+
+    /// v7 → v8: modulation assignments (automation included, since envelopes
+    /// are modulation sources) are keyed by router path instead of the older
+    /// `deck_<u>:<name>` family. See /spec/parameter-routing.md § WS4.
+    ///
+    /// Before v8 a shader parameter named `opacity` shared its key with the
+    /// deck's own opacity; the key moves to the deck built-in it was written for.
+    /// Keys the migration does not recognize are kept as they are.
+    fn migrate_v7_modulation_keys(&mut self) {
+        let assignments = std::mem::take(&mut self.modulation.assignments);
+        let mut rekeyed = 0;
+        for (key, mods) in assignments {
+            let key = if let Some(address) =
+                crate::engine::value::param::ParamAddress::from_legacy_modulation_key(&key)
+            {
+                rekeyed += 1;
+                address.to_string()
+            } else {
+                log::warn!("Scene migration v7→v8: kept unrecognized modulation key '{key}'");
+                key
+            };
+            self.modulation
+                .assignments
+                .entry(key)
+                .or_default()
+                .extend(mods);
+        }
+        if rekeyed > 0 {
+            log::info!("Scene migration v7→v8: re-keyed {rekeyed} modulation target(s)");
+        }
+        // Macro targets were already router paths, but may use the spellings
+        // v8 retired (`video/seek`, owner-qualified effect paths).
+        for macro_control in self.macros.macros_mut() {
+            for target in &mut macro_control.targets {
+                target.path = crate::engine::value::param::canonical_path(&target.path);
+            }
+        }
     }
 
     /// v5 → v6: bipolar sources stopped double-sweeping their target's range.
@@ -274,10 +315,67 @@ pub struct ModulationRecipe {
     pub assignments: Vec<ModulationRecipeAssignment>,
 }
 
+impl ModulationRecipe {
+    /// Rewrite assignments saved before scene version 8 in the current
+    /// spelling. See [`canonical_recipe_param`].
+    pub fn canonicalize(&mut self) {
+        for assignment in &mut self.assignments {
+            assignment.param = canonical_recipe_param(&assignment.param);
+        }
+    }
+}
+
+/// The current spelling of a recipe assignment's parameter.
+///
+/// Deck-owned entries are relative to `deck/<uuid>/` (`param/speed`,
+/// `opacity`, `video/speed`); effect entries are full
+/// `effect/<uuid>/param/<name>` keys. Presets saved before scene version 8 hold
+/// `speed`, `video_speed`, or `fx_<uuid>:<name>`. Reads either, so it is safe to
+/// apply more than once.
+pub fn canonical_recipe_param(param: &str) -> String {
+    use crate::engine::value::param::ParamAddress;
+    if param.starts_with("fx_") {
+        return ParamAddress::from_legacy_modulation_key(param)
+            .map_or_else(|| param.to_string(), |address| address.to_string());
+    }
+    if param.contains('/') || param == "opacity" || param == "scaling_mode" {
+        return param.to_string();
+    }
+    match param {
+        "video_speed" => "video/speed".to_string(),
+        "video_position" => "video/position".to_string(),
+        "video_play" => "video/play".to_string(),
+        "video_loop_mode" => "video/loop_mode".to_string(),
+        name => format!("param/{name}"),
+    }
+}
+
+impl DeckConfig {
+    /// [`ModulationRecipe::canonicalize`] every recipe this deck carries.
+    pub fn canonicalize_modulation(&mut self) {
+        self.modulation
+            .iter_mut()
+            .for_each(ModulationRecipe::canonicalize);
+    }
+}
+
+impl ChannelConfig {
+    /// [`ModulationRecipe::canonicalize`] the channel's recipes and its decks'.
+    pub fn canonicalize_modulation(&mut self) {
+        self.modulation
+            .iter_mut()
+            .for_each(ModulationRecipe::canonicalize);
+        self.decks
+            .iter_mut()
+            .for_each(DeckConfig::canonicalize_modulation);
+    }
+}
+
 /// A single assignment within a modulation recipe.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModulationRecipeAssignment {
-    /// Relative param key: "brightness" for generator, "fx0:amount" for effects
+    /// Relative to the owning deck (`param/brightness`, `opacity`), or a full
+    /// `effect/<uuid>/param/<name>` key for an effect parameter.
     pub param: String,
     /// Modulation amount
     pub amount: f32,
@@ -1559,6 +1657,88 @@ mod tests {
         let mut scene = scene_with_sources(SceneConfig::CURRENT_VERSION, vec![bipolar_lfo(0.25)]);
         scene.migrate();
         assert!((amplitude_of(&scene, 0) - 0.25).abs() < 1e-6);
+    }
+
+    fn assignment_keys(scene: &SceneConfig) -> Vec<String> {
+        let mut keys: Vec<String> = scene.modulation.assignments.keys().cloned().collect();
+        keys.sort();
+        keys
+    }
+
+    /// v8 gives every modulation target one spelling: the router path. Each
+    /// pre-v8 key form moves to the path that names what it drove.
+    #[test]
+    fn migration_v8_rekeys_modulation_by_router_path() {
+        let mut scene = scene_with_sources(7, vec![]);
+        for key in [
+            "deck_d1:speed",
+            "deck_d1:opacity",
+            "deck_d1:video_position",
+            "fx_f1:warp",
+            "ch_c1:opacity",
+            "macro_k1:value",
+            "mod:m1:frequency",
+        ] {
+            scene
+                .modulation
+                .assignments
+                .insert(key.to_string(), Vec::new());
+        }
+        scene.migrate();
+        assert_eq!(
+            assignment_keys(&scene),
+            [
+                "ch/c1/opacity",
+                "deck/d1/opacity",
+                "deck/d1/param/speed",
+                "deck/d1/video/position",
+                "effect/f1/param/warp",
+                "macro/k1/value",
+                "mod/m1/frequency",
+            ]
+        );
+        assert_eq!(scene.version, SceneConfig::CURRENT_VERSION);
+    }
+
+    /// A key the migration does not recognize is kept rather than dropped, so a
+    /// scene never silently loses an assignment.
+    #[test]
+    fn migration_v8_keeps_unrecognized_keys() {
+        let mut scene = scene_with_sources(7, vec![]);
+        scene
+            .modulation
+            .assignments
+            .insert("something_else".to_string(), Vec::new());
+        scene.migrate();
+        assert_eq!(assignment_keys(&scene), ["something_else"]);
+    }
+
+    #[test]
+    fn recipe_params_move_to_the_current_spelling_once() {
+        for (old, new) in [
+            ("speed", "param/speed"),
+            ("opacity", "opacity"),
+            ("video_speed", "video/speed"),
+            ("video_position", "video/position"),
+            ("scaling_mode", "scaling_mode"),
+            ("fx_f1:warp", "effect/f1/param/warp"),
+            ("param/speed", "param/speed"),
+            ("effect/f1/param/warp", "effect/f1/param/warp"),
+        ] {
+            assert_eq!(canonical_recipe_param(old), new, "{old}");
+            assert_eq!(canonical_recipe_param(new), new, "{new} must stay put");
+        }
+    }
+
+    #[test]
+    fn migration_v8_does_not_rerun_on_current_scenes() {
+        let mut scene = scene_with_sources(SceneConfig::CURRENT_VERSION, vec![]);
+        scene
+            .modulation
+            .assignments
+            .insert("deck/d1/param/speed".to_string(), Vec::new());
+        scene.migrate();
+        assert_eq!(assignment_keys(&scene), ["deck/d1/param/speed"]);
     }
 
     // ── Defaults ─────────────────────────────────────────────────────

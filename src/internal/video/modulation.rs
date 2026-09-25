@@ -11,18 +11,13 @@ use crate::modulation::ResolvedModulation;
 
 /// Reserved parameter names on a deck's modulation prefix.
 ///
-/// These live in the same `deck_<uuid>:<name>` namespace as ISF generator
-/// inputs, so they take a `video_` prefix rather than the bare control name.
-/// `deck_<uuid>:speed` already belongs to any shader with an input called
-/// `speed`, which is common, and the collision would silently drive a clip's
-/// playback rate from a shader's animation rate on the same deck.
-/// `tests/shader_pipeline_guard.rs` enforces the reservation.
-pub const SPEED: &str = "video_speed";
-pub const POSITION: &str = "video_position";
-pub const PLAY: &str = "video_play";
-pub const LOOP_MODE: &str = "video_loop_mode";
-/// Source scaling applies to every deck, not just video ones, so it carries no
-/// `video_` prefix. It is reserved by the same guard test.
+/// Paths relative to `deck/<uuid>/`. Shader inputs live under
+/// `deck/<uuid>/param/`, so these cannot collide with them.
+pub const SPEED: &str = "video/speed";
+pub const POSITION: &str = "video/position";
+pub const PLAY: &str = "video/play";
+pub const LOOP_MODE: &str = "video/loop_mode";
+/// Source scaling applies to every deck, not just video ones.
 pub const SCALING_MODE: &str = "scaling_mode";
 
 /// Speed multiplier bounds. Match `param_router::scale_speed` and the UI slider

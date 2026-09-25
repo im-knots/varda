@@ -341,6 +341,8 @@ pub struct AudioUIData {
 /// Notification snapshot for UI rendering (avoids borrowing `NotificationSystem` during egui)
 #[derive(Clone)]
 pub struct NotificationUI {
+    /// Stable id to dismiss this notification by.
+    pub id: u64,
     pub level: crate::notifications::NotificationLevel,
     pub message: String,
     pub progress: f32,
@@ -785,25 +787,13 @@ pub struct DeliveryHealthUI {
     pub frames_padded: u64,
 }
 
-/// Dome-mode UI actions (camera interaction, mode toggle, config changes).
+/// Dome-mode UI actions: the editor view toggle and preview camera navigation.
+/// Dome config itself is engine state, set with `SetDomePreset` and
+/// `SetDomeGeometry`.
 #[derive(Debug, Clone)]
 pub enum DomeAction {
     /// Toggle between 2D Polygon mode and 3D Dome mode
     SetMode(bool),
-    /// Set dome preset
-    SetPreset(DomePreset),
-    /// Set dome radius
-    SetRadius(f32),
-    /// Set dome truncation angle in degrees
-    SetTruncation(f32),
-    /// Set dome tilt angle in degrees
-    SetTilt(f32),
-    /// Set content azimuth rotation in degrees
-    SetContentAzimuth(f32),
-    /// Set content elevation rotation in degrees
-    SetContentElevation(f32),
-    /// Set content roll rotation in degrees
-    SetContentRoll(f32),
     /// Rotate orbit camera by pixel delta
     RotateCamera { delta_x: f32, delta_y: f32 },
     /// Zoom orbit camera by scroll delta

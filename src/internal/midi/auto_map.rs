@@ -10,7 +10,9 @@ use std::time::{Duration, Instant};
 
 use super::controller_profile::{AutoMapConfig, ControllerProfileData};
 use super::{DeviceId, MidiDeviceManager, MidiKey};
+use crate::engine::value::param::{DeckTarget, ParamAddress};
 use crate::mixer::Mixer;
+use crate::param_router::apply_param_by_path;
 
 // ── Device-level auto-map state ─────────────────────────────────────
 
@@ -255,36 +257,40 @@ impl AutoMapEngine {
             if fader_idx == fader_count - 1
                 && state.config.last_fader_target.as_deref() == Some("crossfader")
             {
-                mixer.set_crossfader(normalized);
+                route(mixer, &ParamAddress::Crossfader, normalized);
                 return;
             }
 
             // Other faders → channel opacity
             if state.config.fader_target == "channel_opacity" {
                 let ch_idx = fader_idx + state.page_offset * state.config.columns as usize;
-                if let Some(ch) = mixer.channel_mut(ch_idx) {
-                    ch.opacity = normalized;
+                if let Some(ch) = mixer.channel(ch_idx) {
+                    let address = ParamAddress::channel_opacity(ch.uuid());
+                    route(mixer, &address, normalized);
                 }
             }
         }
     }
 
+    /// Toggle mute or solo on the deck at a grid position.
     fn apply_action(action: &str, mixer: &mut Mixer, ch_idx: usize, dk_idx: usize) {
-        if let Some(ch) = mixer.channel_mut(ch_idx)
-            && dk_idx < ch.deck_count()
-        {
-            match action {
-                "mute" => {
-                    let current = ch.decks[dk_idx].mute;
-                    ch.set_deck_mute(dk_idx, !current);
-                }
-                "solo" => {
-                    let current = ch.decks[dk_idx].solo;
-                    ch.set_deck_solo(dk_idx, !current);
-                }
-                _ => {}
-            }
-        }
+        let target = match action {
+            "mute" => DeckTarget::Mute,
+            "solo" => DeckTarget::Solo,
+            _ => return,
+        };
+        let Some(slot) = mixer.channel(ch_idx).and_then(|ch| ch.decks.get(dk_idx)) else {
+            return;
+        };
+        let address = ParamAddress::deck(slot.deck.uuid(), target);
+        route(mixer, &address, 1.0);
+    }
+}
+
+/// Write through the parameter router, the one path every controller write takes.
+fn route(mixer: &mut Mixer, address: &ParamAddress, value: f32) {
+    if let Err(e) = apply_param_by_path(mixer, &address.to_string(), value) {
+        log::debug!("Auto-map: {address} not applied: {e}");
     }
 }
 
@@ -557,6 +563,37 @@ mod tests {
             state.last_cc_values.insert(48, value);
         }
         assert_eq!(*state.last_cc_values.get(&48).unwrap(), 60);
+    }
+
+    #[test]
+    fn writes_go_through_the_router_by_uuid() {
+        use crate::renderer::GpuContext;
+
+        let Ok(gpu) = GpuContext::new_headless() else {
+            return;
+        };
+        let mut mixer = Mixer::new(&gpu, 64, 64).unwrap();
+        let deck = crate::deck::Deck::new_solid_color(&gpu, [1.0; 4], 64, 64).unwrap();
+        mixer.channel_mut(0).unwrap().add_deck(deck);
+
+        let mut engine = AutoMapEngine::new();
+        engine.register_device(1, Arc::new(builtin_apc_mini()));
+
+        // CC 48 is fader 0 → channel 0 opacity.
+        engine.process_cc(1, 48, 127, &mut mixer);
+        assert!((mixer.channel(0).unwrap().opacity - 1.0).abs() < 1e-4);
+
+        // CC 56 is the last fader → crossfader.
+        engine.process_cc(1, 56, 0, &mut mixer);
+        assert!(mixer.crossfader().abs() < 1e-4);
+
+        // Note 56 is the top-left pad → channel 0, deck 0; a tap toggles mute.
+        engine.process_note_on(1, 56, 0);
+        engine.process_note_off(1, 56, 0, &mut mixer);
+        assert!(mixer.channel(0).unwrap().decks[0].mute);
+        engine.process_note_on(1, 56, 0);
+        engine.process_note_off(1, 56, 0, &mut mixer);
+        assert!(!mixer.channel(0).unwrap().decks[0].mute);
     }
 
     #[test]

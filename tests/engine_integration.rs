@@ -128,6 +128,21 @@ fn add_lfo_assign_modulation_verify() {
     let state = app.build_engine_state();
     assert!(!state.modulation.sources.is_empty());
     let lfo_id = state.modulation.sources[0].uuid.clone();
+    let target = format!("ch/{}/opacity", state.mixer.channels[0].uuid);
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::AssignModulation {
+            target: target.clone(),
+            source_id: lfo_id.clone(),
+            amount: 0.5,
+        },
+    );
+    assert!(matches!(r, CommandResult::Ok));
+    let state = app.build_engine_state();
+    assert!(state.modulation.assignments.contains_key(&target));
+
+    // The crossfader is routable but nothing reads modulation for it, so an
+    // assignment would never fire. It is refused rather than accepted silently.
     let r = send_cmd(
         &mut app,
         EngineCommand::AssignModulation {
@@ -136,9 +151,7 @@ fn add_lfo_assign_modulation_verify() {
             amount: 0.5,
         },
     );
-    assert!(matches!(r, CommandResult::Ok));
-    let state = app.build_engine_state();
-    assert!(state.modulation.assignments.contains_key("crossfader"));
+    assert!(matches!(r, CommandResult::Err { .. }), "{r:?}");
 }
 
 // ── Transport ───────────────────────────────────────────────────
@@ -347,7 +360,7 @@ fn add_automation_lane_creates_an_assigned_transport_locked_envelope() {
     let Some(mut app) = headless_app() else {
         return;
     };
-    let target = "deck_abc:opacity".to_string();
+    let target = "deck/abc/opacity".to_string();
     let uuid = match send_cmd(
         &mut app,
         EngineCommand::AddAutomationLane {
@@ -620,7 +633,7 @@ fn a_hand_on_a_playback_control_takes_its_lane_back() {
     let Some((mut app, deck)) = app_with_one_region(0.0, 30.0) else {
         return;
     };
-    let target = format!("deck_{deck}:{}", varda::video::modulation::SCALING_MODE);
+    let target = format!("deck/{deck}/{}", varda::video::modulation::SCALING_MODE);
     let envelope = new_uuid(send_cmd(
         &mut app,
         EngineCommand::AddAutomationLane {
@@ -743,7 +756,7 @@ fn envelope_breakpoints_are_sorted_on_write() {
     let uuid = match send_cmd(
         &mut app,
         EngineCommand::AddAutomationLane {
-            target: "deck_abc:opacity".into(),
+            target: "deck/abc/opacity".into(),
             timebase: Timebase::Transport,
         },
     ) {
@@ -933,7 +946,7 @@ fn macro_value_modulation_drives_targets_live() {
     let r = send_cmd(
         &mut app,
         EngineCommand::AssignModulation {
-            target: format!("macro_{macro_uuid}:value"),
+            target: format!("macro/{macro_uuid}/value"),
             source_id: lfo_id,
             amount: 1.0,
         },
@@ -1281,8 +1294,7 @@ fn publish_state_reflects_mutations() {
         },
     );
     app.publish_state();
-    let guard = reader.read().unwrap();
-    let state = guard.as_ref().expect("state published");
+    let state = reader.latest().expect("state published");
     assert!(!state.mixer.channels[0].decks.is_empty());
 }
 
@@ -2994,7 +3006,7 @@ fn a_live_touch_takes_a_parameter_back_from_the_arrangement() {
     let state = app.build_engine_state();
     assert_eq!(
         state.arrangement.expect("arrangement").overridden_params,
-        vec![format!("deck_{deck}:opacity")],
+        vec![format!("deck/{deck}/opacity")],
         "the held parameter should be reported so the UI can offer a re-arm"
     );
 }
@@ -3016,7 +3028,7 @@ fn re_arming_returns_the_parameter_to_the_arrangement() {
     fire(
         &mut app,
         EngineCommand::RearmParam {
-            param_key: format!("deck_{deck}:opacity"),
+            param_key: format!("deck/{deck}/opacity"),
             seconds: Some(0.0),
         },
     );
@@ -3431,7 +3443,7 @@ fn a_re_armed_parameter_ramps_rather_than_snapping() {
     fire(
         &mut app,
         EngineCommand::RearmParam {
-            param_key: format!("deck_{deck}:opacity"),
+            param_key: format!("deck/{deck}/opacity"),
             seconds: Some(30.0),
         },
     );
@@ -3471,7 +3483,7 @@ fn a_route_write_takes_the_parameter_back_from_the_show() {
             .arrangement
             .expect("arrangement")
             .overridden_params,
-        vec![format!("deck_{deck}:opacity")],
+        vec![format!("deck/{deck}/opacity")],
         "a route write holds the parameter exactly as a UI drag does"
     );
 
@@ -3948,14 +3960,31 @@ fn a_deck_in_a_previewed_channel_keeps_pulling_frames() {
     run_from(&mut app, 150.0);
     assert!(asleep(&mut app, &deck), "asleep until someone looks at it");
 
-    app.set_preview_channels(vec![0]);
+    let channel_uuid = app.build_engine_state().mixer.channels[0].uuid.clone();
+    app.command_sender()
+        .send((
+            EngineCommand::SetPreviewChannels {
+                channel_uuids: vec![channel_uuid],
+            },
+            None,
+        ))
+        .unwrap();
+    app.process_commands();
     step(&mut app);
     assert!(
         !asleep(&mut app, &deck),
         "a cued channel is being watched, so its decks stay awake"
     );
 
-    app.set_preview_channels(Vec::new());
+    app.command_sender()
+        .send((
+            EngineCommand::SetPreviewChannels {
+                channel_uuids: Vec::new(),
+            },
+            None,
+        ))
+        .unwrap();
+    app.process_commands();
     step(&mut app);
     assert!(
         asleep(&mut app, &deck),
@@ -4063,7 +4092,7 @@ fn a_live_modulator_on_opacity_keeps_the_deck_awake() {
     fire(
         &mut app,
         EngineCommand::AssignModulation {
-            target: format!("deck_{deck}:opacity"),
+            target: format!("deck/{deck}/opacity"),
             source_id: lfo,
             amount: 1.0,
         },

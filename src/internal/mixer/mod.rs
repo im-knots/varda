@@ -1495,6 +1495,69 @@ mod tests {
         ));
     }
 
+    /// Effects are addressed by UUID alone; the owner-qualified spelling saved
+    /// bindings may still hold reaches the same parameter.
+    #[test]
+    fn param_router_addresses_an_effect_by_uuid_in_either_spelling() {
+        use crate::param_router::apply_param_by_path;
+
+        let gpu = headless_gpu();
+        let mut mixer = Mixer::new(&gpu, 64, 64).unwrap();
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders/brightness_contrast.fs");
+        let shader = crate::isf::ISFShader::from_file(&path).expect("parse effect");
+        let mut effect = crate::deck::Effect::new(&gpu, shader).expect("build effect");
+        effect.set_uuid("fx1".to_string());
+        mixer.add_master_effect(effect);
+        let brightness = |mixer: &Mixer| mixer.master_effects()[0].params.get_float("brightness");
+
+        assert!(apply_param_by_path(&mut mixer, "effect/fx1/param/brightness", 0.75).is_ok());
+        assert!((brightness(&mixer).unwrap() - 0.5).abs() < 1e-5);
+
+        assert!(
+            apply_param_by_path(&mut mixer, "master/effect/fx1/param/brightness", 0.25).is_ok()
+        );
+        assert!((brightness(&mixer).unwrap() + 0.5).abs() < 1e-5);
+    }
+
+    /// A controller's LEDs read back the value a write would take, so reading
+    /// after writing gives back what was written.
+    #[test]
+    fn param_router_reads_back_what_it_writes() {
+        use crate::engine::value::param::{DeckTarget, ParamAddress};
+        use crate::param_router::{apply_param_by_path, read_param};
+
+        let gpu = headless_gpu();
+        let mut mixer = Mixer::new(&gpu, 64, 64).unwrap();
+        add_solid_deck_to(&mut mixer, &gpu, 0, [1.0, 0.0, 0.0, 1.0]);
+        let deck = mixer.channel(0).unwrap().decks[0].deck.uuid().to_string();
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders/brightness_contrast.fs");
+        let shader = crate::isf::ISFShader::from_file(&path).expect("parse effect");
+        let mut effect = crate::deck::Effect::new(&gpu, shader).expect("build effect");
+        effect.set_uuid("fx1".to_string());
+        mixer.add_master_effect(effect);
+
+        let brightness = ParamAddress::effect_param("fx1", "brightness");
+        apply_param_by_path(&mut mixer, &brightness.to_string(), 0.75).unwrap();
+        assert!((read_param(&mixer, &brightness).unwrap() - 0.75).abs() < 1e-5);
+
+        let opacity = ParamAddress::deck(&deck, DeckTarget::Opacity);
+        apply_param_by_path(&mut mixer, &opacity.to_string(), 0.3).unwrap();
+        assert!((read_param(&mixer, &opacity).unwrap() - 0.3).abs() < 1e-5);
+
+        let mute = ParamAddress::deck(&deck, DeckTarget::Mute);
+        assert_eq!(read_param(&mixer, &mute), Some(0.0));
+        apply_param_by_path(&mut mixer, &mute.to_string(), 1.0).unwrap();
+        assert_eq!(read_param(&mixer, &mute), Some(1.0));
+
+        apply_param_by_path(&mut mixer, "crossfader", 0.2).unwrap();
+        assert!((read_param(&mixer, &ParamAddress::Crossfader).unwrap() - 0.2).abs() < 1e-5);
+
+        let gone = ParamAddress::deck("deadbeef", DeckTarget::Opacity);
+        assert_eq!(read_param(&mixer, &gone), None);
+    }
+
     // ── Macro controls: one control → many targets via the router ─────
 
     #[test]

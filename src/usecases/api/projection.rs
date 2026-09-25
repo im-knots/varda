@@ -3,35 +3,30 @@
 //! Pure functions, no HTTP/axum dependency. This is the API consumer's
 //! equivalent of `usecases::ui::build_ui_data()` in the UI consumer.
 
+use crate::app::publish::{PublishedState, StatePublication};
 use crate::engine::types::{
     CameraId, ChannelSnapshot, DeckSnapshot, EffectSnapshot, EngineState, ModulationSnapshot,
     MonitorSnapshot, OutputWindowSnapshot, SequenceSnapshot, StreamReceiverSnapshot,
     SurfaceSnapshot,
 };
 use serde::Serialize;
+use std::sync::Arc;
 use utoipa::ToSchema;
 
-/// Helper to read the engine state or return a 503-appropriate error.
+/// The latest published snapshot, shared rather than copied.
 ///
 /// # Errors
 ///
-/// Returns [`StateReadError::LockPoisoned`] if the state lock was poisoned by a
-/// panicking writer, or [`StateReadError::NotInitialized`] if the engine has not
-/// published a snapshot yet.
-pub fn read_state(
-    engine_state: &std::sync::RwLock<Option<EngineState>>,
-) -> Result<EngineState, StateReadError> {
-    let guard = engine_state
-        .read()
-        .map_err(|_| StateReadError::LockPoisoned)?;
-    guard.clone().ok_or(StateReadError::NotInitialized)
+/// Returns [`StateReadError::NotInitialized`] if the engine has not published a
+/// snapshot yet.
+pub fn read_state(publication: &StatePublication) -> Result<Arc<PublishedState>, StateReadError> {
+    publication.latest().ok_or(StateReadError::NotInitialized)
 }
 
 /// Errors when reading engine state.
 #[derive(Debug)]
 pub enum StateReadError {
     NotInitialized,
-    LockPoisoned,
 }
 
 // ── Performance projection ──────────────────────────────────────────
@@ -172,6 +167,8 @@ pub(crate) mod tests {
     };
     pub(crate) fn make_test_state() -> EngineState {
         EngineState {
+            deck_loads: Vec::new(),
+            dome: crate::engine::value::dome::DomeConfig::default(),
             mixer: MixerSnapshot {
                 channels: vec![ChannelSnapshot {
                     idx: 0,
@@ -345,18 +342,16 @@ pub(crate) mod tests {
 
     #[test]
     fn test_read_state_not_initialized() {
-        let lock = std::sync::RwLock::new(None);
         assert!(matches!(
-            read_state(&lock),
+            read_state(&StatePublication::default()),
             Err(StateReadError::NotInitialized)
         ));
     }
 
     #[test]
-    fn test_read_state_returns_clone() {
-        let state = make_test_state();
-        let lock = std::sync::RwLock::new(Some(state));
-        let result = read_state(&lock).unwrap();
+    fn test_read_state_returns_the_published_snapshot() {
+        let publication = StatePublication::with_state(make_test_state());
+        let result = read_state(&publication).unwrap();
         assert!((result.fps - 60.0).abs() < 1e-5);
     }
 

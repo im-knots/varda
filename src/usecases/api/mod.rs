@@ -10,8 +10,9 @@ pub mod routes;
 pub mod runner;
 pub mod ws;
 
-use crate::engine::{CommandEnvelope, CommandResult, EngineCommand, EngineState, ErrorCode};
-use std::sync::{Arc, RwLock};
+use crate::app::publish::StatePublication;
+use crate::engine::{CommandEnvelope, CommandResult, EngineCommand, ErrorCode};
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 /// Shared state passed to all route handlers via axum's `State` extractor.
@@ -22,8 +23,8 @@ use tokio::sync::mpsc;
 pub struct SharedState {
     /// Send commands to the engine. The engine processes them once per frame.
     pub command_tx: mpsc::UnboundedSender<CommandEnvelope>,
-    /// Read the latest engine state snapshot (updated each frame by `publish_state`).
-    pub engine_state: Arc<RwLock<Option<EngineState>>>,
+    /// The engine's published snapshot, read without a lock or a copy.
+    pub engine_state: Arc<StatePublication>,
 }
 
 impl SharedState {

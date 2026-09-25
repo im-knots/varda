@@ -233,11 +233,16 @@ pub(super) fn handle_library_dnd(ui: &egui::Ui, data: &UIData, actions: &mut UIA
             };
 
             if let Some(channel_uuid) = target_channel {
-                let gen_key = egui::Id::new("__lib_dnd_gen_idx");
-                let gen_idx: Option<usize> = ctx.memory(|mem| mem.data.get_temp(gen_key));
-                if let Some(gen_idx) = gen_idx {
-                    log::info!("Library drop (deferred): generator {gen_idx} -> ch {channel_uuid}");
-                    actions.session.shader_to_add = Some((channel_uuid.clone(), gen_idx));
+                let gen_key = egui::Id::new("__lib_dnd_gen_name");
+                let shader_name: Option<String> = ctx.memory(|mem| mem.data.get_temp(gen_key));
+                if let Some(shader_name) = shader_name {
+                    log::info!(
+                        "Library drop (deferred): generator {shader_name} -> ch {channel_uuid}"
+                    );
+                    actions.commands.push(EngineCommand::AddDeck {
+                        channel_uuid: channel_uuid.clone(),
+                        shader_name,
+                    });
                 }
 
                 let cam_key = egui::Id::new("__lib_dnd_cam_id");
@@ -456,7 +461,8 @@ pub(super) fn handle_library_dnd(ui: &egui::Ui, data: &UIData, actions: &mut UIA
                 mem.data.remove::<Option<usize>>(hover_ch_id);
                 mem.data.remove::<Option<FxHover>>(hover_fx_target_id);
                 mem.data.remove::<bool>(on_new_ch_id);
-                mem.data.remove::<usize>(egui::Id::new("__lib_dnd_gen_idx"));
+                mem.data
+                    .remove::<String>(egui::Id::new("__lib_dnd_gen_name"));
                 mem.data.remove::<usize>(egui::Id::new("__lib_dnd_fx_idx"));
                 mem.data
                     .remove::<crate::camera::CameraId>(egui::Id::new("__lib_dnd_cam_id"));

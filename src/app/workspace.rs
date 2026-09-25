@@ -1,13 +1,13 @@
 //! Workspace persistence — save/load from `.varda/` directory.
 
 use super::VardaApp;
-use crate::usecases::ui::UILayoutState;
+use crate::engine::value::editor::EditorPrefs;
 
 /// Outcome of loading `.varda/`. Hard failures are listed so the command
 /// bus cannot report `Ok` when a file that exists could not be restored.
-/// Layout is still returned when stage.json loaded, even if scene.json failed.
+/// Editor prefs are still returned when stage.json loaded, even if scene.json failed.
 pub struct WorkspaceLoad {
-    pub layout: Option<UILayoutState>,
+    pub editor_prefs: Option<EditorPrefs>,
     errors: Vec<String>,
 }
 
@@ -46,16 +46,15 @@ fn duration_config_to_spec(
 }
 
 impl VardaApp {
-    /// Save the entire workspace to `.varda/`.
-    /// `layout` is UI-consumer-owned state persisted in stage.json.
+    /// Save the entire workspace to `.varda/`, including the editor prefs the
+    /// GUI last sent.
     ///
     /// # Errors
     ///
     /// Returns an error if `.varda/` cannot be created or if any workspace
     /// file fails to write. Files that succeeded stay on disk; the error
     /// lists every failure. The operator is toasted on failure.
-    pub fn save_workspace(&mut self, layout: &UILayoutState) -> anyhow::Result<()> {
-        self.session.last_layout = layout.clone();
+    pub fn save_workspace(&mut self) -> anyhow::Result<()> {
         if let Err(e) = self.session.workspace.ensure_dir() {
             let msg = format!("Failed to create .varda directory: {e}");
             log::error!("{msg}");
@@ -100,15 +99,8 @@ impl VardaApp {
         let mut stage = crate::persistence::snapshot_stage(
             &self.output.surface_manager,
             &self.output.outputs,
-            layout.stage_editor_grid_size,
-            layout.stage_editor_snap,
-            layout.library_panel_open,
-            layout.right_panel_open,
-            layout.stage_editor_open,
-            layout.dome_preview_open,
-            layout.dome_mode_active,
-            layout.dome_preset,
-            layout.dome_geometry,
+            &self.session.editor_prefs,
+            &self.output.dome,
             self.output.domemaster_resolution,
         );
         stage.timecode = self.timecode_config();
@@ -158,36 +150,26 @@ impl VardaApp {
 
     /// Load workspace from `.varda/` if it exists.
     /// If a scene is found, replaces the default mixer with the restored one.
-    /// Returns layout preferences loaded from stage.json (if any), plus any
+    /// Returns editor prefs loaded from stage.json (if any), plus any
     /// hard failures so the command bus cannot report success on a partial load.
     pub fn load_workspace(&mut self) -> WorkspaceLoad {
         if !self.session.workspace.exists() {
             log::info!("No .varda/ directory found, starting fresh");
             return WorkspaceLoad {
-                layout: None,
+                editor_prefs: None,
                 errors: Vec::new(),
             };
         }
         // Loading a workspace replaces the live scene/stage, so the undo/redo
         // timeline (which references the previous state) must be cleared.
         self.session.history.clear();
-        let mut loaded_layout: Option<UILayoutState> = None;
+        let mut loaded_prefs: Option<EditorPrefs> = None;
         let mut errors: Vec<String> = Vec::new();
         if self.session.workspace.has_stage() {
             match crate::persistence::StagePrefs::load(self.session.workspace.stage_path()) {
                 Ok(prefs) => {
-                    loaded_layout = Some(UILayoutState {
-                        stage_editor_grid_size: prefs.grid_size,
-                        stage_editor_snap: prefs.snap,
-                        library_panel_open: prefs.library_panel_open,
-                        right_panel_open: prefs.right_panel_open,
-                        stage_editor_open: prefs.stage_editor_open,
-                        dome_preview_open: prefs.dome_preview_open,
-                        dome_mode_active: prefs.dome_mode_active,
-                        dome_preset: prefs.dome_preset,
-                        dome_geometry: prefs.dome_geometry,
-                        ..UILayoutState::default()
-                    });
+                    loaded_prefs = Some(prefs.editor_prefs());
+                    self.output.dome = prefs.dome_config();
                     self.apply_timecode_config(&prefs.timecode);
                     self.output.surface_manager = prefs.surfaces;
                     // Set before `ensure_domemaster` below, which builds at
@@ -369,15 +351,15 @@ impl VardaApp {
                 }
             }
         }
-        if let Some(layout) = &loaded_layout {
-            self.session.last_layout = layout.clone();
+        if let Some(prefs) = loaded_prefs {
+            self.session.editor_prefs = prefs;
         }
         if !errors.is_empty() {
             let msg = format!("Failed to load workspace: {}", errors.join("; "));
             self.session.notifications.error(msg);
         }
         WorkspaceLoad {
-            layout: loaded_layout,
+            editor_prefs: loaded_prefs,
             errors,
         }
     }
@@ -737,42 +719,9 @@ impl VardaApp {
     }
 
     /// Build a combined history snapshot (scene + stage) of current engine
-    /// state using neutral/default editor prefs.
-    ///
-    /// Used by the headless/API undo path (`EngineCommand::Undo`/`Redo`), which
-    /// has no UI layout to source cosmetic editor prefs or dome layout flags
-    /// from. `apply_stage_diff` ignores those cosmetic fields anyway, so the
-    /// defaults are inconsequential to what undo actually restores. The windowed
-    /// runner builds its own snapshot with real layout prefs.
-    pub fn history_snapshot_default(&self) -> super::history::HistorySnapshot {
-        let scene = crate::persistence::snapshot_scene(
-            &self.mixer,
-            Some(&self.transport_config()),
-            self.render_width,
-            self.render_height,
-        );
-        let d = crate::persistence::StagePrefs::default();
-        let stage = crate::persistence::snapshot_stage(
-            &self.output.surface_manager,
-            &self.output.outputs,
-            d.grid_size,
-            d.snap,
-            d.library_panel_open,
-            d.right_panel_open,
-            d.stage_editor_open,
-            d.dome_preview_open,
-            d.dome_mode_active,
-            d.dome_preset,
-            d.dome_geometry,
-            self.output.domemaster_resolution,
-        );
-        super::history::HistorySnapshot { scene, stage }
-    }
-
-    /// Build a combined history snapshot (scene + stage) of current engine
-    /// state, sourcing cosmetic editor prefs and dome layout flags from the UI
-    /// `layout`. Used by the windowed runner's undo/redo push and restore.
-    pub fn history_snapshot(&self, layout: &UILayoutState) -> super::history::HistorySnapshot {
+    /// state. Restores leave the editor prefs alone, so capturing them is only
+    /// for completeness of the stage file shape.
+    pub fn history_snapshot(&self) -> super::history::HistorySnapshot {
         let scene = crate::persistence::snapshot_scene(
             &self.mixer,
             Some(&self.transport_config()),
@@ -782,15 +731,8 @@ impl VardaApp {
         let stage = crate::persistence::snapshot_stage(
             &self.output.surface_manager,
             &self.output.outputs,
-            layout.stage_editor_grid_size,
-            layout.stage_editor_snap,
-            layout.library_panel_open,
-            layout.right_panel_open,
-            layout.stage_editor_open,
-            layout.dome_preview_open,
-            layout.dome_mode_active,
-            layout.dome_preset,
-            layout.dome_geometry,
+            &self.session.editor_prefs,
+            &self.output.dome,
             self.output.domemaster_resolution,
         );
         super::history::HistorySnapshot { scene, stage }
@@ -823,63 +765,57 @@ impl VardaApp {
         self.session.history.clear();
     }
 
-    /// Restore a history snapshot onto live state (scene + stage), returning the
-    /// restored snapshot so a windowed caller can sync its dome layout flags.
-    fn restore_history_snapshot(
-        &mut self,
-        snapshot: super::history::HistorySnapshot,
-    ) -> super::history::HistoryRestore {
+    /// Restore a history snapshot onto live state (scene + stage).
+    fn restore_history_snapshot(&mut self, snapshot: &super::history::HistorySnapshot) {
         let rw = self.render_width;
         let rh = self.render_height;
         // Scene half — diff-apply (patches only what changed).
         let warnings = self.apply_scene_diff(&snapshot.scene, rw, rh);
-        // Stage half — restore surfaces + assignments (no window lifecycle).
-        // Cosmetic editor prefs are intentionally left untouched; dome layout
-        // flags live in UI layout and are restored by the windowed caller.
+        // Stage half — restore surfaces, assignments, and dome config (no
+        // window lifecycle). Cosmetic editor prefs are intentionally left alone.
         self.apply_stage_diff(&snapshot.stage);
         self.mixer.clear_sub_mix_cache();
         for w in &warnings {
             log::warn!("History restore warning: {w}");
         }
-        super::history::HistoryRestore { snapshot }
     }
 
     /// Undo the most recent undoable action. `current` is the live state to
-    /// place on the redo stack. Returns `None` when the undo stack is empty.
-    pub fn history_undo(
-        &mut self,
-        current: super::history::HistorySnapshot,
-    ) -> Option<super::history::HistoryRestore> {
-        let snapshot = self.session.history.undo(current)?;
-        Some(self.restore_history_snapshot(snapshot))
+    /// place on the redo stack. Returns false when the undo stack is empty.
+    pub fn history_undo(&mut self, current: super::history::HistorySnapshot) -> bool {
+        let Some(snapshot) = self.session.history.undo(current) else {
+            return false;
+        };
+        self.restore_history_snapshot(&snapshot);
+        true
     }
 
     /// Redo the most recently undone action. `current` is the live state to
-    /// place on the undo stack. Returns `None` when the redo stack is empty.
-    pub fn history_redo(
-        &mut self,
-        current: super::history::HistorySnapshot,
-    ) -> Option<super::history::HistoryRestore> {
-        let snapshot = self.session.history.redo(current)?;
-        Some(self.restore_history_snapshot(snapshot))
+    /// place on the undo stack. Returns false when the redo stack is empty.
+    pub fn history_redo(&mut self, current: super::history::HistorySnapshot) -> bool {
+        let Some(snapshot) = self.session.history.redo(current) else {
+            return false;
+        };
+        self.restore_history_snapshot(&snapshot);
+        true
     }
 
     /// Apply a stage diff: restore the authored stage state from a `StagePrefs`
     /// snapshot onto live state for undo/redo.
     ///
-    /// Restores surfaces (geometry, warp, holes, combine, stacking, `dome_setup`)
-    /// and per-output surface assignments. Deliberately does NOT recreate,
-    /// remove, move, or resize output windows/monitors, and does NOT touch
-    /// cosmetic editor prefs (grid size, snap, panel-open flags) — those are not
-    /// authored content. Dome layout flags (mode/preset/geometry) live in UI
-    /// layout state and are restored by the caller (the runner).
+    /// Restores surfaces (geometry, warp, holes, combine, stacking, `dome_setup`),
+    /// per-output surface assignments, and the dome config. Deliberately does NOT
+    /// recreate, remove, move, or resize output windows/monitors, and does NOT
+    /// touch cosmetic editor prefs (grid size, snap, panel-open flags), which are
+    /// not authored content.
     ///
     /// GPU-derived caches rebuild automatically from the restored surface data:
     /// hole masks are content-hash keyed and warp meshes are tessellated per
     /// frame, so no explicit cache invalidation is needed here.
     pub fn apply_stage_diff(&mut self, target: &crate::persistence::StagePrefs) {
-        // (a) Surfaces — plain data, swap wholesale.
+        // (a) Surfaces and dome config — plain data, swap wholesale.
         self.output.surface_manager = target.surfaces.clone();
+        self.output.dome = target.dome_config();
 
         // (b) Per-output surface assignments — patch by matching uuid to the
         //     snapshot's OutputConfig. Never create/destroy/reposition windows;
@@ -1088,7 +1024,7 @@ mod tests {
         };
         // No .varda/ exists → load_workspace returns None
         let result = app.load_workspace();
-        assert!(result.layout.is_none());
+        assert!(result.editor_prefs.is_none());
         assert!(result.is_ok());
     }
 
@@ -1101,8 +1037,7 @@ mod tests {
         let ch = app.mixer_snapshot().channels[0].uuid.clone();
         app.add_solid_color_deck(&ch, [1.0, 0.0, 0.0, 1.0]).unwrap();
         app.set_crossfader(0.6);
-        app.save_workspace(&UILayoutState::default())
-            .expect("save workspace");
+        app.save_workspace().expect("save workspace");
 
         let Some(mut app2) = headless_app_in(tmp.path()) else {
             return;
@@ -1126,8 +1061,7 @@ mod tests {
             "Test Surface",
             crate::renderer::context::OutputSource::Master,
         );
-        app.save_workspace(&UILayoutState::default())
-            .expect("save workspace");
+        app.save_workspace().expect("save workspace");
 
         let Some(mut app2) = headless_app_in(tmp.path()) else {
             return;
@@ -1170,8 +1104,7 @@ mod tests {
             }),
             CommandResult::Ok
         ));
-        app.save_workspace(&UILayoutState::default())
-            .expect("save workspace");
+        app.save_workspace().expect("save workspace");
 
         let stage: crate::persistence::StagePrefs = serde_json::from_str(
             &std::fs::read_to_string(tmp.path().join(".varda").join("stage.json")).unwrap(),
@@ -1231,8 +1164,7 @@ mod tests {
         let Some(mut app) = headless_app_in(tmp.path()) else {
             return;
         };
-        app.save_workspace(&UILayoutState::default())
-            .expect("save workspace");
+        app.save_workspace().expect("save workspace");
         assert!(varda_dir.exists());
     }
 
@@ -1242,13 +1174,12 @@ mod tests {
         let Some(mut app) = headless_app_in(tmp.path()) else {
             return;
         };
-        app.save_workspace(&UILayoutState::default())
-            .expect("save workspace");
+        app.save_workspace().expect("save workspace");
         let scene = tmp.path().join(".varda").join("scene.json");
         std::fs::remove_file(&scene).unwrap();
         std::fs::create_dir(&scene).unwrap();
         let err = app
-            .save_workspace(&UILayoutState::default())
+            .save_workspace()
             .expect_err("a directory named scene.json must fail the save");
         assert!(err.to_string().contains("scene"));
         assert!(
@@ -1278,42 +1209,42 @@ mod tests {
     }
 
     #[test]
-    fn load_workspace_returns_layout() {
+    fn load_workspace_returns_editor_prefs() {
         let tmp = TempDir::new().unwrap();
         let Some(mut app) = headless_app_in(tmp.path()) else {
             return;
         };
-        let layout = UILayoutState {
+        app.session.editor_prefs = EditorPrefs {
             stage_editor_open: true,
             library_panel_open: true,
             ..Default::default()
         };
-        app.save_workspace(&layout).expect("save workspace");
+        app.save_workspace().expect("save workspace");
 
         let Some(mut app2) = headless_app_in(tmp.path()) else {
             return;
         };
         let loaded = app2.load_workspace();
         assert!(loaded.is_ok(), "should load without hard errors");
-        let loaded = loaded.layout.expect("should return layout");
+        let loaded = loaded.editor_prefs.expect("should return editor prefs");
         assert!(loaded.stage_editor_open);
         assert!(loaded.library_panel_open);
     }
 
-    /// `EngineCommand::SaveWorkspace` carries no layout, so it must reuse the one
+    /// A save from a consumer that never sent editor prefs must reuse the ones
     /// loaded from disk instead of writing defaults over the user's panels.
     #[test]
-    fn command_save_preserves_loaded_layout() {
+    fn command_save_preserves_loaded_editor_prefs() {
         let tmp = TempDir::new().unwrap();
         let Some(mut app) = headless_app_in(tmp.path()) else {
             return;
         };
-        app.save_workspace(&UILayoutState {
+        app.session.editor_prefs = EditorPrefs {
             stage_editor_open: true,
             library_panel_open: true,
             ..Default::default()
-        })
-        .expect("save workspace");
+        };
+        app.save_workspace().expect("save workspace");
 
         let Some(mut app2) = headless_app_in(tmp.path()) else {
             return;
@@ -1324,7 +1255,10 @@ mod tests {
         let Some(mut app3) = headless_app_in(tmp.path()) else {
             return;
         };
-        let reloaded = app3.load_workspace().layout.expect("layout should survive");
+        let reloaded = app3
+            .load_workspace()
+            .editor_prefs
+            .expect("editor prefs should survive");
         assert!(reloaded.stage_editor_open);
         assert!(reloaded.library_panel_open);
     }

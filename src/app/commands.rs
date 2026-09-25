@@ -6,7 +6,17 @@
 
 use super::VardaApp;
 use super::resolve::UnknownEntity;
-use crate::engine::{CommandOutcome, CommandResult, DomeLayoutFields, EngineCommand, ErrorCode};
+use crate::engine::{CommandOutcome, CommandResult, EngineCommand, ErrorCode};
+
+/// The canonical modulation key for a target a client sent, or the wire error
+/// for one that names nothing modulation can drive. Accepts the pre-v8
+/// `deck_<uuid>:<name>` spelling too, so existing API scripts keep working.
+fn modulation_target(target: &str) -> Result<String, CommandResult> {
+    crate::param_router::canonical_modulation_key(target).map_err(|e| CommandResult::Err {
+        code: ErrorCode::InvalidInput,
+        message: e.to_string(),
+    })
+}
 
 /// Classify an engine error for the wire. An unresolvable UUID is `NotFound` —
 /// the caller's view of the world is stale, which is distinct from a malformed
@@ -125,40 +135,6 @@ impl VardaApp {
             .flat_map(|ch| ch.decks.iter())
             .map(|slot| slot.deck.uuid().to_string())
             .collect()
-    }
-
-    /// Undo/redo on behalf of the windowed GUI. Uses the UI `layout` to source
-    /// cosmetic/dome prefs for the "current" snapshot (the API path uses
-    /// defaults), and returns a typed [`CommandOutcome::HistoryRestored`] so the
-    /// runner can sync dome flags.
-    pub(crate) fn history_gui(
-        &mut self,
-        layout: &crate::usecases::ui::UILayoutState,
-        undo: bool,
-    ) -> CommandOutcome {
-        let current = self.history_snapshot(layout);
-        let restore = if undo {
-            self.history_undo(current)
-        } else {
-            self.history_redo(current)
-        };
-        match restore {
-            Some(r) => CommandOutcome::HistoryRestored {
-                dome_layout: DomeLayoutFields {
-                    dome_mode_active: r.snapshot.stage.dome_mode_active,
-                    dome_preset: r.snapshot.stage.dome_preset,
-                    dome_geometry: r.snapshot.stage.dome_geometry,
-                },
-            },
-            None => CommandOutcome::Plain(CommandResult::Err {
-                code: ErrorCode::InvalidInput,
-                message: if undo {
-                    "Nothing to undo".into()
-                } else {
-                    "Nothing to redo".into()
-                },
-            }),
-        }
     }
 
     /// True if any command in the batch is undoable. Used by the windowed
@@ -317,7 +293,7 @@ impl VardaApp {
                 if matches!(result, CommandResult::Ok) {
                     self.note_live_video_write(
                         &deck_uuid,
-                        crate::video::modulation::SCALING_MODE,
+                        crate::engine::value::param::DeckTarget::ScalingMode,
                         crate::param_router::scaling_mode_to_value(mode),
                     );
                 }
@@ -436,6 +412,10 @@ impl VardaApp {
                 CommandResult::Ok
             }
             EngineCommand::AddAutomationLane { target, timebase } => {
+                let target = match modulation_target(&target) {
+                    Ok(target) => target,
+                    Err(e) => return e,
+                };
                 // Returns the UUID because the caller needs it to reveal the
                 // new lane and to push breakpoints into it.
                 CommandResult::OkWithId {
@@ -460,17 +440,28 @@ impl VardaApp {
                 target,
                 source_id,
                 amount,
-            } => {
-                self.assign_modulation(&target, &source_id, amount);
-                CommandResult::Ok
-            }
-            EngineCommand::ClearModulation { target } => {
-                self.clear_modulation(&target);
-                CommandResult::Ok
-            }
+            } => match modulation_target(&target) {
+                Ok(target) => {
+                    self.assign_modulation(&target, &source_id, amount);
+                    CommandResult::Ok
+                }
+                Err(e) => e,
+            },
+            EngineCommand::ClearModulation { target } => match modulation_target(&target) {
+                Ok(target) => {
+                    self.clear_modulation(&target);
+                    CommandResult::Ok
+                }
+                Err(e) => e,
+            },
             EngineCommand::ClearModulationSource { target, source_id } => {
-                self.clear_modulation_source(&target, &source_id);
-                CommandResult::Ok
+                match modulation_target(&target) {
+                    Ok(target) => {
+                        self.clear_modulation_source(&target, &source_id);
+                        CommandResult::Ok
+                    }
+                    Err(e) => e,
+                }
             }
 
             // ── Output ───────────────────────────────────────
@@ -703,7 +694,7 @@ impl VardaApp {
                 if matches!(result, CommandResult::Ok) {
                     self.note_live_video_write(
                         &deck_uuid,
-                        crate::video::modulation::PLAY,
+                        crate::engine::value::param::DeckTarget::VideoPlay,
                         f32::from(u8::from(!was_playing)),
                     );
                 }
@@ -720,7 +711,7 @@ impl VardaApp {
                 if matches!(result, CommandResult::Ok) {
                     self.note_live_video_write(
                         &deck_uuid,
-                        crate::video::modulation::POSITION,
+                        crate::engine::value::param::DeckTarget::VideoPosition,
                         crate::param_router::duration_to_norm(position_secs, duration),
                     );
                 }
@@ -731,7 +722,7 @@ impl VardaApp {
                 if matches!(result, CommandResult::Ok) {
                     self.note_live_video_write(
                         &deck_uuid,
-                        crate::video::modulation::SPEED,
+                        crate::engine::value::param::DeckTarget::VideoSpeed,
                         crate::param_router::speed_to_norm(speed),
                     );
                 }
@@ -742,7 +733,7 @@ impl VardaApp {
                 if matches!(result, CommandResult::Ok) {
                     self.note_live_video_write(
                         &deck_uuid,
-                        crate::video::modulation::LOOP_MODE,
+                        crate::engine::value::param::DeckTarget::VideoLoopMode,
                         crate::param_router::loop_mode_to_value(mode),
                     );
                 }
@@ -1162,7 +1153,10 @@ impl VardaApp {
             } => self.cmd_set_lane_collapsed(&deck_uuid, collapsed),
             EngineCommand::SetIdleBehaviour { idle } => self.cmd_set_idle_behaviour(idle),
             EngineCommand::RearmParam { param_key, seconds } => {
-                self.cmd_rearm_param(&param_key, seconds)
+                match modulation_target(&param_key) {
+                    Ok(param_key) => self.cmd_rearm_param(&param_key, seconds),
+                    Err(e) => e,
+                }
             }
             EngineCommand::RearmAll { seconds } => self.cmd_rearm_all(seconds),
             EngineCommand::AddCue { at, name } => self.cmd_add_cue(at, &name),
@@ -1625,7 +1619,13 @@ impl VardaApp {
                         params.set(&name, value);
                     }
                     if let Some(held) = taken {
-                        self.note_live_param_write(&format!("deck_{deck_uuid}:{name}"), held);
+                        self.note_live_param_write(
+                            &crate::engine::value::param::ParamAddress::deck_param(
+                                &deck_uuid, &name,
+                            )
+                            .to_string(),
+                            held,
+                        );
                     }
                     CommandResult::Ok
                 }
@@ -1643,7 +1643,14 @@ impl VardaApp {
                         effect.params.set(&name, value);
                     }
                     if let Some(held) = taken {
-                        self.note_live_param_write(&format!("fx_{effect_uuid}:{name}"), held);
+                        self.note_live_param_write(
+                            &crate::engine::value::param::ParamAddress::effect_param(
+                                &effect_uuid,
+                                &name,
+                            )
+                            .to_string(),
+                            held,
+                        );
                     }
                     CommandResult::Ok
                 }
@@ -1705,6 +1712,18 @@ impl VardaApp {
                 self.set_domemaster_resolution(resolution);
                 CommandResult::Ok
             }
+            EngineCommand::SetDomePreset { preset } => {
+                self.output.dome.preset = preset;
+                CommandResult::Ok
+            }
+            EngineCommand::SetDomeGeometry { geometry } => {
+                self.output.dome.geometry = geometry;
+                CommandResult::Ok
+            }
+            EngineCommand::SetEditorPrefs { prefs } => {
+                self.session.editor_prefs = prefs;
+                CommandResult::Ok
+            }
 
             EngineCommand::SetTargetFps { fps } => {
                 self.set_target_fps(fps);
@@ -1732,19 +1751,94 @@ impl VardaApp {
                 self.cmd_save_channel_preset(&channel_uuid, &name)
             }
 
-            // ── Persistence ───────────────────────────────────────
-            EngineCommand::SaveWorkspace => {
-                // No layout travels with the command, so reuse the last one the
-                // engine saw rather than writing defaults over the user's panels.
-                let layout = self.session.last_layout.clone();
-                match self.save_workspace(&layout) {
-                    Ok(()) => CommandResult::Ok,
-                    Err(e) => CommandResult::Err {
-                        code: ErrorCode::InternalError,
-                        message: e.to_string(),
-                    },
+            // ── Learn modes and notifications ─────────────────────
+            EngineCommand::MidiLearnToggle => {
+                self.input.midi_mappings.toggle_learn();
+                if self.input.midi_mappings.learn_mode {
+                    self.input.keymap.cancel_learn();
+                }
+                CommandResult::Ok
+            }
+            EngineCommand::MidiLearnSelect { path } => {
+                self.input
+                    .midi_mappings
+                    .select_learn_target(crate::engine::value::param::canonical_path(&path));
+                CommandResult::Ok
+            }
+            EngineCommand::KeyboardLearnToggle => {
+                self.input.keymap.toggle_learn();
+                if self.input.keymap.learn_mode {
+                    self.input.midi_mappings.cancel_learn();
+                }
+                CommandResult::Ok
+            }
+            EngineCommand::KeyboardLearnSelect { target } => {
+                let target = match target {
+                    crate::keymap::KeyTarget::ParamPath(path) => {
+                        crate::keymap::KeyTarget::ParamPath(
+                            crate::engine::value::param::canonical_path(&path),
+                        )
+                    }
+                    action @ crate::keymap::KeyTarget::Action(_) => action,
+                };
+                self.input.keymap.select_learn_target(target);
+                CommandResult::Ok
+            }
+            EngineCommand::KeyboardLearnBind { combo } => {
+                self.input.keymap.process_learn(combo);
+                CommandResult::Ok
+            }
+            EngineCommand::DismissNotification { id } => {
+                self.session.notifications.dismiss(id);
+                CommandResult::Ok
+            }
+            EngineCommand::NotifyInfo { message } => {
+                self.session.notifications.info(message);
+                CommandResult::Ok
+            }
+            // ── Consumer views ────────────────────────────────────
+            EngineCommand::SetPreviewChannels { channel_uuids } => {
+                self.preview_channel_uuids = channel_uuids;
+                CommandResult::Ok
+            }
+            EngineCommand::AcquireDetectionCamera { camera_id } => {
+                if self.detection_camera == Some(camera_id) {
+                    return CommandResult::Ok;
+                }
+                if let Some(previous) = self.detection_camera.take() {
+                    self.camera_manager.release_camera(previous);
+                }
+                match self.open_camera(camera_id) {
+                    Ok(_) => {
+                        self.detection_camera = Some(camera_id);
+                        CommandResult::Ok
+                    }
+                    Err(e) => {
+                        let message =
+                            format!("Camera detection could not open camera {camera_id}: {e}");
+                        self.session.notifications.error(message.clone());
+                        CommandResult::Err {
+                            code: ErrorCode::InternalError,
+                            message,
+                        }
+                    }
                 }
             }
+            EngineCommand::ReleaseDetectionCamera => {
+                if let Some(previous) = self.detection_camera.take() {
+                    self.camera_manager.release_camera(previous);
+                }
+                CommandResult::Ok
+            }
+
+            // ── Persistence ───────────────────────────────────────
+            EngineCommand::SaveWorkspace => match self.save_workspace() {
+                Ok(()) => CommandResult::Ok,
+                Err(e) => CommandResult::Err {
+                    code: ErrorCode::InternalError,
+                    message: e.to_string(),
+                },
+            },
             EngineCommand::LoadWorkspace => match self.load_workspace().error_message() {
                 None => CommandResult::Ok,
                 Some(message) => CommandResult::Err {
@@ -1754,13 +1848,11 @@ impl VardaApp {
             },
 
             // ── History ───────────────────────────────────────────
-            // Restore is shared with the windowed runner via `history_undo` /
-            // `history_redo` on the unified timeline. The headless/API path has
-            // no UI layout, so it uses `history_snapshot_default()` for the
-            // "current" state pushed onto the opposite stack.
+            // One timeline for every consumer; "current" goes onto the opposite
+            // stack so the step can be walked back.
             EngineCommand::Undo => {
-                let current = self.history_snapshot_default();
-                if self.history_undo(current).is_some() {
+                let current = self.history_snapshot();
+                if self.history_undo(current) {
                     CommandResult::Ok
                 } else {
                     CommandResult::Err {
@@ -1770,8 +1862,8 @@ impl VardaApp {
                 }
             }
             EngineCommand::Redo => {
-                let current = self.history_snapshot_default();
-                if self.history_redo(current).is_some() {
+                let current = self.history_snapshot();
+                if self.history_redo(current) {
                     CommandResult::Ok
                 } else {
                     CommandResult::Err {
@@ -1798,9 +1890,8 @@ impl VardaApp {
 /// non-authored commands; everything else defaults to undoable. New commands
 /// are therefore undoable unless added here — when introducing a live control
 /// (transport, device toggle, output-window lifecycle) or a transient action,
-/// add it below so it does not pollute the undo timeline. This mirrors
-/// `UIActions::has_undoable_action` / `has_undoable_stage_action`, which are
-/// the equivalent gate for the windowed consumer.
+/// add it below so it does not pollute the undo timeline. The windowed
+/// consumer uses the same predicate through `batch_has_undoable`.
 pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
     use EngineCommand as C;
     !matches!(
@@ -1913,6 +2004,21 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
             // Global engine settings / profiling.
             | C::SetRenderResolution { .. }
             | C::SetDomemasterResolution { .. }
+            // Stage editor view state the engine only stores for the GUI.
+            | C::SetEditorPrefs { .. }
+            // Learn modes bind controls, and notifications are feedback; neither
+            // is an edit to the show.
+            | C::MidiLearnToggle
+            | C::MidiLearnSelect { .. }
+            | C::KeyboardLearnToggle
+            | C::KeyboardLearnSelect { .. }
+            | C::KeyboardLearnBind { .. }
+            | C::DismissNotification { .. }
+            | C::NotifyInfo { .. }
+            // What a consumer is looking at, not what the show is.
+            | C::SetPreviewChannels { .. }
+            | C::AcquireDetectionCamera { .. }
+            | C::ReleaseDetectionCamera
             | C::SetTargetFps { .. }
             | C::StartPerfProfile { .. }
             // Param toggle is a live keyboard/shortcut affordance (SetParam edits
@@ -2149,35 +2255,35 @@ mod tests {
         );
     }
 
+    /// Drain `commands` the way the windowed runner does.
+    fn drain(app: &mut super::VardaApp, commands: Vec<C>, starts_undo_step: bool) {
+        app.apply_engine_actions(commands, starts_undo_step);
+    }
+
     #[test]
     fn gui_undo_redo_roundtrips_a_structural_deck_add() {
         let Some(mut app) = headless_app() else {
             return;
         };
-        let layout = crate::usecases::ui::UILayoutState::default();
-        // Runner records the pre-mutation snapshot, then mutates.
-        let before = app.history_snapshot(&layout);
-        app.push_history(before);
         let channel_uuid = app.mixer_ref().channels()[0].uuid().to_string();
-        app.execute_command(C::AddSolidColorDeck {
-            channel_uuid,
-            color: [0.0, 0.0, 1.0, 1.0],
-        });
+        drain(
+            &mut app,
+            vec![C::AddSolidColorDeck {
+                channel_uuid,
+                color: [0.0, 0.0, 1.0, 1.0],
+            }],
+            true,
+        );
         assert_eq!(app.mixer_ref().channels()[0].decks.len(), 1);
 
-        let outcome = app.history_gui(&layout, true);
-        assert!(
-            matches!(outcome, CommandOutcome::HistoryRestored { .. }),
-            "expected HistoryRestored, got {outcome:?}"
-        );
+        drain(&mut app, vec![C::Undo], false);
         assert_eq!(
             app.mixer_ref().channels()[0].decks.len(),
             0,
             "undo must remove the added deck"
         );
 
-        let outcome = app.history_gui(&layout, false);
-        assert!(matches!(outcome, CommandOutcome::HistoryRestored { .. }));
+        drain(&mut app, vec![C::Redo], false);
         assert_eq!(
             app.mixer_ref().channels()[0].decks.len(),
             1,
@@ -2185,16 +2291,32 @@ mod tests {
         );
     }
 
+    /// Only a frame that starts an undo step records one; a held drag's later
+    /// frames must not.
     #[test]
-    fn gui_undo_on_empty_stack_is_plain_err() {
+    fn gui_drain_records_history_only_when_a_step_starts() {
         let Some(mut app) = headless_app() else {
             return;
         };
-        let layout = crate::usecases::ui::UILayoutState::default();
-        let outcome = app.history_gui(&layout, true);
+        let channel_uuid = app.mixer_ref().channels()[0].uuid().to_string();
+        let add = || C::AddSolidColorDeck {
+            channel_uuid: channel_uuid.clone(),
+            color: [0.0, 0.0, 1.0, 1.0],
+        };
+        drain(&mut app, vec![add()], false);
+        assert!(!app.history_can_undo());
+        drain(&mut app, vec![add()], true);
+        assert!(app.history_can_undo());
+    }
+
+    #[test]
+    fn undo_on_empty_stack_is_err() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         assert!(matches!(
-            outcome,
-            CommandOutcome::Plain(CommandResult::Err { .. })
+            app.execute_command(C::Undo),
+            CommandResult::Err { .. }
         ));
     }
 
@@ -2236,6 +2358,7 @@ mod tests {
         }) else {
             return;
         };
+        app.settle_deck_loads();
 
         // Speed and the palette, the ranged float and an excluded colour.
         let look = |app: &super::VardaApp| {
@@ -2271,12 +2394,11 @@ mod tests {
             "colours are excluded: a palette is chosen, not stumbled upon"
         );
 
-        let layout = crate::usecases::ui::UILayoutState::default();
         assert!(
             app.history_can_undo(),
             "one command, one history entry, so one undo undoes the whole draw"
         );
-        app.history_gui(&layout, true);
+        app.execute_command(C::Undo);
         assert_eq!(
             look(&app).0,
             before.0,
@@ -2380,5 +2502,115 @@ mod tests {
             !app.history_can_undo(),
             "patching a cable is not an edit to the show"
         );
+    }
+
+    // ── Learn modes and notifications (spec/ui-engine-boundary.md WS7) ──
+
+    /// MIDI learn is a command, so the API can run it too. Entering it leaves
+    /// keyboard learn, since one control cannot be bound by two learn modes.
+    #[test]
+    fn midi_learn_runs_over_the_bus_and_excludes_keyboard_learn() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        app.execute_command(C::KeyboardLearnToggle);
+        assert!(app.input.keymap.learn_mode);
+
+        app.execute_command(C::MidiLearnToggle);
+        app.execute_command(C::MidiLearnSelect {
+            path: "crossfader".to_string(),
+        });
+
+        assert!(app.input.midi_mappings.learn_mode);
+        assert_eq!(
+            app.input.midi_mappings.learn_target.as_deref(),
+            Some("crossfader")
+        );
+        assert!(!app.input.keymap.learn_mode, "keyboard learn was cancelled");
+    }
+
+    #[test]
+    fn keyboard_learn_binds_a_combo_over_the_bus() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        let combo = crate::keymap::KeyCombo {
+            key: "K".to_string(),
+            command: false,
+            shift: true,
+            alt: false,
+        };
+        let target = crate::keymap::KeyTarget::ParamPath("crossfader".to_string());
+        app.execute_command(C::KeyboardLearnToggle);
+        app.execute_command(C::KeyboardLearnSelect {
+            target: target.clone(),
+        });
+        app.execute_command(C::KeyboardLearnBind {
+            combo: combo.clone(),
+        });
+
+        assert_eq!(app.input.keymap.get(&combo), Some(&target));
+    }
+
+    /// Notifications are dismissed by id: an index would name a different toast
+    /// once an older one expires.
+    #[test]
+    fn notifications_are_dismissed_by_id() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        app.execute_command(C::NotifyInfo {
+            message: "first".to_string(),
+        });
+        app.execute_command(C::NotifyInfo {
+            message: "second".to_string(),
+        });
+        let first = app
+            .session
+            .notifications
+            .visible()
+            .iter()
+            .find(|n| n.message == "first")
+            .expect("first is visible")
+            .id;
+
+        app.execute_command(C::DismissNotification { id: first });
+
+        let left: Vec<&str> = app
+            .session
+            .notifications
+            .visible()
+            .iter()
+            .map(|n| n.message.as_str())
+            .collect();
+        assert_eq!(left, ["second"]);
+    }
+
+    #[test]
+    fn learn_and_notification_commands_are_not_undoable() {
+        for cmd in [
+            C::MidiLearnToggle,
+            C::MidiLearnSelect {
+                path: "crossfader".to_string(),
+            },
+            C::KeyboardLearnToggle,
+            C::KeyboardLearnSelect {
+                target: crate::keymap::KeyTarget::ParamPath("crossfader".to_string()),
+            },
+            C::KeyboardLearnBind {
+                combo: crate::keymap::KeyCombo {
+                    key: "K".to_string(),
+                    command: false,
+                    shift: false,
+                    alt: false,
+                },
+            },
+            C::DismissNotification { id: 1 },
+            C::NotifyInfo {
+                message: "hi".to_string(),
+            },
+        ] {
+            assert!(!command_is_undoable(&cmd), "{cmd:?}");
+        }
     }
 }

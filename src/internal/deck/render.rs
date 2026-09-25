@@ -1808,7 +1808,7 @@ mod tests {
         let mut params = ShaderParams::from_inputs(&isf_inputs);
 
         // amount 0.5 over a 0..5 range lifts the effective speed by 2.5 → 3.5
-        let modulation = constant_modulation("deck0:speed", 0.5);
+        let modulation = constant_modulation("deck0/speed", 0.5);
         accumulate_phase_times(
             &mut accum,
             0.1,
@@ -1831,7 +1831,7 @@ mod tests {
         let isf_inputs = vec![float_input("speed", 1.0, 0.0, 5.0)];
         let mut params = ShaderParams::from_inputs(&isf_inputs);
 
-        let modulation = constant_modulation("deck9:speed", 0.5);
+        let modulation = constant_modulation("deck9/speed", 0.5);
         accumulate_phase_times(
             &mut accum,
             0.1,
@@ -1864,7 +1864,7 @@ mod tests {
         let before = accum[0];
 
         // Modulation kicking in changes the rate, never the phase itself.
-        let modulated = constant_modulation("deck0:speed", 0.4);
+        let modulated = constant_modulation("deck0/speed", 0.4);
         accumulate_phase_times(
             &mut accum,
             0.016,
@@ -1912,7 +1912,7 @@ mod tests {
         ];
 
         // Modulating the second operand must move the rate just as the first does.
-        for target in ["deck0:speed", "deck0:rot_speed"] {
+        for target in ["deck0/speed", "deck0/rot_speed"] {
             let mut params = ShaderParams::from_inputs(&isf_inputs);
             let mut accum = [0.0f32; 4];
             accumulate_phase_times(
@@ -2026,7 +2026,7 @@ mod tests {
         let mut params = ShaderParams::from_inputs(&isf_inputs);
 
         // 4.0 + 1.0 * 5.0 would be 9.0; the parameter max caps it at 5.0
-        let modulation = constant_modulation("deck0:speed", 1.0);
+        let modulation = constant_modulation("deck0/speed", 1.0);
         accumulate_phase_times(
             &mut accum,
             0.1,

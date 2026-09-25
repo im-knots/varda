@@ -12,6 +12,7 @@
 //! rather than a silent no-op (see `/spec/parameter-routing.md`).
 
 use crate::deck::ScalingMode;
+use crate::engine::value::param::{DeckTarget, ModulatorTarget, ParamAddress};
 use crate::mixer::Mixer;
 use crate::modulation::ModulationSource;
 use crate::params::ParamValue;
@@ -109,38 +110,100 @@ fn ok_or_state(applied: bool, path: &str, reason: &'static str) -> Result<(), Pa
     }
 }
 
-/// The modulation engine's key for a router path, when the two address the
-/// same parameter.
-///
-/// Routes use slashes and the modulation graph uses `prefix:name`, so the live
-/// override (which arrives as a path from OSC, MIDI, or the API) needs a
-/// translation to find out whether it just landed on an automated parameter.
-/// Returns `None` for routes nothing can be assigned to, such as triggers.
-///
-/// The video arms map an action onto a state: the route `video/seek` means "seek
-/// to here", while the modulation target `video_position` means "the playhead is
-/// here". In and out points stay unassignable on purpose. They define the loop
-/// region that a position offset is scaled against, so modulating them would
-/// make position modulation depend on its own scaling reference.
+/// The modulation key a live write to `path` takes back from automation: the
+/// canonical path itself. `video/seek` resolves to the playhead,
+/// `video/position`. Returns `None` for routes a live write does not override:
+/// triggers, in and out points (the reference a position offset is scaled
+/// against), and macro and modulator values, which are controls rather than
+/// the parameters they drive.
 ///
 /// See /spec/arrangement.md § Live override and
 /// /spec/video-playback-modulation.md § Router and Addressing.
 pub fn modulation_key_for_path(path: &str) -> Option<String> {
-    use crate::video::modulation as vm;
-    let parts: Vec<&str> = path.split('/').collect();
-    match parts.as_slice() {
-        ["deck", uuid, "opacity"] => Some(format!("deck_{uuid}:opacity")),
-        ["deck", uuid, "param", name] => Some(format!("deck_{uuid}:{name}")),
-        ["ch", uuid, "opacity"] => Some(format!("ch_{uuid}:opacity")),
-        ["deck" | "ch", _, "effect", fx, "param", name]
-        | ["master", "effect", fx, "param", name] => Some(format!("fx_{fx}:{name}")),
-        ["deck", uuid, "video", "speed"] => Some(format!("deck_{uuid}:{}", vm::SPEED)),
-        ["deck", uuid, "video", "seek"] => Some(format!("deck_{uuid}:{}", vm::POSITION)),
-        ["deck", uuid, "video", "play"] => Some(format!("deck_{uuid}:{}", vm::PLAY)),
-        ["deck", uuid, "video", "loop_mode"] => Some(format!("deck_{uuid}:{}", vm::LOOP_MODE)),
-        ["deck", uuid, "scaling_mode"] => Some(format!("deck_{uuid}:{}", vm::SCALING_MODE)),
-        _ => None,
+    let address: ParamAddress = path.parse().ok()?;
+    let overridable = address.is_modulatable()
+        && !matches!(
+            address,
+            ParamAddress::MacroValue { .. } | ParamAddress::Modulator { .. }
+        );
+    overridable.then(|| address.to_string())
+}
+
+/// The canonical modulation key for a target a client sent: a router path, or
+/// the pre-v8 `deck_<uuid>:<name>` family, which API clients may still send.
+///
+/// # Errors
+///
+/// Returns [`ParamRouteError::UnknownPath`] when `target` names nothing
+/// modulation can drive.
+pub fn canonical_modulation_key(target: &str) -> Result<String, ParamRouteError> {
+    target
+        .parse::<ParamAddress>()
+        .ok()
+        .or_else(|| ParamAddress::from_legacy_modulation_key(target))
+        .filter(ParamAddress::is_modulatable)
+        .map(|address| address.to_string())
+        .ok_or_else(|| ParamRouteError::UnknownPath {
+            path: target.to_string(),
+        })
+}
+
+/// The normalized (0.0–1.0) value a write to `address` would take, read back
+/// from the mixer: what a controller's LEDs show. Mute and solo read as 0 or 1.
+/// A shader parameter without a declared range reads as its raw value.
+/// `None` when the address names nothing readable or nothing that exists.
+pub fn read_param(mixer: &Mixer, address: &ParamAddress) -> Option<f32> {
+    match address {
+        ParamAddress::Crossfader => Some(mixer.crossfader()),
+        ParamAddress::ChannelOpacity { channel } => mixer
+            .channel(mixer.find_channel_by_uuid(channel)?)
+            .map(|c| c.opacity),
+        ParamAddress::Deck { deck, target } => {
+            let (ch, dk) = mixer.find_deck_by_uuid(deck)?;
+            let slot = mixer.channel(ch)?.decks.get(dk)?;
+            match target {
+                DeckTarget::Opacity | DeckTarget::Trigger => Some(slot.opacity),
+                DeckTarget::Mute => Some(f32::from(u8::from(slot.mute))),
+                DeckTarget::Solo => Some(f32::from(u8::from(slot.solo))),
+                DeckTarget::Param(name) => read_normalized(&slot.deck.generator_params, name),
+                _ => None,
+            }
+        }
+        ParamAddress::EffectParam { effect, param } => {
+            let location = mixer.find_effect_by_uuid(effect)?;
+            read_normalized(&mixer.effect_at(location)?.params, param)
+        }
+        ParamAddress::Action(_)
+        | ParamAddress::CueFire { .. }
+        | ParamAddress::Modulator { .. }
+        | ParamAddress::MacroValue { .. } => None,
     }
+}
+
+fn read_normalized(params: &crate::ShaderParams, name: &str) -> Option<f32> {
+    let value = params.values.get(name)?;
+    params
+        .normalize(name, value)
+        .or_else(|| params.get_float(name))
+}
+
+/// Parse a router path, reporting a malformed one as `UnknownPath`.
+fn parse_address(path: &str) -> Result<ParamAddress, ParamRouteError> {
+    path.parse().map_err(|_| ParamRouteError::UnknownPath {
+        path: path.to_string(),
+    })
+}
+
+/// The parameters of the effect with `uuid`, whichever chain holds it.
+fn effect_params_mut<'m>(
+    mixer: &'m mut Mixer,
+    uuid: &str,
+) -> Result<&'m mut crate::ShaderParams, ParamRouteError> {
+    let location = mixer
+        .find_effect_by_uuid(uuid)
+        .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Effect, uuid))?;
+    let (chain, idx) = mixer.effect_chain_at_mut(location);
+    Ok(&mut chain[idx].params)
 }
 
 /// Apply a normalized value (0.0–1.0) to the parameter at the given path.
@@ -161,20 +224,25 @@ pub fn apply_param_by_path(
     path: &str,
     value: f32,
 ) -> Result<(), ParamRouteError> {
-    let parts: Vec<&str> = path.split('/').collect();
-    match parts.as_slice() {
-        ["crossfader"] => {
+    match &parse_address(path)? {
+        ParamAddress::Crossfader => {
             mixer.snap_crossfader(value);
             Ok(())
         }
-        ["deck", uuid, "opacity"] => {
+        ParamAddress::Deck {
+            deck: uuid,
+            target: DeckTarget::Opacity,
+        } => {
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
             mixer.channels_mut()[ch].decks[dk].opacity = clamp_or_full(value);
             Ok(())
         }
-        ["deck", uuid, "mute"] => {
+        ParamAddress::Deck {
+            deck: uuid,
+            target: DeckTarget::Mute,
+        } => {
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
@@ -184,7 +252,10 @@ pub fn apply_param_by_path(
             }
             Ok(())
         }
-        ["deck", uuid, "solo"] => {
+        ParamAddress::Deck {
+            deck: uuid,
+            target: DeckTarget::Solo,
+        } => {
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
@@ -194,7 +265,10 @@ pub fn apply_param_by_path(
             }
             Ok(())
         }
-        ["deck", uuid, "trigger"] => {
+        ParamAddress::Deck {
+            deck: uuid,
+            target: DeckTarget::Trigger,
+        } => {
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
@@ -203,7 +277,10 @@ pub fn apply_param_by_path(
             }
             Ok(())
         }
-        ["deck", uuid, "at", "play_duration"] => {
+        ParamAddress::Deck {
+            deck: uuid,
+            target: DeckTarget::AutoTransitionPlay,
+        } => {
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
@@ -224,7 +301,10 @@ pub fn apply_param_by_path(
                 .set_value(0.5 + f64::from(value) * (max - 0.5));
             Ok(())
         }
-        ["deck", uuid, "at", "trans_duration"] => {
+        ParamAddress::Deck {
+            deck: uuid,
+            target: DeckTarget::AutoTransitionFade,
+        } => {
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
@@ -245,7 +325,10 @@ pub fn apply_param_by_path(
                 .set_value(0.1 + f64::from(value) * (max - 0.1));
             Ok(())
         }
-        ["deck", uuid, "video", "play"] => {
+        ParamAddress::Deck {
+            deck: uuid,
+            target: DeckTarget::VideoPlay,
+        } => {
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
@@ -254,7 +337,10 @@ pub fn apply_param_by_path(
                 .video_set_playing(value > 0.5);
             ok_or_state(applied, path, "deck has no video source")
         }
-        ["deck", uuid, "video", "speed"] => {
+        ParamAddress::Deck {
+            deck: uuid,
+            target: DeckTarget::VideoSpeed,
+        } => {
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
@@ -263,7 +349,10 @@ pub fn apply_param_by_path(
                 .video_set_speed(scale_speed(value));
             ok_or_state(applied, path, "deck has no video source")
         }
-        ["deck", uuid, "video", "seek"] => {
+        ParamAddress::Deck {
+            deck: uuid,
+            target: DeckTarget::VideoPosition,
+        } => {
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
@@ -277,7 +366,10 @@ pub fn apply_param_by_path(
             let applied = deck.video_seek(scale_to_duration(value, snap.duration));
             ok_or_state(applied, path, "video seek failed")
         }
-        ["deck", uuid, "video", "in_point"] => {
+        ParamAddress::Deck {
+            deck: uuid,
+            target: DeckTarget::VideoInPoint,
+        } => {
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
@@ -291,7 +383,10 @@ pub fn apply_param_by_path(
             let applied = deck.video_set_in_point(scale_to_duration(value, snap.duration));
             ok_or_state(applied, path, "set in-point failed")
         }
-        ["deck", uuid, "video", "out_point"] => {
+        ParamAddress::Deck {
+            deck: uuid,
+            target: DeckTarget::VideoOutPoint,
+        } => {
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
@@ -305,7 +400,10 @@ pub fn apply_param_by_path(
             let applied = deck.video_set_out_point(scale_to_duration(value, snap.duration));
             ok_or_state(applied, path, "set out-point failed")
         }
-        ["deck", uuid, "video", "clear"] => {
+        ParamAddress::Deck {
+            deck: uuid,
+            target: DeckTarget::VideoClearInOut,
+        } => {
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
@@ -318,7 +416,10 @@ pub fn apply_param_by_path(
                 Ok(())
             }
         }
-        ["deck", uuid, "video", "loop_mode"] => {
+        ParamAddress::Deck {
+            deck: uuid,
+            target: DeckTarget::VideoLoopMode,
+        } => {
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
@@ -327,7 +428,10 @@ pub fn apply_param_by_path(
                 .video_set_loop_mode(loop_mode_from_value(value));
             ok_or_state(applied, path, "deck has no video source")
         }
-        ["deck", uuid, "scaling_mode"] => {
+        ParamAddress::Deck {
+            deck: uuid,
+            target: DeckTarget::ScalingMode,
+        } => {
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
@@ -346,7 +450,10 @@ pub fn apply_param_by_path(
         // they should be is an open question in
         // spec/video-playback-modulation.md.
         // See spec/screen-capture.md § Parameters and Router Paths.
-        ["deck", uuid, "capture", name] => {
+        ParamAddress::Deck {
+            deck: uuid,
+            target: DeckTarget::Capture(name),
+        } => {
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
@@ -355,7 +462,10 @@ pub fn apply_param_by_path(
                 .set_capture_param(name, clamp_norm(value));
             ok_or_state(applied, path, "deck is not a screen capture source")
         }
-        ["deck", uuid, "depth", name] => {
+        ParamAddress::Deck {
+            deck: uuid,
+            target: DeckTarget::Depth(name),
+        } => {
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
@@ -367,7 +477,10 @@ pub fn apply_param_by_path(
         // Depth-sensor *preprocessor* params, distinct from the point-cloud
         // params above: these configure the fields fed to a shader that declared
         // `depth_sensor`. See spec/depth-sensor-preprocessor.md.
-        ["deck", uuid, "depth_prepro", name] => {
+        ParamAddress::Deck {
+            deck: uuid,
+            target: DeckTarget::DepthPreprocess(name),
+        } => {
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
@@ -376,7 +489,10 @@ pub fn apply_param_by_path(
                 .set_depth_prepro_param(name, clamp_norm(value));
             ok_or_state(applied, path, "deck has no depth-sensor preprocessor")
         }
-        ["deck", uuid, "param", name] => {
+        ParamAddress::Deck {
+            deck: uuid,
+            target: DeckTarget::Param(name),
+        } => {
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
@@ -387,52 +503,25 @@ pub fn apply_param_by_path(
             );
             Ok(())
         }
-        ["deck", uuid, "effect", fx_uuid, "param", name] => {
-            let (ch, dk) = mixer
-                .find_deck_by_uuid(uuid)
-                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
-            let effects = &mut mixer.channels_mut()[ch].decks[dk].deck.effects;
-            let ek = effects
-                .iter()
-                .position(|e| e.uuid() == *fx_uuid)
-                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Effect, fx_uuid))?;
-            apply_float_param_scaled(&mut effects[ek].params, name, value);
+        ParamAddress::EffectParam {
+            effect,
+            param: name,
+        } => {
+            apply_float_param_scaled(effect_params_mut(mixer, effect)?, name, value);
             Ok(())
         }
-        ["ch", ch_uuid, "opacity"] => {
+        ParamAddress::ChannelOpacity { channel: ch_uuid } => {
             let ch = mixer
                 .find_channel_by_uuid(ch_uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Channel, ch_uuid))?;
             mixer.channels_mut()[ch].opacity = clamp_or_full(value);
             Ok(())
         }
-        ["ch", ch_uuid, "effect", fx_uuid, "param", name] => {
-            let ch = mixer
-                .find_channel_by_uuid(ch_uuid)
-                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Channel, ch_uuid))?;
-            let effects = &mut mixer.channels_mut()[ch].effects;
-            let ek = effects
-                .iter()
-                .position(|e| e.uuid() == *fx_uuid)
-                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Effect, fx_uuid))?;
-            apply_float_param_scaled(&mut effects[ek].params, name, value);
-            Ok(())
-        }
-        ["master", "effect", fx_uuid, "param", name] => {
-            let effects = mixer.master_effects_mut();
-            let ek = effects
-                .iter()
-                .position(|e| e.uuid() == *fx_uuid)
-                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Effect, fx_uuid))?;
-            apply_float_param_scaled(&mut effects[ek].params, name, value);
-            Ok(())
-        }
-        ["mod", mod_uuid, "step", step_s] => {
-            let step_idx = step_s
-                .parse::<usize>()
-                .map_err(|_| ParamRouteError::UnknownPath {
-                    path: path.to_string(),
-                })?;
+        ParamAddress::Modulator {
+            source: mod_uuid,
+            target: ModulatorTarget::Step(step_idx),
+        } => {
+            let step_idx = *step_idx;
             let entry = mixer
                 .modulation_mut()
                 .find_source_by_uuid_mut(mod_uuid)
@@ -455,14 +544,17 @@ pub fn apply_param_by_path(
                 })
             }
         }
-        ["mod", mod_uuid, param_name] => {
+        ParamAddress::Modulator {
+            source: mod_uuid,
+            target: ModulatorTarget::Param(param_name),
+        } => {
             let entry = mixer
                 .modulation_mut()
                 .find_source_by_uuid_mut(mod_uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Modulator, mod_uuid))?;
             apply_mod_param(&mut entry.source, param_name, value)
         }
-        ["macro", macro_uuid, "value"] => {
+        ParamAddress::MacroValue { macro_uuid } => {
             // Feed the macro; it returns the parameter writes to fan out. Global
             // app actions (undo/save/tap) are queued on the bank for the app layer
             // to drain (see app/inputs.rs). Targets are never `macro/*` paths
@@ -506,9 +598,11 @@ pub fn apply_typed_param_by_path(
     path: &str,
     value: ParamValue,
 ) -> Result<(), ParamRouteError> {
-    let parts: Vec<&str> = path.split('/').collect();
-    match parts.as_slice() {
-        ["deck", uuid, "param", name] => {
+    match &parse_address(path)? {
+        ParamAddress::Deck {
+            deck: uuid,
+            target: DeckTarget::Param(name),
+        } => {
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
@@ -518,36 +612,10 @@ pub fn apply_typed_param_by_path(
                 value,
             )
         }
-        ["deck", uuid, "effect", fx_uuid, "param", name] => {
-            let (ch, dk) = mixer
-                .find_deck_by_uuid(uuid)
-                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
-            let effects = &mut mixer.channels_mut()[ch].decks[dk].deck.effects;
-            let ek = effects
-                .iter()
-                .position(|e| e.uuid() == *fx_uuid)
-                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Effect, fx_uuid))?;
-            apply_typed_param(&mut effects[ek].params, name, value)
-        }
-        ["ch", ch_uuid, "effect", fx_uuid, "param", name] => {
-            let ch = mixer
-                .find_channel_by_uuid(ch_uuid)
-                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Channel, ch_uuid))?;
-            let effects = &mut mixer.channels_mut()[ch].effects;
-            let ek = effects
-                .iter()
-                .position(|e| e.uuid() == *fx_uuid)
-                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Effect, fx_uuid))?;
-            apply_typed_param(&mut effects[ek].params, name, value)
-        }
-        ["master", "effect", fx_uuid, "param", name] => {
-            let effects = mixer.master_effects_mut();
-            let ek = effects
-                .iter()
-                .position(|e| e.uuid() == *fx_uuid)
-                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Effect, fx_uuid))?;
-            apply_typed_param(&mut effects[ek].params, name, value)
-        }
+        ParamAddress::EffectParam {
+            effect,
+            param: name,
+        } => apply_typed_param(effect_params_mut(mixer, effect)?, name, value),
         // Inherently-scalar paths (opacity, crossfader, video, mod, …): flatten.
         _ => apply_param_by_path(mixer, path, param_value_to_norm_f32(&value)),
     }
@@ -892,14 +960,13 @@ pub(crate) fn scaling_mode_from_value(value: f32) -> ScalingMode {
 /// [`ParamRouteError::UnknownParam`] if the named shader parameter does not exist,
 /// and [`ParamRouteError::WrongState`] for modulation paths that cannot toggle.
 pub fn toggle_param_by_path(mixer: &mut Mixer, path: &str) -> Result<(), ParamRouteError> {
-    let parts: Vec<&str> = path.split('/').collect();
-    match parts.as_slice() {
-        ["crossfader"] => {
+    match &parse_address(path)? {
+        ParamAddress::Crossfader => {
             let current = mixer.crossfader();
             mixer.snap_crossfader(if current > 0.5 { 0.0 } else { 1.0 });
             Ok(())
         }
-        ["ch", ch_uuid, "opacity"] => {
+        ParamAddress::ChannelOpacity { channel: ch_uuid } => {
             let ch = mixer
                 .find_channel_by_uuid(ch_uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Channel, ch_uuid))?;
@@ -907,7 +974,10 @@ pub fn toggle_param_by_path(mixer: &mut Mixer, path: &str) -> Result<(), ParamRo
             channel.opacity = if channel.opacity > 0.01 { 0.0 } else { 1.0 };
             Ok(())
         }
-        ["deck", uuid, "opacity"] => {
+        ParamAddress::Deck {
+            deck: uuid,
+            target: DeckTarget::Opacity,
+        } => {
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
@@ -915,7 +985,10 @@ pub fn toggle_param_by_path(mixer: &mut Mixer, path: &str) -> Result<(), ParamRo
             slot.opacity = if slot.opacity > 0.01 { 0.0 } else { 1.0 };
             Ok(())
         }
-        ["deck", uuid, "mute"] => {
+        ParamAddress::Deck {
+            deck: uuid,
+            target: DeckTarget::Mute,
+        } => {
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
@@ -923,7 +996,10 @@ pub fn toggle_param_by_path(mixer: &mut Mixer, path: &str) -> Result<(), ParamRo
             slot.mute = !slot.mute;
             Ok(())
         }
-        ["deck", uuid, "solo"] => {
+        ParamAddress::Deck {
+            deck: uuid,
+            target: DeckTarget::Solo,
+        } => {
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
@@ -931,14 +1007,20 @@ pub fn toggle_param_by_path(mixer: &mut Mixer, path: &str) -> Result<(), ParamRo
             slot.solo = !slot.solo;
             Ok(())
         }
-        ["deck", uuid, "trigger"] => {
+        ParamAddress::Deck {
+            deck: uuid,
+            target: DeckTarget::Trigger,
+        } => {
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
             mixer.channels_mut()[ch].decks[dk].opacity = 1.0;
             Ok(())
         }
-        ["deck", uuid, "param", name] => {
+        ParamAddress::Deck {
+            deck: uuid,
+            target: DeckTarget::Param(name),
+        } => {
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
@@ -946,72 +1028,29 @@ pub fn toggle_param_by_path(mixer: &mut Mixer, path: &str) -> Result<(), ParamRo
                 .deck
                 .generator_params
                 .values
-                .get_mut(*name)
+                .get_mut(name.as_str())
                 .ok_or_else(|| ParamRouteError::UnknownParam {
                     scope: "deck",
-                    name: (*name).to_string(),
+                    name: name.clone(),
                 })?;
             toggle_param_value(val);
             Ok(())
         }
-        ["deck", uuid, "effect", fx_uuid, "param", name] => {
-            let (ch, dk) = mixer
-                .find_deck_by_uuid(uuid)
-                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
-            let slot = &mut mixer.channels_mut()[ch].decks[dk];
-            let ek = slot
-                .deck
-                .effects
-                .iter()
-                .position(|e| e.uuid() == *fx_uuid)
-                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Effect, fx_uuid))?;
-            let val = slot.deck.effects[ek]
-                .params
+        ParamAddress::EffectParam {
+            effect,
+            param: name,
+        } => {
+            let val = effect_params_mut(mixer, effect)?
                 .values
-                .get_mut(*name)
+                .get_mut(name.as_str())
                 .ok_or_else(|| ParamRouteError::UnknownParam {
                     scope: "effect",
-                    name: (*name).to_string(),
+                    name: name.clone(),
                 })?;
             toggle_param_value(val);
             Ok(())
         }
-        ["ch", ch_uuid, "effect", fx_uuid, "param", name] => {
-            let ch = mixer
-                .find_channel_by_uuid(ch_uuid)
-                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Channel, ch_uuid))?;
-            let ek = mixer.channels_mut()[ch]
-                .effects
-                .iter()
-                .position(|e| e.uuid() == *fx_uuid)
-                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Effect, fx_uuid))?;
-            let val = mixer.channels_mut()[ch].effects[ek]
-                .params
-                .values
-                .get_mut(*name)
-                .ok_or_else(|| ParamRouteError::UnknownParam {
-                    scope: "effect",
-                    name: (*name).to_string(),
-                })?;
-            toggle_param_value(val);
-            Ok(())
-        }
-        ["master", "effect", fx_uuid, "param", name] => {
-            let effects = mixer.master_effects_mut();
-            let ek = effects
-                .iter()
-                .position(|e| e.uuid() == *fx_uuid)
-                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Effect, fx_uuid))?;
-            let val = effects[ek].params.values.get_mut(*name).ok_or_else(|| {
-                ParamRouteError::UnknownParam {
-                    scope: "effect",
-                    name: (*name).to_string(),
-                }
-            })?;
-            toggle_param_value(val);
-            Ok(())
-        }
-        ["mod", _, _] => Err(ParamRouteError::WrongState {
+        ParamAddress::Modulator { .. } => Err(ParamRouteError::WrongState {
             path: path.to_string(),
             reason: "modulation params are continuous; keyboard toggle does not apply",
         }),
@@ -1040,22 +1079,29 @@ mod tests {
     #[test]
     fn a_path_that_names_an_automatable_parameter_finds_its_key() {
         for (path, key) in [
-            ("deck/d0000001/opacity", "deck_d0000001:opacity"),
-            ("deck/d0000001/param/speed", "deck_d0000001:speed"),
-            ("ch/c0000001/opacity", "ch_c0000001:opacity"),
+            ("deck/d0000001/opacity", "deck/d0000001/opacity"),
+            ("deck/d0000001/param/speed", "deck/d0000001/param/speed"),
+            ("ch/c0000001/opacity", "ch/c0000001/opacity"),
             (
                 "ch/c0000001/effect/f0000001/param/amount",
-                "fx_f0000001:amount",
+                "effect/f0000001/param/amount",
             ),
-            ("master/effect/f0000001/param/amount", "fx_f0000001:amount"),
-            ("deck/d0000001/video/speed", "deck_d0000001:video_speed"),
-            ("deck/d0000001/video/seek", "deck_d0000001:video_position"),
-            ("deck/d0000001/video/play", "deck_d0000001:video_play"),
+            (
+                "master/effect/f0000001/param/amount",
+                "effect/f0000001/param/amount",
+            ),
+            (
+                "effect/f0000001/param/amount",
+                "effect/f0000001/param/amount",
+            ),
+            ("deck/d0000001/video/speed", "deck/d0000001/video/speed"),
+            ("deck/d0000001/video/seek", "deck/d0000001/video/position"),
+            ("deck/d0000001/video/play", "deck/d0000001/video/play"),
             (
                 "deck/d0000001/video/loop_mode",
-                "deck_d0000001:video_loop_mode",
+                "deck/d0000001/video/loop_mode",
             ),
-            ("deck/d0000001/scaling_mode", "deck_d0000001:scaling_mode"),
+            ("deck/d0000001/scaling_mode", "deck/d0000001/scaling_mode"),
         ] {
             assert_eq!(
                 modulation_key_for_path(path).as_deref(),
@@ -1065,9 +1111,8 @@ mod tests {
         }
     }
 
-    /// A video playback key must not be able to collide with a shader input of
-    /// the same nickname on the same deck, which is what the reserved `video_`
-    /// prefix buys. `tests/shader_pipeline_guard.rs` holds the other half.
+    /// A video playback key cannot collide with a shader input of the same
+    /// nickname on the same deck: shader inputs live under `param/`.
     #[test]
     fn a_shader_param_named_speed_is_not_the_video_speed_target() {
         assert_ne!(
@@ -1088,6 +1133,7 @@ mod tests {
             "deck/d0000001/video/out_point",
             "deck/d0000001/video/clear",
             "macro/m0000001/value",
+            "mod/m0000001/frequency",
             "ch/c0000001",
         ] {
             assert_eq!(modulation_key_for_path(path), None, "{path}");

@@ -6,7 +6,7 @@
 
 use super::{DomeAction, UIActions};
 use crate::camera::CameraId;
-use crate::renderer::slicer::{DomeGeometry, DomePreset};
+use crate::engine::value::editor::EditorPrefs;
 use crate::surface::detect::{DetectedContour, DetectionParams};
 
 /// Zoom bounds for the arrangement timeline, in pixels per second.
@@ -96,10 +96,6 @@ pub struct UILayoutState {
     pub dome_preview_open: bool,
     /// Whether the stage editor is in 3D Dome mode (vs 2D Polygon mode)
     pub dome_mode_active: bool,
-    /// Active dome preset
-    pub dome_preset: DomePreset,
-    /// Active dome geometry (radius, truncation, tilt)
-    pub dome_geometry: DomeGeometry,
     /// Camera detection mode state
     pub camera_detect_mode: CameraDetectMode,
 }
@@ -130,8 +126,6 @@ impl Default for UILayoutState {
             right_panel_open: true,
             dome_preview_open: false,
             dome_mode_active: false,
-            dome_preset: DomePreset::Quad,
-            dome_geometry: DomeGeometry::default(),
             camera_detect_mode: CameraDetectMode::Off,
         }
     }
@@ -270,17 +264,6 @@ impl UILayoutState {
                         self.dome_preview_open = true;
                     }
                 }
-                DomeAction::SetPreset(preset) => self.dome_preset = *preset,
-                DomeAction::SetRadius(r) => self.dome_geometry.radius = *r,
-                DomeAction::SetTruncation(deg) => self.dome_geometry.truncation_degrees = *deg,
-                DomeAction::SetTilt(deg) => self.dome_geometry.tilt_degrees = *deg,
-                DomeAction::SetContentAzimuth(deg) => {
-                    self.dome_geometry.content_azimuth_degrees = *deg;
-                }
-                DomeAction::SetContentElevation(deg) => {
-                    self.dome_geometry.content_elevation_degrees = *deg;
-                }
-                DomeAction::SetContentRoll(deg) => self.dome_geometry.content_roll_degrees = *deg,
                 DomeAction::RotateCamera { .. }
                 | DomeAction::ZoomCamera { .. }
                 | DomeAction::ResetCamera => {
@@ -288,6 +271,30 @@ impl UILayoutState {
                 }
             }
         }
+    }
+
+    /// The stage editor prefs the engine persists for this layout.
+    pub fn editor_prefs(&self) -> EditorPrefs {
+        EditorPrefs {
+            grid_size: self.stage_editor_grid_size,
+            snap: self.stage_editor_snap,
+            library_panel_open: self.library_panel_open,
+            right_panel_open: self.right_panel_open,
+            stage_editor_open: self.stage_editor_open,
+            dome_preview_open: self.dome_preview_open,
+            dome_mode_active: self.dome_mode_active,
+        }
+    }
+
+    /// Adopt editor prefs loaded from the workspace.
+    pub fn apply_editor_prefs(&mut self, prefs: EditorPrefs) {
+        self.stage_editor_grid_size = prefs.grid_size;
+        self.stage_editor_snap = prefs.snap;
+        self.library_panel_open = prefs.library_panel_open;
+        self.right_panel_open = prefs.right_panel_open;
+        self.stage_editor_open = prefs.stage_editor_open;
+        self.dome_preview_open = prefs.dome_preview_open;
+        self.dome_mode_active = prefs.dome_mode_active;
     }
 
     /// Channels to force-render for preview, derived from the current selection.

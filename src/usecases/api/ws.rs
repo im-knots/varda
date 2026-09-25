@@ -84,15 +84,14 @@ pub async fn ws_upgrade(
 async fn handle_ws(socket: WebSocket, state: SharedState) {
     let (mut sink, mut stream) = socket.split();
 
-    // Send full state snapshot on connect.
-    let Some(initial) = state.engine_state.read().ok().and_then(|g| g.clone()) else {
+    // Send full state snapshot on connect. Deltas are diffed against the last
+    // publication this client was sent, which it shares with every reader.
+    let Some(mut last) = state.engine_state.latest() else {
         let _ = sink.send(Message::Close(None)).await;
         return;
     };
-
-    let mut last_json = serde_json::to_value(&initial).unwrap_or_default();
     if sink
-        .send(Message::Text(last_json.to_string().into()))
+        .send(Message::Text(last.json().to_string().into()))
         .await
         .is_err()
     {
@@ -123,17 +122,18 @@ async fn handle_ws(socket: WebSocket, state: SharedState) {
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    // Compute delta
-                    if let Some(current) = state.engine_state.read().ok().and_then(|g| g.clone()) {
-                        let current_json = serde_json::to_value(&current).unwrap_or_default();
-                        let patch = json_patch::diff(&last_json, &current_json);
+                    // Nothing to do until the engine publishes a new snapshot.
+                    if let Some(current) = state.engine_state.latest()
+                        && current.generation != last.generation
+                    {
+                        let patch = json_patch::diff(last.json(), current.json());
                         if !patch.0.is_empty() {
                             let patch_str = serde_json::to_string(&patch).unwrap_or_default();
                             if sink.send(Message::Text(patch_str.into())).await.is_err() {
                                 break;
                             }
-                            last_json = current_json;
                         }
+                        last = current;
                     }
                 }
                 Some(text) = cmd_rx.recv() => {

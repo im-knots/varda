@@ -115,7 +115,8 @@ impl PresetLibrary {
 
             if is_deck {
                 match serde_json::from_str::<DeckConfig>(&content) {
-                    Ok(config) => {
+                    Ok(mut config) => {
+                        config.canonicalize_modulation();
                         let warnings = config.validate(&format!("deck_preset '{stem}'"));
                         for w in &warnings {
                             log::warn!("Preset {}: {}", path.display(), w);
@@ -126,7 +127,8 @@ impl PresetLibrary {
                 }
             } else {
                 match serde_json::from_str::<ChannelConfig>(&content) {
-                    Ok(config) => {
+                    Ok(mut config) => {
+                        config.canonicalize_modulation();
                         let warnings = config.validate(&format!("channel_preset '{stem}'"));
                         for w in &warnings {
                             log::warn!("Preset {}: {}", path.display(), w);
@@ -301,7 +303,11 @@ mod tests {
         let loaded = &lib.deck_presets[0].config;
         assert_eq!(loaded.modulation.len(), 1);
         assert_eq!(loaded.modulation[0].assignments.len(), 2);
-        assert_eq!(loaded.modulation[0].assignments[0].param, "brightness");
+        // A pre-v8 relative name is read in the current spelling.
+        assert_eq!(
+            loaded.modulation[0].assignments[0].param,
+            "param/brightness"
+        );
         assert_eq!(loaded.modulation[0].assignments[0].amount, 0.5);
     }
 
