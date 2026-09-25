@@ -208,6 +208,8 @@ pub(crate) struct OutputSubsystem {
     /// from the stage before any dome surface exists, and `ensure_domemaster`
     /// builds at whatever it says at the time.
     pub domemaster_resolution: crate::renderer::dome::DomemasterResolution,
+    /// Dome projection the domemaster is rendered for.
+    pub dome: crate::engine::value::dome::DomeConfig,
     pub pending_output_creates: Vec<crate::scene::OutputConfig>,
     pub cached_monitors: Vec<(String, winit::monitor::MonitorHandle)>,
 }
@@ -263,11 +265,10 @@ pub(crate) struct SessionState {
     pub preset_library: crate::persistence::presets::PresetLibrary,
     pub history: history::HistoryManager,
     pub notifications: NotificationSystem,
-    /// Last UI layout the engine has seen, from either a load or a GUI-driven
-    /// save. `EngineCommand::SaveWorkspace` has no layout of its own to pass, so
-    /// without this a save from the API or a headless process would overwrite
-    /// `stage.json` with default panel state.
-    pub last_layout: crate::usecases::ui::UILayoutState,
+    /// Stage editor prefs last sent by the GUI (or loaded from `stage.json`),
+    /// persisted by every save so a save from the API or a headless process
+    /// does not overwrite them with defaults.
+    pub editor_prefs: crate::engine::value::editor::EditorPrefs,
     /// What copy is holding, as configs rather than live objects. Session state:
     /// it survives no further than the process. See /spec/clipboard.md.
     pub clipboard: Option<state::clipboard::ClipboardPayload>,
@@ -549,6 +550,7 @@ impl VardaApp {
                 calibration_textures,
                 domemaster: None,
                 domemaster_resolution: crate::renderer::dome::DomemasterResolution::default(),
+                dome: crate::engine::value::dome::DomeConfig::default(),
                 pending_output_creates: Vec::new(),
                 cached_monitors: Vec::new(),
             },
@@ -603,7 +605,7 @@ impl VardaApp {
                 preset_library,
                 history: history::HistoryManager::new(),
                 notifications: NotificationSystem::new(),
-                last_layout: crate::usecases::ui::UILayoutState::default(),
+                editor_prefs: crate::engine::value::editor::EditorPrefs::default(),
                 clipboard: None,
                 cue_anchor: None,
                 chase_silent_since: None,
@@ -653,7 +655,7 @@ impl VardaApp {
             // performer playing a fader through the API would otherwise fill
             // the stack a frame at a time.
             if commands::command_is_undoable(&cmd) && !self.is_recording() {
-                let snapshot = self.history_snapshot_default();
+                let snapshot = self.history_snapshot();
                 self.push_history(snapshot);
             }
             let result = self.execute_command(cmd);
@@ -929,10 +931,9 @@ impl VardaApp {
     /// Set domemaster content rotation (azimuth, elevation, roll) in radians.
     /// Called each frame from the UI layer so content rotation is applied
     /// in real-time by the domemaster shader, not baked into warp meshes.
-    pub fn set_domemaster_content_rotation(&mut self, az: f32, el: f32, roll: f32) {
-        if let Some(dome) = &mut self.output.domemaster {
-            dome.set_content_rotation(az, el, roll);
-        }
+    /// Dome projection the domemaster is rendered for.
+    pub fn dome_config(&self) -> crate::engine::value::dome::DomeConfig {
+        self.output.dome
     }
 
     /// Publish the set of channels to force-render for off-air preview.
@@ -1437,7 +1438,7 @@ mod tests {
         };
 
         // Snapshot the stage state before mutating.
-        let snap = app.history_snapshot_default();
+        let snap = app.history_snapshot();
 
         // Move the surface.
         tx.send((

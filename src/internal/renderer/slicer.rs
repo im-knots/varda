@@ -26,6 +26,17 @@ impl Default for DomeGeometry {
     }
 }
 
+impl DomeGeometry {
+    /// Content rotation as (azimuth, elevation, roll) in radians.
+    pub fn content_rotation_radians(&self) -> (f32, f32, f32) {
+        (
+            self.content_azimuth_degrees.to_radians(),
+            self.content_elevation_degrees.to_radians(),
+            self.content_roll_degrees.to_radians(),
+        )
+    }
+}
+
 impl Default for ProjectorConfig {
     fn default() -> Self {
         Self {

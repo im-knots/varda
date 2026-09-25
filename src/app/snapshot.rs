@@ -683,6 +683,7 @@ pub(crate) fn build_engine_state(app: &VardaApp) -> EngineState {
     };
     EngineState {
         mixer: app.mixer_snapshot(),
+        dome: app.dome_config(),
         audio: app.audio_snapshot(),
         modulation: app.modulation_snapshot(),
         outputs: app.output_snapshot(),

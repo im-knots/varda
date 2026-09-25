@@ -6,7 +6,7 @@
 
 use super::VardaApp;
 use super::resolve::UnknownEntity;
-use crate::engine::{CommandOutcome, CommandResult, DomeLayoutFields, EngineCommand, ErrorCode};
+use crate::engine::{CommandOutcome, CommandResult, EngineCommand, ErrorCode};
 
 /// Classify an engine error for the wire. An unresolvable UUID is `NotFound` —
 /// the caller's view of the world is stale, which is distinct from a malformed
@@ -125,40 +125,6 @@ impl VardaApp {
             .flat_map(|ch| ch.decks.iter())
             .map(|slot| slot.deck.uuid().to_string())
             .collect()
-    }
-
-    /// Undo/redo on behalf of the windowed GUI. Uses the UI `layout` to source
-    /// cosmetic/dome prefs for the "current" snapshot (the API path uses
-    /// defaults), and returns a typed [`CommandOutcome::HistoryRestored`] so the
-    /// runner can sync dome flags.
-    pub(crate) fn history_gui(
-        &mut self,
-        layout: &crate::usecases::ui::UILayoutState,
-        undo: bool,
-    ) -> CommandOutcome {
-        let current = self.history_snapshot(layout);
-        let restore = if undo {
-            self.history_undo(current)
-        } else {
-            self.history_redo(current)
-        };
-        match restore {
-            Some(r) => CommandOutcome::HistoryRestored {
-                dome_layout: DomeLayoutFields {
-                    dome_mode_active: r.snapshot.stage.dome_mode_active,
-                    dome_preset: r.snapshot.stage.dome_preset,
-                    dome_geometry: r.snapshot.stage.dome_geometry,
-                },
-            },
-            None => CommandOutcome::Plain(CommandResult::Err {
-                code: ErrorCode::InvalidInput,
-                message: if undo {
-                    "Nothing to undo".into()
-                } else {
-                    "Nothing to redo".into()
-                },
-            }),
-        }
     }
 
     /// True if any command in the batch is undoable. Used by the windowed
@@ -1705,6 +1671,18 @@ impl VardaApp {
                 self.set_domemaster_resolution(resolution);
                 CommandResult::Ok
             }
+            EngineCommand::SetDomePreset { preset } => {
+                self.output.dome.preset = preset;
+                CommandResult::Ok
+            }
+            EngineCommand::SetDomeGeometry { geometry } => {
+                self.output.dome.geometry = geometry;
+                CommandResult::Ok
+            }
+            EngineCommand::SetEditorPrefs { prefs } => {
+                self.session.editor_prefs = prefs;
+                CommandResult::Ok
+            }
 
             EngineCommand::SetTargetFps { fps } => {
                 self.set_target_fps(fps);
@@ -1733,18 +1711,13 @@ impl VardaApp {
             }
 
             // ── Persistence ───────────────────────────────────────
-            EngineCommand::SaveWorkspace => {
-                // No layout travels with the command, so reuse the last one the
-                // engine saw rather than writing defaults over the user's panels.
-                let layout = self.session.last_layout.clone();
-                match self.save_workspace(&layout) {
-                    Ok(()) => CommandResult::Ok,
-                    Err(e) => CommandResult::Err {
-                        code: ErrorCode::InternalError,
-                        message: e.to_string(),
-                    },
-                }
-            }
+            EngineCommand::SaveWorkspace => match self.save_workspace() {
+                Ok(()) => CommandResult::Ok,
+                Err(e) => CommandResult::Err {
+                    code: ErrorCode::InternalError,
+                    message: e.to_string(),
+                },
+            },
             EngineCommand::LoadWorkspace => match self.load_workspace().error_message() {
                 None => CommandResult::Ok,
                 Some(message) => CommandResult::Err {
@@ -1754,13 +1727,11 @@ impl VardaApp {
             },
 
             // ── History ───────────────────────────────────────────
-            // Restore is shared with the windowed runner via `history_undo` /
-            // `history_redo` on the unified timeline. The headless/API path has
-            // no UI layout, so it uses `history_snapshot_default()` for the
-            // "current" state pushed onto the opposite stack.
+            // One timeline for every consumer; "current" goes onto the opposite
+            // stack so the step can be walked back.
             EngineCommand::Undo => {
-                let current = self.history_snapshot_default();
-                if self.history_undo(current).is_some() {
+                let current = self.history_snapshot();
+                if self.history_undo(current) {
                     CommandResult::Ok
                 } else {
                     CommandResult::Err {
@@ -1770,8 +1741,8 @@ impl VardaApp {
                 }
             }
             EngineCommand::Redo => {
-                let current = self.history_snapshot_default();
-                if self.history_redo(current).is_some() {
+                let current = self.history_snapshot();
+                if self.history_redo(current) {
                     CommandResult::Ok
                 } else {
                     CommandResult::Err {
@@ -1913,6 +1884,8 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
             // Global engine settings / profiling.
             | C::SetRenderResolution { .. }
             | C::SetDomemasterResolution { .. }
+            // Stage editor view state the engine only stores for the GUI.
+            | C::SetEditorPrefs { .. }
             | C::SetTargetFps { .. }
             | C::StartPerfProfile { .. }
             // Param toggle is a live keyboard/shortcut affordance (SetParam edits
@@ -2149,35 +2122,37 @@ mod tests {
         );
     }
 
+    /// Drain `commands` the way the windowed runner does.
+    fn drain(app: &mut super::VardaApp, commands: Vec<C>, starts_undo_step: bool) {
+        let mut actions = crate::usecases::ui::UIActions::new();
+        actions.commands = commands;
+        app.apply_engine_actions(&mut actions, starts_undo_step);
+    }
+
     #[test]
     fn gui_undo_redo_roundtrips_a_structural_deck_add() {
         let Some(mut app) = headless_app() else {
             return;
         };
-        let layout = crate::usecases::ui::UILayoutState::default();
-        // Runner records the pre-mutation snapshot, then mutates.
-        let before = app.history_snapshot(&layout);
-        app.push_history(before);
         let channel_uuid = app.mixer_ref().channels()[0].uuid().to_string();
-        app.execute_command(C::AddSolidColorDeck {
-            channel_uuid,
-            color: [0.0, 0.0, 1.0, 1.0],
-        });
+        drain(
+            &mut app,
+            vec![C::AddSolidColorDeck {
+                channel_uuid,
+                color: [0.0, 0.0, 1.0, 1.0],
+            }],
+            true,
+        );
         assert_eq!(app.mixer_ref().channels()[0].decks.len(), 1);
 
-        let outcome = app.history_gui(&layout, true);
-        assert!(
-            matches!(outcome, CommandOutcome::HistoryRestored { .. }),
-            "expected HistoryRestored, got {outcome:?}"
-        );
+        drain(&mut app, vec![C::Undo], false);
         assert_eq!(
             app.mixer_ref().channels()[0].decks.len(),
             0,
             "undo must remove the added deck"
         );
 
-        let outcome = app.history_gui(&layout, false);
-        assert!(matches!(outcome, CommandOutcome::HistoryRestored { .. }));
+        drain(&mut app, vec![C::Redo], false);
         assert_eq!(
             app.mixer_ref().channels()[0].decks.len(),
             1,
@@ -2185,16 +2160,32 @@ mod tests {
         );
     }
 
+    /// Only a frame that starts an undo step records one; a held drag's later
+    /// frames must not.
     #[test]
-    fn gui_undo_on_empty_stack_is_plain_err() {
+    fn gui_drain_records_history_only_when_a_step_starts() {
         let Some(mut app) = headless_app() else {
             return;
         };
-        let layout = crate::usecases::ui::UILayoutState::default();
-        let outcome = app.history_gui(&layout, true);
+        let channel_uuid = app.mixer_ref().channels()[0].uuid().to_string();
+        let add = || C::AddSolidColorDeck {
+            channel_uuid: channel_uuid.clone(),
+            color: [0.0, 0.0, 1.0, 1.0],
+        };
+        drain(&mut app, vec![add()], false);
+        assert!(!app.history_can_undo());
+        drain(&mut app, vec![add()], true);
+        assert!(app.history_can_undo());
+    }
+
+    #[test]
+    fn undo_on_empty_stack_is_err() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         assert!(matches!(
-            outcome,
-            CommandOutcome::Plain(CommandResult::Err { .. })
+            app.execute_command(C::Undo),
+            CommandResult::Err { .. }
         ));
     }
 
@@ -2271,12 +2262,11 @@ mod tests {
             "colours are excluded: a palette is chosen, not stumbled upon"
         );
 
-        let layout = crate::usecases::ui::UILayoutState::default();
         assert!(
             app.history_can_undo(),
             "one command, one history entry, so one undo undoes the whole draw"
         );
-        app.history_gui(&layout, true);
+        app.execute_command(C::Undo);
         assert_eq!(
             look(&app).0,
             before.0,

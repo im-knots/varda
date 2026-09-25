@@ -764,6 +764,7 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `GET` | `/api/state/cameras` | Camera devices discovered by the last scan. |
 | `GET` | `/api/state/clock` | Clock state: resolved BPM, beat phase, active source, and detected clock sources. |
 | `GET` | `/api/state/depth` | Depth sensors discovered by the last scan. |
+| `GET` | `/api/state/dome` | Dome projection the domemaster is rendered for: projector preset and dome geometry, content rotation included. |
 | `GET` | `/api/state/macros` | Every macro control with its kind, current value, and parameter targets. |
 | `GET` | `/api/state/midi` | MIDI state: devices, mappings, and whether learn mode is active. |
 | `GET` | `/api/state/mixer` | Mixer state: channels, crossfader position, master effects, active transition, and sequences. |
@@ -841,6 +842,8 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `PUT` | `/api/clock/manual-bpm` |  |
 | `PUT` | `/api/clock/preference` |  |
 | `POST` | `/api/command` | Applies any `EngineCommand` sent as JSON and returns its `CommandResult`. |
+| `PUT` | `/api/dome/geometry` |  |
+| `PUT` | `/api/dome/preset` |  |
 | `PUT` | `/api/domemaster/resolution` |  |
 | `GET` | `/api/health` |  |
 | `POST` | `/api/perf-profile` |  |

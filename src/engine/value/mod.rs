@@ -11,6 +11,7 @@
 //! See /spec/engine-value-types.md
 pub mod detect;
 pub mod dome;
+pub mod editor;
 pub mod render;
 pub mod surface;
 pub mod video;

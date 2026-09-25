@@ -52,13 +52,21 @@ impl VardaApp {
     /// Apply engine mutations: mixer, decks, effects, transitions, channels, cameras.
     /// Routes through engine trait methods where possible, `VardaApp` methods otherwise.
     ///
-    /// Returns an [`EngineActionsOutcome`] carrying the GUI post-steps the runner
-    /// must apply after the drain: the removed channel index (selection fixup),
-    /// whether the render resolution changed (egui texture re-point), and the
-    /// `CommandOutcome`s a preview-texture-registering consumer needs to act on.
-    /// This method itself never touches egui — see `/spec/app-presentation-boundary.md`.
-    pub fn apply_engine_actions(&mut self, ui_actions: &mut ui::UIActions) -> EngineActionsOutcome {
-        // ── Unified command stream (WS2) ──────────────────────────────────
+    /// When `starts_undo_step` is set, the pre-mutation state is recorded as one
+    /// undo step before anything runs. The consumer decides that, because only
+    /// it knows whether a drag is continuing.
+    ///
+    /// Returns an [`EngineActionsOutcome`] carrying the GUI post-step the runner
+    /// must apply after the drain: the removed channel index (selection fixup).
+    pub fn apply_engine_actions(
+        &mut self,
+        ui_actions: &mut ui::UIActions,
+        starts_undo_step: bool,
+    ) -> EngineActionsOutcome {
+        if starts_undo_step {
+            let snapshot = self.history_snapshot();
+            self.push_history(snapshot);
+        }
         // Panels push `EngineCommand`s directly; drain them through the same
         // dispatch as the bus. Ordering within the vec is preserved, so a
         // new-channel library drop enqueues `AddChannel` before its `Add*Deck`
@@ -66,9 +74,15 @@ impl VardaApp {
         let commands = std::mem::take(&mut ui_actions.commands);
         for cmd in commands {
             let is_deck_add = command_is_deck_add(&cmd);
+            let success_toast = gui_success_toast(&cmd);
             let outcome = self.execute_command_gui(cmd);
             if is_deck_add {
                 self.notify_deck_add_outcome(&outcome);
+            }
+            if let (Some(toast), CommandOutcome::Plain(CommandResult::Ok)) =
+                (success_toast, &outcome)
+            {
+                self.session.notifications.info(toast);
             }
         }
 
@@ -103,7 +117,7 @@ impl VardaApp {
                     .notifications
                     .error(format!("Failed to add deck: {message}"));
             }
-            _ => {}
+            CommandOutcome::Plain(_) => {}
         }
     }
 
@@ -140,6 +154,17 @@ impl VardaApp {
 pub struct EngineActionsOutcome {
     /// Index of a channel removed this frame (for UI selection fixup).
     pub removed_channel: Option<usize>,
+}
+
+/// The toast the GUI shows when a command it sent succeeds, for commands whose
+/// success is otherwise invisible. Failures toast from the command itself.
+fn gui_success_toast(cmd: &EngineCommand) -> Option<&'static str> {
+    match cmd {
+        EngineCommand::Undo => Some("↩ Undo"),
+        EngineCommand::Redo => Some("↪ Redo"),
+        EngineCommand::SaveWorkspace => Some("💾 Workspace saved"),
+        _ => None,
+    }
 }
 
 /// True for the deck-creating commands the GUI drain toasts. Mirrors the deck-add arm list in `execute_command_gui`.

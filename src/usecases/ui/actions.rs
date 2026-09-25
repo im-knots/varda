@@ -3,7 +3,7 @@
 //! Split into the outbound `EngineCommand` stream and UI-local [`UISession`]
 //! state (/spec/ui-engine-boundary.md WS4).
 
-use super::{DomeAction, ParamUIInfo, UISession};
+use super::{ParamUIInfo, UISession};
 use crate::ShaderParams;
 
 /// All UI output collected during a frame, split into two buckets (WS4):
@@ -44,28 +44,6 @@ impl UIActions {
     /// so the runner can fix up UI selection with the removed index).
     pub fn has_undoable_action(&self) -> bool {
         self.session.shader_to_add.is_some() || self.session.remove_channel.is_some()
-    }
-
-    /// Whether this frame's actions include any undoable *stage* mutation
-    /// (surface geometry/warp/holes/combine/reorder, surface→output
-    /// assignments, or authored dome changes).
-    ///
-    /// Deliberately excludes non-authored actions on the same collections:
-    /// output-window lifecycle (create/remove/reposition) and dome preview
-    /// camera navigation (rotate/zoom/reset) are live/venue controls, not
-    /// stage-editor edits, so they must not create history entries.
-    ///
-    /// Does NOT distinguish continuous vs discrete edits — gesture collapsing is
-    /// handled by the `gesture_active` edge in the runner.
-    pub fn has_undoable_stage_action(&self) -> bool {
-        self.session.dome_actions.iter().any(|a| {
-            !matches!(
-                a,
-                DomeAction::RotateCamera { .. }
-                    | DomeAction::ZoomCamera { .. }
-                    | DomeAction::ResetCamera
-            )
-        })
     }
 }
 

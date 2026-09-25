@@ -163,7 +163,7 @@ impl ApplicationHandler for UIRunner {
             match event {
                 WindowEvent::CloseRequested => {
                     log::info!("Close requested, saving workspace and exiting...");
-                    if let Err(e) = varda.save_workspace(&self.layout) {
+                    if let Err(e) = varda.save_workspace() {
                         log::error!("{e}");
                     }
                     if let Some(api) = self.api_handle.take() {

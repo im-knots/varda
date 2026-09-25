@@ -1,10 +1,11 @@
 //! Persistence integration tests — save/load roundtrips with tempdir workspaces.
 
 use varda::app::{AppConfig, VardaApp};
+use varda::engine::value::dome::{DomeConfig, DomeGeometry, DomePreset};
+use varda::engine::value::editor::EditorPrefs;
 use varda::engine::{BlendMode, CommandResult, EffectTarget, EngineCommand};
 use varda::modulation::LFOWaveform;
 use varda::timebase::Timebase;
-use varda::usecases::ui::UILayoutState;
 
 use clap::Parser;
 use tempfile::TempDir;
@@ -56,8 +57,7 @@ fn save_load_empty_workspace() {
     let Some(mut app) = headless_app_in(tmp.path()) else {
         return;
     };
-    app.save_workspace(&UILayoutState::default())
-        .expect("save workspace");
+    app.save_workspace().expect("save workspace");
     // Reload
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
@@ -81,8 +81,7 @@ fn save_load_with_decks() {
             color: [1.0, 0.0, 0.0, 1.0],
         },
     );
-    app.save_workspace(&UILayoutState::default())
-        .expect("save workspace");
+    app.save_workspace().expect("save workspace");
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
     };
@@ -101,8 +100,7 @@ fn save_load_crossfader_position() {
         return;
     };
     fire(&mut app, EngineCommand::SetCrossfader(0.75));
-    app.save_workspace(&UILayoutState::default())
-        .expect("save workspace");
+    app.save_workspace().expect("save workspace");
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
     };
@@ -124,8 +122,7 @@ fn save_load_modulation_sources() {
             frequency: 2.0,
         },
     );
-    app.save_workspace(&UILayoutState::default())
-        .expect("save workspace");
+    app.save_workspace().expect("save workspace");
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
     };
@@ -160,8 +157,7 @@ fn save_load_modulation_timebase() {
             timebase: Timebase::Beat,
         },
     );
-    app.save_workspace(&UILayoutState::default())
-        .expect("save workspace");
+    app.save_workspace().expect("save workspace");
 
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
@@ -222,8 +218,7 @@ fn save_load_automation_envelope() {
             breakpoints: drawn.clone(),
         },
     );
-    app.save_workspace(&UILayoutState::default())
-        .expect("save workspace");
+    app.save_workspace().expect("save workspace");
 
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
@@ -299,8 +294,7 @@ fn save_load_arrangement_edits() {
             collapsed: true,
         },
     );
-    app.save_workspace(&UILayoutState::default())
-        .expect("save workspace");
+    app.save_workspace().expect("save workspace");
 
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
@@ -342,8 +336,7 @@ fn save_load_cue_points() {
             name: "Drop".to_string(),
         },
     );
-    app.save_workspace(&UILayoutState::default())
-        .expect("save workspace");
+    app.save_workspace().expect("save workspace");
 
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
@@ -374,8 +367,7 @@ fn save_load_render_resolution() {
             height: 720,
         },
     );
-    app.save_workspace(&UILayoutState::default())
-        .expect("save workspace");
+    app.save_workspace().expect("save workspace");
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
     };
@@ -398,8 +390,7 @@ fn save_load_timecode_preference() {
             preference: varda::timecode::TimecodePreference::Off,
         },
     );
-    app.save_workspace(&UILayoutState::default())
-        .expect("save workspace");
+    app.save_workspace().expect("save workspace");
 
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
@@ -436,8 +427,7 @@ fn save_load_ltc_patch_by_interface_name() {
             input: Some(patched),
         },
     );
-    app.save_workspace(&UILayoutState::default())
-        .expect("save workspace");
+    app.save_workspace().expect("save workspace");
 
     let stage: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(tmp.path().join(".varda").join("stage.json"))
@@ -503,8 +493,7 @@ fn save_load_domemaster_resolution() {
             resolution: varda::renderer::dome::DomemasterResolution::R4K,
         },
     );
-    app.save_workspace(&UILayoutState::default())
-        .expect("save workspace");
+    app.save_workspace().expect("save workspace");
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
     };
@@ -523,8 +512,7 @@ fn save_load_multiple_channels() {
         return;
     };
     fire(&mut app, EngineCommand::AddChannel);
-    app.save_workspace(&UILayoutState::default())
-        .expect("save workspace");
+    app.save_workspace().expect("save workspace");
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
     };
@@ -562,8 +550,7 @@ fn save_load_svg_image_deck() {
         matches!(result, CommandResult::OkWithId { .. }),
         "adding an SVG deck should succeed, got {result:?}"
     );
-    app.save_workspace(&UILayoutState::default())
-        .expect("save workspace");
+    app.save_workspace().expect("save workspace");
 
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
@@ -592,8 +579,7 @@ fn load_missing_assets_graceful() {
             path: std::path::PathBuf::from("/nonexistent/path/video.mp4"),
         },
     );
-    app.save_workspace(&UILayoutState::default())
-        .expect("save workspace");
+    app.save_workspace().expect("save workspace");
     // Reload — should not crash
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
@@ -609,8 +595,7 @@ fn save_creates_varda_directory() {
     let Some(mut app) = headless_app_in(tmp.path()) else {
         return;
     };
-    app.save_workspace(&UILayoutState::default())
-        .expect("save workspace");
+    app.save_workspace().expect("save workspace");
     assert!(varda_dir.exists());
 }
 
@@ -620,8 +605,7 @@ fn scene_json_valid_format() {
     let Some(mut app) = headless_app_in(tmp.path()) else {
         return;
     };
-    app.save_workspace(&UILayoutState::default())
-        .expect("save workspace");
+    app.save_workspace().expect("save workspace");
     let scene_path = tmp.path().join(".varda").join("scene.json");
     let content = std::fs::read_to_string(scene_path).expect("scene.json should exist");
     let parsed: serde_json::Value = serde_json::from_str(&content).expect("should be valid JSON");
@@ -670,8 +654,7 @@ fn save_load_deck_fidelity_opacity_transparent_blend() {
             mode: BlendMode::Multiply,
         },
     );
-    app.save_workspace(&UILayoutState::default())
-        .expect("save workspace");
+    app.save_workspace().expect("save workspace");
 
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
@@ -723,8 +706,7 @@ fn save_load_deck_effect_survives() {
         // Effect shader unavailable in this build — nothing to assert.
         _ => return,
     };
-    app.save_workspace(&UILayoutState::default())
-        .expect("save workspace");
+    app.save_workspace().expect("save workspace");
 
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
@@ -758,12 +740,148 @@ fn save_load_channel_opacity() {
             opacity: 0.5,
         },
     );
-    app.save_workspace(&UILayoutState::default())
-        .expect("save workspace");
+    app.save_workspace().expect("save workspace");
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
     };
     let _ = app2.load_workspace();
     let state = app2.build_engine_state();
     assert!((state.mixer.channels[0].opacity - 0.5).abs() < 1e-4);
+}
+
+// ── Dome config and editor prefs (spec/ui-engine-boundary.md WS5, WS6) ──
+
+fn a_dome() -> DomeConfig {
+    DomeConfig {
+        preset: DomePreset::Hexa,
+        geometry: DomeGeometry {
+            radius: 2.0,
+            tilt_degrees: 15.0,
+            content_roll_degrees: 30.0,
+            ..DomeGeometry::default()
+        },
+    }
+}
+
+fn some_editor_prefs() -> EditorPrefs {
+    EditorPrefs {
+        grid_size: 0.25,
+        snap: false,
+        library_panel_open: true,
+        dome_mode_active: true,
+        ..EditorPrefs::default()
+    }
+}
+
+fn set_dome(app: &mut VardaApp, dome: DomeConfig) {
+    let preset = send_cmd(
+        app,
+        EngineCommand::SetDomePreset {
+            preset: dome.preset,
+        },
+    );
+    assert!(matches!(preset, CommandResult::Ok), "{preset:?}");
+    let geometry = send_cmd(
+        app,
+        EngineCommand::SetDomeGeometry {
+            geometry: dome.geometry,
+        },
+    );
+    assert!(matches!(geometry, CommandResult::Ok), "{geometry:?}");
+}
+
+/// A headless install has no GUI to hold dome config, so it must be engine
+/// state that the bus sets and a restart restores.
+#[test]
+fn dome_config_set_over_the_bus_survives_a_restart() {
+    let tmp = TempDir::new().unwrap();
+    let Some(mut app) = headless_app_in(tmp.path()) else {
+        return;
+    };
+    set_dome(&mut app, a_dome());
+    assert_eq!(app.build_engine_state().dome, a_dome());
+
+    app.save_workspace().expect("save workspace");
+    let mut restored = headless_app_in(tmp.path()).expect("GPU was available above");
+    assert!(restored.load_workspace().is_ok());
+    assert_eq!(restored.build_engine_state().dome, a_dome());
+}
+
+/// The engine stores the GUI's editor prefs without interpreting them, so a save
+/// requested over the bus keeps whatever the GUI last sent.
+#[test]
+fn editor_prefs_survive_a_save_from_any_consumer() {
+    let tmp = TempDir::new().unwrap();
+    let Some(mut app) = headless_app_in(tmp.path()) else {
+        return;
+    };
+    fire(
+        &mut app,
+        EngineCommand::SetEditorPrefs {
+            prefs: some_editor_prefs(),
+        },
+    );
+    let saved = send_cmd(&mut app, EngineCommand::SaveWorkspace);
+    assert!(matches!(saved, CommandResult::Ok), "{saved:?}");
+
+    let mut restored = headless_app_in(tmp.path()).expect("GPU was available above");
+    let load = restored.load_workspace();
+    assert!(load.is_ok());
+    assert_eq!(load.editor_prefs, Some(some_editor_prefs()));
+}
+
+/// Existing `.varda/` directories must keep loading: moving these values into
+/// the engine must not rename a single `stage.json` field.
+#[test]
+fn stage_json_keeps_its_field_names() {
+    let tmp = TempDir::new().unwrap();
+    let Some(mut app) = headless_app_in(tmp.path()) else {
+        return;
+    };
+    fire(
+        &mut app,
+        EngineCommand::SetEditorPrefs {
+            prefs: some_editor_prefs(),
+        },
+    );
+    set_dome(&mut app, a_dome());
+    app.save_workspace().expect("save workspace");
+
+    let stage: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(tmp.path().join(".varda").join("stage.json"))
+            .expect("stage.json should exist"),
+    )
+    .expect("stage.json should be valid JSON");
+    assert_eq!(stage["grid_size"], 0.25);
+    assert_eq!(stage["snap"], false);
+    assert_eq!(stage["library_panel_open"], true);
+    assert_eq!(stage["right_panel_open"], true);
+    assert_eq!(stage["stage_editor_open"], false);
+    assert_eq!(stage["dome_preview_open"], false);
+    assert_eq!(stage["dome_mode_active"], true);
+    assert_eq!(stage["dome_preset"], "Hexa");
+    assert_eq!(stage["dome_geometry"]["radius"], 2.0);
+    assert_eq!(stage["dome_geometry"]["content_roll_degrees"], 30.0);
+}
+
+/// Dome config sits in the stage half of the undo snapshot, so undo restores it
+/// the way it restores surfaces.
+#[test]
+fn undo_restores_dome_config() {
+    let tmp = TempDir::new().unwrap();
+    let Some(mut app) = headless_app_in(tmp.path()) else {
+        return;
+    };
+    let before = app.build_engine_state().dome;
+    set_dome(&mut app, a_dome());
+
+    assert!(matches!(
+        send_cmd(&mut app, EngineCommand::Undo),
+        CommandResult::Ok
+    ));
+    assert!(matches!(
+        send_cmd(&mut app, EngineCommand::Undo),
+        CommandResult::Ok
+    ));
+    assert_eq!(app.build_engine_state().dome, before);
 }

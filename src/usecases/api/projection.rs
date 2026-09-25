@@ -172,6 +172,7 @@ pub(crate) mod tests {
     };
     pub(crate) fn make_test_state() -> EngineState {
         EngineState {
+            dome: crate::engine::value::dome::DomeConfig::default(),
             mixer: MixerSnapshot {
                 channels: vec![ChannelSnapshot {
                     idx: 0,

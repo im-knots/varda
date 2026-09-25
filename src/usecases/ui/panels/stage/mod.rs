@@ -17,7 +17,7 @@ mod warp_editor;
 pub(super) use surface_editor::render_surface_editor;
 pub(super) use warp_editor::{render_stage_bottom_bar, stage_selection_id};
 
-use super::super::{CameraDetectMode, DomeAction, UIActions, UIData};
+use super::super::{CameraDetectMode, UIActions, UIData};
 use crate::engine::EngineCommand;
 use crate::renderer::dome::DomemasterResolution;
 use crate::renderer::slicer::DomePreset;
@@ -85,125 +85,91 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                             .clicked()
                         {
                             actions
-                                .session
-                                .dome_actions
-                                .push(DomeAction::SetPreset(*preset));
+                                .commands
+                                .push(EngineCommand::SetDomePreset { preset: *preset });
                         }
                     }
                 });
 
             ui.separator();
 
-            // Radius slider
-            let mut radius = data.dome_geometry.radius;
-            ui.label("R:");
-            if ui
-                .add(
-                    egui::DragValue::new(&mut radius)
-                        .range(0.5..=5.0)
-                        .speed(0.01),
-                )
-                .changed()
-            {
-                actions
-                    .session
-                    .dome_actions
-                    .push(DomeAction::SetRadius(radius));
-            }
-
-            // Truncation angle slider
-            let mut trunc = data.dome_geometry.truncation_degrees;
-            ui.label("Trunc:");
-            if ui
-                .add(
-                    egui::DragValue::new(&mut trunc)
-                        .range(30.0..=90.0)
-                        .speed(0.5)
-                        .suffix("°"),
-                )
-                .changed()
-            {
-                actions
-                    .session
-                    .dome_actions
-                    .push(DomeAction::SetTruncation(trunc));
-            }
-
-            // Tilt slider
-            let mut tilt = data.dome_geometry.tilt_degrees;
-            ui.label("Tilt:");
-            if ui
-                .add(
-                    egui::DragValue::new(&mut tilt)
-                        .range(0.0..=45.0)
-                        .speed(0.5)
-                        .suffix("°"),
-                )
-                .changed()
-            {
-                actions.session.dome_actions.push(DomeAction::SetTilt(tilt));
-            }
-
+            // Geometry: every field edits one copy, sent once if anything moved.
+            let mut geometry = data.dome_geometry;
+            let mut changed = false;
+            let mut held = false;
+            let mut field = |ui: &mut egui::Ui,
+                             label: &str,
+                             value: &mut f32,
+                             range: std::ops::RangeInclusive<f32>,
+                             speed: f64,
+                             suffix: &str| {
+                ui.label(label);
+                let resp = ui.add(
+                    egui::DragValue::new(value)
+                        .range(range)
+                        .speed(speed)
+                        .suffix(suffix),
+                );
+                changed |= resp.changed();
+                held |= resp.dragged();
+            };
+            field(ui, "R:", &mut geometry.radius, 0.5..=5.0, 0.01, "");
+            field(
+                ui,
+                "Trunc:",
+                &mut geometry.truncation_degrees,
+                30.0..=90.0,
+                0.5,
+                "°",
+            );
+            field(
+                ui,
+                "Tilt:",
+                &mut geometry.tilt_degrees,
+                0.0..=45.0,
+                0.5,
+                "°",
+            );
             ui.separator();
-
-            // Content rotation controls
-            let mut c_az = data.dome_geometry.content_azimuth_degrees;
-            ui.label("Content Az:");
-            if ui
-                .add(
-                    egui::DragValue::new(&mut c_az)
-                        .range(-180.0..=180.0)
-                        .speed(1.0)
-                        .suffix("°"),
-                )
-                .changed()
-            {
+            field(
+                ui,
+                "Content Az:",
+                &mut geometry.content_azimuth_degrees,
+                -180.0..=180.0,
+                1.0,
+                "°",
+            );
+            field(
+                ui,
+                "Content El:",
+                &mut geometry.content_elevation_degrees,
+                -90.0..=90.0,
+                1.0,
+                "°",
+            );
+            field(
+                ui,
+                "Content Roll:",
+                &mut geometry.content_roll_degrees,
+                -180.0..=180.0,
+                1.0,
+                "°",
+            );
+            if changed {
                 actions
-                    .session
-                    .dome_actions
-                    .push(DomeAction::SetContentAzimuth(c_az));
+                    .commands
+                    .push(EngineCommand::SetDomeGeometry { geometry });
             }
-
-            let mut c_el = data.dome_geometry.content_elevation_degrees;
-            ui.label("Content El:");
-            if ui
-                .add(
-                    egui::DragValue::new(&mut c_el)
-                        .range(-90.0..=90.0)
-                        .speed(1.0)
-                        .suffix("°"),
-                )
-                .changed()
-            {
-                actions
-                    .session
-                    .dome_actions
-                    .push(DomeAction::SetContentElevation(c_el));
-            }
-
-            let mut c_roll = data.dome_geometry.content_roll_degrees;
-            ui.label("Content Roll:");
-            if ui
-                .add(
-                    egui::DragValue::new(&mut c_roll)
-                        .range(-180.0..=180.0)
-                        .speed(1.0)
-                        .suffix("°"),
-                )
-                .changed()
-            {
-                actions
-                    .session
-                    .dome_actions
-                    .push(DomeAction::SetContentRoll(c_roll));
+            // A held drag is a single undo gesture.
+            if held {
+                actions.session.gesture_active = true;
             }
 
             ui.separator();
 
             // Domemaster output size. Square by definition, so it does not
             // follow the master render resolution — it is sized by the dome's
-            // projectors. Goes straight to the engine rather than through a
-            // DomeAction because it rebuilds GPU textures.
+            // projectors.
             ui.label("Res:");
             let mut current_res = data.domemaster_resolution;
             egui::ComboBox::from_id_salt("domemaster_resolution")

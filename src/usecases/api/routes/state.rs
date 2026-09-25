@@ -123,6 +123,12 @@ state_route!(
     |s: &crate::engine::EngineState| s.transport.clone()
 );
 state_route!(
+    dome,
+    "/api/state/dome",
+    "Dome projection the domemaster is rendered for: projector preset and dome geometry, content rotation included.",
+    |s: &crate::engine::EngineState| s.dome
+);
+state_route!(
     timecode,
     "/api/state/timecode",
     "Timecode diagnostics: every LTC and MTC input being listened to with its own position and run state, which one is driving the transport, and the current preference and LTC patch.",

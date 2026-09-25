@@ -101,6 +101,8 @@ pub enum ClipboardKind {
 #[derive(Clone, Serialize)]
 pub struct EngineState {
     pub mixer: MixerSnapshot,
+    /// Dome projection the domemaster is rendered for.
+    pub dome: crate::engine::value::dome::DomeConfig,
     pub audio: AudioSnapshot,
     pub modulation: ModulationSnapshot,
     pub outputs: OutputSnapshot,
@@ -965,6 +967,7 @@ mod tests {
     #[test]
     fn engine_state_can_be_constructed() {
         let state = EngineState {
+            dome: crate::engine::value::dome::DomeConfig::default(),
             mixer: MixerSnapshot {
                 channels: vec![],
                 crossfader: 0.0,
@@ -1054,6 +1057,7 @@ mod tests {
     #[test]
     fn engine_state_clone() {
         let state = EngineState {
+            dome: crate::engine::value::dome::DomeConfig::default(),
             mixer: MixerSnapshot {
                 channels: vec![],
                 crossfader: 0.5,

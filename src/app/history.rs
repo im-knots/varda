@@ -79,16 +79,6 @@ impl HistoryManager {
     }
 }
 
-/// Result of a successful undo/redo restore, returned to the caller.
-///
-/// A windowed consumer reads dome layout flags off the restored `snapshot`'s
-/// stage half. The headless/API consumer only needs to know a restore happened
-/// (`Some(_)` vs `None`).
-pub struct HistoryRestore {
-    /// The state that was restored onto live engine state.
-    pub snapshot: HistorySnapshot,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

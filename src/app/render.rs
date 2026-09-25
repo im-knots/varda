@@ -640,8 +640,9 @@ impl VardaApp {
         let mixer = &self.mixer;
         let master_key = Self::master_program_key(&self.mixer);
 
-        // Run domemaster renderer if enabled (content rotation is updated each frame via set_content_rotation)
-        let domemaster_view = if let Some(dome) = &self.output.domemaster {
+        let (az, el, roll) = self.output.dome.geometry.content_rotation_radians();
+        let domemaster_view = if let Some(dome) = &mut self.output.domemaster {
+            dome.set_content_rotation(az, el, roll);
             if dome.enabled {
                 dome.update_params(&self.context.queue);
                 dome.render(&self.context, mixer.program_view(master_key));

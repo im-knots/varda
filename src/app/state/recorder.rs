@@ -123,7 +123,7 @@ impl VardaApp {
                 // One entry for the pass: undo means "that take was no good".
                 // Before the envelope is created, or undo would return to a
                 // scene that already has the lane this pass is about to write.
-                let snapshot = self.history_snapshot_default();
+                let snapshot = self.history_snapshot();
                 self.push_history(snapshot);
                 self.session.recorder.snapshot_taken = true;
             }

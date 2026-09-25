@@ -41,18 +41,6 @@ pub enum CommandOutcome {
     /// One or more decks were created. The GUI registers a preview texture for
     /// each UUID. Mirrors `OkWithId` for the single-deck case.
     DecksCreated { uuids: Vec<String> },
-    /// Undo/redo restored engine state. `dome_layout` carries the UI-local dome
-    /// flags to sync back into layout state.
-    HistoryRestored { dome_layout: DomeLayoutFields },
-}
-
-/// Dome layout flags that live in UI layout state (not engine state) and must
-/// be synced back after an undo/redo restore.
-#[derive(Debug, Clone, Copy)]
-pub struct DomeLayoutFields {
-    pub dome_mode_active: bool,
-    pub dome_preset: crate::engine::value::dome::DomePreset,
-    pub dome_geometry: crate::engine::value::dome::DomeGeometry,
 }
 
 /// Error codes for command failures.
@@ -1230,6 +1218,19 @@ pub enum EngineCommand {
     /// dome's projector, not by the master canvas it samples from.
     SetDomemasterResolution {
         resolution: crate::engine::value::dome::DomemasterResolution,
+    },
+    /// Set the projector arrangement the domemaster is rendered for.
+    SetDomePreset {
+        preset: crate::engine::value::dome::DomePreset,
+    },
+    /// Set the dome the domemaster projects onto, content rotation included.
+    SetDomeGeometry {
+        geometry: crate::engine::value::dome::DomeGeometry,
+    },
+    /// Replace the stage editor preferences the engine persists for the GUI.
+    /// Not undoable: they are view state, not authored content.
+    SetEditorPrefs {
+        prefs: crate::engine::value::editor::EditorPrefs,
     },
 
     // ── Frame pacing ─────────────────────────────────────────

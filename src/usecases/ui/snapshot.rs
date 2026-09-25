@@ -603,8 +603,8 @@ pub(crate) fn build_ui_data(
         dome_preview_open: layout.dome_preview_open,
         dome_preview_texture: None, // populated by UIRunner after build
         dome_mode_active: layout.dome_mode_active,
-        dome_preset: layout.dome_preset,
-        dome_geometry: layout.dome_geometry,
+        dome_preset: engine.dome.preset,
+        dome_geometry: engine.dome.geometry,
         domemaster_resolution: app.domemaster_resolution(),
         camera_detect_texture: None, // populated by UIRunner
         camera_detect_mode: crate::usecases::ui::CameraDetectMode::Off, // populated by UIRunner

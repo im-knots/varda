@@ -2121,6 +2121,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_get_dome_state() {
+        let (status, json) = get_json(router_with_state(), "/api/state/dome").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["preset"], "Quad");
+        assert_eq!(json["geometry"]["radius"], 1.0);
+    }
+
+    #[tokio::test]
+    async fn test_set_dome_preset_dispatches_the_preset() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = put_json(
+            app,
+            "/api/dome/preset",
+            serde_json::json!({"preset": "Hexa"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(matches!(
+            take_command(&seen),
+            crate::engine::EngineCommand::SetDomePreset {
+                preset: crate::engine::value::dome::DomePreset::Hexa
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_set_dome_geometry_dispatches_the_geometry() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = put_json(
+            app,
+            "/api/dome/geometry",
+            serde_json::json!({"geometry": {
+                "radius": 2.0,
+                "truncation_degrees": 60.0,
+                "tilt_degrees": 10.0,
+                "content_roll_degrees": 45.0
+            }}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let crate::engine::EngineCommand::SetDomeGeometry { geometry } = take_command(&seen) else {
+            panic!("expected SetDomeGeometry");
+        };
+        assert!((geometry.truncation_degrees - 60.0).abs() < f32::EPSILON);
+        assert!((geometry.content_roll_degrees - 45.0).abs() < f32::EPSILON);
+        assert!(
+            geometry.content_azimuth_degrees.abs() < f32::EPSILON,
+            "omitted content angles default to zero"
+        );
+    }
+
+    #[tokio::test]
     async fn test_set_clock_preference() {
         let (status, json) = put_json(
             router_with_mock_engine(),

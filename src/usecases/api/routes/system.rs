@@ -89,6 +89,46 @@ pub async fn set_resolution(
 }
 
 #[derive(Deserialize, ToSchema)]
+pub struct DomePresetBody {
+    /// Projector arrangement the domemaster is rendered for.
+    pub preset: crate::engine::value::dome::DomePreset,
+}
+#[utoipa::path(put, path = "/api/dome/preset", request_body = DomePresetBody, responses((status = 200, body = CommandResult)), tag = "System")]
+pub async fn set_dome_preset(
+    State(state): State<SharedState>,
+    Json(b): Json<DomePresetBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::SetDomePreset { preset: b.preset })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct DomeGeometryBody {
+    /// Dome the domemaster projects onto. Content angles default to zero.
+    pub geometry: crate::engine::value::dome::DomeGeometry,
+}
+#[utoipa::path(put, path = "/api/dome/geometry", request_body = DomeGeometryBody, responses((status = 200, body = CommandResult)), tag = "System")]
+pub async fn set_dome_geometry(
+    State(state): State<SharedState>,
+    Json(b): Json<DomeGeometryBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::SetDomeGeometry {
+            geometry: b.geometry,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
 pub struct DomemasterResolutionBody {
     /// Domemaster output size. Square, so it is a preset rather than a width
     /// and height: `R1K` (1024²), `R2K` (2048²), or `R4K` (4096²).

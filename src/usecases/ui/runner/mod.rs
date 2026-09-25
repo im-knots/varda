@@ -6,6 +6,8 @@
 
 use crate::app::render::{DeckLoadResult, FileDialogKind, FileDialogResult};
 use crate::app::{AppConfig, VardaApp};
+use crate::engine::EngineCommand;
+use crate::engine::value::editor::EditorPrefs;
 use crate::renderer::blit::BlitPipeline;
 use crate::renderer::context::{GpuContext, WindowSurface};
 use crate::usecases::ui;
@@ -85,6 +87,8 @@ pub struct UIRunner {
     /// Previous frame's `gesture_active` flag, for detecting drag start vs.
     /// continuation so a continuous stage/warp drag collapses into one undo step.
     prev_gesture_active: bool,
+    /// Editor prefs last sent to the engine; `None` until the first frame sends them.
+    sent_editor_prefs: Option<EditorPrefs>,
 
     // ── Performance: gate publish_state to reduce snapshot overhead ──
     publish_counter: u32,
@@ -154,6 +158,7 @@ impl UIRunner {
             gpu_init_handle: None,
             startup_t0: None,
             prev_gesture_active: false,
+            sent_editor_prefs: None,
             publish_counter: 0,
             api_handle: None,
             cadence_anchor: None,
@@ -274,8 +279,8 @@ impl UIRunner {
         // Load workspace (may replace default mixer with saved scene)
         log::info!("[STARTUP] Loading workspace...");
         let loaded = varda.load_workspace();
-        if let Some(loaded_layout) = loaded.layout {
-            self.layout = loaded_layout;
+        if let Some(prefs) = loaded.editor_prefs {
+            self.layout.apply_editor_prefs(prefs);
         }
         // `load_workspace` clears the engine-owned undo/redo timeline.
         log::info!("[STARTUP] Workspace loaded ({:.0?})", startup_t0.elapsed());
@@ -344,7 +349,7 @@ impl UIRunner {
                 .load(std::sync::atomic::Ordering::Relaxed)
         {
             log::info!("Shutdown requested, saving workspace and exiting...");
-            if let Err(e) = varda.save_workspace(&self.layout) {
+            if let Err(e) = varda.save_workspace() {
                 log::error!("{e}");
             }
             if let Some(api) = self.api_handle.take() {
@@ -371,20 +376,6 @@ impl UIRunner {
 
         // GPU render (mixer compositing)
         varda.render_mixer_frame();
-
-        // Push content rotation to domemaster renderer (headless path)
-        let c_az = self
-            .layout
-            .dome_geometry
-            .content_azimuth_degrees
-            .to_radians();
-        let c_el = self
-            .layout
-            .dome_geometry
-            .content_elevation_degrees
-            .to_radians();
-        let c_roll = self.layout.dome_geometry.content_roll_degrees.to_radians();
-        varda.set_domemaster_content_rotation(c_az, c_el, c_roll);
 
         // Render output windows + publish state
         varda.render_outputs();
@@ -430,13 +421,11 @@ impl UIRunner {
             && let (Some(renderer), Some(varda)) = (&mut self.dome_preview_renderer, &self.varda)
         {
             let context = varda.gpu_context();
+            let dome = varda.dome_config();
 
             // Update slice overlays when in dome mode
             if self.layout.dome_mode_active {
-                let setup = self
-                    .layout
-                    .dome_preset
-                    .to_setup_with_geometry(self.layout.dome_geometry);
+                let setup = dome.preset.to_setup_with_geometry(dome.geometry);
                 renderer.set_slice_overlays(&context.device, &setup);
             } else {
                 renderer.clear_slice_overlays();
@@ -446,17 +435,7 @@ impl UIRunner {
             let source_view = varda
                 .domemaster_view()
                 .unwrap_or_else(|| varda.mixer_ref().composite_view());
-            let c_az = self
-                .layout
-                .dome_geometry
-                .content_azimuth_degrees
-                .to_radians();
-            let c_el = self
-                .layout
-                .dome_geometry
-                .content_elevation_degrees
-                .to_radians();
-            let c_roll = self.layout.dome_geometry.content_roll_degrees.to_radians();
+            let (c_az, c_el, c_roll) = dome.geometry.content_rotation_radians();
             renderer.render(context, source_view, c_az, c_el, c_roll);
         }
 
@@ -595,7 +574,7 @@ impl UIRunner {
                             renderer.camera.reset();
                         }
                     }
-                    _ => {} // Config actions handled by layout.apply_selections
+                    ui::DomeAction::SetMode(_) => {} // handled by layout.apply_selections
                 }
             }
         }
@@ -615,23 +594,19 @@ impl UIRunner {
             // held drag — so a continuous gesture of any kind (warp drag, param
             // slider) collapses into a single undo step (snapshot on the first
             // frame). Undoability is decided by the single, compiler-checked
-            // `command_is_undoable` predicate (via `batch_has_undoable`) for
-            // migrated domains, plus the residual `has_undoable_*` gates for
-            // fields not yet migrated to `commands`.
-            let dirty = ui_actions.has_undoable_action()
-                || ui_actions.has_undoable_stage_action()
-                || varda.batch_has_undoable(&ui_actions.commands);
+            // `command_is_undoable` predicate (via `batch_has_undoable`), plus
+            // the residual `has_undoable_action` gate for fields not yet on
+            // `commands`. The engine takes the snapshot inside the drain.
+            let dirty =
+                ui_actions.has_undoable_action() || varda.batch_has_undoable(&ui_actions.commands);
             // A recording pass is one long gesture: it pushed its own entry
             // when the first parameter was touched, and every write until it
             // ends belongs to that entry.
-            if wants_history_snapshot(
+            let starts_undo_step = wants_history_snapshot(
                 &mut self.prev_gesture_active,
                 dirty,
                 ui_actions.session.gesture_active || varda.is_recording(),
-            ) {
-                let snapshot = varda.history_snapshot(&self.layout);
-                varda.push_history(snapshot);
-            }
+            );
 
             // Intercept shader_to_add: resolve and route to background loading
             if let Some((channel_uuid, gen_idx)) = ui_actions.session.shader_to_add.take()
@@ -651,32 +626,27 @@ impl UIRunner {
                 );
             }
 
-            let engine_outcome = varda.apply_engine_actions(&mut ui_actions);
-
-            // ── Control-surface undo/redo/save join the UI's own requests ──
+            // ── Editor prefs, undo/redo, and save ride the same command stream,
+            // after this frame's edits, in that order. Control-surface requests
+            // join the UI's own.
             let pending = varda.take_pending_global_actions();
-            ui_actions.session.undo_requested |= pending.undo;
-            ui_actions.session.redo_requested |= pending.redo;
-            ui_actions.session.save_requested |= pending.save;
-
-            // ── Undo/redo: restore via the engine's shared timeline ──
-            // The restore (scene + stage diff-apply) lives on `VardaApp` so the
-            // windowed and headless/API consumers behave identically; the
-            // runner only restores the UI-owned dome layout flags. Preview
-            // registrations follow the restored decks on the next texture sync.
-            if ui_actions.session.undo_requested || ui_actions.session.redo_requested {
-                let undo = ui_actions.session.undo_requested;
-                let outcome = varda.history_gui(&self.layout, undo);
-                if let crate::engine::CommandOutcome::HistoryRestored { dome_layout } = outcome {
-                    // Dome layout flags live in UI layout, not engine state.
-                    self.layout.dome_mode_active = dome_layout.dome_mode_active;
-                    self.layout.dome_preset = dome_layout.dome_preset;
-                    self.layout.dome_geometry = dome_layout.dome_geometry;
-
-                    let label = if undo { "↩ Undo" } else { "↪ Redo" };
-                    varda.notify_info(label);
-                }
+            let prefs = self.layout.editor_prefs();
+            if self.sent_editor_prefs != Some(prefs) {
+                ui_actions
+                    .commands
+                    .push(EngineCommand::SetEditorPrefs { prefs });
+                self.sent_editor_prefs = Some(prefs);
             }
+            if ui_actions.session.undo_requested || pending.undo {
+                ui_actions.commands.push(EngineCommand::Undo);
+            } else if ui_actions.session.redo_requested || pending.redo {
+                ui_actions.commands.push(EngineCommand::Redo);
+            }
+            if ui_actions.session.save_requested || pending.save {
+                ui_actions.commands.push(EngineCommand::SaveWorkspace);
+            }
+
+            let engine_outcome = varda.apply_engine_actions(&mut ui_actions, starts_undo_step);
 
             varda.apply_ui_actions(&ui_actions);
             varda.update_controller_leds();
@@ -684,10 +654,6 @@ impl UIRunner {
             // Fix up selection state after channel removal
             if let Some(ch_idx) = engine_outcome.removed_channel {
                 self.layout.fixup_channel_removal(ch_idx);
-            }
-
-            if ui_actions.session.save_requested && varda.save_workspace(&self.layout).is_ok() {
-                varda.notify_info("💾 Workspace saved");
             }
 
             // Spawn file dialogs on background threads (non-blocking)
@@ -828,19 +794,6 @@ impl UIRunner {
             let Some(varda) = self.varda.as_mut() else {
                 return;
             };
-            // Push content rotation to domemaster renderer each frame (real-time, MIDI-mappable)
-            let c_az = self
-                .layout
-                .dome_geometry
-                .content_azimuth_degrees
-                .to_radians();
-            let c_el = self
-                .layout
-                .dome_geometry
-                .content_elevation_degrees
-                .to_radians();
-            let c_roll = self.layout.dome_geometry.content_roll_degrees.to_radians();
-            varda.set_domemaster_content_rotation(c_az, c_el, c_roll);
             varda.render_outputs();
             #[cfg(feature = "html")]
             varda.render_interactive();

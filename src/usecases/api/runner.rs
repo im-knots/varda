@@ -24,6 +24,7 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::system::shutdown, routes::system::undo, routes::system::redo,
         routes::decks::generic_command,
         routes::system::set_resolution, routes::system::set_domemaster_resolution,
+        routes::system::set_dome_preset, routes::system::set_dome_geometry,
         routes::system::set_target_fps, routes::system::start_perf_profile,
         routes::system::set_clock_preference,
         routes::system::set_manual_bpm, routes::system::save_workspace,
@@ -140,7 +141,7 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::macros::assign_modulation, routes::macros::clear_modulation,
         routes::macros::clear_modulation_source,
         // Runtime state
-        routes::state::mixer, routes::state::audio,
+        routes::state::mixer, routes::state::audio, routes::state::dome,
         routes::state::modulation, routes::state::macros,
         routes::state::outputs, routes::state::surfaces,
         routes::state::registry, routes::state::midi,
@@ -271,6 +272,7 @@ pub fn build_router(shared: SharedState) -> Router {
         .route("/api/state/clock", get(routes::state::clock))
         .route("/api/state/transport", get(routes::state::transport))
         .route("/api/state/timecode", get(routes::state::timecode))
+        .route("/api/state/dome", get(routes::state::dome))
         .route("/api/state/arrangement", get(routes::state::arrangement))
         .route("/api/state/ndi", get(routes::state::ndi))
         .route("/api/state/syphon", get(routes::state::syphon))
@@ -1217,6 +1219,14 @@ pub fn build_router(shared: SharedState) -> Router {
         .route(
             "/api/domemaster/resolution",
             axum::routing::put(routes::system::set_domemaster_resolution),
+        )
+        .route(
+            "/api/dome/preset",
+            axum::routing::put(routes::system::set_dome_preset),
+        )
+        .route(
+            "/api/dome/geometry",
+            axum::routing::put(routes::system::set_dome_geometry),
         )
         .route(
             "/api/target-fps",

@@ -211,6 +211,8 @@ A domemaster is a circular fisheye image using **equidistant azimuthal projectio
 
 **2. Configure dome geometry** — **R** (radius, 0.5–5.0), **Trunc** (truncation angle, 30°–90°), and **Tilt** (0°–45°).
 
+Geometry and preset edits are undoable and saved with the stage. A headless install can set them over the HTTP API with `PUT /api/dome/geometry` and `PUT /api/dome/preset`, and read them back from `GET /api/state/dome`.
+
 **Res** sets the size the domemaster itself is rendered at: **1K** (1024×1024), **2K** (2048×2048, the default) or **4K** (4096×4096). It is square and deliberately independent of the master render resolution, because a domemaster is sized by the projectors reading it rather than by the canvas it samples from. Pick the tier that matches your projector array. Changing it rebuilds the dome's textures immediately, and the choice is saved with the stage, since it describes the venue rather than the scene.
 
 **3. Choose a projector preset:**
