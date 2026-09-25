@@ -117,7 +117,7 @@ fn engine_mod_on_mod(n: usize) -> ModulationEngine {
     let uuids: Vec<String> = (0..n).map(|i| engine.add_source(lfo(i))).collect();
     for i in 0..n {
         let driver = &uuids[(i + 1) % n];
-        engine.assign(&format!("mod:{}:frequency", uuids[i]), driver, 0.3, None);
+        engine.assign(&format!("mod/{}/frequency", uuids[i]), driver, 0.3, None);
     }
     engine
 }
@@ -192,7 +192,7 @@ fn bench_update(c: &mut Criterion) {
                 b.iter(|| {
                     t += 1.0 / 60.0;
                     engine.update_free_running(t, &audio, &analyzers);
-                    criterion::black_box(engine.get_modulation("deck_0000:opacity"))
+                    criterion::black_box(engine.get_modulation("deck/0000/opacity"))
                 });
             });
         }

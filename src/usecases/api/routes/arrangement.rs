@@ -144,7 +144,7 @@ pub async fn set_idle(State(s): State<SharedState>, Json(b): Json<IdleBody>) -> 
     }
 }
 
-#[utoipa::path(post, path = "/api/arrangement/rearm/{param_key}", params(("param_key" = String, Path, description = "Modulation key of the held parameter")), request_body = RearmBody, responses((status = 200, body = CommandResult)), tag = "Arrangement")]
+#[utoipa::path(post, path = "/api/arrangement/rearm/{param_key}", params(("param_key" = String, Path, description = "Modulation key of the held parameter, a router path such as deck/<uuid>/opacity. May span several segments.")), request_body = RearmBody, responses((status = 200, body = CommandResult)), tag = "Arrangement")]
 pub async fn rearm_param(
     State(s): State<SharedState>,
     Path(param_key): Path<String>,

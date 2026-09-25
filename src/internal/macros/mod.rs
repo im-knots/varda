@@ -267,10 +267,9 @@ impl Macro {
         }
     }
 
-    /// The modulation target key for this macro's value (`macro_<uuid>:value`),
-    /// matching the `{prefix}:{name}` convention used by the modulation engine.
+    /// The modulation target key for this macro's value (`macro/<uuid>/value`).
     pub fn value_mod_key(uuid: &str) -> String {
-        format!("macro_{uuid}:value")
+        crate::engine::value::param::ParamAddress::macro_value(uuid).to_string()
     }
 
     /// Compute the fan-out for `clamp(base + offset, 0, 1)` **without** mutating
@@ -527,7 +526,7 @@ mod tests {
 
     #[test]
     fn value_mod_key_matches_prefix_convention() {
-        assert_eq!(Macro::value_mod_key("abcd1234"), "macro_abcd1234:value");
+        assert_eq!(Macro::value_mod_key("abcd1234"), "macro/abcd1234/value");
     }
 
     #[test]

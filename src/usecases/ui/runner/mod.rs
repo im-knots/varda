@@ -4,7 +4,7 @@
 //! The engine (`VardaApp`) is owned here and driven each frame.
 //! For headless operation (HTTP API, CLI), this module is simply not used.
 
-use crate::app::render::{DeckLoadResult, FileDialogKind, FileDialogResult};
+use crate::app::render::{FileDialogKind, FileDialogResult};
 use crate::app::{AppConfig, VardaApp};
 use crate::engine::EngineCommand;
 use crate::engine::value::editor::EditorPrefs;
@@ -18,7 +18,6 @@ use winit::{
 };
 
 mod camera_detect;
-mod deck_load;
 mod detect;
 mod event_loop;
 mod preview;
@@ -27,7 +26,6 @@ pub(crate) use event_loop::WindowHost;
 
 use preview::PreviewEncoder;
 
-use deck_load::DeckLoadTargets;
 use detect::{DetectRequest, DetectResponse, spawn_detect_thread};
 
 pub struct UIRunner {
@@ -51,7 +49,13 @@ pub struct UIRunner {
     dome_preview_texture: Option<egui::TextureId>,
     // Camera detection mode state
     camera_detect_texture: Option<egui::TextureId>,
+    /// Detection camera last requested from the engine.
     camera_detect_camera_id: Option<crate::camera::CameraId>,
+    /// Commands raised outside the UI pass (camera detection), sent with this
+    /// frame's UI commands.
+    queued_commands: Vec<EngineCommand>,
+    /// Cued preview channels last sent to the engine.
+    sent_preview_channels: Vec<String>,
     camera_detect_contours: Vec<crate::surface::detect::DetectedContour>,
     // Background detection thread channels
     detect_req_tx: std::sync::mpsc::Sender<DetectRequest>,
@@ -67,11 +71,6 @@ pub struct UIRunner {
     file_dialog_rx: std::sync::mpsc::Receiver<FileDialogResult>,
 
     // ── Background deck loading channel (async, non-blocking) ────────
-    deck_load_tx: std::sync::mpsc::Sender<DeckLoadResult>,
-    deck_load_rx: std::sync::mpsc::Receiver<DeckLoadResult>,
-    /// Number of deck loads currently in-flight on background threads
-    pending_deck_loads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    deck_load_targets: DeckLoadTargets,
 
     // ── Engine (created after GPU init in resumed()) ─────────────────
     varda: Option<VardaApp>,
@@ -121,7 +120,6 @@ pub struct UIRunner {
 impl UIRunner {
     pub fn new(config: AppConfig) -> Self {
         let (file_dialog_tx, file_dialog_rx) = std::sync::mpsc::channel();
-        let (deck_load_tx, deck_load_rx) = std::sync::mpsc::channel();
         let (detect_req_tx, detect_req_rx) = std::sync::mpsc::channel();
         let detect_res_rx = spawn_detect_thread(detect_req_rx);
         Self {
@@ -142,6 +140,8 @@ impl UIRunner {
             dome_preview_texture: None,
             camera_detect_texture: None,
             camera_detect_camera_id: None,
+            queued_commands: Vec::new(),
+            sent_preview_channels: Vec::new(),
             camera_detect_contours: Vec::new(),
             detect_req_tx,
             detect_res_rx,
@@ -150,10 +150,6 @@ impl UIRunner {
             layout: super::UILayoutState::default(),
             file_dialog_tx,
             file_dialog_rx,
-            deck_load_tx,
-            deck_load_rx,
-            pending_deck_loads: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            deck_load_targets: DeckLoadTargets::default(),
             varda: None,
             gpu_init_handle: None,
             startup_t0: None,
@@ -371,9 +367,6 @@ impl UIRunner {
         #[cfg(feature = "html")]
         host.create_pending_interactive(varda);
 
-        // Publish the cued channel(s) so off-air previews render live (issue #72).
-        varda.set_preview_channels(self.layout.preview_channels());
-
         // GPU render (mixer compositing)
         varda.render_mixer_frame();
 
@@ -445,23 +438,30 @@ impl UIRunner {
         let Some(varda_ref) = self.varda.as_ref() else {
             return;
         };
+        // One snapshot per frame: the GUI's view borrows it, and every tenth
+        // frame the API gets the same build instead of a second one.
+        let engine = varda_ref.build_engine_state();
         let mut ui_data = crate::usecases::ui::build_ui_data(
             varda_ref,
+            &engine,
             &self.layout,
-            &self.deck_preview_textures,
-            &self.channel_preview_textures,
-            &self.output_preview_textures,
-            self.main_output_texture,
+            &crate::usecases::ui::PreviewTextures {
+                deck: &self.deck_preview_textures,
+                channel: &self.channel_preview_textures,
+                output: &self.output_preview_textures,
+                main_output: self.main_output_texture,
+            },
             self.lut_catalog.files(
                 &varda_ref.session.workspace.luts_dir(),
                 std::time::Instant::now(),
             ),
         );
+        self.publish_counter += 1;
+        if self.publish_counter.is_multiple_of(10) {
+            varda_ref.publish(engine);
+        }
         ui_data.can_undo = varda_ref.history_can_undo();
         ui_data.can_redo = varda_ref.history_can_redo();
-        ui_data.pending_deck_loads = self
-            .pending_deck_loads
-            .load(std::sync::atomic::Ordering::Relaxed);
         ui_data.dome_preview_open = self.layout.dome_preview_open;
         ui_data.dome_preview_texture = self.dome_preview_texture;
         ui_data.camera_detect_texture = self.camera_detect_texture;
@@ -587,6 +587,21 @@ impl UIRunner {
                 return;
             };
 
+            ui_actions.commands.append(&mut self.queued_commands);
+
+            // Files picked in a dialog become deck-adds on this frame's command
+            // stream. The dialog carries a channel UUID rather than an index:
+            // the user may have spent minutes browsing while the UI stayed live.
+            while let Ok(result) = self.file_dialog_rx.try_recv() {
+                for path in result.paths {
+                    let channel_uuid = result.channel_uuid.clone();
+                    ui_actions.commands.push(match result.kind {
+                        FileDialogKind::Image => EngineCommand::AddImageDeck { channel_uuid, path },
+                        FileDialogKind::Video => EngineCommand::AddVideoDeck { channel_uuid, path },
+                    });
+                }
+            }
+
             // ── Undo/redo: snapshot before undoable mutations ──
             // Unified scene+stage timeline with general gesture coalescing
             // (ui-engine-boundary.md WS3). A snapshot is pushed when the frame
@@ -594,11 +609,9 @@ impl UIRunner {
             // held drag — so a continuous gesture of any kind (warp drag, param
             // slider) collapses into a single undo step (snapshot on the first
             // frame). Undoability is decided by the single, compiler-checked
-            // `command_is_undoable` predicate (via `batch_has_undoable`), plus
-            // the residual `has_undoable_action` gate for fields not yet on
-            // `commands`. The engine takes the snapshot inside the drain.
-            let dirty =
-                ui_actions.has_undoable_action() || varda.batch_has_undoable(&ui_actions.commands);
+            // `command_is_undoable` predicate (via `batch_has_undoable`). The
+            // engine takes the snapshot inside the drain.
+            let dirty = varda.batch_has_undoable(&ui_actions.commands);
             // A recording pass is one long gesture: it pushed its own entry
             // when the first parameter was touched, and every write until it
             // ends belongs to that entry.
@@ -608,28 +621,29 @@ impl UIRunner {
                 ui_actions.session.gesture_active || varda.is_recording(),
             );
 
-            // Intercept shader_to_add: resolve and route to background loading
-            if let Some((channel_uuid, gen_idx)) = ui_actions.session.shader_to_add.take()
-                && let Some(shader) = varda.resolve_generator(gen_idx)
-            {
-                let token = self.deck_load_targets.record(channel_uuid);
-                let context = varda.gpu_context();
-                VardaApp::spawn_deck_loads(
-                    &self.deck_load_tx,
-                    context,
-                    &self.pending_deck_loads,
-                    varda.render_width(),
-                    varda.render_height(),
-                    Vec::new(),
-                    Vec::new(),
-                    vec![(token, shader)],
-                );
-            }
-
             // ── Editor prefs, undo/redo, and save ride the same command stream,
             // after this frame's edits, in that order. Control-surface requests
             // join the UI's own.
             let pending = varda.take_pending_global_actions();
+            // Compared in place so a frame that changes nothing allocates nothing.
+            let cued = self.layout.preview_channels();
+            let channels = varda.mixer_ref().channels();
+            let unchanged = cued.len() == self.sent_preview_channels.len()
+                && cued
+                    .iter()
+                    .zip(&self.sent_preview_channels)
+                    .all(|(&idx, sent)| channels.get(idx).is_some_and(|ch| ch.uuid() == sent));
+            if !unchanged {
+                let channel_uuids: Vec<String> = cued
+                    .iter()
+                    .filter_map(|&idx| channels.get(idx))
+                    .map(|ch| ch.uuid().to_string())
+                    .collect();
+                self.sent_preview_channels.clone_from(&channel_uuids);
+                ui_actions
+                    .commands
+                    .push(EngineCommand::SetPreviewChannels { channel_uuids });
+            }
             let prefs = self.layout.editor_prefs();
             if self.sent_editor_prefs != Some(prefs) {
                 ui_actions
@@ -646,14 +660,29 @@ impl UIRunner {
                 ui_actions.commands.push(EngineCommand::SaveWorkspace);
             }
 
-            let engine_outcome = varda.apply_engine_actions(&mut ui_actions, starts_undo_step);
+            // Where each channel this frame removes sits now, so selection can
+            // follow once the engine confirms it is gone.
+            let mut removals: Vec<(usize, String)> = ui_actions
+                .commands
+                .iter()
+                .filter_map(|cmd| match cmd {
+                    EngineCommand::RemoveChannel { channel_uuid } => varda
+                        .mixer_ref()
+                        .find_channel_by_uuid(channel_uuid)
+                        .map(|idx| (idx, channel_uuid.clone())),
+                    _ => None,
+                })
+                .collect();
 
-            varda.apply_ui_actions(&ui_actions);
+            varda.apply_engine_actions(std::mem::take(&mut ui_actions.commands), starts_undo_step);
             varda.update_controller_leds();
 
-            // Fix up selection state after channel removal
-            if let Some(ch_idx) = engine_outcome.removed_channel {
-                self.layout.fixup_channel_removal(ch_idx);
+            // Highest position first, so each fixup sees the indices it expects.
+            removals.sort_unstable_by_key(|r| std::cmp::Reverse(r.0));
+            for (ch_idx, uuid) in removals {
+                if varda.mixer_ref().find_channel_by_uuid(&uuid).is_none() {
+                    self.layout.fixup_channel_removal(ch_idx);
+                }
             }
 
             // Spawn file dialogs on background threads (non-blocking)
@@ -662,98 +691,6 @@ impl UIRunner {
             }
             if let Some(uuid) = ui_actions.session.open_video_dialog_for_channel.take() {
                 VardaApp::open_file_dialog(&self.file_dialog_tx, FileDialogKind::Video, uuid);
-            }
-
-            // Poll completed file dialog results → spawn background deck loads.
-            // The dialog carries a channel UUID rather than an index: the user
-            // may have spent minutes browsing while the UI stayed live.
-            while let Ok(result) = self.file_dialog_rx.try_recv() {
-                if varda
-                    .mixer_ref()
-                    .find_channel_by_uuid(&result.channel_uuid)
-                    .is_none()
-                {
-                    log::warn!(
-                        "Dropping {} file dialog result(s): channel {} no longer exists",
-                        result.paths.len(),
-                        result.channel_uuid
-                    );
-                    continue;
-                }
-                let mut images = Vec::new();
-                let mut videos = Vec::new();
-                for path in result.paths {
-                    let token = self.deck_load_targets.record(result.channel_uuid.clone());
-                    match result.kind {
-                        FileDialogKind::Image => images.push((token, path)),
-                        FileDialogKind::Video => videos.push((token, path)),
-                    }
-                }
-                if !images.is_empty() || !videos.is_empty() {
-                    let context = varda.gpu_context();
-                    VardaApp::spawn_deck_loads(
-                        &self.deck_load_tx,
-                        context,
-                        &self.pending_deck_loads,
-                        varda.render_width(),
-                        varda.render_height(),
-                        images,
-                        videos,
-                        Vec::new(),
-                    );
-                }
-            }
-
-            // Poll completed background deck loads (non-blocking)
-            while let Ok(result) = self.deck_load_rx.try_recv() {
-                let target = self.deck_load_targets.claim(result.token);
-                match result.deck {
-                    Ok(deck) => {
-                        // Resolve the target here, not at spawn: the channel list
-                        // can change while a decode or shader compile runs, and an
-                        // index captured back then would now name a different
-                        // channel. See `/spec/api-addressing.md`.
-                        let Some(channel_uuid) = target else {
-                            log::warn!(
-                                "Dropping background load '{}': no target channel was recorded",
-                                result.name
-                            );
-                            continue;
-                        };
-                        let Some(ch_idx) = varda.mixer_ref().find_channel_by_uuid(&channel_uuid)
-                        else {
-                            log::warn!(
-                                "Dropping background load '{}': channel {} no longer exists",
-                                result.name,
-                                channel_uuid
-                            );
-                            continue;
-                        };
-                        // Same post-construction wiring the synchronous
-                        // `add_deck` command performs — analyzer startup and
-                        // required-device acquisition. Without it a shader
-                        // dropped from the Library renders against blank
-                        // preprocessor textures with no error shown.
-                        let mut deck = deck;
-                        if let Err(e) = varda.finalize_new_deck(&mut deck) {
-                            log::error!("Failed to add deck: {e}");
-                            varda.notify_error(format!("Failed to add deck: {e}"));
-                            continue;
-                        }
-                        if let Some(ch) = varda.mixer_mut().channel_mut(ch_idx) {
-                            let idx = ch.add_deck(deck);
-                            log::info!(
-                                "Background load complete: deck {} to channel {}: {}",
-                                idx,
-                                channel_uuid,
-                                result.name
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        log::error!("Background deck load failed for '{}': {}", result.name, e);
-                    }
-                }
             }
         }
 
@@ -780,8 +717,6 @@ impl UIRunner {
             let Some(varda) = self.varda.as_mut() else {
                 return;
             };
-            // Publish the cued channel(s) so off-air previews render live (issue #72).
-            varda.set_preview_channels(self.layout.preview_channels());
             varda.render_mixer_frame();
         }
         let mixer_us = t_mixer.elapsed().as_micros();
@@ -797,10 +732,6 @@ impl UIRunner {
             varda.render_outputs();
             #[cfg(feature = "html")]
             varda.render_interactive();
-            self.publish_counter += 1;
-            if self.publish_counter.is_multiple_of(10) {
-                varda.publish_state();
-            }
         }
         let outputs_us = t_outputs.elapsed().as_micros();
 
@@ -1191,22 +1122,20 @@ mod tests {
             .as_ref()
             .expect("engine attached")
             .state_reader();
-        // Start from a known-empty slot regardless of construction-time publishing.
-        reader.write().expect("state lock").take();
+        let generation = || reader.latest().map(|p| p.generation);
+        let before = generation();
 
         let host = FakeHost::default();
         for frame in 1..10 {
             runner.render_headless(&host);
-            assert!(
-                reader.read().expect("state lock").is_none(),
-                "frame {frame} must not publish"
-            );
+            assert_eq!(generation(), before, "frame {frame} must not publish");
         }
 
         runner.render_headless(&host);
         assert_eq!(runner.publish_counter, 10);
-        assert!(
-            reader.read().expect("state lock").is_some(),
+        assert_ne!(
+            generation(),
+            before,
             "the tenth frame publishes engine state"
         );
     }

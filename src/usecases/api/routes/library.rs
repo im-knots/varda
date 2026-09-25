@@ -1,27 +1,15 @@
 //! Library routes: GET /api/library/*
 
+use super::read_or_error;
 use axum::Json;
 use axum::extract::State;
-use axum::http::StatusCode;
 use axum::response::IntoResponse;
 
 use crate::usecases::api::SharedState;
 use crate::usecases::api::projection::{
-    self, CameraEntry, DepthSensorEntry, MonitorEntry, NdiSourceEntry, ShaderEntry, StateReadError,
-    SyphonSourceEntry, TransitionEntry,
+    CameraEntry, DepthSensorEntry, MonitorEntry, NdiSourceEntry, ShaderEntry, SyphonSourceEntry,
+    TransitionEntry,
 };
-
-fn read_or_error(
-    state: &SharedState,
-) -> Result<crate::engine::EngineState, (StatusCode, &'static str)> {
-    projection::read_state(&state.engine_state).map_err(|e| match e {
-        StateReadError::NotInitialized => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Engine not yet initialized",
-        ),
-        StateReadError::LockPoisoned => (StatusCode::INTERNAL_SERVER_ERROR, "State lock poisoned"),
-    })
-}
 
 /// Generator shaders available in the registry, with their registry indices.
 #[utoipa::path(get, path = "/api/library/generators",
@@ -202,7 +190,7 @@ pub async fn monitors(State(state): State<SharedState>) -> impl IntoResponse {
     tag = "Analyzers")]
 pub async fn analyzers(State(state): State<SharedState>) -> impl IntoResponse {
     match read_or_error(&state) {
-        Ok(s) => Json(s.analyzers).into_response(),
+        Ok(s) => Json(&s.analyzers).into_response(),
         Err((status, msg)) => (status, msg).into_response(),
     }
 }

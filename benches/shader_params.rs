@@ -97,7 +97,7 @@ fn bench_shader_params_buffer(c: &mut Criterion) {
 
     for n_floats in [2usize, 6, 14] {
         let total = n_floats + 2;
-        let lfo_key = "deck0:p0".to_string();
+        let lfo_key = "deck0/p0".to_string();
         let eng_empty = ModulationEngine::new();
         let eng_lfo = engine_with_lfo(&lfo_key);
 
@@ -136,7 +136,7 @@ fn bench_prefix_construction(c: &mut Criterion) {
     let mut g = c.benchmark_group("prefix_construction");
     g.sample_size(500);
 
-    // Simulate the deck render path: format!("deck_{}", uuid) + modulated buffer build
+    // Simulate the deck render path: the deck param prefix + modulated buffer build
     let deck_uuid = "a1b2c3d4";
     let fx_uuid = "e5f6a7b8";
 
@@ -144,29 +144,29 @@ fn bench_prefix_construction(c: &mut Criterion) {
         let total = n_floats + 2;
         let eng = ModulationEngine::new();
 
-        // Deck prefix: format!("deck_{}", uuid) each frame
+        // Deck param prefix each frame
         let mut params_deck_format = make_params(n_floats);
         g.bench_with_input(BenchmarkId::new("deck_format", total), &total, |b, _| {
             b.iter(|| {
-                let prefix = format!("deck_{deck_uuid}");
+                let prefix = format!("deck/{deck_uuid}/param");
                 params_deck_format.build_modulated_buffer_data(&eng, Some(&prefix));
                 criterion::black_box(params_deck_format.scratch().len())
             });
         });
 
-        // Effect prefix: format!("fx_{}", uuid) each frame
+        // Effect param prefix each frame
         let mut params_fx_format = make_params(n_floats);
         g.bench_with_input(BenchmarkId::new("fx_format", total), &total, |b, _| {
             b.iter(|| {
-                let prefix = format!("fx_{fx_uuid}");
+                let prefix = format!("effect/{fx_uuid}/param");
                 params_fx_format.build_modulated_buffer_data(&eng, Some(&prefix));
                 criterion::black_box(params_fx_format.scratch().len())
             });
         });
 
         // Cached: prefix already exists, just pass &str (no allocation)
-        let cached_deck_prefix = format!("deck_{deck_uuid}");
-        let cached_fx_prefix = format!("fx_{fx_uuid}");
+        let cached_deck_prefix = format!("deck/{deck_uuid}/param");
+        let cached_fx_prefix = format!("effect/{fx_uuid}/param");
         let mut params_deck_cached = make_params(n_floats);
         g.bench_with_input(BenchmarkId::new("deck_cached", total), &total, |b, _| {
             b.iter(|| {
@@ -202,7 +202,7 @@ fn bench_phase_accumulator_reads(c: &mut Criterion) {
     for n_inputs in [1usize, 4] {
         let names = &PHASE_PARAMS[..n_inputs];
         let eng_empty = ModulationEngine::new();
-        let eng_lfo = engine_with_lfo("deck0:p0");
+        let eng_lfo = engine_with_lfo("deck0/p0");
 
         let params_base = make_params(14);
         g.bench_with_input(BenchmarkId::new("base", n_inputs), &n_inputs, |b, _| {

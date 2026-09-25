@@ -10,26 +10,27 @@ use super::utils::{
 };
 use crate::channel::DeckRenderFps;
 use crate::engine::EngineCommand;
+use crate::engine::value::param::{DeckTarget, ParamAddress};
 use crate::modulation::DEFAULT_ASSIGNMENT_AMOUNT;
 use crate::params::ParamValue;
 use crate::{BlendMode, ScalingMode};
 
 /// The `〰` dropdown for one of a video deck's playback controls.
 ///
-/// Playback targets are keyed by reserved names on the deck's own modulation
-/// prefix rather than by a `ParamUIInfo` row, so they are addressed the way a
-/// channel fader is. See /spec/video-playback-modulation.md § Key naming.
+/// Playback targets are deck built-ins (`deck/<uuid>/video/speed`, ...) rather
+/// than `ParamUIInfo` rows, so they are addressed the way a channel fader is.
+/// See /spec/video-playback-modulation.md § Key naming.
 fn playback_mod_menu(
     ui: &mut egui::Ui,
     deck_uuid: &str,
-    name: &str,
+    target: DeckTarget,
     data: &UIData,
     actions: &mut UIActions,
 ) {
     widgets::modulation_menu_for_key(
         ui,
-        format!("vidmod-{deck_uuid}-{name}"),
-        &format!("deck_{deck_uuid}:{name}"),
+        format!("vidmod-{deck_uuid}-{target}"),
+        &ParamAddress::deck(deck_uuid, target).to_string(),
         &data.modulation_sources,
         &data.modulation_assignments,
         &mut actions.commands,
@@ -41,8 +42,8 @@ fn playback_mod_menu(
 ///
 /// The colour has to match the card in the modulation panel, so the index comes
 /// from the unfiltered source list.
-fn playback_mod_color(deck_uuid: &str, name: &str, data: &UIData) -> Option<egui::Color32> {
-    let key = format!("deck_{deck_uuid}:{name}");
+fn playback_mod_color(deck_uuid: &str, target: DeckTarget, data: &UIData) -> Option<egui::Color32> {
+    let key = ParamAddress::deck(deck_uuid, target).to_string();
     let first = data.modulation_assignments.get(&key)?.first()?;
     let idx = data
         .modulation_sources
@@ -107,7 +108,9 @@ fn learn_overlay(
         }
         let id = ui.id().with(("midi_learn", path.as_str()));
         if ui.interact(rect, id, egui::Sense::click()).clicked() {
-            actions.session.midi_learn_select = Some(path);
+            actions
+                .commands
+                .push(EngineCommand::MidiLearnSelect { path });
         }
     } else if data.keyboard_learn_active {
         if data.keyboard_learn_target.as_deref() == Some(path.as_str()) {
@@ -117,7 +120,9 @@ fn learn_overlay(
         }
         let id = ui.id().with(("kb_learn", path.as_str()));
         if ui.interact(rect, id, egui::Sense::click()).clicked() {
-            actions.session.keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(path));
+            actions.commands.push(EngineCommand::KeyboardLearnSelect {
+                target: crate::keymap::KeyTarget::ParamPath(path),
+            });
         }
     }
 }
@@ -155,14 +160,14 @@ fn render_depth_controls(
             let resp = ui.add(egui::Slider::new(&mut v, 0.0..=1.0).show_value(false));
             if resp.changed() {
                 actions.commands.push(EngineCommand::SetParam {
-                    path: format!("deck/{}/depth/{}", deck.uuid, name),
+                    path: ParamAddress::deck(&deck.uuid, DeckTarget::depth(name)).to_string(),
                     value: ParamValue::Float(v),
                 });
             }
             learn_overlay(
                 ui,
                 resp.rect,
-                format!("deck/{}/depth/{}", deck.uuid, name),
+                ParamAddress::deck(&deck.uuid, DeckTarget::depth(name)).to_string(),
                 data,
                 actions,
             );
@@ -187,7 +192,7 @@ fn render_depth_controls(
             // Map bucket index to a normalized value that lands in that bucket.
             let norm = (idx as f32 + 0.5) / 3.0;
             actions.commands.push(EngineCommand::SetParam {
-                path: format!("deck/{}/depth/color_mode", deck.uuid),
+                path: ParamAddress::deck(&deck.uuid, DeckTarget::depth("color_mode")).to_string(),
                 value: ParamValue::Float(norm),
             });
         }
@@ -228,14 +233,15 @@ fn render_depth_prepro_controls(
             let resp = ui.add(egui::Slider::new(&mut v, 0.0..=1.0).show_value(false));
             if resp.changed() {
                 actions.commands.push(EngineCommand::SetParam {
-                    path: format!("deck/{}/depth_prepro/{}", deck.uuid, name),
+                    path: ParamAddress::deck(&deck.uuid, DeckTarget::depth_preprocess(name))
+                        .to_string(),
                     value: ParamValue::Float(v),
                 });
             }
             learn_overlay(
                 ui,
                 resp.rect,
-                format!("deck/{}/depth_prepro/{}", deck.uuid, name),
+                ParamAddress::deck(&deck.uuid, DeckTarget::depth_preprocess(name)).to_string(),
                 data,
                 actions,
             );
@@ -248,14 +254,15 @@ fn render_depth_prepro_controls(
         let resp = ui.checkbox(&mut mirror, "Mirror");
         if resp.changed() {
             actions.commands.push(EngineCommand::SetParam {
-                path: format!("deck/{}/depth_prepro/mirror", deck.uuid),
+                path: ParamAddress::deck(&deck.uuid, DeckTarget::depth_preprocess("mirror"))
+                    .to_string(),
                 value: ParamValue::Float(f32::from(u8::from(mirror))),
             });
         }
         learn_overlay(
             ui,
             resp.rect,
-            format!("deck/{}/depth_prepro/mirror", deck.uuid),
+            ParamAddress::deck(&deck.uuid, DeckTarget::depth_preprocess("mirror")).to_string(),
             data,
             actions,
         );
@@ -340,7 +347,7 @@ fn render_capture_controls(
 ) {
     let send = |actions: &mut UIActions, name: &str, value: f32| {
         actions.commands.push(EngineCommand::SetParam {
-            path: format!("deck/{}/capture/{}", deck.uuid, name),
+            path: ParamAddress::deck(&deck.uuid, DeckTarget::capture(name)).to_string(),
             value: ParamValue::Float(value),
         });
     };
@@ -371,7 +378,7 @@ fn render_capture_controls(
         learn_overlay(
             ui,
             resp.rect,
-            format!("deck/{}/capture/rate", deck.uuid),
+            ParamAddress::deck(&deck.uuid, DeckTarget::capture("rate")).to_string(),
             data,
             actions,
         );
@@ -412,7 +419,7 @@ fn render_capture_controls(
             learn_overlay(
                 ui,
                 resp.rect,
-                format!("deck/{}/capture/{}", deck.uuid, name),
+                ParamAddress::deck(&deck.uuid, DeckTarget::capture(name)).to_string(),
                 data,
                 actions,
             );
@@ -429,7 +436,7 @@ fn render_capture_controls(
         learn_overlay(
             ui,
             resp.rect,
-            format!("deck/{}/capture/cursor", deck.uuid),
+            ParamAddress::deck(&deck.uuid, DeckTarget::capture("cursor")).to_string(),
             data,
             actions,
         );
@@ -447,7 +454,7 @@ fn render_capture_controls(
             learn_overlay(
                 ui,
                 resp.rect,
-                format!("deck/{}/capture/exclude_varda", deck.uuid),
+                ParamAddress::deck(&deck.uuid, DeckTarget::capture("exclude_varda")).to_string(),
                 data,
                 actions,
             );
@@ -763,8 +770,8 @@ pub(super) fn render_selected_deck_detail(
                                 if play_resp.clicked() {
                                     actions.commands.push(EngineCommand::VideoTogglePlay { deck_uuid: deck.uuid.clone() });
                                 }
-                                learn_overlay(ui, play_resp.rect, format!("deck/{}/video/play", deck.uuid), data, actions);
-                                playback_mod_menu(ui, &deck.uuid, crate::video::modulation::PLAY, data, actions);
+                                learn_overlay(ui, play_resp.rect, ParamAddress::deck(&deck.uuid, DeckTarget::VideoPlay).to_string(), data, actions);
+                                playback_mod_menu(ui, &deck.uuid, DeckTarget::VideoPlay, data, actions);
                             });
 
                             // Position scrub bar. The handle rides the live
@@ -781,14 +788,14 @@ pub(super) fn render_selected_deck_detail(
                                 if resp.changed() {
                                     actions.commands.push(EngineCommand::VideoSeek { deck_uuid: deck.uuid.clone(), position_secs: f64::from(pos) });
                                 }
-                                if let Some(color) = playback_mod_color(&deck.uuid, crate::video::modulation::POSITION, data) {
+                                if let Some(color) = playback_mod_color(&deck.uuid, DeckTarget::VideoPosition, data) {
                                     let anchor = vp.position - vp.position_offset;
                                     let track = slider_track(ui, resp.rect, false);
                                     draw_slider_ghost(ui, track, anchor as f32, 0.0..=duration as f32, color);
                                 }
-                                learn_overlay(ui, resp.rect, format!("deck/{}/video/seek", deck.uuid), data, actions);
+                                learn_overlay(ui, resp.rect, ParamAddress::deck(&deck.uuid, DeckTarget::VideoPosition).to_string(), data, actions);
                                 ui.label(format_time(duration));
-                                playback_mod_menu(ui, &deck.uuid, crate::video::modulation::POSITION, data, actions);
+                                playback_mod_menu(ui, &deck.uuid, DeckTarget::VideoPosition, data, actions);
                             });
 
                             // Speed control
@@ -801,12 +808,12 @@ pub(super) fn render_selected_deck_detail(
                                 }
                                 // The slider stays on the set point, so the
                                 // ghost is the only thing showing the live rate.
-                                if let Some(color) = playback_mod_color(&deck.uuid, crate::video::modulation::SPEED, data) {
+                                if let Some(color) = playback_mod_color(&deck.uuid, DeckTarget::VideoSpeed, data) {
                                     let track = slider_track(ui, resp.rect, true);
                                     draw_slider_ghost(ui, track, vp.effective_speed as f32, 0.1..=4.0, color);
                                 }
-                                learn_overlay(ui, resp.rect, format!("deck/{}/video/speed", deck.uuid), data, actions);
-                                playback_mod_menu(ui, &deck.uuid, crate::video::modulation::SPEED, data, actions);
+                                learn_overlay(ui, resp.rect, ParamAddress::deck(&deck.uuid, DeckTarget::VideoSpeed).to_string(), data, actions);
+                                playback_mod_menu(ui, &deck.uuid, DeckTarget::VideoSpeed, data, actions);
                             });
 
                             // Loop mode
@@ -825,9 +832,9 @@ pub(super) fn render_selected_deck_detail(
                                         actions.commands.push(EngineCommand::VideoSetLoopMode { deck_uuid: deck.uuid.clone(), mode: *mode });
                                     }
                                 }
-                                playback_mod_menu(ui, &deck.uuid, crate::video::modulation::LOOP_MODE, data, actions);
+                                playback_mod_menu(ui, &deck.uuid, DeckTarget::VideoLoopMode, data, actions);
                             });
-                            learn_overlay(ui, loop_resp.response.rect, format!("deck/{}/video/loop_mode", deck.uuid), data, actions);
+                            learn_overlay(ui, loop_resp.response.rect, ParamAddress::deck(&deck.uuid, DeckTarget::VideoLoopMode).to_string(), data, actions);
 
                             if chasing_now {
                                 ui.label(
@@ -839,11 +846,11 @@ pub(super) fn render_selected_deck_detail(
                                 // this design avoids, so say which one wins
                                 // rather than letting it look broken.
                                 let held = [
-                                    ("Playhead", crate::video::modulation::POSITION),
-                                    ("Speed", crate::video::modulation::SPEED),
+                                    ("Playhead", DeckTarget::VideoPosition),
+                                    ("Speed", DeckTarget::VideoSpeed),
                                 ]
                                 .into_iter()
-                                .filter(|(_, name)| playback_mod_color(&deck.uuid, name, data).is_some())
+                                .filter(|(_, target)| playback_mod_color(&deck.uuid, target.clone(), data).is_some())
                                 .map(|(label, _)| label)
                                 .collect::<Vec<_>>();
                                 if !held.is_empty() {
@@ -932,7 +939,7 @@ pub(super) fn render_selected_deck_detail(
                                 {
                                     actions.commands.push(EngineCommand::VideoSetInPoint { deck_uuid: deck.uuid.clone(), secs: f64::from(in_pt) });
                                 }
-                                learn_overlay(ui, resp.rect, format!("deck/{}/video/in_point", deck.uuid), data, actions);
+                                learn_overlay(ui, resp.rect, ParamAddress::deck(&deck.uuid, DeckTarget::VideoInPoint).to_string(), data, actions);
                                 ui.label(format_time(f64::from(in_pt)));
                             });
 
@@ -946,7 +953,7 @@ pub(super) fn render_selected_deck_detail(
                                 {
                                     actions.commands.push(EngineCommand::VideoSetOutPoint { deck_uuid: deck.uuid.clone(), secs: f64::from(out_pt) });
                                 }
-                                learn_overlay(ui, resp.rect, format!("deck/{}/video/out_point", deck.uuid), data, actions);
+                                learn_overlay(ui, resp.rect, ParamAddress::deck(&deck.uuid, DeckTarget::VideoOutPoint).to_string(), data, actions);
                                 ui.label(format_time(f64::from(out_pt)));
                             });
 
@@ -965,7 +972,7 @@ pub(super) fn render_selected_deck_detail(
                                 if clear_resp.clicked() {
                                     actions.commands.push(EngineCommand::VideoClearInOutPoints { deck_uuid: deck.uuid.clone() });
                                 }
-                                learn_overlay(ui, clear_resp.rect, format!("deck/{}/video/clear", deck.uuid), data, actions);
+                                learn_overlay(ui, clear_resp.rect, ParamAddress::deck(&deck.uuid, DeckTarget::VideoClearInOut).to_string(), data, actions);
                             });
 
                             if has_range {
@@ -1039,7 +1046,7 @@ pub(super) fn render_selected_deck_detail(
                                             ui.label("Play:");
                                             let mut val = at.play_duration_value as f32;
                                             let max = if at.play_duration_is_beats { 128.0 } else { 300.0 };
-                                            let play_path = format!("deck/{}/at/play_duration", deck.uuid);
+                                            let play_path = ParamAddress::deck(&deck.uuid, DeckTarget::AutoTransitionPlay).to_string();
                                             let slider_rect = if any_learn {
                                                 let inner = ui.scope(|ui| {
                                                     ui.disable();
@@ -1063,7 +1070,7 @@ pub(super) fn render_selected_deck_detail(
                                                 else { widgets::draw_midi_learn_glow(ui, slider_rect); }
                                                 let click_id = ui.id().with(("midi_learn_at_play", ch_idx, deck_idx));
                                                 if ui.interact(slider_rect, click_id, egui::Sense::click()).clicked() {
-                                                    actions.session.midi_learn_select = Some(play_path.clone());
+                                                    actions.commands.push(EngineCommand::MidiLearnSelect { path: play_path.clone() });
                                                 }
                                             }
                                             if data.keyboard_learn_active {
@@ -1072,7 +1079,7 @@ pub(super) fn render_selected_deck_detail(
                                                 else { widgets::draw_keyboard_learn_glow(ui, slider_rect); }
                                                 let click_id = ui.id().with(("kb_learn_at_play", ch_idx, deck_idx));
                                                 if ui.interact(slider_rect, click_id, egui::Sense::click()).clicked() {
-                                                    actions.session.keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(play_path));
+                                                    actions.commands.push(EngineCommand::KeyboardLearnSelect { target: crate::keymap::KeyTarget::ParamPath(play_path) });
                                                 }
                                             }
                                             if !any_learn
@@ -1086,7 +1093,7 @@ pub(super) fn render_selected_deck_detail(
                                             ui.label("Trans:");
                                             let mut val = at.transition_duration_value as f32;
                                             let max = if at.transition_duration_is_beats { 32.0 } else { 30.0 };
-                                            let trans_path = format!("deck/{}/at/trans_duration", deck.uuid);
+                                            let trans_path = ParamAddress::deck(&deck.uuid, DeckTarget::AutoTransitionFade).to_string();
                                             let slider_rect = if any_learn {
                                                 let inner = ui.scope(|ui| {
                                                     ui.disable();
@@ -1110,7 +1117,7 @@ pub(super) fn render_selected_deck_detail(
                                                 else { widgets::draw_midi_learn_glow(ui, slider_rect); }
                                                 let click_id = ui.id().with(("midi_learn_at_trans", ch_idx, deck_idx));
                                                 if ui.interact(slider_rect, click_id, egui::Sense::click()).clicked() {
-                                                    actions.session.midi_learn_select = Some(trans_path.clone());
+                                                    actions.commands.push(EngineCommand::MidiLearnSelect { path: trans_path.clone() });
                                                 }
                                             }
                                             if data.keyboard_learn_active {
@@ -1119,7 +1126,7 @@ pub(super) fn render_selected_deck_detail(
                                                 else { widgets::draw_keyboard_learn_glow(ui, slider_rect); }
                                                 let click_id = ui.id().with(("kb_learn_at_trans", ch_idx, deck_idx));
                                                 if ui.interact(slider_rect, click_id, egui::Sense::click()).clicked() {
-                                                    actions.session.keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(trans_path));
+                                                    actions.commands.push(EngineCommand::KeyboardLearnSelect { target: crate::keymap::KeyTarget::ParamPath(trans_path) });
                                                 }
                                             }
                                             if !any_learn
@@ -1225,8 +1232,8 @@ pub(super) fn render_selected_deck_detail(
                                                     ui.selectable_value(&mut selected_scaling, i, *mode_name);
                                                 }
                                             });
-                                        learn_overlay(ui, combo.response.rect, format!("deck/{}/scaling_mode", deck.uuid), data, actions);
-                                        playback_mod_menu(ui, &deck.uuid, crate::video::modulation::SCALING_MODE, data, actions);
+                                        learn_overlay(ui, combo.response.rect, ParamAddress::deck(&deck.uuid, DeckTarget::ScalingMode).to_string(), data, actions);
+                                        playback_mod_menu(ui, &deck.uuid, DeckTarget::ScalingMode, data, actions);
                                     });
                                     if selected_scaling != current_idx {
                                         let new_scaling = match selected_scaling {
@@ -1321,16 +1328,16 @@ pub(super) fn render_selected_deck_detail(
                                         &data.modulation_sources,
                                         &|name: &str, val: ParamValue| EngineCommand::SetGeneratorParam { deck_uuid: deck.uuid.clone(), name: name.to_string(), value: val },
                                         Some(&|name: &str, source_uuid: &str| EngineCommand::AssignModulation {
-                                            target: format!("deck_{deck_uuid_assign}:{name}"), source_id: source_uuid.to_string(), amount: DEFAULT_ASSIGNMENT_AMOUNT,
+                                            target: ParamAddress::deck_param(&deck_uuid_assign, name).to_string(), source_id: source_uuid.to_string(), amount: DEFAULT_ASSIGNMENT_AMOUNT,
                                         }),
                                         Some(&|name: &str, source_uuid: &str| EngineCommand::ClearModulationSource {
-                                            target: format!("deck_{deck_uuid_unassign}:{name}"), source_id: source_uuid.to_string(),
+                                            target: ParamAddress::deck_param(&deck_uuid_unassign, name).to_string(), source_id: source_uuid.to_string(),
                                         }),
                                         Some(&|name: &str| EngineCommand::ClearModulation {
-                                            target: format!("deck_{deck_uuid_remove}:{name}"),
+                                            target: ParamAddress::deck_param(&deck_uuid_remove, name).to_string(),
                                         }),
                                         Some(&|name: &str| EngineCommand::AddAutomationLane {
-                                            target: format!("deck_{deck_uuid_automate}:{name}"),
+                                            target: ParamAddress::deck_param(&deck_uuid_automate, name).to_string(),
                                             timebase: crate::timebase::Timebase::Transport,
                                         }),
                                         &mut actions.commands,
@@ -1338,13 +1345,11 @@ pub(super) fn render_selected_deck_detail(
                                         &format!("sel_{ch_idx}_{deck_idx}"),
                                         Some(&midi_path_prefix),
                                         data.midi_learn_active,
-                                        &mut actions.session.midi_learn_select,
                                         data.midi_learn_target.as_deref(),
                                         &data.modulation_assignments,
                                         &data.modulation_current_values,
-                                        &format!("deck_{deck_uuid}"),
+                                        &crate::engine::value::param::deck_param_prefix(&deck_uuid),
                                         data.keyboard_learn_active,
-                                        &mut actions.session.keyboard_learn_select,
                                         data.keyboard_learn_target.as_deref(),
                                     );
                                     ui.add_space(4.0);
@@ -1401,23 +1406,23 @@ pub(super) fn render_selected_deck_detail(
                                     let eff_uuid_unassign = eff_uuid.clone();
                                     let eff_uuid_remove = eff_uuid.clone();
                                     let eff_uuid_automate = eff_uuid.clone();
-                                    let eff_midi_prefix = format!("deck/{deck_uuid_eff}/effect/{eff_uuid}");
+                                    let eff_midi_prefix = format!("effect/{eff_uuid}");
                                     widgets::render_effect_params(
                                         ui,
                                         &eff_params.params,
                                         &data.modulation_sources,
                                         &|name: &str, val: ParamValue| EngineCommand::SetEffectParam { effect_uuid: eff_uuid_param.clone(), name: name.to_string(), value: val },
                                         Some(&|name: &str, source_uuid: &str| EngineCommand::AssignModulation {
-                                            target: format!("fx_{eff_uuid_assign}:{name}"), source_id: source_uuid.to_string(), amount: DEFAULT_ASSIGNMENT_AMOUNT,
+                                            target: ParamAddress::effect_param(&eff_uuid_assign, name).to_string(), source_id: source_uuid.to_string(), amount: DEFAULT_ASSIGNMENT_AMOUNT,
                                         }),
                                         Some(&|name: &str, source_uuid: &str| EngineCommand::ClearModulationSource {
-                                            target: format!("fx_{eff_uuid_unassign}:{name}"), source_id: source_uuid.to_string(),
+                                            target: ParamAddress::effect_param(&eff_uuid_unassign, name).to_string(), source_id: source_uuid.to_string(),
                                         }),
                                         Some(&|name: &str| EngineCommand::ClearModulation {
-                                            target: format!("fx_{eff_uuid_remove}:{name}"),
+                                            target: ParamAddress::effect_param(&eff_uuid_remove, name).to_string(),
                                         }),
                                         Some(&|name: &str| EngineCommand::AddAutomationLane {
-                                            target: format!("fx_{eff_uuid_automate}:{name}"),
+                                            target: ParamAddress::effect_param(&eff_uuid_automate, name).to_string(),
                                             timebase: crate::timebase::Timebase::Transport,
                                         }),
                                         &mut actions.commands,
@@ -1425,13 +1430,11 @@ pub(super) fn render_selected_deck_detail(
                                         &format!("fx_{deck_uuid_eff}_{eff_uuid}"),
                                         Some(&eff_midi_prefix),
                                         data.midi_learn_active,
-                                        &mut actions.session.midi_learn_select,
                                         data.midi_learn_target.as_deref(),
                                         &data.modulation_assignments,
                                         &data.modulation_current_values,
-                                        &format!("fx_{eff_uuid}"),
+                                        &crate::engine::value::param::effect_param_prefix(eff_uuid),
                                         data.keyboard_learn_active,
-                                        &mut actions.session.keyboard_learn_select,
                                         data.keyboard_learn_target.as_deref(),
                                     );
                                 }

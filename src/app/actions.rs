@@ -1,77 +1,23 @@
-//! UI action processing — applies `UIActions` to `VardaApp` state.
-//!
-//! These methods were originally in main.rs but belong in the engine layer
-//! since they mutate engine-owned state (mixer, surfaces, outputs, etc.).
+//! The GUI's command drain: runs a frame's `EngineCommand`s in order, records
+//! the undo step the consumer asked for, and raises the GUI's toasts.
 
 use super::VardaApp;
 use crate::engine::{CommandOutcome, CommandResult, EngineCommand};
-use crate::usecases::ui;
 
 impl VardaApp {
-    /// Apply UI-driven engine state changes: MIDI learn, notifications.
-    /// Selection and layout state is handled by the UI consumer (`UIRunner`).
-    pub fn apply_ui_actions(&mut self, ui_actions: &ui::UIActions) {
-        // MIDI learn
-        if ui_actions.session.midi_learn_toggle {
-            self.input.midi_mappings.toggle_learn();
-            // Mutually exclusive: exit keyboard learn when entering MIDI learn
-            if self.input.midi_mappings.learn_mode {
-                self.input.keymap.cancel_learn();
-            }
-        }
-        if let Some(ref path) = ui_actions.session.midi_learn_select {
-            self.input.midi_mappings.select_learn_target(path.clone());
-        }
-
-        // Keyboard learn
-        if ui_actions.session.keyboard_learn_toggle {
-            self.input.keymap.toggle_learn();
-            // Mutually exclusive: exit MIDI learn when entering keyboard learn
-            if self.input.keymap.learn_mode {
-                self.input.midi_mappings.cancel_learn();
-            }
-        }
-        if let Some(ref target) = ui_actions.session.keyboard_learn_select {
-            self.input.keymap.select_learn_target(target.clone());
-        }
-        if let Some(ref combo) = ui_actions.session.keyboard_learn_bind {
-            self.input.keymap.process_learn(combo.clone());
-        }
-
-        let mut dismissals = ui_actions.session.notifications_to_dismiss.clone();
-        dismissals.sort_unstable_by(|a, b| b.cmp(a));
-        for idx in dismissals {
-            self.session.notifications.dismiss(idx);
-        }
-
-        for msg in &ui_actions.session.info_notifications {
-            self.session.notifications.info(msg);
-        }
-    }
-
-    /// Apply engine mutations: mixer, decks, effects, transitions, channels, cameras.
-    /// Routes through engine trait methods where possible, `VardaApp` methods otherwise.
+    /// Run the GUI's commands for this frame, in order.
     ///
     /// When `starts_undo_step` is set, the pre-mutation state is recorded as one
     /// undo step before anything runs. The consumer decides that, because only
     /// it knows whether a drag is continuing.
-    ///
-    /// Returns an [`EngineActionsOutcome`] carrying the GUI post-step the runner
-    /// must apply after the drain: the removed channel index (selection fixup).
-    pub fn apply_engine_actions(
-        &mut self,
-        ui_actions: &mut ui::UIActions,
-        starts_undo_step: bool,
-    ) -> EngineActionsOutcome {
+    pub fn apply_engine_actions(&mut self, commands: Vec<EngineCommand>, starts_undo_step: bool) {
         if starts_undo_step {
             let snapshot = self.history_snapshot();
             self.push_history(snapshot);
         }
-        // Panels push `EngineCommand`s directly; drain them through the same
-        // dispatch as the bus. Ordering within the vec is preserved, so a
-        // new-channel library drop enqueues `AddChannel` before its `Add*Deck`
-        // and the deck resolves against the freshly created channel.
-        let commands = std::mem::take(&mut ui_actions.commands);
+        // Ordering within the vec is preserved, so a new-channel library drop
+        // enqueues `AddChannel` before its `Add*Deck` and the deck resolves
+        // against the freshly created channel.
         for cmd in commands {
             let is_deck_add = command_is_deck_add(&cmd);
             let success_toast = gui_success_toast(&cmd);
@@ -85,16 +31,10 @@ impl VardaApp {
                 self.session.notifications.info(toast);
             }
         }
-
-        EngineActionsOutcome {
-            removed_channel: self.apply_remove_channel(ui_actions),
-        }
     }
 
-    /// Emit the GUI toast for a deck-creating command's outcome — the post-step
-    /// that mirrors the old `dispatch_source_deck_add`. The engine logic lives
-    /// in the command; this only surfaces success/failure to the notification
-    /// center.
+    /// Toast a deck-creating command's outcome. The engine logic lives in the
+    /// command; this only reports success or failure.
     fn notify_deck_add_outcome(&mut self, outcome: &CommandOutcome) {
         match outcome {
             CommandOutcome::DecksCreated { uuids } => {
@@ -121,18 +61,6 @@ impl VardaApp {
         }
     }
 
-    /// Returns the index of the removed channel (if any) so the UI consumer
-    /// can fix up selection state.
-    fn apply_remove_channel(&mut self, ui_actions: &ui::UIActions) -> Option<usize> {
-        let ch_idx = ui_actions.session.remove_channel?;
-        let channel_uuid = self.mixer.channels().get(ch_idx)?.uuid().to_string();
-        let result = self.execute_command(EngineCommand::RemoveChannel { channel_uuid });
-        match result {
-            crate::engine::CommandResult::Ok => Some(ch_idx),
-            _ => None,
-        }
-    }
-
     /// Update controller LEDs based on current state.
     pub fn update_controller_leds(&mut self) {
         if let Some(mgr) = &self.input.midi_devices {
@@ -146,14 +74,6 @@ impl VardaApp {
             self.input.auto_map_engine.update_leds(mgr, &self.mixer);
         }
     }
-}
-
-/// GUI post-step the runner applies after [`VardaApp::apply_engine_actions`]:
-/// selection fixup for a removed channel, which needs UI layout state the engine
-/// can't touch.
-pub struct EngineActionsOutcome {
-    /// Index of a channel removed this frame (for UI selection fixup).
-    pub removed_channel: Option<usize>,
 }
 
 /// The toast the GUI shows when a command it sent succeeds, for commands whose

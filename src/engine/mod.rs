@@ -1271,6 +1271,45 @@ pub enum EngineCommand {
         name: String,
     },
 
+    // ── Learn modes and notifications ──────────────────────────
+    /// Enter or leave MIDI learn. Entering it leaves keyboard learn.
+    MidiLearnToggle,
+    /// Choose the parameter path the next MIDI control is bound to.
+    MidiLearnSelect {
+        path: String,
+    },
+    /// Enter or leave keyboard learn. Entering it leaves MIDI learn.
+    KeyboardLearnToggle,
+    /// Choose what the next key combination is bound to.
+    KeyboardLearnSelect {
+        target: crate::engine::value::keymap::KeyTarget,
+    },
+    /// Bind `combo` to the selected keyboard learn target.
+    KeyboardLearnBind {
+        combo: crate::engine::value::keymap::KeyCombo,
+    },
+    /// Dismiss a notification. Ids are stable; positions shift as others expire.
+    DismissNotification {
+        id: u64,
+    },
+    /// Show an informational notification.
+    NotifyInfo {
+        message: String,
+    },
+
+    // ── Consumer views ──────────────────────────────────────────
+    /// Force-render these channels for off-air preview even when their opacity
+    /// culls them. Replaces the previous set; not persisted.
+    SetPreviewChannels {
+        channel_uuids: Vec<String>,
+    },
+    /// Open a camera for surface detection, releasing the one held before.
+    AcquireDetectionCamera {
+        camera_id: CameraId,
+    },
+    /// Release the camera held for surface detection, if any.
+    ReleaseDetectionCamera,
+
     // ── Persistence ────────────────────────────────────────────
     SaveWorkspace,
     LoadWorkspace,

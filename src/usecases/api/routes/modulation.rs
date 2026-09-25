@@ -48,7 +48,7 @@ pub struct AddStepSequencerBody {
 
 #[derive(Deserialize, ToSchema)]
 pub struct AssignModulationBody {
-    /// Dot-separated path of the parameter to modulate.
+    /// Path of the parameter to modulate, such as `deck/<uuid>/param/speed`.
     pub target: String,
     /// UUID of the modulation source.
     pub source_id: String,
@@ -58,7 +58,7 @@ pub struct AssignModulationBody {
 
 #[derive(Deserialize, ToSchema)]
 pub struct ClearModulationBody {
-    /// Dot-separated path of the parameter to un-modulate.
+    /// Path of the parameter to stop modulating, such as `deck/<uuid>/param/speed`.
     pub target: String,
 }
 
@@ -251,7 +251,7 @@ pub async fn update_timebase(
 #[derive(Deserialize, ToSchema)]
 pub struct AddAutomationLaneBody {
     /// Modulation key of the parameter to automate, not a router path:
-    /// `deck_<uuid>:opacity`, `deck_<uuid>:video_speed`, `fx_<uuid>:amount`.
+    /// `deck/<uuid>/opacity`, `deck/<uuid>/video/speed`, `effect/<uuid>/param/amount`. The pre-v8 `deck_<uuid>:opacity` family is still accepted.
     /// See /spec/modulation.md § Internal key scheme.
     pub target: String,
     /// Timebase the curve is drawn against. Defaults to `Transport`, which is

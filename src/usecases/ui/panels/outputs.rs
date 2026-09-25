@@ -1203,10 +1203,9 @@ fn render_copyable_url(
     );
     if response.clicked() {
         ui.ctx().copy_text(url.to_string());
-        actions
-            .session
-            .info_notifications
-            .push(format!("📋 Copied to clipboard: {url}"));
+        actions.commands.push(EngineCommand::NotifyInfo {
+            message: format!("📋 Copied to clipboard: {url}"),
+        });
     }
     response.on_hover_text("Click to copy URL");
 }

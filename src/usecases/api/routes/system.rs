@@ -23,16 +23,10 @@ pub async fn health() -> impl IntoResponse {
 /// The full engine state snapshot.
 #[utoipa::path(get, path = "/api/state", responses((status = 200, description = "Full engine state"), (status = 503, description = "Engine not yet initialized")), tag = "System")]
 pub async fn get_state(State(state): State<SharedState>) -> impl IntoResponse {
-    match state.engine_state.read() {
-        Ok(guard) => match guard.as_ref() {
-            Some(engine_state) => Json(engine_state).into_response(),
-            None => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Engine not yet initialized",
-            )
-                .into_response(),
-        },
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "State lock poisoned").into_response(),
+    match super::read_or_error(&state) {
+        // The publication's own serialization, shared with WebSocket clients.
+        Ok(published) => Json(published.json()).into_response(),
+        Err((status, msg)) => (status, msg).into_response(),
     }
 }
 
@@ -571,7 +565,7 @@ mod tests {
     fn test_router() -> axum::Router {
         let shared = SharedState {
             command_tx: tokio::sync::mpsc::unbounded_channel().0,
-            engine_state: std::sync::Arc::new(std::sync::RwLock::new(None)),
+            engine_state: std::sync::Arc::default(),
         };
         crate::usecases::api::runner::build_router(shared)
     }

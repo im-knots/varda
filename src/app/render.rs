@@ -13,15 +13,6 @@ pub enum FileDialogKind {
     Video,
 }
 
-/// Correlates a spawned deck load with the target its requester recorded.
-///
-/// Deliberately opaque: a load outlives the frame that requested it, so any
-/// position captured at spawn time may name a different entity by the time the
-/// deck is ready. The requester keeps `token → channel UUID` and resolves the
-/// UUID on completion. See [`/spec/api-addressing.md`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct DeckLoadToken(pub usize);
-
 /// Result from a completed file dialog (sent from background thread).
 /// Supports multi-select: `paths` may contain one or more files.
 ///
@@ -33,16 +24,6 @@ pub struct FileDialogResult {
     pub kind: FileDialogKind,
     pub channel_uuid: String,
     pub paths: Vec<std::path::PathBuf>,
-}
-
-/// Result from a background deck load (sent from a spawned thread).
-/// Contains a ready-to-use Deck that just needs mixer insertion + egui texture registration.
-pub struct DeckLoadResult {
-    /// Echoed back verbatim from the spawn request; only the requester can
-    /// interpret it.
-    pub token: DeckLoadToken,
-    pub deck: anyhow::Result<crate::deck::Deck>,
-    pub name: String,
 }
 
 /// Mutable external delivery sinks the headless render loop feeds frames and
@@ -78,114 +59,6 @@ fn stop_headless_output(
 }
 
 impl VardaApp {
-    /// Spawn background threads to create decks from file paths and shaders.
-    /// Each thread creates a full Deck (CPU decode + GPU upload) and sends
-    /// the result via the channel. The render loop polls for completed decks.
-    /// `pending` is incremented per-spawn and decremented when each thread completes.
-    // Args map directly to the independent inputs a deck load needs; bundling them
-    // would only add an ephemeral struct with no shared invariant.
-    #[allow(clippy::too_many_arguments)]
-    pub fn spawn_deck_loads(
-        sender: &std::sync::mpsc::Sender<DeckLoadResult>,
-        context: &crate::renderer::context::GpuContext,
-        pending: &std::sync::Arc<std::sync::atomic::AtomicUsize>,
-        render_width: u32,
-        render_height: u32,
-        images: Vec<(DeckLoadToken, std::path::PathBuf)>,
-        videos: Vec<(DeckLoadToken, std::path::PathBuf)>,
-        shaders: Vec<(DeckLoadToken, crate::isf::ISFShader)>,
-    ) {
-        use crate::deck::Deck;
-        use std::sync::atomic::Ordering;
-
-        for (token, path) in images {
-            let tx = sender.clone();
-            let ctx = context.clone();
-            let counter = pending.clone();
-            let w = render_width;
-            let h = render_height;
-            counter.fetch_add(1, Ordering::Relaxed);
-            std::thread::spawn(move || {
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let name = path
-                        .file_name()
-                        .and_then(|f| f.to_str())
-                        .unwrap_or("image")
-                        .to_string();
-                    let deck = Deck::new_from_image(&ctx, &path, w, h);
-                    (name, deck)
-                }));
-                let (name, deck) = match result {
-                    Ok((name, deck)) => (name, deck),
-                    Err(_) => (
-                        "image".to_string(),
-                        Err(anyhow::anyhow!("panic loading image deck")),
-                    ),
-                };
-                let _ = tx.send(DeckLoadResult { token, deck, name });
-                counter.fetch_sub(1, Ordering::Relaxed);
-            });
-        }
-
-        for (token, path) in videos {
-            let tx = sender.clone();
-            let ctx = context.clone();
-            let counter = pending.clone();
-            let w = render_width;
-            let h = render_height;
-            counter.fetch_add(1, Ordering::Relaxed);
-            std::thread::spawn(move || {
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let name = path
-                        .file_name()
-                        .and_then(|f| f.to_str())
-                        .unwrap_or("video")
-                        .to_string();
-                    let deck = Deck::new_from_video(&ctx, &path, w, h);
-                    (name, deck)
-                }));
-                let (name, deck) = match result {
-                    Ok((name, deck)) => (name, deck),
-                    Err(_) => (
-                        "video".to_string(),
-                        Err(anyhow::anyhow!("panic loading video deck")),
-                    ),
-                };
-                let _ = tx.send(DeckLoadResult { token, deck, name });
-                counter.fetch_sub(1, Ordering::Relaxed);
-            });
-        }
-
-        for (token, shader) in shaders {
-            let tx = sender.clone();
-            let ctx = context.clone();
-            let counter = pending.clone();
-            let w = render_width;
-            let h = render_height;
-            counter.fetch_add(1, Ordering::Relaxed);
-            std::thread::spawn(move || {
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let name = shader.name();
-                    let deck = if shader.metadata.is_compute() {
-                        Deck::new_from_compute_shader(&ctx, shader, w, h)
-                    } else {
-                        Deck::new(&ctx, shader, w, h)
-                    };
-                    (name, deck)
-                }));
-                let (name, deck) = match result {
-                    Ok((name, deck)) => (name, deck),
-                    Err(_) => (
-                        "shader".to_string(),
-                        Err(anyhow::anyhow!("panic loading shader deck")),
-                    ),
-                };
-                let _ = tx.send(DeckLoadResult { token, deck, name });
-                counter.fetch_sub(1, Ordering::Relaxed);
-            });
-        }
-    }
-
     /// Update frame timing (FPS measurement) and system stats. Call once per frame before any work.
     pub fn update_frame_timing(&mut self) {
         let now = std::time::Instant::now();
@@ -241,6 +114,7 @@ impl VardaApp {
     /// Render the mixer frame: update cameras, NDI, Syphon, collect audio, render mixer.
     /// This performs all GPU work that doesn't need the surface texture.
     pub fn render_mixer_frame(&mut self) {
+        self.resolve_preview_channels();
         // Surface a one-time notice for any deck whose ping-pong RAM cache was
         // truncated (hit the memory cap). The supported path for full-length
         // reverse on heavy/long/high-res clips is to pre-transcode to HAP.
@@ -1466,51 +1340,6 @@ mod tests {
             app.frame_stats.fps_history.len(),
             60,
             "Window should cap at 60 entries"
-        );
-    }
-
-    // ── Offensive: catch_unwind pattern delivers error through channel ──
-
-    #[test]
-    fn catch_unwind_delivers_error_on_panic() {
-        let (tx, rx) = std::sync::mpsc::channel::<DeckLoadResult>();
-        let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-
-        let c = counter.clone();
-        c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
-        std::thread::spawn(move || {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                || -> (String, anyhow::Result<crate::deck::Deck>) {
-                    panic!("simulated loader panic");
-                },
-            ));
-            let (name, deck) = match result {
-                Ok((name, deck)) => (name, deck),
-                Err(_) => (
-                    "panicked".to_string(),
-                    Err(anyhow::anyhow!("panic in loader")),
-                ),
-            };
-            let _ = tx.send(DeckLoadResult {
-                token: DeckLoadToken(0),
-                deck,
-                name,
-            });
-            c.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-        });
-
-        let msg = rx
-            .recv_timeout(std::time::Duration::from_secs(2))
-            .expect("should receive result even after panic");
-        assert!(msg.deck.is_err(), "deck should be an error after panic");
-        assert_eq!(msg.name, "panicked");
-        // Counter should be back to zero (cleanup ran)
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        assert_eq!(
-            counter.load(std::sync::atomic::Ordering::Relaxed),
-            0,
-            "counter must decrement even after panic"
         );
     }
 

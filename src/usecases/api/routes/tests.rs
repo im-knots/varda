@@ -18,7 +18,8 @@ mod tests {
         let state = make_test_state();
         let (cmd_tx, mut cmd_rx) =
             tokio::sync::mpsc::unbounded_channel::<crate::engine::CommandEnvelope>();
-        let engine_state = std::sync::Arc::new(std::sync::RwLock::new(Some(state)));
+        let engine_state =
+            std::sync::Arc::new(crate::app::publish::StatePublication::with_state(state));
 
         // Spawn a background task that processes commands
         tokio::spawn(async move {
@@ -40,7 +41,9 @@ mod tests {
         let state = make_test_state();
         let shared = SharedState {
             command_tx: tokio::sync::mpsc::unbounded_channel().0,
-            engine_state: std::sync::Arc::new(std::sync::RwLock::new(Some(state))),
+            engine_state: std::sync::Arc::new(crate::app::publish::StatePublication::with_state(
+                state,
+            )),
         };
         crate::usecases::api::runner::build_router(shared)
     }
@@ -188,7 +191,9 @@ mod tests {
         };
         let shared = SharedState {
             command_tx: tokio::sync::mpsc::unbounded_channel().0,
-            engine_state: std::sync::Arc::new(std::sync::RwLock::new(Some(state))),
+            engine_state: std::sync::Arc::new(crate::app::publish::StatePublication::with_state(
+                state,
+            )),
         };
         let app = crate::usecases::api::runner::build_router(shared);
 
@@ -929,7 +934,7 @@ mod tests {
         let (status, json) = post_json(
             router_with_mock_engine(),
             "/api/modulation/assign",
-            serde_json::json!({"target": "deck_a:brightness", "source_id": "lfo-1", "amount": 0.5}),
+            serde_json::json!({"target": "deck/a/param/brightness", "source_id": "lfo-1", "amount": 0.5}),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -941,7 +946,7 @@ mod tests {
         let (status, json) = post_json(
             router_with_mock_engine(),
             "/api/modulation/clear",
-            serde_json::json!({"target": "deck_a:brightness"}),
+            serde_json::json!({"target": "deck/a/param/brightness"}),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -1552,7 +1557,7 @@ mod tests {
         let (status, json) = put_json(
             router_with_mock_engine(),
             "/api/params",
-            serde_json::json!({"path": "deck_a:brightness", "value": 0.8}),
+            serde_json::json!({"path": "deck/a/param/brightness", "value": 0.8}),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -2587,7 +2592,7 @@ mod tests {
         let (status, json) = post_json(
             router_with_mock_engine(),
             "/api/modulation/automation",
-            serde_json::json!({"target": "deck_abc:opacity", "timebase": "Transport"}),
+            serde_json::json!({"target": "deck/abc/opacity", "timebase": "Transport"}),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -2601,7 +2606,7 @@ mod tests {
         let (status, json) = post_json(
             router_with_mock_engine(),
             "/api/modulation/automation",
-            serde_json::json!({"target": "deck_abc:opacity"}),
+            serde_json::json!({"target": "deck/abc/opacity"}),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -3100,14 +3105,14 @@ mod tests {
         let (app, seen) = router_capturing_commands();
         let (status, _) = post_json(
             app,
-            "/api/arrangement/rearm/deck_dk-001:opacity",
+            "/api/arrangement/rearm/deck/dk-001/opacity",
             serde_json::json!({"seconds": 1.5}),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
         match take_command(&seen) {
             crate::engine::EngineCommand::RearmParam { param_key, seconds } => {
-                assert_eq!(param_key, "deck_dk-001:opacity");
+                assert_eq!(param_key, "deck/dk-001/opacity");
                 assert_eq!(seconds, Some(1.5));
             }
             other => panic!("unexpected command: {other:?}"),
@@ -3223,7 +3228,7 @@ mod tests {
     fn router_without_state() -> axum::Router {
         let shared = SharedState {
             command_tx: tokio::sync::mpsc::unbounded_channel().0,
-            engine_state: std::sync::Arc::new(std::sync::RwLock::new(None)),
+            engine_state: std::sync::Arc::default(),
         };
         crate::usecases::api::runner::build_router(shared)
     }
@@ -3345,7 +3350,8 @@ mod tests {
         let state = make_test_state();
         let (cmd_tx, mut cmd_rx) =
             tokio::sync::mpsc::unbounded_channel::<crate::engine::CommandEnvelope>();
-        let engine_state = std::sync::Arc::new(std::sync::RwLock::new(Some(state)));
+        let engine_state =
+            std::sync::Arc::new(crate::app::publish::StatePublication::with_state(state));
         tokio::spawn(async move {
             while let Some((_cmd, reply_tx)) = cmd_rx.recv().await {
                 if let Some(tx) = reply_tx {
@@ -3367,7 +3373,8 @@ mod tests {
         let state = make_test_state();
         let (cmd_tx, mut cmd_rx) =
             tokio::sync::mpsc::unbounded_channel::<crate::engine::CommandEnvelope>();
-        let engine_state = std::sync::Arc::new(std::sync::RwLock::new(Some(state)));
+        let engine_state =
+            std::sync::Arc::new(crate::app::publish::StatePublication::with_state(state));
         tokio::spawn(async move {
             while let Some((_cmd, reply_tx)) = cmd_rx.recv().await {
                 if let Some(tx) = reply_tx {
@@ -3389,7 +3396,8 @@ mod tests {
         let state = make_test_state();
         let (cmd_tx, mut cmd_rx) =
             tokio::sync::mpsc::unbounded_channel::<crate::engine::CommandEnvelope>();
-        let engine_state = std::sync::Arc::new(std::sync::RwLock::new(Some(state)));
+        let engine_state =
+            std::sync::Arc::new(crate::app::publish::StatePublication::with_state(state));
         tokio::spawn(async move {
             while let Some((_cmd, reply_tx)) = cmd_rx.recv().await {
                 if let Some(tx) = reply_tx {
@@ -3410,7 +3418,8 @@ mod tests {
         let state = make_test_state();
         let (cmd_tx, mut cmd_rx) =
             tokio::sync::mpsc::unbounded_channel::<crate::engine::CommandEnvelope>();
-        let engine_state = std::sync::Arc::new(std::sync::RwLock::new(Some(state)));
+        let engine_state =
+            std::sync::Arc::new(crate::app::publish::StatePublication::with_state(state));
         tokio::spawn(async move {
             while let Some((_cmd, reply_tx)) = cmd_rx.recv().await {
                 if let Some(tx) = reply_tx {
@@ -3485,7 +3494,8 @@ mod tests {
         let state = make_test_state();
         let (cmd_tx, cmd_rx) =
             tokio::sync::mpsc::unbounded_channel::<crate::engine::CommandEnvelope>();
-        let engine_state = std::sync::Arc::new(std::sync::RwLock::new(Some(state)));
+        let engine_state =
+            std::sync::Arc::new(crate::app::publish::StatePublication::with_state(state));
         // Drop receiver immediately so sends fail
         drop(cmd_rx);
         let shared = SharedState {
@@ -3898,7 +3908,8 @@ mod tests {
         let state = make_test_state();
         let (cmd_tx, mut cmd_rx) =
             tokio::sync::mpsc::unbounded_channel::<crate::engine::CommandEnvelope>();
-        let engine_state = std::sync::Arc::new(std::sync::RwLock::new(Some(state)));
+        let engine_state =
+            std::sync::Arc::new(crate::app::publish::StatePublication::with_state(state));
         let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink = seen.clone();
         tokio::spawn(async move {

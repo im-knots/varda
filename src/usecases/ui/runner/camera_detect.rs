@@ -6,67 +6,62 @@
 
 use super::UIRunner;
 use super::detect::DetectRequest;
+use crate::engine::EngineCommand;
 use crate::usecases::ui;
 
 impl UIRunner {
-    /// Open or release the detection camera to match the current mode, and push a
-    /// frame to the detection worker when one is due.
+    /// Ask the engine to hold the camera the current mode needs, and register
+    /// its preview once the engine reports it open.
+    ///
+    /// Runs before this frame's command drain, so a request queued here is
+    /// answered by the next call.
     pub(super) fn sync_camera_detect_capture(&mut self) {
-        let detect_camera_id = match &self.layout.camera_detect_mode {
+        let wanted = match &self.layout.camera_detect_mode {
             ui::CameraDetectMode::Live { camera_id, .. }
             | ui::CameraDetectMode::Preview { camera_id, .. } => Some(*camera_id),
             ui::CameraDetectMode::Off => None,
         };
+        let Some(varda) = self.varda.as_ref() else {
+            return;
+        };
 
-        if let (Some(cam_id), Some(varda)) = (detect_camera_id, self.varda.as_mut()) {
-            if self.camera_detect_camera_id != Some(cam_id) {
-                // Release previous camera if switching
-                if let Some(prev_id) = self.camera_detect_camera_id.take() {
-                    varda.camera_manager_mut().release_camera(prev_id);
-                    if let (Some(tex_id), Some(egui_renderer)) = (
-                        self.camera_detect_texture.take(),
-                        self.egui_renderer.as_mut(),
-                    ) {
-                        egui_renderer.free_texture(&tex_id);
-                    }
-                }
-                // Open new camera (uses convenience method to avoid split-borrow)
-                match varda.open_camera(cam_id) {
-                    Ok(_res) => {
-                        if let Some(tex_view) = varda.camera_manager().texture_view(cam_id) {
-                            let context = varda.gpu_context();
-                            if let Some(egui_renderer) = self.egui_renderer.as_mut() {
-                                let tid = egui_renderer.register_native_texture(
-                                    &context.device,
-                                    tex_view,
-                                    wgpu::FilterMode::Linear,
-                                );
-                                self.camera_detect_texture = Some(tid);
-                            }
-                        }
-                        self.camera_detect_camera_id = Some(cam_id);
-                        log::info!("Camera detection: opened camera {cam_id}");
-                    }
-                    Err(e) => {
-                        log::error!("Camera detection: failed to open camera {cam_id}: {e}");
-                        self.layout.camera_detect_mode = ui::CameraDetectMode::Off;
-                    }
-                }
+        if wanted != self.camera_detect_camera_id {
+            if let (Some(tex_id), Some(egui_renderer)) = (
+                self.camera_detect_texture.take(),
+                self.egui_renderer.as_mut(),
+            ) {
+                egui_renderer.free_texture(&tex_id);
             }
-        } else if detect_camera_id.is_none() && self.camera_detect_camera_id.is_some() {
-            // Mode is Off — release camera
-            if let Some(prev_id) = self.camera_detect_camera_id.take() {
-                if let Some(varda) = self.varda.as_mut() {
-                    varda.camera_manager_mut().release_camera(prev_id);
-                }
-                if let (Some(tex_id), Some(egui_renderer)) = (
-                    self.camera_detect_texture.take(),
-                    self.egui_renderer.as_mut(),
-                ) {
-                    egui_renderer.free_texture(&tex_id);
-                }
+            self.queued_commands.push(match wanted {
+                Some(camera_id) => EngineCommand::AcquireDetectionCamera { camera_id },
+                None => EngineCommand::ReleaseDetectionCamera,
+            });
+            if wanted.is_none() {
+                self.camera_detect_contours.clear();
             }
-            self.camera_detect_contours.clear();
+            self.camera_detect_camera_id = wanted;
+            return;
+        }
+
+        let Some(cam_id) = wanted else {
+            return;
+        };
+        if varda.detection_camera() != Some(cam_id) {
+            // The engine refused the camera and has already told the operator.
+            log::error!("Camera detection: camera {cam_id} could not be opened");
+            self.layout.camera_detect_mode = ui::CameraDetectMode::Off;
+            return;
+        }
+        if self.camera_detect_texture.is_none()
+            && let Some(tex_view) = varda.camera_manager().texture_view(cam_id)
+            && let Some(egui_renderer) = self.egui_renderer.as_mut()
+        {
+            let tid = egui_renderer.register_native_texture(
+                &varda.gpu_context().device,
+                tex_view,
+                wgpu::FilterMode::Linear,
+            );
+            self.camera_detect_texture = Some(tid);
         }
     }
 

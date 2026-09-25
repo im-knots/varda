@@ -12,6 +12,7 @@
 
 use super::super::{ModSourceUI, UIActions, UIData, modulator_color, widgets};
 use crate::engine::EngineCommand;
+use crate::engine::value::param::{DeckTarget, ParamAddress};
 use crate::macros::{ButtonBehavior, GlobalAction, Macro, MacroCurve, MacroKind, TriggerAction};
 use crate::modulation::DEFAULT_ASSIGNMENT_AMOUNT;
 use crate::params::ParamValue;
@@ -271,7 +272,7 @@ fn render_macro_value(
     actions: &mut UIActions,
     knob_diameter: f32,
 ) {
-    let path = format!("macro/{}/value", m.uuid);
+    let path = ParamAddress::macro_value(&m.uuid).to_string();
     // If the macro's value is modulated, compute the live effective value + the
     // modulator's color so the control can render a ghost indicator (like params).
     let ghost = macro_modulation_ghost(m, data);
@@ -759,7 +760,9 @@ fn macro_learn_overlay(
     }
     let id = ui.id().with(("macro_midi_learn", path.as_str()));
     if ui.interact(rect, id, egui::Sense::click()).clicked() {
-        actions.session.midi_learn_select = Some(path);
+        actions
+            .commands
+            .push(EngineCommand::MidiLearnSelect { path });
     }
 }
 
@@ -772,14 +775,14 @@ fn collect_target_paths(data: &UIData) -> Vec<(String, String)> {
     for ch in &data.channels {
         out.push((
             format!("{} · opacity", ch.name),
-            format!("ch/{}/opacity", ch.uuid),
+            ParamAddress::channel_opacity(&ch.uuid).to_string(),
         ));
         for (fx_uuid, fx_name, _enabled, params) in &ch.effects {
             for p in &params.params {
                 if matches!(p.value, ParamValue::Float(_)) {
                     out.push((
                         format!("{} · {} · {}", ch.name, fx_name, param_label(p)),
-                        format!("ch/{}/effect/{}/param/{}", ch.uuid, fx_uuid, p.name),
+                        ParamAddress::effect_param(fx_uuid, &p.name).to_string(),
                     ));
                 }
             }
@@ -787,13 +790,13 @@ fn collect_target_paths(data: &UIData) -> Vec<(String, String)> {
         for d in &ch.decks {
             out.push((
                 format!("{} · {} · opacity", ch.name, d.name),
-                format!("deck/{}/opacity", d.uuid),
+                ParamAddress::deck(&d.uuid, DeckTarget::Opacity).to_string(),
             ));
             for p in &d.generator.params {
                 if matches!(p.value, ParamValue::Float(_)) {
                     out.push((
                         format!("{} · {}", d.name, param_label(p)),
-                        format!("deck/{}/param/{}", d.uuid, p.name),
+                        ParamAddress::deck_param(&d.uuid, &p.name).to_string(),
                     ));
                 }
             }
@@ -802,7 +805,7 @@ fn collect_target_paths(data: &UIData) -> Vec<(String, String)> {
                     if matches!(p.value, ParamValue::Float(_)) {
                         out.push((
                             format!("{} · {} · {}", d.name, fx_name, param_label(p)),
-                            format!("deck/{}/effect/{}/param/{}", d.uuid, fx_uuid, p.name),
+                            ParamAddress::effect_param(fx_uuid, &p.name).to_string(),
                         ));
                     }
                 }
@@ -814,22 +817,22 @@ fn collect_target_paths(data: &UIData) -> Vec<(String, String)> {
             // offset is measured against.
             // See /spec/video-playback-modulation.md.
             if d.video_playback.is_some() {
-                for (label, leaf) in [
-                    ("speed", "speed"),
-                    ("playhead", "seek"),
-                    ("play", "play"),
-                    ("loop mode", "loop_mode"),
+                for (label, target) in [
+                    ("speed", DeckTarget::VideoSpeed),
+                    ("playhead", DeckTarget::VideoPosition),
+                    ("play", DeckTarget::VideoPlay),
+                    ("loop mode", DeckTarget::VideoLoopMode),
                 ] {
                     out.push((
                         format!("{} · {} · {label}", ch.name, d.name),
-                        format!("deck/{}/video/{leaf}", d.uuid),
+                        ParamAddress::deck(&d.uuid, target).to_string(),
                     ));
                 }
             }
             if d.scaling_mode.is_some() {
                 out.push((
                     format!("{} · {} · scaling", ch.name, d.name),
-                    format!("deck/{}/scaling_mode", d.uuid),
+                    ParamAddress::deck(&d.uuid, DeckTarget::ScalingMode).to_string(),
                 ));
             }
         }
@@ -863,7 +866,10 @@ fn collect_target_paths(data: &UIData) -> Vec<(String, String)> {
             ModSourceUI::Envelope { .. } => &[],
         };
         for p in params {
-            out.push((format!("{base} · {p}"), format!("mod/{}/{}", entry.uuid, p)));
+            out.push((
+                format!("{base} · {p}"),
+                ParamAddress::modulator_param(&entry.uuid, p).to_string(),
+            ));
         }
     }
 

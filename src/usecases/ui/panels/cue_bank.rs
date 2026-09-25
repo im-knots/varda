@@ -9,6 +9,7 @@
 use super::super::{UIActions, UIData, widgets};
 use crate::arrangement::Cue;
 use crate::engine::EngineCommand;
+use crate::engine::value::param::ParamAddress;
 use crate::transport::TransportSource;
 
 /// The ruler's cue colour, so a pad and its mark read as the same thing.
@@ -113,7 +114,7 @@ fn learn_overlay(
     if !data.midi_learn_active {
         return;
     }
-    let path = format!("cue/{}/fire", cue.uuid);
+    let path = ParamAddress::cue_fire(&cue.uuid).to_string();
     if data.midi_learn_target.as_deref() == Some(path.as_str()) {
         widgets::draw_midi_learn_selected(ui, rect);
     } else {
@@ -121,6 +122,8 @@ fn learn_overlay(
     }
     let id = ui.id().with(("cue_midi_learn", cue.uuid.as_str()));
     if ui.interact(rect, id, egui::Sense::click()).clicked() {
-        actions.session.midi_learn_select = Some(path);
+        actions
+            .commands
+            .push(EngineCommand::MidiLearnSelect { path });
     }
 }

@@ -341,6 +341,8 @@ pub struct AudioUIData {
 /// Notification snapshot for UI rendering (avoids borrowing `NotificationSystem` during egui)
 #[derive(Clone)]
 pub struct NotificationUI {
+    /// Stable id to dismiss this notification by.
+    pub id: u64,
     pub level: crate::notifications::NotificationLevel,
     pub message: String,
     pub progress: f32,

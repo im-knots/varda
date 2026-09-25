@@ -81,50 +81,7 @@ pub fn is_supported_key_name(name: &str) -> bool {
     SUPPORTED_KEY_NAMES.contains(&name)
 }
 
-/// A key combination: a key + modifier state.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct KeyCombo {
-    pub key: String,
-    pub command: bool,
-    pub shift: bool,
-    pub alt: bool,
-}
-
-/// What a key binding targets.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum KeyTarget {
-    /// A discrete application action.
-    Action(ActionId),
-    /// A `param_path` (same addressing as MIDI).
-    ParamPath(String),
-}
-
-/// All discrete actions that can be keyboard-mapped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum ActionId {
-    Undo,
-    Redo,
-    Save,
-    ToggleLibrary,
-    ToggleStageEditor,
-    ToolSelect,
-    ToolRectangle,
-    ToolPolygon,
-    ToolCircle,
-    DuplicateSurface,
-    FlipHorizontal,
-    FlipVertical,
-    DeleteSurface,
-    ClearDrawing,
-    CombineSurfaces,
-    ToggleMidiLearn,
-    ToggleKeyboardLearn,
-    /// Copy, paste, and duplicate the current selection: the deck, channel, or
-    /// effect the bottom bar is already following. See /spec/clipboard.md.
-    Copy,
-    Paste,
-    Duplicate,
-}
+pub use crate::engine::value::keymap::{ActionId, KeyCombo, KeyTarget};
 
 /// Persistent keymap store. Mirrors `MidiMappingStore` pattern.
 #[derive(Debug, Clone)]
@@ -403,7 +360,13 @@ impl KeymapStore {
                 alt: binding.alt,
             };
             if is_supported_key_name(&binding.key) {
-                self.bindings.insert(combo, binding.target.clone());
+                let target = match &binding.target {
+                    KeyTarget::ParamPath(path) => {
+                        KeyTarget::ParamPath(crate::engine::value::param::canonical_path(path))
+                    }
+                    other @ KeyTarget::Action(_) => other.clone(),
+                };
+                self.bindings.insert(combo, target);
             } else {
                 log::warn!("Keymap: skipping unknown key '{}'", binding.key);
             }

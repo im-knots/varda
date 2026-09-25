@@ -9,6 +9,7 @@ use super::stage::render_stage_editor;
 use super::utils::channel_color;
 use crate::BlendMode;
 use crate::engine::EngineCommand;
+use crate::engine::value::param::{DeckTarget, ParamAddress};
 use crate::mixer::CrossfadeEasing;
 
 fn effect_drag_active(ctx: &egui::Context) -> bool {
@@ -287,7 +288,9 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                                     .on_hover_text(format!("Remove channel {}", ch.name))
                                     .clicked()
                             {
-                                actions.session.remove_channel = Some(ch_idx);
+                                actions.commands.push(EngineCommand::RemoveChannel {
+                                    channel_uuid: ch.uuid.clone(),
+                                });
                             }
                         });
                         widgets::modulation_menu_for_key(
@@ -322,7 +325,7 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                         };
                         // MIDI learn: glow + click overlay
                         if data.midi_learn_active {
-                            let path = format!("ch/{}/opacity", ch.uuid);
+                            let path = ParamAddress::channel_opacity(&ch.uuid).to_string();
                             let is_target =
                                 data.midi_learn_target.as_deref() == Some(path.as_str());
                             if is_target {
@@ -334,12 +337,14 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                             let click_resp =
                                 ui.interact(slider_rect, click_id, egui::Sense::click());
                             if click_resp.clicked() {
-                                actions.session.midi_learn_select = Some(path);
+                                actions
+                                    .commands
+                                    .push(EngineCommand::MidiLearnSelect { path });
                             }
                         }
                         // Keyboard learn: orange glow + click overlay
                         if data.keyboard_learn_active {
-                            let path = format!("ch/{}/opacity", ch.uuid);
+                            let path = ParamAddress::channel_opacity(&ch.uuid).to_string();
                             let is_target =
                                 data.keyboard_learn_target.as_deref() == Some(path.as_str());
                             if is_target {
@@ -351,8 +356,9 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                             let click_resp =
                                 ui.interact(slider_rect, click_id, egui::Sense::click());
                             if click_resp.clicked() {
-                                actions.session.keyboard_learn_select =
-                                    Some(crate::keymap::KeyTarget::ParamPath(path));
+                                actions.commands.push(EngineCommand::KeyboardLearnSelect {
+                                    target: crate::keymap::KeyTarget::ParamPath(path),
+                                });
                             }
                         }
                     });
@@ -413,7 +419,9 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                         let click_id = ui.id().with("midi_learn_crossfader");
                         let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
                         if click_resp.clicked() {
-                            actions.session.midi_learn_select = Some("crossfader".to_string());
+                            actions.commands.push(EngineCommand::MidiLearnSelect {
+                                path: "crossfader".to_string(),
+                            });
                         }
                     }
                     if data.keyboard_learn_active {
@@ -426,9 +434,11 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                         let click_id = ui.id().with("kb_learn_crossfader");
                         let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
                         if click_resp.clicked() {
-                            actions.session.keyboard_learn_select = Some(
-                                crate::keymap::KeyTarget::ParamPath("crossfader".to_string()),
-                            );
+                            actions.commands.push(EngineCommand::KeyboardLearnSelect {
+                                target: crate::keymap::KeyTarget::ParamPath(
+                                    "crossfader".to_string(),
+                                ),
+                            });
                         }
                     }
                     ui.label(egui::RichText::new(name_b).small().color(color_b));
@@ -1021,7 +1031,7 @@ pub(super) fn render_deck_thumbnail(
 
         // MIDI learn mode: glow on deck card, click to select trigger
         if data.midi_learn_active {
-            let trigger_path = format!("deck/{}/trigger", deck.uuid);
+            let trigger_path = ParamAddress::deck(&deck.uuid, DeckTarget::Trigger).to_string();
             let is_target = data.midi_learn_target.as_deref() == Some(trigger_path.as_str());
             if is_target {
                 widgets::draw_midi_learn_selected(ui, card_rect);
@@ -1029,12 +1039,14 @@ pub(super) fn render_deck_thumbnail(
                 widgets::draw_midi_learn_glow(ui, card_rect);
             }
             if card_resp.clicked() {
-                actions.session.midi_learn_select = Some(trigger_path);
+                actions
+                    .commands
+                    .push(EngineCommand::MidiLearnSelect { path: trigger_path });
             }
         }
         // Keyboard learn mode: orange glow on deck card
         if data.keyboard_learn_active {
-            let trigger_path = format!("deck/{}/trigger", deck.uuid);
+            let trigger_path = ParamAddress::deck(&deck.uuid, DeckTarget::Trigger).to_string();
             let is_target = data.keyboard_learn_target.as_deref() == Some(trigger_path.as_str());
             if is_target {
                 widgets::draw_keyboard_learn_selected(ui, card_rect);
@@ -1042,8 +1054,9 @@ pub(super) fn render_deck_thumbnail(
                 widgets::draw_keyboard_learn_glow(ui, card_rect);
             }
             if card_resp.clicked() {
-                actions.session.keyboard_learn_select =
-                    Some(crate::keymap::KeyTarget::ParamPath(trigger_path));
+                actions.commands.push(EngineCommand::KeyboardLearnSelect {
+                    target: crate::keymap::KeyTarget::ParamPath(trigger_path),
+                });
             }
         }
 
@@ -1245,7 +1258,7 @@ pub(super) fn render_deck_thumbnail(
             resp.rect
         };
         if data.midi_learn_active {
-            let opacity_path = format!("deck/{}/opacity", deck.uuid);
+            let opacity_path = ParamAddress::deck(&deck.uuid, DeckTarget::Opacity).to_string();
             let is_target = data.midi_learn_target.as_deref() == Some(opacity_path.as_str());
             if is_target {
                 widgets::draw_midi_learn_selected(&slider_ui, op_slider_rect);
@@ -1257,11 +1270,13 @@ pub(super) fn render_deck_thumbnail(
                 .with(("midi_learn_deck_opacity", ch_idx, idx));
             let click_resp = slider_ui.interact(op_slider_rect, click_id, egui::Sense::click());
             if click_resp.clicked() {
-                actions.session.midi_learn_select = Some(opacity_path);
+                actions
+                    .commands
+                    .push(EngineCommand::MidiLearnSelect { path: opacity_path });
             }
         }
         if data.keyboard_learn_active {
-            let opacity_path = format!("deck/{}/opacity", deck.uuid);
+            let opacity_path = ParamAddress::deck(&deck.uuid, DeckTarget::Opacity).to_string();
             let is_target = data.keyboard_learn_target.as_deref() == Some(opacity_path.as_str());
             if is_target {
                 widgets::draw_keyboard_learn_selected(&slider_ui, op_slider_rect);
@@ -1271,8 +1286,9 @@ pub(super) fn render_deck_thumbnail(
             let click_id = slider_ui.id().with(("kb_learn_deck_opacity", ch_idx, idx));
             let click_resp = slider_ui.interact(op_slider_rect, click_id, egui::Sense::click());
             if click_resp.clicked() {
-                actions.session.keyboard_learn_select =
-                    Some(crate::keymap::KeyTarget::ParamPath(opacity_path));
+                actions.commands.push(EngineCommand::KeyboardLearnSelect {
+                    target: crate::keymap::KeyTarget::ParamPath(opacity_path),
+                });
             }
         }
 
@@ -1314,7 +1330,7 @@ pub(super) fn render_deck_thumbnail(
             ui.spacing_mut().item_spacing.x = 2.0;
             let mute_resp = ui.selectable_label(mute, egui::RichText::new("M").small());
             if any_learn {
-                let mute_path = format!("deck/{}/mute", deck.uuid);
+                let mute_path = ParamAddress::deck(&deck.uuid, DeckTarget::Mute).to_string();
                 if data.midi_learn_active {
                     let is_target = data.midi_learn_target.as_deref() == Some(mute_path.as_str());
                     if is_target {
@@ -1323,7 +1339,9 @@ pub(super) fn render_deck_thumbnail(
                         widgets::draw_midi_learn_glow(ui, mute_resp.rect);
                     }
                     if mute_resp.clicked() {
-                        actions.session.midi_learn_select = Some(mute_path.clone());
+                        actions.commands.push(EngineCommand::MidiLearnSelect {
+                            path: mute_path.clone(),
+                        });
                     }
                 }
                 if data.keyboard_learn_active {
@@ -1335,8 +1353,9 @@ pub(super) fn render_deck_thumbnail(
                         widgets::draw_keyboard_learn_glow(ui, mute_resp.rect);
                     }
                     if mute_resp.clicked() {
-                        actions.session.keyboard_learn_select =
-                            Some(crate::keymap::KeyTarget::ParamPath(mute_path));
+                        actions.commands.push(EngineCommand::KeyboardLearnSelect {
+                            target: crate::keymap::KeyTarget::ParamPath(mute_path),
+                        });
                     }
                 }
             } else if mute_resp.clicked() {
@@ -1344,7 +1363,7 @@ pub(super) fn render_deck_thumbnail(
             }
             let solo_resp = ui.selectable_label(solo, egui::RichText::new("S").small());
             if any_learn {
-                let solo_path = format!("deck/{}/solo", deck.uuid);
+                let solo_path = ParamAddress::deck(&deck.uuid, DeckTarget::Solo).to_string();
                 if data.midi_learn_active {
                     let is_target = data.midi_learn_target.as_deref() == Some(solo_path.as_str());
                     if is_target {
@@ -1353,7 +1372,9 @@ pub(super) fn render_deck_thumbnail(
                         widgets::draw_midi_learn_glow(ui, solo_resp.rect);
                     }
                     if solo_resp.clicked() {
-                        actions.session.midi_learn_select = Some(solo_path.clone());
+                        actions.commands.push(EngineCommand::MidiLearnSelect {
+                            path: solo_path.clone(),
+                        });
                     }
                 }
                 if data.keyboard_learn_active {
@@ -1365,8 +1386,9 @@ pub(super) fn render_deck_thumbnail(
                         widgets::draw_keyboard_learn_glow(ui, solo_resp.rect);
                     }
                     if solo_resp.clicked() {
-                        actions.session.keyboard_learn_select =
-                            Some(crate::keymap::KeyTarget::ParamPath(solo_path));
+                        actions.commands.push(EngineCommand::KeyboardLearnSelect {
+                            target: crate::keymap::KeyTarget::ParamPath(solo_path),
+                        });
                     }
                 }
             } else if solo_resp.clicked() {

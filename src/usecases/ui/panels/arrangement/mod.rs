@@ -106,7 +106,7 @@ struct AutomationRow<'a> {
     /// channel's colour rather than inventing one.
     ch_idx: usize,
     owner: Owner,
-    /// Display name, already stripped of the `deck_<uuid>:` addressing prefix
+    /// Display name, already stripped of the `deck/<uuid>/` addressing prefix
     /// and qualified by the effect it belongs to where that is ambiguous.
     label: String,
     param_key: &'a str,
@@ -288,7 +288,8 @@ fn build_rows(data: &UIData) -> Vec<Row<'_>> {
         // The channel's own fader and its effects belong to the channel rather
         // than to any one deck, so their curves sit directly under the group
         // header.
-        let mut channel_sources = vec![(format!("ch_{}:", ch.uuid), None)];
+        let mut channel_sources =
+            vec![(crate::engine::value::param::channel_prefix(&ch.uuid), None)];
         channel_sources.extend(effect_sources(&ch.effects));
         rows.extend(
             automation_rows(
@@ -328,7 +329,12 @@ fn build_rows(data: &UIData) -> Vec<Row<'_>> {
 fn effect_sources(effects: &[super::super::EffectInfo]) -> Vec<(String, Option<String>)> {
     effects
         .iter()
-        .map(|(uuid, name, _, _)| (format!("fx_{uuid}:"), Some(name.clone())))
+        .map(|(uuid, name, _, _)| {
+            (
+                crate::engine::value::param::effect_prefix(uuid),
+                Some(name.clone()),
+            )
+        })
         .collect()
 }
 
@@ -351,7 +357,7 @@ fn deck_automation_rows<'a>(
                 .get(&crate::arrangement::opacity_param_key(&deck.uuid))
         });
 
-    let mut sources = vec![(format!("deck_{}:", deck.uuid), None)];
+    let mut sources = vec![(crate::engine::value::param::deck_prefix(&deck.uuid), None)];
     sources.extend(effect_sources(&deck.effects));
     automation_rows(
         data,
@@ -362,14 +368,19 @@ fn deck_automation_rows<'a>(
     )
 }
 
-/// A display name for a parameter Varda reserves, or the key's own name.
+/// A display name for a parameter, from its key relative to its owner.
 ///
-/// Shader parameters are named by whoever wrote the shader, so they are shown as
-/// they are. The keys Varda defines itself are internal identifiers that happen
-/// to be addressable, and showing `video_loop_mode` next to a control the rest
-/// of the UI calls "Loop" makes the two look like different settings.
-fn reserved_param_label(name: &str) -> &str {
+/// Shader and effect parameters (`param/<name>`) are named by whoever wrote the
+/// shader, so they are shown as they are. The built-ins Varda defines are
+/// internal paths that happen to be addressable, and showing `video/loop_mode`
+/// next to a control the rest of the UI calls "Loop" makes the two look like
+/// different settings.
+fn reserved_param_label(relative: &str) -> &str {
     use crate::video::modulation as vm;
+    if let Some(name) = relative.strip_prefix("param/") {
+        return name;
+    }
+    let name = relative;
     match name {
         "opacity" => "Opacity",
         vm::SPEED => "Speed",
@@ -397,14 +408,22 @@ fn automation_rows<'a>(
         .modulation_assignments
         .iter()
         .filter_map(|(key, assignments)| {
-            let (_, owner_label) = sources.iter().find(|(prefix, _)| key.starts_with(prefix))?;
-            Some((key.as_str(), owner_label.as_deref(), assignments))
+            let (prefix, owner_label) =
+                sources.iter().find(|(prefix, _)| key.starts_with(prefix))?;
+            Some((
+                key.as_str(),
+                &key[prefix.len()..],
+                owner_label.as_deref(),
+                assignments,
+            ))
         })
-        .flat_map(|(key, owner_label, assignments)| {
-            assignments.iter().map(move |a| (key, owner_label, a))
+        .flat_map(|(key, relative, owner_label, assignments)| {
+            assignments
+                .iter()
+                .map(move |a| (key, relative, owner_label, a))
         })
-        .filter(|(_, _, a)| Some(&a.source_id) != exclude)
-        .filter_map(|(param_key, owner_label, assignment)| {
+        .filter(|(_, _, _, a)| Some(&a.source_id) != exclude)
+        .filter_map(|(param_key, relative, owner_label, assignment)| {
             let entry = data
                 .modulation_sources
                 .iter()
@@ -412,8 +431,7 @@ fn automation_rows<'a>(
             let ModSourceUI::Envelope { breakpoints } = &entry.source else {
                 return None;
             };
-            let name = param_key.rsplit_once(':').map_or(param_key, |(_, n)| n);
-            let name = reserved_param_label(name);
+            let name = reserved_param_label(relative);
             Some(AutomationRow {
                 ch_idx,
                 owner,
@@ -1076,9 +1094,6 @@ fn render_group_row(
         let subject = clipboard_menu::Subject::channel(&channel.uuid, &channel.name);
         clipboard_menu::items(ui, data, actions, &subject);
         ui.separator();
-        // Through the session action rather than the command, because removing a
-        // channel by index is also what fixes up a selection pointing past the
-        // end of the list.
         if ui
             .add_enabled(
                 data.channels.len() > 2,
@@ -1088,7 +1103,9 @@ fn render_group_row(
             .on_disabled_hover_text("A mixer keeps at least two channels")
             .clicked()
         {
-            actions.session.remove_channel = Some(ch_idx);
+            actions.commands.push(EngineCommand::RemoveChannel {
+                channel_uuid: channel.uuid.clone(),
+            });
             ui.close();
         }
     });
@@ -1993,7 +2010,11 @@ mod tests {
     pub(super) fn fixture_with_automation() -> UIData {
         let mut data = fixture_with_arrangement();
         let deck_uuid = data.channels[0].decks[0].uuid.clone();
-        push_envelope(&mut data, "env-speed", &format!("deck_{deck_uuid}:speed"));
+        push_envelope(
+            &mut data,
+            "env-speed",
+            &format!("deck/{deck_uuid}/param/speed"),
+        );
         data
     }
 
@@ -2102,7 +2123,7 @@ mod tests {
     fn an_automation_row_carries_its_own_override_badge() {
         let mut data = fixture_with_arrangement();
         let deck = data.channels[0].decks[0].uuid.clone();
-        let key = format!("deck_{deck}:{}", crate::video::modulation::POSITION);
+        let key = format!("deck/{deck}/{}", crate::video::modulation::POSITION);
         push_envelope(&mut data, "env-playhead", &key);
         data.arrangement.as_mut().unwrap().overridden_params = vec![key.clone()];
 
@@ -2123,7 +2144,7 @@ mod tests {
         );
     }
 
-    /// The keys Varda reserves are internal identifiers. Showing `video_loop_mode`
+    /// The built-in paths are internal identifiers. Showing `video/loop_mode`
     /// beside a control the rest of the UI calls "Loop" makes them look like two
     /// different settings.
     #[test]
@@ -2142,7 +2163,7 @@ mod tests {
             push_envelope(
                 &mut data,
                 &format!("env-{i}"),
-                &format!("deck_{deck}:{name}"),
+                &format!("deck/{deck}/{name}"),
             );
         }
 
@@ -2439,7 +2460,10 @@ mod tests {
         harness.run();
         drop(harness);
 
-        assert_eq!(actions.session.remove_channel, Some(1));
+        assert!(matches!(
+            actions.commands.as_slice(),
+            [EngineCommand::RemoveChannel { channel_uuid }] if *channel_uuid == data.channels[1].uuid
+        ));
     }
 
     /// The engine keeps two channels whatever the UI asks, so the item is shown
@@ -2459,7 +2483,7 @@ mod tests {
         harness.run();
         drop(harness);
 
-        assert_eq!(actions.session.remove_channel, None);
+        assert!(actions.commands.is_empty());
     }
 
     /// Rows are laid out in one pass so the header and the track for a lane are
@@ -2589,7 +2613,11 @@ mod tests {
     fn a_master_effect_curve_lands_on_the_master_row() {
         let mut data = fixture_with_arrangement();
         let fx = data.master_effect_info[0].0.clone();
-        push_envelope(&mut data, "env-master", &format!("fx_{fx}:intensity"));
+        push_envelope(
+            &mut data,
+            "env-master",
+            &format!("effect/{fx}/param/intensity"),
+        );
 
         let rows = build_rows(&data);
         assert!(
@@ -2614,7 +2642,7 @@ mod tests {
     fn a_channel_effect_curve_lands_under_its_group() {
         let mut data = fixture_with_arrangement();
         let fx = data.channels[0].effects[0].0.clone();
-        push_envelope(&mut data, "env-channel", &format!("fx_{fx}:mix"));
+        push_envelope(&mut data, "env-channel", &format!("effect/{fx}/param/mix"));
 
         let owners: Vec<usize> = build_rows(&data)
             .into_iter()
@@ -2660,7 +2688,7 @@ mod tests {
     fn a_deck_effect_curve_is_named_for_its_effect() {
         let mut data = fixture_with_arrangement();
         let fx = data.channels[0].decks[0].effects[0].0.clone();
-        push_envelope(&mut data, "env-fx", &format!("fx_{fx}:amount"));
+        push_envelope(&mut data, "env-fx", &format!("effect/{fx}/param/amount"));
 
         let labels: Vec<String> = build_rows(&data)
             .into_iter()

@@ -7,6 +7,7 @@
 use super::super::{UIActions, UIData};
 use super::deck_detail::render_selected_deck_detail;
 use super::effects::{render_channel_effect_detail, render_master_effect_detail};
+use crate::engine::EngineCommand;
 
 pub(super) fn render_bottom_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     // MIDI learn status indicator
@@ -34,7 +35,7 @@ pub(super) fn render_bottom_panel(ui: &mut egui::Ui, data: &UIData, actions: &mu
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("x Exit MIDI Learn").clicked() {
-                            actions.session.midi_learn_toggle = true;
+                            actions.commands.push(EngineCommand::MidiLearnToggle);
                         }
                     });
                 });

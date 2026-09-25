@@ -260,7 +260,8 @@ impl ShaderParams {
         self.mod_key_scratch.clear();
         if let Some(prefix) = param_prefix {
             self.mod_key_scratch.push_str(prefix);
-            self.mod_key_scratch.push(':');
+            self.mod_key_scratch
+                .push(crate::engine::value::param::PARAM_KEY_SEPARATOR);
         }
         self.mod_key_scratch.push_str(name);
 
@@ -289,7 +290,8 @@ impl ShaderParams {
         self.mod_key_scratch.clear();
         if let Some(prefix) = param_prefix {
             self.mod_key_scratch.push_str(prefix);
-            self.mod_key_scratch.push(':');
+            self.mod_key_scratch
+                .push(crate::engine::value::param::PARAM_KEY_SEPARATOR);
         }
         self.mod_key_scratch.push_str(name);
         Some(Self::apply_modulation_to_value_with_key(
@@ -669,7 +671,8 @@ impl ShaderParams {
                 self.mod_key_scratch.clear();
                 if let Some(prefix) = param_prefix {
                     self.mod_key_scratch.push_str(prefix);
-                    self.mod_key_scratch.push(':');
+                    self.mod_key_scratch
+                        .push(crate::engine::value::param::PARAM_KEY_SEPARATOR);
                 }
                 self.mod_key_scratch.push_str(name);
 
@@ -749,7 +752,7 @@ impl ShaderParams {
     }
 
     /// Update GPU buffer with modulation applied
-    /// `param_prefix` is used to look up modulation (e.g., "deck0" to look up "deck0:paramname")
+    /// `param_prefix` is used to look up modulation (`deck/<u>/param` looks up `deck/<u>/param/<name>`)
     pub fn update_buffer_with_modulation(
         &mut self,
         queue: &wgpu::Queue,
@@ -1293,7 +1296,7 @@ mod tests {
         let mut params = ShaderParams::from_inputs(&inputs);
         let mut engine = ModulationEngine::new();
         let uuid = engine.add_source(pinned_source(1.0));
-        engine.assign("deck0:speed", &uuid, 0.5, None);
+        engine.assign("deck0/speed", &uuid, 0.5, None);
         engine.update_free_running(
             0.0,
             &crate::modulation::AudioValues::default(),
@@ -1344,7 +1347,7 @@ mod tests {
             let mut params = ShaderParams::from_inputs(&inputs);
             let mut engine = ModulationEngine::new();
             let uuid = engine.add_source(pinned_source(ramp));
-            engine.assign("deck0:speed", &uuid, amount, None);
+            engine.assign("deck0/speed", &uuid, amount, None);
             engine.update_free_running(
                 0.0,
                 &crate::modulation::AudioValues::default(),
@@ -1393,7 +1396,7 @@ mod tests {
             amplitude: 1.0,
             bipolar,
         });
-        engine.assign("deck0:speed", &uuid, DEFAULT_ASSIGNMENT_AMOUNT, None);
+        engine.assign("deck0/speed", &uuid, DEFAULT_ASSIGNMENT_AMOUNT, None);
 
         let mut pinned = 0;
         let (mut lo, mut hi) = (f32::MAX, f32::MIN);
@@ -1499,7 +1502,7 @@ mod tests {
                 mode,
                 noise_gate: 0.0,
             });
-            engine.assign("deck0:speed", &uuid, DEFAULT_ASSIGNMENT_AMOUNT, None);
+            engine.assign("deck0/speed", &uuid, DEFAULT_ASSIGNMENT_AMOUNT, None);
 
             let (mut lo, mut hi) = (f32::MAX, f32::MIN);
             // Long enough for the ramp to cross the full 0..1 span at the
@@ -1561,8 +1564,8 @@ mod tests {
             &crate::modulation::AudioValues::default(),
             &crate::modulation::AnalyzerValues::default(),
         );
-        // Assign with prefix "deck0:brightness"
-        engine.assign("deck0:brightness", &uuid, 0.5, None);
+        // Assign with prefix "deck0/brightness"
+        engine.assign("deck0/brightness", &uuid, 0.5, None);
 
         let modulated = params
             .build_modulated_buffer_data(&engine, Some("deck0"))

@@ -2,6 +2,7 @@
 
 use super::super::{ModSourceUI, UIActions, UIData, modulator_color, widgets};
 use crate::engine::EngineCommand;
+use crate::engine::value::param::ParamAddress;
 use crate::modulation::{LFOWaveform, StepInterpolation};
 use crate::timebase::Timebase;
 
@@ -222,7 +223,8 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     let mut freq = *frequency;
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("Freq:").small());
-                                        let path = format!("mod/{sid}/frequency");
+                                        let path = ParamAddress::modulator_param(sid, "frequency")
+                                            .to_string();
                                         if render_mod_learn_slider(
                                             ui,
                                             &mut freq,
@@ -250,7 +252,8 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     let mut amp = *amplitude;
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("Amp:").small());
-                                        let path = format!("mod/{sid}/amplitude");
+                                        let path = ParamAddress::modulator_param(sid, "amplitude")
+                                            .to_string();
                                         if render_mod_learn_slider(
                                             ui,
                                             &mut amp,
@@ -278,7 +281,8 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     let mut ph = *phase;
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("Phase:").small());
-                                        let path = format!("mod/{sid}/phase");
+                                        let path =
+                                            ParamAddress::modulator_param(sid, "phase").to_string();
                                         if render_mod_learn_slider(
                                             ui,
                                             &mut ph,
@@ -458,7 +462,8 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     let mut fl = *freq_low;
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("Lo:").small());
-                                        let path = format!("mod/{sid}/freq_low");
+                                        let path = ParamAddress::modulator_param(sid, "freq_low")
+                                            .to_string();
                                         if render_mod_learn_slider(
                                             ui,
                                             &mut fl,
@@ -479,7 +484,8 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     let mut fh = *freq_high;
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("Hi:").small());
-                                        let path = format!("mod/{sid}/freq_high");
+                                        let path = ParamAddress::modulator_param(sid, "freq_high")
+                                            .to_string();
                                         if render_mod_learn_slider(
                                             ui,
                                             &mut fh,
@@ -501,7 +507,8 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     let mut gain_val = *gain;
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("Gain:").small());
-                                        let path = format!("mod/{sid}/gain");
+                                        let path =
+                                            ParamAddress::modulator_param(sid, "gain").to_string();
                                         if render_mod_learn_slider(
                                             ui,
                                             &mut gain_val,
@@ -522,7 +529,8 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     let mut sm = *smoothing;
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("Smooth:").small());
-                                        let path = format!("mod/{sid}/smoothing");
+                                        let path = ParamAddress::modulator_param(sid, "smoothing")
+                                            .to_string();
                                         if render_mod_learn_slider(
                                             ui,
                                             &mut sm,
@@ -635,7 +643,8 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     stage: _,
                                 } => {
                                     // Combined gate button: press → trigger, release → gate off
-                                    let gate_path = format!("mod/{sid}/gate");
+                                    let gate_path =
+                                        ParamAddress::modulator_param(sid, "gate").to_string();
                                     let any_learn =
                                         data.midi_learn_active || data.keyboard_learn_active;
                                     let gate_id = ui.id().with(("adsr_gate", idx));
@@ -707,8 +716,9 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                             .interact(gate_rect, click_id, egui::Sense::click())
                                             .clicked()
                                         {
-                                            actions.session.midi_learn_select =
-                                                Some(gate_path.clone());
+                                            actions.commands.push(EngineCommand::MidiLearnSelect {
+                                                path: gate_path.clone(),
+                                            });
                                         }
                                     }
                                     // Keyboard learn overlay
@@ -725,16 +735,20 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                             .interact(gate_rect, click_id, egui::Sense::click())
                                             .clicked()
                                         {
-                                            actions.session.keyboard_learn_select =
-                                                Some(crate::keymap::KeyTarget::ParamPath(
-                                                    gate_path.clone(),
-                                                ));
+                                            actions.commands.push(
+                                                EngineCommand::KeyboardLearnSelect {
+                                                    target: crate::keymap::KeyTarget::ParamPath(
+                                                        gate_path.clone(),
+                                                    ),
+                                                },
+                                            );
                                         }
                                     }
                                     let mut attack_val = *attack;
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("A:").small());
-                                        let path = format!("mod/{sid}/attack");
+                                        let path = ParamAddress::modulator_param(sid, "attack")
+                                            .to_string();
                                         if render_mod_learn_slider(
                                             ui,
                                             &mut attack_val,
@@ -758,7 +772,8 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     let mut decay_val = *decay;
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("D:").small());
-                                        let path = format!("mod/{sid}/decay");
+                                        let path =
+                                            ParamAddress::modulator_param(sid, "decay").to_string();
                                         if render_mod_learn_slider(
                                             ui,
                                             &mut decay_val,
@@ -778,7 +793,8 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     let mut sustain_val = *sustain;
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("S:").small());
-                                        let path = format!("mod/{sid}/sustain");
+                                        let path = ParamAddress::modulator_param(sid, "sustain")
+                                            .to_string();
                                         if render_mod_learn_slider(
                                             ui,
                                             &mut sustain_val,
@@ -802,7 +818,8 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     let mut release_val = *release;
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("R:").small());
-                                        let path = format!("mod/{sid}/release");
+                                        let path = ParamAddress::modulator_param(sid, "release")
+                                            .to_string();
                                         if render_mod_learn_slider(
                                             ui,
                                             &mut release_val,
@@ -921,7 +938,7 @@ fn render_step_sequencer_controls(
     let mut r = rate;
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Rate:").small());
-        let path = format!("mod/{sid}/rate");
+        let path = ParamAddress::modulator_param(sid, "rate").to_string();
         if render_mod_learn_slider(
             ui,
             &mut r,
@@ -1132,7 +1149,7 @@ fn render_step_sequencer_controls(
                 egui::pos2(x0, rect.top()),
                 egui::vec2(step_w, rect.height()),
             );
-            let step_path = format!("mod/{sid}/step/{step_idx}");
+            let step_path = ParamAddress::modulator_step(sid, step_idx).to_string();
             if data.midi_learn_active {
                 let is_target = data.midi_learn_target.as_deref() == Some(step_path.as_str());
                 if is_target {
@@ -1145,7 +1162,9 @@ fn render_step_sequencer_controls(
                     .interact(step_rect, click_id, egui::Sense::click())
                     .clicked()
                 {
-                    actions.session.midi_learn_select = Some(step_path.clone());
+                    actions.commands.push(EngineCommand::MidiLearnSelect {
+                        path: step_path.clone(),
+                    });
                 }
             }
             if data.keyboard_learn_active {
@@ -1160,8 +1179,9 @@ fn render_step_sequencer_controls(
                     .interact(step_rect, click_id, egui::Sense::click())
                     .clicked()
                 {
-                    actions.session.keyboard_learn_select =
-                        Some(crate::keymap::KeyTarget::ParamPath(step_path));
+                    actions.commands.push(EngineCommand::KeyboardLearnSelect {
+                        target: crate::keymap::KeyTarget::ParamPath(step_path),
+                    });
                 }
             }
         }
@@ -1197,7 +1217,9 @@ pub(super) fn render_mod_learn_slider(
             let click_id = ui.id().with(("midi_learn_mod", midi_path));
             let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
             if click_resp.clicked() {
-                actions.session.midi_learn_select = Some(midi_path.to_string());
+                actions.commands.push(EngineCommand::MidiLearnSelect {
+                    path: midi_path.to_string(),
+                });
             }
         }
         if data.keyboard_learn_active {
@@ -1210,8 +1232,9 @@ pub(super) fn render_mod_learn_slider(
             let click_id = ui.id().with(("kb_learn_mod", midi_path));
             let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
             if click_resp.clicked() {
-                actions.session.keyboard_learn_select =
-                    Some(crate::keymap::KeyTarget::ParamPath(midi_path.to_string()));
+                actions.commands.push(EngineCommand::KeyboardLearnSelect {
+                    target: crate::keymap::KeyTarget::ParamPath(midi_path.to_string()),
+                });
             }
         }
     } else if ui
@@ -1237,7 +1260,7 @@ pub(super) fn render_mod_on_mod_dropdown(
     target_uuid: &str,
     param_name: &str,
 ) {
-    let key = format!("mod:{target_uuid}:{param_name}");
+    let key = ParamAddress::modulator_param(target_uuid, param_name).to_string();
     let assignments = data
         .modulation_assignments
         .get(&key)

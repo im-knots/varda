@@ -12,15 +12,22 @@ use crate::engine::types::{
     EffectSnapshot, ModulationSourceSnapshot, SequenceStepKindSnapshot, ShaderParamsSnapshot,
 };
 
-/// Build a `UIData` snapshot from `VardaApp` state + UI layout state + egui texture IDs.
-/// Constructs `EngineState` first, then derives `UIData` from it.
+/// The egui textures the runner has registered for previews.
+pub(crate) struct PreviewTextures<'a> {
+    pub deck: &'a std::collections::HashMap<String, egui::TextureId>,
+    pub channel: &'a std::collections::HashMap<usize, egui::TextureId>,
+    pub output: &'a std::collections::HashMap<usize, egui::TextureId>,
+    pub main_output: Option<egui::TextureId>,
+}
+
+/// Derive the GUI's view model from this frame's engine snapshot, the UI
+/// layout, and the registered preview textures. Borrows `engine` so the runner
+/// can publish the same snapshot to the API afterwards.
 pub(crate) fn build_ui_data(
     app: &VardaApp,
+    engine: &crate::engine::EngineState,
     layout: &crate::usecases::ui::UILayoutState,
-    deck_preview_textures: &std::collections::HashMap<String, egui::TextureId>,
-    channel_preview_textures: &std::collections::HashMap<usize, egui::TextureId>,
-    output_preview_textures: &std::collections::HashMap<usize, egui::TextureId>,
-    main_output_texture: Option<egui::TextureId>,
+    textures: &PreviewTextures<'_>,
     available_luts: std::sync::Arc<[String]>,
 ) -> crate::usecases::ui::UIData {
     use crate::usecases::ui::{
@@ -30,9 +37,6 @@ pub(crate) fn build_ui_data(
         SequenceStepKindUI, SequenceStepUI, SequenceUIData, SrtLibraryEntry, SurfaceAssignmentUI,
         SurfaceUI, TapUI, UIData, VideoPlaybackUI,
     };
-
-    // Build the domain-neutral engine state first
-    let engine = app.build_engine_state();
 
     // ── Map EngineState → UIData ──────────────────────────────────────
 
@@ -533,6 +537,7 @@ pub(crate) fn build_ui_data(
         .visible()
         .iter()
         .map(|n| NotificationUI {
+            id: n.id,
             level: n.level,
             message: n.message.clone(),
             progress: n.progress(),
@@ -540,8 +545,8 @@ pub(crate) fn build_ui_data(
         .collect();
 
     UIData {
-        generators: engine.registry.generators,
-        filters: engine.registry.filters,
+        generators: engine.registry.generators.clone(),
+        filters: engine.registry.filters.clone(),
         shader_count: engine.registry.shader_count,
         channels,
         master_effect_info,
@@ -550,10 +555,10 @@ pub(crate) fn build_ui_data(
         modulation_assignments,
         macros: engine.macros.clone(),
         audio,
-        deck_preview_textures: deck_preview_textures.clone(),
-        channel_preview_textures: channel_preview_textures.clone(),
-        output_preview_textures: output_preview_textures.clone(),
-        main_output_texture,
+        deck_preview_textures: textures.deck.clone(),
+        channel_preview_textures: textures.channel.clone(),
+        output_preview_textures: textures.output.clone(),
+        main_output_texture: textures.main_output,
         notifications,
         crossfader: engine.mixer.crossfader,
         auto_crossfade_active: engine.mixer.auto_crossfade_active,
@@ -563,7 +568,7 @@ pub(crate) fn build_ui_data(
         look_lut_filename: engine.mixer.look_lut.clone(),
         available_luts,
         midi_learn_active: engine.midi.learn_active,
-        midi_learn_target: engine.midi.learn_target,
+        midi_learn_target: engine.midi.learn_target.clone(),
         keyboard_learn_active: app.input.keymap.learn_mode,
         keyboard_learn_target: app
             .input
@@ -572,8 +577,8 @@ pub(crate) fn build_ui_data(
             .as_ref()
             .map(|t| format!("{t}")),
         keymap_bindings: app.input.keymap.bindings.clone(),
-        transition_names: engine.mixer.transition_names,
-        active_transition_name: engine.mixer.active_transition_name,
+        transition_names: engine.mixer.transition_names.clone(),
+        active_transition_name: engine.mixer.active_transition_name.clone(),
         // UI layout/selection state — owned by the UI consumer, not the engine
         selected_deck: layout.selected_deck,
         selected_channel: layout.selected_channel,
@@ -616,10 +621,10 @@ pub(crate) fn build_ui_data(
         available_monitors,
         midi_devices,
         midi_mappings,
-        cameras: engine.cameras.devices,
-        depth_sensors: engine.depth_sensors.devices,
-        capture_targets: engine.screen_capture.targets,
-        screen_capture_permission: engine.screen_capture.permission,
+        cameras: engine.cameras.devices.clone(),
+        depth_sensors: engine.depth_sensors.devices.clone(),
+        capture_targets: engine.screen_capture.targets.clone(),
+        screen_capture_permission: engine.screen_capture.permission.clone(),
         screen_capture_available: engine.screen_capture.available,
         ndi_sources: engine.ndi_sources.clone(),
         ndi_available: engine.ndi_available,
@@ -735,20 +740,20 @@ pub(crate) fn build_ui_data(
         cpu_usage: app.frame_stats.system_monitor.cpu_usage(),
         ram_used: app.frame_stats.system_monitor.ram_used(),
         ram_total: app.frame_stats.system_monitor.ram_total(),
-        clock_source: engine.clock.source_label,
+        clock_source: engine.clock.source_label.clone(),
         clock_bpm: engine.clock.bpm,
         clock_active: engine.clock.active,
-        clock_device_name: engine.clock.device_name,
-        clock_detected_midi: engine.clock.detected_midi_sources,
+        clock_device_name: engine.clock.device_name.clone(),
+        clock_detected_midi: engine.clock.detected_midi_sources.clone(),
         clock_osc_active: engine.clock.osc_active,
         clock_osc_bpm: engine.clock.osc_bpm,
         clock_audio_bpm: engine.clock.audio_bpm,
-        clock_preference: engine.clock.preference_label,
+        clock_preference: engine.clock.preference_label.clone(),
         clock_preference_force_device_id: engine.clock.preference_force_device_id,
         clock_manual_bpm: engine.clock.manual_bpm,
         clock_beat_followers: engine.clock.beat_followers,
-        transport: engine.transport,
-        timecode: engine.timecode,
+        transport: engine.transport.clone(),
+        timecode: engine.timecode.clone(),
         render_width: app.render_width(),
         render_height: app.render_height(),
         max_render_dimension: app.max_render_dimension(),
@@ -756,7 +761,11 @@ pub(crate) fn build_ui_data(
         // Populated by UIRunner after build (history/pending loads live on runner, not app)
         can_undo: false,
         can_redo: false,
-        pending_deck_loads: 0,
+        pending_deck_loads: engine
+            .deck_loads
+            .iter()
+            .filter(|l| l.status == crate::engine::types::DeckLoadStatus::Loading)
+            .count(),
         deck_presets: app
             .session
             .preset_library

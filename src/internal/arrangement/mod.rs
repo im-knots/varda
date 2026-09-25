@@ -288,9 +288,9 @@ pub fn opacity_param_key(deck_uuid: &str) -> String {
 /// [`opacity_param_key`] into a reused buffer, for the per-frame path.
 pub fn write_opacity_param_key(buf: &mut String, deck_uuid: &str) {
     buf.clear();
-    buf.push_str("deck_");
+    buf.push_str("deck/");
     buf.push_str(deck_uuid);
-    buf.push_str(":opacity");
+    buf.push_str("/opacity");
 }
 
 /// The parameter key the modulation engine addresses a channel's fader by.
@@ -300,9 +300,9 @@ pub fn write_opacity_param_key(buf: &mut String, deck_uuid: &str) {
 /// See /spec/automation-recording.md § What can be recorded.
 pub fn channel_opacity_param_key(channel_uuid: &str) -> String {
     let mut key = String::with_capacity(channel_uuid.len() + 11);
-    key.push_str("ch_");
+    key.push_str("ch/");
     key.push_str(channel_uuid);
-    key.push_str(":opacity");
+    key.push_str("/opacity");
     key
 }
 
@@ -624,7 +624,7 @@ mod tests {
 
     #[test]
     fn the_opacity_key_matches_the_modulation_engine_convention() {
-        assert_eq!(opacity_param_key("abc123"), "deck_abc123:opacity");
+        assert_eq!(opacity_param_key("abc123"), "deck/abc123/opacity");
     }
 
     fn cued(positions: &[f64]) -> ArrangementConfig {

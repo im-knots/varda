@@ -25,3 +25,21 @@ pub mod system;
 mod tests;
 pub mod timecode;
 pub mod transport;
+
+use crate::app::publish::PublishedState;
+use crate::usecases::api::SharedState;
+use crate::usecases::api::projection::{self, StateReadError};
+use axum::http::StatusCode;
+use std::sync::Arc;
+
+/// The published snapshot, or the HTTP error for its absence.
+pub(crate) fn read_or_error(
+    state: &SharedState,
+) -> Result<Arc<PublishedState>, (StatusCode, &'static str)> {
+    projection::read_state(&state.engine_state).map_err(|e| match e {
+        StateReadError::NotInitialized => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Engine not yet initialized",
+        ),
+    })
+}

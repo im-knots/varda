@@ -264,7 +264,7 @@ impl UIData {
             modulation_assignments: {
                 let mut m = std::collections::HashMap::new();
                 m.insert(
-                    "deck_a0000001:speed".to_string(),
+                    "deck/a0000001/param/speed".to_string(),
                     vec![ModAssignmentUI {
                         source_id: "mod00001".to_string(),
                         amount: 0.5,

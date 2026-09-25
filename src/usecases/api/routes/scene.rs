@@ -1,24 +1,13 @@
 //! Scene state routes: GET /api/scene/*
 
+use super::read_or_error;
+use crate::usecases::api::projection;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 
 use crate::usecases::api::SharedState;
-use crate::usecases::api::projection::{self, StateReadError};
-
-fn read_or_error(
-    state: &SharedState,
-) -> Result<crate::engine::EngineState, (StatusCode, &'static str)> {
-    projection::read_state(&state.engine_state).map_err(|e| match e {
-        StateReadError::NotInitialized => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Engine not yet initialized",
-        ),
-        StateReadError::LockPoisoned => (StatusCode::INTERNAL_SERVER_ERROR, "State lock poisoned"),
-    })
-}
 
 /// Full scene: channels, crossfader, master effects, modulation, macros, sequences, and streams.
 #[utoipa::path(get, path = "/api/scene",

@@ -203,14 +203,20 @@ impl VardaApp {
     }
 
     /// [`Self::note_live_param_write`] for one of a deck's video playback
-    /// parameters, addressed by its reserved modulation name.
+    /// parameters.
     ///
     /// MIDI, OSC, and the API get this for free, because they arrive as router
     /// paths that resolve to the same keys. A bottom-bar gesture never touches
     /// the router, so without this a hand on the scrub bar would leave an
     /// automation lane still driving the playhead it is trying to take back.
-    pub(crate) fn note_live_video_write(&mut self, deck_uuid: &str, name: &str, normalized: f32) {
-        self.note_live_param_write(&format!("deck_{deck_uuid}:{name}"), normalized);
+    pub(crate) fn note_live_video_write(
+        &mut self,
+        deck_uuid: &str,
+        target: crate::engine::value::param::DeckTarget,
+        normalized: f32,
+    ) {
+        let key = crate::engine::value::param::ParamAddress::deck(deck_uuid, target).to_string();
+        self.note_live_param_write(&key, normalized);
     }
 
     /// [`Self::note_live_param_write`] for a value that arrived as a router

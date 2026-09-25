@@ -1987,7 +1987,7 @@ mod tests {
 
     /// A restored effect must answer to the UUID it was saved under.
     ///
-    /// Modulation targets an effect parameter by the key `fx_{uuid}:{param}`,
+    /// Modulation targets an effect parameter by the key `effect/{uuid}/param/{param}`,
     /// and the render path looks that key up through the effect's cached
     /// `param_prefix`. Restore used to write `uuid` directly, leaving the prefix
     /// built from the throwaway UUID `Effect::new` mints. Everything that keys
@@ -2013,7 +2013,7 @@ mod tests {
         assert_eq!(effect.uuid(), "fxsaved1");
         assert_eq!(
             effect.param_prefix(),
-            "fx_fxsaved1",
+            "effect/fxsaved1/param",
             "the prefix modulation is looked up under must follow the restored UUID"
         );
     }
@@ -2029,7 +2029,7 @@ mod tests {
 
         effect.set_uuid("abcd1234".to_string());
         assert_eq!(effect.uuid(), "abcd1234");
-        assert_eq!(effect.param_prefix(), "fx_abcd1234");
+        assert_eq!(effect.param_prefix(), "effect/abcd1234/param");
     }
 
     #[test]

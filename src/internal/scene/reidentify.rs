@@ -89,14 +89,16 @@ fn recipes(recipes: &mut [ModulationRecipe], renames: &Renames, taken: &dyn Fn(&
     }
 }
 
-/// `fx_{old}:{param}` becomes `fx_{new}:{param}`. Bare generator params
-/// (`speed`) carry no UUID and are re-prefixed by the caller that knows the new
-/// deck, so they are left alone here.
+/// `effect/{old}/param/{name}` becomes `effect/{new}/param/{name}`. Owner-relative
+/// params (`param/speed`) carry no UUID and are re-prefixed by the caller that
+/// knows the new deck, so they are left alone here.
 fn rename_effect_key(param: &str, renames: &Renames) -> Option<String> {
-    let rest = param.strip_prefix("fx_")?;
-    let (uuid, name) = rest.split_once(':')?;
-    let new = renames.get(uuid)?;
-    Some(format!("fx_{new}:{name}"))
+    use crate::engine::value::param::ParamAddress;
+    let ParamAddress::EffectParam { effect, param } = param.parse().ok()? else {
+        return None;
+    };
+    let new = renames.get(&effect)?;
+    Some(ParamAddress::effect_param(new, &param).to_string())
 }
 
 /// Returns whether a new UUID was minted.
@@ -214,13 +216,13 @@ mod tests {
     #[test]
     fn effect_assignments_follow_the_effect_they_name() {
         let mut config = a_deck("deck0001");
-        config.modulation = vec![an_lfo_on("fx_fx000001:amount")];
+        config.modulation = vec![an_lfo_on("effect/fx000001/param/amount")];
         deck(&mut config, &everything_is_taken);
 
         let new_fx = &config.effects[0].uuid;
         assert_eq!(
             config.modulation[0].assignments[0].param,
-            format!("fx_{new_fx}:amount")
+            format!("effect/{new_fx}/param/amount")
         );
     }
 
@@ -306,13 +308,13 @@ mod tests {
     #[test]
     fn a_lone_effect_carries_its_assignments_across() {
         let mut config = an_effect("fx000001");
-        let mut modulation = vec![an_lfo_on("fx_fx000001:amount")];
+        let mut modulation = vec![an_lfo_on("effect/fx000001/param/amount")];
         effect(&mut config, &mut modulation, &everything_is_taken);
 
         assert_ne!(config.uuid, "fx000001");
         assert_eq!(
             modulation[0].assignments[0].param,
-            format!("fx_{}:amount", config.uuid)
+            format!("effect/{}/param/amount", config.uuid)
         );
     }
 
@@ -359,17 +361,17 @@ mod tests {
             .collect();
 
         for key in [
-            "speed",
-            "fx_",
-            "fx_fx000001",
-            "fx_unknown:amount",
-            ":amount",
+            "param/speed",
+            "effect/",
+            "effect/fx000001",
+            "effect/unknown/param/amount",
+            "/param/amount",
         ] {
             assert_eq!(rename_effect_key(key, &renames), None, "{key}");
         }
         assert_eq!(
-            rename_effect_key("fx_fx000001:amount", &renames).as_deref(),
-            Some("fx_fx000002:amount"),
+            rename_effect_key("effect/fx000001/param/amount", &renames).as_deref(),
+            Some("effect/fx000002/param/amount"),
         );
     }
 }

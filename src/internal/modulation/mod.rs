@@ -1280,9 +1280,9 @@ mod tests {
         let lfo0 = engine.add_source(ModulationSource::sine_lfo(1.0));
         let lfo1 = engine.add_source(ModulationSource::sine_lfo(2.0));
         engine.assign_mod_on_mod(&lfo0, "frequency", &lfo1, 0.5);
-        assert!(engine.has_modulation(&format!("mod:{lfo0}:frequency")));
+        assert!(engine.has_modulation(&format!("mod/{lfo0}/frequency")));
         engine.clear_mod_on_mod(&lfo0, "frequency");
-        assert!(!engine.has_modulation(&format!("mod:{lfo0}:frequency")));
+        assert!(!engine.has_modulation(&format!("mod/{lfo0}/frequency")));
     }
 
     #[test]
@@ -1390,11 +1390,11 @@ mod tests {
     #[test]
     fn parse_mod_target_valid() {
         assert_eq!(
-            ModulationEngine::parse_mod_target("mod:abc123:frequency"),
+            ModulationEngine::parse_mod_target("mod/abc123/frequency"),
             Some("abc123")
         );
         assert_eq!(
-            ModulationEngine::parse_mod_target("mod:def456:phase"),
+            ModulationEngine::parse_mod_target("mod/def456/phase"),
             Some("def456")
         );
     }
@@ -1615,7 +1615,7 @@ mod tests {
         // Remove the target — assignments should be cleaned up
         engine.remove_source(&a);
         assert!(!engine.has_source(&a));
-        // The mod-on-mod key "mod:{a}:frequency" should have been purged
+        // The mod-on-mod key "mod/{a}/frequency" should have been purged
         for key in engine.assignments_iter().map(|(k, _)| k) {
             assert!(
                 !key.contains(&a),

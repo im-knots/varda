@@ -44,6 +44,25 @@ fn fire(app: &mut VardaApp, cmd: EngineCommand) {
     app.process_commands();
 }
 
+/// Run frames until every background deck load has attached or failed.
+/// Shader, image, and video decks are built off the render thread.
+fn settle_deck_loads(app: &mut VardaApp) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while app
+        .build_engine_state()
+        .deck_loads
+        .iter()
+        .any(|l| l.status == varda::engine::DeckLoadStatus::Loading)
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "deck loads never finished"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        app.process_commands();
+    }
+}
+
 /// UUID of the channel currently at `idx`.
 fn channel_uuid(app: &mut VardaApp, idx: usize) -> String {
     app.build_engine_state().mixer.channels[idx].uuid.clone()
@@ -194,7 +213,7 @@ fn save_load_automation_envelope() {
         CommandResult::OkWithId { uuid } => uuid,
         other => panic!("expected OkWithId, got {other:?}"),
     };
-    let target = format!("deck_{deck_uuid}:opacity");
+    let target = format!("deck/{deck_uuid}/opacity");
 
     let uuid = match send_cmd(
         &mut app,
@@ -550,6 +569,7 @@ fn save_load_svg_image_deck() {
         matches!(result, CommandResult::OkWithId { .. }),
         "adding an SVG deck should succeed, got {result:?}"
     );
+    settle_deck_loads(&mut app);
     app.save_workspace().expect("save workspace");
 
     let Some(mut app2) = headless_app_in(tmp.path()) else {

@@ -22,6 +22,9 @@ impl NotificationLevel {
 /// A single notification message
 #[derive(Debug, Clone)]
 pub struct Notification {
+    /// Stable for the life of the session. Consumers dismiss by id because a
+    /// position shifts as older notifications expire.
+    pub id: u64,
     pub level: NotificationLevel,
     pub message: String,
     pub created_at: Instant,
@@ -51,6 +54,8 @@ pub struct NotificationSystem {
     max_visible: usize,
     /// Keys for which a one-shot notification has already been emitted.
     once_keys: HashSet<String>,
+    /// Id for the next notification.
+    next_id: u64,
 }
 
 impl NotificationSystem {
@@ -60,6 +65,7 @@ impl NotificationSystem {
             history: Vec::new(),
             max_visible: 5,
             once_keys: HashSet::new(),
+            next_id: 1,
         }
     }
 
@@ -71,7 +77,10 @@ impl NotificationSystem {
             NotificationLevel::Error => Duration::from_secs(8),
         };
 
+        let id = self.next_id;
+        self.next_id += 1;
         let notification = Notification {
+            id,
             level,
             message: message.into(),
             created_at: Instant::now(),
@@ -147,11 +156,10 @@ impl NotificationSystem {
         &self.active[..end]
     }
 
-    /// Dismiss a notification by index
-    pub fn dismiss(&mut self, index: usize) {
-        if index < self.active.len() {
-            self.active.remove(index);
-        }
+    /// Dismiss the notification with `id`. Unknown ids (already expired or
+    /// dismissed) are ignored.
+    pub fn dismiss(&mut self, id: u64) {
+        self.active.retain(|n| n.id != id);
     }
 }
 
@@ -225,16 +233,26 @@ mod tests {
         ns.info("B");
         ns.info("C");
         assert_eq!(ns.visible().len(), 3);
-        ns.dismiss(0);
-        assert_eq!(ns.visible().len(), 2);
+        let b = ns.visible()[1].id;
+        ns.dismiss(b);
+        let left: Vec<&str> = ns.visible().iter().map(|n| n.message.as_str()).collect();
+        assert_eq!(left, ["C", "A"]);
     }
 
     #[test]
-    fn notification_system_dismiss_out_of_bounds() {
+    fn notification_system_dismiss_unknown_id() {
         let mut ns = NotificationSystem::new();
         ns.info("A");
-        ns.dismiss(10);
+        ns.dismiss(999);
         assert_eq!(ns.visible().len(), 1);
+    }
+
+    #[test]
+    fn notification_ids_are_unique() {
+        let mut ns = NotificationSystem::new();
+        ns.info("A");
+        ns.info("B");
+        assert_ne!(ns.visible()[0].id, ns.visible()[1].id);
     }
 
     #[test]
@@ -257,6 +275,7 @@ mod tests {
     #[test]
     fn notification_progress() {
         let n = Notification {
+            id: 1,
             level: NotificationLevel::Info,
             message: "Test".into(),
             created_at: Instant::now(),
@@ -270,6 +289,7 @@ mod tests {
     #[test]
     fn notification_is_expired() {
         let n = Notification {
+            id: 1,
             level: NotificationLevel::Info,
             message: "Test".into(),
             created_at: Instant::now()
@@ -283,6 +303,7 @@ mod tests {
     #[test]
     fn notification_not_expired() {
         let n = Notification {
+            id: 1,
             level: NotificationLevel::Info,
             message: "Test".into(),
             created_at: Instant::now(),
@@ -296,6 +317,7 @@ mod tests {
         let mut ns = NotificationSystem::new();
         ns.notify(NotificationLevel::Info, "Fresh");
         let _expired = Notification {
+            id: 1,
             level: NotificationLevel::Error,
             message: "Old".into(),
             created_at: Instant::now()

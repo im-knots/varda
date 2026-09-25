@@ -34,17 +34,6 @@ impl UIActions {
             session: UISession::new(),
         }
     }
-
-    /// Whether this frame's actions include any undoable mutation carried by a
-    /// non-command field. Source-deck adds, deck remove/move/reorder, channel
-    /// add, effects, presets, and mixer edits now flow through `commands` and
-    /// are gated by `batch_has_undoable`. Only two irreducible residuals remain
-    /// here: the async shader load (`shader_to_add`, resolved off-frame and thus
-    /// never on `commands`) and channel removal (`remove_channel`, kept a field
-    /// so the runner can fix up UI selection with the removed index).
-    pub fn has_undoable_action(&self) -> bool {
-        self.session.shader_to_add.is_some() || self.session.remove_channel.is_some()
-    }
 }
 
 /// Drag payload types for library drag-and-drop

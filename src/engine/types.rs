@@ -101,6 +101,8 @@ pub enum ClipboardKind {
 #[derive(Clone, Serialize)]
 pub struct EngineState {
     pub mixer: MixerSnapshot,
+    /// Deck loads in flight, then loads that failed in the last minute.
+    pub deck_loads: Vec<DeckLoadSnapshot>,
     /// Dome projection the domemaster is rendered for.
     pub dome: crate::engine::value::dome::DomeConfig,
     pub audio: AudioSnapshot,
@@ -312,6 +314,27 @@ pub struct TimecodeInputSnapshot {
 /// A list rather than an object even though one signal drives the transport: a
 /// performer chasing a bad cable needs to see the input that is *not*
 /// resolving. See /spec/timecode.md § Dual simultaneous inputs.
+/// A deck being built in the background, or one that failed to build.
+///
+/// Deck-creating commands answer with the new deck's UUID straight away; the
+/// deck joins its channel once built. See /spec/ui-engine-boundary.md
+/// (Decision #15).
+#[derive(Clone, Debug, PartialEq, Serialize, utoipa::ToSchema)]
+pub struct DeckLoadSnapshot {
+    /// The UUID the deck has, or would have had.
+    pub uuid: String,
+    pub channel_uuid: String,
+    /// Shader name or media file name.
+    pub name: String,
+    pub status: DeckLoadStatus,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, utoipa::ToSchema)]
+pub enum DeckLoadStatus {
+    Loading,
+    Failed { message: String },
+}
+
 #[derive(Clone, Serialize, Default, utoipa::ToSchema)]
 pub struct TimecodeSnapshot {
     pub inputs: Vec<TimecodeInputSnapshot>,
@@ -967,6 +990,7 @@ mod tests {
     #[test]
     fn engine_state_can_be_constructed() {
         let state = EngineState {
+            deck_loads: Vec::new(),
             dome: crate::engine::value::dome::DomeConfig::default(),
             mixer: MixerSnapshot {
                 channels: vec![],
@@ -1057,6 +1081,7 @@ mod tests {
     #[test]
     fn engine_state_clone() {
         let state = EngineState {
+            deck_loads: Vec::new(),
             dome: crate::engine::value::dome::DomeConfig::default(),
             mixer: MixerSnapshot {
                 channels: vec![],

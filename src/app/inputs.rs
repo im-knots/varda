@@ -800,7 +800,7 @@ mod tests {
                 .arrangement
                 .expect("arrangement")
                 .overridden_params,
-            vec![format!("deck_{deck}:opacity")]
+            vec![format!("deck/{deck}/opacity")]
         );
     }
 

@@ -1,6 +1,6 @@
-//! `UISession` — the half of a frame's UI output that is *not* an engine
-//! mutation: selection focus, panel visibility, learn-mode targeting, dialog
-//! triggers, and the undo/redo/save flags.
+//! `UISession`: the half of a frame's UI output that is *not* an engine
+//! mutation: selection focus, panel visibility, dialog triggers, and the
+//! undo/redo/save requests the runner turns into commands.
 //!
 //! See /spec/ui-engine-boundary.md WS4 / Decision #11.
 
@@ -9,42 +9,22 @@ use super::{CameraDetectAction, DomeAction};
 /// UI-local session/ephemeral state accumulated during a frame (Population 2).
 ///
 /// This is the half of the frame's UI output that is **not** an engine mutation:
-/// selection focus, panel visibility, learn-mode targeting, dialog-open triggers,
-/// notification dismissals, gesture continuation, the async shader-load request,
-/// and the layout-coupled undo/redo/save triggers. None of it belongs on the
-/// command bus (the HTTP/CLI/MIDI consumers neither can nor should express it);
-/// it targets UI-local state (`UILayoutState`) or the runner, not the engine.
+/// selection focus, panel visibility, dialog-open triggers, gesture
+/// continuation, and the undo/redo/save
+/// requests. It targets UI-local state (`UILayoutState`) or the runner; engine
+/// mutations go on `UIActions::commands`.
 ///
 /// See /spec/ui-engine-boundary.md WS4 / Decision #11 — the deliberate split of
 /// "what I tell the engine" (`UIActions::commands`) from "my local view state".
 // Per-frame request flags that are independently set and cleared; an enum cannot express them.
 #[allow(clippy::struct_excessive_bools)]
 pub struct UISession {
-    /// (`channel_uuid`, `generator_registry_idx`) — add a shader as a new deck to a
-    /// channel. Resolved off-frame via `spawn_deck_loads` (not a command), so the
-    /// channel is held by UUID: a channel index captured at click time can name a
-    /// different channel by the time the shader finishes compiling. See
-    /// [`/spec/api-addressing.md`].
-    pub shader_to_add: Option<(String, usize)>,
     /// Channel UUID to open an image file dialog for (deferred to outside egui
     /// frame). A UUID rather than an index because the dialog outlives the
     /// frame that requested it — see [`/spec/api-addressing.md`].
     pub open_image_dialog_for_channel: Option<String>,
     /// Channel UUID to open a video file dialog for (deferred to outside egui frame)
     pub open_video_dialog_for_channel: Option<String>,
-    pub notifications_to_dismiss: Vec<usize>,
-    /// Info notifications to push (e.g. "Copied URL to clipboard")
-    pub info_notifications: Vec<String>,
-    /// MIDI learn: toggle learn mode on/off
-    pub midi_learn_toggle: bool,
-    /// MIDI learn: select a parameter as learn target (in learn mode, clicking a param)
-    pub midi_learn_select: Option<String>,
-    /// Keyboard learn: toggle learn mode on/off
-    pub keyboard_learn_toggle: bool,
-    /// Keyboard learn: select a target (Action or `ParamPath`)
-    pub keyboard_learn_select: Option<crate::keymap::KeyTarget>,
-    /// Keyboard learn: bind a key combo to current target
-    pub keyboard_learn_bind: Option<crate::keymap::KeyCombo>,
     /// Select a deck for detail view in bottom bar (`ch_idx`, `deck_idx`)
     pub select_deck: Option<(usize, usize)>,
     /// Select a channel for detail view in bottom bar (`ch_idx`)
@@ -59,10 +39,6 @@ pub struct UISession {
     pub select_macro: Option<String>,
     /// Clear the macro selection (e.g. its macro was deleted, or Close pressed)
     pub deselect_macro: bool,
-    /// Remove a channel from the mixer (by index). Retained as a non-command
-    /// field because the runner needs the removed index to fix up UI selection
-    /// state (`layout.fixup_channel_removal`).
-    pub remove_channel: Option<usize>,
     /// Toggle stage editor open/closed
     pub toggle_stage_editor: bool,
     /// Swap the central area between Performance and Arrangement. Purely a view
@@ -124,16 +100,8 @@ impl Default for UISession {
 impl UISession {
     pub fn new() -> Self {
         Self {
-            shader_to_add: None,
             open_image_dialog_for_channel: None,
             open_video_dialog_for_channel: None,
-            notifications_to_dismiss: Vec::new(),
-            info_notifications: Vec::new(),
-            midi_learn_toggle: false,
-            midi_learn_select: None,
-            keyboard_learn_toggle: false,
-            keyboard_learn_select: None,
-            keyboard_learn_bind: None,
             select_deck: None,
             select_channel: None,
             select_master: false,
@@ -141,7 +109,6 @@ impl UISession {
             select_sequence_step: None,
             select_macro: None,
             deselect_macro: false,
-            remove_channel: None,
             toggle_stage_editor: false,
             toggle_arrangement_mode: false,
             set_arrangement_zoom: None,

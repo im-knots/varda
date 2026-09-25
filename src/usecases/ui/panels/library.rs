@@ -166,18 +166,21 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                 ui.label(egui::RichText::new(format!("  ◆ {name}")).size(12.0));
                             })
                             .response;
-                        // Store generator index in temp memory so the deferred drop handler can use it
+                        // Store the shader name in temp memory so the deferred drop handler can use it
                         if ui.ctx().is_being_dragged(item_id) {
                             ui.ctx().memory_mut(|mem| {
                                 mem.data
-                                    .insert_temp(egui::Id::new("__lib_dnd_gen_idx"), *gen_idx);
+                                    .insert_temp(egui::Id::new("__lib_dnd_gen_name"), name.clone());
                             });
                         }
                         // Fallback: double-click adds to first channel
                         if resp.double_clicked()
                             && let Some(ch) = data.channels.first()
                         {
-                            actions.session.shader_to_add = Some((ch.uuid.clone(), *gen_idx));
+                            actions.commands.push(EngineCommand::AddDeck {
+                                channel_uuid: ch.uuid.clone(),
+                                shader_name: name.clone(),
+                            });
                         }
                         resp.on_hover_text(
                             "Drag to a channel to create a deck, or double-click to add to Ch 0",

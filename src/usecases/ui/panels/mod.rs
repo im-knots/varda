@@ -147,7 +147,9 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                             super::widgets::draw_midi_learn_glow(ui, undo_resp.rect);
                         }
                         if undo_resp.clicked() {
-                            actions.session.midi_learn_select = Some("action/undo".to_string());
+                            actions.commands.push(EngineCommand::MidiLearnSelect {
+                                path: "action/undo".to_string(),
+                            });
                         }
                     } else {
                         let is_target = data.keyboard_learn_target.as_deref() == Some("Undo");
@@ -157,9 +159,11 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                             super::widgets::draw_keyboard_learn_glow(ui, undo_resp.rect);
                         }
                         if undo_resp.clicked() {
-                            actions.session.keyboard_learn_select = Some(
-                                crate::keymap::KeyTarget::Action(crate::keymap::ActionId::Undo),
-                            );
+                            actions.commands.push(EngineCommand::KeyboardLearnSelect {
+                                target: crate::keymap::KeyTarget::Action(
+                                    crate::keymap::ActionId::Undo,
+                                ),
+                            });
                         }
                     }
                 } else if undo_resp.clicked() {
@@ -180,7 +184,9 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                             super::widgets::draw_midi_learn_glow(ui, redo_resp.rect);
                         }
                         if redo_resp.clicked() {
-                            actions.session.midi_learn_select = Some("action/redo".to_string());
+                            actions.commands.push(EngineCommand::MidiLearnSelect {
+                                path: "action/redo".to_string(),
+                            });
                         }
                     } else {
                         let is_target = data.keyboard_learn_target.as_deref() == Some("Redo");
@@ -190,9 +196,11 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                             super::widgets::draw_keyboard_learn_glow(ui, redo_resp.rect);
                         }
                         if redo_resp.clicked() {
-                            actions.session.keyboard_learn_select = Some(
-                                crate::keymap::KeyTarget::Action(crate::keymap::ActionId::Redo),
-                            );
+                            actions.commands.push(EngineCommand::KeyboardLearnSelect {
+                                target: crate::keymap::KeyTarget::Action(
+                                    crate::keymap::ActionId::Redo,
+                                ),
+                            });
                         }
                     }
                 } else if redo_resp.clicked() {
@@ -210,7 +218,9 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                             super::widgets::draw_midi_learn_glow(ui, save_resp.rect);
                         }
                         if save_resp.clicked() {
-                            actions.session.midi_learn_select = Some("action/save".to_string());
+                            actions.commands.push(EngineCommand::MidiLearnSelect {
+                                path: "action/save".to_string(),
+                            });
                         }
                     } else {
                         let is_target = data.keyboard_learn_target.as_deref() == Some("Save");
@@ -220,9 +230,11 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                             super::widgets::draw_keyboard_learn_glow(ui, save_resp.rect);
                         }
                         if save_resp.clicked() {
-                            actions.session.keyboard_learn_select = Some(
-                                crate::keymap::KeyTarget::Action(crate::keymap::ActionId::Save),
-                            );
+                            actions.commands.push(EngineCommand::KeyboardLearnSelect {
+                                target: crate::keymap::KeyTarget::Action(
+                                    crate::keymap::ActionId::Save,
+                                ),
+                            });
                         }
                     }
                 } else if save_resp.clicked() {
@@ -261,7 +273,7 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                     .on_hover_text("Click to exit MIDI learn mode")
                     .clicked()
                 {
-                    actions.session.midi_learn_toggle = true;
+                    actions.commands.push(EngineCommand::MidiLearnToggle);
                 }
             }
             if data.keyboard_learn_active {
@@ -273,7 +285,7 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                     .on_hover_text("Click to exit keyboard learn mode")
                     .clicked()
                 {
-                    actions.session.keyboard_learn_toggle = true;
+                    actions.commands.push(EngineCommand::KeyboardLearnToggle);
                 }
             }
 
@@ -398,7 +410,9 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
         if data.keyboard_learn_active {
             // In learn mode: intercept key presses for binding, don't dispatch normally
             if let Some(combo) = pressed.first() {
-                actions.session.keyboard_learn_bind = Some(combo.clone());
+                actions.commands.push(EngineCommand::KeyboardLearnBind {
+                    combo: combo.clone(),
+                });
             }
         } else {
             // Normal dispatch: look up each pressed key in the keymap
@@ -417,10 +431,10 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                             actions.session.toggle_stage_editor = true;
                         }
                         KeyTarget::Action(ActionId::ToggleMidiLearn) => {
-                            actions.session.midi_learn_toggle = true;
+                            actions.commands.push(EngineCommand::MidiLearnToggle);
                         }
                         KeyTarget::Action(ActionId::ToggleKeyboardLearn) => {
-                            actions.session.keyboard_learn_toggle = true;
+                            actions.commands.push(EngineCommand::KeyboardLearnToggle);
                         }
                         KeyTarget::Action(
                             id @ (ActionId::Copy | ActionId::Paste | ActionId::Duplicate),

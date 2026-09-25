@@ -7,6 +7,7 @@
 
 mod actions;
 mod commands;
+mod deck_loads;
 mod engine_impl;
 pub(crate) mod history;
 mod inputs;
@@ -14,6 +15,7 @@ mod inputs;
 #[cfg(feature = "html")]
 pub(crate) mod interactive;
 mod outputs;
+pub mod publish;
 pub(crate) mod render;
 pub(crate) mod resolve;
 mod snapshot;
@@ -294,7 +296,7 @@ pub(crate) struct SessionState {
 pub(crate) struct MessageBus {
     pub command_rx: tokio::sync::mpsc::UnboundedReceiver<CommandEnvelope>,
     pub command_tx: tokio::sync::mpsc::UnboundedSender<CommandEnvelope>,
-    pub state_tx: std::sync::Arc<std::sync::RwLock<Option<EngineState>>>,
+    pub publication: std::sync::Arc<publish::StatePublication>,
 }
 
 // ── Main application struct ─────────────────────────────────────
@@ -311,12 +313,16 @@ pub struct VardaApp {
     mixer: Mixer,
     audio_manager: AudioManager,
     camera_manager: CameraManager,
+    /// Camera held open for surface detection, if any. See `AcquireDetectionCamera`.
+    detection_camera: Option<crate::camera::CameraId>,
     /// Depth-sensor capture manager (Kinect/LIDAR point-cloud sources).
     depth_manager: DepthSensorManager,
     /// Screen / window capture manager. See spec/screen-capture.md.
     screen_capture_manager: ScreenCaptureManager,
     registry: ShaderRegistry,
     analyzer_registry: crate::analyzer::AnalyzerRegistry,
+    /// Decks being built off the render thread. See `deck_loads`.
+    deck_loader: deck_loads::DeckLoader,
     context: GpuContext,
     /// Absolute show position. Distinct from the tempo clock in
     /// `input.clock_manager`; see /spec/transport.md.
@@ -346,9 +352,12 @@ pub struct VardaApp {
     // ── Frame pacing (global, runtime-mutable) ──────────
     target_fps: u32,
 
-    // ── Channel preview / cue (ephemeral, published by UI each frame) ──
-    // Channels force-rendered for off-air preview. Never persisted; affects the
-    // render gate only, never the compositor. See /spec/channel-preview.md.
+    // ── Channel preview / cue (ephemeral) ──
+    // Channels force-rendered for off-air preview, set by `SetPreviewChannels`.
+    // Held by UUID so a reorder cannot move the cue; `preview_channels` is the
+    // positions resolved from them at the start of each frame. Never persisted;
+    // affects the render gate only. See /spec/channel-preview.md.
+    preview_channel_uuids: Vec<String>,
     preview_channels: Vec<usize>,
 
     // ── Pending control-surface actions (consumed by the runner) ──
@@ -504,7 +513,7 @@ impl VardaApp {
         };
 
         let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel();
-        let state_tx = std::sync::Arc::new(std::sync::RwLock::new(None));
+        let publication = std::sync::Arc::new(publish::StatePublication::default());
 
         // Always create GPU-dependent resources up front
         log::info!("[STARTUP]   GPU resources (textures, mixer)...");
@@ -518,6 +527,7 @@ impl VardaApp {
             mixer,
             audio_manager,
             camera_manager: CameraManager::new(),
+            detection_camera: None,
             depth_manager: DepthSensorManager::new(),
             // Constructed disabled rather than merely inert, so `--no-screen-capture`
             // never triggers the macOS TCC prompt.
@@ -528,6 +538,7 @@ impl VardaApp {
             },
             registry,
             analyzer_registry: crate::analyzer::default_registry(),
+            deck_loader: deck_loads::DeckLoader::new(),
             context: gpu,
             transport: crate::transport::Transport::new(),
             arrangement_blackout_reported: false,
@@ -616,7 +627,7 @@ impl VardaApp {
             bus: MessageBus {
                 command_rx,
                 command_tx,
-                state_tx,
+                publication,
             },
             audio_textures,
             #[cfg(feature = "html")]
@@ -624,6 +635,7 @@ impl VardaApp {
             render_width: DEFAULT_RENDER_WIDTH,
             render_height: DEFAULT_RENDER_HEIGHT,
             target_fps: config.target_fps,
+            preview_channel_uuids: Vec::new(),
             preview_channels: Vec::new(),
             pending_actions: inputs::PendingGlobalActions::default(),
             shutdown_requested: false,
@@ -635,9 +647,9 @@ impl VardaApp {
         self.bus.command_tx.clone()
     }
 
-    /// Get a shared reference to the latest engine state (for cross-thread consumers).
-    pub fn state_reader(&self) -> std::sync::Arc<std::sync::RwLock<Option<EngineState>>> {
-        self.bus.state_tx.clone()
+    /// Where other threads read the published engine snapshot.
+    pub fn state_reader(&self) -> std::sync::Arc<publish::StatePublication> {
+        self.bus.publication.clone()
     }
 
     /// Process all queued cross-thread commands. Called once per frame.
@@ -645,6 +657,7 @@ impl VardaApp {
     /// Exhaustive match — the compiler enforces that every `EngineCommand` variant
     /// is handled. Adding a new variant requires wiring it here.
     pub fn process_commands(&mut self) {
+        self.attach_finished_deck_loads();
         while let Ok((cmd, reply_tx)) = self.bus.command_rx.try_recv() {
             // Record pre-mutation state so bus-driven (HTTP API / WebSocket /
             // CLI / MIDI-issued) edits are undoable on the same timeline the
@@ -746,12 +759,16 @@ impl VardaApp {
         snapshot::build_engine_state(self)
     }
 
-    /// Publish the latest engine state for cross-thread consumers.
+    /// Build and publish a snapshot for cross-thread consumers (HTTP API,
+    /// WebSocket). Called every 10th frame.
     pub fn publish_state(&self) {
-        let state = self.build_engine_state();
-        if let Ok(mut guard) = self.bus.state_tx.write() {
-            *guard = Some(state);
-        }
+        self.publish(self.build_engine_state());
+    }
+
+    /// Publish a snapshot already built this frame, such as the one the GUI
+    /// built for its own view, instead of building a second.
+    pub fn publish(&self, state: EngineState) {
+        self.bus.publication.publish(state);
     }
 
     // ── Public accessors (controlled access for delivery layers) ─────
@@ -776,22 +793,18 @@ impl VardaApp {
         &self.camera_manager
     }
 
-    /// Mutable access to the camera manager (open/release cameras).
-    pub fn camera_manager_mut(&mut self) -> &mut CameraManager {
-        &mut self.camera_manager
-    }
-
-    /// Open a camera, returning resolution on success. Avoids split-borrow issues
-    /// by accessing both `camera_manager` and `context` internally.
+    /// Open a camera, returning its resolution.
     ///
     /// # Errors
     /// Returns an error if no camera with `id` is present, if the OS refuses
     /// access to the device, or if its GPU textures cannot be allocated.
-    pub fn open_camera(&mut self, id: crate::camera::CameraId) -> anyhow::Result<(u32, u32)> {
+    pub(crate) fn open_camera(
+        &mut self,
+        id: crate::camera::CameraId,
+    ) -> anyhow::Result<(u32, u32)> {
         self.camera_manager.open_camera(id, &self.context.device)
     }
 
-    /// Read-only access to the screen-capture manager.
     /// `(uuid, name)` for every channel, which is what resolves a tap's
     /// channel UUID to something a performer can read.
     pub fn channel_labels(&self) -> Vec<(String, String)> {
@@ -802,13 +815,9 @@ impl VardaApp {
             .collect()
     }
 
+    /// Read-only access to the screen-capture manager.
     pub fn screen_capture_manager(&self) -> &ScreenCaptureManager {
         &self.screen_capture_manager
-    }
-
-    /// Mutable access to the screen-capture manager (scan/open/release captures).
-    pub fn screen_capture_manager_mut(&mut self) -> &mut ScreenCaptureManager {
-        &mut self.screen_capture_manager
     }
 
     /// Read-only access to the depth-sensor manager.
@@ -816,19 +825,9 @@ impl VardaApp {
         &self.depth_manager
     }
 
-    /// Mutable access to the depth-sensor manager (open/release sensors).
-    pub fn depth_manager_mut(&mut self) -> &mut DepthSensorManager {
-        &mut self.depth_manager
-    }
-
     /// Read-only access to the outputs.
     pub fn outputs_ref(&self) -> &[crate::renderer::context::UnifiedOutput] {
         &self.output.outputs
-    }
-
-    /// Mutable access to the mixer (for deck insertion from background loads).
-    pub fn mixer_mut(&mut self) -> &mut crate::mixer::Mixer {
-        &mut self.mixer
     }
 
     /// Read-only access to the domemaster renderer output view (if enabled).
@@ -936,25 +935,25 @@ impl VardaApp {
         self.output.dome
     }
 
-    /// Publish the set of channels to force-render for off-air preview.
-    /// Called by the runner each frame from the UI selection. Ephemeral — never
-    /// persisted; affects the render gate only. See /spec/channel-preview.md.
-    pub fn set_preview_channels(&mut self, channels: Vec<usize>) {
-        self.preview_channels = channels;
+    /// The camera held open for surface detection, if any.
+    pub fn detection_camera(&self) -> Option<crate::camera::CameraId> {
+        self.detection_camera
+    }
+
+    /// Resolve the cued channel UUIDs to their current positions, reusing the
+    /// buffer the render gate reads.
+    fn resolve_preview_channels(&mut self) {
+        self.preview_channels.clear();
+        for uuid in &self.preview_channel_uuids {
+            if let Some(idx) = self.mixer.find_channel_by_uuid(uuid) {
+                self.preview_channels.push(idx);
+            }
+        }
     }
 
     /// Number of loaded shaders.
     pub fn shader_count(&self) -> usize {
         self.registry.count()
-    }
-
-    /// Resolve a generator index to a cloned `ISFShader`.
-    /// Returns None if the index is out of bounds.
-    pub fn resolve_generator(&self, gen_idx: usize) -> Option<crate::isf::ISFShader> {
-        self.registry
-            .generators()
-            .get(gen_idx)
-            .map(|s| (*s).clone())
     }
 
     /// Tick notification expiry timers.
@@ -1641,8 +1640,7 @@ mod tests {
         };
         let reader = app.state_reader();
         app.publish_state();
-        let guard = reader.read().unwrap();
-        let state = guard.as_ref().expect("state should be published");
+        let state = reader.latest().expect("state should be published");
         assert_eq!(state.mixer.channels.len(), 2);
     }
 
