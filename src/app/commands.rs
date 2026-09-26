@@ -359,6 +359,9 @@ impl VardaApp {
                 },
             },
             EngineCommand::ToggleParam { path } => {
+                if let Some(cmd) = super::inputs::surface_command(&path, self.interactive_deck()) {
+                    return self.execute_command(cmd);
+                }
                 if let Err(e) = crate::param_router::toggle_param_by_path(&mut self.mixer, &path) {
                     log::debug!("ToggleParam {path}: {e}");
                 }

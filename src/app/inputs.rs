@@ -4,6 +4,8 @@
 //! After processing, changed parameters are broadcast via OSC feedback.
 
 use super::VardaApp;
+use crate::engine::EngineCommand;
+use crate::engine::value::param::{DeckTarget, ParamAddress};
 
 /// Undo/redo/save requested by a control surface (MIDI, OSC, or a macro
 /// trigger) and not yet dispatched.
@@ -14,17 +16,27 @@ pub(crate) struct PendingGlobalActions {
     pub(crate) save: bool,
 }
 
-/// The cue a control-surface write asks for, if it asks for one.
-///
-/// `cue/<uuid>/fire` is taken on the rising edge like `deck/<uuid>/trigger`, so
-/// one press of a pad is one jump and a fader swept past halfway is one too.
-fn fired_cue(path: &str, value: f32) -> Option<String> {
-    if value <= 0.5 {
-        return None;
+/// The command a press on `path` asks for, when its target lives outside the
+/// mixer: a cue, or an HTML deck's reload or interactive window. The
+/// interactive window toggles, so `interactive_deck` is the deck it is open on,
+/// if any. `None` for every path the parameter router handles.
+pub(crate) fn surface_command(path: &str, interactive_deck: Option<&str>) -> Option<EngineCommand> {
+    match path.parse::<ParamAddress>().ok()? {
+        ParamAddress::CueFire { cue } => Some(EngineCommand::TriggerCue { uuid: cue }),
+        ParamAddress::Deck {
+            deck,
+            target: DeckTarget::HtmlReload,
+        } => Some(EngineCommand::ReloadHtmlDeck { deck_uuid: deck }),
+        ParamAddress::Deck {
+            deck,
+            target: DeckTarget::HtmlInteractive,
+        } => Some(if interactive_deck == Some(deck.as_str()) {
+            EngineCommand::CloseHtmlInteractive
+        } else {
+            EngineCommand::OpenHtmlInteractive { deck_uuid: deck }
+        }),
+        _ => None,
     }
-    let rest = path.strip_prefix("cue/")?;
-    let uuid = rest.strip_suffix("/fire")?;
-    (!uuid.is_empty() && !uuid.contains('/')).then(|| uuid.to_string())
 }
 
 impl VardaApp {
@@ -37,7 +49,7 @@ impl VardaApp {
     /// Run the pending control-surface actions through the engine's own command
     /// arms, for consumers with no UI layout (headless). Clears them.
     pub(crate) fn run_pending_global_actions(&mut self) {
-        use crate::engine::{CommandResult, EngineCommand};
+        use crate::engine::CommandResult;
         let pending = self.take_pending_global_actions();
         for (requested, cmd) in [
             (pending.undo, EngineCommand::Undo),
@@ -53,19 +65,34 @@ impl VardaApp {
         }
     }
 
+    /// The HTML deck the interactive window is open on, if any.
+    pub(crate) fn interactive_deck(&self) -> Option<&str> {
+        #[cfg(feature = "html")]
+        {
+            self.interactive_active_deck()
+        }
+        #[cfg(not(feature = "html"))]
+        {
+            let _ = self;
+            None
+        }
+    }
+
     /// One normalized write from a control surface, whichever surface it came
     /// from.
     ///
     /// MIDI and OSC address the same paths, so they ask the same three
-    /// questions in the same order: is this a global action, is it a cue, is it
-    /// a parameter. Cues are collected rather than fired here because the
-    /// transport is not part of the mixer and a jump mid-drain would reorder the
-    /// writes still queued behind it.
+    /// questions in the same order: is this a global action, is it a target
+    /// outside the mixer, is it a parameter. Targets outside the mixer fire on
+    /// the rising edge like `deck/<uuid>/trigger`, so one press of a pad is one
+    /// command and a fader swept past halfway is one too. Their commands are
+    /// collected rather than run here because a cue jump mid-drain would
+    /// reorder the writes still queued behind it.
     fn apply_surface_write(
         &mut self,
         path: &str,
         value: f32,
-        fired_cues: &mut Vec<String>,
+        deferred: &mut Vec<EngineCommand>,
         changed_params: &mut Vec<(String, f32)>,
     ) {
         if path.starts_with("action/") && value > 0.5 {
@@ -78,8 +105,10 @@ impl VardaApp {
                 "action/record" => self.set_record_armed(!self.record_armed()),
                 _ => log::debug!("Unknown action path: {path}"),
             }
-        } else if let Some(uuid) = fired_cue(path, value) {
-            fired_cues.push(uuid);
+        } else if let Some(cmd) = surface_command(path, self.interactive_deck()) {
+            if value > 0.5 {
+                deferred.push(cmd);
+            }
         } else {
             match crate::param_router::apply_param_by_path(&mut self.mixer, path, value) {
                 Ok(()) => changed_params.push((path.to_string(), value)),
@@ -93,9 +122,9 @@ impl VardaApp {
     pub fn process_inputs(&mut self) {
         // Collect (path, value) pairs changed this frame for OSC feedback
         let mut changed_params: Vec<(String, f32)> = Vec::new();
-        // Cues a control surface asked for. Applied after the loops below,
-        // which hold a borrow of the receiver they are draining.
-        let mut fired_cues: Vec<String> = Vec::new();
+        // Commands a control surface asked for outside the mixer. Run after
+        // the loops below, which hold a borrow of the receiver they are draining.
+        let mut deferred: Vec<EngineCommand> = Vec::new();
         // Poll for shader file changes (hot-reload)
         let shader_events = self.registry.poll_changes();
         for event in &shader_events {
@@ -202,7 +231,7 @@ impl VardaApp {
         for input in osc_inputs {
             match input {
                 crate::osc::OscInput::Param { ref path, value } => {
-                    self.apply_surface_write(path, value, &mut fired_cues, &mut changed_params);
+                    self.apply_surface_write(path, value, &mut deferred, &mut changed_params);
                 }
                 crate::osc::OscInput::ClockBpm(bpm) => {
                     self.input.clock_manager.process_osc_bpm(bpm);
@@ -343,20 +372,19 @@ impl VardaApp {
                             .set_preference(crate::clock::ClockPreference::ForceManual { bpm });
                     }
                 } else {
-                    self.apply_surface_write(&path, value, &mut fired_cues, &mut changed_params);
+                    self.apply_surface_write(&path, value, &mut deferred, &mut changed_params);
                 }
             } else if !self.input.midi_mappings.learn_mode {
                 log::debug!("Unmapped MIDI: {key} value={value:.2}");
             }
         }
 
-        // Locate to any cue a control surface pressed. Handled here rather than
-        // in `param_router` because the transport is not part of the mixer, and
-        // a cue that has since been deleted is ignored the way a mapping to a
-        // deleted deck is. See /spec/arrangement.md § The cue bank.
-        for uuid in fired_cues {
-            if let crate::engine::CommandResult::Err { message, .. } = self.cmd_trigger_cue(&uuid) {
-                log::debug!("Cue fire ignored ({uuid}): {message}");
+        // Run what a control surface pressed outside the mixer. A cue or deck
+        // that has since been deleted is ignored the way a mapping to a deleted
+        // deck is. See /spec/arrangement.md § The cue bank.
+        for cmd in deferred {
+            if let crate::engine::CommandResult::Err { message, .. } = self.execute_command(cmd) {
+                log::debug!("Control-surface command ignored: {message}");
             }
         }
 
@@ -536,7 +564,7 @@ impl VardaApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{VardaApp, fired_cue};
+    use super::{EngineCommand, VardaApp, surface_command};
     use crate::engine::{EngineCommand as C, MixerQueries};
     use crate::midi::{MidiDeviceManager, MidiKey, MidiMessage};
     use crate::osc::{OscInput, OscReceiver};
@@ -1304,15 +1332,33 @@ mod tests {
     }
 
     #[test]
-    fn a_cue_path_names_its_cue_on_the_rising_edge() {
-        assert_eq!(
-            fired_cue("cue/ab12cd34/fire", 1.0).as_deref(),
-            Some("ab12cd34")
-        );
-        assert_eq!(
-            fired_cue("cue/ab12cd34/fire", 0.5),
-            None,
-            "a release, or a fader below halfway, is not a press"
+    fn targets_outside_the_mixer_become_commands() {
+        assert!(matches!(
+            surface_command("cue/ab12cd34/fire", None),
+            Some(EngineCommand::TriggerCue { uuid }) if uuid == "ab12cd34"
+        ));
+        assert!(matches!(
+            surface_command("deck/d1/html/reload", None),
+            Some(EngineCommand::ReloadHtmlDeck { deck_uuid }) if deck_uuid == "d1"
+        ));
+    }
+
+    #[test]
+    fn the_interactive_target_toggles_the_window() {
+        assert!(matches!(
+            surface_command("deck/d1/html/interactive", None),
+            Some(EngineCommand::OpenHtmlInteractive { deck_uuid }) if deck_uuid == "d1"
+        ));
+        assert!(matches!(
+            surface_command("deck/d1/html/interactive", Some("d1")),
+            Some(EngineCommand::CloseHtmlInteractive)
+        ));
+        assert!(
+            matches!(
+                surface_command("deck/d1/html/interactive", Some("d2")),
+                Some(EngineCommand::OpenHtmlInteractive { deck_uuid }) if deck_uuid == "d1"
+            ),
+            "open on another deck moves the window here"
         );
     }
 
@@ -1320,11 +1366,12 @@ mod tests {
     fn other_paths_are_left_to_the_router() {
         for path in [
             "deck/ab12cd34/trigger",
+            "deck/ab12cd34/transparent",
             "cue/ab12cd34",
             "cue//fire",
             "cue/ab12cd34/extra/fire",
         ] {
-            assert_eq!(fired_cue(path, 1.0), None, "{path}");
+            assert!(surface_command(path, None).is_none(), "{path}");
         }
     }
 }

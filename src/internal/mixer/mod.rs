@@ -1525,7 +1525,7 @@ mod tests {
     #[test]
     fn param_router_reads_back_what_it_writes() {
         use crate::engine::value::param::{DeckTarget, ParamAddress};
-        use crate::param_router::{apply_param_by_path, read_param};
+        use crate::param_router::{apply_param_by_path, read_param, toggle_param_by_path};
 
         let gpu = headless_gpu();
         let mut mixer = Mixer::new(&gpu, 64, 64).unwrap();
@@ -1550,6 +1550,19 @@ mod tests {
         assert_eq!(read_param(&mixer, &mute), Some(0.0));
         apply_param_by_path(&mut mixer, &mute.to_string(), 1.0).unwrap();
         assert_eq!(read_param(&mixer, &mute), Some(1.0));
+
+        let transparent = ParamAddress::deck(&deck, DeckTarget::Transparent);
+        assert_eq!(read_param(&mixer, &transparent), Some(0.0));
+        apply_param_by_path(&mut mixer, &transparent.to_string(), 1.0).unwrap();
+        assert_eq!(read_param(&mixer, &transparent), Some(1.0));
+        apply_param_by_path(&mut mixer, &transparent.to_string(), 0.0).unwrap();
+        assert_eq!(
+            read_param(&mixer, &transparent),
+            Some(1.0),
+            "a release is not a press"
+        );
+        toggle_param_by_path(&mut mixer, &transparent.to_string()).unwrap();
+        assert_eq!(read_param(&mixer, &transparent), Some(0.0));
 
         apply_param_by_path(&mut mixer, "crossfader", 0.2).unwrap();
         assert!((read_param(&mixer, &ParamAddress::Crossfader).unwrap() - 0.2).abs() < 1e-5);

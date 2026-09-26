@@ -701,7 +701,7 @@ pub(super) fn render_selected_deck_detail(
                             learn_overlay(
                                 ui,
                                 reload_resp.rect,
-                                format!("deck/{}/html/reload", deck.uuid),
+                                ParamAddress::deck(&deck.uuid, DeckTarget::HtmlReload).to_string(),
                                 data,
                                 actions,
                             );
@@ -724,7 +724,7 @@ pub(super) fn render_selected_deck_detail(
                             learn_overlay(
                                 ui,
                                 interactive_resp.rect,
-                                format!("deck/{}/html/interactive", deck.uuid),
+                                ParamAddress::deck(&deck.uuid, DeckTarget::HtmlInteractive).to_string(),
                                 data,
                                 actions,
                             );
@@ -740,7 +740,7 @@ pub(super) fn render_selected_deck_detail(
                             learn_overlay(
                                 ui,
                                 transparent_resp.rect,
-                                format!("deck/{}/transparent", deck.uuid),
+                                ParamAddress::deck(&deck.uuid, DeckTarget::Transparent).to_string(),
                                 data,
                                 actions,
                             );

@@ -444,15 +444,17 @@ MIDI, OSC, and keyboard shortcuts all use the same parameter path format:
 | `deck/<uuid>/solo` | Deck solo toggle |
 | `deck/<uuid>/trigger` | Set deck opacity to 1.0 |
 | `deck/<uuid>/param/<name>` | Shader parameter |
-| `deck/<uuid>/effect/<effect_uuid>/param/<name>` | Deck effect parameter |
 | `deck/<uuid>/video/play` | Set video play state (playing when > 0.5) |
 | `deck/<uuid>/video/speed` | Video playback speed (0.0–1.0 → 0.1×–4.0×) |
-| `deck/<uuid>/video/seek` | Seek position (0.0–1.0 → start–end of clip) |
+| `deck/<uuid>/video/position` | Seek position (0.0–1.0 → start–end of clip); `video/seek` also works |
 | `deck/<uuid>/video/in_point` | Loop in-point (0.0–1.0 → start–end of clip) |
 | `deck/<uuid>/video/out_point` | Loop out-point (0.0–1.0 → start–end of clip) |
 | `deck/<uuid>/video/clear` | Clear in/out points (trigger, > 0.5) |
 | `deck/<uuid>/video/loop_mode` | Loop mode, fader-bucketed (Loop / Ping-Pong / One Shot / Hold Last) |
 | `deck/<uuid>/scaling_mode` | Source scaling, fader-bucketed (Fill / Fit / Stretch / Center) |
+| `deck/<uuid>/transparent` | Transparent background toggle (> 0.5) |
+| `deck/<uuid>/html/reload` | Reload an HTML deck's page (> 0.5) |
+| `deck/<uuid>/html/interactive` | Open the interactive window on an HTML deck, or close it (> 0.5) |
 | `deck/<uuid>/capture/rate` | Screen-capture rate (0.0–1.0 → 1–120 fps) |
 | `deck/<uuid>/capture/crop_x` | Screen-capture crop origin X (0.0–1.0) |
 | `deck/<uuid>/capture/crop_y` | Screen-capture crop origin Y (0.0–1.0) |
@@ -461,8 +463,7 @@ MIDI, OSC, and keyboard shortcuts all use the same parameter path format:
 | `deck/<uuid>/capture/cursor` | Include the mouse pointer (toggle, > 0.5) |
 | `deck/<uuid>/capture/exclude_varda` | Omit Varda's own windows from a display capture (toggle, > 0.5) |
 | `ch/<uuid>/opacity` | Channel opacity |
-| `ch/<uuid>/effect/<effect_uuid>/param/<name>` | Channel effect parameter |
-| `master/effect/<effect_uuid>/param/<name>` | Master effect parameter |
+| `effect/<effect_uuid>/param/<name>` | Effect parameter, on a deck, a channel, or the master chain. The longer `deck/<uuid>/effect/...`, `ch/<uuid>/effect/...`, and `master/effect/...` forms also work |
 | `mod/<mod_uuid>/frequency` | LFO frequency |
 | `mod/<mod_uuid>/amplitude` | LFO amplitude |
 | `mod/<mod_uuid>/step/<n>` | Step-sequencer step value (step index is positional within the source) |
