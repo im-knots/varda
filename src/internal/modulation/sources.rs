@@ -188,9 +188,10 @@ impl ModulationSource {
         }
     }
 
-    pub fn sine_lfo(frequency: f32) -> Self {
+    /// A unipolar, full-amplitude LFO starting at phase zero.
+    pub fn lfo(waveform: LFOWaveform, frequency: f32) -> Self {
         ModulationSource::LFO {
-            waveform: LFOWaveform::Sine,
+            waveform,
             frequency,
             phase: 0.0,
             amplitude: 1.0,
@@ -198,10 +199,19 @@ impl ModulationSource {
         }
     }
 
-    pub fn audio_from_preset(preset: AudioBandPreset) -> Self {
+    pub fn sine_lfo(frequency: f32) -> Self {
+        Self::lfo(LFOWaveform::Sine, frequency)
+    }
+
+    /// An audio-band source over a preset's frequency range, on `source_id`
+    /// (`None` follows the primary input).
+    pub fn audio_from_preset(
+        preset: AudioBandPreset,
+        source_id: Option<crate::audio::AudioSourceId>,
+    ) -> Self {
         let (freq_low, freq_high) = preset.freq_range();
         ModulationSource::AudioBand {
-            source_id: None,
+            source_id,
             freq_low,
             freq_high,
             gain: 1.0,

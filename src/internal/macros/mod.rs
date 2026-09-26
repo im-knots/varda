@@ -349,6 +349,87 @@ impl MacroBank {
         self.macros.iter_mut().find(|m| m.uuid == uuid)
     }
 
+    // Edits by UUID. An unknown UUID is ignored.
+
+    pub fn rename(&mut self, uuid: &str, name: &str) {
+        if let Some(m) = self.find_mut(uuid) {
+            m.name = name.to_string();
+        }
+    }
+
+    pub fn set_kind(&mut self, uuid: &str, kind: MacroKind) {
+        if let Some(m) = self.find_mut(uuid) {
+            m.set_kind(kind);
+        }
+    }
+
+    /// Add a target, refusing any macro path: a macro driving a macro could loop.
+    pub fn add_target(&mut self, uuid: &str, path: &str) {
+        if path == "macro" || path.starts_with("macro/") {
+            log::warn!("refusing macro target on macro path '{path}' (loop prevention)");
+            return;
+        }
+        if let Some(m) = self.find_mut(uuid) {
+            m.targets.push(MacroTarget::new(path));
+        }
+    }
+
+    pub fn remove_target(&mut self, uuid: &str, target_idx: usize) {
+        if let Some(m) = self.find_mut(uuid)
+            && target_idx < m.targets.len()
+        {
+            m.targets.remove(target_idx);
+        }
+    }
+
+    pub fn update_target(
+        &mut self,
+        uuid: &str,
+        target_idx: usize,
+        min: f32,
+        max: f32,
+        curve: MacroCurve,
+        invert: bool,
+    ) {
+        if let Some(t) = self
+            .find_mut(uuid)
+            .and_then(|m| m.targets.get_mut(target_idx))
+        {
+            t.min = min;
+            t.max = max;
+            t.curve = curve;
+            t.invert = invert;
+        }
+    }
+
+    pub fn set_button_behavior(&mut self, uuid: &str, behavior: ButtonBehavior) {
+        if let Some(m) = self.find_mut(uuid) {
+            match &mut m.button {
+                Some(spec) => spec.behavior = behavior,
+                None => {
+                    m.button = Some(ButtonSpec {
+                        behavior,
+                        trigger: Vec::new(),
+                    });
+                }
+            }
+        }
+    }
+
+    pub fn set_triggers(&mut self, uuid: &str, actions: Vec<TriggerAction>) {
+        if let Some(m) = self.find_mut(uuid) {
+            match &mut m.button {
+                Some(spec) => spec.trigger = actions,
+                None => {
+                    m.button = Some(ButtonSpec {
+                        behavior: ButtonBehavior::Trigger,
+                        trigger: actions,
+                    });
+                }
+            }
+        }
+    }
+
     /// Feed a raw input into the macro identified by `uuid`. Returns the list of
     /// `(path, value)` parameter writes to apply, or `None` if the macro does not
     /// exist. Any global actions produced are queued in `pending_actions`.

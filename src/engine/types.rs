@@ -35,20 +35,7 @@ pub use crate::engine::value::surface::{
 };
 pub use crate::engine::value::video::{DeckTransportSync, LoopMode, TransportSyncMode};
 
-/// Identifies which effect chain to operate on.
-///
-/// Used for chain-scoped operations (append an effect, reorder within a chain).
-/// Operations on an *existing* effect address it by its own UUID instead — see
-/// [`/spec/api-addressing.md`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize, utoipa::ToSchema)]
-pub enum EffectTarget {
-    /// A deck's pre-composite chain, by deck UUID.
-    Deck(String),
-    /// A channel's post-composite chain, by channel UUID.
-    Channel(String),
-    /// The master output chain.
-    Master,
-}
+pub use crate::engine::value::entity::EffectTarget;
 
 /// What a copy is taken from. See [`/spec/clipboard.md`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]

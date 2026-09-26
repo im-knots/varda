@@ -1,6 +1,10 @@
 //! Mixer - Top-level compositor that owns channels, crossfader, master effects, and modulation
 
+mod arrangement_edit;
+mod ops;
 mod render;
+mod resolve;
+mod sequences;
 mod transition;
 
 pub use transition::{
@@ -16,6 +20,9 @@ use crate::renderer::lut::{LoadedLut, LutPipeline};
 pub use crate::renderer::tonemap::TonemapMode;
 use crate::renderer::{BlitPipeline, CompositeBlitPipeline, GpuContext, TonemapPipeline};
 use anyhow::Result;
+pub use arrangement_edit::ArrangementError;
+pub use resolve::EffectChain;
+pub use sequences::NoSuchStep;
 
 /// Where an effect lives, resolved from its globally-unique UUID.
 ///

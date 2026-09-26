@@ -16,7 +16,6 @@ pub mod pipeline;
 pub mod readback;
 pub mod slicer;
 pub mod submit_stats;
-pub mod subprocess;
 pub mod tonemap;
 pub mod transition;
 
@@ -33,6 +32,5 @@ pub use pipeline::*;
 pub use readback::*;
 pub use slicer::*;
 pub use submit_stats::*;
-pub use subprocess::*;
 pub use tonemap::*;
 pub use transition::*;

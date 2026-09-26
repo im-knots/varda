@@ -119,6 +119,15 @@ impl ModulationEngine {
         self.invalidate_order();
         uuid
     }
+    /// Add an automation lane: an empty envelope on `timebase`, assigned
+    /// absolutely to `target`, so a curve drawn to a value produces that value
+    /// rather than depending on the saved fader position. Returns its UUID.
+    pub fn add_automation_lane(&mut self, target: &str, timebase: Timebase) -> String {
+        let uuid = self.add_source(ModulationSource::envelope(Vec::new()));
+        self.set_timebase(&uuid, timebase);
+        self.assign_with_mode(target, &uuid, 1.0, None, AssignmentMode::Absolute);
+        uuid
+    }
 
     /// Add a source with a specific UUID (for preset loading)
     pub fn add_source_with_uuid(&mut self, uuid: String, source: ModulationSource) -> String {

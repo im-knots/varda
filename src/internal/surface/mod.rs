@@ -18,6 +18,7 @@ pub use crate::engine::value::surface::{
     SurfaceReorderOp,
 };
 
+use crate::engine::value::entity::{Resolved, UnknownEntity};
 use crate::engine::value::render::OutputSource;
 use crate::ids::generate_short_uuid;
 use serde::{Deserialize, Serialize};
@@ -507,6 +508,69 @@ impl Surface {
             .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
             .map(|(i, _)| i)
     }
+    /// Mirror the outline left to right within the output.
+    pub fn flip_horizontal(&mut self) {
+        for v in &mut self.vertices {
+            v[0] = 1.0 - v[0];
+        }
+    }
+
+    /// Mirror the outline top to bottom within the output.
+    pub fn flip_vertical(&mut self) {
+        for v in &mut self.vertices {
+            v[1] = 1.0 - v[1];
+        }
+    }
+
+    /// Insert a vertex after `after_vert_idx`, first turning a circle or curve
+    /// into a plain polygon. An index past the end inserts nothing.
+    pub fn insert_vertex(&mut self, after_vert_idx: usize, position: [f32; 2]) {
+        self.convert_to_polygon();
+        if after_vert_idx < self.vertices.len() {
+            self.vertices.insert(after_vert_idx + 1, position);
+        }
+    }
+
+    /// Resize a circle surface. Other surfaces are unchanged.
+    pub fn set_circle_radius(&mut self, radius: f32) {
+        if let Some(ref mut hint) = self.circle_hint {
+            hint.radius = radius;
+            self.vertices = hint.generate_vertices();
+        }
+    }
+
+    /// Change how many sides approximate a circle surface. Other surfaces are
+    /// unchanged.
+    pub fn set_circle_sides(&mut self, sides: u32) {
+        if let Some(ref mut hint) = self.circle_hint {
+            hint.sides = sides;
+            self.vertices = hint.generate_vertices();
+        }
+    }
+
+    /// Translate the surface, keeping a circle's centre on its new vertices.
+    pub fn move_by(&mut self, dx: f32, dy: f32) {
+        self.translate(dx, dy);
+        if self.circle_hint.is_some() {
+            let center = centroid(&self.vertices);
+            if let Some(ref mut hint) = self.circle_hint {
+                hint.center = center;
+            }
+        }
+    }
+
+    /// Replace one contour's vertices: 0 is the outline, 1 and up the extra
+    /// contours. A circle's centre follows a new outline.
+    pub fn set_contour_vertices(&mut self, contour: usize, vertices: Vec<[f32; 2]>) {
+        if contour == 0 {
+            if let Some(ref mut hint) = self.circle_hint {
+                hint.center = centroid(&vertices);
+            }
+            self.vertices = vertices;
+        } else if let Some(c) = self.extra_contours.get_mut(contour - 1) {
+            *c = vertices;
+        }
+    }
 
     /// Translate all vertices by (dx, dy), clamping to [0..1].
     pub fn translate(&mut self, dx: f32, dy: f32) {
@@ -654,6 +718,14 @@ impl std::fmt::Display for SurfaceOutputType {
         }
     }
 }
+/// The mean of a set of points; the origin for none.
+fn centroid(points: &[[f32; 2]]) -> [f32; 2] {
+    let n = points.len().max(1) as f32;
+    let sum = points
+        .iter()
+        .fold([0.0f32, 0.0], |acc, v| [acc[0] + v[0], acc[1] + v[1]]);
+    [sum[0] / n, sum[1] / n]
+}
 
 /// Manages all surfaces in the stage layout
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -683,6 +755,7 @@ impl SurfaceManager {
 
         let surface = Surface::new_rect(name, x, y, 0.28, 0.28, source);
         let uuid = surface.uuid.clone();
+        log::info!("Added surface '{}' (uuid {uuid})", surface.name);
         self.surfaces.push(surface);
         uuid
     }
@@ -695,6 +768,10 @@ impl SurfaceManager {
         source: OutputSource,
     ) -> String {
         let uuid = generate_short_uuid();
+        log::info!(
+            "Added polygon surface '{name}' with {} vertices (uuid {uuid})",
+            vertices.len()
+        );
         self.surfaces.push(Surface {
             uuid: uuid.clone(),
             name,
@@ -751,6 +828,7 @@ impl SurfaceManager {
     ) -> String {
         let uuid = generate_short_uuid();
         let vertices = hint.generate_vertices();
+        log::info!("Added circle surface '{name}' (uuid {uuid})");
         self.surfaces.push(Surface {
             uuid: uuid.clone(),
             name,
@@ -767,6 +845,69 @@ impl SurfaceManager {
             hole_contours: Vec::new(),
         });
         uuid
+    }
+    // Edits by UUID. An unknown UUID is ignored.
+
+    pub fn set_source(&mut self, uuid: &str, source: OutputSource) {
+        if let Some((_, surface)) = self.find_by_uuid_mut(uuid) {
+            surface.source = source;
+        }
+    }
+
+    pub fn set_output_type(&mut self, uuid: &str, output_type: SurfaceOutputType) {
+        if let Some((_, surface)) = self.find_by_uuid_mut(uuid) {
+            surface.output_type = output_type;
+        }
+    }
+
+    pub fn set_content_mapping(&mut self, uuid: &str, mapping: ContentMapping) {
+        if let Some((_, surface)) = self.find_by_uuid_mut(uuid) {
+            surface.content_mapping = mapping;
+        }
+    }
+
+    pub fn rename(&mut self, uuid: &str, name: &str) {
+        if let Some((_, surface)) = self.find_by_uuid_mut(uuid) {
+            surface.name = name.to_string();
+        }
+    }
+
+    /// Create a surface for each detected contour, fed from the master: a
+    /// circle when the contour was fitted to one, an editable curve when an SVG
+    /// import kept its curvature, otherwise a polygon. Returns the new UUIDs.
+    pub fn add_detected(&mut self, contours: &[detect::DetectedContour]) -> Vec<String> {
+        let mut uuids = Vec::with_capacity(contours.len());
+        for contour in contours {
+            let name = contour.suggested_name.clone();
+            let uuid = match (contour.is_circular, contour.circle_fit) {
+                (true, Some((center, radius))) => {
+                    let hint = CircleHint {
+                        center,
+                        radius,
+                        sides: 32,
+                        aspect_ratio: 1.0,
+                    };
+                    self.add_circle_surface(name, hint, OutputSource::Master)
+                }
+                (true, None) => {
+                    self.add_polygon_surface(name, contour.vertices.clone(), OutputSource::Master)
+                }
+                (false, _) => match contour.path.as_ref().filter(|p| p.has_cubic()) {
+                    Some(path) => self.add_path_surface(name, path.clone(), OutputSource::Master),
+                    None => self.add_polygon_surface(
+                        name,
+                        contour.vertices.clone(),
+                        OutputSource::Master,
+                    ),
+                },
+            };
+            log::info!(
+                "Created surface '{}' from detection (uuid {uuid})",
+                contour.suggested_name
+            );
+            uuids.push(uuid);
+        }
+        uuids
     }
 
     /// Remove a surface by UUID. Returns true if found and removed.
@@ -831,6 +972,17 @@ impl SurfaceManager {
             .iter()
             .enumerate()
             .find(|(_, s)| s.uuid == uuid)
+    }
+    /// The surface a UUID names.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the UUID names no surface.
+    pub fn surface_mut(&mut self, uuid: &str) -> Resolved<&mut Surface> {
+        self.surfaces
+            .iter_mut()
+            .find(|s| s.uuid == uuid)
+            .ok_or_else(|| UnknownEntity::new("surface", uuid))
     }
 
     /// Find a surface by UUID, returning its index and a mutable reference.

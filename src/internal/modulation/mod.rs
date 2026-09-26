@@ -1358,7 +1358,7 @@ mod tests {
 
     #[test]
     fn audio_band_from_preset_creates_valid_source() {
-        let source = ModulationSource::audio_from_preset(AudioBandPreset::Low);
+        let source = ModulationSource::audio_from_preset(AudioBandPreset::Low, None);
         match source {
             ModulationSource::AudioBand {
                 freq_low,

@@ -76,18 +76,14 @@ impl VardaApp {
         if !armed {
             self.close_takes();
         }
-        self.session.recorder.armed = armed;
-        if armed && !self.transport.running() {
+        self.show.recorder.armed = armed;
+        if armed && !self.show.transport.running() {
             // A refusal here is the chase case, and arming is still what was
             // asked for.
-            if let Err(e) = self.transport.play() {
+            if let Err(e) = self.show.transport.play() {
                 log::debug!("Record armed without rolling the transport: {e}");
             }
         }
-    }
-
-    pub fn record_armed(&self) -> bool {
-        self.session.recorder.armed()
     }
 
     /// Whether a pass is under way and has already pushed its undo entry.
@@ -96,11 +92,7 @@ impl VardaApp {
     /// one entry, the way a fader drag folds into one: a take is a gesture, and
     /// undoing it a frame at a time is not what "that take was no good" means.
     pub fn is_recording(&self) -> bool {
-        self.session.recorder.snapshot_taken
-    }
-
-    pub fn recording_params(&self) -> Vec<String> {
-        self.session.recorder.recording_params()
+        self.show.recorder.snapshot_taken
     }
 
     /// Capture one live write, opening a take for the parameter if this is the
@@ -111,24 +103,24 @@ impl VardaApp {
     /// a curve-only show never engages arrangement authority, and waiting for
     /// that would mean the first pass could never be recorded.
     pub(crate) fn record_param_write(&mut self, param_key: &str, normalized: f32) {
-        if !self.session.recorder.armed || !self.transport.running() {
+        if !self.show.recorder.armed || !self.show.transport.running() {
             return;
         }
-        let at = self.transport.position();
+        let at = self.show.transport.position();
 
-        if let Some(take) = self.session.recorder.takes.get_mut(param_key) {
+        if let Some(take) = self.show.recorder.takes.get_mut(param_key) {
             take.capture(at, normalized);
         } else {
-            if !self.session.recorder.snapshot_taken {
+            if !self.show.recorder.snapshot_taken {
                 // One entry for the pass: undo means "that take was no good".
                 // Before the envelope is created, or undo would return to a
                 // scene that already has the lane this pass is about to write.
                 let snapshot = self.history_snapshot();
-                self.push_history(snapshot);
-                self.session.recorder.snapshot_taken = true;
+                self.session.history.push(snapshot);
+                self.show.recorder.snapshot_taken = true;
             }
             let envelope = self.envelope_to_record_into(param_key);
-            self.session.recorder.takes.insert(
+            self.show.recorder.takes.insert(
                 param_key.to_string(),
                 Take {
                     envelope,
@@ -167,11 +159,9 @@ impl VardaApp {
                 )
             });
         existing.unwrap_or_else(|| {
-            <Self as crate::engine::ModulationCommands>::add_automation_lane(
-                self,
-                param_key,
-                crate::timebase::Timebase::Transport,
-            )
+            self.mixer
+                .modulation_mut()
+                .add_automation_lane(param_key, crate::timebase::Timebase::Transport)
         })
     }
 
@@ -181,8 +171,8 @@ impl VardaApp {
     /// position: a locate or a loop wrap ends the stretch that was being
     /// written, and the next write after it opens a take of its own.
     pub(crate) fn close_takes(&mut self) {
-        let takes = std::mem::take(&mut self.session.recorder.takes);
-        self.session.recorder.snapshot_taken = false;
+        let takes = std::mem::take(&mut self.show.recorder.takes);
+        self.show.recorder.snapshot_taken = false;
         for (param_key, take) in takes {
             let recorded = simplify(&take.points, SIMPLIFY_TOLERANCE);
             let (Some(first), Some(last)) = (recorded.first(), recorded.last()) else {
@@ -212,10 +202,10 @@ impl VardaApp {
 
     /// Per-frame housekeeping, after the transport has been ticked.
     pub(crate) fn tick_recorder(&mut self) {
-        if self.session.recorder.takes.is_empty() {
+        if self.show.recorder.takes.is_empty() {
             return;
         }
-        if !self.transport.running() || self.transport.discontinuity() {
+        if !self.show.transport.running() || self.show.transport.discontinuity() {
             self.close_takes();
         }
     }
@@ -351,7 +341,7 @@ mod tests {
     fn play_pass(app: &mut VardaApp, deck: &str, moves: &[(f64, f32)]) {
         app.set_record_armed(true);
         for (dt, opacity) in moves {
-            app.transport.tick(*dt);
+            app.show.transport.tick(*dt);
             app.tick_recorder();
             app.execute_command(EngineCommand::SetDeckOpacity {
                 deck_uuid: deck.to_string(),
@@ -449,7 +439,7 @@ mod tests {
             return;
         };
         app.set_record_armed(true);
-        app.transport.tick(4.0);
+        app.show.transport.tick(4.0);
         app.execute_command(EngineCommand::SetDeckOpacity {
             deck_uuid: deck.clone(),
             opacity: 0.2,
@@ -474,7 +464,7 @@ mod tests {
             return;
         };
         app.set_record_armed(true);
-        app.transport.tick(10.0);
+        app.show.transport.tick(10.0);
         app.execute_command(EngineCommand::SetDeckOpacity {
             deck_uuid: deck.clone(),
             opacity: 0.2,

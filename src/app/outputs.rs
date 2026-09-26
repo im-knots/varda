@@ -71,7 +71,7 @@ impl VardaApp {
                     window_attrs =
                         window_attrs.with_inner_size(winit::dpi::PhysicalSize::new(w, h));
                 } else {
-                    let (w, h) = default_output_window_size(self.render_width, self.render_height);
+                    let (w, h) = default_output_window_size(self.render.width, self.render.height);
                     window_attrs = window_attrs.with_inner_size(winit::dpi::LogicalSize::new(w, h));
                 }
 
@@ -84,7 +84,7 @@ impl VardaApp {
                 match event_loop.create_window(window_attrs) {
                     Ok(window) => {
                         let window_static: &'static Window = Box::leak(Box::new(window));
-                        match OutputWindow::new(&self.context, window_static, name.clone()) {
+                        match OutputWindow::new(&self.render.context, window_static, name.clone()) {
                             Ok(mut output) => {
                                 output.uuid.clone_from(&config.uuid);
                                 // Force position after full initialization — macOS
@@ -135,9 +135,10 @@ impl VardaApp {
                                     }
                                 }
                                 output.tonemap_override = config.tonemap_override;
-                                if let Err(error) = output
-                                    .set_presentation_request(&self.context, config.presentation)
-                                {
+                                if let Err(error) = output.set_presentation_request(
+                                    &self.render.context,
+                                    config.presentation,
+                                ) {
                                     log::warn!(
                                         "Output '{}' presentation request fell back during restore: {error}",
                                         output.name
@@ -167,12 +168,13 @@ impl VardaApp {
             } else {
                 // Headless output (Recording, SRT, NDI, Syphon)
                 let mut headless = HeadlessOutput::new(
-                    &self.context.device,
+                    &self.render.context.device,
                     name.clone(),
                     OutputSource::Master,
                     target,
-                    self.render_width,
-                    self.render_height,
+                    self.render.width,
+                    self.render.height,
+                    crate::delivery::presentation::plan,
                 );
                 headless.uuid.clone_from(&config.uuid);
                 // Restore surface assignments from config
@@ -188,103 +190,19 @@ impl VardaApp {
                 headless.edge_blend_mode = config.edge_blend_mode;
                 headless.edge_blend = config.edge_blend;
                 headless.rotation = config.rotation;
-                headless.set_presentation_request(&self.context.device, config.presentation);
+                headless.set_presentation_request(&self.render.context.device, config.presentation);
                 headless.tonemap_override = config.tonemap_override;
                 if matches!(&headless.target, OutputTarget::NdiSend { .. }) {
                     let resolved = self
-                        .external_io
+                        .sources
+                        .io
                         .ndi_manager
                         .resolve_presentation(config.presentation);
-                    headless.set_resolved_presentation(&self.context.device, resolved);
+                    headless.set_resolved_presentation(&self.render.context.device, resolved);
                 }
                 log::info!("Created headless output '{name}'");
                 self.output.outputs.push(UnifiedOutput::Headless(headless));
                 self.refresh_presentation_notification(self.output.outputs.len() - 1);
-            }
-        }
-    }
-
-    /// Recompute per-surface edge blend for all Auto-mode outputs based on surface topology.
-    pub fn recompute_auto_edge_blend(&mut self) {
-        use crate::renderer::edge_blend::{
-            EdgeBlendMode, MappedRegion, OutputSurfaceInfo, SurfaceOverlapZones,
-            compute_auto_edge_blend,
-        };
-
-        // Check if any output is in Auto mode — early exit if none.
-        let auto_count = self
-            .output
-            .outputs
-            .iter()
-            .filter(|o| o.edge_blend_mode() == EdgeBlendMode::Auto)
-            .count();
-        if auto_count == 0 {
-            return;
-        }
-        log::debug!("[edge-blend] recompute_auto: {auto_count} outputs in Auto mode");
-
-        // Build OutputSurfaceInfo for each output (include surface_uuid in MappedRegion).
-        let infos: Vec<OutputSurfaceInfo> = self
-            .output
-            .outputs
-            .iter()
-            .enumerate()
-            .map(|(idx, output)| {
-                let mut regions = Vec::new();
-                for assignment in output.surface_assignments() {
-                    if let Some((_, surface)) = self
-                        .output
-                        .surface_manager
-                        .find_by_uuid(&assignment.surface_uuid)
-                    {
-                        let bb = surface.bounding_box();
-                        regions.push(MappedRegion {
-                            source_key: format!("{:?}", surface.source),
-                            bbox: [bb.x, bb.y, bb.width, bb.height],
-                            surface_uuid: assignment.surface_uuid.clone(),
-                            vertices: surface.vertices.clone(),
-                            extra_contours: surface.extra_contours.clone(),
-                            holes: surface.hole_contours.clone(),
-                        });
-                    }
-                }
-                let default_gamma = output.edge_blend().left.gamma;
-                OutputSurfaceInfo {
-                    output_idx: idx,
-                    edge_blend_mode: output.edge_blend_mode(),
-                    default_gamma,
-                    regions,
-                }
-            })
-            .collect();
-
-        // Clear overlap zones on all Auto-mode assignments before applying new results.
-        for output in &mut self.output.outputs {
-            if output.edge_blend_mode() == EdgeBlendMode::Auto {
-                for assignment in output.surface_assignments_mut() {
-                    assignment.overlap_zones = SurfaceOverlapZones::default();
-                }
-            }
-        }
-
-        // Compute per-surface overlap zones and apply to assignments.
-        let results = compute_auto_edge_blend(&infos);
-        log::debug!("[edge-blend] computed {} results", results.len());
-        for result in &results {
-            log::debug!(
-                "[edge-blend]   output={} surface={} zones={}",
-                result.output_idx,
-                result.surface_uuid,
-                result.overlap_zones.zones.len(),
-            );
-        }
-        for result in results {
-            let output = &mut self.output.outputs[result.output_idx];
-            for assignment in output.surface_assignments_mut() {
-                if assignment.surface_uuid == result.surface_uuid {
-                    assignment.overlap_zones = result.overlap_zones;
-                    break;
-                }
             }
         }
     }

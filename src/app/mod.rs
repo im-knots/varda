@@ -6,6 +6,7 @@
 //! The main.rs `App` struct owns window/egui state and holds a `VardaApp`.
 
 mod actions;
+mod classify;
 mod commands;
 mod deck_loads;
 mod engine_impl;
@@ -23,6 +24,7 @@ pub(crate) mod state;
 mod surfaces;
 mod workspace;
 
+pub use render::RenderTimes;
 pub use workspace::WorkspaceLoad;
 
 /// Default render resolution for all decks and stage output (Full HD 1080p)
@@ -168,8 +170,9 @@ use crate::engine::{CommandEnvelope, CommandResult, EngineState, ErrorCode};
 
 // ── Domain sub-structs ──────────────────────────────────────────
 
-/// Input subsystem: OSC, MIDI, keyboard shortcuts, clock.
-pub(crate) struct InputSubsystem {
+/// Control inputs: OSC, MIDI, keyboard shortcuts, clock, timecode, and the
+/// global actions a control surface asked for.
+pub(crate) struct Inputs {
     pub osc_receiver: Option<OscReceiver>,
     pub osc_feedback: Option<OscFeedbackSender>,
     pub osc_config: OscConfig,
@@ -185,6 +188,8 @@ pub(crate) struct InputSubsystem {
     pub timecode: crate::timecode::TimecodeManager,
     /// The PCM tap LTC is decoded from, while one is patched.
     pub ltc_tap: Option<LtcTap>,
+    /// Undo, redo, and save a control surface asked for, not yet dispatched.
+    pub pending_actions: inputs::PendingGlobalActions,
 }
 
 /// A live subscription to the raw PCM of the audio input carrying LTC.
@@ -199,8 +204,11 @@ pub(crate) struct LtcTap {
     pub channels: u16,
 }
 
-/// Output and surface subsystem: windows, headless outputs, surface layout, dome.
-pub(crate) struct OutputSubsystem {
+/// Where the picture goes: output windows, headless outputs, the surface
+/// layout, and the dome.
+// `outputs` is the list this group is named for.
+#[allow(clippy::struct_field_names)]
+pub(crate) struct Outputs {
     pub outputs: Vec<UnifiedOutput>,
     pub surface_manager: SurfaceManager,
     pub calibration_textures: Vec<(wgpu::Texture, wgpu::TextureView)>,
@@ -214,6 +222,8 @@ pub(crate) struct OutputSubsystem {
     pub dome: crate::engine::value::dome::DomeConfig,
     pub pending_output_creates: Vec<crate::scene::OutputConfig>,
     pub cached_monitors: Vec<(String, winit::monitor::MonitorHandle)>,
+    /// What each active headless output sends through, by output UUID.
+    pub deliveries: std::collections::HashMap<String, crate::delivery::Delivery>,
 }
 
 /// External I/O managers: NDI, Syphon, SRT/HLS/DASH/RTMP streams.
@@ -262,7 +272,7 @@ pub(crate) struct FrameStats {
 }
 
 /// Session persistence: workspace, presets, undo/redo, notifications.
-pub(crate) struct SessionState {
+pub(crate) struct Session {
     pub workspace: Workspace,
     pub preset_library: crate::persistence::presets::PresetLibrary,
     pub history: history::HistoryManager,
@@ -274,6 +284,18 @@ pub(crate) struct SessionState {
     /// What copy is holding, as configs rather than live objects. Session state:
     /// it survives no further than the process. See /spec/clipboard.md.
     pub clipboard: Option<state::clipboard::ClipboardPayload>,
+}
+
+/// The show in time: the transport, what is being recorded into it, and the
+/// cue walk.
+pub(crate) struct Show {
+    /// Absolute show position. Distinct from the tempo clock in
+    /// `Inputs::clock_manager`; see /spec/transport.md.
+    pub transport: crate::transport::Transport,
+    /// Whether live parameter writes are being kept as automation, and what is
+    /// being written right now. An arm is a mode the performer is in. See
+    /// /spec/automation-recording.md.
+    pub recorder: state::recorder::Recorder,
     /// Where the last cue jump left the playhead, so repeated presses of an
     /// arrow walk the list instead of returning to the same cue while playback
     /// carries the position past it. Cleared by any other move of the playhead.
@@ -286,10 +308,42 @@ pub(crate) struct SessionState {
     /// Last position republished over OSC, so the show is sent at the rate
     /// frames exist rather than at the rate the renderer runs.
     pub published_timecode: Option<String>,
-    /// Whether live parameter writes are being kept as automation, and what is
-    /// being written right now. Session state: an arm is a mode the performer
-    /// is in. See /spec/automation-recording.md.
-    pub recorder: state::recorder::Recorder,
+    /// Edge-detect for the arrangement blackout notice, so a deliberate
+    /// blackout reports once rather than every frame it lasts.
+    pub blackout_reported: bool,
+}
+
+/// Where decks come from: the shader and analyzer registries, the devices a
+/// deck can open, the background deck loader, and external video in.
+pub(crate) struct DeckSources {
+    pub registry: ShaderRegistry,
+    pub analyzer_registry: crate::analyzer::AnalyzerRegistry,
+    /// Decks being built off the render thread. See `deck_loads`.
+    pub deck_loader: deck_loads::DeckLoader,
+    pub camera_manager: CameraManager,
+    /// Camera held open for surface detection, if any. See `AcquireDetectionCamera`.
+    pub detection_camera: Option<crate::camera::CameraId>,
+    /// Depth-sensor capture manager (Kinect/LIDAR point-cloud sources).
+    pub depth_manager: DepthSensorManager,
+    /// Screen / window capture manager. See spec/screen-capture.md.
+    pub screen_capture_manager: ScreenCaptureManager,
+    /// NDI, Syphon, Spout, streams, and HTML. The NDI, Syphon, and Spout
+    /// runtimes also send, so outputs borrow them from here.
+    pub io: ExternalIO,
+}
+
+/// What the mixer renders into: the GPU, the render size, and the frame rate.
+pub(crate) struct RenderTarget {
+    pub context: GpuContext,
+    pub width: u32,
+    pub height: u32,
+    pub target_fps: u32,
+}
+
+/// Audio input and the textures shaders read it from.
+pub(crate) struct Audio {
+    pub manager: AudioManager,
+    pub textures: crate::audio::AudioTextures,
 }
 
 /// Cross-thread message passing.
@@ -301,58 +355,25 @@ pub(crate) struct MessageBus {
 
 // ── Main application struct ─────────────────────────────────────
 
-/// Core engine application. Owns all subsystems except window/egui.
-///
-/// Implements all engine traits (`MixerCommands`, `AudioCommands`, etc.)
-/// for direct same-thread access. Also processes `EngineCommands` from
-/// cross-thread consumers via mpsc channel.
-// Aggregate root: the flags are unrelated subsystem toggles, not a state enum.
-#[allow(clippy::struct_excessive_bools)]
+/// Core engine application. Owns all subsystems except window/egui, grouped by
+/// what uses them, and processes `EngineCommand`s from every consumer. Work
+/// within one group is that group's method; work spanning groups is a method
+/// here that lends each group what it needs. See /spec/vardapp-decomposition.md.
 pub struct VardaApp {
-    // ── Engine core ──────────────────────────────────────────────
     mixer: Mixer,
-    audio_manager: AudioManager,
-    camera_manager: CameraManager,
-    /// Camera held open for surface detection, if any. See `AcquireDetectionCamera`.
-    detection_camera: Option<crate::camera::CameraId>,
-    /// Depth-sensor capture manager (Kinect/LIDAR point-cloud sources).
-    depth_manager: DepthSensorManager,
-    /// Screen / window capture manager. See spec/screen-capture.md.
-    screen_capture_manager: ScreenCaptureManager,
-    registry: ShaderRegistry,
-    analyzer_registry: crate::analyzer::AnalyzerRegistry,
-    /// Decks being built off the render thread. See `deck_loads`.
-    deck_loader: deck_loads::DeckLoader,
-    context: GpuContext,
-    /// Absolute show position. Distinct from the tempo clock in
-    /// `input.clock_manager`; see /spec/transport.md.
-    pub(crate) transport: crate::transport::Transport,
-    /// Edge-detect for the arrangement blackout notice, so a deliberate
-    /// blackout reports once rather than every frame it lasts.
-    pub(crate) arrangement_blackout_reported: bool,
-
-    // ── Domain sub-structs ───────────────────────────────────────
-    pub(crate) input: InputSubsystem,
-    pub(crate) output: OutputSubsystem,
-    pub(crate) external_io: ExternalIO,
+    pub(crate) render: RenderTarget,
+    pub(crate) audio: Audio,
+    pub(crate) sources: DeckSources,
+    pub(crate) output: Outputs,
+    pub(crate) input: Inputs,
+    pub(crate) show: Show,
+    pub(crate) session: Session,
     /// Interactive HTML window state (feature `html`). See /spec/html-source.md §4.
     #[cfg(feature = "html")]
     pub(crate) interactive: interactive::InteractiveHtmlState,
     pub(crate) frame_stats: FrameStats,
-    pub(crate) session: SessionState,
     pub(crate) bus: MessageBus,
 
-    // ── Audio textures (GPU resource, owned here) ──────────────
-    audio_textures: crate::audio::AudioTextures,
-
-    // ── Render resolution (configurable, scene-level) ───────
-    render_width: u32,
-    render_height: u32,
-
-    // ── Frame pacing (global, runtime-mutable) ──────────
-    target_fps: u32,
-
-    // ── Channel preview / cue (ephemeral) ──
     // Channels force-rendered for off-air preview, set by `SetPreviewChannels`.
     // Held by UUID so a reorder cannot move the cue; `preview_channels` is the
     // positions resolved from them at the start of each frame. Never persisted;
@@ -360,10 +381,6 @@ pub struct VardaApp {
     preview_channel_uuids: Vec<String>,
     preview_channels: Vec<usize>,
 
-    // ── Pending control-surface actions (consumed by the runner) ──
-    pending_actions: inputs::PendingGlobalActions,
-
-    // ── Shutdown request flag ──────────────────────────────────
     pub(crate) shutdown_requested: bool,
 }
 
@@ -525,24 +542,81 @@ impl VardaApp {
 
         Ok(Self {
             mixer,
-            audio_manager,
-            camera_manager: CameraManager::new(),
-            detection_camera: None,
-            depth_manager: DepthSensorManager::new(),
-            // Constructed disabled rather than merely inert, so `--no-screen-capture`
-            // never triggers the macOS TCC prompt.
-            screen_capture_manager: if config.screen_capture_disabled {
-                ScreenCaptureManager::new_disabled()
-            } else {
-                ScreenCaptureManager::new()
+            render: RenderTarget {
+                context: gpu,
+                width: DEFAULT_RENDER_WIDTH,
+                height: DEFAULT_RENDER_HEIGHT,
+                target_fps: config.target_fps,
             },
-            registry,
-            analyzer_registry: crate::deck::analyzer_registry(),
-            deck_loader: deck_loads::DeckLoader::new(),
-            context: gpu,
-            transport: crate::transport::Transport::new(),
-            arrangement_blackout_reported: false,
-            input: InputSubsystem {
+            audio: Audio {
+                manager: audio_manager,
+                textures: audio_textures,
+            },
+            sources: DeckSources {
+                registry,
+                analyzer_registry: crate::deck::analyzer_registry(),
+                deck_loader: deck_loads::DeckLoader::new(),
+                camera_manager: CameraManager::new(),
+                detection_camera: None,
+                depth_manager: DepthSensorManager::new(),
+                // Constructed disabled rather than merely inert, so `--no-screen-capture`
+                // never triggers the macOS TCC prompt.
+                screen_capture_manager: if config.screen_capture_disabled {
+                    ScreenCaptureManager::new_disabled()
+                } else {
+                    ScreenCaptureManager::new()
+                },
+                io: ExternalIO {
+                    ndi_manager: if config.ndi_disabled {
+                        log::info!("NDI disabled by CLI flag");
+                        crate::ndi::NdiManager::new_disabled()
+                    } else {
+                        crate::ndi::NdiManager::new()
+                    },
+                    #[cfg(target_os = "macos")]
+                    syphon_manager: if config.syphon_disabled {
+                        log::info!("Syphon disabled by CLI flag");
+                        crate::syphon::SyphonManager::new_disabled()
+                    } else {
+                        crate::syphon::SyphonManager::new()
+                    },
+                    #[cfg(target_os = "macos")]
+                    pending_syphon: Vec::new(),
+                    #[cfg(target_os = "macos")]
+                    last_syphon_scan: std::time::Instant::now(),
+                    spout_manager: if config.spout_disabled {
+                        log::info!("Spout disabled by CLI flag");
+                        crate::spout::SpoutManager::new_disabled()
+                    } else {
+                        crate::spout::SpoutManager::new()
+                    },
+                    pending_spout: Vec::new(),
+                    last_spout_scan: std::time::Instant::now(),
+                    stream_manager: crate::stream::StreamManager::new(),
+                    stream_library: Vec::new(),
+                    hls_library: Vec::new(),
+                    dash_library: Vec::new(),
+                    rtmp_library: Vec::new(),
+                    html_manager: if config.html_disabled {
+                        crate::html::HtmlManager::new_disabled()
+                    } else {
+                        crate::html::HtmlManager::new()
+                    },
+                    html_library: Vec::new(),
+                },
+            },
+            output: Outputs {
+                outputs: Vec::new(),
+                surface_manager: SurfaceManager::new(),
+                calibration_textures,
+                domemaster: None,
+                domemaster_resolution: crate::renderer::dome::DomemasterResolution::default(),
+                dome: crate::engine::value::dome::DomeConfig::default(),
+                pending_output_creates: Vec::new(),
+                cached_monitors: Vec::new(),
+                deliveries: std::collections::HashMap::new(),
+            },
+            input: Inputs {
                 osc_receiver,
                 osc_feedback,
                 osc_config,
@@ -554,55 +628,27 @@ impl VardaApp {
                 clock_manager: crate::clock::ClockManager::new(),
                 timecode: crate::timecode::TimecodeManager::new(),
                 ltc_tap: None,
+                pending_actions: inputs::PendingGlobalActions::default(),
             },
-            output: OutputSubsystem {
-                outputs: Vec::new(),
-                surface_manager: SurfaceManager::new(),
-                calibration_textures,
-                domemaster: None,
-                domemaster_resolution: crate::renderer::dome::DomemasterResolution::default(),
-                dome: crate::engine::value::dome::DomeConfig::default(),
-                pending_output_creates: Vec::new(),
-                cached_monitors: Vec::new(),
+            show: Show {
+                transport: crate::transport::Transport::new(),
+                recorder: state::recorder::Recorder::default(),
+                cue_anchor: None,
+                chase_silent_since: None,
+                chase_silence_reported: false,
+                published_timecode: None,
+                blackout_reported: false,
             },
-            external_io: ExternalIO {
-                ndi_manager: if config.ndi_disabled {
-                    log::info!("NDI disabled by CLI flag");
-                    crate::ndi::NdiManager::new_disabled()
-                } else {
-                    crate::ndi::NdiManager::new()
-                },
-                #[cfg(target_os = "macos")]
-                syphon_manager: if config.syphon_disabled {
-                    log::info!("Syphon disabled by CLI flag");
-                    crate::syphon::SyphonManager::new_disabled()
-                } else {
-                    crate::syphon::SyphonManager::new()
-                },
-                #[cfg(target_os = "macos")]
-                pending_syphon: Vec::new(),
-                #[cfg(target_os = "macos")]
-                last_syphon_scan: std::time::Instant::now(),
-                spout_manager: if config.spout_disabled {
-                    log::info!("Spout disabled by CLI flag");
-                    crate::spout::SpoutManager::new_disabled()
-                } else {
-                    crate::spout::SpoutManager::new()
-                },
-                pending_spout: Vec::new(),
-                last_spout_scan: std::time::Instant::now(),
-                stream_manager: crate::stream::StreamManager::new(),
-                stream_library: Vec::new(),
-                hls_library: Vec::new(),
-                dash_library: Vec::new(),
-                rtmp_library: Vec::new(),
-                html_manager: if config.html_disabled {
-                    crate::html::HtmlManager::new_disabled()
-                } else {
-                    crate::html::HtmlManager::new()
-                },
-                html_library: Vec::new(),
+            session: Session {
+                workspace,
+                preset_library,
+                history: history::HistoryManager::new(),
+                notifications: NotificationSystem::new(),
+                editor_prefs: crate::engine::value::editor::EditorPrefs::default(),
+                clipboard: None,
             },
+            #[cfg(feature = "html")]
+            interactive: interactive::InteractiveHtmlState::default(),
             frame_stats: FrameStats {
                 last_frame_instant: std::time::Instant::now(),
                 fps_history: std::collections::VecDeque::with_capacity(60),
@@ -611,33 +657,13 @@ impl VardaApp {
                 system_monitor: crate::sysmon::SystemMonitor::new(),
                 last_frame_submits: 0,
             },
-            session: SessionState {
-                workspace,
-                preset_library,
-                history: history::HistoryManager::new(),
-                notifications: NotificationSystem::new(),
-                editor_prefs: crate::engine::value::editor::EditorPrefs::default(),
-                clipboard: None,
-                cue_anchor: None,
-                chase_silent_since: None,
-                chase_silence_reported: false,
-                published_timecode: None,
-                recorder: state::recorder::Recorder::default(),
-            },
             bus: MessageBus {
                 command_rx,
                 command_tx,
                 publication,
             },
-            audio_textures,
-            #[cfg(feature = "html")]
-            interactive: interactive::InteractiveHtmlState::default(),
-            render_width: DEFAULT_RENDER_WIDTH,
-            render_height: DEFAULT_RENDER_HEIGHT,
-            target_fps: config.target_fps,
             preview_channel_uuids: Vec::new(),
             preview_channels: Vec::new(),
-            pending_actions: inputs::PendingGlobalActions::default(),
             shutdown_requested: false,
         })
     }
@@ -663,13 +689,13 @@ impl VardaApp {
             // CLI / MIDI-issued) edits are undoable on the same timeline the
             // windowed UI uses. In-process UI mutations do NOT flow through the
             // bus — the windowed runner records those itself — so there is no
-            // double-record here. See commands::command_is_undoable.
+            // double-record here. See classify::command_is_undoable.
             // A pass under way has already pushed the one entry it gets, and a
             // performer playing a fader through the API would otherwise fill
             // the stack a frame at a time.
-            if commands::command_is_undoable(&cmd) && !self.is_recording() {
+            if classify::command_is_undoable(&cmd) && !self.is_recording() {
                 let snapshot = self.history_snapshot();
-                self.push_history(snapshot);
+                self.session.history.push(snapshot);
             }
             let result = self.execute_command(cmd);
             if let Some(tx) = reply_tx {
@@ -684,7 +710,7 @@ impl VardaApp {
         deck_uuid: &str,
         f: impl FnOnce(&mut crate::channel::DeckAutoTransition),
     ) -> CommandResult {
-        let (ch_idx, deck_idx) = match self.resolve_deck(deck_uuid) {
+        let (ch_idx, deck_idx) = match self.mixer.resolve_deck(deck_uuid) {
             Ok(loc) => loc,
             Err(e) => {
                 return CommandResult::Err {
@@ -709,7 +735,7 @@ impl VardaApp {
         deck_uuid: &str,
         f: impl FnOnce(&mut crate::deck::Deck) -> bool,
     ) -> CommandResult {
-        let (ch_idx, deck_idx) = match self.resolve_deck(deck_uuid) {
+        let (ch_idx, deck_idx) = match self.mixer.resolve_deck(deck_uuid) {
             Ok(loc) => loc,
             Err(e) => {
                 return CommandResult::Err {
@@ -775,7 +801,7 @@ impl VardaApp {
 
     /// Read-only access to the GPU context.
     pub fn gpu_context(&self) -> &GpuContext {
-        &self.context
+        &self.render.context
     }
 
     /// Command buffer commits issued during the previous frame.
@@ -790,7 +816,7 @@ impl VardaApp {
 
     /// Read-only access to the camera manager.
     pub fn camera_manager(&self) -> &CameraManager {
-        &self.camera_manager
+        &self.sources.camera_manager
     }
 
     /// Open a camera, returning its resolution.
@@ -802,27 +828,19 @@ impl VardaApp {
         &mut self,
         id: crate::camera::CameraId,
     ) -> anyhow::Result<(u32, u32)> {
-        self.camera_manager.open_camera(id, &self.context.device)
-    }
-
-    /// `(uuid, name)` for every channel, which is what resolves a tap's
-    /// channel UUID to something a performer can read.
-    pub fn channel_labels(&self) -> Vec<(String, String)> {
-        self.mixer
-            .channels()
-            .iter()
-            .map(|ch| (ch.uuid().to_string(), ch.name.clone()))
-            .collect()
+        self.sources
+            .camera_manager
+            .open_camera(id, &self.render.context.device)
     }
 
     /// Read-only access to the screen-capture manager.
     pub fn screen_capture_manager(&self) -> &ScreenCaptureManager {
-        &self.screen_capture_manager
+        &self.sources.screen_capture_manager
     }
 
     /// Read-only access to the depth-sensor manager.
     pub fn depth_manager(&self) -> &DepthSensorManager {
-        &self.depth_manager
+        &self.sources.depth_manager
     }
 
     /// Read-only access to the outputs.
@@ -859,8 +877,8 @@ impl VardaApp {
                 ..crate::renderer::dome::DomemasterConfig::default()
             };
             match crate::renderer::dome::DomemasterRenderer::new(
-                &self.context.device,
-                self.context.compositing_format,
+                &self.render.context.device,
+                self.render.context.compositing_format,
                 config,
             ) {
                 Ok(mut dome) => {
@@ -912,8 +930,8 @@ impl VardaApp {
         drop(existing);
 
         match crate::renderer::dome::DomemasterRenderer::new(
-            &self.context.device,
-            self.context.compositing_format,
+            &self.render.context.device,
+            self.render.context.compositing_format,
             config,
         ) {
             Ok(mut dome) => {
@@ -937,7 +955,7 @@ impl VardaApp {
 
     /// The camera held open for surface detection, if any.
     pub fn detection_camera(&self) -> Option<crate::camera::CameraId> {
-        self.detection_camera
+        self.sources.detection_camera
     }
 
     /// Resolve the cued channel UUIDs to their current positions, reusing the
@@ -953,23 +971,12 @@ impl VardaApp {
 
     /// Number of loaded shaders.
     pub fn shader_count(&self) -> usize {
-        self.registry.count()
+        self.sources.registry.count()
     }
 
     /// Tick notification expiry timers.
     pub fn update_notifications(&mut self) {
         self.session.notifications.update();
-    }
-
-    /// Push an info-level notification.
-    pub fn notify_info(&mut self, message: impl Into<String>) {
-        self.session.notifications.info(message);
-    }
-
-    /// Surface an error to the performer. Used by consumers that handle a
-    /// failure outside the command bus (which toasts errors on their behalf).
-    pub fn notify_error(&mut self, message: impl Into<String>) {
-        self.session.notifications.error(message);
     }
 
     /// Close an output window by its winit `WindowId`. Returns the name if found.
@@ -1004,7 +1011,7 @@ impl VardaApp {
             if let UnifiedOutput::Window(w) = o
                 && w.window.id() == window_id
             {
-                w.resize(&self.context.device, new_size);
+                w.resize(&self.render.context.device, new_size);
                 return;
             }
         }
@@ -1012,19 +1019,19 @@ impl VardaApp {
 
     /// Current render width.
     pub fn render_width(&self) -> u32 {
-        self.render_width
+        self.render.width
     }
 
     /// Current render height.
     pub fn render_height(&self) -> u32 {
-        self.render_height
+        self.render.height
     }
 
     /// Maximum render dimension (width or height) the GPU can allocate a
     /// texture for. Varda imposes no artificial cap — this hardware limit is
     /// the only bound on render resolution (see spec/resolution-and-scaling.md).
     pub fn max_render_dimension(&self) -> u32 {
-        self.context.device.limits().max_texture_dimension_2d
+        self.render.context.device.limits().max_texture_dimension_2d
     }
 
     /// Change the master render resolution. Resizes all textures in the pipeline.
@@ -1039,19 +1046,19 @@ impl VardaApp {
         }
         let max_dim = self.max_render_dimension();
         let (width, height) = clamp_resolution_to_gpu(width, height, max_dim);
-        if width == self.render_width && height == self.render_height {
+        if width == self.render.width && height == self.render.height {
             return;
         }
         log::info!(
             "Changing render resolution: {}×{} → {}×{}",
-            self.render_width,
-            self.render_height,
+            self.render.width,
+            self.render.height,
             width,
             height
         );
-        self.render_width = width;
-        self.render_height = height;
-        self.mixer.resize(&self.context, width, height);
+        self.render.width = width;
+        self.render.height = height;
+        self.mixer.resize(&self.render.context, width, height);
         // Clear sub-mix cache since textures were recreated
         self.mixer.clear_sub_mix_cache();
         let stopped = self.resize_headless_outputs(width, height);
@@ -1073,16 +1080,16 @@ impl VardaApp {
 
     /// Current target FPS (0 = uncapped).
     pub fn target_fps(&self) -> u32 {
-        self.target_fps
+        self.render.target_fps
     }
 
     /// Set the target FPS. 0 = uncapped.
     pub fn set_target_fps(&mut self, fps: u32) {
-        if fps == self.target_fps {
+        if fps == self.render.target_fps {
             return;
         }
-        log::info!("Target FPS: {} → {}", self.target_fps, fps);
-        self.target_fps = fps;
+        log::info!("Target FPS: {} → {}", self.render.target_fps, fps);
+        self.render.target_fps = fps;
     }
 }
 
@@ -1649,7 +1656,7 @@ mod tests {
         let Some(mut app) = headless_app() else {
             return;
         };
-        app.notify_info("Test notification");
+        app.session.notifications.info("Test notification");
         app.update_notifications();
         // Verify no crash
     }

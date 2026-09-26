@@ -43,7 +43,7 @@ impl VardaApp {
     /// Hand the pending control-surface actions to a windowed consumer, which
     /// runs them against its UI layout. Clears them.
     pub(crate) fn take_pending_global_actions(&mut self) -> PendingGlobalActions {
-        std::mem::take(&mut self.pending_actions)
+        std::mem::take(&mut self.input.pending_actions)
     }
 
     /// Run the pending control-surface actions through the engine's own command
@@ -98,11 +98,11 @@ impl VardaApp {
         if path.starts_with("action/") && value > 0.5 {
             // Global actions — trigger on note-on / CC > 50%
             match path {
-                "action/undo" => self.pending_actions.undo = true,
-                "action/redo" => self.pending_actions.redo = true,
-                "action/save" => self.pending_actions.save = true,
+                "action/undo" => self.input.pending_actions.undo = true,
+                "action/redo" => self.input.pending_actions.redo = true,
+                "action/save" => self.input.pending_actions.save = true,
                 // A pad, so it toggles rather than needing two bindings.
-                "action/record" => self.set_record_armed(!self.record_armed()),
+                "action/record" => self.set_record_armed(!self.show.recorder.armed()),
                 _ => log::debug!("Unknown action path: {path}"),
             }
         } else if let Some(cmd) = surface_command(path, self.interactive_deck()) {
@@ -126,7 +126,7 @@ impl VardaApp {
         // the loops below, which hold a borrow of the receiver they are draining.
         let mut deferred: Vec<EngineCommand> = Vec::new();
         // Poll for shader file changes (hot-reload)
-        let shader_events = self.registry.poll_changes();
+        let shader_events = self.sources.registry.poll_changes();
         for event in &shader_events {
             match event {
                 crate::registry::ShaderEvent::Changed(path) => {
@@ -177,9 +177,9 @@ impl VardaApp {
         // See /spec/audio-capture-lifecycle.md.
         {
             let bands = self.mixer.modulation().audio_band_source_ids();
-            let default = self.audio_manager.default_source_id();
+            let default = self.audio.manager.default_source_id();
             let needed = crate::audio::AudioManager::needed_from_bands(&bands, default);
-            self.audio_manager.set_modulation_refs(&needed);
+            self.audio.manager.set_modulation_refs(&needed);
         }
 
         // One frame time for every signal ingested below, so LTC and MTC are
@@ -187,21 +187,23 @@ impl VardaApp {
         let now = std::time::Instant::now();
 
         // Poll all audio sources
-        self.audio_manager.poll();
+        self.audio.manager.poll();
 
         // Timecode arrives on two paths. This is the audio one; the MIDI one is
         // answered in the drain below.
         self.tick_ltc(now);
 
         // Update audio textures (using primary source)
-        self.audio_textures
-            .update(&self.context.queue, self.audio_manager.get_primary_data());
+        self.audio.textures.update(
+            &self.render.context.queue,
+            self.audio.manager.get_primary_data(),
+        );
 
         // Pre-update modulation with fresh audio so snapshots read current values
         {
             let mut av = crate::modulation::AudioValues::default();
-            for id in self.audio_manager.active_source_ids() {
-                if let Some(data) = self.audio_manager.get_data(id) {
+            for id in self.audio.manager.active_source_ids() {
+                if let Some(data) = self.audio.manager.get_data(id) {
                     av.sources.insert(
                         id,
                         crate::modulation::AudioSourceValues {
@@ -214,7 +216,7 @@ impl VardaApp {
             }
             let analyzer_vals = crate::modulation::AnalyzerValues::default();
             let beat_time = self.input.clock_manager.beat_time();
-            let transport = self.transport.sample();
+            let transport = self.show.transport.sample();
             self.mixer
                 .update_modulation(beat_time, transport, &av, &analyzer_vals);
         }
@@ -394,15 +396,15 @@ impl VardaApp {
         // undo/redo/save dispatch uniformly.
         for action in self.mixer.macros_mut().take_pending_actions() {
             match action {
-                crate::macros::GlobalAction::Undo => self.pending_actions.undo = true,
-                crate::macros::GlobalAction::Redo => self.pending_actions.redo = true,
-                crate::macros::GlobalAction::Save => self.pending_actions.save = true,
+                crate::macros::GlobalAction::Undo => self.input.pending_actions.undo = true,
+                crate::macros::GlobalAction::Redo => self.input.pending_actions.redo = true,
+                crate::macros::GlobalAction::Save => self.input.pending_actions.save = true,
             }
         }
 
         // Feed audio BPM to ClockManager
         {
-            let primary = self.audio_manager.get_primary_data();
+            let primary = self.audio.manager.get_primary_data();
             self.input
                 .clock_manager
                 .update_audio(primary.bpm, primary.beat_phase());
@@ -418,7 +420,7 @@ impl VardaApp {
 
         // Advance the show position. After command processing, so a locate that
         // arrived this frame is published rather than overwritten.
-        self.transport.update();
+        self.show.transport.update();
 
         // Every surface write above is a performer's hand, so anything that
         // landed on a parameter the arrangement drives takes that lane back.
@@ -455,15 +457,15 @@ impl VardaApp {
         let Some(sender) = &self.input.osc_feedback else {
             return;
         };
-        if !sender.has_targets() || !self.transport.has_run() {
+        if !sender.has_targets() || !self.show.transport.has_run() {
             return;
         }
-        let label = self.transport.formatted_position();
-        if self.session.published_timecode.as_deref() == Some(label.as_str()) {
+        let label = self.show.transport.formatted_position();
+        if self.show.published_timecode.as_deref() == Some(label.as_str()) {
             return;
         }
-        sender.send_timecode(self.transport.position(), &label);
-        self.session.published_timecode = Some(label);
+        sender.send_timecode(self.show.transport.position(), &label);
+        self.show.published_timecode = Some(label);
     }
 
     /// Keep the LTC tap matching what is patched, and decode what it heard.
@@ -482,10 +484,10 @@ impl VardaApp {
 
         if self.input.ltc_tap.as_ref().map(|tap| tap.source_id) != wanted.map(|i| i.source_id) {
             if let Some(tap) = self.input.ltc_tap.take() {
-                self.audio_manager.unsubscribe_pcm(tap.source_id, tap.token);
+                self.audio.manager.unsubscribe_pcm(tap.source_id, tap.token);
             }
             if let Some(input) = wanted {
-                if let Some(sub) = self.audio_manager.subscribe_pcm(input.source_id) {
+                if let Some(sub) = self.audio.manager.subscribe_pcm(input.source_id) {
                     log::info!(
                         "Listening for LTC on audio source {} channel {}",
                         input.source_id,
@@ -526,12 +528,12 @@ impl VardaApp {
     /// Resolve the incoming timecode and give the transport its position.
     fn chase_timecode(&mut self, now: std::time::Instant) {
         self.input.timecode.update(now);
-        if self.transport.source() != crate::transport::TransportSource::Timecode {
+        if self.show.transport.source() != crate::transport::TransportSource::Timecode {
             return;
         }
 
         let state = self.input.timecode.state();
-        self.transport.chase(crate::transport::Chase {
+        self.show.transport.chase(crate::transport::Chase {
             position: state.position,
             running: state.running,
             discontinuity: state.discontinuity,
@@ -543,14 +545,14 @@ impl VardaApp {
         // not started. Headless has nobody watching the popover, so it is said
         // out loud, once per silence rather than every frame of it.
         if state.running {
-            self.session.chase_silent_since = None;
-            self.session.chase_silence_reported = false;
+            self.show.chase_silent_since = None;
+            self.show.chase_silence_reported = false;
         } else {
-            let since = *self.session.chase_silent_since.get_or_insert(now);
+            let since = *self.show.chase_silent_since.get_or_insert(now);
             if now.duration_since(since) > std::time::Duration::from_secs(5)
-                && !self.session.chase_silence_reported
+                && !self.show.chase_silence_reported
             {
-                self.session.chase_silence_reported = true;
+                self.show.chase_silence_reported = true;
                 log::warn!(
                     "Transport is chasing timecode but nothing has arrived for 5 seconds \
                      (preference {:?}, {} input(s) seen)",
@@ -565,7 +567,7 @@ impl VardaApp {
 #[cfg(test)]
 mod tests {
     use super::{EngineCommand, VardaApp, surface_command};
-    use crate::engine::{EngineCommand as C, MixerQueries};
+    use crate::engine::EngineCommand as C;
     use crate::midi::{MidiDeviceManager, MidiKey, MidiMessage};
     use crate::osc::{OscInput, OscReceiver};
 
@@ -576,7 +578,9 @@ mod tests {
     fn app_with_a_deck() -> Option<(VardaApp, String)> {
         let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
         let mut app = VardaApp::new(gpu, &crate::testing::headless_config()).ok()?;
-        let channel = app.mixer_snapshot().channels[0].uuid.clone();
+        let channel = crate::app::snapshot::build_mixer_snapshot(&app).channels[0]
+            .uuid
+            .clone();
         let uuid = match app.execute_command(C::AddSolidColorDeck {
             channel_uuid: channel,
             color: [1.0, 1.0, 1.0, 1.0],
@@ -588,7 +592,7 @@ mod tests {
     }
 
     fn opacity(app: &mut VardaApp) -> f32 {
-        app.mixer_snapshot().channels[0].decks[0].opacity
+        crate::app::snapshot::build_mixer_snapshot(app).channels[0].decks[0].opacity
     }
 
     /// Wire up an OSC receiver with nothing behind it and send one message.
@@ -788,8 +792,11 @@ mod tests {
 
         app.process_inputs();
 
-        assert!((app.transport.position() - 12.0).abs() < 1e-9);
-        assert!(!app.transport.running(), "a cue locates, it does not start");
+        assert!((app.show.transport.position() - 12.0).abs() < 1e-9);
+        assert!(
+            !app.show.transport.running(),
+            "a cue locates, it does not start"
+        );
     }
 
     /// A hand on a controller is a hand on the show: a mapped write during an
@@ -846,7 +853,7 @@ mod tests {
 
         app.process_inputs();
 
-        assert!(app.transport.position().abs() < 1e-9);
+        assert!(app.show.transport.position().abs() < 1e-9);
     }
 
     // ── Chasing timecode ────────────────────────────────────────
@@ -905,13 +912,13 @@ mod tests {
         );
 
         assert!(
-            (app.transport.position() - 3630.0).abs() < 0.2,
+            (app.show.transport.position() - 3630.0).abs() < 0.2,
             "an hour and half a minute in, got {}",
-            app.transport.position()
+            app.show.transport.position()
         );
-        assert!(app.transport.running());
+        assert!(app.show.transport.running());
         assert!(
-            app.transport.has_run(),
+            app.show.transport.has_run(),
             "a chased show engages the arrangement like any other"
         );
     }
@@ -935,7 +942,7 @@ mod tests {
             )),
         );
 
-        assert!(app.transport.position().abs() < 1e-9);
+        assert!(app.show.transport.position().abs() < 1e-9);
         assert!(
             !app.input.timecode.inputs().is_empty(),
             "but it is still heard, so the popover can offer it"
@@ -962,7 +969,7 @@ mod tests {
                 crate::transport::TimecodeRate::Fps25,
             )),
         );
-        let held = app.transport.position();
+        let held = app.show.transport.position();
 
         // Nothing arrives for well past the freewheel window.
         app.input
@@ -970,13 +977,13 @@ mod tests {
             .update(std::time::Instant::now() + std::time::Duration::from_secs(2));
         app.process_inputs();
 
-        assert!(!app.transport.running(), "the master stopped");
+        assert!(!app.show.transport.running(), "the master stopped");
         assert!(
-            (app.transport.position() - held).abs() < 0.5,
+            (app.show.transport.position() - held).abs() < 0.5,
             "and the position held rather than snapping home"
         );
         assert_eq!(
-            app.transport.status(),
+            app.show.transport.status(),
             crate::transport::TransportStatus::Stopped
         );
     }
@@ -985,7 +992,7 @@ mod tests {
 
     /// Every capture device this machine enumerated.
     fn audio_inputs(app: &VardaApp) -> Vec<crate::audio::AudioSourceId> {
-        app.audio_manager.devices().iter().map(|d| d.id).collect()
+        app.audio.manager.devices().iter().map(|d| d.id).collect()
     }
 
     /// Patch LTC to `source_id` and let one frame reconcile the tap, returning
@@ -1026,7 +1033,7 @@ mod tests {
         };
         assert_eq!(tapped, source_id);
         assert!(
-            app.audio_manager.active_source_ids().contains(&source_id),
+            app.audio.manager.active_source_ids().contains(&source_id),
             "the interface is captured while timecode is being listened for"
         );
 
@@ -1035,7 +1042,7 @@ mod tests {
 
         assert!(app.input.ltc_tap.is_none());
         assert!(
-            !app.audio_manager.active_source_ids().contains(&source_id),
+            !app.audio.manager.active_source_ids().contains(&source_id),
             "and let go once nobody is listening"
         );
     }
@@ -1061,7 +1068,7 @@ mod tests {
         app.process_inputs();
 
         assert!(app.input.ltc_tap.is_none());
-        assert!(!app.audio_manager.active_source_ids().contains(&source_id));
+        assert!(!app.audio.manager.active_source_ids().contains(&source_id));
         assert!(
             app.input.timecode.ltc_input().is_some(),
             "the patch itself is remembered, so turning timecode back on needs no re-patching"
@@ -1089,7 +1096,7 @@ mod tests {
 
         assert_eq!(moved, second);
         assert!(
-            !app.audio_manager.active_source_ids().contains(&first),
+            !app.audio.manager.active_source_ids().contains(&first),
             "the interface the patch left is released"
         );
     }
@@ -1259,11 +1266,8 @@ mod tests {
             addresses.contains(&"/varda/timecode/string".to_string()),
             "got {addresses:?}"
         );
-        let label = app.transport.formatted_position();
-        assert_eq!(
-            app.session.published_timecode.as_deref(),
-            Some(label.as_str())
-        );
+        let label = app.show.transport.formatted_position();
+        assert_eq!(app.show.published_timecode.as_deref(), Some(label.as_str()));
     }
 
     // ── Chasing nothing ─────────────────────────────────────────
@@ -1283,16 +1287,16 @@ mod tests {
 
         app.chase_timecode(start);
         assert!(
-            !app.session.chase_silence_reported,
+            !app.show.chase_silence_reported,
             "a gap between cues is not a fault"
         );
 
         app.chase_timecode(start + std::time::Duration::from_secs(6));
-        assert!(app.session.chase_silence_reported);
+        assert!(app.show.chase_silence_reported);
 
         app.chase_timecode(start + std::time::Duration::from_secs(7));
         assert!(
-            app.session.chase_silence_reported,
+            app.show.chase_silence_reported,
             "still one silence, not a second complaint about it"
         );
     }
@@ -1310,7 +1314,7 @@ mod tests {
         let start = std::time::Instant::now();
         app.chase_timecode(start);
         app.chase_timecode(start + std::time::Duration::from_secs(6));
-        assert!(app.session.chase_silence_reported);
+        assert!(app.show.chase_silence_reported);
 
         let returned = start + std::time::Duration::from_secs(7);
         app.input.timecode.ingest(
@@ -1323,10 +1327,10 @@ mod tests {
         );
         app.chase_timecode(returned);
 
-        assert!(app.transport.running(), "the master is back");
-        assert!(!app.session.chase_silence_reported);
+        assert!(app.show.transport.running(), "the master is back");
+        assert!(!app.show.chase_silence_reported);
         assert!(
-            app.session.chase_silent_since.is_none(),
+            app.show.chase_silent_since.is_none(),
             "and the next silence is timed from when it starts, not from tonight's first one"
         );
     }

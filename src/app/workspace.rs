@@ -66,8 +66,8 @@ impl VardaApp {
             let scene = crate::persistence::snapshot_scene(
                 &self.mixer,
                 Some(&self.transport_config()),
-                self.render_width,
-                self.render_height,
+                self.render.width,
+                self.render.height,
             );
             match scene.save(self.session.workspace.scene_path()) {
                 Ok(()) => log::info!(
@@ -216,22 +216,22 @@ impl VardaApp {
                         && w > 0
                         && h > 0
                     {
-                        self.render_width = w;
-                        self.render_height = h;
+                        self.render.width = w;
+                        self.render.height = h;
                         log::info!("Scene render resolution: {w}×{h}");
                     }
                     match crate::persistence::restore_scene(
                         &scene_config,
-                        &self.context,
-                        &self.registry,
-                        &mut self.camera_manager,
-                        &mut self.screen_capture_manager,
-                        &mut self.depth_manager,
-                        &mut self.external_io.ndi_manager,
-                        &mut self.external_io.stream_manager,
-                        &mut self.external_io.html_manager,
-                        self.render_width,
-                        self.render_height,
+                        &self.render.context,
+                        &self.sources.registry,
+                        &mut self.sources.camera_manager,
+                        &mut self.sources.screen_capture_manager,
+                        &mut self.sources.depth_manager,
+                        &mut self.sources.io.ndi_manager,
+                        &mut self.sources.io.stream_manager,
+                        &mut self.sources.io.html_manager,
+                        self.render.width,
+                        self.render.height,
                     ) {
                         Ok(result) => {
                             self.mixer = result.mixer;
@@ -239,9 +239,11 @@ impl VardaApp {
                             // authored; where it was stopped is not, so the
                             // position stays at zero and the arrangement stays
                             // inert until someone starts it.
-                            self.transport
+                            self.show
+                                .transport
                                 .set_timecode_rate(scene_config.transport.timecode_rate);
-                            self.transport
+                            self.show
+                                .transport
                                 .set_loop_region(scene_config.transport.loop_region);
                             for warn in &result.warnings {
                                 self.session.notifications.warn(warn.clone());
@@ -257,7 +259,7 @@ impl VardaApp {
                                         result.pending_syphon.len()
                                     );
                                 }
-                                self.external_io.pending_syphon = result.pending_syphon;
+                                self.sources.io.pending_syphon = result.pending_syphon;
                             }
 
                             // Start preprocessor analyzers for active decks restored from save.
@@ -269,8 +271,9 @@ impl VardaApp {
                                         && (!any_solo || slot.solo)
                                         && slot.opacity > 0.0;
                                     if active {
-                                        slot.deck
-                                            .ensure_preprocessor_analyzers(&self.analyzer_registry);
+                                        slot.deck.ensure_preprocessor_analyzers(
+                                            &self.sources.analyzer_registry,
+                                        );
                                     }
                                 }
                             }
@@ -387,9 +390,12 @@ impl VardaApp {
         // the undo stack like any other scene data; the transport's *position*
         // is not, since undoing an edit must not also rewind the show.
         self.mixer.set_arrangement(target.arrangement.clone());
-        self.transport
+        self.show
+            .transport
             .set_timecode_rate(target.transport.timecode_rate);
-        self.transport.set_loop_region(target.transport.loop_region);
+        self.show
+            .transport
+            .set_loop_region(target.transport.loop_region);
 
         // (c) Transition shader — compare names, only recreate if changed
         {
@@ -399,13 +405,15 @@ impl VardaApp {
                 match target_name {
                     Some(name) => {
                         if let Some(shader) = self
+                            .sources
                             .registry
                             .transitions()
                             .iter()
                             .find(|s| s.name() == name)
                         {
-                            if let Err(e) =
-                                self.mixer.set_transition(&self.context, (*shader).clone())
+                            if let Err(e) = self
+                                .mixer
+                                .set_transition(&self.render.context, (*shader).clone())
                             {
                                 warnings
                                     .push(format!("Failed to restore transition '{name}': {e}"));
@@ -449,21 +457,21 @@ impl VardaApp {
                     Self::patch_deck_slot(
                         &mut ch.decks[d_idx],
                         deck_config,
-                        &self.context,
-                        &self.registry,
+                        &self.render.context,
+                        &self.sources.registry,
                     );
                 } else {
                     // Different source — rebuild just this deck
                     match crate::persistence::restore_deck(
                         deck_config,
-                        &self.context,
-                        &self.registry,
-                        &mut self.camera_manager,
-                        &mut self.screen_capture_manager,
-                        &mut self.depth_manager,
-                        &mut self.external_io.ndi_manager,
-                        &mut self.external_io.stream_manager,
-                        &mut self.external_io.html_manager,
+                        &self.render.context,
+                        &self.sources.registry,
+                        &mut self.sources.camera_manager,
+                        &mut self.sources.screen_capture_manager,
+                        &mut self.sources.depth_manager,
+                        &mut self.sources.io.ndi_manager,
+                        &mut self.sources.io.stream_manager,
+                        &mut self.sources.io.html_manager,
                         rw,
                         rh,
                     ) {
@@ -472,8 +480,8 @@ impl VardaApp {
                             Self::patch_deck_slot(
                                 &mut slot,
                                 deck_config,
-                                &self.context,
-                                &self.registry,
+                                &self.render.context,
+                                &self.sources.registry,
                             );
                             ch.decks[d_idx] = slot;
                         }
@@ -497,14 +505,14 @@ impl VardaApp {
                 let deck_config = &ch_config.decks[d_idx];
                 match crate::persistence::restore_deck(
                     deck_config,
-                    &self.context,
-                    &self.registry,
-                    &mut self.camera_manager,
-                    &mut self.screen_capture_manager,
-                    &mut self.depth_manager,
-                    &mut self.external_io.ndi_manager,
-                    &mut self.external_io.stream_manager,
-                    &mut self.external_io.html_manager,
+                    &self.render.context,
+                    &self.sources.registry,
+                    &mut self.sources.camera_manager,
+                    &mut self.sources.screen_capture_manager,
+                    &mut self.sources.depth_manager,
+                    &mut self.sources.io.ndi_manager,
+                    &mut self.sources.io.stream_manager,
+                    &mut self.sources.io.html_manager,
                     rw,
                     rh,
                 ) {
@@ -513,8 +521,8 @@ impl VardaApp {
                         Self::patch_deck_slot(
                             &mut slot,
                             deck_config,
-                            &self.context,
-                            &self.registry,
+                            &self.render.context,
+                            &self.sources.registry,
                         );
                         ch.decks.push(slot);
                     }
@@ -531,8 +539,8 @@ impl VardaApp {
             Self::diff_effects(
                 &mut ch.effects,
                 &ch_config.effects,
-                &self.context,
-                self.context.compositing_format,
+                &self.render.context,
+                self.render.context.compositing_format,
                 &mut warnings,
             );
         }
@@ -545,21 +553,22 @@ impl VardaApp {
         // Add missing channels
         for ch_idx in paired_count..target_ch_count {
             let ch_config = &target.channels[ch_idx];
-            match crate::channel::Channel::new(ch_config.name.clone(), &self.context, rw, rh) {
+            match crate::channel::Channel::new(ch_config.name.clone(), &self.render.context, rw, rh)
+            {
                 Ok(mut channel) => {
                     channel.opacity = ch_config.opacity;
                     channel.blend_mode = ch_config.blend_mode.into();
                     for deck_config in &ch_config.decks {
                         match crate::persistence::restore_deck(
                             deck_config,
-                            &self.context,
-                            &self.registry,
-                            &mut self.camera_manager,
-                            &mut self.screen_capture_manager,
-                            &mut self.depth_manager,
-                            &mut self.external_io.ndi_manager,
-                            &mut self.external_io.stream_manager,
-                            &mut self.external_io.html_manager,
+                            &self.render.context,
+                            &self.sources.registry,
+                            &mut self.sources.camera_manager,
+                            &mut self.sources.screen_capture_manager,
+                            &mut self.sources.depth_manager,
+                            &mut self.sources.io.ndi_manager,
+                            &mut self.sources.io.stream_manager,
+                            &mut self.sources.io.html_manager,
                             rw,
                             rh,
                         ) {
@@ -568,8 +577,8 @@ impl VardaApp {
                                 Self::patch_deck_slot(
                                     &mut slot,
                                     deck_config,
-                                    &self.context,
-                                    &self.registry,
+                                    &self.render.context,
+                                    &self.sources.registry,
                                 );
                                 channel.add_deck_slot(slot);
                             }
@@ -584,8 +593,8 @@ impl VardaApp {
                     for eff_config in &ch_config.effects {
                         match crate::persistence::restore_effect(
                             eff_config,
-                            &self.context,
-                            self.context.texture_format,
+                            &self.render.context,
+                            self.render.context.texture_format,
                         ) {
                             Ok(eff) => channel.add_effect(eff),
                             Err(e) => {
@@ -622,8 +631,8 @@ impl VardaApp {
         Self::diff_effects(
             self.mixer.master_effects_mut(),
             &target.master_effects,
-            &self.context,
-            self.context.compositing_format,
+            &self.render.context,
+            self.render.context.compositing_format,
             &mut warnings,
         );
 
@@ -658,8 +667,8 @@ impl VardaApp {
     /// where it loops, without its position or run state.
     pub fn transport_config(&self) -> crate::scene::TransportConfig {
         crate::scene::TransportConfig {
-            timecode_rate: self.transport.timecode_rate(),
-            loop_region: self.transport.loop_region(),
+            timecode_rate: self.show.transport.timecode_rate(),
+            loop_region: self.show.transport.loop_region(),
         }
     }
 
@@ -667,7 +676,8 @@ impl VardaApp {
     pub fn timecode_config(&self) -> crate::timecode::TimecodeConfig {
         self.input.timecode.to_config(
             |id| {
-                self.audio_manager
+                self.audio
+                    .manager
                     .devices()
                     .iter()
                     .find(|d| d.id == id)
@@ -687,7 +697,8 @@ impl VardaApp {
     /// reporting anything the rig no longer has.
     pub fn apply_timecode_config(&mut self, config: &crate::timecode::TimecodeConfig) {
         let audio: Vec<(crate::audio::AudioSourceId, String)> = self
-            .audio_manager
+            .audio
+            .manager
             .devices()
             .iter()
             .map(|d| (d.id, d.name.clone()))
@@ -725,8 +736,8 @@ impl VardaApp {
         let scene = crate::persistence::snapshot_scene(
             &self.mixer,
             Some(&self.transport_config()),
-            self.render_width,
-            self.render_height,
+            self.render.width,
+            self.render.height,
         );
         let stage = crate::persistence::snapshot_stage(
             &self.output.surface_manager,
@@ -755,20 +766,10 @@ impl VardaApp {
         self.session.history.can_redo()
     }
 
-    /// Record `snapshot` as the pre-mutation state for one undoable step.
-    pub fn push_history(&mut self, snapshot: super::history::HistorySnapshot) {
-        self.session.history.push(snapshot);
-    }
-
-    /// Clear the undo/redo timeline (e.g. on workspace load).
-    pub fn clear_history(&mut self) {
-        self.session.history.clear();
-    }
-
     /// Restore a history snapshot onto live state (scene + stage).
     fn restore_history_snapshot(&mut self, snapshot: &super::history::HistorySnapshot) {
-        let rw = self.render_width;
-        let rh = self.render_height;
+        let rw = self.render.width;
+        let rh = self.render.height;
         // Scene half — diff-apply (patches only what changed).
         let warnings = self.apply_scene_diff(&snapshot.scene, rw, rh);
         // Stage half — restore surfaces, assignments, and dome config (no
@@ -842,7 +843,7 @@ impl VardaApp {
                         h.tonemap_override = cfg.tonemap_override;
                     }
                 }
-                match output.set_presentation_request(&self.context, cfg.presentation) {
+                match output.set_presentation_request(&self.render.context, cfg.presentation) {
                     Ok(()) => {
                         if let crate::renderer::context::UnifiedOutput::Headless(headless) = output
                             && matches!(
@@ -851,10 +852,12 @@ impl VardaApp {
                             )
                         {
                             let resolved = self
-                                .external_io
+                                .sources
+                                .io
                                 .ndi_manager
                                 .resolve_presentation(cfg.presentation);
-                            headless.set_resolved_presentation(&self.context.device, resolved);
+                            headless
+                                .set_resolved_presentation(&self.render.context.device, resolved);
                         }
                         restored_output_indices.push(idx);
                     }
@@ -872,7 +875,7 @@ impl VardaApp {
 
         // (c) Recompute Auto-mode edge-blend overlap zones for the restored
         //     surface topology.
-        self.recompute_auto_edge_blend();
+        self.output.recompute_auto_edge_blend();
     }
 
     /// Patch a `DeckSlot`'s properties from config without rebuilding the source.
@@ -994,7 +997,6 @@ impl VardaApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::traits::*;
     use clap::Parser;
     use tempfile::TempDir;
 
@@ -1034,7 +1036,9 @@ mod tests {
         let Some(mut app) = headless_app_in(tmp.path()) else {
             return;
         };
-        let ch = app.mixer_snapshot().channels[0].uuid.clone();
+        let ch = crate::app::snapshot::build_mixer_snapshot(&app).channels[0]
+            .uuid
+            .clone();
         app.add_solid_color_deck(&ch, [1.0, 0.0, 0.0, 1.0]).unwrap();
         app.set_crossfader(0.6);
         app.save_workspace().expect("save workspace");
@@ -1043,7 +1047,7 @@ mod tests {
             return;
         };
         let _ = app2.load_workspace();
-        let snap = app2.mixer_snapshot();
+        let snap = crate::app::snapshot::build_mixer_snapshot(&app2);
         assert!(
             !snap.channels[0].decks.is_empty(),
             "deck should survive roundtrip"
@@ -1057,8 +1061,8 @@ mod tests {
         let Some(mut app) = headless_app_in(tmp.path()) else {
             return;
         };
-        let _uuid = app.add_surface(
-            "Test Surface",
+        let _uuid = app.output.surface_manager.add_surface(
+            "Test Surface".to_string(),
             crate::renderer::context::OutputSource::Master,
         );
         app.save_workspace().expect("save workspace");
@@ -1067,7 +1071,7 @@ mod tests {
             return;
         };
         let _ = app2.load_workspace();
-        let surfaces = app2.surface_snapshot();
+        let surfaces = app2.build_engine_state().outputs.surfaces;
         assert!(
             surfaces.iter().any(|s| s.name == "Test Surface"),
             "surface should survive roundtrip"
@@ -1130,7 +1134,7 @@ mod tests {
         let result = app.load_workspace();
         assert!(!result.is_ok(), "corrupt scene.json must be a load failure");
         assert!(result.error_message().expect("error").contains("scene"));
-        let snap = app.mixer_snapshot();
+        let snap = crate::app::snapshot::build_mixer_snapshot(&app);
         assert_eq!(snap.channels.len(), 2);
         assert!(
             app.session.notifications.visible().iter().any(|n| n.level
@@ -1152,7 +1156,7 @@ mod tests {
         };
         let _ = app.load_workspace();
         // Should skip scene loading gracefully
-        let snap = app.mixer_snapshot();
+        let snap = crate::app::snapshot::build_mixer_snapshot(&app);
         assert_eq!(snap.channels.len(), 2);
     }
 
@@ -1307,7 +1311,7 @@ mod tests {
         };
         let warnings = app.apply_scene_diff(&scene, 1920, 1080);
         assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
-        let snap = app.mixer_snapshot();
+        let snap = crate::app::snapshot::build_mixer_snapshot(&app);
         assert!(
             (snap.crossfader - 0.42).abs() < 1e-4,
             "crossfader should be applied via diff"
@@ -1337,7 +1341,7 @@ mod tests {
         let Some(mut app) = headless_app_in(tmp.path()) else {
             return;
         };
-        let Some(device) = app.audio_manager.devices().first().cloned() else {
+        let Some(device) = app.audio.manager.devices().first().cloned() else {
             return;
         };
         app.input
@@ -1370,7 +1374,7 @@ mod tests {
         let Some(mut app) = headless_app_in(tmp.path()) else {
             return;
         };
-        let Some(device) = app.audio_manager.devices().last().cloned() else {
+        let Some(device) = app.audio.manager.devices().last().cloned() else {
             return;
         };
         // Written by a previous load-in, when nobody recorded an id at all.

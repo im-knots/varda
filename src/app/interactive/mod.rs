@@ -39,7 +39,7 @@ impl super::VardaApp {
     /// Open (or re-target) the interactive window for the HTML deck identified by
     /// `deck_uuid`. Window creation is deferred to the render loop.
     pub(crate) fn cmd_open_html_interactive(&mut self, deck_uuid: &str) -> CommandResult {
-        let (channel_idx, deck_idx) = match self.resolve_deck(deck_uuid) {
+        let (channel_idx, deck_idx) = match self.mixer.resolve_deck(deck_uuid) {
             Ok(loc) => loc,
             Err(e) => return e.into(),
         };
@@ -58,7 +58,8 @@ impl super::VardaApp {
                     return CommandResult::Ok;
                 }
                 let (width, height) = self
-                    .external_io
+                    .sources
+                    .io
                     .html_manager
                     .instance_dimensions(html_idx)
                     .unwrap_or((1920, 1080));
@@ -105,7 +106,8 @@ impl super::VardaApp {
         if self.interactive.pending_close {
             self.interactive.pending_close = false;
             if let Some(win) = self.interactive.window.take() {
-                self.external_io
+                self.sources
+                    .io
                     .html_manager
                     .send_input(win.target.html_idx, HtmlInputEvent::Focus(false));
                 win.destroy();
@@ -135,10 +137,11 @@ impl super::VardaApp {
             target.width,
             target.height,
         );
-        match window::InteractiveWindow::new(&self.context, window_static, target) {
+        match window::InteractiveWindow::new(&self.render.context, window_static, target) {
             Ok(win) => {
                 window_static.set_ime_allowed(true);
-                self.external_io
+                self.sources
+                    .io
                     .html_manager
                     .send_input(html_idx, HtmlInputEvent::Focus(true));
                 log::info!(
@@ -186,7 +189,7 @@ impl super::VardaApp {
             .unwrap()
             .process_event(event);
         for ev in events {
-            self.external_io.html_manager.send_input(html_idx, ev);
+            self.sources.io.html_manager.send_input(html_idx, ev);
         }
         true
     }
@@ -196,11 +199,12 @@ impl super::VardaApp {
     pub(crate) fn render_interactive(&self) {
         if let Some(win) = &self.interactive.window
             && let Some(view) = self
-                .external_io
+                .sources
+                .io
                 .html_manager
                 .texture_view(win.target.html_idx)
         {
-            win.render(&self.context, view);
+            win.render(&self.render.context, view);
         }
     }
 }

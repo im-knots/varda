@@ -24,22 +24,22 @@ Varda is built with domain-driven design and clean architecture principles. Thin
 
 ```
 src/
-  engine/        # trait contracts and shared types (no implementation)
+  engine/        # contracts: EngineCommand, EngineState snapshots, engine::value types
   internal/      # domain modules (audio, camera, channel, deck, mixer, renderer, etc.)
-  app/           # application layer (VardaApp: wires domain modules together, implements engine traits)
+  app/           # application layer (VardaApp: owns the domain modules, dispatches commands, runs the frame)
   usecases/      # delivery layer (UI panels, action handlers, HTTP API routes)
   main.rs        # thin orchestrator: parse CLI, init logger, run UI
 ```
 
-The **engine layer** (`src/engine/`) defines trait contracts (`MixerCommands`, `MixerQueries`, `OutputCommands`, etc.) using only primitives and engine-defined types. No wgpu, egui, or framework types leak through.
+The **engine layer** (`src/engine/`) defines the contracts every consumer speaks: the `EngineCommand` vocabulary, the `EngineState` snapshots, and the plain value types in `engine::value`, using only primitives and engine-defined types. No wgpu, egui, or framework types leak through.
 
 The **internal layer** (`src/internal/`) contains domain modules that each own one concern: audio analysis, video decoding, ISF shader compilation, NDI FFI, SRT subprocess management, the modulation engine, etc. Each module is independently testable.
 
 The domain modules are ordered bottom to top, in tiers: foundations (`ids`, `files`, `isf`, `audio`, …), time, GPU, signals, composition (`deck` → `channel` → `macros` → `mixer`), control (`param_router`, `midi`, `osc`, `keymap`), and saved files (`scene`, `persistence`). Production code may name only modules below it; `tests/domain_dependency_guard.rs` holds the order and fails on anything else. When a lower module needs something from a higher one, move the shared type down (often into `engine::value`) or have the higher module pass the behavior in. Don't route it through `EngineCommand`: commands are how consumers reach the engine, not how domains reach each other. See `/spec/domain-dependencies.md`.
 
-The **app layer** (`src/app/`, `VardaApp`) is the concrete implementation. It owns all subsystems and implements the engine traits. It can run headless without any window or UI.
+The **app layer** (`src/app/`, `VardaApp`) is the concrete engine. It owns every subsystem, grouped by what uses them (render target, audio, deck sources, outputs, inputs, show, session), dispatches every `EngineCommand`, and runs the frame through `begin_frame` and `render_frame`. An operation that touches one domain belongs on that domain (`Mixer`, `SurfaceManager`, `MacroBank`, ...); `app/` holds the work that spans several. It can run headless without any window or UI.
 
-The **usecases layer** (`src/usecases/`) is the only place that touches egui or HTTP routing, and owns all *main-window* presentation (blit pipeline, texture registration, `UIData` construction). It reads engine state snapshots and emits action structs. The UI never mutates engine state directly — commands flow through the app layer via the engine traits. Two documented exceptions touch `winit` (not egui) directly in `app/`: output windows (`app/outputs.rs`, `app/render.rs`) and the HTML interactive window (`app/interactive/`). `tests/egui_layer_boundary_guard.rs` rejects egui types in `src/internal/` and `src/app/`.
+The **usecases layer** (`src/usecases/`) is the only place that touches egui or HTTP routing, and owns all *main-window* presentation (blit pipeline, texture registration, `UIData` construction). It reads engine state snapshots and emits `EngineCommand`s. The UI never mutates engine state directly; commands flow through the app layer. Two documented exceptions touch `winit` (not egui) directly in `app/`: output windows (`app/outputs.rs`, `app/render.rs`) and the HTML interactive window (`app/interactive/`). `tests/egui_layer_boundary_guard.rs` rejects egui types in `src/internal/` and `src/app/`.
 
 This separation means the same engine can be driven from the GUI, the HTTP API, or a test harness without changing engine code. When adding a feature, think about whether it needs updates in *all* delivery paths (UI panel, HTTP route, MIDI/OSC mapping) or just one.
 

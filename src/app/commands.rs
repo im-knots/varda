@@ -22,7 +22,9 @@ fn modulation_target(target: &str) -> Result<String, CommandResult> {
 /// the caller's view of the world is stale, which is distinct from a malformed
 /// request. See [`/spec/api-addressing.md`].
 fn classify(err: &anyhow::Error) -> ErrorCode {
-    if err.downcast_ref::<UnknownEntity>().is_some() {
+    if err.downcast_ref::<UnknownEntity>().is_some()
+        || err.downcast_ref::<crate::mixer::NoSuchStep>().is_some()
+    {
         ErrorCode::NotFound
     } else {
         ErrorCode::InvalidInput
@@ -30,13 +32,21 @@ fn classify(err: &anyhow::Error) -> ErrorCode {
 }
 
 /// Map a unit-returning engine call onto the wire result.
-fn wire(result: anyhow::Result<()>) -> CommandResult {
-    match result {
+fn wire<E: Into<anyhow::Error>>(result: Result<(), E>) -> CommandResult {
+    match result.map_err(Into::into) {
         Ok(()) => CommandResult::Ok,
         Err(e) => CommandResult::Err {
             code: classify(&e),
             message: e.to_string(),
         },
+    }
+}
+
+/// Map an arrangement edit onto the wire result.
+fn arranged(result: Result<(), crate::mixer::ArrangementError>) -> CommandResult {
+    match result {
+        Ok(()) => CommandResult::Ok,
+        Err(e) => e.into(),
     }
 }
 
@@ -139,20 +149,31 @@ impl VardaApp {
 
     /// True if any command in the batch is undoable. Used by the windowed
     /// runner to make one snapshot decision over the GUI's command stream,
-    /// sharing the single compiler-checked [`command_is_undoable`] predicate
-    /// with the bus consumers.
+    /// sharing the single [`command_is_undoable`] predicate with the bus
+    /// consumers.
     // Method form is the engine-facing API used by `usecases/ui/runner.rs`.
     #[allow(clippy::unused_self)]
     pub(crate) fn batch_has_undoable(&self, cmds: &[EngineCommand]) -> bool {
-        cmds.iter().any(command_is_undoable)
+        cmds.iter().any(super::classify::command_is_undoable)
     }
 
     /// Execute a single command and return the result.
+    ///
+    /// A command that writes a parameter as a live gesture is noted here,
+    /// once, after it succeeds: the recorder captures it and the arrangement
+    /// hands that parameter back to the performer.
     pub(crate) fn execute_command(&mut self, cmd: EngineCommand) -> CommandResult {
-        use crate::engine::traits::{
-            AnalyzerCommands, AudioCommands, DetectCommands, MacroCommands, MixerCommands,
-            ModulationCommands, OutputCommands, SurfaceCommands,
-        };
+        let live = self.live_write(&cmd);
+        let result = self.dispatch_command(cmd);
+        if let Some((key, value)) = live
+            && !matches!(result, CommandResult::Err { .. })
+        {
+            self.note_live_param_write(&key, value);
+        }
+        result
+    }
+
+    fn dispatch_command(&mut self, cmd: EngineCommand) -> CommandResult {
         use crate::modulation::ModulationSource;
         match cmd {
             // ── Mixer ────────────────────────────────────────
@@ -161,7 +182,8 @@ impl VardaApp {
                 CommandResult::Ok
             }
             EngineCommand::SetTonemapMode(mode) => {
-                self.set_tonemap_mode(mode);
+                self.mixer
+                    .set_tonemap_mode(&self.render.context.queue, mode);
                 CommandResult::Ok
             }
             EngineCommand::LoadLut { filename } => match self.load_lut(&filename) {
@@ -183,7 +205,7 @@ impl VardaApp {
                 CommandResult::Ok
             }
             EngineCommand::UnloadLut => {
-                self.unload_lut();
+                self.mixer.unload_lut();
                 CommandResult::Ok
             }
             EngineCommand::AutoCrossfade {
@@ -191,11 +213,11 @@ impl VardaApp {
                 duration_secs,
                 easing,
             } => {
-                self.start_auto_crossfade(target, duration_secs, easing);
+                self.mixer.start_crossfade(target, duration_secs, easing);
                 CommandResult::Ok
             }
             EngineCommand::BeatCrossfade { target, beats } => {
-                self.start_beat_crossfade(target, beats);
+                self.mixer.start_beat_crossfade(target, beats);
                 CommandResult::Ok
             }
             EngineCommand::AddDeck {
@@ -238,7 +260,7 @@ impl VardaApp {
                     exclude_varda: exclude_varda.unwrap_or_else(|| target.is_display()),
                     scale_to: None,
                 };
-                wire_id(self.add_screen_capture_deck(&channel_uuid, &target, options))
+                wire_id(self.add_screen_capture_deck(&channel_uuid, &target, &options))
             }
             EngineCommand::AddTapDeck {
                 channel_uuid,
@@ -251,35 +273,28 @@ impl VardaApp {
             EngineCommand::MoveDeck {
                 deck_uuid,
                 dst_channel_uuid,
-            } => wire(self.move_deck(&deck_uuid, &dst_channel_uuid)),
+            } => wire(self.mixer.move_deck(&deck_uuid, &dst_channel_uuid)),
             EngineCommand::ReorderDeck {
                 channel_uuid,
                 from_idx,
                 to_idx,
-            } => wire(self.reorder_deck(&channel_uuid, from_idx, to_idx)),
+            } => wire(self.mixer.reorder_deck(&channel_uuid, from_idx, to_idx)),
             EngineCommand::SetDeckOpacity { deck_uuid, opacity } => {
-                let result = wire(self.set_deck_opacity(&deck_uuid, opacity));
-                // Grabbing a deck's fader takes that lane back from the show,
-                // immediately and without confirmation.
-                self.note_live_param_write(
-                    &crate::arrangement::opacity_param_key(&deck_uuid),
-                    opacity,
-                );
-                result
+                wire(self.mixer.set_deck_opacity(&deck_uuid, opacity))
             }
             EngineCommand::SetDeckBlendMode { deck_uuid, mode } => {
-                wire(self.set_deck_blend_mode(&deck_uuid, mode))
+                wire(self.mixer.set_deck_blend_mode(&deck_uuid, mode))
             }
             EngineCommand::SetDeckSolo { deck_uuid, solo } => {
-                wire(self.set_deck_solo(&deck_uuid, solo))
+                wire(self.mixer.set_deck_solo(&deck_uuid, solo))
             }
             EngineCommand::SetDeckMute { deck_uuid, mute } => {
-                wire(self.set_deck_mute(&deck_uuid, mute))
+                wire(self.mixer.set_deck_mute(&deck_uuid, mute))
             }
             EngineCommand::SetDeckRenderFps {
                 deck_uuid,
                 render_fps,
-            } => match self.resolve_deck(&deck_uuid) {
+            } => match self.mixer.resolve_deck(&deck_uuid) {
                 Ok((ch, dk)) => {
                     self.mixer.channels_mut()[ch].decks[dk].render_fps = render_fps;
                     CommandResult::Ok
@@ -287,37 +302,18 @@ impl VardaApp {
                 Err(e) => not_found(&e),
             },
             EngineCommand::SetDeckScalingMode { deck_uuid, mode } => {
-                let result = wire(self.set_deck_scaling_mode(&deck_uuid, mode));
-                // Scaling belongs to any deck with a source texture, not just a
-                // video one, but it is modulatable on the same terms.
-                if matches!(result, CommandResult::Ok) {
-                    self.note_live_video_write(
-                        &deck_uuid,
-                        crate::engine::value::param::DeckTarget::ScalingMode,
-                        mode.to_value(),
-                    );
-                }
-                result
+                wire(self.mixer.set_deck_scaling_mode(&deck_uuid, mode))
             }
             EngineCommand::SetDeckTransparent {
                 deck_uuid,
                 transparent,
-            } => wire(self.set_deck_transparent(&deck_uuid, transparent)),
+            } => wire(self.mixer.set_deck_transparent(&deck_uuid, transparent)),
             EngineCommand::SetChannelOpacity {
                 channel_uuid,
                 opacity,
-            } => {
-                let result = wire(self.set_channel_opacity(&channel_uuid, opacity));
-                // A hand on the channel fader takes it back from any curve on
-                // it, the same way a deck's does.
-                self.note_live_param_write(
-                    &crate::arrangement::channel_opacity_param_key(&channel_uuid),
-                    opacity,
-                );
-                result
-            }
+            } => wire(self.mixer.set_channel_opacity(&channel_uuid, opacity)),
             EngineCommand::SetChannelBlendMode { channel_uuid, mode } => {
-                wire(self.set_channel_blend_mode(&channel_uuid, mode))
+                wire(self.mixer.set_channel_blend_mode(&channel_uuid, mode))
             }
             EngineCommand::AddChannel => wire_id(self.add_channel()),
             EngineCommand::RemoveChannel { channel_uuid } => {
@@ -326,14 +322,16 @@ impl VardaApp {
             EngineCommand::AddEffect {
                 target,
                 shader_name,
-            } => wire_id(self.add_effect(target, &shader_name)),
+            } => wire_id(self.add_effect(&target, &shader_name)),
             EngineCommand::RemoveEffect { effect_uuid } => wire(self.remove_effect(&effect_uuid)),
-            EngineCommand::ToggleEffect { effect_uuid } => wire(self.toggle_effect(&effect_uuid)),
+            EngineCommand::ToggleEffect { effect_uuid } => {
+                wire(self.mixer.toggle_effect(&effect_uuid))
+            }
             EngineCommand::MoveEffect {
                 target,
                 from_idx,
                 to_idx,
-            } => wire(self.move_effect(target, from_idx, to_idx)),
+            } => wire(self.mixer.move_effect(&target, from_idx, to_idx)),
 
             // ── Clipboard ────────────────────────────────────
             EngineCommand::Copy {
@@ -370,7 +368,12 @@ impl VardaApp {
 
             // ── Audio ────────────────────────────────────────
             EngineCommand::OpenAudioSource { source_id } => {
-                match self.open_audio_source(source_id) {
+                match self
+                    .audio
+                    .manager
+                    .open_source(source_id)
+                    .map_err(|e| anyhow::anyhow!("Failed to open audio source: {e}"))
+                {
                     Ok(()) => CommandResult::Ok,
                     Err(e) => CommandResult::Err {
                         code: ErrorCode::InvalidInput,
@@ -379,11 +382,11 @@ impl VardaApp {
                 }
             }
             EngineCommand::CloseAudioSource { source_id } => {
-                self.close_audio_source(source_id);
+                self.audio.manager.close_source(source_id);
                 CommandResult::Ok
             }
-            EngineCommand::ScanAudioDevices => {
-                self.scan_audio_devices();
+            EngineCommand::ScanAudioDevices | EngineCommand::RescanAudio => {
+                self.audio.manager.scan_devices();
                 CommandResult::Ok
             }
 
@@ -392,13 +395,17 @@ impl VardaApp {
                 waveform,
                 frequency,
             } => {
-                self.add_lfo(waveform, frequency);
+                self.mixer
+                    .modulation_mut()
+                    .add_source(ModulationSource::lfo(waveform, frequency));
                 CommandResult::Ok
             }
             EngineCommand::AddAudioBand { preset, source_id } => {
                 // Capture is reconciled per-frame from modulator demand
                 // (see /spec/audio-capture-lifecycle.md); adding the band is enough.
-                self.add_audio_band(preset, source_id);
+                self.mixer
+                    .modulation_mut()
+                    .add_source(ModulationSource::audio_from_preset(preset, source_id));
                 CommandResult::Ok
             }
             EngineCommand::AddAdsr {
@@ -407,11 +414,15 @@ impl VardaApp {
                 sustain,
                 release,
             } => {
-                self.add_adsr(attack, decay, sustain, release);
+                self.mixer
+                    .modulation_mut()
+                    .add_source(ModulationSource::adsr(attack, decay, sustain, release));
                 CommandResult::Ok
             }
             EngineCommand::AddStepSequencer { num_steps, rate } => {
-                self.add_step_sequencer(num_steps, rate);
+                self.mixer
+                    .modulation_mut()
+                    .add_source(ModulationSource::step_sequencer(num_steps, rate));
                 CommandResult::Ok
             }
             EngineCommand::AddAutomationLane { target, timebase } => {
@@ -422,11 +433,18 @@ impl VardaApp {
                 // Returns the UUID because the caller needs it to reveal the
                 // new lane and to push breakpoints into it.
                 CommandResult::OkWithId {
-                    uuid: self.add_automation_lane(&target, timebase),
+                    uuid: self
+                        .mixer
+                        .modulation_mut()
+                        .add_automation_lane(&target, timebase),
                 }
             }
             EngineCommand::SetEnvelopeBreakpoints { uuid, breakpoints } => {
-                if self.set_envelope_breakpoints(&uuid, breakpoints) {
+                if self
+                    .mixer
+                    .modulation_mut()
+                    .set_envelope_breakpoints(&uuid, breakpoints)
+                {
                     CommandResult::Ok
                 } else {
                     CommandResult::Err {
@@ -436,7 +454,7 @@ impl VardaApp {
                 }
             }
             EngineCommand::RemoveModulationSource { uuid } => {
-                self.remove_modulation_source(&uuid);
+                self.mixer.modulation_mut().remove_source(&uuid);
                 CommandResult::Ok
             }
             EngineCommand::AssignModulation {
@@ -445,14 +463,16 @@ impl VardaApp {
                 amount,
             } => match modulation_target(&target) {
                 Ok(target) => {
-                    self.assign_modulation(&target, &source_id, amount);
+                    self.mixer
+                        .modulation_mut()
+                        .assign(&target, &source_id, amount, None);
                     CommandResult::Ok
                 }
                 Err(e) => e,
             },
             EngineCommand::ClearModulation { target } => match modulation_target(&target) {
                 Ok(target) => {
-                    self.clear_modulation(&target);
+                    self.mixer.modulation_mut().clear_assignments(&target);
                     CommandResult::Ok
                 }
                 Err(e) => e,
@@ -460,7 +480,9 @@ impl VardaApp {
             EngineCommand::ClearModulationSource { target, source_id } => {
                 match modulation_target(&target) {
                     Ok(target) => {
-                        self.clear_modulation_source(&target, &source_id);
+                        self.mixer
+                            .modulation_mut()
+                            .clear_assignment_source(&target, &source_id);
                         CommandResult::Ok
                     }
                     Err(e) => e,
@@ -469,25 +491,37 @@ impl VardaApp {
 
             // ── Output ───────────────────────────────────────
             EngineCommand::CreateOutput => {
-                self.request_create_output();
+                self.output.request_create_output();
                 CommandResult::Ok
             }
-            EngineCommand::CloseOutput { output_uuid } => wire(self.close_output(&output_uuid)),
+            EngineCommand::CloseOutput { output_uuid } => {
+                match self.output.close_output(&output_uuid) {
+                    Ok(passthrough) => {
+                        if let Some(pass) = passthrough {
+                            self.audio
+                                .manager
+                                .unsubscribe_pcm(pass.source_id, pass.token);
+                        }
+                        CommandResult::Ok
+                    }
+                    Err(e) => wire(Err::<(), _>(e)),
+                }
+            }
             EngineCommand::SetOutputDisplay {
                 output_uuid,
                 monitor_name,
-            } => wire(self.set_output_display(&output_uuid, &monitor_name)),
+            } => wire(self.output.set_output_display(&output_uuid, &monitor_name)),
             EngineCommand::SetOutputTarget {
                 output_uuid,
                 target,
-            } => match self.resolve_output(&output_uuid) {
+            } => match self.output.resolve_output(&output_uuid) {
                 Ok(idx) => self.cmd_set_output_target(idx, target),
                 Err(e) => not_found(&e),
             },
 
             // ── Surfaces ────────────────────────────────────
             EngineCommand::AddSurface { name, source } => {
-                self.add_surface(&name, source);
+                self.output.surface_manager.add_surface(name, source);
                 CommandResult::Ok
             }
             EngineCommand::AddPolygonSurface {
@@ -495,7 +529,9 @@ impl VardaApp {
                 vertices,
                 source,
             } => {
-                self.add_polygon_surface(&name, &vertices, source);
+                self.output
+                    .surface_manager
+                    .add_polygon_surface(name, vertices, source);
                 CommandResult::Ok
             }
             EngineCommand::AddCircleSurface {
@@ -506,110 +542,144 @@ impl VardaApp {
                 aspect_ratio,
                 source,
             } => {
-                self.add_circle_surface(&name, center, radius, sides, aspect_ratio, source);
+                let hint = crate::surface::CircleHint {
+                    center,
+                    radius,
+                    sides,
+                    aspect_ratio,
+                };
+                self.output
+                    .surface_manager
+                    .add_circle_surface(name, hint, source);
                 CommandResult::Ok
             }
-            EngineCommand::RemoveSurface { uuid } => self.cmd_remove_surface(&uuid),
-            EngineCommand::ReorderSurface { uuid, op } => self.cmd_reorder_surface(&uuid, op),
+            EngineCommand::RemoveSurface { uuid } => self.output.cmd_remove_surface(&uuid),
+            EngineCommand::ReorderSurface { uuid, op } => {
+                self.output.cmd_reorder_surface(&uuid, op)
+            }
             EngineCommand::SetSurfaceSource { uuid, source } => {
-                self.set_surface_source(&uuid, source);
-                self.recompute_auto_edge_blend();
+                self.output.surface_manager.set_source(&uuid, source);
+                self.output.recompute_auto_edge_blend();
                 CommandResult::Ok
             }
             EngineCommand::SetSurfaceOutputType { uuid, output_type } => {
-                self.set_surface_output_type(&uuid, output_type);
+                self.output
+                    .surface_manager
+                    .set_output_type(&uuid, output_type);
                 CommandResult::Ok
             }
             EngineCommand::SetSurfaceContentMapping { uuid, mapping } => {
-                self.set_surface_content_mapping(&uuid, mapping);
-                self.recompute_auto_edge_blend();
+                self.output
+                    .surface_manager
+                    .set_content_mapping(&uuid, mapping);
+                self.output.recompute_auto_edge_blend();
                 CommandResult::Ok
             }
             EngineCommand::RenameSurface { uuid, name } => {
-                self.rename_surface(&uuid, &name);
+                self.output.surface_manager.rename(&uuid, &name);
                 CommandResult::Ok
             }
-            EngineCommand::UpdateSurfaceVertices { uuid, vertices } => {
-                self.cmd_update_surface_vertices(&uuid, vertices)
-            }
-            EngineCommand::DuplicateSurface { uuid } => self.cmd_duplicate_surface(&uuid),
-            EngineCommand::FlipSurfaceHorizontal { uuid } => {
-                self.cmd_flip_surface_horizontal(&uuid)
-            }
-            EngineCommand::FlipSurfaceVertical { uuid } => self.cmd_flip_surface_vertical(&uuid),
+            EngineCommand::UpdateSurfaceVertices { uuid, vertices } => self
+                .output
+                .reshape_surface(&uuid, |s| s.vertices = vertices),
+            EngineCommand::DuplicateSurface { uuid } => self.output.cmd_duplicate_surface(&uuid),
+            EngineCommand::FlipSurfaceHorizontal { uuid } => self
+                .output
+                .edit_surface(&uuid, crate::surface::Surface::flip_horizontal),
+            EngineCommand::FlipSurfaceVertical { uuid } => self
+                .output
+                .edit_surface(&uuid, crate::surface::Surface::flip_vertical),
             EngineCommand::InsertSurfaceVertex {
                 uuid,
                 after_vert_idx,
                 position,
-            } => self.cmd_insert_surface_vertex(&uuid, after_vert_idx, position),
-            EngineCommand::SetCircleRadius { uuid, radius } => {
-                self.cmd_set_circle_radius(&uuid, radius)
+            } => self
+                .output
+                .edit_surface(&uuid, |s| s.insert_vertex(after_vert_idx, position)),
+            EngineCommand::SetCircleRadius { uuid, radius } => self
+                .output
+                .edit_surface(&uuid, |s| s.set_circle_radius(radius)),
+            EngineCommand::SetCircleSides { uuid, sides } => self
+                .output
+                .edit_surface(&uuid, |s| s.set_circle_sides(sides)),
+            EngineCommand::ConvertSurfaceToPolygon { uuid } => self
+                .output
+                .edit_surface(&uuid, crate::surface::Surface::convert_to_polygon),
+            EngineCommand::CombineSurfaces { uuids } => self.output.cmd_combine_surfaces(&uuids),
+            EngineCommand::MoveSurface { uuid, dx, dy } => {
+                self.output.reshape_surface(&uuid, |s| s.move_by(dx, dy))
             }
-            EngineCommand::SetCircleSides { uuid, sides } => {
-                self.cmd_set_circle_sides(&uuid, sides)
-            }
-            EngineCommand::ConvertSurfaceToPolygon { uuid } => {
-                self.cmd_convert_surface_to_polygon(&uuid)
-            }
-            EngineCommand::CombineSurfaces { uuids } => self.cmd_combine_surfaces(&uuids),
-            EngineCommand::MoveSurface { uuid, dx, dy } => self.cmd_move_surface(&uuid, dx, dy),
-            EngineCommand::RotateSurface { uuid, angle, pivot } => {
-                self.cmd_rotate_surface(&uuid, angle, pivot)
-            }
+            EngineCommand::RotateSurface { uuid, angle, pivot } => self
+                .output
+                .reshape_surface(&uuid, |s| s.rotate(angle, pivot)),
             EngineCommand::ScaleSurface {
                 uuid,
                 sx,
                 sy,
                 pivot,
-            } => self.cmd_scale_surface(&uuid, sx, sy, pivot),
+            } => self
+                .output
+                .reshape_surface(&uuid, |s| s.scale(sx, sy, pivot)),
             EngineCommand::UpdateSurfaceContourVertices {
                 uuid,
                 contour,
                 vertices,
-            } => self.cmd_update_surface_contour_vertices(&uuid, contour, vertices),
+            } => self
+                .output
+                .edit_surface(&uuid, |s| s.set_contour_vertices(contour, vertices)),
             EngineCommand::ConvertSurfaceEdge {
                 uuid,
                 edge_idx,
                 to_cubic,
-            } => self.cmd_convert_surface_edge(&uuid, edge_idx, to_cubic),
+            } => self
+                .output
+                .reshape_surface(&uuid, |s| s.convert_edge(edge_idx, to_cubic)),
             EngineCommand::MovePathAnchor {
                 uuid,
                 anchor_idx,
                 pos,
-            } => self.cmd_move_path_anchor(&uuid, anchor_idx, pos),
+            } => self
+                .output
+                .reshape_surface(&uuid, |s| s.move_path_anchor(anchor_idx, pos)),
             EngineCommand::MovePathHandle {
                 uuid,
                 segment_idx,
                 handle,
                 pos,
-            } => self.cmd_move_path_handle(&uuid, segment_idx, handle, pos),
-            EngineCommand::AddSurfaceHole { uuid, hole } => self.cmd_add_surface_hole(&uuid, hole),
+            } => self
+                .output
+                .reshape_surface(&uuid, |s| s.move_path_handle(segment_idx, handle, pos)),
+            EngineCommand::AddSurfaceHole { uuid, hole } => {
+                self.output.reshape_surface(&uuid, |s| s.add_hole(hole))
+            }
             EngineCommand::RemoveSurfaceHole { uuid, hole_index } => {
-                self.cmd_remove_surface_hole(&uuid, hole_index)
+                self.output.cmd_remove_surface_hole(&uuid, hole_index)
             }
             EngineCommand::PunchSurfaceHole { source_uuid } => {
-                self.cmd_punch_surface_hole(&source_uuid)
+                self.output.cmd_punch_surface_hole(&source_uuid)
             }
             EngineCommand::AssignSurfaceToOutput {
                 output_uuid,
                 surface_uuid,
             } => {
-                self.assign_surface_to_output(&output_uuid, &surface_uuid);
-                self.recompute_auto_edge_blend();
+                self.output
+                    .assign_surface_to_output(&output_uuid, &surface_uuid);
+                self.output.recompute_auto_edge_blend();
                 CommandResult::Ok
             }
             EngineCommand::UnassignSurfaceFromOutput {
                 output_uuid,
                 surface_uuid,
             } => {
-                self.unassign_surface_from_output(&output_uuid, &surface_uuid);
-                self.recompute_auto_edge_blend();
+                self.output
+                    .unassign_surface_from_output(&output_uuid, &surface_uuid);
+                self.output.recompute_auto_edge_blend();
                 CommandResult::Ok
             }
 
             // ── Surface Auto-Detection ────────────────────────
             EngineCommand::DetectFromImage { image_data, params } => {
-                match self.detect_from_image(&image_data, &params) {
+                match crate::surface::import::detect_from_image(&image_data, &params) {
                     Ok(result) => CommandResult::OkWithData {
                         data: serde_json::to_value(&result).unwrap_or_default(),
                     },
@@ -619,26 +689,30 @@ impl VardaApp {
                     },
                 }
             }
-            EngineCommand::DetectFromSvg { svg_data } => match self.detect_from_svg(&svg_data) {
-                Ok(result) => CommandResult::OkWithData {
-                    data: serde_json::to_value(&result).unwrap_or_default(),
-                },
-                Err(e) => CommandResult::Err {
-                    code: ErrorCode::InvalidInput,
-                    message: e.to_string(),
-                },
-            },
-            EngineCommand::DetectFromDxf { dxf_data } => match self.detect_from_dxf(&dxf_data) {
-                Ok(result) => CommandResult::OkWithData {
-                    data: serde_json::to_value(&result).unwrap_or_default(),
-                },
-                Err(e) => CommandResult::Err {
-                    code: ErrorCode::InvalidInput,
-                    message: e.to_string(),
-                },
-            },
+            EngineCommand::DetectFromSvg { svg_data } => {
+                match crate::surface::import::detect_from_svg(&svg_data) {
+                    Ok(result) => CommandResult::OkWithData {
+                        data: serde_json::to_value(&result).unwrap_or_default(),
+                    },
+                    Err(e) => CommandResult::Err {
+                        code: ErrorCode::InvalidInput,
+                        message: e.to_string(),
+                    },
+                }
+            }
+            EngineCommand::DetectFromDxf { dxf_data } => {
+                match crate::surface::import::detect_from_dxf(&dxf_data) {
+                    Ok(result) => CommandResult::OkWithData {
+                        data: serde_json::to_value(&result).unwrap_or_default(),
+                    },
+                    Err(e) => CommandResult::Err {
+                        code: ErrorCode::InvalidInput,
+                        message: e.to_string(),
+                    },
+                }
+            }
             EngineCommand::ConfirmDetectedContours { contours } => {
-                let uuids = self.confirm_detected_contours(&contours);
+                let uuids = self.output.surface_manager.add_detected(&contours);
                 CommandResult::OkWithData {
                     data: serde_json::json!({ "surface_uuids": uuids }),
                 }
@@ -647,7 +721,7 @@ impl VardaApp {
                 let params = crate::surface::detect::DetectionParams::default();
                 match crate::surface::import::detect_from_file(&path, &params) {
                     Ok(result) => {
-                        let uuids = self.confirm_detected_contours(&result.contours);
+                        let uuids = self.output.surface_manager.add_detected(&result.contours);
                         log::info!("Imported {} surfaces from {}", uuids.len(), path.display());
                         CommandResult::OkWithData {
                             data: serde_json::json!({ "surface_uuids": uuids }),
@@ -669,7 +743,7 @@ impl VardaApp {
             EngineCommand::DetectFromCamera { camera_id, params } => {
                 match self.detect_from_camera(camera_id, &params) {
                     Ok(result) => {
-                        let uuids = self.confirm_detected_contours(&result.contours);
+                        let uuids = self.output.surface_manager.add_detected(&result.contours);
                         CommandResult::OkWithData {
                             data: serde_json::json!({ "surface_uuids": uuids, "contours_found": result.contours.len() }),
                         }
@@ -682,65 +756,18 @@ impl VardaApp {
             }
 
             // ── Video Playback ────────────────────────────────
-            // The four playback commands below take their lane back from the
-            // show, the same way a hand on a deck fader does. Each records the
-            // normalized value a curve would need to hold to reproduce the
-            // gesture, because that is the space the override ramp and the
-            // recorder both work in.
             EngineCommand::VideoTogglePlay { deck_uuid } => {
-                // Read before the toggle: it sends a command to the decode
-                // thread, so the snapshot still reports the old state after.
-                let was_playing = self
-                    .video_playback_snapshot(&deck_uuid)
-                    .is_some_and(|s| s.playing);
-                let result = self.exec_on_deck(&deck_uuid, |d| d.video_toggle_play());
-                if matches!(result, CommandResult::Ok) {
-                    self.note_live_video_write(
-                        &deck_uuid,
-                        crate::engine::value::param::DeckTarget::VideoPlay,
-                        f32::from(u8::from(!was_playing)),
-                    );
-                }
-                result
+                self.exec_on_deck(&deck_uuid, |d| d.video_toggle_play())
             }
             EngineCommand::VideoSeek {
                 deck_uuid,
                 position_secs,
-            } => {
-                let duration = self
-                    .video_playback_snapshot(&deck_uuid)
-                    .map_or(0.0, |s| s.duration);
-                let result = self.exec_on_deck(&deck_uuid, |d| d.video_seek(position_secs));
-                if matches!(result, CommandResult::Ok) {
-                    self.note_live_video_write(
-                        &deck_uuid,
-                        crate::engine::value::param::DeckTarget::VideoPosition,
-                        crate::param_router::duration_to_norm(position_secs, duration),
-                    );
-                }
-                result
-            }
+            } => self.exec_on_deck(&deck_uuid, |d| d.video_seek(position_secs)),
             EngineCommand::VideoSetSpeed { deck_uuid, speed } => {
-                let result = self.exec_on_deck(&deck_uuid, |d| d.video_set_speed(speed));
-                if matches!(result, CommandResult::Ok) {
-                    self.note_live_video_write(
-                        &deck_uuid,
-                        crate::engine::value::param::DeckTarget::VideoSpeed,
-                        crate::param_router::speed_to_norm(speed),
-                    );
-                }
-                result
+                self.exec_on_deck(&deck_uuid, |d| d.video_set_speed(speed))
             }
             EngineCommand::VideoSetLoopMode { deck_uuid, mode } => {
-                let result = self.exec_on_deck(&deck_uuid, |d| d.video_set_loop_mode(mode));
-                if matches!(result, CommandResult::Ok) {
-                    self.note_live_video_write(
-                        &deck_uuid,
-                        crate::engine::value::param::DeckTarget::VideoLoopMode,
-                        mode.to_value(),
-                    );
-                }
-                result
+                self.exec_on_deck(&deck_uuid, |d| d.video_set_loop_mode(mode))
             }
             EngineCommand::VideoSetInPoint { deck_uuid, secs } => {
                 self.exec_on_deck(&deck_uuid, |d| d.video_set_in_point(secs))
@@ -791,12 +818,13 @@ impl VardaApp {
                 deck_uuid,
                 shader_name,
             } => {
-                let (ch_idx, deck_idx) = match self.resolve_deck(&deck_uuid) {
+                let (ch_idx, deck_idx) = match self.mixer.resolve_deck(&deck_uuid) {
                     Ok(loc) => loc,
                     Err(e) => return not_found(&e),
                 };
                 let shader = shader_name.as_ref().and_then(|name| {
-                    self.registry
+                    self.sources
+                        .registry
                         .transitions()
                         .iter()
                         .find(|s| s.name() == *name)
@@ -809,7 +837,7 @@ impl VardaApp {
                     .clone_from(&shader_name);
                 match shader {
                     Some(shader) => {
-                        let _ = slot.set_transition_shader(&self.context, shader);
+                        let _ = slot.set_transition_shader(&self.render.context, shader);
                     }
                     None => slot.transition_effect = None,
                 }
@@ -899,107 +927,152 @@ impl VardaApp {
             }
 
             // ── Transition Sequences ──────────────────────────
-            EngineCommand::CreateSequence => self.cmd_create_sequence(),
+            EngineCommand::CreateSequence => CommandResult::OkWithId {
+                uuid: self.mixer.create_sequence(),
+            },
             EngineCommand::DeleteSequence { sequence_uuid } => {
-                self.cmd_delete_sequence(&sequence_uuid)
+                wire(self.mixer.delete_sequence(&sequence_uuid))
             }
             EngineCommand::PlaySequence { sequence_uuid } => self.cmd_play_sequence(&sequence_uuid),
-            EngineCommand::StopSequence { sequence_uuid } => self.cmd_stop_sequence(&sequence_uuid),
+            EngineCommand::StopSequence { sequence_uuid } => {
+                wire(self.mixer.stop_sequence(&sequence_uuid))
+            }
             EngineCommand::ToggleSequence { sequence_uuid } => {
-                self.cmd_toggle_sequence(&sequence_uuid)
+                wire(self.mixer.toggle_sequence(&sequence_uuid))
             }
             EngineCommand::AddFadeStep {
                 sequence_uuid,
                 from_channel_uuid,
                 to_channel_uuid,
-            } => self.cmd_add_fade_step(&sequence_uuid, &from_channel_uuid, &to_channel_uuid),
-            EngineCommand::AddWaitStep { sequence_uuid } => self.cmd_add_wait_step(&sequence_uuid),
+            } => wire(self.mixer.add_fade_step(
+                &sequence_uuid,
+                &from_channel_uuid,
+                &to_channel_uuid,
+            )),
+            EngineCommand::AddWaitStep { sequence_uuid } => {
+                wire(self.mixer.add_wait_step(&sequence_uuid))
+            }
             EngineCommand::AddGoToStep {
                 sequence_uuid,
                 step_index,
-            } => self.cmd_add_goto_step(&sequence_uuid, step_index),
+            } => wire(self.mixer.add_goto_step(&sequence_uuid, step_index)),
             EngineCommand::RemoveStep {
                 sequence_uuid,
                 step_idx,
-            } => self.cmd_remove_step(&sequence_uuid, step_idx),
+            } => wire(self.mixer.remove_step(&sequence_uuid, step_idx)),
             EngineCommand::SetStepDuration {
                 sequence_uuid,
                 step_idx,
                 value,
                 unit,
-            } => self.cmd_set_step_duration(&sequence_uuid, step_idx, value, unit),
+            } => wire(
+                self.mixer
+                    .set_step_duration(&sequence_uuid, step_idx, value, unit),
+            ),
             EngineCommand::SetStepEasing {
                 sequence_uuid,
                 step_idx,
                 easing,
-            } => self.cmd_set_step_easing(&sequence_uuid, step_idx, &easing),
+            } => wire(
+                self.mixer
+                    .set_step_easing(&sequence_uuid, step_idx, &easing),
+            ),
             EngineCommand::SetStepTransitionShader {
                 sequence_uuid,
                 step_idx,
                 shader_name,
-            } => self.cmd_set_step_transition_shader(&sequence_uuid, step_idx, shader_name),
+            } => wire(
+                self.mixer
+                    .set_step_transition_shader(&sequence_uuid, step_idx, shader_name),
+            ),
             EngineCommand::MoveStep {
                 sequence_uuid,
                 from,
                 to,
-            } => self.cmd_move_step(&sequence_uuid, from, to),
+            } => wire(self.mixer.move_step(&sequence_uuid, from, to)),
             EngineCommand::SetStepDurationUnit {
                 sequence_uuid,
                 step_idx,
                 unit,
-            } => self.cmd_set_step_duration_unit(&sequence_uuid, step_idx, unit),
+            } => wire(
+                self.mixer
+                    .set_step_duration_unit(&sequence_uuid, step_idx, unit),
+            ),
             EngineCommand::ToggleStepDurationUnit {
                 sequence_uuid,
                 step_idx,
-            } => self.cmd_toggle_step_duration_unit(&sequence_uuid, step_idx),
+            } => wire(
+                self.mixer
+                    .toggle_step_duration_unit(&sequence_uuid, step_idx),
+            ),
             EngineCommand::SetStepDurationValue {
                 sequence_uuid,
                 step_idx,
                 value,
-            } => self.cmd_set_step_duration_value(&sequence_uuid, step_idx, value),
+            } => wire(
+                self.mixer
+                    .set_step_duration_value(&sequence_uuid, step_idx, value),
+            ),
             EngineCommand::SetStepFromCh {
                 sequence_uuid,
                 step_idx,
                 channel_uuid,
-            } => self.cmd_set_step_from_ch(&sequence_uuid, step_idx, channel_uuid),
+            } => wire(
+                self.mixer
+                    .set_step_from_channel(&sequence_uuid, step_idx, channel_uuid),
+            ),
             EngineCommand::SetStepToCh {
                 sequence_uuid,
                 step_idx,
                 channel_uuid,
-            } => self.cmd_set_step_to_ch(&sequence_uuid, step_idx, channel_uuid),
+            } => wire(
+                self.mixer
+                    .set_step_to_channel(&sequence_uuid, step_idx, channel_uuid),
+            ),
             EngineCommand::SetGoToTarget {
                 sequence_uuid,
                 step_idx,
                 target,
-            } => self.cmd_set_goto_target(&sequence_uuid, step_idx, target),
+            } => wire(self.mixer.set_goto_target(&sequence_uuid, step_idx, target)),
             EngineCommand::SetStepTargetAmount {
                 sequence_uuid,
                 step_idx,
                 amount,
-            } => self.cmd_set_step_target_amount(&sequence_uuid, step_idx, amount),
+            } => wire(
+                self.mixer
+                    .set_step_target_amount(&sequence_uuid, step_idx, amount),
+            ),
 
             // ── Stream Library ─────────────────────────────────
             EngineCommand::AddStreamLibraryEntry { url, mode } => {
-                self.cmd_add_stream_library_entry(url, mode)
+                self.sources.io.cmd_add_stream_library_entry(url, mode)
             }
             EngineCommand::RemoveStreamLibraryEntry { url } => {
-                self.cmd_remove_stream_library_entry(&url)
+                self.sources.io.cmd_remove_stream_library_entry(&url)
             }
-            EngineCommand::AddHlsLibraryEntry { url } => self.cmd_add_hls_library_entry(url),
-            EngineCommand::RemoveHlsLibraryEntry { url } => self.cmd_remove_hls_library_entry(&url),
-            EngineCommand::AddDashLibraryEntry { url } => self.cmd_add_dash_library_entry(url),
+            EngineCommand::AddHlsLibraryEntry { url } => {
+                self.sources.io.cmd_add_hls_library_entry(url)
+            }
+            EngineCommand::RemoveHlsLibraryEntry { url } => {
+                self.sources.io.cmd_remove_hls_library_entry(&url)
+            }
+            EngineCommand::AddDashLibraryEntry { url } => {
+                self.sources.io.cmd_add_dash_library_entry(url)
+            }
             EngineCommand::RemoveDashLibraryEntry { url } => {
-                self.cmd_remove_dash_library_entry(&url)
+                self.sources.io.cmd_remove_dash_library_entry(&url)
             }
             EngineCommand::AddRtmpLibraryEntry { url, mode } => {
-                self.cmd_add_rtmp_library_entry(url, mode)
+                self.sources.io.cmd_add_rtmp_library_entry(url, mode)
             }
             EngineCommand::RemoveRtmpLibraryEntry { url } => {
-                self.cmd_remove_rtmp_library_entry(&url)
+                self.sources.io.cmd_remove_rtmp_library_entry(&url)
             }
-            EngineCommand::AddHtmlLibraryEntry { url } => self.cmd_add_html_library_entry(url),
+            EngineCommand::AddHtmlLibraryEntry { url } => {
+                self.sources.io.cmd_add_html_library_entry(url)
+            }
             EngineCommand::RemoveHtmlLibraryEntry { url } => {
-                self.cmd_remove_html_library_entry(&url)
+                self.sources.io.cmd_remove_html_library_entry(&url)
             }
 
             // ── Output Management ─────────────────────────────────
@@ -1009,38 +1082,51 @@ impl VardaApp {
             EngineCommand::StartOutput { output_uuid } => self.cmd_start_output(&output_uuid),
             EngineCommand::StopOutput { output_uuid } => self.cmd_stop_output(&output_uuid),
             EngineCommand::SetCalibrationMode { output_uuid, mode } => {
-                self.cmd_set_calibration_mode(&output_uuid, mode)
+                self.output.cmd_set_calibration_mode(&output_uuid, mode)
             }
             EngineCommand::SetWarpCorner {
                 surface_uuid,
                 corner_idx,
                 position,
-            } => self.cmd_set_warp_corner(&surface_uuid, corner_idx, position),
-            EngineCommand::ResetWarp { surface_uuid } => self.cmd_reset_warp(&surface_uuid),
+            } => self
+                .output
+                .edit_surface(&surface_uuid, |s| s.set_warp_corner(corner_idx, position)),
+            EngineCommand::ResetWarp { surface_uuid } => self
+                .output
+                .edit_surface(&surface_uuid, crate::surface::Surface::reset_warp),
             EngineCommand::SetWarpSubdivisions {
                 surface_uuid,
                 cols,
                 rows,
-            } => self.cmd_set_warp_subdivisions(&surface_uuid, cols, rows),
+            } => self
+                .output
+                .edit_surface(&surface_uuid, |s| s.set_warp_subdivisions(cols, rows)),
             EngineCommand::SetWarpMeshPoint {
                 surface_uuid,
                 row,
                 col,
                 position,
-            } => self.cmd_set_warp_mesh_point(&surface_uuid, row, col, position),
+            } => self
+                .output
+                .edit_surface(&surface_uuid, |s| s.set_warp_mesh_point(row, col, position)),
             EngineCommand::SetWarpBound {
                 surface_uuid,
                 bound,
-            } => self.cmd_set_warp_bound(&surface_uuid, bound),
-            EngineCommand::ConvertWarpToBezier { surface_uuid } => {
-                self.cmd_convert_warp_to_bezier(&surface_uuid)
-            }
+            } => self
+                .output
+                .edit_surface(&surface_uuid, |s| s.set_warp_bound(bound)),
+            EngineCommand::ConvertWarpToBezier { surface_uuid } => self.output.edit_surface(
+                &surface_uuid,
+                crate::surface::Surface::convert_warp_to_bezier,
+            ),
             EngineCommand::MoveWarpAnchor {
                 surface_uuid,
                 row,
                 col,
                 position,
-            } => self.cmd_move_warp_anchor(&surface_uuid, row, col, position),
+            } => self.output.edit_surface(&surface_uuid, |s| {
+                s.set_warp_bezier_anchor(row, col, position);
+            }),
             EngineCommand::MoveWarpHandle {
                 surface_uuid,
                 horizontal,
@@ -1048,18 +1134,22 @@ impl VardaApp {
                 col,
                 which,
                 position,
-            } => self.cmd_move_warp_handle(&surface_uuid, horizontal, row, col, which, position),
+            } => self.output.edit_surface(&surface_uuid, |s| {
+                s.set_warp_bezier_handle(horizontal, row, col, which, position);
+            }),
             EngineCommand::SetBezierCageSubdivisions {
                 surface_uuid,
                 cols,
                 rows,
-            } => self.cmd_set_bezier_cage_subdivisions(&surface_uuid, cols, rows),
+            } => self.output.edit_surface(&surface_uuid, |s| {
+                s.set_bezier_cage_subdivisions(cols, rows);
+            }),
             EngineCommand::SetEdgeBlend {
                 output_uuid,
                 config,
-            } => self.cmd_set_edge_blend(&output_uuid, config),
+            } => self.output.cmd_set_edge_blend(&output_uuid, config),
             EngineCommand::SetEdgeBlendMode { output_uuid, mode } => {
-                self.cmd_set_edge_blend_mode(&output_uuid, mode)
+                self.output.cmd_set_edge_blend_mode(&output_uuid, mode)
             }
             EngineCommand::SetOutputRotation {
                 output_uuid,
@@ -1072,7 +1162,7 @@ impl VardaApp {
             EngineCommand::SetOutputTonemap {
                 output_uuid,
                 tonemap,
-            } => self.cmd_set_output_tonemap(&output_uuid, tonemap),
+            } => self.output.cmd_set_output_tonemap(&output_uuid, tonemap),
 
             // ── Modulation Updates ────────────────────────────────
             EngineCommand::UpdateLfoFrequency { uuid, frequency } => {
@@ -1082,27 +1172,29 @@ impl VardaApp {
                     }
                 })
             }
-            EngineCommand::TransportPlay => match self.transport.play() {
+            EngineCommand::TransportPlay => match self.show.transport.play() {
                 Ok(()) => CommandResult::Ok,
                 Err(e) => transport_rejected(e),
             },
             EngineCommand::TransportStop => {
-                self.transport.stop();
+                self.show.transport.stop();
                 // A second stop returns to zero, which is a move the cue walk
                 // did not make and must not keep stepping from.
-                self.forget_cue_walk();
+                self.show.cue_anchor = None;
                 CommandResult::Ok
             }
-            EngineCommand::TransportLocate { position } => match self.transport.locate(position) {
-                Ok(()) => {
-                    self.forget_cue_walk();
-                    CommandResult::Ok
+            EngineCommand::TransportLocate { position } => {
+                match self.show.transport.locate(position) {
+                    Ok(()) => {
+                        self.show.cue_anchor = None;
+                        CommandResult::Ok
+                    }
+                    Err(e) => transport_rejected(e),
                 }
-                Err(e) => transport_rejected(e),
-            },
+            }
             EngineCommand::SetTransportSource { source } => {
-                self.transport.set_source(source);
-                self.forget_cue_walk();
+                self.show.transport.set_source(source);
+                self.show.cue_anchor = None;
                 CommandResult::Ok
             }
             EngineCommand::SetTransportLoop { region } => {
@@ -1115,11 +1207,11 @@ impl VardaApp {
                     },
                     None => None,
                 };
-                self.transport.set_loop_region(checked);
+                self.show.transport.set_loop_region(checked);
                 CommandResult::Ok
             }
             EngineCommand::SetTimecodeRate { rate } => {
-                self.transport.set_timecode_rate(rate);
+                self.show.transport.set_timecode_rate(rate);
                 CommandResult::Ok
             }
             EngineCommand::SetTimecodePreference { preference } => {
@@ -1137,34 +1229,57 @@ impl VardaApp {
             EngineCommand::TransportPrevCue => self.cmd_locate_cue(false),
             EngineCommand::TransportNextCue => self.cmd_locate_cue(true),
             EngineCommand::TriggerCue { uuid } => self.cmd_trigger_cue(&uuid),
-            EngineCommand::AddLane { deck_uuid } => self.cmd_add_lane(&deck_uuid),
-            EngineCommand::RemoveLane { deck_uuid } => self.cmd_remove_lane(&deck_uuid),
+            EngineCommand::AddLane { deck_uuid } => arranged(self.mixer.add_lane(&deck_uuid)),
+            EngineCommand::RemoveLane { deck_uuid } => arranged(self.mixer.remove_lane(&deck_uuid)),
             EngineCommand::AddRegion { deck_uuid, region } => {
-                self.cmd_add_region(&deck_uuid, region)
+                match self.mixer.add_region(&deck_uuid, region) {
+                    Ok(index) => CommandResult::OkWithData {
+                        data: serde_json::json!({ "index": index }),
+                    },
+                    Err(e) => e.into(),
+                }
             }
             EngineCommand::UpdateRegion {
                 deck_uuid,
                 index,
                 region,
-            } => self.cmd_update_region(&deck_uuid, index, region),
+            } => arranged(self.mixer.update_region(&deck_uuid, index, region)),
             EngineCommand::RemoveRegion { deck_uuid, index } => {
-                self.cmd_remove_region(&deck_uuid, index)
+                arranged(self.mixer.remove_region(&deck_uuid, index))
             }
             EngineCommand::SetLaneCollapsed {
                 deck_uuid,
                 collapsed,
-            } => self.cmd_set_lane_collapsed(&deck_uuid, collapsed),
-            EngineCommand::SetIdleBehaviour { idle } => self.cmd_set_idle_behaviour(idle),
+            } => arranged(self.mixer.set_lane_collapsed(&deck_uuid, collapsed)),
+            EngineCommand::SetIdleBehaviour { idle } => {
+                arranged(self.mixer.set_idle_behaviour(idle))
+            }
             EngineCommand::RearmParam { param_key, seconds } => {
                 match modulation_target(&param_key) {
-                    Ok(param_key) => self.cmd_rearm_param(&param_key, seconds),
+                    Ok(param_key) => {
+                        self.mixer.modulation_mut().rearm_param(
+                            &param_key,
+                            seconds.unwrap_or(crate::arrangement::DEFAULT_REARM_SECONDS),
+                        );
+                        CommandResult::Ok
+                    }
                     Err(e) => e,
                 }
             }
-            EngineCommand::RearmAll { seconds } => self.cmd_rearm_all(seconds),
-            EngineCommand::AddCue { at, name } => self.cmd_add_cue(at, &name),
-            EngineCommand::UpdateCue { uuid, at, name } => self.cmd_update_cue(&uuid, at, name),
-            EngineCommand::RemoveCue { uuid } => self.cmd_remove_cue(&uuid),
+            EngineCommand::RearmAll { seconds } => {
+                self.mixer
+                    .modulation_mut()
+                    .rearm_all(seconds.unwrap_or(crate::arrangement::DEFAULT_REARM_SECONDS));
+                CommandResult::Ok
+            }
+            EngineCommand::AddCue { at, name } => match self.mixer.add_cue(at, &name) {
+                Ok(uuid) => CommandResult::OkWithId { uuid },
+                Err(e) => e.into(),
+            },
+            EngineCommand::UpdateCue { uuid, at, name } => {
+                arranged(self.mixer.update_cue(&uuid, at, name))
+            }
+            EngineCommand::RemoveCue { uuid } => arranged(self.mixer.remove_cue(&uuid)),
             EngineCommand::UpdateModulationTimebase { uuid, timebase } => {
                 if self.mixer.modulation_mut().set_timebase(&uuid, timebase) {
                     CommandResult::Ok
@@ -1396,19 +1511,19 @@ impl VardaApp {
 
             // ── Macros ───────────────────────────────────────────
             EngineCommand::AddMacro { kind } => {
-                let uuid = self.add_macro(kind);
+                let uuid = self.mixer.macros_mut().add_macro(kind);
                 CommandResult::OkWithId { uuid }
             }
             EngineCommand::RemoveMacro { uuid } => {
-                self.remove_macro(&uuid);
+                self.mixer.macros_mut().remove_macro(&uuid);
                 CommandResult::Ok
             }
             EngineCommand::RenameMacro { uuid, name } => {
-                self.rename_macro(&uuid, &name);
+                self.mixer.macros_mut().rename(&uuid, &name);
                 CommandResult::Ok
             }
             EngineCommand::SetMacroKind { uuid, kind } => {
-                self.set_macro_kind(&uuid, kind);
+                self.mixer.macros_mut().set_kind(&uuid, kind);
                 CommandResult::Ok
             }
             EngineCommand::SetMacroValue { uuid, value } => {
@@ -1416,11 +1531,11 @@ impl VardaApp {
                 CommandResult::Ok
             }
             EngineCommand::AddMacroTarget { uuid, path } => {
-                self.add_macro_target(&uuid, &path);
+                self.mixer.macros_mut().add_target(&uuid, &path);
                 CommandResult::Ok
             }
             EngineCommand::RemoveMacroTarget { uuid, target_idx } => {
-                self.remove_macro_target(&uuid, target_idx);
+                self.mixer.macros_mut().remove_target(&uuid, target_idx);
                 CommandResult::Ok
             }
             EngineCommand::UpdateMacroTarget {
@@ -1431,15 +1546,17 @@ impl VardaApp {
                 curve,
                 invert,
             } => {
-                self.update_macro_target(&uuid, target_idx, min, max, curve, invert);
+                self.mixer
+                    .macros_mut()
+                    .update_target(&uuid, target_idx, min, max, curve, invert);
                 CommandResult::Ok
             }
             EngineCommand::SetMacroButtonBehavior { uuid, behavior } => {
-                self.set_macro_button_behavior(&uuid, behavior);
+                self.mixer.macros_mut().set_button_behavior(&uuid, behavior);
                 CommandResult::Ok
             }
             EngineCommand::SetMacroTriggers { uuid, actions } => {
-                self.set_macro_triggers(&uuid, actions);
+                self.mixer.macros_mut().set_triggers(&uuid, actions);
                 CommandResult::Ok
             }
 
@@ -1448,7 +1565,12 @@ impl VardaApp {
                 deck_id,
                 analyzer_type,
                 options,
-            } => match self.request_analyzer(&deck_id, &analyzer_type, &options) {
+            } => match self.mixer.request_analyzer(
+                &deck_id,
+                &analyzer_type,
+                &self.sources.analyzer_registry,
+                &options,
+            ) {
                 Ok(()) => CommandResult::Ok,
                 Err(e) => CommandResult::Err {
                     code: ErrorCode::InvalidInput,
@@ -1459,7 +1581,7 @@ impl VardaApp {
                 deck_id,
                 analyzer_type,
             } => {
-                self.release_analyzer(&deck_id, &analyzer_type);
+                self.mixer.release_analyzer(&deck_id, &analyzer_type);
                 CommandResult::Ok
             }
             EngineCommand::AddAnalyzerModSource {
@@ -1498,7 +1620,7 @@ impl VardaApp {
 
             // ── Device Scanning ───────────────────────────────────
             EngineCommand::RescanNdi => {
-                self.external_io.ndi_manager.discover();
+                self.sources.io.ndi_manager.discover();
                 CommandResult::Ok
             }
             EngineCommand::RescanSyphon => {
@@ -1509,8 +1631,8 @@ impl VardaApp {
                 // spuriously "defer Syphon init".
                 #[cfg(target_os = "macos")]
                 {
-                    self.external_io.syphon_manager.discover();
-                    let names = self.external_io.syphon_manager.discovered_sources();
+                    self.sources.io.syphon_manager.discover();
+                    let names = self.sources.io.syphon_manager.discovered_sources();
                     CommandResult::OkWithData {
                         data: serde_json::json!(names),
                     }
@@ -1526,25 +1648,25 @@ impl VardaApp {
                 // Same contract as RescanSyphon: discover inline and answer with
                 // the fresh list, so a probe is one non-racy call. No platform
                 // gate is needed because discovery is a no-op off Windows.
-                self.external_io.spout_manager.discover();
+                self.sources.io.spout_manager.discover();
                 CommandResult::OkWithData {
-                    data: serde_json::json!(self.external_io.spout_manager.discovered_sources()),
+                    data: serde_json::json!(self.sources.io.spout_manager.discovered_sources()),
                 }
             }
             EngineCommand::RescanCameras => {
-                self.camera_manager.scan_devices();
+                self.sources.camera_manager.scan_devices();
                 CommandResult::Ok
             }
             EngineCommand::RescanDepthSensors => {
-                self.depth_manager.scan_devices();
+                self.sources.depth_manager.scan_devices();
                 CommandResult::Ok
             }
             EngineCommand::RescanCaptureTargets => {
-                self.screen_capture_manager.scan_targets();
+                self.sources.screen_capture_manager.scan_targets();
                 CommandResult::Ok
             }
             EngineCommand::RequestScreenCapturePermission => {
-                self.screen_capture_manager.request_permission();
+                self.sources.screen_capture_manager.request_permission();
                 CommandResult::Ok
             }
             EngineCommand::RescanMidi => {
@@ -1561,13 +1683,9 @@ impl VardaApp {
                 }
                 CommandResult::Ok
             }
-            EngineCommand::RescanAudio => {
-                self.audio_manager.scan_devices();
-                CommandResult::Ok
-            }
             EngineCommand::ToggleAudioSource { source_id, enabled } => {
                 if enabled {
-                    if let Err(e) = self.audio_manager.open_source(source_id) {
+                    if let Err(e) = self.audio.manager.open_source(source_id) {
                         log::warn!("Failed to open audio source {source_id}: {e}");
                         return CommandResult::Err {
                             code: ErrorCode::InternalError,
@@ -1575,7 +1693,7 @@ impl VardaApp {
                         };
                     }
                 } else {
-                    self.audio_manager.close_source(source_id);
+                    self.audio.manager.close_source(source_id);
                 }
                 CommandResult::Ok
             }
@@ -1613,54 +1731,14 @@ impl VardaApp {
                 deck_uuid,
                 name,
                 value,
-            } => match self.resolve_deck(&deck_uuid) {
-                Ok((ch_idx, dk_idx)) => {
-                    let mut taken = None;
-                    if let Some(ch) = self.mixer.channel_mut(ch_idx) {
-                        let params = &mut ch.decks[dk_idx].deck.generator_params;
-                        taken = params.normalize(&name, &value);
-                        params.set(&name, value);
-                    }
-                    if let Some(held) = taken {
-                        self.note_live_param_write(
-                            &crate::engine::value::param::ParamAddress::deck_param(
-                                &deck_uuid, &name,
-                            )
-                            .to_string(),
-                            held,
-                        );
-                    }
-                    CommandResult::Ok
-                }
-                Err(e) => e.into(),
-            },
+            } => wire(self.mixer.set_generator_param(&deck_uuid, &name, value)),
             EngineCommand::SetEffectParam {
                 effect_uuid,
                 name,
                 value,
-            } => match self.resolve_effect(&effect_uuid) {
-                Ok(loc) => {
-                    let mut taken = None;
-                    if let Some(effect) = self.mixer.effect_at_mut(loc) {
-                        taken = effect.params.normalize(&name, &value);
-                        effect.params.set(&name, value);
-                    }
-                    if let Some(held) = taken {
-                        self.note_live_param_write(
-                            &crate::engine::value::param::ParamAddress::effect_param(
-                                &effect_uuid,
-                                &name,
-                            )
-                            .to_string(),
-                            held,
-                        );
-                    }
-                    CommandResult::Ok
-                }
-                Err(e) => e.into(),
-            },
+            } => wire(self.mixer.set_effect_param(&effect_uuid, &name, value)),
             EngineCommand::ResetGeneratorParamsToDefaults { deck_uuid } => {
-                match self.resolve_deck(&deck_uuid) {
+                match self.mixer.resolve_deck(&deck_uuid) {
                     Ok((ch_idx, dk_idx)) => {
                         if let Some(ch) = self.mixer.channel_mut(ch_idx) {
                             ch.decks[dk_idx].deck.generator_params.reset_to_defaults();
@@ -1674,7 +1752,7 @@ impl VardaApp {
                 deck_uuid,
                 group,
                 seed,
-            } => match self.resolve_deck(&deck_uuid) {
+            } => match self.mixer.resolve_deck(&deck_uuid) {
                 Ok((ch_idx, dk_idx)) => {
                     if let Some(ch) = self.mixer.channel_mut(ch_idx) {
                         ch.decks[dk_idx]
@@ -1691,7 +1769,7 @@ impl VardaApp {
                 group,
                 amount,
                 seed,
-            } => match self.resolve_deck(&deck_uuid) {
+            } => match self.mixer.resolve_deck(&deck_uuid) {
                 Ok((ch_idx, dk_idx)) => {
                     if let Some(ch) = self.mixer.channel_mut(ch_idx) {
                         ch.decks[dk_idx].deck.generator_params.mutate(
@@ -1805,15 +1883,15 @@ impl VardaApp {
                 CommandResult::Ok
             }
             EngineCommand::AcquireDetectionCamera { camera_id } => {
-                if self.detection_camera == Some(camera_id) {
+                if self.sources.detection_camera == Some(camera_id) {
                     return CommandResult::Ok;
                 }
-                if let Some(previous) = self.detection_camera.take() {
-                    self.camera_manager.release_camera(previous);
+                if let Some(previous) = self.sources.detection_camera.take() {
+                    self.sources.camera_manager.release_camera(previous);
                 }
                 match self.open_camera(camera_id) {
                     Ok(_) => {
-                        self.detection_camera = Some(camera_id);
+                        self.sources.detection_camera = Some(camera_id);
                         CommandResult::Ok
                     }
                     Err(e) => {
@@ -1828,8 +1906,8 @@ impl VardaApp {
                 }
             }
             EngineCommand::ReleaseDetectionCamera => {
-                if let Some(previous) = self.detection_camera.take() {
-                    self.camera_manager.release_camera(previous);
+                if let Some(previous) = self.sources.detection_camera.take() {
+                    self.sources.camera_manager.release_camera(previous);
                 }
                 CommandResult::Ok
             }
@@ -1885,230 +1963,10 @@ impl VardaApp {
     }
 }
 
-/// Whether a bus-driven command should record an undo/redo snapshot before it
-/// executes. This is what makes API / WebSocket / CLI edits undoable on the
-/// same timeline the windowed UI uses (see [undo-redo.md](/spec/undo-redo.md)).
-///
-/// The predicate is an explicit **denylist** of live-control, transient, and
-/// non-authored commands; everything else defaults to undoable. New commands
-/// are therefore undoable unless added here — when introducing a live control
-/// (transport, device toggle, output-window lifecycle) or a transient action,
-/// add it below so it does not pollute the undo timeline. The windowed
-/// consumer uses the same predicate through `batch_has_undoable`.
-pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
-    use EngineCommand as C;
-    !matches!(
-        cmd,
-        // Live crossfader control (spec: ⚠️ live, excluded).
-        C::SetCrossfader(..)
-            | C::AutoCrossfade { .. }
-            | C::BeatCrossfade { .. }
-            // Live macro-knob turn (fans out to targets; config edits stay undoable).
-            | C::SetMacroValue { .. }
-            // Audio device lifecycle / scanning.
-            | C::OpenAudioSource { .. }
-            | C::CloseAudioSource { .. }
-            | C::ScanAudioDevices
-            | C::RescanAudio
-            | C::ToggleAudioSource { .. }
-            // Video transport (temporal, not structural).
-            | C::VideoTogglePlay { .. }
-            | C::VideoSeek { .. }
-            | C::VideoSetSpeed { .. }
-            | C::VideoSetLoopMode { .. }
-            | C::VideoSetInPoint { .. }
-            | C::VideoSetOutPoint { .. }
-            | C::VideoClearInOutPoints { .. }
-            | C::VideoSetTransportSync { .. }
-            // ADSR live triggers.
-            | C::TriggerAdsr { .. }
-            | C::ReleaseAdsr { .. }
-            // Sequence playback transport (authoring steps stay undoable).
-            | C::PlaySequence { .. }
-            | C::StopSequence { .. }
-            | C::ToggleSequence { .. }
-            // Copying reads the scene; paste and duplicate are undoable.
-            | C::Copy { .. }
-            // Arming is a mode. What a pass records is undoable, in one entry
-            // pushed when the first take opens.
-            | C::SetRecordArmed { .. }
-            // HTML transient window / reload.
-            | C::OpenHtmlInteractive { .. }
-            | C::CloseHtmlInteractive
-            | C::ReloadHtmlDeck { .. }
-            // Stream library config (not scene state).
-            | C::AddStreamLibraryEntry { .. }
-            | C::RemoveStreamLibraryEntry { .. }
-            | C::AddHlsLibraryEntry { .. }
-            | C::RemoveHlsLibraryEntry { .. }
-            | C::AddDashLibraryEntry { .. }
-            | C::RemoveDashLibraryEntry { .. }
-            | C::AddRtmpLibraryEntry { .. }
-            | C::RemoveRtmpLibraryEntry { .. }
-            | C::AddHtmlLibraryEntry { .. }
-            | C::RemoveHtmlLibraryEntry { .. }
-            // Output-window lifecycle / device config (spec: ❌, excluded).
-            // Surface→output *assignments* remain undoable (default true).
-            | C::CreateOutput
-            | C::CreateHeadlessOutput { .. }
-            | C::CloseOutput { .. }
-            | C::SetOutputDisplay { .. }
-            | C::SetOutputTarget { .. }
-            | C::StartOutput { .. }
-            | C::StopOutput { .. }
-            | C::SetCalibrationMode { .. }
-            | C::SetOutputRotation { .. }
-            | C::SetOutputPresentation { .. }
-            | C::SetOutputTonemap { .. }
-            | C::SetEdgeBlend { .. }
-            | C::SetEdgeBlendMode { .. }
-            // Surface auto-detection produces preview contours only; the scene
-            // is not mutated until ConfirmDetectedContours (which is undoable).
-            | C::DetectFromImage { .. }
-            | C::DetectFromSvg { .. }
-            | C::DetectFromDxf { .. }
-            | C::DetectFromCamera { .. }
-            // Analyzer instance lifecycle (runtime, not SceneConfig state).
-            | C::RequestAnalyzer { .. }
-            | C::ReleaseAnalyzer { .. }
-            | C::AddAnalyzerModSource { .. }
-            | C::UpdateAnalyzerSmoothing { .. }
-            // Device scanning / MIDI mappings (device config, not scene).
-            | C::RescanNdi
-            | C::RescanSyphon
-            | C::RescanCameras
-            | C::RescanCaptureTargets
-            | C::RequestScreenCapturePermission
-            | C::RescanMidi
-            | C::SetMidiDeviceEnabled { .. }
-            | C::ClearMidiMappings
-            | C::RemoveMidiMapping { .. }
-            // Clock preference / manual BPM (live sync config).
-            | C::SetClockPreference { .. }
-            | C::SetManualBpm { .. }
-            // Which cable the show is following is live rig config, like the
-            // clock's: undoing an edit must not silently re-patch the room.
-            | C::SetTimecodePreference { .. }
-            | C::SetLtcInput { .. }
-            // Show position and re-arm are session state. Lane and region edits
-            // are ordinary scene data and stay undoable; undoing one of them
-            // must not also rewind the show or revive a released fader.
-            | C::TransportPlay
-            | C::TransportStop
-            | C::TransportLocate { .. }
-            | C::TransportPrevCue
-            | C::TransportNextCue
-            | C::TriggerCue { .. }
-            | C::SetTransportSource { .. }
-            | C::RearmParam { .. }
-            | C::RearmAll { .. }
-            // Folding a lane away rearranges the view, not the show.
-            | C::SetLaneCollapsed { .. }
-            // Global engine settings / profiling.
-            | C::SetRenderResolution { .. }
-            | C::SetDomemasterResolution { .. }
-            // Stage editor view state the engine only stores for the GUI.
-            | C::SetEditorPrefs { .. }
-            // Learn modes bind controls, and notifications are feedback; neither
-            // is an edit to the show.
-            | C::MidiLearnToggle
-            | C::MidiLearnSelect { .. }
-            | C::KeyboardLearnToggle
-            | C::KeyboardLearnSelect { .. }
-            | C::KeyboardLearnBind { .. }
-            | C::DismissNotification { .. }
-            | C::NotifyInfo { .. }
-            // What a consumer is looking at, not what the show is.
-            | C::SetPreviewChannels { .. }
-            | C::AcquireDetectionCamera { .. }
-            | C::ReleaseDetectionCamera
-            | C::SetTargetFps { .. }
-            | C::StartPerfProfile { .. }
-            // Param toggle is a live keyboard/shortcut affordance (SetParam edits
-            // stay undoable; the two-value toggle does not pollute the timeline).
-            | C::ToggleParam { .. }
-            // Saving a preset writes to disk; loading one (structural) is undoable.
-            | C::SaveDeckPreset { .. }
-            | C::SaveChannelPreset { .. }
-            // Persistence, history control, and shutdown are never undoable.
-            | C::SaveWorkspace
-            | C::LoadWorkspace
-            | C::Undo
-            | C::Redo
-            | C::Shutdown
-    )
-}
-
 #[cfg(test)]
 mod tests {
-    use super::command_is_undoable;
+    use crate::app::classify::command_is_undoable;
     use crate::engine::EngineCommand as C;
-
-    #[test]
-    fn authoring_commands_are_undoable() {
-        assert!(command_is_undoable(&C::AddChannel));
-        assert!(command_is_undoable(&C::RemoveChannel {
-            channel_uuid: "ch".into(),
-        }));
-        assert!(command_is_undoable(&C::SetChannelOpacity {
-            channel_uuid: "ch".into(),
-            opacity: 0.5,
-        }));
-        assert!(command_is_undoable(&C::SetParam {
-            path: "deck/abc/opacity".into(),
-            value: crate::engine::ParamValue::Float(0.5),
-        }));
-        assert!(command_is_undoable(&C::RemoveSurface { uuid: "s".into() }));
-        // Surface→output assignment is authoring and must be undoable.
-        assert!(command_is_undoable(&C::AssignSurfaceToOutput {
-            output_uuid: "o".into(),
-            surface_uuid: "s".into(),
-        }));
-    }
-
-    #[test]
-    fn live_and_transient_commands_are_not_undoable() {
-        assert!(!command_is_undoable(&C::SetCrossfader(0.5)));
-        assert!(!command_is_undoable(&C::VideoTogglePlay {
-            deck_uuid: "dk".into(),
-        }));
-        assert!(!command_is_undoable(&C::VideoSetTransportSync {
-            deck_uuid: "dk".into(),
-            sync: crate::video::DeckTransportSync::default(),
-        }));
-        assert!(!command_is_undoable(&C::PlaySequence {
-            sequence_uuid: "sq".into(),
-        }));
-        assert!(!command_is_undoable(&C::StartOutput {
-            output_uuid: "o".into(),
-        }));
-        assert!(!command_is_undoable(&C::CreateOutput));
-        assert!(!command_is_undoable(&C::Undo));
-        assert!(!command_is_undoable(&C::Redo));
-        assert!(!command_is_undoable(&C::SaveWorkspace));
-        assert!(!command_is_undoable(&C::Shutdown));
-        // Audio device lifecycle, detection previews, and global settings are
-        // all live/transient — excluded from the undo timeline.
-        assert!(!command_is_undoable(&C::ScanAudioDevices));
-        assert!(!command_is_undoable(&C::RescanAudio));
-        assert!(!command_is_undoable(&C::DetectFromImage {
-            image_data: Vec::new(),
-            params: crate::engine::value::detect::DetectionParams::default(),
-        }));
-        assert!(!command_is_undoable(&C::SetRenderResolution {
-            width: 1280,
-            height: 720,
-        }));
-        assert!(!command_is_undoable(&C::SetDomemasterResolution {
-            resolution: crate::renderer::dome::DomemasterResolution::R4K,
-        }));
-        assert!(!command_is_undoable(&C::SetTargetFps { fps: 30 }));
-        // Saving a preset writes to disk; it is not undoable (loading is).
-        assert!(!command_is_undoable(&C::SaveChannelPreset {
-            channel_uuid: "ch".into(),
-            name: "p".into(),
-        }));
-    }
 
     // ── Error → wire mapping (classify / wire / wire_id / not_found) ───
     //
@@ -2148,13 +2006,16 @@ mod tests {
 
     #[test]
     fn wire_ok_maps_to_ok() {
-        assert!(matches!(wire(Ok(())), CommandResult::Ok));
+        assert!(matches!(
+            wire(Ok::<(), anyhow::Error>(())),
+            CommandResult::Ok
+        ));
     }
 
     #[test]
     fn wire_err_classifies_and_carries_message() {
         // Unresolvable UUID → NotFound, message preserved.
-        match wire(Err(unknown().into())) {
+        match wire(Err::<(), _>(unknown())) {
             CommandResult::Err { code, message } => {
                 assert_eq!(code, ErrorCode::NotFound);
                 assert_eq!(message, "No deck with UUID 'abc123'");

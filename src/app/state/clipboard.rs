@@ -9,12 +9,11 @@
 
 use super::presets::{Identity, apply_modulation_recipes, extract_modulation_recipes};
 use crate::app::VardaApp;
-use crate::app::resolve::EffectChain;
 use crate::arrangement::RegionConfig;
 use crate::engine::{
-    ClipboardKind, ClipboardSource, ClipboardSummary, CommandResult, ErrorCode, MixerCommands,
-    PasteTarget,
+    ClipboardKind, ClipboardSource, ClipboardSummary, CommandResult, ErrorCode, PasteTarget,
 };
+use crate::mixer::EffectChain;
 use crate::scene::{ChannelConfig, DeckConfig, EffectConfig, ModulationRecipe};
 
 /// What the clipboard holds. Configs, never live objects.
@@ -132,12 +131,15 @@ impl VardaApp {
         deck_uuid: &str,
         include_arrangement: bool,
     ) -> Result<ClipboardPayload, CommandResult> {
-        let (channel_idx, deck_idx) = self.resolve_deck(deck_uuid).map_err(CommandResult::from)?;
+        let (channel_idx, deck_idx) = self
+            .mixer
+            .resolve_deck(deck_uuid)
+            .map_err(CommandResult::from)?;
         let scene = crate::persistence::snapshot_scene(
             &self.mixer,
             None,
-            self.render_width,
-            self.render_height,
+            self.render.width,
+            self.render.height,
         );
         let mut config = scene
             .channels
@@ -165,6 +167,7 @@ impl VardaApp {
 
     fn capture_channel(&self, channel_uuid: &str) -> Result<ClipboardPayload, CommandResult> {
         let channel_idx = self
+            .mixer
             .resolve_channel(channel_uuid)
             .map_err(CommandResult::from)?;
         let config = self
@@ -182,8 +185,8 @@ impl VardaApp {
         let scene = crate::persistence::snapshot_scene(
             &self.mixer,
             None,
-            self.render_width,
-            self.render_height,
+            self.render.width,
+            self.render.height,
         );
         let mut config = scene.channels.get(channel_idx).cloned()?;
 
@@ -199,6 +202,7 @@ impl VardaApp {
 
     fn capture_effect(&self, effect_uuid: &str) -> Result<ClipboardPayload, CommandResult> {
         let location = self
+            .mixer
             .resolve_effect(effect_uuid)
             .map_err(CommandResult::from)?;
         let effect = self
@@ -268,11 +272,11 @@ impl VardaApp {
         target: &PasteTarget,
     ) -> CommandResult {
         let (channel_idx, at) = match target {
-            PasteTarget::AfterDeck(uuid) => match self.resolve_deck(uuid) {
+            PasteTarget::AfterDeck(uuid) => match self.mixer.resolve_deck(uuid) {
                 Ok((channel_idx, deck_idx)) => (channel_idx, Some(deck_idx + 1)),
                 Err(e) => return e.into(),
             },
-            PasteTarget::IntoChannel(uuid) => match self.resolve_channel(uuid) {
+            PasteTarget::IntoChannel(uuid) => match self.mixer.resolve_channel(uuid) {
                 Ok(channel_idx) => (channel_idx, None),
                 Err(e) => return e.into(),
             },
@@ -284,7 +288,9 @@ impl VardaApp {
                 // Through the region command, so the lane is created and the
                 // opacity envelope recompiled the one way they ever are.
                 for region in regions {
-                    self.cmd_add_region(&deck_uuid, *region);
+                    if let Err(e) = self.mixer.add_region(&deck_uuid, *region) {
+                        log::warn!("Pasted deck {deck_uuid} lost a region: {e}");
+                    }
                 }
                 CommandResult::OkWithId { uuid: deck_uuid }
             }
@@ -302,12 +308,12 @@ impl VardaApp {
         target: &PasteTarget,
     ) -> CommandResult {
         let (chain, at) = match target {
-            PasteTarget::AfterEffect(uuid) => match self.resolve_effect(uuid) {
+            PasteTarget::AfterEffect(uuid) => match self.mixer.resolve_effect(uuid) {
                 Ok(location) => (chain_of(location), Some(index_of(location) + 1)),
                 Err(e) => return e.into(),
             },
             PasteTarget::IntoChain(effect_target) => {
-                match self.resolve_effect_target(effect_target) {
+                match self.mixer.resolve_effect_target(effect_target) {
                     Ok(chain) => (chain, None),
                     Err(e) => return e.into(),
                 }
@@ -322,8 +328,9 @@ impl VardaApp {
             taken.contains(uuid)
         });
 
-        let format = self.context.compositing_format;
-        let effect = match crate::persistence::restore_effect(&config, &self.context, format) {
+        let format = self.render.context.compositing_format;
+        let effect = match crate::persistence::restore_effect(&config, &self.render.context, format)
+        {
             Ok(effect) => effect,
             Err(e) => {
                 return CommandResult::Err {
@@ -364,7 +371,7 @@ impl VardaApp {
                 };
             }
         };
-        let Ok(channel_idx) = self.resolve_channel(&uuid) else {
+        let Ok(channel_idx) = self.mixer.resolve_channel(&uuid) else {
             return missing("channel", &uuid);
         };
         if let Some(channel) = self.mixer.channel_mut(channel_idx) {
@@ -394,9 +401,9 @@ impl VardaApp {
             }
         }
 
-        let format = self.context.compositing_format;
+        let format = self.render.context.compositing_format;
         for effect_config in &config.effects {
-            match crate::persistence::restore_effect(effect_config, &self.context, format) {
+            match crate::persistence::restore_effect(effect_config, &self.render.context, format) {
                 Ok(effect) => {
                     if let Some(channel) = self.mixer.channel_mut(channel_idx) {
                         channel.add_effect(effect);
@@ -479,7 +486,7 @@ fn wrong_target(expected: &str) -> CommandResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::{EffectTarget, EngineCommand as C, MixerQueries};
+    use crate::engine::{EffectTarget, EngineCommand as C};
 
     fn headless_app() -> Option<VardaApp> {
         let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
@@ -488,7 +495,9 @@ mod tests {
 
     /// A blue deck in channel 0, returning its UUID.
     fn a_deck(app: &mut VardaApp) -> String {
-        let channel_uuid = app.mixer_snapshot().channels[0].uuid.clone();
+        let channel_uuid = crate::app::snapshot::build_mixer_snapshot(app).channels[0]
+            .uuid
+            .clone();
         let result = app.execute_command(C::AddSolidColorDeck {
             channel_uuid,
             color: [0.0, 0.0, 1.0, 1.0],
@@ -500,7 +509,7 @@ mod tests {
     }
 
     fn deck_uuids(app: &VardaApp, channel: usize) -> Vec<String> {
-        app.mixer_snapshot().channels[channel]
+        crate::app::snapshot::build_mixer_snapshot(app).channels[channel]
             .decks
             .iter()
             .map(|d| d.uuid.clone())
@@ -523,7 +532,9 @@ mod tests {
             return;
         };
         let deck = a_deck(&mut app);
-        let channel = app.mixer_snapshot().channels[0].uuid.clone();
+        let channel = crate::app::snapshot::build_mixer_snapshot(&app).channels[0]
+            .uuid
+            .clone();
 
         app.execute_command(C::Copy {
             source: ClipboardSource::Deck(deck.clone()),
@@ -566,8 +577,7 @@ mod tests {
             panic!("pasting into another channel failed: {result:?}");
         };
         assert_eq!(deck_uuids(&app, 0), vec![deck], "the original stays put");
-        let target = app
-            .mixer_snapshot()
+        let target = crate::app::snapshot::build_mixer_snapshot(&app)
             .channels
             .iter()
             .position(|ch| ch.uuid == elsewhere)
@@ -609,7 +619,9 @@ mod tests {
         let Some(mut app) = headless_app() else {
             return;
         };
-        let channel = app.mixer_snapshot().channels[0].uuid.clone();
+        let channel = crate::app::snapshot::build_mixer_snapshot(&app).channels[0]
+            .uuid
+            .clone();
         let result = app.execute_command(C::Paste {
             target: PasteTarget::IntoChannel(channel),
         });
@@ -765,7 +777,9 @@ mod tests {
             return;
         };
         let deck = a_deck(&mut app);
-        let channel = app.mixer_snapshot().channels[0].uuid.clone();
+        let channel = crate::app::snapshot::build_mixer_snapshot(&app).channels[0]
+            .uuid
+            .clone();
         app.execute_command(C::AddRegion {
             deck_uuid: deck.clone(),
             region: RegionConfig::new(0.0, 4.0),
@@ -857,7 +871,7 @@ mod tests {
             panic!("nothing was pasted: {result:?}");
         };
 
-        let snapshot = app.mixer_snapshot();
+        let snapshot = crate::app::snapshot::build_mixer_snapshot(&app);
         let chain: Vec<String> = snapshot.channels[0].decks[0]
             .effects
             .iter()
@@ -876,7 +890,9 @@ mod tests {
         let Some(mut app) = headless_app() else {
             return;
         };
-        let channel = app.mixer_snapshot().channels[0].uuid.clone();
+        let channel = crate::app::snapshot::build_mixer_snapshot(&app).channels[0]
+            .uuid
+            .clone();
         let added = app.execute_command(C::AddEffect {
             target: EffectTarget::Channel(channel.clone()),
             shader_name: "invert".into(),
@@ -885,8 +901,7 @@ mod tests {
             eprintln!("Skipping: the invert filter is not in this registry");
             return;
         };
-        let param = app
-            .mixer_snapshot()
+        let param = crate::app::snapshot::build_mixer_snapshot(&app)
             .channels
             .iter()
             .flat_map(|ch| ch.effects.iter())
@@ -917,7 +932,7 @@ mod tests {
             panic!("the channel was not pasted");
         };
 
-        let snapshot = app.mixer_snapshot();
+        let snapshot = crate::app::snapshot::build_mixer_snapshot(&app);
         let copy = snapshot
             .channels
             .iter()
@@ -942,7 +957,9 @@ mod tests {
             return;
         };
         let deck = a_deck(&mut app);
-        let channel = app.mixer_snapshot().channels[0].uuid.clone();
+        let channel = crate::app::snapshot::build_mixer_snapshot(&app).channels[0]
+            .uuid
+            .clone();
         app.execute_command(C::SaveDeckPreset {
             deck_uuid: deck.clone(),
             name: "twice".into(),
@@ -967,7 +984,9 @@ mod tests {
             return;
         };
         let deck = a_deck(&mut app);
-        let channel = app.mixer_snapshot().channels[0].uuid.clone();
+        let channel = crate::app::snapshot::build_mixer_snapshot(&app).channels[0]
+            .uuid
+            .clone();
 
         app.execute_command(C::Copy {
             source: ClipboardSource::Channel(channel.clone()),
@@ -981,7 +1000,7 @@ mod tests {
         };
 
         assert_ne!(pasted, channel);
-        let snapshot = app.mixer_snapshot();
+        let snapshot = crate::app::snapshot::build_mixer_snapshot(&app);
         assert_eq!(snapshot.channels.len(), 3, "two defaults plus the copy");
         let copy = snapshot
             .channels

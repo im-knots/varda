@@ -5,29 +5,31 @@ use crate::engine::{CommandResult, ErrorCode};
 
 impl VardaApp {
     pub fn cmd_add_ndi_deck(&mut self, channel_uuid: &str, source_name: &str) -> CommandResult {
-        let channel_idx = match self.resolve_channel(channel_uuid) {
+        let channel_idx = match self.mixer.resolve_channel(channel_uuid) {
             Ok(idx) => idx,
             Err(e) => return e.into(),
         };
         match self
-            .external_io
+            .sources
+            .io
             .ndi_manager
-            .start_receive(source_name, &self.context.device)
+            .start_receive(source_name, &self.render.context.device)
         {
             Some(receiver_idx) => {
                 let (src_w, src_h) = self
-                    .external_io
+                    .sources
+                    .io
                     .ndi_manager
                     .receiver_dimensions(receiver_idx)
                     .unwrap_or((1920, 1080));
                 match crate::deck::Deck::new_from_ndi(
-                    &self.context,
+                    &self.render.context,
                     receiver_idx,
                     source_name,
                     src_w,
                     src_h,
-                    self.render_width,
-                    self.render_height,
+                    self.render.width,
+                    self.render.height,
                 ) {
                     Ok(deck) => {
                         let uuid = deck.uuid().to_string();
@@ -64,7 +66,7 @@ impl VardaApp {
     /// so the command simply refuses there rather than failing to compile.
     /// See /spec/spout-output.md.
     pub fn cmd_add_spout_deck(&mut self, channel_uuid: &str, sender_name: &str) -> CommandResult {
-        let channel_idx = match self.resolve_channel(channel_uuid) {
+        let channel_idx = match self.mixer.resolve_channel(channel_uuid) {
             Ok(idx) => idx,
             Err(e) => return e.into(),
         };
@@ -81,9 +83,10 @@ impl VardaApp {
             return CommandResult::Ok;
         }
         let Some(receiver_idx) = self
-            .external_io
+            .sources
+            .io
             .spout_manager
-            .start_receive(sender_name, &self.context.device)
+            .start_receive(sender_name, &self.render.context.device)
         else {
             return CommandResult::Err {
                 code: ErrorCode::Unavailable,
@@ -91,18 +94,19 @@ impl VardaApp {
             };
         };
         let (src_w, src_h) = self
-            .external_io
+            .sources
+            .io
             .spout_manager
             .client_dimensions(receiver_idx)
             .unwrap_or((1920, 1080));
         match crate::deck::Deck::new_from_spout(
-            &self.context,
+            &self.render.context,
             receiver_idx,
             sender_name,
             src_w,
             src_h,
-            self.render_width,
-            self.render_height,
+            self.render.width,
+            self.render.height,
         ) {
             Ok(deck) => {
                 let uuid = deck.uuid().to_string();
@@ -125,7 +129,7 @@ impl VardaApp {
 
     pub fn cmd_add_syphon_deck(&mut self, channel_uuid: &str, server_name: &str) -> CommandResult {
         #[cfg(target_os = "macos")]
-        let channel_idx = match self.resolve_channel(channel_uuid) {
+        let channel_idx = match self.mixer.resolve_channel(channel_uuid) {
             Ok(idx) => idx,
             Err(e) => return e.into(),
         };
@@ -148,24 +152,26 @@ impl VardaApp {
                 return CommandResult::Ok;
             }
             match self
-                .external_io
+                .sources
+                .io
                 .syphon_manager
-                .start_receive(server_name, &self.context.device)
+                .start_receive(server_name, &self.render.context.device)
             {
                 Some(client_idx) => {
                     let (src_w, src_h) = self
-                        .external_io
+                        .sources
+                        .io
                         .syphon_manager
                         .client_dimensions(client_idx)
                         .unwrap_or((1920, 1080));
                     match crate::deck::Deck::new_from_syphon(
-                        &self.context,
+                        &self.render.context,
                         client_idx,
                         server_name,
                         src_w,
                         src_h,
-                        self.render_width,
-                        self.render_height,
+                        self.render.width,
+                        self.render.height,
                     ) {
                         Ok(deck) => {
                             let uuid = deck.uuid().to_string();
@@ -207,29 +213,30 @@ impl VardaApp {
         url: &str,
         mode: crate::stream::SrtMode,
     ) -> CommandResult {
-        let channel_idx = match self.resolve_channel(channel_uuid) {
+        let channel_idx = match self.mixer.resolve_channel(channel_uuid) {
             Ok(idx) => idx,
             Err(e) => return e.into(),
         };
-        match self
-            .external_io
-            .stream_manager
-            .start_srt_receive(url, mode, &self.context.device)
-        {
+        match self.sources.io.stream_manager.start_srt_receive(
+            url,
+            mode,
+            &self.render.context.device,
+        ) {
             Some(receiver_idx) => {
                 let (src_w, src_h) = self
-                    .external_io
+                    .sources
+                    .io
                     .stream_manager
                     .receiver_dimensions(receiver_idx)
                     .unwrap_or((1920, 1080));
                 match crate::deck::Deck::new_from_srt(
-                    &self.context,
+                    &self.render.context,
                     receiver_idx,
                     url,
                     src_w,
                     src_h,
-                    self.render_width,
-                    self.render_height,
+                    self.render.width,
+                    self.render.height,
                 ) {
                     Ok(deck) => {
                         let uuid = deck.uuid().to_string();
@@ -257,29 +264,30 @@ impl VardaApp {
     }
 
     pub fn cmd_add_hls_deck(&mut self, channel_uuid: &str, url: &str) -> CommandResult {
-        let channel_idx = match self.resolve_channel(channel_uuid) {
+        let channel_idx = match self.mixer.resolve_channel(channel_uuid) {
             Ok(idx) => idx,
             Err(e) => return e.into(),
         };
-        match self.external_io.stream_manager.start_receive(
+        match self.sources.io.stream_manager.start_receive(
             url,
             crate::stream::StreamProtocol::Hls,
-            &self.context.device,
+            &self.render.context.device,
         ) {
             Some(receiver_idx) => {
                 let (src_w, src_h) = self
-                    .external_io
+                    .sources
+                    .io
                     .stream_manager
                     .receiver_dimensions(receiver_idx)
                     .unwrap_or((1920, 1080));
                 match crate::deck::Deck::new_from_hls(
-                    &self.context,
+                    &self.render.context,
                     receiver_idx,
                     url,
                     src_w,
                     src_h,
-                    self.render_width,
-                    self.render_height,
+                    self.render.width,
+                    self.render.height,
                 ) {
                     Ok(deck) => {
                         let uuid = deck.uuid().to_string();
@@ -307,30 +315,31 @@ impl VardaApp {
     }
 
     pub fn cmd_add_html_deck(&mut self, channel_uuid: &str, url: &str) -> CommandResult {
-        let channel_idx = match self.resolve_channel(channel_uuid) {
+        let channel_idx = match self.mixer.resolve_channel(channel_uuid) {
             Ok(idx) => idx,
             Err(e) => return e.into(),
         };
-        match self.external_io.html_manager.start_render(
+        match self.sources.io.html_manager.start_render(
             url,
-            self.render_width,
-            self.render_height,
-            &self.context.device,
+            self.render.width,
+            self.render.height,
+            &self.render.context.device,
         ) {
             Some(instance_idx) => {
                 let (src_w, src_h) = self
-                    .external_io
+                    .sources
+                    .io
                     .html_manager
                     .instance_dimensions(instance_idx)
                     .unwrap_or((1920, 1080));
                 match crate::deck::Deck::new_from_html(
-                    &self.context,
+                    &self.render.context,
                     instance_idx,
                     url,
                     src_w,
                     src_h,
-                    self.render_width,
-                    self.render_height,
+                    self.render.width,
+                    self.render.height,
                 ) {
                     Ok(deck) => {
                         let uuid = deck.uuid().to_string();
@@ -359,7 +368,7 @@ impl VardaApp {
 
     /// Reload the HTML deck at `(channel_idx, deck_idx)`, re-fetching its URL.
     pub fn cmd_reload_html_deck(&mut self, deck_uuid: &str) -> CommandResult {
-        let (channel_idx, deck_idx) = match self.resolve_deck(deck_uuid) {
+        let (channel_idx, deck_idx) = match self.mixer.resolve_deck(deck_uuid) {
             Ok(loc) => loc,
             Err(e) => return e.into(),
         };
@@ -371,7 +380,7 @@ impl VardaApp {
             .map(|slot| slot.deck.external_source_kind());
         match kind {
             Some(Some(crate::deck::ExternalSourceKind::Html(idx))) => {
-                self.external_io.html_manager.reload(idx);
+                self.sources.io.html_manager.reload(idx);
                 CommandResult::Ok
             }
             _ => CommandResult::Err {
@@ -382,29 +391,30 @@ impl VardaApp {
     }
 
     pub fn cmd_add_dash_deck(&mut self, channel_uuid: &str, url: &str) -> CommandResult {
-        let channel_idx = match self.resolve_channel(channel_uuid) {
+        let channel_idx = match self.mixer.resolve_channel(channel_uuid) {
             Ok(idx) => idx,
             Err(e) => return e.into(),
         };
-        match self.external_io.stream_manager.start_receive(
+        match self.sources.io.stream_manager.start_receive(
             url,
             crate::stream::StreamProtocol::Dash,
-            &self.context.device,
+            &self.render.context.device,
         ) {
             Some(receiver_idx) => {
                 let (src_w, src_h) = self
-                    .external_io
+                    .sources
+                    .io
                     .stream_manager
                     .receiver_dimensions(receiver_idx)
                     .unwrap_or((1920, 1080));
                 match crate::deck::Deck::new_from_dash(
-                    &self.context,
+                    &self.render.context,
                     receiver_idx,
                     url,
                     src_w,
                     src_h,
-                    self.render_width,
-                    self.render_height,
+                    self.render.width,
+                    self.render.height,
                 ) {
                     Ok(deck) => {
                         let uuid = deck.uuid().to_string();
@@ -437,29 +447,30 @@ impl VardaApp {
         url: &str,
         mode: crate::stream::RtmpMode,
     ) -> CommandResult {
-        let channel_idx = match self.resolve_channel(channel_uuid) {
+        let channel_idx = match self.mixer.resolve_channel(channel_uuid) {
             Ok(idx) => idx,
             Err(e) => return e.into(),
         };
-        match self
-            .external_io
-            .stream_manager
-            .start_rtmp_receive(url, mode, &self.context.device)
-        {
+        match self.sources.io.stream_manager.start_rtmp_receive(
+            url,
+            mode,
+            &self.render.context.device,
+        ) {
             Some(receiver_idx) => {
                 let (src_w, src_h) = self
-                    .external_io
+                    .sources
+                    .io
                     .stream_manager
                     .receiver_dimensions(receiver_idx)
                     .unwrap_or((1920, 1080));
                 match crate::deck::Deck::new_from_rtmp(
-                    &self.context,
+                    &self.render.context,
                     receiver_idx,
                     url,
                     src_w,
                     src_h,
-                    self.render_width,
-                    self.render_height,
+                    self.render.width,
+                    self.render.height,
                 ) {
                     Ok(deck) => {
                         let uuid = deck.uuid().to_string();
@@ -488,83 +499,6 @@ impl VardaApp {
 
     // ── Stream Library ─────────────────────────────────────
 
-    pub fn cmd_add_stream_library_entry(
-        &mut self,
-        url: String,
-        mode: crate::stream::SrtMode,
-    ) -> CommandResult {
-        if !self
-            .external_io
-            .stream_library
-            .iter()
-            .any(|(u, _)| u == &url)
-        {
-            self.external_io.stream_library.push((url, mode));
-        }
-        CommandResult::Ok
-    }
-
-    pub fn cmd_remove_stream_library_entry(&mut self, url: &str) -> CommandResult {
-        self.external_io.stream_library.retain(|(u, _)| u != url);
-        CommandResult::Ok
-    }
-
-    pub fn cmd_add_hls_library_entry(&mut self, url: String) -> CommandResult {
-        if !self.external_io.hls_library.contains(&url) {
-            log::info!("Added HLS source to library via API: {url}");
-            self.external_io.hls_library.push(url);
-        }
-        CommandResult::Ok
-    }
-
-    pub fn cmd_remove_hls_library_entry(&mut self, url: &str) -> CommandResult {
-        self.external_io.hls_library.retain(|u| u != url);
-        CommandResult::Ok
-    }
-
-    pub fn cmd_add_dash_library_entry(&mut self, url: String) -> CommandResult {
-        if !self.external_io.dash_library.contains(&url) {
-            log::info!("Added DASH source to library via API: {url}");
-            self.external_io.dash_library.push(url);
-        }
-        CommandResult::Ok
-    }
-
-    pub fn cmd_remove_dash_library_entry(&mut self, url: &str) -> CommandResult {
-        self.external_io.dash_library.retain(|u| u != url);
-        CommandResult::Ok
-    }
-
-    pub fn cmd_add_rtmp_library_entry(
-        &mut self,
-        url: String,
-        mode: crate::stream::RtmpMode,
-    ) -> CommandResult {
-        if !self.external_io.rtmp_library.iter().any(|(u, _)| u == &url) {
-            log::info!("Added RTMP source to library via API: {url} ({mode})");
-            self.external_io.rtmp_library.push((url, mode));
-        }
-        CommandResult::Ok
-    }
-
-    pub fn cmd_remove_rtmp_library_entry(&mut self, url: &str) -> CommandResult {
-        self.external_io.rtmp_library.retain(|(u, _)| u != url);
-        CommandResult::Ok
-    }
-
-    pub fn cmd_add_html_library_entry(&mut self, url: String) -> CommandResult {
-        if !self.external_io.html_library.contains(&url) {
-            log::info!("Added HTML source to library: {url}");
-            self.external_io.html_library.push(url);
-        }
-        CommandResult::Ok
-    }
-
-    pub fn cmd_remove_html_library_entry(&mut self, url: &str) -> CommandResult {
-        self.external_io.html_library.retain(|u| u != url);
-        CommandResult::Ok
-    }
-
     /// Render-thread Syphon maintenance, called ~1×/sec (see `render_mixer_frame`).
     ///
     /// Two jobs, both removing the start/stop-ordering fragility that used to
@@ -579,21 +513,22 @@ impl VardaApp {
     #[cfg(target_os = "macos")]
     pub fn reconcile_syphon(&mut self) {
         const SCAN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
-        if self.external_io.last_syphon_scan.elapsed() < SCAN_INTERVAL {
+        if self.sources.io.last_syphon_scan.elapsed() < SCAN_INTERVAL {
             return;
         }
-        self.external_io.last_syphon_scan = std::time::Instant::now();
+        self.sources.io.last_syphon_scan = std::time::Instant::now();
 
         // (1) Re-scan. Cheap directory query; safe to run every tick-second.
-        self.external_io.syphon_manager.discover();
+        self.sources.io.syphon_manager.discover();
 
-        if self.external_io.pending_syphon.is_empty() {
+        if self.sources.io.pending_syphon.is_empty() {
             return;
         }
 
         // (2) Bind any pending deck whose server is now available.
         let available: std::collections::HashSet<String> = self
-            .external_io
+            .sources
+            .io
             .syphon_manager
             .sources()
             .iter()
@@ -602,7 +537,8 @@ impl VardaApp {
 
         // Pull the ready ones out; leave the rest pending for the next pass.
         let mut ready: Vec<crate::persistence::PendingSyphonDeck> = Vec::new();
-        self.external_io
+        self.sources
+            .io
             .pending_syphon
             .retain(|p| match &p.config.source {
                 crate::scene::SourceConfig::Syphon { name } if available.contains(name) => {
@@ -625,7 +561,7 @@ impl VardaApp {
                     // Re-apply the persisted slot props onto the deck we just bound
                     // (matched by name so an idempotent no-op doesn't mis-target).
                     let display_name = format!("🔗 {server_name}");
-                    if let Ok(ch_idx) = self.resolve_channel(&channel_uuid)
+                    if let Ok(ch_idx) = self.mixer.resolve_channel(&channel_uuid)
                         && let Some(ch) = self.mixer.channel_mut(ch_idx)
                         && let Some(slot) = ch
                             .decks
@@ -654,7 +590,7 @@ impl VardaApp {
                         "Syphon late-bind for '{server_name}' (channel {channel_uuid}) failed: {message}; will retry"
                     );
                     // Requeue to retry on the next reconcile.
-                    self.external_io.pending_syphon.push(p);
+                    self.sources.io.pending_syphon.push(p);
                 }
             }
         }
@@ -670,27 +606,29 @@ impl VardaApp {
     /// the render loop free of a platform gate.
     pub fn reconcile_spout(&mut self) {
         const SCAN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
-        if !self.external_io.spout_manager.is_available() {
+        if !self.sources.io.spout_manager.is_available() {
             return;
         }
-        if self.external_io.last_spout_scan.elapsed() < SCAN_INTERVAL {
+        if self.sources.io.last_spout_scan.elapsed() < SCAN_INTERVAL {
             return;
         }
-        self.external_io.last_spout_scan = std::time::Instant::now();
-        self.external_io.spout_manager.discover();
+        self.sources.io.last_spout_scan = std::time::Instant::now();
+        self.sources.io.spout_manager.discover();
 
-        if self.external_io.pending_spout.is_empty() {
+        if self.sources.io.pending_spout.is_empty() {
             return;
         }
         let available: std::collections::HashSet<String> = self
-            .external_io
+            .sources
+            .io
             .spout_manager
             .sources()
             .iter()
             .map(|s| s.name.clone())
             .collect();
         let mut ready: Vec<crate::persistence::PendingSpoutDeck> = Vec::new();
-        self.external_io
+        self.sources
+            .io
             .pending_spout
             .retain(|p| match &p.config.source {
                 crate::scene::SourceConfig::Spout { name } if available.contains(name) => {
@@ -711,7 +649,7 @@ impl VardaApp {
                 | CommandResult::OkWithId { .. }
                 | CommandResult::OkWithData { .. } => {
                     let display_name = format!("🔗 {sender_name}");
-                    if let Ok(ch_idx) = self.resolve_channel(&channel_uuid)
+                    if let Ok(ch_idx) = self.mixer.resolve_channel(&channel_uuid)
                         && let Some(ch) = self.mixer.channel_mut(ch_idx)
                         && let Some(slot) = ch
                             .decks
@@ -736,9 +674,83 @@ impl VardaApp {
                     log::warn!(
                         "Spout late-bind for '{sender_name}' (channel {channel_uuid}) failed: {message}; will retry"
                     );
-                    self.external_io.pending_spout.push(p);
+                    self.sources.io.pending_spout.push(p);
                 }
             }
         }
+    }
+}
+
+impl super::super::ExternalIO {
+    pub fn cmd_add_stream_library_entry(
+        &mut self,
+        url: String,
+        mode: crate::stream::SrtMode,
+    ) -> CommandResult {
+        if !self.stream_library.iter().any(|(u, _)| u == &url) {
+            self.stream_library.push((url, mode));
+        }
+        CommandResult::Ok
+    }
+
+    pub fn cmd_remove_stream_library_entry(&mut self, url: &str) -> CommandResult {
+        self.stream_library.retain(|(u, _)| u != url);
+        CommandResult::Ok
+    }
+
+    pub fn cmd_add_hls_library_entry(&mut self, url: String) -> CommandResult {
+        if !self.hls_library.contains(&url) {
+            log::info!("Added HLS source to library via API: {url}");
+            self.hls_library.push(url);
+        }
+        CommandResult::Ok
+    }
+
+    pub fn cmd_remove_hls_library_entry(&mut self, url: &str) -> CommandResult {
+        self.hls_library.retain(|u| u != url);
+        CommandResult::Ok
+    }
+
+    pub fn cmd_add_dash_library_entry(&mut self, url: String) -> CommandResult {
+        if !self.dash_library.contains(&url) {
+            log::info!("Added DASH source to library via API: {url}");
+            self.dash_library.push(url);
+        }
+        CommandResult::Ok
+    }
+
+    pub fn cmd_remove_dash_library_entry(&mut self, url: &str) -> CommandResult {
+        self.dash_library.retain(|u| u != url);
+        CommandResult::Ok
+    }
+
+    pub fn cmd_add_rtmp_library_entry(
+        &mut self,
+        url: String,
+        mode: crate::stream::RtmpMode,
+    ) -> CommandResult {
+        if !self.rtmp_library.iter().any(|(u, _)| u == &url) {
+            log::info!("Added RTMP source to library via API: {url} ({mode})");
+            self.rtmp_library.push((url, mode));
+        }
+        CommandResult::Ok
+    }
+
+    pub fn cmd_remove_rtmp_library_entry(&mut self, url: &str) -> CommandResult {
+        self.rtmp_library.retain(|(u, _)| u != url);
+        CommandResult::Ok
+    }
+
+    pub fn cmd_add_html_library_entry(&mut self, url: String) -> CommandResult {
+        if !self.html_library.contains(&url) {
+            log::info!("Added HTML source to library: {url}");
+            self.html_library.push(url);
+        }
+        CommandResult::Ok
+    }
+
+    pub fn cmd_remove_html_library_entry(&mut self, url: &str) -> CommandResult {
+        self.html_library.retain(|u| u != url);
+        CommandResult::Ok
     }
 }

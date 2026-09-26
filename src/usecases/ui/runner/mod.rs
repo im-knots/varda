@@ -355,10 +355,7 @@ impl UIRunner {
             return;
         }
 
-        varda.update_frame_timing();
-        varda.update_notifications();
-        varda.process_commands();
-        varda.process_inputs();
+        varda.begin_frame();
         varda.run_pending_global_actions();
 
         // Create pending output windows (API-driven in headless)
@@ -367,13 +364,7 @@ impl UIRunner {
         #[cfg(feature = "html")]
         host.create_pending_interactive(varda);
 
-        // GPU render (mixer compositing)
-        varda.render_mixer_frame();
-
-        // Render output windows + publish state
-        varda.render_outputs();
-        #[cfg(feature = "html")]
-        varda.render_interactive();
+        varda.render_frame();
         self.publish_counter += 1;
         if self.publish_counter.is_multiple_of(10) {
             varda.publish_state();
@@ -387,10 +378,7 @@ impl UIRunner {
             let Some(varda) = self.varda.as_mut() else {
                 return;
             };
-            varda.update_frame_timing();
-            varda.update_notifications();
-            varda.process_commands();
-            varda.process_inputs();
+            varda.begin_frame();
         }
 
         // 2. Sync egui texture registrations
@@ -675,7 +663,6 @@ impl UIRunner {
                 .collect();
 
             varda.apply_engine_actions(std::mem::take(&mut ui_actions.commands), starts_undo_step);
-            varda.update_controller_leds();
 
             // Highest position first, so each fixup sees the indices it expects.
             removals.sort_unstable_by_key(|r| std::cmp::Reverse(r.0));
@@ -711,29 +698,17 @@ impl UIRunner {
         }
         let poll_us = t_poll.elapsed().as_micros();
 
-        // 8. GPU: render mixer compositing (offscreen — no surface involved)
-        let t_mixer = std::time::Instant::now();
-        {
+        // 8–9. The engine's render: the mixer, then output windows before the
+        // UI, because projectors and displays are latency-critical and must not
+        // be gated behind the UI surface's get_current_texture()/present() cycle.
+        let times = {
             let Some(varda) = self.varda.as_mut() else {
                 return;
             };
-            varda.render_mixer_frame();
-        }
-        let mixer_us = t_mixer.elapsed().as_micros();
-
-        // 9. Output windows FIRST — projectors/displays are latency-critical.
-        // Present outputs before the UI so they aren't gated behind the UI
-        // surface's get_current_texture()/present() cycle.
-        let t_outputs = std::time::Instant::now();
-        {
-            let Some(varda) = self.varda.as_mut() else {
-                return;
-            };
-            varda.render_outputs();
-            #[cfg(feature = "html")]
-            varda.render_interactive();
-        }
-        let outputs_us = t_outputs.elapsed().as_micros();
+            varda.render_frame()
+        };
+        let mixer_us = times.mixer.as_micros();
+        let outputs_us = times.outputs.as_micros();
 
         // 9b. Gamma-encode previews. After the mixer render (8) and output
         // windows (9) — window previews source their intermediate texture — and
