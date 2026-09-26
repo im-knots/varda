@@ -16,7 +16,7 @@ impl VardaApp {
         channel_uuid: &str,
         preset_name: &str,
     ) -> CommandResult {
-        let channel_idx = match self.resolve_channel(channel_uuid) {
+        let channel_idx = match self.mixer.resolve_channel(channel_uuid) {
             Ok(idx) => idx,
             Err(e) => return e.into(),
         };
@@ -61,7 +61,7 @@ impl VardaApp {
         preset_name: &str,
     ) -> CommandResult {
         let target_channel = match target_channel_uuid {
-            Some(uuid) => match self.resolve_channel(uuid) {
+            Some(uuid) => match self.mixer.resolve_channel(uuid) {
                 Ok(idx) => Some(idx),
                 Err(e) => return e.into(),
             },
@@ -108,9 +108,9 @@ impl VardaApp {
             let ch_name = self.mixer.take_next_channel_name();
             match crate::channel::Channel::new(
                 ch_name,
-                &self.context,
-                self.render_width,
-                self.render_height,
+                &self.render.context,
+                self.render.width,
+                self.render.height,
             ) {
                 Ok(mut channel) => {
                     channel.opacity = config.opacity;
@@ -169,13 +169,13 @@ impl VardaApp {
 
     /// Save a deck's current config as a named deck preset (writes to disk).
     pub(crate) fn cmd_save_deck_preset(&mut self, deck_uuid: &str, name: &str) -> CommandResult {
-        let (channel_idx, deck_idx) = match self.resolve_deck(deck_uuid) {
+        let (channel_idx, deck_idx) = match self.mixer.resolve_deck(deck_uuid) {
             Ok(loc) => loc,
             Err(e) => return e.into(),
         };
         let mixer = &mut self.mixer;
         let scene =
-            crate::persistence::snapshot_scene(mixer, None, self.render_width, self.render_height);
+            crate::persistence::snapshot_scene(mixer, None, self.render.width, self.render.height);
         let Some(ch_config) = scene.channels.get(channel_idx) else {
             return CommandResult::Err {
                 code: ErrorCode::NotFound,
@@ -241,7 +241,7 @@ impl VardaApp {
         channel_uuid: &str,
         name: &str,
     ) -> CommandResult {
-        let channel_idx = match self.resolve_channel(channel_uuid) {
+        let channel_idx = match self.mixer.resolve_channel(channel_uuid) {
             Ok(idx) => idx,
             Err(e) => return e.into(),
         };
@@ -291,16 +291,16 @@ impl VardaApp {
         Self::restore_deck_into_channel(
             config,
             ch_idx,
-            &self.context,
-            &self.registry,
-            &mut self.camera_manager,
-            &mut self.screen_capture_manager,
-            &mut self.depth_manager,
-            &mut self.external_io.ndi_manager,
-            &mut self.external_io.stream_manager,
-            &mut self.external_io.html_manager,
-            self.render_width,
-            self.render_height,
+            &self.render.context,
+            &self.sources.registry,
+            &mut self.sources.camera_manager,
+            &mut self.sources.screen_capture_manager,
+            &mut self.sources.depth_manager,
+            &mut self.sources.io.ndi_manager,
+            &mut self.sources.io.stream_manager,
+            &mut self.sources.io.html_manager,
+            self.render.width,
+            self.render.height,
             &mut self.mixer,
             at,
             identity,
@@ -511,7 +511,7 @@ pub(crate) fn apply_modulation_recipes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::{EngineCommand as C, MixerQueries};
+    use crate::engine::EngineCommand as C;
     use crate::modulation::{ModulationEngine, ModulationSource};
     use crate::scene::{ModulationRecipe, ModulationRecipeAssignment};
 
@@ -528,7 +528,9 @@ mod tests {
         let Ok(mut app) = VardaApp::new(gpu, &crate::testing::headless_config()) else {
             return;
         };
-        let channel_uuid = app.mixer_snapshot().channels[0].uuid.clone();
+        let channel_uuid = crate::app::snapshot::build_mixer_snapshot(&app).channels[0]
+            .uuid
+            .clone();
         let result = app.execute_command(C::AddSolidColorDeck {
             channel_uuid: channel_uuid.clone(),
             color: [0.0, 0.0, 1.0, 1.0],
@@ -550,7 +552,7 @@ mod tests {
             preset_name: "twice".into(),
         });
 
-        let uuids: Vec<String> = app.mixer_snapshot().channels[0]
+        let uuids: Vec<String> = crate::app::snapshot::build_mixer_snapshot(&app).channels[0]
             .decks
             .iter()
             .map(|d| d.uuid.clone())

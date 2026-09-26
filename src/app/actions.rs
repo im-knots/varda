@@ -13,7 +13,7 @@ impl VardaApp {
     pub fn apply_engine_actions(&mut self, commands: Vec<EngineCommand>, starts_undo_step: bool) {
         if starts_undo_step {
             let snapshot = self.history_snapshot();
-            self.push_history(snapshot);
+            self.session.history.push(snapshot);
         }
         // Ordering within the vec is preserved, so a new-channel library drop
         // enqueues `AddChannel` before its `Add*Deck` and the deck resolves
@@ -39,7 +39,7 @@ impl VardaApp {
         match outcome {
             CommandOutcome::DecksCreated { uuids } => {
                 for uuid in uuids {
-                    let Ok((ch_idx, deck_idx)) = self.resolve_deck(uuid) else {
+                    let Ok((ch_idx, deck_idx)) = self.mixer.resolve_deck(uuid) else {
                         continue;
                     };
                     let name = self.mixer.channels()[ch_idx].decks[deck_idx]

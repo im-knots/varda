@@ -1,9 +1,10 @@
 //! Output management state mutations.
 
 use super::super::VardaApp;
+use crate::delivery::{AudioPassthrough, Delivery, FfmpegSubprocess};
 use crate::engine::{CommandResult, ErrorCode};
 use crate::renderer::context::{
-    AudioPassthrough, CalibrationMode, HeadlessOutput, OutputSource, OutputTarget, UnifiedOutput,
+    CalibrationMode, HeadlessOutput, OutputSource, OutputTarget, UnifiedOutput,
 };
 use crate::renderer::edge_blend::EdgeBlendMode;
 
@@ -21,8 +22,8 @@ impl VardaApp {
                 .map(UnifiedOutput::presentation_request)
                 .unwrap_or_default();
             (
-                self.external_io.ndi_manager.resolve_presentation(request),
-                self.external_io.ndi_manager.mode_availability(),
+                self.sources.io.ndi_manager.resolve_presentation(request),
+                self.sources.io.ndi_manager.mode_availability(),
             )
         });
         {
@@ -45,7 +46,7 @@ impl VardaApp {
                         };
                         w.set_target(target, monitor);
                         if let Err(error) =
-                            w.set_presentation_request(&self.context, w.presentation_request)
+                            w.set_presentation_request(&self.render.context, w.presentation_request)
                         {
                             return CommandResult::Err {
                                 code: ErrorCode::InternalError,
@@ -59,21 +60,26 @@ impl VardaApp {
                 UnifiedOutput::Headless(h) => {
                     if target.is_headless() {
                         if h.active {
-                            if let Some(mut sub) = h.subprocess.take() {
-                                sub.stop();
-                            }
-                            let passthrough = h.audio_pcm.take();
+                            let passthrough = self
+                                .output
+                                .deliveries
+                                .remove(&h.uuid)
+                                .and_then(|mut delivery| delivery.stop());
                             h.active = false;
                             h.started_at = None;
                             if let Some(pass) = passthrough {
-                                self.audio_manager
+                                self.audio
+                                    .manager
                                     .unsubscribe_pcm(pass.source_id, pass.token);
                             }
                         }
                         h.target = target;
-                        h.set_presentation_request(&self.context.device, h.presentation_request);
+                        h.set_presentation_request(
+                            &self.render.context.device,
+                            h.presentation_request,
+                        );
                         if let Some((resolved, availability)) = ndi_presentation {
-                            h.set_resolved_presentation(&self.context.device, resolved);
+                            h.set_resolved_presentation(&self.render.context.device, resolved);
                             h.mode_availability = availability;
                         }
                     }
@@ -90,20 +96,22 @@ impl VardaApp {
         let name = format!("Output {idx}");
         let is_ndi = matches!(&target, OutputTarget::NdiSend { .. });
         let mut headless = HeadlessOutput::new(
-            &self.context.device,
+            &self.render.context.device,
             name.clone(),
             OutputSource::Master,
             target,
-            self.render_width,
-            self.render_height,
+            self.render.width,
+            self.render.height,
+            crate::delivery::presentation::plan,
         );
         if is_ndi {
             let resolved = self
-                .external_io
+                .sources
+                .io
                 .ndi_manager
                 .resolve_presentation(headless.presentation_request);
-            headless.set_resolved_presentation(&self.context.device, resolved);
-            headless.mode_availability = self.external_io.ndi_manager.mode_availability();
+            headless.set_resolved_presentation(&self.render.context.device, resolved);
+            headless.mode_availability = self.sources.io.ndi_manager.mode_availability();
         }
         log::info!("Created headless output '{name}'");
         self.output.outputs.push(UnifiedOutput::Headless(headless));
@@ -131,7 +139,7 @@ impl VardaApp {
         width: u32,
         height: u32,
     ) -> Vec<String> {
-        let device = &self.context.device;
+        let device = &self.render.context.device;
         let mut stopped = Vec::new();
         let mut released = Vec::new();
         for output in &mut self.output.outputs {
@@ -141,24 +149,30 @@ impl VardaApp {
             if h.width == width && h.height == height {
                 continue;
             }
-            if let Some(mut sub) = h.subprocess.take() {
-                sub.stop();
+            let encoding = self
+                .output
+                .deliveries
+                .get(&h.uuid)
+                .is_some_and(|delivery| delivery.subprocess.is_some());
+            if encoding {
+                if let Some(mut delivery) = self.output.deliveries.remove(&h.uuid) {
+                    released.extend(delivery.stop());
+                }
                 h.active = false;
                 h.started_at = None;
-                released.extend(h.audio_pcm.take());
                 stopped.push(h.name.clone());
             }
             h.resize(device, width, height);
         }
         for pass in released {
-            self.release_passthrough(Some(*pass));
+            self.release_passthrough(Some(pass));
         }
         stopped
     }
 
     /// Start a headless output (spawn ffmpeg subprocess or activate NDI/Syphon).
     pub fn cmd_start_output(&mut self, output_uuid: &str) -> CommandResult {
-        let idx = match self.resolve_output(output_uuid) {
+        let idx = match self.output.resolve_output(output_uuid) {
             Ok(idx) => idx,
             Err(e) => return e.into(),
         };
@@ -171,8 +185,8 @@ impl VardaApp {
         // already keeps outputs in step; this is belt and braces for the paths
         // that assign `render_width`/`render_height` directly, such as the
         // workspace loader applying a scene's resolution.
-        let (render_width, render_height) = (self.render_width, self.render_height);
-        let device = &self.context.device;
+        let (render_width, render_height) = (self.render.width, self.render.height);
+        let device = &self.render.context.device;
         let (target, name, width, height, presentation_request, mut readback_format, stale) =
             match self.output.outputs.get_mut(idx) {
                 Some(UnifiedOutput::Headless(h)) => {
@@ -187,7 +201,10 @@ impl VardaApp {
                         h.height,
                         h.presentation_request,
                         h.readback.format(),
-                        h.audio_pcm.take(),
+                        self.output
+                            .deliveries
+                            .remove(&h.uuid)
+                            .and_then(|mut delivery| delivery.stop()),
                     )
                 }
                 _ => {
@@ -198,7 +215,7 @@ impl VardaApp {
                 }
             };
         if let OutputTarget::Recording { codec, .. } = &target {
-            let resolved = match crate::renderer::FfmpegSubprocess::probe_recording_presentation(
+            let resolved = match FfmpegSubprocess::probe_recording_presentation(
                 codec,
                 presentation_request,
                 device.features().contains(
@@ -208,7 +225,7 @@ impl VardaApp {
             ) {
                 Ok(resolved) => resolved,
                 Err(error) => {
-                    self.release_passthrough(stale.map(|subscription| *subscription));
+                    self.release_passthrough(stale);
                     return CommandResult::Err {
                         code: ErrorCode::Unavailable,
                         message: error.to_string(),
@@ -220,33 +237,31 @@ impl VardaApp {
                 readback_format = output.readback.format();
             }
         }
-        self.release_passthrough(stale.map(|b| *b));
+        self.release_passthrough(stale);
 
         // Resolve optional audio passthrough (emits a notification + falls back
         // to video-only if the device is missing — Decision 6).
         let (audio_input, passthrough) = resolve_output_audio(
-            &mut self.audio_manager,
+            &mut self.audio.manager,
             &mut self.session.notifications,
             target.audio_device(),
             &name,
         );
 
-        let fps = encoder_fps(self.target_fps);
+        let fps = encoder_fps(self.render.target_fps);
 
         let spawn_result = match &target {
-            OutputTarget::SrtStream { url, codec, .. } => {
-                crate::renderer::FfmpegSubprocess::spawn_srt(
-                    url,
-                    codec,
-                    presentation_request,
-                    width,
-                    height,
-                    fps,
-                    audio_input,
-                )
-            }
+            OutputTarget::SrtStream { url, codec, .. } => FfmpegSubprocess::spawn_srt(
+                url,
+                codec,
+                presentation_request,
+                width,
+                height,
+                fps,
+                audio_input,
+            ),
             OutputTarget::Recording { path, codec, .. } => {
-                crate::renderer::FfmpegSubprocess::spawn_recording_with_presentation(
+                FfmpegSubprocess::spawn_recording_with_presentation(
                     path,
                     codec,
                     width,
@@ -262,7 +277,7 @@ impl VardaApp {
                 codec,
                 short_segments,
                 ..
-            } => crate::renderer::FfmpegSubprocess::spawn_hls(
+            } => FfmpegSubprocess::spawn_hls(
                 target_name,
                 codec,
                 presentation_request,
@@ -276,7 +291,7 @@ impl VardaApp {
                 name: target_name,
                 codec,
                 ..
-            } => crate::renderer::FfmpegSubprocess::spawn_dash(
+            } => FfmpegSubprocess::spawn_dash(
                 target_name,
                 codec,
                 presentation_request,
@@ -290,7 +305,7 @@ impl VardaApp {
                 codec,
                 codec_contract,
                 ..
-            } => crate::renderer::FfmpegSubprocess::spawn_rtmp(
+            } => FfmpegSubprocess::spawn_rtmp(
                 url,
                 codec,
                 *codec_contract,
@@ -345,10 +360,15 @@ impl VardaApp {
                 let presentation = sub.presentation().cloned();
                 if let Some(UnifiedOutput::Headless(h)) = self.output.outputs.get_mut(idx) {
                     if let Some(resolved) = presentation {
-                        h.set_resolved_presentation(&self.context.device, resolved);
+                        h.set_resolved_presentation(&self.render.context.device, resolved);
                     }
-                    h.subprocess = Some(Box::new(sub));
-                    h.audio_pcm = passthrough.map(Box::new);
+                    self.output.deliveries.insert(
+                        h.uuid.clone(),
+                        Delivery {
+                            subprocess: Some(sub),
+                            audio: passthrough,
+                        },
+                    );
                     h.active = true;
                 }
                 self.refresh_presentation_notification(idx);
@@ -369,23 +389,25 @@ impl VardaApp {
     /// is a non-ffmpeg target that can't carry passthrough audio).
     fn release_passthrough(&mut self, passthrough: Option<AudioPassthrough>) {
         if let Some(pass) = passthrough {
-            self.audio_manager
+            self.audio
+                .manager
                 .unsubscribe_pcm(pass.source_id, pass.token);
         }
     }
 
     /// Stop a headless output (kill subprocess and deactivate).
     pub fn cmd_stop_output(&mut self, output_uuid: &str) -> CommandResult {
-        let idx = match self.resolve_output(output_uuid) {
+        let idx = match self.output.resolve_output(output_uuid) {
             Ok(idx) => idx,
             Err(e) => return e.into(),
         };
         if let Some(UnifiedOutput::Headless(h)) = self.output.outputs.get_mut(idx) {
             if h.active {
-                if let Some(mut sub) = h.subprocess.take() {
-                    sub.stop();
-                }
-                let passthrough = h.audio_pcm.take();
+                let passthrough = self
+                    .output
+                    .deliveries
+                    .remove(&h.uuid)
+                    .and_then(|mut delivery| delivery.stop());
                 // Report what the content actually reached before clearing it.
                 //
                 // The file's MaxCLL and MaxFALL are whatever x265 wrote at encode
@@ -412,7 +434,8 @@ impl VardaApp {
                 // Disjoint field borrow (audio_manager vs. output): release the
                 // PCM subscription so the cpal callback stops fanning to it.
                 if let Some(pass) = passthrough {
-                    self.audio_manager
+                    self.audio
+                        .manager
                         .unsubscribe_pcm(pass.source_id, pass.token);
                 }
             }
@@ -425,260 +448,20 @@ impl VardaApp {
         }
     }
 
-    /// Set the calibration display mode on a windowed output.
-    pub fn cmd_set_calibration_mode(
-        &mut self,
-        output_uuid: &str,
-        mode: CalibrationMode,
-    ) -> CommandResult {
-        let idx = match self.resolve_output(output_uuid) {
-            Ok(idx) => idx,
-            Err(e) => return e.into(),
-        };
-        if let Some(UnifiedOutput::Window(w)) = self.output.outputs.get_mut(idx) {
-            w.calibration_mode = mode;
-            CommandResult::Ok
-        } else {
-            CommandResult::Err {
-                code: ErrorCode::NotFound,
-                message: "Output not found or not windowed".into(),
-            }
-        }
-    }
-
-    /// Move one corner-pin corner of a surface's warp (per-surface).
-    pub fn cmd_set_warp_corner(
-        &mut self,
-        surface_uuid: &str,
-        corner_idx: usize,
-        position: [f32; 2],
-    ) -> CommandResult {
-        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(surface_uuid) {
-            surface.set_warp_corner(corner_idx, position);
-            CommandResult::Ok
-        } else {
-            CommandResult::Err {
-                code: ErrorCode::NotFound,
-                message: "Surface not found".into(),
-            }
-        }
-    }
-
-    /// Clear a surface's warp (back to no-warp / native position).
-    pub fn cmd_reset_warp(&mut self, surface_uuid: &str) -> CommandResult {
-        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(surface_uuid) {
-            surface.reset_warp();
-            CommandResult::Ok
-        } else {
-            CommandResult::Err {
-                code: ErrorCode::NotFound,
-                message: "Surface not found".into(),
-            }
-        }
-    }
-
-    /// Set the warp grid resolution for a surface, converting its warp into a
-    /// `cols` × `rows` mesh while preserving the current deformation. Dimensions
-    /// are clamped to `[2, MAX_WARP_SUBDIVISIONS]` in the domain method.
-    pub fn cmd_set_warp_subdivisions(
-        &mut self,
-        surface_uuid: &str,
-        cols: u32,
-        rows: u32,
-    ) -> CommandResult {
-        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(surface_uuid) {
-            surface.set_warp_subdivisions(cols, rows);
-            CommandResult::Ok
-        } else {
-            CommandResult::Err {
-                code: ErrorCode::NotFound,
-                message: "Surface not found".into(),
-            }
-        }
-    }
-
-    /// Move a single mesh grid point (row-major) of a surface's mesh warp.
-    /// No-op on the geometry if the surface's warp is not a mesh; still returns
-    /// `Ok` so callers can treat it uniformly.
-    pub fn cmd_set_warp_mesh_point(
-        &mut self,
-        surface_uuid: &str,
-        row: usize,
-        col: usize,
-        position: [f32; 2],
-    ) -> CommandResult {
-        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(surface_uuid) {
-            surface.set_warp_mesh_point(row, col, position);
-            CommandResult::Ok
-        } else {
-            CommandResult::Err {
-                code: ErrorCode::NotFound,
-                message: "Surface not found".into(),
-            }
-        }
-    }
-
-    /// Bind/unbind a surface's warp from its shape (auto-warp). Unbinding
-    /// materialises the conforming warp for manual editing.
-    pub fn cmd_set_warp_bound(&mut self, surface_uuid: &str, bound: bool) -> CommandResult {
-        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(surface_uuid) {
-            surface.set_warp_bound(bound);
-            CommandResult::Ok
-        } else {
-            CommandResult::Err {
-                code: ErrorCode::NotFound,
-                message: "Surface not found".into(),
-            }
-        }
-    }
-
-    /// Convert a surface's warp into a smooth bezier patch grid (8i.6).
-    pub fn cmd_convert_warp_to_bezier(&mut self, surface_uuid: &str) -> CommandResult {
-        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(surface_uuid) {
-            surface.convert_warp_to_bezier();
-            CommandResult::Ok
-        } else {
-            CommandResult::Err {
-                code: ErrorCode::NotFound,
-                message: "Surface not found".into(),
-            }
-        }
-    }
-
-    /// Move a bezier-warp control anchor. No-op on the geometry if the warp is
-    /// not bezier; still returns `Ok` so callers can treat it uniformly.
-    pub fn cmd_move_warp_anchor(
-        &mut self,
-        surface_uuid: &str,
-        row: usize,
-        col: usize,
-        position: [f32; 2],
-    ) -> CommandResult {
-        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(surface_uuid) {
-            surface.set_warp_bezier_anchor(row, col, position);
-            CommandResult::Ok
-        } else {
-            CommandResult::Err {
-                code: ErrorCode::NotFound,
-                message: "Surface not found".into(),
-            }
-        }
-    }
-
-    /// Move a bezier-warp tangent handle. No-op on the geometry if the warp is
-    /// not bezier; still returns `Ok`.
-    pub fn cmd_move_warp_handle(
-        &mut self,
-        surface_uuid: &str,
-        horizontal: bool,
-        row: usize,
-        col: usize,
-        which: usize,
-        position: [f32; 2],
-    ) -> CommandResult {
-        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(surface_uuid) {
-            surface.set_warp_bezier_handle(horizontal, row, col, which, position);
-            CommandResult::Ok
-        } else {
-            CommandResult::Err {
-                code: ErrorCode::NotFound,
-                message: "Surface not found".into(),
-            }
-        }
-    }
-
-    /// Set the bezier-warp control-cage resolution. No-op on the geometry if the
-    /// warp is not bezier; still returns `Ok`.
-    pub fn cmd_set_bezier_cage_subdivisions(
-        &mut self,
-        surface_uuid: &str,
-        cols: u32,
-        rows: u32,
-    ) -> CommandResult {
-        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(surface_uuid) {
-            surface.set_bezier_cage_subdivisions(cols, rows);
-            CommandResult::Ok
-        } else {
-            CommandResult::Err {
-                code: ErrorCode::NotFound,
-                message: "Surface not found".into(),
-            }
-        }
-    }
-
-    /// Set edge blend configuration for an output.
-    pub fn cmd_set_edge_blend(
-        &mut self,
-        output_uuid: &str,
-        config: crate::renderer::edge_blend::EdgeBlendConfig,
-    ) -> CommandResult {
-        let output_idx = match self.resolve_output(output_uuid) {
-            Ok(idx) => idx,
-            Err(e) => return e.into(),
-        };
-        if let Some(output) = self.output.outputs.get_mut(output_idx) {
-            match output {
-                UnifiedOutput::Window(w) => {
-                    w.edge_blend = config;
-                }
-                UnifiedOutput::Headless(h) => {
-                    h.edge_blend = config;
-                }
-            }
-            CommandResult::Ok
-        } else {
-            CommandResult::Err {
-                code: ErrorCode::NotFound,
-                message: "Output not found".into(),
-            }
-        }
-    }
-
-    /// Set edge blend mode for an output; triggers auto-recompute if mode is Auto.
-    pub fn cmd_set_edge_blend_mode(
-        &mut self,
-        output_uuid: &str,
-        mode: EdgeBlendMode,
-    ) -> CommandResult {
-        let output_idx = match self.resolve_output(output_uuid) {
-            Ok(idx) => idx,
-            Err(e) => return e.into(),
-        };
-        if let Some(output) = self.output.outputs.get_mut(output_idx) {
-            match output {
-                UnifiedOutput::Window(w) => {
-                    w.edge_blend_mode = mode;
-                }
-                UnifiedOutput::Headless(h) => {
-                    h.edge_blend_mode = mode;
-                }
-            }
-            if mode == EdgeBlendMode::Auto {
-                self.recompute_auto_edge_blend();
-            }
-            CommandResult::Ok
-        } else {
-            CommandResult::Err {
-                code: ErrorCode::NotFound,
-                message: "Output not found".into(),
-            }
-        }
-    }
-
     /// Set output rotation and rebuild intermediate textures.
     pub fn cmd_set_output_rotation(
         &mut self,
         output_uuid: &str,
         rotation: crate::renderer::context::OutputRotation,
     ) -> CommandResult {
-        let idx = match self.resolve_output(output_uuid) {
+        let idx = match self.output.resolve_output(output_uuid) {
             Ok(idx) => idx,
             Err(e) => return e.into(),
         };
         if let Some(output) = self.output.outputs.get_mut(idx) {
             match output {
                 UnifiedOutput::Window(w) => {
-                    w.set_rotation(&self.context.device, rotation);
+                    w.set_rotation(&self.render.context.device, rotation);
                 }
                 UnifiedOutput::Headless(h) => {
                     h.set_rotation(rotation);
@@ -693,35 +476,12 @@ impl VardaApp {
         }
     }
 
-    /// Set requested SDR precision and dithering, preserving any fallback status.
-    /// Set or clear one output's tonemap override.
-    ///
-    /// Needs no restart and no GPU reconfiguration: the curve only selects which
-    /// graded program the output reads, and the mixer materializes that on the
-    /// next frame.
-    pub fn cmd_set_output_tonemap(
-        &mut self,
-        output_uuid: &str,
-        tonemap: Option<crate::engine::value::render::TonemapMode>,
-    ) -> CommandResult {
-        let idx = match self.resolve_output(output_uuid) {
-            Ok(idx) => idx,
-            Err(e) => return e.into(),
-        };
-        match self.output.outputs.get_mut(idx) {
-            Some(UnifiedOutput::Window(w)) => w.tonemap_override = tonemap,
-            Some(UnifiedOutput::Headless(h)) => h.tonemap_override = tonemap,
-            None => return CommandResult::Ok,
-        }
-        CommandResult::Ok
-    }
-
     pub fn cmd_set_output_presentation(
         &mut self,
         output_uuid: &str,
         request: crate::engine::value::render::PresentationRequest,
     ) -> CommandResult {
-        let idx = match self.resolve_output(output_uuid) {
+        let idx = match self.output.resolve_output(output_uuid) {
             Ok(idx) => idx,
             Err(e) => return e.into(),
         };
@@ -739,16 +499,16 @@ impl VardaApp {
             .outputs
             .get(idx)
             .is_some_and(|output| matches!(output.target(), OutputTarget::NdiSend { .. }))
-            .then(|| self.external_io.ndi_manager.resolve_presentation(request));
+            .then(|| self.sources.io.ndi_manager.resolve_presentation(request));
         if let Some(output) = self.output.outputs.get_mut(idx) {
-            if let Err(error) = output.set_presentation_request(&self.context, request) {
+            if let Err(error) = output.set_presentation_request(&self.render.context, request) {
                 return CommandResult::Err {
                     code: ErrorCode::InternalError,
                     message: format!("Failed to configure output presentation: {error}"),
                 };
             }
             if let (UnifiedOutput::Headless(headless), Some(resolved)) = (output, ndi_resolution) {
-                headless.set_resolved_presentation(&self.context.device, resolved);
+                headless.set_resolved_presentation(&self.render.context.device, resolved);
             }
             self.refresh_presentation_notification(idx);
             if restart {
@@ -834,7 +594,7 @@ pub(crate) fn resolve_output_audio(
     device_name: Option<&str>,
     output_name: &str,
 ) -> (
-    Option<crate::renderer::AudioInput>,
+    Option<crate::delivery::AudioInput>,
     Option<AudioPassthrough>,
 ) {
     let Some(device_name) = device_name else {
@@ -852,7 +612,7 @@ pub(crate) fn resolve_output_audio(
         return (None, None);
     };
     if let Some(sub) = audio_manager.subscribe_pcm(source_id) {
-        let input = crate::renderer::AudioInput {
+        let input = crate::delivery::AudioInput {
             rx: sub.receiver,
             sample_rate: sub.format.sample_rate,
             channels: sub.format.channels,
@@ -869,6 +629,291 @@ pub(crate) fn resolve_output_audio(
             "Failed to open audio device '{device_name}' for output '{output_name}'; video-only"
         ));
         (None, None)
+    }
+}
+
+impl super::super::Outputs {
+    /// How long an output has been sending: the encoder's own clock when it
+    /// runs one, otherwise the time since it started. Zero for a window.
+    pub(crate) fn active_duration(&self, output: &UnifiedOutput) -> std::time::Duration {
+        let UnifiedOutput::Headless(h) = output else {
+            return std::time::Duration::ZERO;
+        };
+        self.deliveries
+            .get(&h.uuid)
+            .and_then(Delivery::duration)
+            .or_else(|| h.started_at.map(|t| t.elapsed()))
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn request_create_output(&mut self) {
+        self.pending_output_creates
+            .push(crate::scene::OutputConfig::default_windowed());
+    }
+
+    /// Close an output, stopping whatever it was sending through. Returns its
+    /// audio passthrough, for the caller to unsubscribe from the audio manager.
+    pub(crate) fn close_output(
+        &mut self,
+        output_uuid: &str,
+    ) -> anyhow::Result<Option<AudioPassthrough>> {
+        let idx = self.resolve_output(output_uuid)?;
+        let name = self.outputs[idx].name().to_string();
+        // Stop the encoder before removing, to release ports and files.
+        let passthrough = self
+            .deliveries
+            .remove(output_uuid)
+            .and_then(|mut delivery| delivery.stop());
+        let removed = self.outputs.remove(idx);
+        if let crate::renderer::context::UnifiedOutput::Window(w) = removed {
+            w.destroy();
+        }
+        log::info!("Closed output '{name}'");
+        Ok(passthrough)
+    }
+
+    pub(crate) fn set_output_display(
+        &mut self,
+        output_uuid: &str,
+        monitor_name: &str,
+    ) -> anyhow::Result<()> {
+        let idx = self.resolve_output(output_uuid)?;
+        let Some((mi, (_, handle))) = self
+            .cached_monitors
+            .iter()
+            .enumerate()
+            .find(|(_, (name, _))| name == monitor_name)
+            .map(|(mi, (n, h))| (mi, (n.clone(), h.clone())))
+        else {
+            anyhow::bail!("No monitor named '{monitor_name}'");
+        };
+        if let crate::renderer::context::UnifiedOutput::Window(output) = &mut self.outputs[idx] {
+            let target = crate::renderer::context::OutputTarget::Display {
+                name: monitor_name.to_string(),
+                monitor_index: mi,
+            };
+            output.set_target(target, Some(handle));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn assign_surface_to_output(&mut self, output_uuid: &str, surface_uuid: &str) {
+        if let Some(output) = self.outputs.iter_mut().find(|o| o.uuid() == output_uuid) {
+            let assignments = output.surface_assignments_mut();
+            // Warp lives on the surface now — the assignment is membership only.
+            if !assignments.iter().any(|a| a.surface_uuid == surface_uuid)
+                && self.surface_manager.find_by_uuid(surface_uuid).is_some()
+            {
+                assignments.push(crate::renderer::context::SurfaceAssignment {
+                    surface_uuid: surface_uuid.to_string(),
+                    enabled: true,
+                    overlap_zones: crate::renderer::edge_blend::SurfaceOverlapZones::default(),
+                });
+            }
+        }
+    }
+
+    pub(crate) fn unassign_surface_from_output(&mut self, output_uuid: &str, surface_uuid: &str) {
+        if let Some(output) = self.outputs.iter_mut().find(|o| o.uuid() == output_uuid) {
+            output
+                .surface_assignments_mut()
+                .retain(|a| a.surface_uuid != surface_uuid);
+        }
+    }
+
+    /// Recompute per-surface edge blend for all Auto-mode outputs based on surface topology.
+    pub fn recompute_auto_edge_blend(&mut self) {
+        use crate::renderer::edge_blend::{
+            EdgeBlendMode, MappedRegion, OutputSurfaceInfo, SurfaceOverlapZones,
+            compute_auto_edge_blend,
+        };
+
+        // Check if any output is in Auto mode — early exit if none.
+        let auto_count = self
+            .outputs
+            .iter()
+            .filter(|o| o.edge_blend_mode() == EdgeBlendMode::Auto)
+            .count();
+        if auto_count == 0 {
+            return;
+        }
+        log::debug!("[edge-blend] recompute_auto: {auto_count} outputs in Auto mode");
+
+        // Build OutputSurfaceInfo for each output (include surface_uuid in MappedRegion).
+        let infos: Vec<OutputSurfaceInfo> = self
+            .outputs
+            .iter()
+            .enumerate()
+            .map(|(idx, output)| {
+                let mut regions = Vec::new();
+                for assignment in output.surface_assignments() {
+                    if let Some((_, surface)) =
+                        self.surface_manager.find_by_uuid(&assignment.surface_uuid)
+                    {
+                        let bb = surface.bounding_box();
+                        regions.push(MappedRegion {
+                            source_key: format!("{:?}", surface.source),
+                            bbox: [bb.x, bb.y, bb.width, bb.height],
+                            surface_uuid: assignment.surface_uuid.clone(),
+                            vertices: surface.vertices.clone(),
+                            extra_contours: surface.extra_contours.clone(),
+                            holes: surface.hole_contours.clone(),
+                        });
+                    }
+                }
+                let default_gamma = output.edge_blend().left.gamma;
+                OutputSurfaceInfo {
+                    output_idx: idx,
+                    edge_blend_mode: output.edge_blend_mode(),
+                    default_gamma,
+                    regions,
+                }
+            })
+            .collect();
+
+        // Clear overlap zones on all Auto-mode assignments before applying new results.
+        for output in &mut self.outputs {
+            if output.edge_blend_mode() == EdgeBlendMode::Auto {
+                for assignment in output.surface_assignments_mut() {
+                    assignment.overlap_zones = SurfaceOverlapZones::default();
+                }
+            }
+        }
+
+        // Compute per-surface overlap zones and apply to assignments.
+        let results = compute_auto_edge_blend(&infos);
+        log::debug!("[edge-blend] computed {} results", results.len());
+        for result in &results {
+            log::debug!(
+                "[edge-blend]   output={} surface={} zones={}",
+                result.output_idx,
+                result.surface_uuid,
+                result.overlap_zones.zones.len(),
+            );
+        }
+        for result in results {
+            let output = &mut self.outputs[result.output_idx];
+            for assignment in output.surface_assignments_mut() {
+                if assignment.surface_uuid == result.surface_uuid {
+                    assignment.overlap_zones = result.overlap_zones;
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Resolve an output UUID to its current index.
+    pub(crate) fn resolve_output(
+        &self,
+        uuid: &str,
+    ) -> crate::engine::value::entity::Resolved<usize> {
+        self.outputs
+            .iter()
+            .position(|o| o.uuid() == uuid)
+            .ok_or_else(|| crate::engine::value::entity::UnknownEntity::new("output", uuid))
+    }
+
+    /// Set the calibration display mode on a windowed output.
+    pub fn cmd_set_calibration_mode(
+        &mut self,
+        output_uuid: &str,
+        mode: CalibrationMode,
+    ) -> CommandResult {
+        let idx = match self.resolve_output(output_uuid) {
+            Ok(idx) => idx,
+            Err(e) => return e.into(),
+        };
+        if let Some(UnifiedOutput::Window(w)) = self.outputs.get_mut(idx) {
+            w.calibration_mode = mode;
+            CommandResult::Ok
+        } else {
+            CommandResult::Err {
+                code: ErrorCode::NotFound,
+                message: "Output not found or not windowed".into(),
+            }
+        }
+    }
+
+    /// Set edge blend configuration for an output.
+    pub fn cmd_set_edge_blend(
+        &mut self,
+        output_uuid: &str,
+        config: crate::renderer::edge_blend::EdgeBlendConfig,
+    ) -> CommandResult {
+        let output_idx = match self.resolve_output(output_uuid) {
+            Ok(idx) => idx,
+            Err(e) => return e.into(),
+        };
+        if let Some(output) = self.outputs.get_mut(output_idx) {
+            match output {
+                UnifiedOutput::Window(w) => {
+                    w.edge_blend = config;
+                }
+                UnifiedOutput::Headless(h) => {
+                    h.edge_blend = config;
+                }
+            }
+            CommandResult::Ok
+        } else {
+            CommandResult::Err {
+                code: ErrorCode::NotFound,
+                message: "Output not found".into(),
+            }
+        }
+    }
+
+    /// Set edge blend mode for an output; triggers auto-recompute if mode is Auto.
+    pub fn cmd_set_edge_blend_mode(
+        &mut self,
+        output_uuid: &str,
+        mode: EdgeBlendMode,
+    ) -> CommandResult {
+        let output_idx = match self.resolve_output(output_uuid) {
+            Ok(idx) => idx,
+            Err(e) => return e.into(),
+        };
+        if let Some(output) = self.outputs.get_mut(output_idx) {
+            match output {
+                UnifiedOutput::Window(w) => {
+                    w.edge_blend_mode = mode;
+                }
+                UnifiedOutput::Headless(h) => {
+                    h.edge_blend_mode = mode;
+                }
+            }
+            if mode == EdgeBlendMode::Auto {
+                self.recompute_auto_edge_blend();
+            }
+            CommandResult::Ok
+        } else {
+            CommandResult::Err {
+                code: ErrorCode::NotFound,
+                message: "Output not found".into(),
+            }
+        }
+    }
+
+    /// Set requested SDR precision and dithering, preserving any fallback status.
+    /// Set or clear one output's tonemap override.
+    ///
+    /// Needs no restart and no GPU reconfiguration: the curve only selects which
+    /// graded program the output reads, and the mixer materializes that on the
+    /// next frame.
+    pub fn cmd_set_output_tonemap(
+        &mut self,
+        output_uuid: &str,
+        tonemap: Option<crate::engine::value::render::TonemapMode>,
+    ) -> CommandResult {
+        let idx = match self.resolve_output(output_uuid) {
+            Ok(idx) => idx,
+            Err(e) => return e.into(),
+        };
+        match self.outputs.get_mut(idx) {
+            Some(UnifiedOutput::Window(w)) => w.tonemap_override = tonemap,
+            Some(UnifiedOutput::Headless(h)) => h.tonemap_override = tonemap,
+            None => return CommandResult::Ok,
+        }
+        CommandResult::Ok
     }
 }
 

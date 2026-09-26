@@ -1638,7 +1638,7 @@ impl FfmpegSubprocess {
     /// be spawned — both indicate the process/thread limits are exhausted.
     pub fn spawn_srt(
         url: &str,
-        codec: &super::context::SrtCodec,
+        codec: &crate::engine::value::render::SrtCodec,
         request: PresentationRequest,
         width: u32,
         height: u32,
@@ -1662,8 +1662,8 @@ impl FfmpegSubprocess {
         };
 
         let configured_codec = match codec {
-            super::context::SrtCodec::H264 => StreamingCodec::H264,
-            super::context::SrtCodec::H265 => StreamingCodec::H265,
+            crate::engine::value::render::SrtCodec::H264 => StreamingCodec::H264,
+            crate::engine::value::render::SrtCodec::H265 => StreamingCodec::H265,
         };
         let plan = StreamingPlan::resolve(
             StreamingProtocol::Srt,
@@ -1748,7 +1748,7 @@ impl FfmpegSubprocess {
     #[allow(clippy::too_many_arguments)]
     pub fn spawn_hls(
         name: &str,
-        codec: &super::context::StreamingCodec,
+        codec: &crate::engine::value::render::StreamingCodec,
         request: PresentationRequest,
         width: u32,
         height: u32,
@@ -1864,7 +1864,7 @@ impl FfmpegSubprocess {
     #[allow(clippy::too_many_arguments)]
     pub fn spawn_rtmp(
         url: &str,
-        codec: &super::context::StreamingCodec,
+        codec: &crate::engine::value::render::StreamingCodec,
         codec_contract: RtmpCodecContract,
         request: PresentationRequest,
         width: u32,
@@ -1968,7 +1968,7 @@ impl FfmpegSubprocess {
     /// be spawned — both indicate the process/thread limits are exhausted.
     pub fn spawn_dash(
         name: &str,
-        codec: &super::context::StreamingCodec,
+        codec: &crate::engine::value::render::StreamingCodec,
         request: PresentationRequest,
         width: u32,
         height: u32,
@@ -2432,7 +2432,7 @@ mod tests {
 
     #[test]
     fn recording_codec_display() {
-        use crate::renderer::context::SrtCodec;
+        use crate::engine::value::render::SrtCodec;
 
         assert_eq!(format!("{}", RecordingCodec::H264), "H.264");
         assert_eq!(format!("{}", RecordingCodec::H265), "H.265 (HEVC)");
@@ -3164,7 +3164,7 @@ mod tests {
         let url = "srt://127.0.0.1:19876";
         let mut sub = FfmpegSubprocess::spawn_srt(
             url,
-            &crate::renderer::context::SrtCodec::H264,
+            &crate::engine::value::render::SrtCodec::H264,
             PresentationRequest::default(),
             64,
             64,

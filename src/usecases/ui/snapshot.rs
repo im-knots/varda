@@ -311,7 +311,11 @@ pub(crate) fn build_ui_data(
                             let surface_name = app
                                 .output
                                 .surface_manager
-                                .find_by_uuid(&a.surface_uuid).map_or_else(|| format!("Surface {}", a.surface_uuid), |(_, s)| s.name.clone());
+                                .find_by_uuid(&a.surface_uuid)
+                                .map_or_else(
+                                    || format!("Surface {}", a.surface_uuid),
+                                    |(_, s)| s.name.clone(),
+                                );
                             SurfaceAssignmentUI {
                                 surface_uuid: a.surface_uuid.clone(),
                                 surface_name,
@@ -340,7 +344,11 @@ pub(crate) fn build_ui_data(
                             surface_name: app
                                 .output
                                 .surface_manager
-                                .find_by_uuid(&a.surface_uuid).map_or_else(|| format!("Surface {}", a.surface_uuid), |(_, s)| s.name.clone()),
+                                .find_by_uuid(&a.surface_uuid)
+                                .map_or_else(
+                                    || format!("Surface {}", a.surface_uuid),
+                                    |(_, s)| s.name.clone(),
+                                ),
                             enabled: a.enabled,
                             overlap_zones: a.overlap_zones.clone(),
                         })
@@ -350,7 +358,7 @@ pub(crate) fn build_ui_data(
                         format!("{}", h.target),
                         false,
                         h.active,
-                        o.active_duration(),
+                        app.output.active_duration(o),
                         sa,
                         crate::renderer::context::CalibrationMode::Off,
                         (h.width, h.height),
@@ -359,37 +367,28 @@ pub(crate) fn build_ui_data(
             };
             let edge_blend_mode = o.edge_blend_mode();
             let edge_blend = o.edge_blend();
-            let audio_passthrough = match o {
+            let delivery_state = match o {
                 crate::renderer::context::UnifiedOutput::Headless(h) => {
-                    h.audio_pcm.as_ref().map(|p| AudioPassthroughUI {
-                        device: h.target.audio_device().unwrap_or_default().to_string(),
-                        frames_written: h
-                            .subprocess
-                            .as_deref()
-                            .and_then(crate::internal::renderer::subprocess::FfmpegSubprocess::audio_frames_written)
-                            .unwrap_or(0),
-                        frames_dropped: p.dropped.load(std::sync::atomic::Ordering::Relaxed),
-                        silence_spliced: h
-                            .subprocess
-                            .as_deref()
-                            .and_then(crate::internal::renderer::subprocess::FfmpegSubprocess::audio_silence_spliced)
-                            .unwrap_or(0),
-                    })
+                    app.output.deliveries.get(&h.uuid).map(|d| (h, d))
                 }
                 crate::renderer::context::UnifiedOutput::Window(_) => None,
             };
-            let delivery = match o {
-                crate::renderer::context::UnifiedOutput::Headless(h) => {
-                    h.subprocess.as_deref().map(|sub| {
-                        crate::usecases::ui::DeliveryHealthUI {
-                            frames_written: sub.frames_written(),
-                            frames_dropped: sub.frames_dropped(),
-                            frames_padded: sub.frames_padded(),
-                        }
+            let audio_passthrough = delivery_state.and_then(|(h, d)| {
+                d.audio_health().map(|health| AudioPassthroughUI {
+                    device: h.target.audio_device().unwrap_or_default().to_string(),
+                    frames_written: health.frames_written,
+                    frames_dropped: health.frames_dropped,
+                    silence_spliced: health.silence_spliced,
+                })
+            });
+            let delivery = delivery_state.and_then(|(_, d)| {
+                d.encoder_health()
+                    .map(|health| crate::usecases::ui::DeliveryHealthUI {
+                        frames_written: health.frames_written,
+                        frames_dropped: health.frames_dropped,
+                        frames_padded: health.frames_padded,
                     })
-                }
-                crate::renderer::context::UnifiedOutput::Window(_) => None,
-            };
+            });
             OutputUI {
                 uuid: o.uuid().to_string(),
                 name: o.name().to_string(),
@@ -648,50 +647,54 @@ pub(crate) fn build_ui_data(
             })
             .collect(),
         hls_library_configs: app
-            .external_io
+            .sources
+            .io
             .hls_library
             .iter()
             .map(|url| crate::usecases::ui::HlsLibraryEntry {
                 url: url.clone(),
-                connected: (0..app.external_io.stream_manager.receiver_count()).any(|i| {
-                    app.external_io.stream_manager.receiver_url(i) == Some(url.as_str())
-                        && app.external_io.stream_manager.is_connected(i)
+                connected: (0..app.sources.io.stream_manager.receiver_count()).any(|i| {
+                    app.sources.io.stream_manager.receiver_url(i) == Some(url.as_str())
+                        && app.sources.io.stream_manager.is_connected(i)
                 }),
             })
             .collect(),
         dash_library_configs: app
-            .external_io
+            .sources
+            .io
             .dash_library
             .iter()
             .map(|url| crate::usecases::ui::DashLibraryEntry {
                 url: url.clone(),
-                connected: (0..app.external_io.stream_manager.receiver_count()).any(|i| {
-                    app.external_io.stream_manager.receiver_url(i) == Some(url.as_str())
-                        && app.external_io.stream_manager.is_connected(i)
+                connected: (0..app.sources.io.stream_manager.receiver_count()).any(|i| {
+                    app.sources.io.stream_manager.receiver_url(i) == Some(url.as_str())
+                        && app.sources.io.stream_manager.is_connected(i)
                 }),
             })
             .collect(),
         rtmp_library_configs: app
-            .external_io
+            .sources
+            .io
             .rtmp_library
             .iter()
             .map(|(url, mode)| crate::usecases::ui::RtmpLibraryEntry {
                 url: url.clone(),
                 mode: *mode,
-                connected: (0..app.external_io.stream_manager.receiver_count()).any(|i| {
-                    app.external_io.stream_manager.receiver_url(i) == Some(url.as_str())
-                        && app.external_io.stream_manager.is_connected(i)
+                connected: (0..app.sources.io.stream_manager.receiver_count()).any(|i| {
+                    app.sources.io.stream_manager.receiver_url(i) == Some(url.as_str())
+                        && app.sources.io.stream_manager.is_connected(i)
                 }),
             })
             .collect(),
         html_library_configs: app
-            .external_io
+            .sources
+            .io
             .html_library
             .iter()
             .map(|url| crate::usecases::ui::HtmlLibraryEntry {
                 url: url.clone(),
-                active: (0..app.external_io.html_manager.instance_count())
-                    .any(|i| app.external_io.html_manager.instance_url(i) == Some(url.as_str())),
+                active: (0..app.sources.io.html_manager.instance_count())
+                    .any(|i| app.sources.io.html_manager.instance_url(i) == Some(url.as_str())),
             })
             .collect(),
 

@@ -1,16 +1,13 @@
-//! Engine layer — domain contracts (traits + types).
+//! Engine layer — domain contracts: the `EngineCommand` vocabulary, the
+//! `EngineState` snapshot types, and the plain value types in [`value`].
 //!
-//! This module defines the public API for the Varda engine.
-//! NO implementation, NO GPU types. Pure contracts.
-//!
-//! Consumers (UI, HTTP API, CLI) program against these traits.
-//! The concrete implementation lives in `src/app/`.
+//! NO implementation, NO GPU types. Consumers (UI, HTTP API, CLI) send
+//! commands and read snapshots; the concrete implementation lives in
+//! `src/app/`.
 
-pub mod traits;
 pub mod types;
 pub mod value;
 
-pub use traits::*;
 pub use types::*;
 
 /// Result of processing an `EngineCommand`. Sent back to the caller

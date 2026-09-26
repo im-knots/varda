@@ -306,7 +306,7 @@ impl Mixer {
     // ── Transition Sequence Control ──────────────────────────────────
 
     /// Start playing a transition sequence by index from the beginning.
-    pub fn start_sequence(&mut self, seq_idx: usize) {
+    pub(super) fn start_sequence_at(&mut self, seq_idx: usize) {
         if let Some(seq) = self.transition_sequences.get_mut(seq_idx) {
             if seq.steps.is_empty() {
                 return;
@@ -323,7 +323,7 @@ impl Mixer {
     }
 
     /// Stop a transition sequence by index (leaves channels at current state).
-    pub fn stop_sequence(&mut self, seq_idx: usize) {
+    pub(super) fn stop_sequence_at(&mut self, seq_idx: usize) {
         if let Some(seq) = self.transition_sequences.get_mut(seq_idx) {
             seq.state.playing = false;
             log::info!(
@@ -340,7 +340,7 @@ impl Mixer {
     pub(super) fn stop_free_running_sequences(&mut self) {
         for idx in 0..self.transition_sequences.len() {
             if self.transition_sequences[idx].state.playing {
-                self.stop_sequence(idx);
+                self.stop_sequence_at(idx);
             }
         }
     }

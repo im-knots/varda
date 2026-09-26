@@ -12,6 +12,12 @@
 use super::VardaApp;
 use crate::channel::{DeckTransitionPhase, DurationSpec, TransitionTrigger};
 use crate::engine::types::{
+    AnalyzerScalarInfo, AnalyzerTypeInfo, AudioDeviceSnapshot, AudioPassthroughSnapshot,
+    AudioSnapshot, DeliveryHealthSnapshot, ModulationAssignmentSnapshot, ModulationSnapshot,
+    ModulationSourceSnapshot, ModulationSourceSnapshotEntry, MonitorSnapshot, OutputSnapshot,
+    OutputWindowSnapshot, SurfaceAssignmentSnapshot, SurfaceSnapshot,
+};
+use crate::engine::types::{
     AutoTransitionSnapshot, CameraSnapshot, ChannelSnapshot, ClockSnapshot, DeckSnapshot,
     DepthPreproParamsSnapshot, EffectSnapshot, EngineState, MidiDeviceSnapshot,
     MidiMappingSnapshot, MidiSnapshot, MixerSnapshot, ParamSnapshot, PointCloudParamsSnapshot,
@@ -19,11 +25,12 @@ use crate::engine::types::{
     SequenceStepKindSnapshot, SequenceStepSnapshot, ShaderParamsSnapshot, TapDeckSnapshot,
     VideoPlaybackSnapshot,
 };
+use crate::modulation::ModulationSource;
 
 /// Build a `MixerSnapshot` from the current `VardaApp` state.
 pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
     let mixer = &app.mixer;
-    let channel_labels = app.channel_labels();
+    let channel_labels = app.mixer.channel_labels();
 
     let channels = mixer
         .channels()
@@ -282,6 +289,7 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
         .map_or(0.0, |a| a.progress());
 
     let transition_names = app
+        .sources
         .registry
         .transitions()
         .iter()
@@ -438,6 +446,7 @@ fn build_sequence_snapshots(mixer: &crate::mixer::Mixer) -> Vec<SequenceSnapshot
 /// Build a `RegistrySnapshot` from the current `VardaApp` state.
 pub(crate) fn build_registry_snapshot(app: &VardaApp) -> RegistrySnapshot {
     let mut generators: Vec<(String, usize)> = app
+        .sources
         .registry
         .generators()
         .iter()
@@ -446,6 +455,7 @@ pub(crate) fn build_registry_snapshot(app: &VardaApp) -> RegistrySnapshot {
         .collect();
     generators.sort_by_key(|a| a.0.to_lowercase());
     let mut filters: Vec<(String, usize)> = app
+        .sources
         .registry
         .filters()
         .iter()
@@ -456,7 +466,7 @@ pub(crate) fn build_registry_snapshot(app: &VardaApp) -> RegistrySnapshot {
     RegistrySnapshot {
         generators,
         filters,
-        shader_count: app.registry.count(),
+        shader_count: app.sources.registry.count(),
     }
 }
 
@@ -513,6 +523,7 @@ pub(crate) fn build_midi_snapshot(app: &VardaApp) -> MidiSnapshot {
 pub(crate) fn build_camera_snapshot(app: &VardaApp) -> CameraSnapshot {
     CameraSnapshot {
         devices: app
+            .sources
             .camera_manager
             .devices()
             .iter()
@@ -624,13 +635,13 @@ pub(crate) fn build_clock_snapshot(app: &VardaApp) -> ClockSnapshot {
 /// follower count, which lives in the modulation engine, and the record state,
 /// which is the session's.
 pub(crate) fn build_transport_snapshot(app: &VardaApp) -> crate::engine::types::TransportSnapshot {
-    let mut snapshot: crate::engine::types::TransportSnapshot = (&app.transport).into();
+    let mut snapshot: crate::engine::types::TransportSnapshot = (&app.show.transport).into();
     snapshot.followers = app
         .mixer
         .modulation()
         .followers_of(crate::timebase::Timebase::Transport);
-    snapshot.record_armed = app.record_armed();
-    snapshot.recording_params = app.recording_params();
+    snapshot.record_armed = app.show.recorder.armed();
+    snapshot.recording_params = app.show.recorder.recording_params();
     snapshot
 }
 
@@ -676,18 +687,322 @@ pub(crate) fn build_arrangement_snapshot(
     })
 }
 
+pub(crate) fn build_audio_snapshot(app: &VardaApp) -> AudioSnapshot {
+    let primary_audio = app.audio.manager.get_primary_data();
+    let active_ids = app.audio.manager.active_source_ids();
+    AudioSnapshot {
+        level: primary_audio.level,
+        bass: primary_audio.bass(),
+        mid: primary_audio.mid(),
+        treble: primary_audio.treble(),
+        bpm: primary_audio.bpm,
+        beat_phase: primary_audio.beat_phase(),
+        enabled: app.audio.manager.has_active_source(),
+        devices: app
+            .audio
+            .manager
+            .devices()
+            .iter()
+            .map(|d| AudioDeviceSnapshot {
+                id: d.id,
+                name: d.name.clone(),
+                active: active_ids.contains(&d.id),
+            })
+            .collect(),
+        fft: primary_audio.fft.clone(),
+        sample_rate: primary_audio.sample_rate,
+    }
+}
+
+pub(crate) fn build_modulation_snapshot(app: &VardaApp) -> ModulationSnapshot {
+    let m = &app.mixer;
+    let sources = m
+        .modulation()
+        .sources
+        .iter()
+        .map(|entry| {
+            let snapshot = match &entry.source {
+                ModulationSource::LFO {
+                    waveform,
+                    frequency,
+                    phase,
+                    amplitude,
+                    bipolar,
+                } => ModulationSourceSnapshot::LFO {
+                    waveform: *waveform,
+                    frequency: *frequency,
+                    phase: *phase,
+                    amplitude: *amplitude,
+                    bipolar: *bipolar,
+                },
+                ModulationSource::AudioBand {
+                    source_id,
+                    freq_low,
+                    freq_high,
+                    gain,
+                    smoothing,
+                    mode,
+                    noise_gate,
+                } => ModulationSourceSnapshot::Audio {
+                    source_id: *source_id,
+                    freq_low: *freq_low,
+                    freq_high: *freq_high,
+                    gain: *gain,
+                    smoothing: *smoothing,
+                    mode: *mode,
+                    noise_gate: *noise_gate,
+                },
+                ModulationSource::ADSR {
+                    attack,
+                    decay,
+                    sustain,
+                    release,
+                    stage,
+                    ..
+                } => ModulationSourceSnapshot::ADSR {
+                    attack: *attack,
+                    decay: *decay,
+                    sustain: *sustain,
+                    release: *release,
+                    stage: *stage,
+                },
+                ModulationSource::StepSequencer {
+                    steps,
+                    rate,
+                    interpolation,
+                    bipolar,
+                } => ModulationSourceSnapshot::StepSequencer {
+                    steps: steps.clone(),
+                    rate: *rate,
+                    interpolation: *interpolation,
+                    bipolar: *bipolar,
+                },
+                ModulationSource::Analyzer {
+                    deck_id,
+                    analyzer_type,
+                    output_name,
+                    smoothing,
+                } => ModulationSourceSnapshot::Analyzer {
+                    deck_id: deck_id.clone(),
+                    analyzer_type: analyzer_type.clone(),
+                    output_name: output_name.clone(),
+                    smoothing: *smoothing,
+                },
+                ModulationSource::Envelope { breakpoints, .. } => {
+                    ModulationSourceSnapshot::Envelope {
+                        breakpoints: breakpoints.clone(),
+                    }
+                }
+            };
+            ModulationSourceSnapshotEntry {
+                uuid: entry.uuid.clone(),
+                source: snapshot,
+                timebase: entry.timebase,
+            }
+        })
+        .collect();
+    let current_values: std::collections::HashMap<String, f32> = m
+        .modulation()
+        .sources
+        .iter()
+        .enumerate()
+        .map(|(i, entry)| {
+            (
+                entry.uuid.clone(),
+                m.modulation()
+                    .current_values()
+                    .get(i)
+                    .copied()
+                    .unwrap_or(0.0),
+            )
+        })
+        .collect();
+    let assignments = m
+        .modulation()
+        .assignments
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.clone(),
+                v.iter()
+                    .map(|pm| ModulationAssignmentSnapshot {
+                        source_id: pm.source_id.clone(),
+                        amount: pm.amount,
+                    })
+                    .collect(),
+            )
+        })
+        .collect();
+    ModulationSnapshot {
+        sources,
+        current_values,
+        assignments,
+    }
+}
+
+pub(crate) fn build_output_snapshot(app: &VardaApp) -> OutputSnapshot {
+    OutputSnapshot {
+        windows: app
+            .output
+            .outputs
+            .iter()
+            .map(|o| {
+                use crate::renderer::context::{OutputTarget, UnifiedOutput};
+                let assignments = match o {
+                    UnifiedOutput::Window(w) => &w.surface_assignments,
+                    UnifiedOutput::Headless(h) => &h.surface_assignments,
+                };
+                let surface_assignments = assignments
+                    .iter()
+                    .map(|a| {
+                        let surface_name = app
+                            .output
+                            .surface_manager
+                            .find_by_uuid(&a.surface_uuid)
+                            .map_or_else(
+                                || format!("Surface {}", a.surface_uuid),
+                                |(_, s)| s.name.clone(),
+                            );
+                        SurfaceAssignmentSnapshot {
+                            surface_uuid: a.surface_uuid.clone(),
+                            surface_name,
+                            enabled: a.enabled,
+                        }
+                    })
+                    .collect();
+                let (
+                    target,
+                    is_on_display,
+                    is_active,
+                    calibration_mode,
+                    audio_passthrough,
+                    delivery,
+                ) = match o {
+                    UnifiedOutput::Window(w) => (
+                        w.target.clone(),
+                        matches!(w.target, OutputTarget::Display { .. }),
+                        false,
+                        w.calibration_mode,
+                        None,
+                        None,
+                    ),
+                    UnifiedOutput::Headless(h) => {
+                        let delivery = app.output.deliveries.get(&h.uuid);
+                        let audio = delivery
+                            .and_then(crate::delivery::Delivery::audio_health)
+                            .map(|health| AudioPassthroughSnapshot {
+                                device: h.target.audio_device().unwrap_or_default().to_string(),
+                                frames_written: health.frames_written,
+                                frames_dropped: health.frames_dropped,
+                            });
+                        let delivery = delivery
+                            .and_then(crate::delivery::Delivery::encoder_health)
+                            .map(|health| DeliveryHealthSnapshot {
+                                frames_written: health.frames_written,
+                                frames_dropped: health.frames_dropped,
+                                frames_padded: health.frames_padded,
+                            });
+                        (
+                            h.target.clone(),
+                            false,
+                            h.active,
+                            crate::renderer::context::CalibrationMode::Off,
+                            audio,
+                            delivery,
+                        )
+                    }
+                };
+                OutputWindowSnapshot {
+                    uuid: o.uuid().to_string(),
+                    name: o.name().to_string(),
+                    target_label: format!("{target}"),
+                    target,
+                    is_on_display,
+                    is_active,
+                    surface_assignments,
+                    calibration_mode,
+                    presentation_request: o.presentation_request(),
+                    resolved_presentation: o.resolved_presentation().clone(),
+                    mode_availability: o.mode_availability().to_vec(),
+                    tonemap_override: o.tonemap_override(),
+                    audio_passthrough,
+                    delivery,
+                }
+            })
+            .collect(),
+        surfaces: app
+            .output
+            .surface_manager
+            .surfaces
+            .iter()
+            .map(|s| SurfaceSnapshot {
+                uuid: s.uuid.clone(),
+                name: s.name.clone(),
+                vertices: s.vertices.clone(),
+                extra_contours: s.extra_contours.clone(),
+                source: s.source.clone(),
+                content_mapping: s.content_mapping,
+                output_type: s.output_type,
+                circle_hint: s.circle_hint,
+                warp: s.effective_warp(),
+                warp_bound: s.warp_bound,
+                path: s.path.clone(),
+                holes: s.holes.clone(),
+                hole_contours: s.hole_contours.clone(),
+            })
+            .collect(),
+        monitors: app
+            .output
+            .cached_monitors
+            .iter()
+            .enumerate()
+            .map(|(i, (name, handle))| {
+                let size = handle.size();
+                MonitorSnapshot {
+                    name: name.clone(),
+                    index: i,
+                    width: size.width,
+                    height: size.height,
+                }
+            })
+            .collect(),
+    }
+}
+
+pub(crate) fn build_analyzer_types(app: &VardaApp) -> Vec<AnalyzerTypeInfo> {
+    app.sources
+        .analyzer_registry
+        .available_types()
+        .into_iter()
+        .filter_map(|t| {
+            let schema = app.sources.analyzer_registry.schema_for(t)?;
+            Some(AnalyzerTypeInfo {
+                analyzer_type: t.to_owned(),
+                scalar_outputs: schema
+                    .scalars
+                    .iter()
+                    .map(|s| AnalyzerScalarInfo {
+                        name: s.name.clone(),
+                        description: s.description.clone(),
+                        range: s.range,
+                        default_smoothing: s.default_smoothing,
+                    })
+                    .collect(),
+                texture_outputs: schema.textures.iter().map(|t| t.name.clone()).collect(),
+            })
+        })
+        .collect()
+}
+
 /// Build a full `EngineState` from all subsystem snapshots.
 pub(crate) fn build_engine_state(app: &VardaApp) -> EngineState {
-    use crate::engine::traits::{
-        AnalyzerQueries, AudioQueries, MacroQueries, MixerQueries, ModulationQueries, OutputQueries,
-    };
     EngineState {
-        mixer: app.mixer_snapshot(),
-        deck_loads: app.deck_loader.snapshot(),
+        mixer: build_mixer_snapshot(app),
+        deck_loads: app.sources.deck_loader.snapshot(),
         dome: app.dome_config(),
-        audio: app.audio_snapshot(),
-        modulation: app.modulation_snapshot(),
-        outputs: app.output_snapshot(),
+        audio: build_audio_snapshot(app),
+        modulation: build_modulation_snapshot(app),
+        outputs: build_output_snapshot(app),
         registry: build_registry_snapshot(app),
         midi: build_midi_snapshot(app),
         cameras: build_camera_snapshot(app),
@@ -699,22 +1014,22 @@ pub(crate) fn build_engine_state(app: &VardaApp) -> EngineState {
         arrangement: build_arrangement_snapshot(app),
         fps: app.frame_stats.fps_smoothed,
         frame_count: app.frame_stats.frame_count,
-        target_fps: app.target_fps,
-        ndi_sources: app.external_io.ndi_manager.discovered_sources(),
-        ndi_available: app.external_io.ndi_manager.is_available(),
+        target_fps: app.render.target_fps,
+        ndi_sources: app.sources.io.ndi_manager.discovered_sources(),
+        ndi_available: app.sources.io.ndi_manager.is_available(),
         #[cfg(target_os = "macos")]
-        syphon_sources: app.external_io.syphon_manager.discovered_sources(),
+        syphon_sources: app.sources.io.syphon_manager.discovered_sources(),
         #[cfg(target_os = "macos")]
-        syphon_available: app.external_io.syphon_manager.is_available(),
+        syphon_available: app.sources.io.syphon_manager.is_available(),
         #[cfg(not(target_os = "macos"))]
         syphon_sources: vec![],
         #[cfg(not(target_os = "macos"))]
         syphon_available: false,
-        spout_sources: app.external_io.spout_manager.discovered_sources(),
-        spout_available: app.external_io.spout_manager.is_available(),
+        spout_sources: app.sources.io.spout_manager.discovered_sources(),
+        spout_available: app.sources.io.spout_manager.is_available(),
         stream_receivers: build_stream_receiver_snapshots(app),
-        analyzers: app.available_analyzers(),
-        macros: app.macro_snapshot(),
+        analyzers: build_analyzer_types(app),
+        macros: app.mixer.macros().macros().to_vec(),
         can_undo: app.history_can_undo(),
         can_redo: app.history_can_redo(),
     }
@@ -727,10 +1042,10 @@ fn build_stream_receiver_snapshots(
     let mut result: Vec<crate::engine::types::StreamReceiverSnapshot> = Vec::new();
 
     // Add library entries (configured but possibly not connected)
-    for (url, mode) in &app.external_io.stream_library {
-        let connected = (0..app.external_io.stream_manager.receiver_count()).any(|i| {
-            app.external_io.stream_manager.receiver_url(i) == Some(url.as_str())
-                && app.external_io.stream_manager.is_connected(i)
+    for (url, mode) in &app.sources.io.stream_library {
+        let connected = (0..app.sources.io.stream_manager.receiver_count()).any(|i| {
+            app.sources.io.stream_manager.receiver_url(i) == Some(url.as_str())
+                && app.sources.io.stream_manager.is_connected(i)
         });
         result.push(crate::engine::types::StreamReceiverSnapshot {
             url: url.clone(),
@@ -740,16 +1055,16 @@ fn build_stream_receiver_snapshots(
     }
 
     // Add active receivers not already in the library (e.g. restored from scene)
-    for i in 0..app.external_io.stream_manager.receiver_count() {
+    for i in 0..app.sources.io.stream_manager.receiver_count() {
         if let (Some(url), Some(mode)) = (
-            app.external_io.stream_manager.receiver_url(i),
-            app.external_io.stream_manager.receiver_mode(i),
+            app.sources.io.stream_manager.receiver_url(i),
+            app.sources.io.stream_manager.receiver_mode(i),
         ) && !result.iter().any(|r| r.url == url)
         {
             result.push(crate::engine::types::StreamReceiverSnapshot {
                 url: url.to_string(),
                 mode: format!("{mode}").to_lowercase(),
-                connected: app.external_io.stream_manager.is_connected(i),
+                connected: app.sources.io.stream_manager.is_connected(i),
             });
         }
     }
@@ -760,7 +1075,6 @@ fn build_stream_receiver_snapshots(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::traits::*;
 
     fn headless_app() -> Option<super::super::VardaApp> {
         let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
@@ -788,7 +1102,7 @@ mod tests {
         };
         let ch = build_mixer_snapshot(&app).channels[0].uuid.clone();
         let deck_uuid = app.add_solid_color_deck(&ch, [1.0, 0.0, 0.0, 1.0]).unwrap();
-        app.set_deck_opacity(&deck_uuid, 0.5).unwrap();
+        app.mixer.set_deck_opacity(&deck_uuid, 0.5).unwrap();
         let snap = build_mixer_snapshot(&app);
         let deck = &snap.channels[0].decks[0];
         assert!((deck.opacity - 0.5).abs() < 1e-5);
@@ -804,7 +1118,7 @@ mod tests {
         let ch = build_mixer_snapshot(&app).channels[0].uuid.clone();
         let deck_uuid = app.add_solid_color_deck(&ch, [1.0, 0.0, 0.0, 1.0]).unwrap();
         let target = crate::engine::types::EffectTarget::Deck(deck_uuid);
-        let effect_uuid = app.add_effect(target, "invert").unwrap();
+        let effect_uuid = app.add_effect(&target, "invert").unwrap();
 
         let snap = build_mixer_snapshot(&app);
         let effects = &snap.channels[0].decks[0].effects;

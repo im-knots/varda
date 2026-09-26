@@ -1,7 +1,7 @@
 //! Stream receive — background ffmpeg decode thread → shared buffer → GPU upload.
 //!
-//! SRT output streaming is handled per-output via `FfmpegSubprocess` in
-//! `src/renderer/subprocess.rs`. This module handles stream *input* (receiving
+//! Stream output is handled per output by the `delivery` module's
+//! `FfmpegSubprocess`. This module handles stream *input* (receiving
 //! video from SRT/HLS/DASH sources and displaying them as deck sources).
 //!
 //! Architecture mirrors `NdiManager`: background thread decodes frames into

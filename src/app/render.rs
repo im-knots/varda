@@ -36,6 +36,8 @@ struct HeadlessDeliverySinks<'a> {
     spout_manager: &'a mut crate::spout::SpoutManager,
     audio_manager: &'a mut crate::audio::AudioManager,
     notifications: &'a mut crate::notifications::NotificationSystem,
+    /// What each active headless output sends through, by output UUID.
+    deliveries: &'a mut std::collections::HashMap<String, crate::delivery::Delivery>,
     /// Master render rate, resolved through `encoder_fps` so an uncapped stage
     /// still names a real number. Used to reopen an ffmpeg output on the SRT
     /// reconnect path — it must match what `cmd_start_output` used, or a
@@ -58,7 +60,46 @@ fn stop_headless_output(
     notifications.error(format!("Output '{name}' stopped: {reason}"));
 }
 
+/// How long [`VardaApp::render_frame`] spent in each stage.
+#[derive(Debug, Clone, Copy)]
+pub struct RenderTimes {
+    /// Compositing the mixer.
+    pub mixer: std::time::Duration,
+    /// Rendering and delivering the outputs, and the interactive window.
+    pub outputs: std::time::Duration,
+}
+
 impl VardaApp {
+    /// The first half of a frame: timing, notifications, every command queued
+    /// since the last frame, and the control inputs. A consumer then does its
+    /// own work (a GUI applies its commands, a host creates windows it was asked
+    /// for) before [`Self::render_frame`].
+    pub fn begin_frame(&mut self) {
+        self.update_frame_timing();
+        self.update_notifications();
+        self.process_commands();
+        self.process_inputs();
+    }
+
+    /// The second half of a frame: controller feedback for the state the frame
+    /// settled on, then the mixer, the outputs, and the interactive window.
+    /// Returns how long the mixer and the outputs took, for a consumer that
+    /// reports its frame time by stage.
+    pub fn render_frame(&mut self) -> RenderTimes {
+        self.update_controller_leds();
+        let mixer = std::time::Instant::now();
+        self.render_mixer_frame();
+        let mixer = mixer.elapsed();
+        let outputs = std::time::Instant::now();
+        self.render_outputs();
+        #[cfg(feature = "html")]
+        self.render_interactive();
+        RenderTimes {
+            mixer,
+            outputs: outputs.elapsed(),
+        }
+    }
+
     /// Update frame timing (FPS measurement) and system stats. Call once per frame before any work.
     pub fn update_frame_timing(&mut self) {
         let now = std::time::Instant::now();
@@ -69,7 +110,7 @@ impl VardaApp {
         // Sampled here, at the top of the frame, so the tally covers a whole
         // previous frame — including the output, preview, and present submits
         // that happen after the mixer is done.
-        self.frame_stats.last_frame_submits = self.context.submits.take();
+        self.frame_stats.last_frame_submits = self.render.context.submits.take();
         self.frame_stats.frame_count = self.frame_stats.frame_count.wrapping_add(1);
         if self.frame_stats.frame_count.is_multiple_of(120) {
             log::debug!(
@@ -205,26 +246,29 @@ impl VardaApp {
         // `remove_deck` — scene diff, undo, truncated or removed channel —
         // never released its session, leaving the capture thread grabbing and
         // downscaling frames for the rest of the session.
-        self.screen_capture_manager
+        self.sources
+            .screen_capture_manager
             .reconcile_holders(&capture_holders);
 
         // Update only needed camera frames
-        self.camera_manager
-            .update_selective(&self.context.queue, &needed_camera_ids);
+        self.sources
+            .camera_manager
+            .update_selective(&self.render.context.queue, &needed_camera_ids);
 
         // Upload screen-capture frames for visible/cued decks only. An
         // invisible capture deck costs nothing, which is what makes a
         // self-capture deck safe to leave in a scene.
-        self.screen_capture_manager.update_selective(
-            &self.context.device,
-            &self.context.queue,
+        self.sources.screen_capture_manager.update_selective(
+            &self.render.context.device,
+            &self.render.context.queue,
             &needed_capture_ids,
         );
 
         // Update NDI receiver frames
-        self.external_io
+        self.sources
+            .io
             .ndi_manager
-            .update(&self.context.device, &self.context.queue);
+            .update(&self.render.context.device, &self.render.context.queue);
 
         // Periodic Syphon re-discovery + late-bind of deferred decks (~1×/sec).
         // Removes the start/stop-ordering dependency: a producer that joins or
@@ -234,24 +278,36 @@ impl VardaApp {
 
         // Update Syphon client frames
         #[cfg(target_os = "macos")]
-        self.external_io.syphon_manager.update(&self.context.device);
+        self.sources
+            .io
+            .syphon_manager
+            .update(&self.render.context.device);
 
         // Spout, the Windows counterpart. Both calls are no-ops off Windows, so
         // this needs no gate. See /spec/spout-output.md.
         self.reconcile_spout();
-        self.external_io.spout_manager.update(&self.context.device);
+        self.sources
+            .io
+            .spout_manager
+            .update(&self.render.context.device);
 
         // Update stream receiver frames
-        self.external_io.stream_manager.update(&self.context.queue);
+        self.sources
+            .io
+            .stream_manager
+            .update(&self.render.context.queue);
 
         // Pump HTML (Servo) instances and upload their frames
-        self.external_io
+        self.sources
+            .io
             .html_manager
-            .update(&self.context.device, &self.context.queue);
+            .update(&self.render.context.device, &self.render.context.queue);
 
         // Upload depth-sensor frames (off-render-thread capture; this only
         // does the GPU texture upload). See spec/depth-sensors.md.
-        self.depth_manager.update(&self.context.queue);
+        self.sources
+            .depth_manager
+            .update(&self.render.context.queue);
 
         for channel in self.mixer.channels_mut() {
             for slot in &mut channel.decks {
@@ -259,28 +315,28 @@ impl VardaApp {
                     use crate::deck::ExternalSourceKind;
                     slot.deck.external_source_view = match kind {
                         ExternalSourceKind::Camera(cam_id) => {
-                            self.camera_manager.texture_view(cam_id).cloned()
+                            self.sources.camera_manager.texture_view(cam_id).cloned()
                         }
                         ExternalSourceKind::Ndi(idx) => {
-                            self.external_io.ndi_manager.texture_view(idx).cloned()
+                            self.sources.io.ndi_manager.texture_view(idx).cloned()
                         }
                         #[cfg(target_os = "macos")]
                         ExternalSourceKind::Syphon(idx) => {
-                            self.external_io.syphon_manager.texture_view(idx).cloned()
+                            self.sources.io.syphon_manager.texture_view(idx).cloned()
                         }
                         #[cfg(not(target_os = "macos"))]
                         ExternalSourceKind::Syphon(_) => None,
                         ExternalSourceKind::Spout(idx) => {
-                            self.external_io.spout_manager.texture_view(idx).cloned()
+                            self.sources.io.spout_manager.texture_view(idx).cloned()
                         }
                         ExternalSourceKind::Srt(idx)
                         | ExternalSourceKind::Hls(idx)
                         | ExternalSourceKind::Dash(idx)
                         | ExternalSourceKind::Rtmp(idx) => {
-                            self.external_io.stream_manager.texture_view(idx).cloned()
+                            self.sources.io.stream_manager.texture_view(idx).cloned()
                         }
                         ExternalSourceKind::Html(idx) => {
-                            self.external_io.html_manager.texture_view(idx).cloned()
+                            self.sources.io.html_manager.texture_view(idx).cloned()
                         }
                         ExternalSourceKind::ScreenCapture(id) => {
                             // Router/UI edits land on the deck; push them down
@@ -288,17 +344,22 @@ impl VardaApp {
                             if let Some(state) = &mut slot.deck.screen_capture
                                 && state.config_dirty
                             {
-                                self.screen_capture_manager
+                                self.sources
+                                    .screen_capture_manager
                                     .set_config(id, state.config.clone());
                                 state.config_dirty = false;
                             }
                             // A crop or target resize reallocates the shared
                             // texture, so the deck's source dimensions are
                             // pushed down each frame rather than fixed at open.
-                            if let Some((w, h)) = self.screen_capture_manager.resolution(id) {
+                            if let Some((w, h)) = self.sources.screen_capture_manager.resolution(id)
+                            {
                                 slot.deck.set_external_source_size(w, h);
                             }
-                            self.screen_capture_manager.texture_view(id).cloned()
+                            self.sources
+                                .screen_capture_manager
+                                .texture_view(id)
+                                .cloned()
                         }
                         // Taps own no device, so the mixer resolves them all at
                         // once in `prepare_taps` below.
@@ -307,10 +368,11 @@ impl VardaApp {
                             // Depth decks read the R16Uint depth view + RGB view
                             // and reproject via the point-cloud pass rather than
                             // blitting a single RGBA texture.
-                            let depth = self.depth_manager.depth_view(id).cloned();
-                            slot.deck.depth_rgb_view = self.depth_manager.rgb_view(id).cloned();
-                            slot.deck.depth_intrinsics = self.depth_manager.intrinsics(id);
-                            slot.deck.depth_source_size = self.depth_manager.resolution(id);
+                            let depth = self.sources.depth_manager.depth_view(id).cloned();
+                            slot.deck.depth_rgb_view =
+                                self.sources.depth_manager.rgb_view(id).cloned();
+                            slot.deck.depth_intrinsics = self.sources.depth_manager.intrinsics(id);
+                            slot.deck.depth_source_size = self.sources.depth_manager.resolution(id);
                             depth
                         }
                     };
@@ -325,17 +387,21 @@ impl VardaApp {
                 if let Some(state) = &mut slot.deck.depth_prepro {
                     let id = state.sensor_id;
                     state.input = match (
-                        self.depth_manager.depth_view(id),
-                        self.depth_manager.rgb_view(id),
-                        self.depth_manager.frame_generation(id),
+                        self.sources.depth_manager.depth_view(id),
+                        self.sources.depth_manager.rgb_view(id),
+                        self.sources.depth_manager.frame_generation(id),
                     ) {
                         (Some(depth), Some(rgb), Some(generation)) => {
                             Some(crate::deck::DepthPreprocessInput {
                                 depth_view: depth.clone(),
                                 rgb_view: rgb.clone(),
                                 generation,
-                                frame_dt: self.depth_manager.frame_dt(id).unwrap_or(1.0 / 30.0),
-                                connected: self.depth_manager.is_connected(id),
+                                frame_dt: self
+                                    .sources
+                                    .depth_manager
+                                    .frame_dt(id)
+                                    .unwrap_or(1.0 / 30.0),
+                                connected: self.sources.depth_manager.is_connected(id),
                             })
                         }
                         _ => None,
@@ -347,13 +413,13 @@ impl VardaApp {
         // Runs after the binding loop but still before any deck renders, which
         // is the window in which a tap can be swapped safely.
         // See spec/program-tap.md.
-        self.mixer.prepare_taps(&self.context);
+        self.mixer.prepare_taps(&self.render.context);
 
         // Collect audio values for modulation
         let audio_values = {
             let mut av = crate::modulation::AudioValues::default();
-            for id in self.audio_manager.active_source_ids() {
-                if let Some(data) = self.audio_manager.get_data(id) {
+            for id in self.audio.manager.active_source_ids() {
+                if let Some(data) = self.audio.manager.get_data(id) {
                     av.sources.insert(
                         id,
                         crate::modulation::AudioSourceValues {
@@ -367,7 +433,7 @@ impl VardaApp {
             av
         };
 
-        let mut primary_audio = self.audio_manager.get_primary_data().clone();
+        let mut primary_audio = self.audio.manager.get_primary_data().clone();
 
         // Override audio BPM/beat with clock-resolved values (MIDI > OSC > Audio)
         let clock = self.input.clock_manager.state();
@@ -384,17 +450,19 @@ impl VardaApp {
             audio_values: &audio_values,
             analyzer_values: &analyzer_values,
             beat_time: self.input.clock_manager.beat_time(),
-            transport: self.transport.sample(),
+            transport: self.show.transport.sample(),
             // The wall paces a live show.
             free_run_time: None,
             write_param: crate::param_router::write_macro_target,
         };
 
-        let target_fps = self.target_fps;
-        if let Err(e) =
-            self.mixer
-                .render(&self.context, &inputs, target_fps, &self.preview_channels)
-        {
+        let target_fps = self.render.target_fps;
+        if let Err(e) = self.mixer.render(
+            &self.render.context,
+            &inputs,
+            target_fps,
+            &self.preview_channels,
+        ) {
             log::error!("Failed to render mixer: {e}");
         }
 
@@ -410,7 +478,7 @@ impl VardaApp {
     /// frame it lasts. See /spec/transport.md § Black-output detection.
     fn report_arrangement_blackout(&mut self) {
         let blacked_out = self.mixer.arrangement_blacked_out();
-        if blacked_out && !self.arrangement_blackout_reported {
+        if blacked_out && !self.show.blackout_reported {
             self.session.notifications.warn(
                 "The arrangement is holding every deck it drives at zero. \
                  If this is not intentional, check the transport position \
@@ -418,7 +486,7 @@ impl VardaApp {
                     .to_string(),
             );
         }
-        self.arrangement_blackout_reported = blacked_out;
+        self.show.blackout_reported = blacked_out;
     }
 
     /// Surface quarantined decks to the performer, and drain anything the GPU
@@ -454,7 +522,7 @@ impl VardaApp {
 
         // Faults raised outside any deck (channel/master effect chains, output
         // compositing). Nothing to quarantine, but they must not vanish.
-        for fault in self.context.errors.take_faults() {
+        for fault in self.render.context.errors.take_faults() {
             if fault.context.is_none() {
                 self.session.notifications.notify_once(
                     format!("gpu_fault_global:{}", fault.message),
@@ -467,7 +535,7 @@ impl VardaApp {
 
     /// Render content to all outputs (windowed + headless) using the surface layout.
     pub fn render_outputs(&mut self) {
-        let context = &self.context;
+        let context = &self.render.context;
 
         // Prepare sub-mixes for any Channels(...) sources
         {
@@ -499,7 +567,7 @@ impl VardaApp {
             }
             if !channel_indices.is_empty() {
                 self.mixer
-                    .prepare_channel_tonemaps(&channel_indices, &self.context);
+                    .prepare_channel_tonemaps(&channel_indices, &self.render.context);
             }
         }
 
@@ -508,10 +576,10 @@ impl VardaApp {
         // single-output show pays exactly what the old global tonemap paid.
         {
             let keys = Self::program_keys_for_outputs(&self.output.outputs, &self.mixer);
-            self.mixer.prepare_programs(&keys, &self.context);
+            self.mixer.prepare_programs(&keys, &self.render.context);
         }
 
-        let render_aspect = self.render_width as f32 / self.render_height.max(1) as f32;
+        let render_aspect = self.render.width as f32 / self.render.height.max(1) as f32;
         let mixer = &self.mixer;
         let master_key = Self::master_program_key(&self.mixer);
 
@@ -519,8 +587,8 @@ impl VardaApp {
         let domemaster_view = if let Some(dome) = &mut self.output.domemaster {
             dome.set_content_rotation(az, el, roll);
             if dome.enabled {
-                dome.update_params(&self.context.queue);
-                dome.render(&self.context, mixer.program_view(master_key));
+                dome.update_params(&self.render.context.queue);
+                dome.render(&self.render.context, mixer.program_view(master_key));
                 Some(dome.output_view())
             } else {
                 None
@@ -550,13 +618,14 @@ impl VardaApp {
 
         // Render headless outputs (needs &mut self for subprocess feeding)
         let sinks = HeadlessDeliverySinks {
-            ndi_manager: &mut self.external_io.ndi_manager,
+            ndi_manager: &mut self.sources.io.ndi_manager,
             #[cfg(target_os = "macos")]
-            syphon_manager: &mut self.external_io.syphon_manager,
-            spout_manager: &mut self.external_io.spout_manager,
-            audio_manager: &mut self.audio_manager,
+            syphon_manager: &mut self.sources.io.syphon_manager,
+            spout_manager: &mut self.sources.io.spout_manager,
+            audio_manager: &mut self.audio.manager,
             notifications: &mut self.session.notifications,
-            encoder_fps: crate::app::state::encoder_fps(self.target_fps),
+            deliveries: &mut self.output.deliveries,
+            encoder_fps: crate::app::state::encoder_fps(self.render.target_fps),
         };
         Self::render_headless_outputs_inner(
             &mut self.output.outputs,
@@ -1127,40 +1196,31 @@ impl VardaApp {
                 && !is_ndi_p216
                 && let Some(frame_data) = h.readback.try_read(&context.device)
             {
-                let delivery = if h.subprocess.is_some() {
-                    if h.subprocess
-                        .as_mut()
-                        .is_some_and(|subprocess| !subprocess.feed_readback_frame(&frame_data))
-                    {
-                        if let Some(mut subprocess) = h.subprocess.take() {
-                            subprocess.stop();
-                        }
-                        if matches!(
-                            h.target,
-                            crate::renderer::context::OutputTarget::SrtStream { .. }
-                        ) {
-                            crate::renderer::context::DeliveryResult::SrtNeedsRestart
-                        } else {
-                            crate::renderer::context::DeliveryResult::Failed(format!(
-                                "FFmpeg frame contract failed for '{}'",
-                                h.name
-                            ))
-                        }
-                    } else {
-                        crate::renderer::context::DeliveryResult::Ok
-                    }
-                } else {
-                    h.deliver_frame(frame_data.bytes(), sinks.ndi_manager, sinks.encoder_fps)
+                // Looked up before inserting, so a running output costs no key
+                // allocation per frame.
+                if !sinks.deliveries.contains_key(&h.uuid) {
+                    sinks
+                        .deliveries
+                        .insert(h.uuid.clone(), crate::delivery::Delivery::default());
+                }
+                let Some(delivery) = sinks.deliveries.get_mut(&h.uuid) else {
+                    continue;
                 };
-                match delivery {
-                    crate::renderer::context::DeliveryResult::Failed(msg) => {
+                match delivery.deliver(
+                    &h.target,
+                    &h.name,
+                    &frame_data,
+                    sinks.ndi_manager,
+                    sinks.encoder_fps,
+                ) {
+                    crate::delivery::DeliveryResult::Failed(msg) => {
                         stop_headless_output(&h.name, &mut h.active, sinks.notifications, msg);
                     }
-                    crate::renderer::context::DeliveryResult::SrtNeedsRestart => {
+                    crate::delivery::DeliveryResult::SrtNeedsRestart => {
                         // The disconnected client's PCM tap is now stale; drop it,
                         // then respawn the listener with a fresh audio tap so the
                         // reconnecting client gets audio again (parity with start).
-                        if let Some(stale) = h.audio_pcm.take() {
+                        if let Some(stale) = delivery.audio.take() {
                             sinks
                                 .audio_manager
                                 .unsubscribe_pcm(stale.source_id, stale.token);
@@ -1181,7 +1241,7 @@ impl VardaApp {
                             device.as_deref(),
                             &name,
                         );
-                        match crate::renderer::FfmpegSubprocess::spawn_srt(
+                        match crate::delivery::FfmpegSubprocess::spawn_srt(
                             &url,
                             &codec,
                             h.presentation_request,
@@ -1191,8 +1251,8 @@ impl VardaApp {
                             audio_input,
                         ) {
                             Ok(new_sub) => {
-                                h.subprocess = Some(Box::new(new_sub));
-                                h.audio_pcm = passthrough.map(Box::new);
+                                delivery.subprocess = Some(new_sub);
+                                delivery.audio = passthrough;
                                 log::info!("SRT restarted for '{name}'");
                             }
                             Err(e) => {
@@ -1210,7 +1270,7 @@ impl VardaApp {
                             }
                         }
                     }
-                    crate::renderer::context::DeliveryResult::Ok => {}
+                    crate::delivery::DeliveryResult::Ok => {}
                 }
             }
         }

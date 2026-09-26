@@ -9,7 +9,7 @@
 //! - `recorder` — capturing live parameter writes as automation curves
 //! - `presets` — deck/channel preset load + save
 //! - `sequences` — transition sequence CRUD and step mutations
-//! - `surfaces` — surface command state mutations
+//! - `surfaces` — surface commands, on `Outputs`
 //! - `io` — external I/O deck creation and stream library mutations
 
 mod arrangement;

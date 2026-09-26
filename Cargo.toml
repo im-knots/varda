@@ -341,6 +341,14 @@ harness = false
 name = "macro_modulation"
 harness = false
 
+[[bench]]
+name = "output_delivery"
+harness = false
+
+[[bench]]
+name = "headless_frame"
+harness = false
+
 
 [profile.release]
 opt-level = 3

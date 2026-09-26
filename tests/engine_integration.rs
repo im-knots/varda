@@ -2,7 +2,7 @@
 
 use varda::app::VardaApp;
 use varda::engine::{
-    BlendMode, CommandResult, DeckSnapshot, EffectTarget, EngineCommand, ErrorCode, SurfaceQueries,
+    BlendMode, CommandResult, DeckSnapshot, EffectTarget, EngineCommand, ErrorCode,
 };
 use varda::modulation::LFOWaveform;
 use varda::renderer::context::OutputSource;
@@ -2486,7 +2486,14 @@ fn add_and_remove_surface_hole_workflow() {
             source: OutputSource::Master,
         },
     );
-    let uuid = app.surface_snapshot().first().unwrap().uuid.clone();
+    let uuid = app
+        .build_engine_state()
+        .outputs
+        .surfaces
+        .first()
+        .unwrap()
+        .uuid
+        .clone();
 
     // Add a hole → snapshot reflects it (holes + derived contours).
     let hole = SurfacePath::from_polygon(&[[0.3, 0.3], [0.6, 0.3], [0.6, 0.6], [0.3, 0.6]], true);
@@ -2498,7 +2505,7 @@ fn add_and_remove_surface_hole_workflow() {
         },
     );
     assert!(matches!(r, CommandResult::Ok));
-    let snap = app.surface_snapshot();
+    let snap = app.build_engine_state().outputs.surfaces;
     let s = snap.iter().find(|s| s.uuid == uuid).unwrap();
     assert_eq!(s.holes.len(), 1);
     assert_eq!(s.hole_contours.len(), 1);
@@ -2512,7 +2519,7 @@ fn add_and_remove_surface_hole_workflow() {
         },
     );
     assert!(matches!(r, CommandResult::Ok));
-    let snap = app.surface_snapshot();
+    let snap = app.build_engine_state().outputs.surfaces;
     let s = snap.iter().find(|s| s.uuid == uuid).unwrap();
     assert!(s.holes.is_empty());
     assert!(s.hole_contours.is_empty());
@@ -2557,7 +2564,7 @@ fn punch_surface_hole_workflow() {
             source: OutputSource::Master,
         },
     );
-    let snap = app.surface_snapshot();
+    let snap = app.build_engine_state().outputs.surfaces;
     let target_uuid = snap
         .iter()
         .find(|s| s.name == "Target")
@@ -2579,7 +2586,7 @@ fn punch_surface_hole_workflow() {
         },
     );
     assert!(matches!(r, CommandResult::Ok));
-    let snap = app.surface_snapshot();
+    let snap = app.build_engine_state().outputs.surfaces;
     assert!(
         snap.iter().all(|s| s.uuid != source_uuid),
         "source surface should be consumed"

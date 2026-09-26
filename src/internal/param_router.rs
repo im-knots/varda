@@ -1163,7 +1163,8 @@ mod tests {
     fn mod_param_audio_band_params_are_routable() {
         // Regression: freq_low/freq_high/gain/noise_gate were previously silent
         // no-ops (only `smoothing` was handled).
-        let mut src = ModulationSource::audio_from_preset(crate::modulation::AudioBandPreset::Low);
+        let mut src =
+            ModulationSource::audio_from_preset(crate::modulation::AudioBandPreset::Low, None);
         assert!(apply_mod_param(&mut src, "freq_low", 0.0).is_ok());
         assert!(apply_mod_param(&mut src, "gain", 1.0).is_ok());
         assert!(apply_mod_param(&mut src, "noise_gate", 1.0).is_ok());

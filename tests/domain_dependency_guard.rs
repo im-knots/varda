@@ -17,7 +17,6 @@ const ORDER: &[&str] = &[
     "stream",
     "html",
     "screen_capture",
-    "recording",
     "notifications",
     "sysmon",
     "cli_install",
@@ -30,6 +29,7 @@ const ORDER: &[&str] = &[
     // 3. GPU
     "surface",
     "renderer",
+    "delivery",
     "spout",
     "syphon",
     // 4. Signals

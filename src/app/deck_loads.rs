@@ -182,19 +182,19 @@ impl VardaApp {
     /// Start a background load of `source` into `channel_uuid` at the current
     /// render size, returning the UUID the deck will have.
     pub(crate) fn spawn_deck_load(&mut self, channel_uuid: &str, source: DeckSource) -> String {
-        self.deck_loader.spawn(
-            &self.context,
+        self.sources.deck_loader.spawn(
+            &self.render.context,
             channel_uuid,
             source,
-            self.render_width,
-            self.render_height,
+            self.render.width,
+            self.render.height,
         )
     }
 
     /// Attach every deck whose load finished since the last frame, and report
     /// the ones that could not be attached.
     pub(crate) fn attach_finished_deck_loads(&mut self) {
-        for (load, deck) in self.deck_loader.take_finished() {
+        for (load, deck) in self.sources.deck_loader.take_finished() {
             match self.attach_loaded_deck(&load, deck) {
                 Ok(ch_idx) => {
                     self.session.notifications.info(format!(
@@ -208,11 +208,11 @@ impl VardaApp {
                     self.session
                         .notifications
                         .error(format!("Failed to load deck '{}': {message}", load.name));
-                    self.deck_loader.record_failure(load, message);
+                    self.sources.deck_loader.record_failure(load, message);
                 }
             }
         }
-        self.deck_loader.prune_failures(Instant::now());
+        self.sources.deck_loader.prune_failures(Instant::now());
     }
 
     /// Finalize a built deck and add it to its channel. Returns the channel's
@@ -224,6 +224,7 @@ impl VardaApp {
     ) -> anyhow::Result<usize> {
         let mut deck = deck?;
         let ch_idx = self
+            .mixer
             .resolve_channel(&load.channel_uuid)
             .context("its channel was removed while it loaded")?;
         self.finalize_new_deck(&mut deck)?;
@@ -242,7 +243,7 @@ impl VardaApp {
     /// decks attach on a later frame than the command that asked for them.
     pub(crate) fn settle_deck_loads(&mut self) {
         let deadline = Instant::now() + Duration::from_secs(20);
-        while self.deck_loader.in_flight() > 0 {
+        while self.sources.deck_loader.in_flight() > 0 {
             assert!(Instant::now() < deadline, "deck loads never finished");
             std::thread::sleep(Duration::from_millis(5));
             self.process_commands();
@@ -252,7 +253,6 @@ impl VardaApp {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::traits::MixerCommands;
     use crate::engine::types::DeckLoadStatus;
     use crate::engine::{CommandResult, EngineCommand as C, ErrorCode};
 
