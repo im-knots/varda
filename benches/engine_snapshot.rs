@@ -16,24 +16,23 @@
 ///
 /// `build` against `deep_clone` also settles the GUI option in the spec: sharing
 /// one build costs the GUI a clone of what it now moves out of an owned state.
+///
+///   `gui_view`      — what the windowed GUI pays each frame for its view: the
+///                     snapshot, then the UI data derived from it.
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::sync::Arc;
+use varda::app::VardaApp;
 use varda::app::publish::StatePublication;
-use varda::app::{AppConfig, VardaApp};
 use varda::engine::{CommandResult, EngineCommand};
 use varda::modulation::LFOWaveform;
 use varda::renderer::context::GpuContext;
-
-use clap::Parser;
 
 /// Four channels of four decks each, and four LFOs: about the size of a
 /// working set.
 fn scene() -> Option<VardaApp> {
     let gpu = GpuContext::new_headless().ok()?;
-    let config =
-        AppConfig::parse_from(["varda", "--headless", "--no-osc", "--no-ndi", "--no-syphon"]);
-    let mut app = VardaApp::new(gpu, &config).ok()?;
+    let mut app = VardaApp::new(gpu, &varda::testing::headless_config()).ok()?;
     let send = |app: &mut VardaApp, cmd: EngineCommand| {
         let (tx, rx) = tokio::sync::oneshot::channel();
         app.command_sender().send((cmd, Some(tx))).ok()?;
@@ -73,6 +72,30 @@ fn scene() -> Option<VardaApp> {
             },
         )?;
     }
+    // Library entries and a headless output, so every part of the view has
+    // something in it.
+    for i in 0..4 {
+        send(
+            &mut app,
+            EngineCommand::AddHlsLibraryEntry {
+                url: format!("https://example.invalid/{i}.m3u8"),
+            },
+        )?;
+        send(
+            &mut app,
+            EngineCommand::AddHtmlLibraryEntry {
+                url: format!("https://example.invalid/{i}.html"),
+            },
+        )?;
+    }
+    send(
+        &mut app,
+        EngineCommand::CreateHeadlessOutput {
+            target: varda::renderer::context::OutputTarget::NdiSend {
+                sender_name: "bench".to_string(),
+            },
+        },
+    )?;
     Some(app)
 }
 
@@ -87,6 +110,9 @@ fn bench_snapshot(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("engine_snapshot");
     group.bench_function("build", |b| b.iter(|| black_box(app.build_engine_state())));
+    group.bench_function("gui_view", |b| {
+        b.iter(|| black_box(varda::testing::gui_view(&app)));
+    });
     group.bench_function("deep_clone", |b| b.iter(|| black_box(state.clone())));
     group.bench_function("arc_clone", |b| b.iter(|| black_box(Arc::clone(&shared))));
     group.bench_function("to_json", |b| {

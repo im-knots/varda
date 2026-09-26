@@ -142,7 +142,9 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::macros::clear_modulation_source,
         // Runtime state
         routes::state::mixer, routes::state::audio, routes::state::dome,
-        routes::state::deck_loads,
+        routes::state::deck_loads, routes::state::libraries, routes::state::keymap,
+        routes::state::presets, routes::state::notifications, routes::state::clipboard,
+        routes::state::render, routes::state::system,
         routes::state::modulation, routes::state::macros,
         routes::state::outputs, routes::state::surfaces,
         routes::state::registry, routes::state::midi,
@@ -279,6 +281,16 @@ pub fn build_router(shared: SharedState) -> Router {
         .route("/api/state/ndi", get(routes::state::ndi))
         .route("/api/state/syphon", get(routes::state::syphon))
         .route("/api/state/streams", get(routes::state::streams))
+        .route("/api/state/libraries", get(routes::state::libraries))
+        .route("/api/state/keymap", get(routes::state::keymap))
+        .route("/api/state/presets", get(routes::state::presets))
+        .route(
+            "/api/state/notifications",
+            get(routes::state::notifications),
+        )
+        .route("/api/state/clipboard", get(routes::state::clipboard))
+        .route("/api/state/render", get(routes::state::render))
+        .route("/api/state/system", get(routes::state::system))
         .route("/api/state/performance", get(routes::state::performance))
         // ── Scene ───────────────────────────────────────────────
         .route("/api/scene", get(routes::scene::scene))

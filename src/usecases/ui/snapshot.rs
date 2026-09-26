@@ -7,7 +7,6 @@
 //! framework-free `EngineState` that this function then maps from.
 
 use super::{EffectInfo, ParamUIInfo, ShaderParamsUI};
-use crate::app::VardaApp;
 use crate::engine::types::{
     EffectSnapshot, ModulationSourceSnapshot, SequenceStepKindSnapshot, ShaderParamsSnapshot,
 };
@@ -24,7 +23,6 @@ pub(crate) struct PreviewTextures<'a> {
 /// layout, and the registered preview textures. Borrows `engine` so the runner
 /// can publish the same snapshot to the API afterwards.
 pub(crate) fn build_ui_data(
-    app: &VardaApp,
     engine: &crate::engine::EngineState,
     layout: &crate::usecases::ui::UILayoutState,
     textures: &PreviewTextures<'_>,
@@ -287,129 +285,56 @@ pub(crate) fn build_ui_data(
         sample_rate: engine.audio.sample_rate,
     };
 
-    // Outputs: build unified OutputUI list from VardaApp's outputs
-    let outputs: Vec<OutputUI> = app
-        .output
+    let outputs: Vec<OutputUI> = engine
         .outputs
+        .windows
         .iter()
         .map(|o| {
-            let (
-                target,
-                target_label,
-                is_windowed,
-                is_active,
-                active_duration,
-                surface_assignments,
-                calibration_mode,
-                (preview_width, preview_height),
-            ) = match o {
-                crate::renderer::context::UnifiedOutput::Window(w) => {
-                    let sa = w
-                        .surface_assignments
-                        .iter()
-                        .map(|a| {
-                            let surface_name = app
-                                .output
-                                .surface_manager
-                                .find_by_uuid(&a.surface_uuid)
-                                .map_or_else(
-                                    || format!("Surface {}", a.surface_uuid),
-                                    |(_, s)| s.name.clone(),
-                                );
-                            SurfaceAssignmentUI {
-                                surface_uuid: a.surface_uuid.clone(),
-                                surface_name,
-                                enabled: a.enabled,
-                                overlap_zones: a.overlap_zones.clone(),
-                            }
-                        })
-                        .collect();
-                    (
-                        w.target.clone(),
-                        format!("{}", w.target),
-                        true,
-                        true,
-                        std::time::Duration::ZERO,
-                        sa,
-                        w.calibration_mode,
-                        (w.preview_texture.width(), w.preview_texture.height()),
-                    )
-                }
-                crate::renderer::context::UnifiedOutput::Headless(h) => {
-                    let sa = h
-                        .surface_assignments
-                        .iter()
-                        .map(|a| SurfaceAssignmentUI {
-                            surface_uuid: a.surface_uuid.clone(),
-                            surface_name: app
-                                .output
-                                .surface_manager
-                                .find_by_uuid(&a.surface_uuid)
-                                .map_or_else(
-                                    || format!("Surface {}", a.surface_uuid),
-                                    |(_, s)| s.name.clone(),
-                                ),
-                            enabled: a.enabled,
-                            overlap_zones: a.overlap_zones.clone(),
-                        })
-                        .collect();
-                    (
-                        h.target.clone(),
-                        format!("{}", h.target),
-                        false,
-                        h.active,
-                        app.output.active_duration(o),
-                        sa,
-                        crate::renderer::context::CalibrationMode::Off,
-                        (h.width, h.height),
-                    )
-                }
-            };
-            let edge_blend_mode = o.edge_blend_mode();
-            let edge_blend = o.edge_blend();
-            let delivery_state = match o {
-                crate::renderer::context::UnifiedOutput::Headless(h) => {
-                    app.output.deliveries.get(&h.uuid).map(|d| (h, d))
-                }
-                crate::renderer::context::UnifiedOutput::Window(_) => None,
-            };
-            let audio_passthrough = delivery_state.and_then(|(h, d)| {
-                d.audio_health().map(|health| AudioPassthroughUI {
-                    device: h.target.audio_device().unwrap_or_default().to_string(),
-                    frames_written: health.frames_written,
-                    frames_dropped: health.frames_dropped,
-                    silence_spliced: health.silence_spliced,
-                })
-            });
-            let delivery = delivery_state.and_then(|(_, d)| {
-                d.encoder_health()
-                    .map(|health| crate::usecases::ui::DeliveryHealthUI {
-                        frames_written: health.frames_written,
-                        frames_dropped: health.frames_dropped,
-                        frames_padded: health.frames_padded,
-                    })
-            });
+            let is_windowed = o.target.is_windowed();
             OutputUI {
-                uuid: o.uuid().to_string(),
-                name: o.name().to_string(),
-                target,
-                target_label,
+                uuid: o.uuid.clone(),
+                name: o.name.clone(),
+                target: o.target.clone(),
+                target_label: o.target_label.clone(),
                 is_windowed,
-                is_active,
-                active_duration,
-                surface_assignments,
-                calibration_mode,
-                edge_blend_mode,
-                edge_blend,
-                rotation: o.rotation(),
-                presentation_request: o.presentation_request(),
-                resolved_presentation: o.resolved_presentation().clone(),
-                mode_availability: o.mode_availability().to_vec(),
-                tonemap_override: o.tonemap_override(),
-                audio_passthrough,
-                delivery,
-                preview_width,
-                preview_height,
+                // A window shows whenever it exists; a headless output only
+                // while it sends.
+                is_active: is_windowed || o.is_active,
+                active_duration: std::time::Duration::from_secs_f64(o.active_seconds),
+                surface_assignments: o
+                    .surface_assignments
+                    .iter()
+                    .map(|a| SurfaceAssignmentUI {
+                        surface_uuid: a.surface_uuid.clone(),
+                        surface_name: a.surface_name.clone(),
+                        enabled: a.enabled,
+                        overlap_zones: a.overlap_zones.clone(),
+                    })
+                    .collect(),
+                calibration_mode: o.calibration_mode,
+                edge_blend_mode: o.edge_blend_mode,
+                edge_blend: o.edge_blend,
+                rotation: o.rotation,
+                presentation_request: o.presentation_request,
+                resolved_presentation: o.resolved_presentation.clone(),
+                mode_availability: o.mode_availability.clone(),
+                tonemap_override: o.tonemap_override,
+                audio_passthrough: o.audio_passthrough.as_ref().map(|p| AudioPassthroughUI {
+                    device: p.device.clone(),
+                    frames_written: p.frames_written,
+                    frames_dropped: p.frames_dropped,
+                    silence_spliced: p.silence_spliced,
+                }),
+                delivery: o
+                    .delivery
+                    .as_ref()
+                    .map(|d| crate::usecases::ui::DeliveryHealthUI {
+                        frames_written: d.frames_written,
+                        frames_dropped: d.frames_dropped,
+                        frames_padded: d.frames_padded,
+                    }),
+                preview_width: o.width,
+                preview_height: o.height,
             }
         })
         .collect();
@@ -529,17 +454,14 @@ pub(crate) fn build_ui_data(
         })
         .collect();
 
-    // Notifications — UI-only, not in EngineState
-    let notifications = app
-        .session
+    let notifications = engine
         .notifications
-        .visible()
         .iter()
         .map(|n| NotificationUI {
             id: n.id,
             level: n.level,
             message: n.message.clone(),
-            progress: n.progress(),
+            progress: n.progress,
         })
         .collect();
 
@@ -568,14 +490,14 @@ pub(crate) fn build_ui_data(
         available_luts,
         midi_learn_active: engine.midi.learn_active,
         midi_learn_target: engine.midi.learn_target.clone(),
-        keyboard_learn_active: app.input.keymap.learn_mode,
-        keyboard_learn_target: app
-            .input
+        keyboard_learn_active: engine.keymap.learn_active,
+        keyboard_learn_target: engine.keymap.learn_target.as_ref().map(|t| format!("{t}")),
+        keymap_bindings: engine
             .keymap
-            .learn_target
-            .as_ref()
-            .map(|t| format!("{t}")),
-        keymap_bindings: app.input.keymap.bindings.clone(),
+            .bindings
+            .iter()
+            .map(|b| (b.combo.clone(), b.target.clone()))
+            .collect(),
         transition_names: engine.mixer.transition_names.clone(),
         active_transition_name: engine.mixer.active_transition_name.clone(),
         // UI layout/selection state — owned by the UI consumer, not the engine
@@ -603,13 +525,13 @@ pub(crate) fn build_ui_data(
                 .loop_region
                 .map(|r| crate::usecases::ui::state::FocusRange::new(r.start, r.end))
         }),
-        clipboard: app.clipboard_summary(),
+        clipboard: engine.clipboard.clone(),
         dome_preview_open: layout.dome_preview_open,
         dome_preview_texture: None, // populated by UIRunner after build
         dome_mode_active: layout.dome_mode_active,
         dome_preset: engine.dome.preset,
         dome_geometry: engine.dome.geometry,
-        domemaster_resolution: app.domemaster_resolution(),
+        domemaster_resolution: engine.render.domemaster_resolution,
         camera_detect_texture: None, // populated by UIRunner
         camera_detect_mode: crate::usecases::ui::CameraDetectMode::Off, // populated by UIRunner
         camera_detect_contours: vec![], // populated by UIRunner
@@ -646,55 +568,41 @@ pub(crate) fn build_ui_data(
                 }
             })
             .collect(),
-        hls_library_configs: app
-            .sources
-            .io
-            .hls_library
+        hls_library_configs: engine
+            .libraries
+            .hls
             .iter()
-            .map(|url| crate::usecases::ui::HlsLibraryEntry {
-                url: url.clone(),
-                connected: (0..app.sources.io.stream_manager.receiver_count()).any(|i| {
-                    app.sources.io.stream_manager.receiver_url(i) == Some(url.as_str())
-                        && app.sources.io.stream_manager.is_connected(i)
-                }),
+            .map(|e| crate::usecases::ui::HlsLibraryEntry {
+                url: e.url.clone(),
+                connected: e.connected,
             })
             .collect(),
-        dash_library_configs: app
-            .sources
-            .io
-            .dash_library
+        dash_library_configs: engine
+            .libraries
+            .dash
             .iter()
-            .map(|url| crate::usecases::ui::DashLibraryEntry {
-                url: url.clone(),
-                connected: (0..app.sources.io.stream_manager.receiver_count()).any(|i| {
-                    app.sources.io.stream_manager.receiver_url(i) == Some(url.as_str())
-                        && app.sources.io.stream_manager.is_connected(i)
-                }),
+            .map(|e| crate::usecases::ui::DashLibraryEntry {
+                url: e.url.clone(),
+                connected: e.connected,
             })
             .collect(),
-        rtmp_library_configs: app
-            .sources
-            .io
-            .rtmp_library
+        rtmp_library_configs: engine
+            .libraries
+            .rtmp
             .iter()
-            .map(|(url, mode)| crate::usecases::ui::RtmpLibraryEntry {
-                url: url.clone(),
-                mode: *mode,
-                connected: (0..app.sources.io.stream_manager.receiver_count()).any(|i| {
-                    app.sources.io.stream_manager.receiver_url(i) == Some(url.as_str())
-                        && app.sources.io.stream_manager.is_connected(i)
-                }),
+            .map(|e| crate::usecases::ui::RtmpLibraryEntry {
+                url: e.url.clone(),
+                mode: e.mode,
+                connected: e.connected,
             })
             .collect(),
-        html_library_configs: app
-            .sources
-            .io
-            .html_library
+        html_library_configs: engine
+            .libraries
+            .html
             .iter()
-            .map(|url| crate::usecases::ui::HtmlLibraryEntry {
-                url: url.clone(),
-                active: (0..app.sources.io.html_manager.instance_count())
-                    .any(|i| app.sources.io.html_manager.instance_url(i) == Some(url.as_str())),
+            .map(|e| crate::usecases::ui::HtmlLibraryEntry {
+                url: e.url.clone(),
+                active: e.active,
             })
             .collect(),
 
@@ -730,19 +638,16 @@ pub(crate) fn build_ui_data(
             stats
         },
         // Wall-clock frame rate (smoothed over 60 frames)
-        fps: app.frame_stats.fps_smoothed,
-        gpu_device_name: {
-            let info = app.gpu_context().adapter.get_info();
-            info.name
-        },
-        gpu_backend: format!("{:?}", app.gpu_context().adapter.get_info().backend),
-        gpu_driver: app.gpu_context().adapter.get_info().driver,
-        gpu_driver_info: app.gpu_context().adapter.get_info().driver_info,
-        gpu_device_type: format!("{:?}", app.gpu_context().adapter.get_info().device_type),
-        gpu_utilization: app.mixer_ref().gpu_utilization(),
-        cpu_usage: app.frame_stats.system_monitor.cpu_usage(),
-        ram_used: app.frame_stats.system_monitor.ram_used(),
-        ram_total: app.frame_stats.system_monitor.ram_total(),
+        fps: engine.fps,
+        gpu_device_name: engine.system.gpu.name.clone(),
+        gpu_backend: engine.system.gpu.backend.clone(),
+        gpu_driver: engine.system.gpu.driver.clone(),
+        gpu_driver_info: engine.system.gpu.driver_info.clone(),
+        gpu_device_type: engine.system.gpu.device_type.clone(),
+        gpu_utilization: engine.system.gpu_utilization,
+        cpu_usage: engine.system.cpu_usage,
+        ram_used: engine.system.ram_used,
+        ram_total: engine.system.ram_total,
         clock_source: engine.clock.source_label.clone(),
         clock_bpm: engine.clock.bpm,
         clock_active: engine.clock.active,
@@ -757,10 +662,10 @@ pub(crate) fn build_ui_data(
         clock_beat_followers: engine.clock.beat_followers,
         transport: engine.transport.clone(),
         timecode: engine.timecode.clone(),
-        render_width: app.render_width(),
-        render_height: app.render_height(),
-        max_render_dimension: app.max_render_dimension(),
-        target_fps: app.target_fps(),
+        render_width: engine.render.width,
+        render_height: engine.render.height,
+        max_render_dimension: engine.render.max_dimension,
+        target_fps: engine.target_fps,
         // Populated by UIRunner after build (history/pending loads live on runner, not app)
         can_undo: false,
         can_redo: false,
@@ -769,20 +674,8 @@ pub(crate) fn build_ui_data(
             .iter()
             .filter(|l| l.status == crate::engine::types::DeckLoadStatus::Loading)
             .count(),
-        deck_presets: app
-            .session
-            .preset_library
-            .deck_presets
-            .iter()
-            .map(|p| p.name.clone())
-            .collect(),
-        channel_presets: app
-            .session
-            .preset_library
-            .channel_presets
-            .iter()
-            .map(|p| p.name.clone())
-            .collect(),
+        deck_presets: engine.presets.deck.clone(),
+        channel_presets: engine.presets.channel.clone(),
     }
 }
 

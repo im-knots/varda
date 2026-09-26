@@ -258,6 +258,13 @@ pub(crate) mod tests {
                     presentation_request:
                         crate::engine::value::render::PresentationRequest::default(),
                     tonemap_override: None,
+                    edge_blend_mode: crate::engine::value::render::EdgeBlendMode::default(),
+                    edge_blend: crate::engine::value::render::EdgeBlendConfig::default(),
+                    rotation: crate::engine::value::render::OutputRotation::default(),
+                    active_seconds: 0.0,
+                    width: 1920,
+                    height: 1080,
+
                     resolved_presentation:
                         crate::engine::value::render::ResolvedPresentation::default(),
                     mode_availability: vec![crate::engine::value::render::ModeAvailability {
@@ -337,6 +344,13 @@ pub(crate) mod tests {
             macros: vec![],
             can_undo: false,
             can_redo: false,
+            libraries: crate::engine::types::LibrariesSnapshot::default(),
+            keymap: crate::engine::types::KeymapSnapshot::default(),
+            presets: crate::engine::types::PresetsSnapshot::default(),
+            notifications: Vec::new(),
+            clipboard: None,
+            render: crate::engine::types::RenderSnapshot::default(),
+            system: crate::engine::types::SystemSnapshot::default(),
         }
     }
 
@@ -427,10 +441,18 @@ pub(crate) mod tests {
                 blocked: None,
             }],
             tonemap_override: None,
+            edge_blend_mode: crate::engine::value::render::EdgeBlendMode::default(),
+            edge_blend: crate::engine::value::render::EdgeBlendConfig::default(),
+            rotation: crate::engine::value::render::OutputRotation::default(),
+            active_seconds: 0.0,
+            width: 1920,
+            height: 1080,
+
             audio_passthrough: Some(AudioPassthroughSnapshot {
                 device: "Scarlett 2i2".into(),
                 frames_written: 42,
                 frames_dropped: 1,
+                silence_spliced: 0,
             }),
             delivery: Some(crate::engine::types::DeliveryHealthSnapshot {
                 frames_written: 100,

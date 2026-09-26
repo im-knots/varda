@@ -130,6 +130,112 @@ pub struct EngineState {
     pub can_undo: bool,
     /// Whether the redo timeline has a redoable action (shared UI/API timeline).
     pub can_redo: bool,
+    /// Saved stream and HTML sources the library offers, with their live state.
+    pub libraries: LibrariesSnapshot,
+    pub keymap: KeymapSnapshot,
+    pub presets: PresetsSnapshot,
+    /// Notifications currently shown to the performer.
+    pub notifications: Vec<NotificationSnapshot>,
+    /// What the clipboard is holding, if anything.
+    pub clipboard: Option<ClipboardSummary>,
+    pub render: RenderSnapshot,
+    pub system: SystemSnapshot,
+}
+
+/// Saved stream and HTML sources. See /spec/ui-engine-boundary.md § WS9.
+#[derive(Clone, Default, Serialize)]
+pub struct LibrariesSnapshot {
+    pub hls: Vec<StreamLibraryEntrySnapshot>,
+    pub dash: Vec<StreamLibraryEntrySnapshot>,
+    pub rtmp: Vec<RtmpLibraryEntrySnapshot>,
+    pub html: Vec<HtmlLibraryEntrySnapshot>,
+}
+
+/// A saved stream URL, and whether a receiver on it is connected now.
+#[derive(Clone, Serialize)]
+pub struct StreamLibraryEntrySnapshot {
+    pub url: String,
+    pub connected: bool,
+}
+
+#[derive(Clone, Serialize)]
+pub struct RtmpLibraryEntrySnapshot {
+    pub url: String,
+    pub mode: crate::stream::RtmpMode,
+    pub connected: bool,
+}
+
+/// A saved HTML page, and whether an HTML deck is showing it now.
+#[derive(Clone, Serialize)]
+pub struct HtmlLibraryEntrySnapshot {
+    pub url: String,
+    pub active: bool,
+}
+
+/// Keyboard shortcuts and keyboard learn.
+#[derive(Clone, Default, Serialize)]
+pub struct KeymapSnapshot {
+    /// Every binding, as a list: a key combination is not a JSON map key.
+    pub bindings: Vec<KeyBindingSnapshot>,
+    pub learn_active: bool,
+    /// What the next key pressed will be bound to, while learning.
+    pub learn_target: Option<crate::engine::value::keymap::KeyTarget>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct KeyBindingSnapshot {
+    pub combo: crate::engine::value::keymap::KeyCombo,
+    pub target: crate::engine::value::keymap::KeyTarget,
+}
+
+/// Saved deck and channel presets, by name.
+#[derive(Clone, Default, Serialize)]
+pub struct PresetsSnapshot {
+    pub deck: Vec<String>,
+    pub channel: Vec<String>,
+}
+
+/// A notification shown to the performer.
+#[derive(Clone, Serialize)]
+pub struct NotificationSnapshot {
+    /// Stable id to dismiss it by.
+    pub id: u64,
+    pub level: crate::engine::value::notification::NotificationLevel,
+    pub message: String,
+    /// How far through its display time it is, 0 to 1.
+    pub progress: f32,
+}
+
+/// What the engine renders at.
+#[derive(Clone, Default, Serialize)]
+pub struct RenderSnapshot {
+    pub width: u32,
+    pub height: u32,
+    /// The largest render dimension the GPU adapter allows.
+    pub max_dimension: u32,
+    pub domemaster_resolution: crate::engine::value::dome::DomemasterResolution,
+}
+
+/// Load on the machine running the engine, and the GPU it runs on.
+#[derive(Clone, Default, Serialize)]
+pub struct SystemSnapshot {
+    /// Process CPU use, percent.
+    pub cpu_usage: f32,
+    pub ram_used: u64,
+    pub ram_total: u64,
+    /// Share of the frame the GPU spent rendering, 0 to 1.
+    pub gpu_utilization: f32,
+    pub gpu: GpuInfoSnapshot,
+}
+
+/// The GPU adapter, fixed for the session.
+#[derive(Clone, Default, Serialize)]
+pub struct GpuInfoSnapshot {
+    pub name: String,
+    pub backend: String,
+    pub driver: String,
+    pub driver_info: String,
+    pub device_type: String,
 }
 
 /// Snapshot of an active stream receiver for UI consumption.
@@ -699,6 +805,14 @@ pub struct OutputWindowSnapshot {
     /// Live ffmpeg video health (None = this output has no subprocess).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery: Option<DeliveryHealthSnapshot>,
+    pub edge_blend_mode: crate::engine::value::render::EdgeBlendMode,
+    pub edge_blend: crate::engine::value::render::EdgeBlendConfig,
+    pub rotation: crate::engine::value::render::OutputRotation,
+    /// Seconds a headless output has been sending; zero for a window.
+    pub active_seconds: f64,
+    /// Resolution the output renders at.
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Clone, Serialize)]
@@ -709,6 +823,8 @@ pub struct AudioPassthroughSnapshot {
     pub frames_written: u64,
     /// PCM chunks dropped on backpressure.
     pub frames_dropped: u64,
+    /// Silence spliced in to cover gaps in the input.
+    pub silence_spliced: u64,
 }
 
 /// Video frames offered to an ffmpeg subprocess, split by fate.
@@ -727,6 +843,8 @@ pub struct SurfaceAssignmentSnapshot {
     pub surface_uuid: String,
     pub surface_name: String,
     pub enabled: bool,
+    /// Where this surface overlaps one on another output, for auto blending.
+    pub overlap_zones: crate::engine::value::render::SurfaceOverlapZones,
 }
 
 #[derive(Clone, Serialize)]
@@ -1059,6 +1177,13 @@ mod tests {
             analyzers: vec![],
             can_undo: false,
             can_redo: false,
+            libraries: LibrariesSnapshot::default(),
+            keymap: KeymapSnapshot::default(),
+            presets: PresetsSnapshot::default(),
+            notifications: Vec::new(),
+            clipboard: None,
+            render: RenderSnapshot::default(),
+            system: SystemSnapshot::default(),
             macros: vec![],
         };
         assert!((state.fps - 60.0).abs() < 1e-5);
@@ -1150,6 +1275,13 @@ mod tests {
             analyzers: vec![],
             can_undo: false,
             can_redo: false,
+            libraries: LibrariesSnapshot::default(),
+            keymap: KeymapSnapshot::default(),
+            presets: PresetsSnapshot::default(),
+            notifications: Vec::new(),
+            clipboard: None,
+            render: RenderSnapshot::default(),
+            system: SystemSnapshot::default(),
             macros: vec![],
         };
         let cloned = state.clone();

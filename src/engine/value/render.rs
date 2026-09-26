@@ -1137,6 +1137,27 @@ impl TonemapMode {
 
 // ── Edge blend ───────────────────────────────────────────────────────
 
+/// A single overlap zone in surface-local UV space [0..1].
+/// Defines a rectangle where this surface overlaps with a surface on another output.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct OverlapZone {
+    /// Overlap rectangle in surface UV: [`u_min`, `v_min`, `u_max`, `v_max`].
+    pub uv_rect: [f32; 4],
+    /// Smoothstep gamma exponent for the blend ramp.
+    pub gamma: f32,
+    /// Horizontal ramp direction: +1.0 = fade toward `u_max`, -1.0 = fade toward `u_min`, 0.0 = none.
+    pub ramp_x: f32,
+    /// Vertical ramp direction: +1.0 = fade toward `v_max`, -1.0 = fade toward `v_min`, 0.0 = none.
+    pub ramp_y: f32,
+}
+
+/// Per-surface overlap zones for Auto mode blending.
+/// Up to `renderer::edge_blend::MAX_OVERLAP_ZONES` zones per surface, sorted by area descending.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct SurfaceOverlapZones {
+    pub zones: Vec<OverlapZone>,
+}
+
 /// Controls whether edge blend config is user-set or auto-computed from surface topology.
 #[derive(
     Debug,

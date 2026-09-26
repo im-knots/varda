@@ -2125,6 +2125,48 @@ mod tests {
         assert_eq!(json["status"], "ok");
     }
 
+    /// Everything the GUI shows is readable over the API too
+    /// (/spec/ui-engine-boundary.md § WS9).
+    #[tokio::test]
+    async fn gui_parity_state_routes_serve_their_subtrees() {
+        let mut state = make_test_state();
+        state
+            .libraries
+            .hls
+            .push(crate::engine::types::StreamLibraryEntrySnapshot {
+                url: "https://example.invalid/a.m3u8".into(),
+                connected: true,
+            });
+        state.presets.deck.push("Warm".into());
+        state.render.width = 1280;
+        state.system.gpu.name = "Test GPU".into();
+        let shared = SharedState {
+            command_tx: tokio::sync::mpsc::unbounded_channel().0,
+            engine_state: std::sync::Arc::new(crate::app::publish::StatePublication::with_state(
+                state,
+            )),
+        };
+        let router = crate::usecases::api::runner::build_router(shared);
+        let (status, json) = get_json(router.clone(), "/api/state/libraries").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["hls"][0]["url"], "https://example.invalid/a.m3u8");
+        assert_eq!(json["hls"][0]["connected"], true);
+        let (_, json) = get_json(router.clone(), "/api/state/presets").await;
+        assert_eq!(json["deck"][0], "Warm");
+        let (_, json) = get_json(router.clone(), "/api/state/render").await;
+        assert_eq!(json["width"], 1280);
+        let (_, json) = get_json(router.clone(), "/api/state/system").await;
+        assert_eq!(json["gpu"]["name"], "Test GPU");
+        for path in [
+            "/api/state/keymap",
+            "/api/state/notifications",
+            "/api/state/clipboard",
+        ] {
+            let (status, _) = get_json(router.clone(), path).await;
+            assert_eq!(status, StatusCode::OK, "{path}");
+        }
+    }
+
     #[tokio::test]
     async fn test_get_dome_state() {
         let (status, json) = get_json(router_with_state(), "/api/state/dome").await;

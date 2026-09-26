@@ -72,6 +72,27 @@ pub fn headless_config() -> crate::app::AppConfig {
     ])
 }
 
+/// Build the GUI's view of `app` the way the windowed runner does each frame:
+/// the engine snapshot, then the UI data derived from it, with default layout
+/// and no preview textures. For benchmarking the GUI's per-frame view cost.
+/// Returns the number of outputs in the view, to keep the work observable.
+pub fn gui_view(app: &crate::app::VardaApp) -> usize {
+    let engine = app.build_engine_state();
+    let layout = crate::usecases::ui::UILayoutState::default();
+    let deck = std::collections::HashMap::new();
+    let channel = std::collections::HashMap::new();
+    let output = std::collections::HashMap::new();
+    let textures = crate::usecases::ui::PreviewTextures {
+        deck: &deck,
+        channel: &channel,
+        output: &output,
+        main_output: None,
+    };
+    crate::usecases::ui::build_ui_data(&engine, &layout, &textures, std::sync::Arc::from([]))
+        .outputs
+        .len()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -339,7 +339,7 @@ impl UIRunner {
         };
 
         // Check for shutdown request (from API or SIGINT/SIGTERM)
-        if varda.shutdown_requested
+        if varda.shutdown_requested()
             || self
                 .shutdown_flag
                 .load(std::sync::atomic::Ordering::Relaxed)
@@ -430,7 +430,6 @@ impl UIRunner {
         // frame the API gets the same build instead of a second one.
         let engine = varda_ref.build_engine_state();
         let mut ui_data = crate::usecases::ui::build_ui_data(
-            varda_ref,
             &engine,
             &self.layout,
             &crate::usecases::ui::PreviewTextures {
@@ -439,10 +438,8 @@ impl UIRunner {
                 output: &self.output_preview_textures,
                 main_output: self.main_output_texture,
             },
-            self.lut_catalog.files(
-                &varda_ref.session.workspace.luts_dir(),
-                std::time::Instant::now(),
-            ),
+            self.lut_catalog
+                .files(&varda_ref.luts_dir(), std::time::Instant::now()),
         );
         self.publish_counter += 1;
         if self.publish_counter.is_multiple_of(10) {
