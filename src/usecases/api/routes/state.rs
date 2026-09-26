@@ -132,6 +132,48 @@ state_route!(
     arrangement
 );
 state_route!(
+    libraries,
+    "/api/state/libraries",
+    "Saved stream and HTML sources: the HLS, DASH, RTMP, and HTML libraries, with whether each stream is connected and each page is showing.",
+    libraries
+);
+state_route!(
+    keymap,
+    "/api/state/keymap",
+    "Keyboard shortcuts: every binding, whether keyboard learn is active, and what it will bind.",
+    keymap
+);
+state_route!(
+    presets,
+    "/api/state/presets",
+    "Saved deck and channel presets, by name.",
+    presets
+);
+state_route!(
+    notifications,
+    "/api/state/notifications",
+    "Notifications currently shown to the performer: id, level, message, and how far through its display time each is.",
+    notifications
+);
+state_route!(
+    clipboard,
+    "/api/state/clipboard",
+    "What the clipboard holds, or null when it is empty.",
+    clipboard
+);
+state_route!(
+    render,
+    "/api/state/render",
+    "Render resolution, the largest dimension the GPU allows, and the domemaster resolution.",
+    render
+);
+state_route!(
+    system,
+    "/api/state/system",
+    "Load on the machine running the engine (CPU, RAM, GPU utilization) and the GPU adapter it runs on.",
+    system
+);
+state_route!(
     streams,
     "/api/state/streams",
     "Active stream receivers with their URL, mode, and connection status.",

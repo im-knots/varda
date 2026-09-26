@@ -15,6 +15,7 @@ pub mod editor;
 pub mod entity;
 pub mod keymap;
 pub mod midi;
+pub mod notification;
 pub mod param;
 pub mod render;
 pub mod surface;

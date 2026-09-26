@@ -335,6 +335,8 @@ pub(crate) struct DeckSources {
 /// What the mixer renders into: the GPU, the render size, and the frame rate.
 pub(crate) struct RenderTarget {
     pub context: GpuContext,
+    /// The GPU adapter, read once: it cannot change during a session.
+    pub gpu_info: crate::engine::types::GpuInfoSnapshot,
     pub width: u32,
     pub height: u32,
     pub target_fps: u32,
@@ -361,18 +363,18 @@ pub(crate) struct MessageBus {
 /// here that lends each group what it needs. See /spec/vardapp-decomposition.md.
 pub struct VardaApp {
     mixer: Mixer,
-    pub(crate) render: RenderTarget,
-    pub(crate) audio: Audio,
-    pub(crate) sources: DeckSources,
-    pub(crate) output: Outputs,
-    pub(crate) input: Inputs,
-    pub(crate) show: Show,
-    pub(crate) session: Session,
+    render: RenderTarget,
+    audio: Audio,
+    sources: DeckSources,
+    output: Outputs,
+    input: Inputs,
+    show: Show,
+    session: Session,
     /// Interactive HTML window state (feature `html`). See /spec/html-source.md §4.
     #[cfg(feature = "html")]
-    pub(crate) interactive: interactive::InteractiveHtmlState,
-    pub(crate) frame_stats: FrameStats,
-    pub(crate) bus: MessageBus,
+    interactive: interactive::InteractiveHtmlState,
+    frame_stats: FrameStats,
+    bus: MessageBus,
 
     // Channels force-rendered for off-air preview, set by `SetPreviewChannels`.
     // Held by UUID so a reorder cannot move the cue; `preview_channels` is the
@@ -381,7 +383,7 @@ pub struct VardaApp {
     preview_channel_uuids: Vec<String>,
     preview_channels: Vec<usize>,
 
-    pub(crate) shutdown_requested: bool,
+    shutdown_requested: bool,
 }
 
 impl VardaApp {
@@ -543,6 +545,16 @@ impl VardaApp {
         Ok(Self {
             mixer,
             render: RenderTarget {
+                gpu_info: {
+                    let info = gpu.adapter.get_info();
+                    crate::engine::types::GpuInfoSnapshot {
+                        name: info.name,
+                        backend: format!("{:?}", info.backend),
+                        driver: info.driver,
+                        driver_info: info.driver_info,
+                        device_type: format!("{:?}", info.device_type),
+                    }
+                },
                 context: gpu,
                 width: DEFAULT_RENDER_WIDTH,
                 height: DEFAULT_RENDER_HEIGHT,
@@ -1030,6 +1042,21 @@ impl VardaApp {
     /// Maximum render dimension (width or height) the GPU can allocate a
     /// texture for. Varda imposes no artificial cap — this hardware limit is
     /// the only bound on render resolution (see spec/resolution-and-scaling.md).
+    /// Current target FPS (0 = uncapped).
+    pub fn target_fps(&self) -> u32 {
+        self.render.target_fps
+    }
+
+    /// Where the workspace keeps its LUT files.
+    pub fn luts_dir(&self) -> std::path::PathBuf {
+        self.session.workspace.luts_dir()
+    }
+
+    /// Whether the API or a signal asked the engine to shut down.
+    pub fn shutdown_requested(&self) -> bool {
+        self.shutdown_requested
+    }
+
     pub fn max_render_dimension(&self) -> u32 {
         self.render.context.device.limits().max_texture_dimension_2d
     }
@@ -1076,11 +1103,6 @@ impl VardaApp {
                 stopped.join(", ")
             ));
         }
-    }
-
-    /// Current target FPS (0 = uncapped).
-    pub fn target_fps(&self) -> u32 {
-        self.render.target_fps
     }
 
     /// Set the target FPS. 0 = uncapped.

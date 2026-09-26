@@ -1,13 +1,7 @@
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
-/// Severity levels for notifications
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NotificationLevel {
-    Info,
-    Warning,
-    Error,
-}
+pub use crate::engine::value::notification::NotificationLevel;
 
 impl NotificationLevel {
     pub fn label(&self) -> &'static str {

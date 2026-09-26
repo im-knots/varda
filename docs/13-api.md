@@ -776,22 +776,29 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `GET` | `/api/state/arrangement` | Arrangement state: authored lanes and regions, whether the arrangement holds authority, and which parameters a performer is holding by hand. |
 | `GET` | `/api/state/audio` | Audio analysis state: level, band energies, FFT bins, detected BPM, and input devices. |
 | `GET` | `/api/state/cameras` | Camera devices discovered by the last scan. |
+| `GET` | `/api/state/clipboard` | What the clipboard holds, or null when it is empty. |
 | `GET` | `/api/state/clock` | Clock state: resolved BPM, beat phase, active source, and detected clock sources. |
 | `GET` | `/api/state/deck-loads` | Decks being built in the background, then loads that failed in the last minute with the reason. Shader, image, and video decks answer their create request with a UUID straight away and appear in the mixer once built. |
 | `GET` | `/api/state/depth` | Depth sensors discovered by the last scan. |
 | `GET` | `/api/state/dome` | Dome projection the domemaster is rendered for: projector preset and dome geometry, content rotation included. |
+| `GET` | `/api/state/keymap` | Keyboard shortcuts: every binding, whether keyboard learn is active, and what it will bind. |
+| `GET` | `/api/state/libraries` | Saved stream and HTML sources: the HLS, DASH, RTMP, and HTML libraries, with whether each stream is connected and each page is showing. |
 | `GET` | `/api/state/macros` | Every macro control with its kind, current value, and parameter targets. |
 | `GET` | `/api/state/midi` | MIDI state: devices, mappings, and whether learn mode is active. |
 | `GET` | `/api/state/mixer` | Mixer state: channels, crossfader position, master effects, active transition, and sequences. |
 | `GET` | `/api/state/modulation` | Modulation state: sources, their current output values, and parameter assignments. |
 | `GET` | `/api/state/ndi` | NDI runtime availability and the source names found by the last scan. |
+| `GET` | `/api/state/notifications` | Notifications currently shown to the performer: id, level, message, and how far through its display time each is. |
 | `GET` | `/api/state/outputs` | Output state: output windows, surfaces, and connected monitors. |
 | `GET` | `/api/state/performance` | Render loop counters: measured FPS, total frames rendered, and the configured target FPS. |
+| `GET` | `/api/state/presets` | Saved deck and channel presets, by name. |
 | `GET` | `/api/state/registry` | Shader registry: generator and filter shader names with their indices. |
+| `GET` | `/api/state/render` | Render resolution, the largest dimension the GPU allows, and the domemaster resolution. |
 | `GET` | `/api/state/screen_capture` | Screen capture state: enumerated targets, permission state, backend, and active session count. |
 | `GET` | `/api/state/streams` | Active stream receivers with their URL, mode, and connection status. |
 | `GET` | `/api/state/surfaces` | Every surface with its geometry, warp, and source assignment. |
 | `GET` | `/api/state/syphon` | Syphon framework availability and the server names found by the last scan. |
+| `GET` | `/api/state/system` | Load on the machine running the engine (CPU, RAM, GPU utilization) and the GPU adapter it runs on. |
 | `GET` | `/api/state/timecode` | Timecode diagnostics: every LTC and MTC input being listened to with its own position and run state, which one is driving the transport, and the current preference and LTC patch. |
 | `GET` | `/api/state/transport` | Transport state: absolute position, timecode, run status, loop region, and follower count. |
 

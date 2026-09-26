@@ -867,6 +867,7 @@ pub(crate) fn build_output_snapshot(app: &VardaApp) -> OutputSnapshot {
                             surface_uuid: a.surface_uuid.clone(),
                             surface_name,
                             enabled: a.enabled,
+                            overlap_zones: a.overlap_zones.clone(),
                         }
                     })
                     .collect();
@@ -894,6 +895,7 @@ pub(crate) fn build_output_snapshot(app: &VardaApp) -> OutputSnapshot {
                                 device: h.target.audio_device().unwrap_or_default().to_string(),
                                 frames_written: health.frames_written,
                                 frames_dropped: health.frames_dropped,
+                                silence_spliced: health.silence_spliced,
                             });
                         let delivery = delivery
                             .and_then(crate::delivery::Delivery::encoder_health)
@@ -912,6 +914,12 @@ pub(crate) fn build_output_snapshot(app: &VardaApp) -> OutputSnapshot {
                         )
                     }
                 };
+                let (width, height) = match o {
+                    UnifiedOutput::Window(w) => {
+                        (w.preview_texture.width(), w.preview_texture.height())
+                    }
+                    UnifiedOutput::Headless(h) => (h.width, h.height),
+                };
                 OutputWindowSnapshot {
                     uuid: o.uuid().to_string(),
                     name: o.name().to_string(),
@@ -927,6 +935,12 @@ pub(crate) fn build_output_snapshot(app: &VardaApp) -> OutputSnapshot {
                     tonemap_override: o.tonemap_override(),
                     audio_passthrough,
                     delivery,
+                    edge_blend_mode: o.edge_blend_mode(),
+                    edge_blend: o.edge_blend(),
+                    rotation: o.rotation(),
+                    active_seconds: app.output.active_duration(o).as_secs_f64(),
+                    width,
+                    height,
                 }
             })
             .collect(),
@@ -1032,6 +1046,110 @@ pub(crate) fn build_engine_state(app: &VardaApp) -> EngineState {
         macros: app.mixer.macros().macros().to_vec(),
         can_undo: app.history_can_undo(),
         can_redo: app.history_can_redo(),
+        libraries: build_libraries_snapshot(app),
+        keymap: build_keymap_snapshot(app),
+        presets: crate::engine::types::PresetsSnapshot {
+            deck: app
+                .session
+                .preset_library
+                .deck_presets
+                .iter()
+                .map(|p| p.name.clone())
+                .collect(),
+            channel: app
+                .session
+                .preset_library
+                .channel_presets
+                .iter()
+                .map(|p| p.name.clone())
+                .collect(),
+        },
+        notifications: app
+            .session
+            .notifications
+            .visible()
+            .iter()
+            .map(|n| crate::engine::types::NotificationSnapshot {
+                id: n.id,
+                level: n.level,
+                message: n.message.clone(),
+                progress: n.progress(),
+            })
+            .collect(),
+        clipboard: app.clipboard_summary(),
+        render: crate::engine::types::RenderSnapshot {
+            width: app.render.width,
+            height: app.render.height,
+            max_dimension: app.max_render_dimension(),
+            domemaster_resolution: app.output.domemaster_resolution,
+        },
+        system: crate::engine::types::SystemSnapshot {
+            cpu_usage: app.frame_stats.system_monitor.cpu_usage(),
+            ram_used: app.frame_stats.system_monitor.ram_used(),
+            ram_total: app.frame_stats.system_monitor.ram_total(),
+            gpu_utilization: app.mixer.gpu_utilization(),
+            gpu: app.render.gpu_info.clone(),
+        },
+    }
+}
+
+/// Saved stream and HTML sources with their live state.
+fn build_libraries_snapshot(app: &VardaApp) -> crate::engine::types::LibrariesSnapshot {
+    use crate::engine::types::{
+        HtmlLibraryEntrySnapshot, RtmpLibraryEntrySnapshot, StreamLibraryEntrySnapshot,
+    };
+    let io = &app.sources.io;
+    let streams = &io.stream_manager;
+    let connected = |url: &str| {
+        (0..streams.receiver_count())
+            .any(|i| streams.receiver_url(i) == Some(url) && streams.is_connected(i))
+    };
+    let stream_entries = |urls: &[String]| {
+        urls.iter()
+            .map(|url| StreamLibraryEntrySnapshot {
+                url: url.clone(),
+                connected: connected(url),
+            })
+            .collect()
+    };
+    crate::engine::types::LibrariesSnapshot {
+        hls: stream_entries(&io.hls_library),
+        dash: stream_entries(&io.dash_library),
+        rtmp: io
+            .rtmp_library
+            .iter()
+            .map(|(url, mode)| RtmpLibraryEntrySnapshot {
+                url: url.clone(),
+                mode: *mode,
+                connected: connected(url),
+            })
+            .collect(),
+        html: io
+            .html_library
+            .iter()
+            .map(|url| HtmlLibraryEntrySnapshot {
+                url: url.clone(),
+                active: (0..io.html_manager.instance_count())
+                    .any(|i| io.html_manager.instance_url(i) == Some(url.as_str())),
+            })
+            .collect(),
+    }
+}
+
+/// Keyboard shortcuts and keyboard learn.
+fn build_keymap_snapshot(app: &VardaApp) -> crate::engine::types::KeymapSnapshot {
+    let keymap = &app.input.keymap;
+    crate::engine::types::KeymapSnapshot {
+        bindings: keymap
+            .bindings
+            .iter()
+            .map(|(combo, target)| crate::engine::types::KeyBindingSnapshot {
+                combo: combo.clone(),
+                target: target.clone(),
+            })
+            .collect(),
+        learn_active: keymap.learn_mode,
+        learn_target: keymap.learn_target.clone(),
     }
 }
 
@@ -1080,6 +1198,27 @@ mod tests {
         let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
         let config = crate::testing::headless_config();
         super::super::VardaApp::new(gpu, &config).ok()
+    }
+
+    /// What the GUI reads, the published state carries: libraries with their
+    /// live state, key bindings, presets, render size, and the GPU adapter
+    /// (/spec/ui-engine-boundary.md § WS9).
+    #[test]
+    fn the_published_state_carries_what_the_gui_shows() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        app.execute_command(crate::engine::EngineCommand::AddHtmlLibraryEntry {
+            url: "https://example.invalid/page.html".into(),
+        });
+        let state = build_engine_state(&app);
+        assert_eq!(state.libraries.html.len(), 1);
+        assert!(!state.libraries.html[0].active, "no deck shows it");
+        assert!(!state.keymap.bindings.is_empty(), "the default bindings");
+        assert_eq!(state.render.width, app.render.width);
+        assert!(state.render.max_dimension >= state.render.width);
+        assert!(!state.system.gpu.name.is_empty());
+        let _json = serde_json::to_value(&state).expect("the state serializes");
     }
 
     #[test]
