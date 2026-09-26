@@ -1,9 +1,8 @@
 //! Warp value types — corner-pin, mesh, and bezier patch-grid warp data.
 //!
-//! Definitions moved from `internal::renderer::warp` (see
-//! /spec/engine-value-types.md). All mesh/tessellation *algorithms* stay in
-//! `renderer::warp` as inherent impls on these re-exported types — only the
-//! plain data shapes live here.
+//! Only the plain data shapes live here. The mesh and tessellation algorithms
+//! are inherent impls in `surface::warp`, which re-exports these types (see
+//! /spec/engine-value-types.md).
 
 /// A single point in a UV warp mesh: output-space position + source-space UV.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
@@ -43,7 +42,7 @@ pub enum WarpMode {
 }
 
 /// A smooth warp defined by a grid of cubic-bezier patches with tangent
-/// handles. See `renderer::warp` module docs for the model.
+/// handles. See `surface::warp` module docs for the model.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BezierWarp {
     /// Anchor columns in the control cage (≥2).

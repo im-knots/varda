@@ -406,7 +406,7 @@ impl Deck {
             _ => None,
         };
 
-        let uuid = super::generate_short_uuid();
+        let uuid = crate::ids::generate_short_uuid();
         let param_prefix = crate::engine::value::param::deck_param_prefix(&uuid);
 
         Ok(Self {
@@ -1011,7 +1011,7 @@ impl Deck {
         let now = Instant::now();
         let generator_params = ShaderParams::from_inputs(&[]);
 
-        let uuid = super::generate_short_uuid();
+        let uuid = crate::ids::generate_short_uuid();
         let param_prefix = crate::engine::value::param::deck_param_prefix(&uuid);
 
         Self {
@@ -1379,7 +1379,7 @@ impl Deck {
         let texture_b_view = texture_b.create_view(&wgpu::TextureViewDescriptor::default());
 
         let now = Instant::now();
-        let uuid = super::generate_short_uuid();
+        let uuid = crate::ids::generate_short_uuid();
         let param_prefix = crate::engine::value::param::deck_param_prefix(&uuid);
 
         Ok(Self {

@@ -17,9 +17,9 @@ pub(crate) fn stage_selection_id() -> egui::Id {
 const UI_MAX_WARP_SUBDIVISIONS: u32 = 16;
 
 /// `(cols, rows)` of a surface's warp. `None` or a corner-pin reads as 2×2.
-fn warp_grid_dims(warp: Option<&crate::renderer::warp::WarpMode>) -> (u32, u32) {
+fn warp_grid_dims(warp: Option<&crate::surface::warp::WarpMode>) -> (u32, u32) {
     match warp {
-        Some(crate::renderer::warp::WarpMode::Mesh(m)) => (m.cols, m.rows),
+        Some(crate::surface::warp::WarpMode::Mesh(m)) => (m.cols, m.rows),
         _ => (2, 2),
     }
 }
@@ -92,7 +92,7 @@ fn render_surface_warp_editor(
     data: &UIData,
     actions: &mut UIActions,
 ) {
-    use crate::renderer::warp::WarpMode;
+    use crate::surface::warp::WarpMode;
     let uuid = surface.uuid.clone();
     let bound = surface.warp_bound;
     let is_bezier = matches!(surface.warp, Some(WarpMode::Bezier(_)));
@@ -411,7 +411,7 @@ enum BezDrag {
 /// (anchors, tangent handles, connector lines) with drag interaction.
 fn render_bezier_canvas(
     ui: &mut egui::Ui,
-    b: &crate::renderer::warp::BezierWarp,
+    b: &crate::surface::warp::BezierWarp,
     uuid: &str,
     bound: bool,
     canvas_rect: egui::Rect,

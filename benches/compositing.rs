@@ -47,6 +47,7 @@ fn frame_inputs<'a>(
         beat_time: None,
         transport: None,
         free_run_time: None,
+        write_param: varda::param_router::write_macro_target,
     }
 }
 

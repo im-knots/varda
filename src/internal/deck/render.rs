@@ -263,7 +263,7 @@ impl Deck {
     ///
     /// Idempotent, and safe to call when the shader declares nothing.
     pub fn start_declared_preprocessors(&mut self) {
-        let registry = crate::analyzer::default_registry();
+        let registry = analyzer_registry();
         self.ensure_preprocessor_analyzers(&registry);
     }
 
@@ -1565,6 +1565,12 @@ impl Deck {
     pub fn output_view(&self) -> &wgpu::TextureView {
         &self.texture_view
     }
+}
+
+/// Every analyzer and preprocessor a deck can declare: the analyzer module's
+/// own, plus the depth sensor's.
+pub(crate) fn analyzer_registry() -> AnalyzerRegistry {
+    crate::depth::preprocess::register(crate::analyzer::default_registry())
 }
 
 /// Get current date as [year, month, day, `seconds_in_day`]

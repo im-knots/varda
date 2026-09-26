@@ -1,4 +1,5 @@
-//! Warp pipeline — perspective correction and UV mesh warping for projection mapping.
+//! Warp geometry: perspective correction and UV mesh warping for projection
+//! mapping. Pure CPU math; the renderer draws what it produces.
 //!
 //! Supports two warp modes:
 //! - **`CornerPin`**: 4-point homography (legacy quad warp, DLT solver)

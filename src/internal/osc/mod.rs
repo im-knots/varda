@@ -71,7 +71,7 @@ impl OscConfig {
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let content =
             serde_json::to_string_pretty(self).context("Failed to serialize OSC config")?;
-        crate::persistence::atomic_write(path.as_ref(), &content)?;
+        crate::files::atomic_write(path.as_ref(), &content)?;
         Ok(())
     }
 }

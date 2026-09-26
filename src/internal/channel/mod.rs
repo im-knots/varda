@@ -3,7 +3,6 @@
 use crate::arrangement::SourceDemand;
 use crate::deck::{Deck, Effect};
 use crate::isf::ISFShader;
-use crate::mixer::GpuTimingFrame;
 use crate::modulation::ModulationEngine;
 use crate::params::ShaderParams;
 use crate::renderer::{
@@ -401,6 +400,45 @@ impl DeckSlot {
     }
 }
 
+/// Per-frame GPU timing allocation context.
+/// Hands out (`begin_query`, `end_query`) index pairs from a shared `QuerySet`.
+pub struct GpuTimingFrame {
+    /// Maximum number of queries in the set (must be even: pairs of begin/end)
+    max_queries: u32,
+    /// Next available query index
+    next_index: u32,
+    /// Records which (`ch_idx`, `deck_idx`) owns which query pair
+    pub allocations: Vec<(usize, usize, u32, u32)>,
+}
+
+impl GpuTimingFrame {
+    pub fn new(max_queries: u32) -> Self {
+        Self {
+            max_queries,
+            next_index: 0,
+            allocations: Vec::new(),
+        }
+    }
+
+    /// Allocate a (begin, end) query index pair for a deck.
+    /// Returns None if capacity exhausted.
+    pub fn allocate(&mut self, ch_idx: usize, deck_idx: usize) -> Option<(u32, u32)> {
+        if self.next_index + 2 > self.max_queries {
+            return None;
+        }
+        let begin = self.next_index;
+        let end = self.next_index + 1;
+        self.next_index += 2;
+        self.allocations.push((ch_idx, deck_idx, begin, end));
+        Some((begin, end))
+    }
+
+    /// Number of queries actually written this frame.
+    pub fn query_count(&self) -> u32 {
+        self.next_index
+    }
+}
+
 /// Channel - Groups multiple decks into a composited layer
 pub struct Channel {
     /// Stable UUID for this channel (8-char hex, persists across saves)
@@ -483,7 +521,7 @@ impl Channel {
         )?;
 
         Ok(Self {
-            uuid: crate::deck::generate_short_uuid(),
+            uuid: crate::ids::generate_short_uuid(),
             name,
             decks: Vec::new(),
             effects: Vec::new(),

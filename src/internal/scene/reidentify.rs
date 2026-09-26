@@ -14,7 +14,7 @@
 //! See [`/spec/clipboard.md`] § Paste reidentifies.
 
 use super::{ChannelConfig, DeckConfig, EffectConfig, ModulationRecipe};
-use crate::deck::generate_short_uuid;
+use crate::ids::generate_short_uuid;
 use std::collections::HashMap;
 
 /// Rename map from old UUID to new, for the effects a pass has reidentified.

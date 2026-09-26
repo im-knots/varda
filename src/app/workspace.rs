@@ -1274,7 +1274,7 @@ mod tests {
             version: 3,
             channels: vec![
                 crate::scene::ChannelConfig {
-                    uuid: crate::deck::generate_short_uuid(),
+                    uuid: crate::ids::generate_short_uuid(),
                     name: "Ch 0".into(),
                     opacity: 1.0,
                     blend_mode: crate::scene::BlendModeConfig::Normal,
@@ -1283,7 +1283,7 @@ mod tests {
                     modulation: vec![],
                 },
                 crate::scene::ChannelConfig {
-                    uuid: crate::deck::generate_short_uuid(),
+                    uuid: crate::ids::generate_short_uuid(),
                     name: "Ch 1".into(),
                     opacity: 1.0,
                     blend_mode: crate::scene::BlendModeConfig::Normal,

@@ -158,7 +158,7 @@ pub struct StreamReceiverSnapshot {
 /// A detected MIDI clock source for UI display.
 #[derive(Clone, Debug, Serialize)]
 pub struct DetectedClockSourceSnapshot {
-    pub device_id: crate::midi::DeviceId,
+    pub device_id: crate::engine::value::midi::DeviceId,
     pub device_name: String,
     pub bpm: Option<f32>,
 }
@@ -187,7 +187,7 @@ pub struct ClockSnapshot {
     /// Current preference label: "Auto", "`ForceMidi`(<name>)", "`ForceOsc`", "`ForceAudio`", "`ForceManual`".
     pub preference_label: String,
     /// Device ID if preference is `ForceMidi`.
-    pub preference_force_device_id: Option<crate::midi::DeviceId>,
+    pub preference_force_device_id: Option<crate::engine::value::midi::DeviceId>,
     /// Manual BPM value (if preference is `ForceManual`).
     pub manual_bpm: Option<f32>,
     /// How many modulation sources are locked to the beat. Drives the readout's
@@ -784,7 +784,7 @@ pub struct MidiSnapshot {
 
 #[derive(Clone, Serialize)]
 pub struct MidiDeviceSnapshot {
-    pub id: crate::midi::DeviceId,
+    pub id: crate::engine::value::midi::DeviceId,
     pub name: String,
     pub enabled: bool,
     pub has_output: bool,

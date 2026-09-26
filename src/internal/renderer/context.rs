@@ -852,7 +852,7 @@ pub struct SurfaceRenderInfo<'a> {
     /// UV offset for content sampling (Fill=[0,0], Mapped=[`bb_x`, `bb_y`])
     pub uv_offset: [f32; 2],
     /// Warp mode: `CornerPin` or Mesh. None = no warp (render at polygon's native position).
-    pub warp_mode: Option<super::warp::WarpMode>,
+    pub warp_mode: Option<crate::surface::warp::WarpMode>,
     /// Per-surface overlap zones (Auto mode). Default = no zones.
     pub overlap_zones: super::edge_blend::SurfaceOverlapZones,
     /// Flattened subtractive hole contours in surface uv space (8i.7). Empty =
@@ -1017,7 +1017,7 @@ impl OutputWindow {
         );
 
         Ok(Self {
-            uuid: crate::deck::generate_short_uuid(),
+            uuid: crate::ids::generate_short_uuid(),
             name,
             window,
             surface,
@@ -1325,14 +1325,17 @@ impl OutputWindow {
                 let (homography, vertices) = if surf.extra_contours.is_empty() {
                     // Dispatch warp mode: CornerPin → homography, Mesh → vertex-baked, None → identity
                     match &surf.warp_mode {
-                        Some(super::warp::WarpMode::CornerPin { corners }) => {
+                        Some(crate::surface::warp::WarpMode::CornerPin { corners }) => {
                             let src_corners = [
                                 [bb[0], bb[1]],
                                 [bb[0] + bb[2], bb[1]],
                                 [bb[0] + bb[2], bb[1] + bb[3]],
                                 [bb[0], bb[1] + bb[3]],
                             ];
-                            let h = super::warp::compute_forward_homography(&src_corners, corners);
+                            let h = crate::surface::warp::compute_forward_homography(
+                                &src_corners,
+                                corners,
+                            );
                             let verts = PolygonBlitPipeline::triangulate_verts(
                                 surf.vertices,
                                 bb[0],
@@ -1342,11 +1345,11 @@ impl OutputWindow {
                             );
                             (Some(h), verts)
                         }
-                        Some(super::warp::WarpMode::Mesh(mesh)) => {
+                        Some(crate::surface::warp::WarpMode::Mesh(mesh)) => {
                             // Mesh mode: warp baked into vertices, identity homography
                             (None, PolygonBlitPipeline::mesh_verts(mesh))
                         }
-                        Some(super::warp::WarpMode::Bezier(b)) => {
+                        Some(crate::surface::warp::WarpMode::Bezier(b)) => {
                             // Bezier: tessellate the control cage into a mesh, then bake.
                             (None, PolygonBlitPipeline::mesh_verts(&b.tessellate()))
                         }
@@ -1944,7 +1947,7 @@ impl HeadlessOutput {
         let edge_blend_pipeline = super::edge_blend::EdgeBlendPipeline::new(device, format)
             .expect("Failed to create headless edge blend pipeline");
         Self {
-            uuid: crate::deck::generate_short_uuid(),
+            uuid: crate::ids::generate_short_uuid(),
             name,
             source,
             readback,

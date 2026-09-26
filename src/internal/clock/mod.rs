@@ -9,7 +9,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
-use crate::midi::DeviceId;
+use crate::engine::value::midi::DeviceId;
 
 /// Ticks per quarter note in the MIDI clock protocol.
 const MIDI_PPQ: usize = 24;

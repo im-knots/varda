@@ -2747,7 +2747,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!(
             "varda-prores-alpha-{}-{}.mov",
             std::process::id(),
-            crate::deck::generate_short_uuid()
+            crate::ids::generate_short_uuid()
         ));
         let mut encoder = Command::new("ffmpeg")
             .args(["-v", "error", "-y", "-f", "rawvideo"])
@@ -3727,7 +3727,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!(
             "varda-hdr10-vui-{}-{}.mp4",
             std::process::id(),
-            crate::deck::generate_short_uuid()
+            crate::ids::generate_short_uuid()
         ));
         let mut cmd = Command::new("ffmpeg");
         cmd.args(["-v", "error", "-y", "-f", "rawvideo"])
@@ -3820,7 +3820,7 @@ mod tests {
             let path = std::env::temp_dir().join(format!(
                 "varda-hdr10-matrix-{label}-{}-{}.mp4",
                 std::process::id(),
-                crate::deck::generate_short_uuid()
+                crate::ids::generate_short_uuid()
             ));
             let mut cmd = Command::new("ffmpeg");
             cmd.args(["-v", "error", "-y", "-f", "rawvideo"])
@@ -3945,7 +3945,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!(
             "varda-hlg-vui-{}-{}.mp4",
             std::process::id(),
-            crate::deck::generate_short_uuid()
+            crate::ids::generate_short_uuid()
         ));
         let mut cmd = Command::new("ffmpeg");
         cmd.args(["-v", "error", "-y", "-f", "rawvideo"])
@@ -4284,7 +4284,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "varda-player-{}-{}",
             std::process::id(),
-            crate::deck::generate_short_uuid()
+            crate::ids::generate_short_uuid()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.to_string_lossy().to_string();
@@ -4305,7 +4305,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "varda-player-buf-{}-{}",
             std::process::id(),
-            crate::deck::generate_short_uuid()
+            crate::ids::generate_short_uuid()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.to_string_lossy().to_string();

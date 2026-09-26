@@ -387,6 +387,7 @@ impl VardaApp {
             transport: self.transport.sample(),
             // The wall paces a live show.
             free_run_time: None,
+            write_param: crate::param_router::write_macro_target,
         };
 
         let target_fps = self.target_fps;
@@ -880,7 +881,7 @@ impl VardaApp {
                         // contour as a bounding-box UV fill (matches the editor).
                         let (homography, vertices) = if surface.extra_contours.is_empty() {
                             match eff_warp.as_ref() {
-                                Some(crate::renderer::warp::WarpMode::CornerPin { corners }) => {
+                                Some(crate::surface::warp::WarpMode::CornerPin { corners }) => {
                                     let src_corners = [
                                         [bb.x, bb.y],
                                         [bb.x + bb.width, bb.y],
@@ -888,7 +889,7 @@ impl VardaApp {
                                         [bb.x, bb.y + bb.height],
                                     ];
                                     let homography =
-                                        crate::renderer::warp::compute_forward_homography(
+                                        crate::surface::warp::compute_forward_homography(
                                             &src_corners,
                                             corners,
                                         );
@@ -902,13 +903,13 @@ impl VardaApp {
                                     );
                                     (Some(homography), verts)
                                 }
-                                Some(crate::renderer::warp::WarpMode::Mesh(mesh)) => (
+                                Some(crate::surface::warp::WarpMode::Mesh(mesh)) => (
                                     None,
                                     crate::renderer::blit::PolygonBlitPipeline::mesh_verts(mesh),
                                 ),
                                 // Bezier: tessellate the control cage into a mesh,
                                 // then bake to verts (identity homography).
-                                Some(crate::renderer::warp::WarpMode::Bezier(b)) => (
+                                Some(crate::surface::warp::WarpMode::Bezier(b)) => (
                                     None,
                                     crate::renderer::blit::PolygonBlitPipeline::mesh_verts(
                                         &b.tessellate(),

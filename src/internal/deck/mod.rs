@@ -3,6 +3,7 @@ mod render;
 mod source;
 pub mod svg;
 
+pub(crate) use render::analyzer_registry;
 pub use render::get_current_date;
 
 use crate::isf::{ISFPass, ISFShader};
@@ -13,11 +14,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
-
-/// Generate a short 8-character hex UUID for entity identity.
-pub fn generate_short_uuid() -> String {
-    uuid::Uuid::new_v4().simple().to_string()[..8].to_string()
-}
 
 /// Scaling mode for non-shader sources (images, video)
 #[derive(
@@ -36,6 +32,27 @@ pub enum ScalingMode {
 }
 
 impl ScalingMode {
+    /// The mode a fader at `value` (0.0–1.0) selects: four equal buckets.
+    pub fn from_value(value: f32) -> Self {
+        match crate::params::bucket_index(value, 4) {
+            0 => ScalingMode::Fill,
+            1 => ScalingMode::Fit,
+            2 => ScalingMode::Stretch,
+            _ => ScalingMode::Center,
+        }
+    }
+
+    /// The value at the centre of this mode's bucket. Inverse of [`Self::from_value`].
+    pub fn to_value(self) -> f32 {
+        let index = match self {
+            ScalingMode::Fill => 0,
+            ScalingMode::Fit => 1,
+            ScalingMode::Stretch => 2,
+            ScalingMode::Center => 3,
+        };
+        crate::params::bucket_center(index, 4)
+    }
+
     /// Compute UV scale and offset for blitting source into target
     /// Returns (`uv_scale`, `uv_offset`) to transform target UVs to source UVs
     pub fn compute_uv_transform(
@@ -1270,20 +1287,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn generate_short_uuid_format() {
-        let id = generate_short_uuid();
-        assert_eq!(id.len(), 8, "UUID should be 8 chars");
+    fn the_analyzer_registry_includes_the_depth_preprocessor() {
+        let ty = crate::depth::preprocess::PREPROCESSOR_TYPE;
+        assert!(analyzer_registry().schema_for(ty).is_some());
         assert!(
-            id.chars().all(|c| c.is_ascii_hexdigit()),
-            "UUID should be hex: {id}"
+            crate::analyzer::default_registry().schema_for(ty).is_none(),
+            "the analyzer module registers only its own analyzers"
         );
     }
 
     #[test]
-    fn generate_short_uuid_unique() {
-        let ids: Vec<String> = (0..100).map(|_| generate_short_uuid()).collect();
-        let unique: std::collections::HashSet<&String> = ids.iter().collect();
-        assert_eq!(unique.len(), 100, "100 UUIDs should all be unique");
+    fn scaling_mode_buckets() {
+        assert_eq!(ScalingMode::from_value(0.0), ScalingMode::Fill);
+        assert_eq!(ScalingMode::from_value(0.3), ScalingMode::Fit);
+        assert_eq!(ScalingMode::from_value(0.6), ScalingMode::Stretch);
+        assert_eq!(ScalingMode::from_value(1.0), ScalingMode::Center);
+    }
+
+    #[test]
+    fn scaling_modes_round_trip_through_their_buckets() {
+        // Both directions are written out by hand, so a reordering of either
+        // match has to show up here rather than as a mode that silently becomes
+        // its neighbour when a live gesture is recorded.
+        for mode in [
+            ScalingMode::Fill,
+            ScalingMode::Fit,
+            ScalingMode::Stretch,
+            ScalingMode::Center,
+        ] {
+            assert_eq!(ScalingMode::from_value(mode.to_value()), mode);
+        }
     }
 
     #[test]

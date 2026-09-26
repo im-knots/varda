@@ -1631,7 +1631,7 @@ impl PolygonBlitPipeline {
     /// UVs come from `mesh.points[].uv` (source texture space).
     /// The homography should be set to identity when using mesh warp.
     /// Returns an empty vec for an invalid mesh.
-    pub fn mesh_verts(mesh: &super::warp::WarpMesh) -> Vec<PolygonVertex> {
+    pub fn mesh_verts(mesh: &crate::surface::warp::WarpMesh) -> Vec<PolygonVertex> {
         let cols = mesh.cols as usize;
         let rows = mesh.rows as usize;
         if cols < 2 || rows < 2 || mesh.points.len() != cols * rows {
@@ -1656,7 +1656,7 @@ impl PolygonBlitPipeline {
                 // Positions stay in output space [0..1]; the vertex shader
                 // (with identity homography for mesh warp) converts to NDC,
                 // matching the corner-pin path in `triangulate_verts`.
-                let to_vert = |p: &super::warp::MeshPoint| -> PolygonVertex {
+                let to_vert = |p: &crate::surface::warp::MeshPoint| -> PolygonVertex {
                     PolygonVertex {
                         position: p.position,
                         uv: p.uv,
@@ -2504,7 +2504,7 @@ mod tests {
 
     #[test]
     fn mesh_verts_invalid_is_empty() {
-        let mesh = super::super::warp::WarpMesh {
+        let mesh = crate::surface::warp::WarpMesh {
             cols: 1,
             rows: 1,
             points: vec![],
@@ -2518,7 +2518,7 @@ mod tests {
     /// Regression guard against the double-NDC bug that clipped surfaces.
     #[test]
     fn mesh_verts_positions_stay_in_output_space() {
-        let mesh = super::super::warp::WarpMesh::identity(2, 2);
+        let mesh = crate::surface::warp::WarpMesh::identity(2, 2);
         let verts = PolygonBlitPipeline::mesh_verts(&mesh);
         assert_eq!(verts.len(), 6);
         for v in &verts {

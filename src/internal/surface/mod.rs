@@ -11,14 +11,15 @@ pub mod curve;
 pub mod detect;
 pub mod import;
 pub mod mask;
+pub mod warp;
 
 pub use crate::engine::value::surface::{
     CircleHint, ContentMapping, CubicHandle, PathSegment, SurfaceOutputType, SurfacePath,
     SurfaceReorderOp,
 };
 
-use crate::deck::generate_short_uuid;
-use crate::renderer::context::OutputSource;
+use crate::engine::value::render::OutputSource;
+use crate::ids::generate_short_uuid;
 use serde::{Deserialize, Serialize};
 
 impl CircleHint {
@@ -72,7 +73,7 @@ pub struct Surface {
     /// polygon's native position). Promoted from the former `default_warp`
     /// template; the serde `alias` keeps pre-8i.5 `.varda` files loading.
     #[serde(default, alias = "default_warp")]
-    pub warp: Option<crate::renderer::warp::WarpMode>,
+    pub warp: Option<crate::surface::warp::WarpMode>,
     /// When `true` (default for surfaces created in-app), the warp auto-conforms
     /// to this surface's outline — `effective_warp()` derives it and `warp` is
     /// ignored. When `false`, `warp` is authoritative and manually editable.
@@ -153,17 +154,17 @@ impl Surface {
 
     /// The surface's warp, or an identity corner-pin seeded from its bounding
     /// box when it has none. Used as the base for warp editing and rendering.
-    pub fn warp_or_identity(&self) -> crate::renderer::warp::WarpMode {
+    pub fn warp_or_identity(&self) -> crate::surface::warp::WarpMode {
         self.warp.clone().unwrap_or_else(|| {
             let bb = self.bounding_box();
-            crate::renderer::warp::WarpMode::identity_corners([bb.x, bb.y, bb.width, bb.height])
+            crate::surface::warp::WarpMode::identity_corners([bb.x, bb.y, bb.width, bb.height])
         })
     }
 
     /// Move one corner-pin corner (0..4), seeding an identity corner-pin first
     /// when the surface has no warp. No-op if the warp is currently a mesh.
     pub fn set_warp_corner(&mut self, corner_idx: usize, position: [f32; 2]) {
-        if corner_idx >= 4 || matches!(self.warp, Some(crate::renderer::warp::WarpMode::Mesh(_))) {
+        if corner_idx >= 4 || matches!(self.warp, Some(crate::surface::warp::WarpMode::Mesh(_))) {
             return;
         }
         let mut warp = self.warp_or_identity();
@@ -181,7 +182,7 @@ impl Surface {
     /// The warp actually applied when rendering/displaying this surface. While
     /// `warp_bound`, it is derived from the shape (`conforming_warp`); otherwise
     /// the stored `warp`. Single choke point for render, snapshot, and editor.
-    pub fn effective_warp(&self) -> Option<crate::renderer::warp::WarpMode> {
+    pub fn effective_warp(&self) -> Option<crate::surface::warp::WarpMode> {
         if self.warp_bound {
             Some(self.conforming_warp())
         } else {
@@ -193,8 +194,8 @@ impl Surface {
     /// B, fill semantics): circles → elliptical disc-map mesh; quads → a 2×2
     /// mesh at the four vertices; other polygons → a Coons-patch mesh over the
     /// vertices nearest the bbox corners.
-    pub fn conforming_warp(&self) -> crate::renderer::warp::WarpMode {
-        use crate::renderer::warp::{self, WarpMesh, WarpMode};
+    pub fn conforming_warp(&self) -> crate::surface::warp::WarpMode {
+        use crate::surface::warp::{self, WarpMesh, WarpMode};
         if let Some(hint) = &self.circle_hint {
             let n = (hint.sides / 4 + 2).clamp(3, warp::MAX_WARP_SUBDIVISIONS);
             return WarpMode::Mesh(warp::disc_map_mesh(
@@ -228,17 +229,17 @@ impl Surface {
     /// Convert the warp to a `cols` × `rows` mesh, preserving the current
     /// deformation. Dimensions clamp to `[2, MAX_WARP_SUBDIVISIONS]`.
     pub fn set_warp_subdivisions(&mut self, cols: u32, rows: u32) {
-        let cols = cols.clamp(2, crate::renderer::warp::MAX_WARP_SUBDIVISIONS);
-        let rows = rows.clamp(2, crate::renderer::warp::MAX_WARP_SUBDIVISIONS);
+        let cols = cols.clamp(2, crate::surface::warp::MAX_WARP_SUBDIVISIONS);
+        let rows = rows.clamp(2, crate::surface::warp::MAX_WARP_SUBDIVISIONS);
         let base = self.warp_or_identity();
-        self.warp = Some(crate::renderer::warp::WarpMode::Mesh(
+        self.warp = Some(crate::surface::warp::WarpMode::Mesh(
             base.to_mesh(cols, rows),
         ));
     }
 
     /// Move a single mesh grid point (row-major). No-op if the warp is not a mesh.
     pub fn set_warp_mesh_point(&mut self, row: usize, col: usize, position: [f32; 2]) {
-        if let Some(crate::renderer::warp::WarpMode::Mesh(mesh)) = &mut self.warp {
+        if let Some(crate::surface::warp::WarpMode::Mesh(mesh)) = &mut self.warp {
             mesh.set_point(row, col, position);
         }
     }
@@ -248,7 +249,7 @@ impl Surface {
     /// bbox), so the shape is preserved. No-op if the warp is already bezier.
     /// Meaningful only while unbound (manual editing); the caller ensures that.
     pub fn convert_warp_to_bezier(&mut self) {
-        use crate::renderer::warp::{BezierWarp, DEFAULT_BEZIER_TESS, WarpMode};
+        use crate::surface::warp::{BezierWarp, DEFAULT_BEZIER_TESS, WarpMode};
         let base = self.warp_or_identity();
         if matches!(base, WarpMode::Bezier(_)) {
             return;
@@ -266,7 +267,7 @@ impl Surface {
 
     /// Move a bezier-warp anchor `(row, col)`. No-op if the warp is not bezier.
     pub fn set_warp_bezier_anchor(&mut self, row: usize, col: usize, position: [f32; 2]) {
-        if let Some(crate::renderer::warp::WarpMode::Bezier(b)) = &mut self.warp {
+        if let Some(crate::surface::warp::WarpMode::Bezier(b)) = &mut self.warp {
             b.move_anchor(row, col, position);
         }
     }
@@ -282,7 +283,7 @@ impl Surface {
         which: usize,
         position: [f32; 2],
     ) {
-        if let Some(crate::renderer::warp::WarpMode::Bezier(b)) = &mut self.warp {
+        if let Some(crate::surface::warp::WarpMode::Bezier(b)) = &mut self.warp {
             b.move_handle(horizontal, row, col, which, position);
         }
     }
@@ -290,7 +291,7 @@ impl Surface {
     /// Set the bezier-warp control-cage resolution (anchor `cols` × `rows`),
     /// resampling onto the current surface. No-op if the warp is not bezier.
     pub fn set_bezier_cage_subdivisions(&mut self, cols: u32, rows: u32) {
-        if let Some(crate::renderer::warp::WarpMode::Bezier(b)) = &mut self.warp {
+        if let Some(crate::surface::warp::WarpMode::Bezier(b)) = &mut self.warp {
             b.set_cage_subdivisions(cols, rows);
         }
     }
@@ -660,7 +661,7 @@ pub struct SurfaceManager {
     pub surfaces: Vec<Surface>,
     /// Active dome setup (if dome slices have been generated)
     #[serde(default)]
-    pub dome_setup: Option<crate::renderer::slicer::DomeSetup>,
+    pub dome_setup: Option<crate::engine::value::dome::DomeSetup>,
 }
 
 impl SurfaceManager {

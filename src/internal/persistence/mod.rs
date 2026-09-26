@@ -12,24 +12,6 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// Atomic file write: writes to a `.tmp` sibling then renames into place.
-/// Prevents data loss if the process crashes mid-write.
-///
-/// # Errors
-///
-/// Returns an error if the temporary sibling file cannot be written (missing
-/// parent directory, permissions, disk full) or if renaming it over `path`
-/// fails.
-pub fn atomic_write<P: AsRef<Path>>(path: P, content: &str) -> Result<()> {
-    let path = path.as_ref();
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, content)
-        .with_context(|| format!("Failed to write temp file: {}", tmp.display()))?;
-    std::fs::rename(&tmp, path)
-        .with_context(|| format!("Failed to rename {} → {}", tmp.display(), path.display()))?;
-    Ok(())
-}
-
 /// Stage configuration persisted in `.varda/stage.json`.
 /// Contains venue-specific data: surfaces, outputs, and editor preferences.
 /// Kept separate from scene.json so users can share deck layouts without stage geometry.
@@ -144,7 +126,7 @@ impl StagePrefs {
         }
         // Warp now lives on surfaces — validate their corner-pin finiteness.
         for (i, surface) in self.surfaces.surfaces.iter().enumerate() {
-            if let Some(crate::renderer::warp::WarpMode::CornerPin { corners }) = &surface.warp {
+            if let Some(crate::surface::warp::WarpMode::CornerPin { corners }) = &surface.warp {
                 for (c, corner) in corners.iter().enumerate() {
                     for (k, v) in corner.iter().enumerate() {
                         if !v.is_finite() {
@@ -191,7 +173,7 @@ impl StagePrefs {
         }
         let content =
             serde_json::to_string_pretty(self).context("Failed to serialize stage prefs")?;
-        atomic_write(path.as_ref(), &content)?;
+        crate::files::atomic_write(path.as_ref(), &content)?;
         Ok(())
     }
 }
@@ -2159,7 +2141,7 @@ mod tests {
             .surfaces
             .add_surface("s".into(), crate::renderer::context::OutputSource::Master);
         if let Some((_, s)) = prefs.surfaces.find_by_uuid_mut(&uuid) {
-            s.warp = Some(crate::renderer::warp::WarpMode::CornerPin {
+            s.warp = Some(crate::surface::warp::WarpMode::CornerPin {
                 corners: [[0.0, 0.0], [1.0, 0.0], [f32::INFINITY, 1.0], [0.0, 1.0]],
             });
         }

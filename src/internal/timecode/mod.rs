@@ -15,7 +15,7 @@ pub mod mtc;
 
 use std::time::{Duration, Instant};
 
-use crate::midi::DeviceId;
+use crate::engine::value::midi::DeviceId;
 use crate::transport::TimecodeRate;
 
 /// How many frames of silence the reader coasts through before giving up.
@@ -541,8 +541,8 @@ impl TimecodeManager {
     ///
     /// Everything that is not timecode is ignored here, so the caller can hand
     /// over the whole stream rather than filtering it first.
-    pub fn ingest_midi(&mut self, message: &crate::midi::MidiMessage, at: Instant) {
-        use crate::midi::MidiMessage;
+    pub fn ingest_midi(&mut self, message: &crate::engine::value::midi::MidiMessage, at: Instant) {
+        use crate::engine::value::midi::MidiMessage;
         let device_id = message.device_id();
         if !self.wants_mtc(device_id) {
             return;
@@ -1032,7 +1032,7 @@ mod tests {
     /// the same bus must not be able to take the show.
     #[test]
     fn mtc_from_a_port_nobody_named_is_never_parsed() {
-        use crate::midi::MidiMessage;
+        use crate::engine::value::midi::MidiMessage;
 
         let mut manager = TimecodeManager::new();
         manager.set_preference(TimecodePreference::ForceMtc { device_id: 1 });
@@ -1141,7 +1141,7 @@ mod tests {
     /// The path the Tascam takes: nibbles off the wire, a position out.
     #[test]
     fn a_midi_stream_of_quarter_frames_moves_the_show() {
-        use crate::midi::MidiMessage;
+        use crate::engine::value::midi::MidiMessage;
 
         let mut manager = TimecodeManager::new();
         let sent = TimecodeFrame::new(1, 0, 30, 0, TimecodeRate::Fps25);
@@ -1371,7 +1371,7 @@ mod tests {
         let mut manager = TimecodeManager::new();
         let now = Instant::now();
         manager.ingest_midi(
-            &crate::midi::MidiMessage::MtcFullFrame {
+            &crate::engine::value::midi::MidiMessage::MtcFullFrame {
                 device_id: 7,
                 payload: [0x20, 0x0A, 0x00, 0x00],
             },

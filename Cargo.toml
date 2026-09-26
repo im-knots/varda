@@ -337,6 +337,10 @@ harness = false
 name = "engine_snapshot"
 harness = false
 
+[[bench]]
+name = "macro_modulation"
+harness = false
+
 
 [profile.release]
 opt-level = 3

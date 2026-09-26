@@ -10,7 +10,7 @@
 //! This module is pure domain logic — no GPU, no UI, no engine coupling. Fan-out
 //! is computed here and applied by the parameter router (see `param_router.rs`).
 
-use crate::deck::generate_short_uuid;
+use crate::ids::generate_short_uuid;
 use serde::{Deserialize, Serialize};
 
 fn one() -> f32 {

@@ -768,9 +768,61 @@ impl ShaderParams {
     }
 }
 
+// ── Normalized values ───────────────────────────────────────────────────
+
+/// Clamp a normalized value to 0.0–1.0, treating non-finite input as 0.0.
+pub(crate) fn clamp_norm(value: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
+/// Map a normalized 0.0–1.0 value to a discrete variant index via fader bucketing.
+/// Splits the range into `n` equal segments: `index = min(floor(value * n), n - 1)`.
+pub(crate) fn bucket_index(value: f32, n: usize) -> usize {
+    if n == 0 {
+        return 0;
+    }
+    ((clamp_norm(value) * n as f32).floor() as usize).min(n - 1)
+}
+
+/// The normalized value at the centre of bucket `index` of `n`.
+///
+/// Inverse of [`bucket_index`] in the only sense a bucketing has one: it returns
+/// a value that maps back to the same bucket, and picks the centre so rounding
+/// at either edge cannot land in a neighbour.
+pub(crate) fn bucket_center(index: usize, n: usize) -> f32 {
+    if n == 0 {
+        return 0.0;
+    }
+    (index.min(n - 1) as f32 + 0.5) / n as f32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bucket_index_splits_range_evenly() {
+        assert_eq!(bucket_index(0.0, 4), 0);
+        assert_eq!(bucket_index(0.1, 4), 0);
+        assert_eq!(bucket_index(0.25, 4), 1);
+        assert_eq!(bucket_index(0.4, 4), 1);
+        assert_eq!(bucket_index(0.5, 4), 2);
+        assert_eq!(bucket_index(0.74, 4), 2);
+        assert_eq!(bucket_index(0.75, 4), 3);
+        assert_eq!(bucket_index(1.0, 4), 3);
+    }
+
+    #[test]
+    fn bucket_index_clamps_out_of_range() {
+        assert_eq!(bucket_index(-1.0, 4), 0);
+        assert_eq!(bucket_index(2.0, 4), 3);
+        assert_eq!(bucket_index(f32::NAN, 4), 0);
+        assert_eq!(bucket_index(0.5, 0), 0);
+    }
     use crate::isf::ISFInput;
     use crate::modulation::DEFAULT_ASSIGNMENT_AMOUNT;
 

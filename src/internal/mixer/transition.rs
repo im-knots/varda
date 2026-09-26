@@ -101,7 +101,7 @@ pub struct TransitionSequence {
 
 impl TransitionSequence {
     pub fn new(name: String) -> Self {
-        Self::with_uuid(crate::deck::generate_short_uuid(), name, Vec::new(), true)
+        Self::with_uuid(crate::ids::generate_short_uuid(), name, Vec::new(), true)
     }
 
     /// Rebuild a sequence with a persisted UUID and step list.

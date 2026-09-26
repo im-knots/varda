@@ -537,7 +537,7 @@ impl VardaApp {
                 ScreenCaptureManager::new()
             },
             registry,
-            analyzer_registry: crate::analyzer::default_registry(),
+            analyzer_registry: crate::deck::analyzer_registry(),
             deck_loader: deck_loads::DeckLoader::new(),
             context: gpu,
             transport: crate::transport::Transport::new(),

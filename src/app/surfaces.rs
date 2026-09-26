@@ -4,7 +4,7 @@ use super::VardaApp;
 use crate::engine::EngineCommand;
 use crate::renderer::context::OutputSource;
 use crate::renderer::slicer::compute_dome_meshes;
-use crate::renderer::warp::WarpMode;
+use crate::surface::warp::WarpMode;
 
 impl VardaApp {
     /// Generate dome slices: remove old "Dome P*" surfaces, compute warp meshes,
@@ -61,7 +61,7 @@ impl VardaApp {
 
 /// Compute the convex hull of a warp mesh's UV coordinates.
 /// Returns polygon vertices in CCW order for use as a 2D surface shape.
-fn convex_hull_of_uvs(mesh: &crate::renderer::warp::WarpMesh) -> Vec<[f32; 2]> {
+fn convex_hull_of_uvs(mesh: &crate::surface::warp::WarpMesh) -> Vec<[f32; 2]> {
     let mut points: Vec<[f32; 2]> = mesh.points.iter().map(|p| p.uv).collect();
     if points.len() < 3 {
         return points;
@@ -113,7 +113,7 @@ fn cross_2d(o: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::renderer::warp::{MeshPoint, WarpMesh};
+    use crate::surface::warp::{MeshPoint, WarpMesh};
 
     #[test]
     fn convex_hull_of_unit_square_mesh() {

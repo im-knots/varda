@@ -238,7 +238,7 @@ fn default_video_speed() -> f64 {
 // ── Deck ───────────────────────────────────────────────────────────
 
 fn generate_default_uuid() -> String {
-    crate::deck::generate_short_uuid()
+    crate::ids::generate_short_uuid()
 }
 
 /// Serializable deck state.
@@ -302,7 +302,7 @@ pub struct DeckConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModulationRecipe {
     /// UUID of the modulation source
-    #[serde(default = "crate::deck::generate_short_uuid")]
+    #[serde(default = "crate::ids::generate_short_uuid")]
     pub source_uuid: String,
     /// The modulation source definition
     pub source: crate::modulation::ModulationSource,
@@ -947,7 +947,7 @@ impl OutputConfig {
     /// Create a default windowed output config with an auto-generated name.
     pub fn default_windowed() -> Self {
         Self {
-            uuid: crate::deck::generate_short_uuid(),
+            uuid: crate::ids::generate_short_uuid(),
             name: String::new(),
             target: OutputTargetConfig::Windowed,
             target_display: None,
@@ -972,7 +972,7 @@ pub struct SurfaceAssignmentConfig {
     /// LEGACY (pre-8i.5): warp used to live on the assignment. Read at load for
     /// one-time migration onto `Surface.warp`, then dropped (never re-saved).
     #[serde(default, rename = "warp_mode", skip_serializing)]
-    pub legacy_warp_mode: Option<crate::renderer::warp::WarpMode>,
+    pub legacy_warp_mode: Option<crate::surface::warp::WarpMode>,
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -1291,7 +1291,7 @@ impl SceneConfig {
             log::error!("Scene config save: {e}");
         }
         let content = serde_json::to_string_pretty(self).context("Failed to serialize scene")?;
-        crate::persistence::atomic_write(path.as_ref(), &content)?;
+        crate::files::atomic_write(path.as_ref(), &content)?;
         Ok(())
     }
 }
@@ -1401,12 +1401,12 @@ mod tests {
         let scene = SceneConfig {
             version: 2,
             channels: vec![ChannelConfig {
-                uuid: crate::deck::generate_short_uuid(),
+                uuid: crate::ids::generate_short_uuid(),
                 name: "Ch 0".into(),
                 opacity: 1.0,
                 blend_mode: BlendModeConfig::Normal,
                 decks: vec![DeckConfig {
-                    uuid: crate::deck::generate_short_uuid(),
+                    uuid: crate::ids::generate_short_uuid(),
                     name: "Color Burn".into(),
                     source: SourceConfig::Shader {
                         path: "shaders/color_burn.fs".into(),
@@ -1902,7 +1902,7 @@ mod tests {
         let scene = SceneConfig {
             version: 2,
             channels: vec![ChannelConfig {
-                uuid: crate::deck::generate_short_uuid(),
+                uuid: crate::ids::generate_short_uuid(),
                 name: "Test Ch".into(),
                 opacity: 0.9,
                 blend_mode: BlendModeConfig::Add,
@@ -1941,12 +1941,12 @@ mod tests {
         let scene = SceneConfig {
             version: 2,
             channels: vec![ChannelConfig {
-                uuid: crate::deck::generate_short_uuid(),
+                uuid: crate::ids::generate_short_uuid(),
                 name: "Ch 0".into(),
                 opacity: 1.0,
                 blend_mode: BlendModeConfig::Normal,
                 decks: vec![DeckConfig {
-                    uuid: crate::deck::generate_short_uuid(),
+                    uuid: crate::ids::generate_short_uuid(),
                     name: "Deck".into(),
                     source: SourceConfig::Shader {
                         path: "test.fs".into(),
@@ -2033,7 +2033,7 @@ mod tests {
     #[test]
     fn validate_channel_opacity_out_of_range() {
         let ch = ChannelConfig {
-            uuid: crate::deck::generate_short_uuid(),
+            uuid: crate::ids::generate_short_uuid(),
             name: "Bad".into(),
             opacity: 2.0,
             blend_mode: BlendModeConfig::Normal,
@@ -2048,7 +2048,7 @@ mod tests {
     #[test]
     fn validate_deck_opacity_out_of_range() {
         let deck = DeckConfig {
-            uuid: crate::deck::generate_short_uuid(),
+            uuid: crate::ids::generate_short_uuid(),
             name: "D".into(),
             source: SourceConfig::Shader {
                 path: "ok.fs".into(),
@@ -2517,7 +2517,7 @@ mod tests {
         assert!(
             matches!(
                 cfg.legacy_warp_mode,
-                Some(crate::renderer::warp::WarpMode::CornerPin { .. })
+                Some(crate::surface::warp::WarpMode::CornerPin { .. })
             ),
             "legacy warp_mode should deserialize for migration"
         );
@@ -2528,7 +2528,7 @@ mod tests {
     fn assignment_config_drops_legacy_warp_on_save() {
         let cfg = SurfaceAssignmentConfig {
             surface_uuid: "s1".into(),
-            legacy_warp_mode: Some(crate::renderer::warp::WarpMode::identity_corners([
+            legacy_warp_mode: Some(crate::surface::warp::WarpMode::identity_corners([
                 0.0, 0.0, 1.0, 1.0,
             ])),
             enabled: true,
