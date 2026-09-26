@@ -165,6 +165,7 @@ pub fn read_param(mixer: &Mixer, address: &ParamAddress) -> Option<f32> {
                 DeckTarget::Opacity | DeckTarget::Trigger => Some(slot.opacity),
                 DeckTarget::Mute => Some(f32::from(u8::from(slot.mute))),
                 DeckTarget::Solo => Some(f32::from(u8::from(slot.solo))),
+                DeckTarget::Transparent => Some(f32::from(u8::from(slot.deck.transparent()))),
                 DeckTarget::Param(name) => read_normalized(&slot.deck.generator_params, name),
                 _ => None,
             }
@@ -178,6 +179,15 @@ pub fn read_param(mixer: &Mixer, address: &ParamAddress) -> Option<f32> {
         | ParamAddress::Modulator { .. }
         | ParamAddress::MacroValue { .. } => None,
     }
+}
+
+fn toggle_transparent(mixer: &mut Mixer, uuid: &str) -> Result<(), ParamRouteError> {
+    let (ch, dk) = mixer
+        .find_deck_by_uuid(uuid)
+        .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
+    let deck = &mut mixer.channels_mut()[ch].decks[dk].deck;
+    deck.set_transparent(!deck.transparent());
+    Ok(())
 }
 
 fn read_normalized(params: &crate::ShaderParams, name: &str) -> Option<f32> {
@@ -438,6 +448,15 @@ pub fn apply_param_by_path(
             mixer.channels_mut()[ch].decks[dk]
                 .deck
                 .set_scaling_mode(scaling_mode_from_value(value));
+            Ok(())
+        }
+        ParamAddress::Deck {
+            deck: uuid,
+            target: DeckTarget::Transparent,
+        } => {
+            if value > 0.5 {
+                toggle_transparent(mixer, uuid)?;
+            }
             Ok(())
         }
         // Screen/window capture params. The deck holds the desired config and
@@ -1050,6 +1069,10 @@ pub fn toggle_param_by_path(mixer: &mut Mixer, path: &str) -> Result<(), ParamRo
             toggle_param_value(val);
             Ok(())
         }
+        ParamAddress::Deck {
+            deck: uuid,
+            target: DeckTarget::Transparent,
+        } => toggle_transparent(mixer, uuid),
         ParamAddress::Modulator { .. } => Err(ParamRouteError::WrongState {
             path: path.to_string(),
             reason: "modulation params are continuous; keyboard toggle does not apply",

@@ -96,6 +96,12 @@ pub enum DeckTarget {
     VideoClearInOut,
     VideoLoopMode,
     ScalingMode,
+    /// Toggles whether the deck keeps its source alpha.
+    Transparent,
+    /// Reloads an HTML deck's page.
+    HtmlReload,
+    /// Opens the interactive window on an HTML deck, or closes it if open.
+    HtmlInteractive,
     /// `capture/<name>`
     Capture(String),
     /// `depth/<name>`
@@ -267,6 +273,9 @@ impl fmt::Display for DeckTarget {
             Self::VideoClearInOut => f.write_str("video/clear"),
             Self::VideoLoopMode => f.write_str("video/loop_mode"),
             Self::ScalingMode => f.write_str("scaling_mode"),
+            Self::Transparent => f.write_str("transparent"),
+            Self::HtmlReload => f.write_str("html/reload"),
+            Self::HtmlInteractive => f.write_str("html/interactive"),
             Self::Capture(name) => write!(f, "capture/{name}"),
             Self::Depth(name) => write!(f, "depth/{name}"),
             Self::DepthPreprocess(name) => write!(f, "depth_prepro/{name}"),
@@ -346,6 +355,9 @@ impl FromStr for ParamAddress {
                     ["video", "clear"] => DeckTarget::VideoClearInOut,
                     ["video", "loop_mode"] => DeckTarget::VideoLoopMode,
                     ["scaling_mode"] => DeckTarget::ScalingMode,
+                    ["transparent"] => DeckTarget::Transparent,
+                    ["html", "reload"] => DeckTarget::HtmlReload,
+                    ["html", "interactive"] => DeckTarget::HtmlInteractive,
                     ["capture", name] => DeckTarget::Capture(owned(name)),
                     ["depth", name] => DeckTarget::Depth(owned(name)),
                     ["depth_prepro", name] => DeckTarget::DepthPreprocess(owned(name)),
@@ -401,6 +413,9 @@ mod tests {
         "deck/d1/video/clear",
         "deck/d1/video/loop_mode",
         "deck/d1/scaling_mode",
+        "deck/d1/transparent",
+        "deck/d1/html/reload",
+        "deck/d1/html/interactive",
         "deck/d1/capture/rate",
         "deck/d1/depth/near",
         "deck/d1/depth_prepro/mirror",
