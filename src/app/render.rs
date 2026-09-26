@@ -264,11 +264,15 @@ impl VardaApp {
             &needed_capture_ids,
         );
 
-        // Update NDI receiver frames
-        self.sources
+        // Upload NDI receiver frames, converting UYVY on the GPU.
+        if let Some(conversion) = self
+            .sources
             .io
             .ndi_manager
-            .update(&self.render.context.device, &self.render.context.queue);
+            .update(&self.render.context.device, &self.render.context.queue)
+        {
+            self.render.context.submit(std::iter::once(conversion));
+        }
 
         // Periodic Syphon re-discovery + late-bind of deferred decks (~1×/sec).
         // Removes the start/stop-ordering dependency: a producer that joins or
@@ -415,23 +419,8 @@ impl VardaApp {
         // See spec/program-tap.md.
         self.mixer.prepare_taps(&self.render.context);
 
-        // Collect audio values for modulation
-        let audio_values = {
-            let mut av = crate::modulation::AudioValues::default();
-            for id in self.audio.manager.active_source_ids() {
-                if let Some(data) = self.audio.manager.get_data(id) {
-                    av.sources.insert(
-                        id,
-                        crate::modulation::AudioSourceValues {
-                            fft: data.fft.clone(),
-                            level: data.level,
-                            sample_rate: data.sample_rate,
-                        },
-                    );
-                }
-            }
-            av
-        };
+        let audio_values =
+            crate::modulation::AudioValues::collect(self.audio.manager.active_data());
 
         let mut primary_audio = self.audio.manager.get_primary_data().clone();
 
@@ -1075,18 +1064,17 @@ impl VardaApp {
                 crate::renderer::context::OutputTarget::SpoutSender { .. }
             );
 
-            let is_ndi_p216 = matches!(
-                (&h.target, &h.resolved_presentation.pixel_format),
-                (
-                    crate::renderer::context::OutputTarget::NdiSend { .. },
-                    crate::renderer::context::PresentationPixelFormat::P216
-                )
+            // NDI converts to its pixel format on the GPU and reads that back,
+            // so it skips the RGBA readback. See /spec/performance-hot-paths.md A.
+            let is_ndi = matches!(
+                &h.target,
+                crate::renderer::context::OutputTarget::NdiSend { .. }
             );
-            if is_ndi_p216 {
+            if is_ndi {
                 if let crate::renderer::context::OutputTarget::NdiSend { sender_name } = &h.target
-                    && let Err(error) = sinks.ndi_manager.begin_p216_frame(
+                    && let Err(error) = sinks.ndi_manager.begin_frame(
                         sender_name,
-                        crate::ndi::P216FrameConversion {
+                        crate::ndi::FrameConversion {
                             device: &context.device,
                             queue: &context.queue,
                             encoder: &mut encoder,
@@ -1094,6 +1082,7 @@ impl VardaApp {
                             width: h.width,
                             height: h.height,
                             dither: h.presentation_request.dither,
+                            pixel_format: h.resolved_presentation.pixel_format.clone(),
                         },
                     )
                 {
@@ -1138,9 +1127,9 @@ impl VardaApp {
             }
             context.submit(std::iter::once(encoder.finish()));
 
-            if is_ndi_p216
+            if is_ndi
                 && let crate::renderer::context::OutputTarget::NdiSend { sender_name } = &h.target
-                && let Err(error) = sinks.ndi_manager.try_send_p216(
+                && let Err(error) = sinks.ndi_manager.try_send(
                     sender_name,
                     &context.device,
                     h.width,
@@ -1193,7 +1182,7 @@ impl VardaApp {
             // Deliver previous frame's readback data to target
             if !is_syphon
                 && !is_spout
-                && !is_ndi_p216
+                && !is_ndi
                 && let Some(frame_data) = h.readback.try_read(&context.device)
             {
                 // Looked up before inserting, so a running output costs no key
@@ -1206,13 +1195,7 @@ impl VardaApp {
                 let Some(delivery) = sinks.deliveries.get_mut(&h.uuid) else {
                     continue;
                 };
-                match delivery.deliver(
-                    &h.target,
-                    &h.name,
-                    &frame_data,
-                    sinks.ndi_manager,
-                    sinks.encoder_fps,
-                ) {
+                match delivery.deliver(&h.target, &h.name, frame_data) {
                     crate::delivery::DeliveryResult::Failed(msg) => {
                         stop_headless_output(&h.name, &mut h.active, sinks.notifications, msg);
                     }

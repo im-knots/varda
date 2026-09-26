@@ -1,6 +1,6 @@
 //! Delivering rendered frames to where they are going: ffmpeg for recordings
-//! and network streams, and the NDI sender. The renderer produces read-back
-//! frames; this module decides what a target can carry and sends each frame on.
+//! and network streams. The renderer produces read-back frames; this module
+//! decides what a target can carry and sends each frame on.
 //! The renderer never names it. See /spec/vardapp-decomposition.md.
 
 pub mod ffmpeg;
@@ -63,52 +63,30 @@ pub struct Delivery {
 }
 
 impl Delivery {
-    /// Hand one read-back frame to `target`.
-    ///
-    /// With an encoder running, the frame goes to it; a frame it cannot take
-    /// ends the encode, and an SRT listener is handed back for a restart. With
-    /// no encoder, an NDI target publishes through `ndi`, declaring `fps`, the
-    /// master render rate. `name` labels a failure.
+    /// Hand one read-back frame to the encoder, if the output runs one. The
+    /// frame's bytes move to the encoder's writer thread, uncopied. A frame
+    /// the encoder cannot take ends the encode, and an SRT listener is handed
+    /// back for a restart. `name` labels a failure. NDI, Syphon, and Spout
+    /// publish from the GPU and never reach here.
     pub fn deliver(
         &mut self,
         target: &OutputTarget,
         name: &str,
-        frame: &crate::renderer::ReadbackFrame,
-        ndi: &mut crate::ndi::NdiManager,
-        fps: u32,
+        frame: crate::renderer::ReadbackFrame,
     ) -> DeliveryResult {
-        if let Some(sub) = &mut self.subprocess {
-            if sub.feed_readback_frame(frame) {
-                return DeliveryResult::Ok;
-            }
-            if let Some(mut sub) = self.subprocess.take() {
-                sub.stop();
-            }
-            return if matches!(target, OutputTarget::SrtStream { .. }) {
-                DeliveryResult::SrtNeedsRestart
-            } else {
-                DeliveryResult::Failed(format!("FFmpeg frame contract failed for '{name}'"))
-            };
+        let Some(sub) = &mut self.subprocess else {
+            return DeliveryResult::Ok;
+        };
+        if sub.feed_readback_frame(frame) {
+            return DeliveryResult::Ok;
         }
-        match target {
-            OutputTarget::NdiSend { sender_name } => {
-                ndi.send_frame(
-                    sender_name,
-                    frame.bytes(),
-                    frame.width(),
-                    frame.height(),
-                    fps,
-                );
-                DeliveryResult::Ok
-            }
-            // Syphon output is published GPU-side (zero-copy) in the headless
-            // render loop before this point, so on macOS it never reaches here.
-            #[cfg(not(target_os = "macos"))]
-            OutputTarget::SyphonServer { .. } => {
-                log::warn!("Syphon output not supported on this platform");
-                DeliveryResult::Ok
-            }
-            _ => DeliveryResult::Ok,
+        if let Some(mut sub) = self.subprocess.take() {
+            sub.stop();
+        }
+        if matches!(target, OutputTarget::SrtStream { .. }) {
+            DeliveryResult::SrtNeedsRestart
+        } else {
+            DeliveryResult::Failed(format!("FFmpeg frame contract failed for '{name}'"))
         }
     }
 

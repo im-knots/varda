@@ -1050,13 +1050,13 @@ impl FrameCounters {
 /// `Ok` / `Full` both return true: the subprocess is still alive. `Full`
 /// increments `dropped` so the operator can see backpressure. `Disconnected`
 /// returns false.
-fn try_enqueue_frame(
+pub(crate) fn try_enqueue_frame(
     tx: &mpsc::SyncSender<Vec<u8>>,
     dropped: &AtomicU64,
     label: &str,
-    rgba: &[u8],
+    frame: Vec<u8>,
 ) -> bool {
-    match tx.try_send(rgba.to_vec()) {
+    match tx.try_send(frame) {
         Ok(()) => true,
         Err(mpsc::TrySendError::Full(_)) => {
             let n = dropped.fetch_add(1, Ordering::Relaxed) + 1;
@@ -2068,7 +2068,7 @@ impl FfmpegSubprocess {
     /// The format, dimensions, and stride must match the contract negotiated
     /// before FFmpeg was spawned. A mismatch stops bytes from entering the raw
     /// video pipe, where they would otherwise silently desynchronize frames.
-    pub fn feed_readback_frame(&mut self, frame: &ReadbackFrame) -> bool {
+    pub fn feed_readback_frame(&mut self, frame: ReadbackFrame) -> bool {
         let Some(contract) = self.frame_contract else {
             log::error!(
                 "typed frame sent without an FFmpeg contract for '{}'",
@@ -2113,13 +2113,13 @@ impl FfmpegSubprocess {
             );
             return false;
         }
-        self.feed_frame(frame.bytes())
+        self.feed_frame(frame.into_bytes())
     }
 
     /// Feed a frame of raw data to a byte-oriented streaming subprocess.
     /// Never blocks — drops the frame if the writer thread can't keep up.
     /// Returns false if the subprocess has failed (write error or process exited).
-    pub fn feed_frame(&mut self, rgba: &[u8]) -> bool {
+    pub fn feed_frame(&mut self, frame: Vec<u8>) -> bool {
         // Check if writer thread reported an error
         if self.write_failed.load(Ordering::SeqCst) {
             self.drain_stderr();
@@ -2141,7 +2141,7 @@ impl FfmpegSubprocess {
             return false;
         }
         if let Some(ref tx) = self.frame_tx {
-            if try_enqueue_frame(tx, &self.counters.dropped, &self.label, rgba) {
+            if try_enqueue_frame(tx, &self.counters.dropped, &self.label, frame) {
                 true
             } else {
                 self.drain_stderr();
@@ -3102,7 +3102,7 @@ mod tests {
         // Feed a few frames
         let frame = vec![0u8; 64 * 64 * 4]; // black RGBA
         for _ in 0..5 {
-            let ok = sub.feed_frame(&frame);
+            let ok = sub.feed_frame(frame.clone());
             assert!(ok, "feed_frame should succeed");
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
@@ -3178,7 +3178,7 @@ mod tests {
 
         // Feed a frame (won't block because of background writer thread)
         let frame = vec![128u8; 64 * 64 * 4];
-        let _ = sub.feed_frame(&frame);
+        let _ = sub.feed_frame(frame);
 
         // Stop cleanly
         sub.stop();
@@ -3202,7 +3202,7 @@ mod tests {
 
         // After stop, feed_frame should return false (channel closed)
         let frame = vec![0u8; 64 * 64 * 4];
-        assert!(!sub.feed_frame(&frame));
+        assert!(!sub.feed_frame(frame));
 
         let _ = std::fs::remove_file(path);
     }
@@ -3223,7 +3223,7 @@ mod tests {
 
         let frame = vec![0u8; 64 * 64 * 4];
         for _ in 0..3 {
-            sub.feed_frame(&frame);
+            sub.feed_frame(frame.clone());
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         sub.stop();
@@ -3243,12 +3243,32 @@ mod tests {
         tx.send(vec![0u8; 4]).unwrap();
         let dropped = AtomicU64::new(0);
         assert!(
-            try_enqueue_frame(&tx, &dropped, "test-rec", &[1, 2, 3, 4]),
+            try_enqueue_frame(&tx, &dropped, "test-rec", vec![1, 2, 3, 4]),
             "Full must not look like a dead subprocess"
         );
         assert_eq!(dropped.load(Ordering::Relaxed), 1);
-        assert!(try_enqueue_frame(&tx, &dropped, "test-rec", &[5, 6, 7, 8]));
+        assert!(try_enqueue_frame(
+            &tx,
+            &dropped,
+            "test-rec",
+            vec![5, 6, 7, 8]
+        ));
         assert_eq!(dropped.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn an_accepted_frame_reaches_the_writer_uncopied() {
+        let (tx, rx) = mpsc::sync_channel(1);
+        let frame = vec![7u8; 64];
+        let bytes = frame.as_ptr();
+        assert!(try_enqueue_frame(
+            &tx,
+            &AtomicU64::new(0),
+            "test-rec",
+            frame
+        ));
+        let received = rx.recv().unwrap();
+        assert_eq!(received.as_ptr(), bytes);
     }
 
     #[test]
@@ -3256,7 +3276,12 @@ mod tests {
         let (tx, rx) = mpsc::sync_channel(1);
         drop(rx);
         let dropped = AtomicU64::new(0);
-        assert!(!try_enqueue_frame(&tx, &dropped, "test-rec", &[1, 2, 3, 4]));
+        assert!(!try_enqueue_frame(
+            &tx,
+            &dropped,
+            "test-rec",
+            vec![1, 2, 3, 4]
+        ));
         assert_eq!(dropped.load(Ordering::Relaxed), 0);
     }
 

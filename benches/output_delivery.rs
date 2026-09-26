@@ -1,85 +1,57 @@
 /// Per-frame cost of handing a read-back frame to a headless output's target,
 /// the step every active headless output takes once per rendered frame.
 ///
-/// `ndi_send` delivers a 1080p frame to an NDI sender on a disabled runtime, so
-/// what is measured is the dispatch around the send rather than NDI itself.
-/// Skipped when no GPU adapter is available.
-use criterion::{Criterion, criterion_group, criterion_main};
+/// `no_encoder` delivers a 1080p frame header to an output with no encoder
+/// running: the dispatch alone. The frame carries no bytes, so freeing it,
+/// which the render thread pays whether or not an encoder runs, is left out.
+/// `recording_feed` hands a freshly read-back 1080p frame to a recording's
+/// writer queue: `accepting`, where the writer keeps up, and `full`, where the
+/// frame is dropped. Making the frame is not timed; dropping it on the render
+/// thread is.
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use varda::delivery::Delivery;
-use varda::ndi::NdiManager;
 use varda::renderer::ReadbackFrame;
-use varda::renderer::context::{GpuContext, HeadlessOutput, OutputSource, OutputTarget};
+use varda::renderer::context::OutputTarget;
+use varda::testing::RecordingFeedBench;
 
 const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
 
-struct Fixture {
-    output: HeadlessOutput,
-    delivery: Delivery,
-    ndi: NdiManager,
-    frame: ReadbackFrame,
-}
-
-/// One real frame, read back from the output's texture.
-fn read_back(gpu: &GpuContext, output: &mut HeadlessOutput) -> ReadbackFrame {
-    let mut encoder = gpu
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-    output
-        .readback
-        .begin_readback(&mut encoder, &output.texture);
-    gpu.queue.submit(std::iter::once(encoder.finish()));
-    loop {
-        if let Some(frame) = output.readback.try_read(&gpu.device) {
-            return frame;
-        }
-        let _ = gpu.device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        });
-    }
-}
-
-fn fixture(gpu: &GpuContext) -> Fixture {
+fn bench_output_delivery(c: &mut Criterion) {
     let target = OutputTarget::NdiSend {
         sender_name: "bench".to_string(),
     };
-    let mut output = HeadlessOutput::new(
-        &gpu.device,
-        "bench".to_string(),
-        OutputSource::Master,
-        target,
-        WIDTH,
-        HEIGHT,
-        varda::delivery::presentation::plan,
-    );
-    let frame = read_back(gpu, &mut output);
-    Fixture {
-        output,
-        delivery: Delivery::default(),
-        ndi: NdiManager::new_disabled(),
-        frame,
-    }
-}
-
-fn deliver_once(f: &mut Fixture) {
-    let _ = f
-        .delivery
-        .deliver(&f.output.target, &f.output.name, &f.frame, &mut f.ndi, 60);
-}
-
-fn bench_output_delivery(c: &mut Criterion) {
-    let Ok(gpu) = GpuContext::new_headless() else {
-        eprintln!("output_delivery: no GPU adapter, skipping");
-        return;
-    };
-    let mut f = fixture(&gpu);
+    let mut delivery = Delivery::default();
     let mut g = c.benchmark_group("output_delivery");
-    g.bench_function("ndi_send", |b| {
-        b.iter(|| deliver_once(std::hint::black_box(&mut f)));
+    g.bench_function("no_encoder", |b| {
+        b.iter_batched(
+            || ReadbackFrame::rgba8(WIDTH, HEIGHT, Vec::new()),
+            |frame| delivery.deliver(&target, "bench", frame),
+            BatchSize::SmallInput,
+        );
     });
     g.finish();
 }
 
-criterion_group!(benches, bench_output_delivery);
+fn bench_recording_feed(c: &mut Criterion) {
+    let feed = RecordingFeedBench::new(WIDTH, HEIGHT);
+    let mut g = c.benchmark_group("recording_feed");
+    g.bench_function("accepting", |b| {
+        b.iter_batched(
+            || feed.frame(),
+            |frame| feed.feed_accepting(frame),
+            BatchSize::PerIteration,
+        );
+    });
+    g.bench_function("full", |b| {
+        b.iter_batched(
+            || feed.frame(),
+            |frame| feed.feed_full(frame),
+            BatchSize::PerIteration,
+        );
+    });
+    g.finish();
+}
+
+criterion_group!(benches, bench_output_delivery, bench_recording_feed);
 criterion_main!(benches);

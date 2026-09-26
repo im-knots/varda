@@ -6,8 +6,15 @@
 ///
 /// Both currently clone + full-sort their input to compute a median.
 /// Benchmarks measure per-invocation cost at realistic window sizes.
+///
+/// Two more groups, for /spec/performance-hot-paths.md item H:
+///   `audio_callback`     — the capture callback's work for one 256-frame
+///                          stereo buffer from the device.
+///   `audio_hop_analysis` — one 256-sample hop of FFT, flux, onset and BPM
+///                          analysis, wherever it runs.
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use varda::audio::{compute_onset_threshold, estimate_bpm};
+use varda::testing::{AudioCaptureBench, HopAnalysisBench};
 
 /// Realistic spectral flux values (positive, varying magnitude)
 fn make_flux_history(n: usize) -> Vec<f32> {
@@ -53,5 +60,25 @@ fn bench_bpm_estimation(c: &mut Criterion) {
     g.finish();
 }
 
-criterion_group!(benches, bench_onset_threshold, bench_bpm_estimation);
+fn bench_audio_callback(c: &mut Criterion) {
+    let mut capture = AudioCaptureBench::new();
+    let mut g = c.benchmark_group("audio_callback");
+    g.bench_function("stereo_256", |b| b.iter(|| capture.callback()));
+    g.finish();
+}
+
+fn bench_hop_analysis(c: &mut Criterion) {
+    let mut analysis = HopAnalysisBench::new();
+    let mut g = c.benchmark_group("audio_hop_analysis");
+    g.bench_function("one_hop", |b| b.iter(|| analysis.analyze()));
+    g.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_onset_threshold,
+    bench_bpm_estimation,
+    bench_audio_callback,
+    bench_hop_analysis
+);
 criterion_main!(benches);

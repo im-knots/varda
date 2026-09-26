@@ -199,28 +199,6 @@ impl VardaApp {
             self.audio.manager.get_primary_data(),
         );
 
-        // Pre-update modulation with fresh audio so snapshots read current values
-        {
-            let mut av = crate::modulation::AudioValues::default();
-            for id in self.audio.manager.active_source_ids() {
-                if let Some(data) = self.audio.manager.get_data(id) {
-                    av.sources.insert(
-                        id,
-                        crate::modulation::AudioSourceValues {
-                            fft: data.fft.clone(),
-                            level: data.level,
-                            sample_rate: data.sample_rate,
-                        },
-                    );
-                }
-            }
-            let analyzer_vals = crate::modulation::AnalyzerValues::default();
-            let beat_time = self.input.clock_manager.beat_time();
-            let transport = self.show.transport.sample();
-            self.mixer
-                .update_modulation(beat_time, transport, &av, &analyzer_vals);
-        }
-
         // Process OSC messages via shared param router. Drained first because
         // dispatching a write needs the whole app, and the receiver is part of
         // it.
@@ -589,6 +567,28 @@ mod tests {
             other => panic!("expected a new deck, got {other:?}"),
         };
         Some((app, uuid))
+    }
+
+    /// Modulation updates once per frame, in render, where the frame's
+    /// analyzer values exist. Input processing leaves it where the last render
+    /// left it, so a view built between the two reads that frame's values, and
+    /// a smoothed source is not pulled toward the empty analyzer values input
+    /// processing has. See /spec/performance-hot-paths.md item G.
+    #[test]
+    fn input_processing_leaves_modulation_where_the_last_render_left_it() {
+        let Some((mut app, _)) = app_with_a_deck() else {
+            return;
+        };
+        app.execute_command(C::AddLfo {
+            waveform: crate::modulation::LFOWaveform::Sine,
+            frequency: 7.3,
+        });
+        app.begin_frame();
+        app.render_frame();
+        let rendered = app.mixer_ref().modulation().current_values()[0];
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        app.begin_frame();
+        assert_eq!(app.mixer_ref().modulation().current_values()[0], rendered);
     }
 
     fn opacity(app: &mut VardaApp) -> f32 {

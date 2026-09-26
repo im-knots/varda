@@ -105,15 +105,21 @@ Each output can send video over NDI to other applications and machines on the ne
 3. Enter a sender name (e.g., "Varda Main")
 4. The NDI stream is discoverable by any NDI-compatible application on the LAN
 
-With a loaded NDI 6 runtime, a 10-bit request sends P216 with Rec.709 limited-range conversion.
-Older runtimes use UYVY and show a fallback reason. Receiver software should request its best or
-highest-quality color mode to avoid converting P216 back to 8-bit.
+With a loaded NDI 6 runtime, a 10-bit request sends P216. An 8-bit request, or an older runtime,
+sends UYVY, and an older runtime also shows a fallback reason. Both are converted on the GPU to
+Rec.709 at limited range (video levels) and tagged as such, so receivers show the same colors and
+levels either way. Receiver software should request its best or highest-quality color mode to avoid
+converting P216 back to 8-bit.
 
 ### Receiving
 
 1. In the Library panel, open the **📡 NDI Sources** section
 2. Click **Rescan** to discover NDI sources on the network
 3. **Drag** a source into a channel and it becomes a live deck source
+
+Varda asks each source for UYVY, or RGBA when the source carries alpha, so the NDI runtime does no
+conversion of its own. UYVY is read as Rec.709 at limited range, the same contract Varda sends, and
+converted to RGB on the GPU; RGBA is used as it arrives.
 
 NDI uses dynamic SDK loading (`libloading`). If the SDK is not installed, NDI features are gracefully unavailable.
 

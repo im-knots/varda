@@ -709,7 +709,7 @@ pub(crate) fn build_audio_snapshot(app: &VardaApp) -> AudioSnapshot {
                 active: active_ids.contains(&d.id),
             })
             .collect(),
-        fft: primary_audio.fft.clone(),
+        fft: primary_audio.fft.to_vec(),
         sample_rate: primary_audio.sample_rate,
     }
 }

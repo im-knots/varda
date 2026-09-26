@@ -31,7 +31,7 @@ fn audio_values() -> AudioValues {
     sources.insert(
         AudioSourceId::default(),
         AudioSourceValues {
-            fft,
+            fft: fft.into(),
             level: 0.4,
             sample_rate: 48_000.0,
         },

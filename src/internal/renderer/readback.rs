@@ -97,6 +97,20 @@ impl ReadbackFrame {
         &self.bytes
     }
 
+    /// A tightly packed 8-bit RGBA frame, for tests and benchmarks.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn rgba8(width: u32, height: u32, bytes: Vec<u8>) -> Self {
+        Self {
+            format: ReadbackFormat::Rgba8,
+            width,
+            height,
+            stride: width * 4,
+            color_profile: crate::engine::value::render::PresentationColorProfile::SrgbFull,
+            alpha_mode: crate::engine::value::render::AlphaMode::Opaque,
+            bytes,
+        }
+    }
+
     /// Consume the frame and return its bytes.
     pub fn into_bytes(self) -> Vec<u8> {
         self.bytes

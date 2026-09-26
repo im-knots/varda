@@ -1,4 +1,7 @@
-//! GPU conversion and asynchronous readback for NDI P216 frames.
+//! GPU conversion and asynchronous readback for NDI frames: ten-bit P216 and
+//! eight-bit UYVY, both BT.709 limited range with Rec.709 transfer, matching
+//! what the sender declares. See /spec/sdr-ndi-output.md and
+//! /spec/performance-hot-paths.md item A.
 
 use std::sync::mpsc::{Receiver, TryRecvError};
 
@@ -18,18 +21,20 @@ pub(super) struct P216Layout {
 }
 
 impl P216Layout {
-    pub fn new(width: u32, height: u32) -> Result<Self, P216Error> {
+    pub fn new(width: u32, height: u32) -> Result<Self, ConvertError> {
         if width == 0 || height == 0 {
-            return Err(P216Error::EmptyFrame);
+            return Err(ConvertError::EmptyFrame);
         }
         if !width.is_multiple_of(2) {
-            return Err(P216Error::OddWidth(width));
+            return Err(ConvertError::OddWidth(width));
         }
-        let stride = width.checked_mul(2).ok_or(P216Error::FrameTooLarge)?;
+        let stride = width.checked_mul(2).ok_or(ConvertError::FrameTooLarge)?;
         let plane_len = u64::from(stride)
             .checked_mul(u64::from(height))
-            .ok_or(P216Error::FrameTooLarge)?;
-        let byte_len = plane_len.checked_mul(2).ok_or(P216Error::FrameTooLarge)?;
+            .ok_or(ConvertError::FrameTooLarge)?;
+        let byte_len = plane_len
+            .checked_mul(2)
+            .ok_or(ConvertError::FrameTooLarge)?;
         Ok(Self {
             stride,
             y_offset: 0,
@@ -39,27 +44,68 @@ impl P216Layout {
     }
 }
 
+/// The pixel format a sender publishes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum P216Error {
+pub(super) enum SendFormat {
+    /// Ten-bit 4:2:2, luma plane then interleaved chroma plane, 16 bits per value.
+    P216,
+    /// Eight-bit 4:2:2, one `U Y0 V Y1` quad per pixel pair.
+    Uyvy,
+}
+
+impl SendFormat {
+    /// Row stride and total bytes of a `width` x `height` frame.
+    pub fn layout(self, width: u32, height: u32) -> Result<(u32, u64), ConvertError> {
+        match self {
+            Self::P216 => P216Layout::new(width, height).map(|l| (l.stride, l.byte_len)),
+            Self::Uyvy => {
+                if width == 0 || height == 0 {
+                    return Err(ConvertError::EmptyFrame);
+                }
+                if !width.is_multiple_of(2) {
+                    return Err(ConvertError::OddWidth(width));
+                }
+                let stride = width.checked_mul(2).ok_or(ConvertError::FrameTooLarge)?;
+                let byte_len = u64::from(stride)
+                    .checked_mul(u64::from(height))
+                    .ok_or(ConvertError::FrameTooLarge)?;
+                Ok((stride, byte_len))
+            }
+        }
+    }
+
+    fn entry_point(self) -> &'static str {
+        match self {
+            Self::P216 => "p216",
+            Self::Uyvy => "uyvy",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ConvertError {
     EmptyFrame,
     OddWidth(u32),
     FrameTooLarge,
     InvalidBuffer { expected: u64, actual: usize },
 }
 
-impl std::fmt::Display for P216Error {
+impl std::fmt::Display for ConvertError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::EmptyFrame => formatter.write_str("P216 requires non-zero dimensions"),
+            Self::EmptyFrame => formatter.write_str("NDI frames require non-zero dimensions"),
             Self::OddWidth(width) => {
-                write!(formatter, "P216 requires an even width, received {width}")
+                write!(
+                    formatter,
+                    "NDI frames require an even width, received {width}"
+                )
             }
             Self::FrameTooLarge => {
-                formatter.write_str("P216 frame size exceeds addressable storage")
+                formatter.write_str("NDI frame size exceeds addressable storage")
             }
             Self::InvalidBuffer { expected, actual } => write!(
                 formatter,
-                "P216 buffer has {actual} bytes, expected {expected}"
+                "NDI frame buffer has {actual} bytes, expected {expected}"
             ),
         }
     }
@@ -81,10 +127,12 @@ enum SlotState {
 }
 
 /// Per-sender converter. One storage buffer feeds two asynchronous map slots.
-pub(super) struct P216Converter {
+pub(super) struct SendConverter {
+    format: SendFormat,
     width: u32,
     height: u32,
-    layout: P216Layout,
+    stride: u32,
+    byte_len: u64,
     pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     params: wgpu::Buffer,
@@ -93,11 +141,16 @@ pub(super) struct P216Converter {
     slots: [SlotState; 2],
 }
 
-impl P216Converter {
-    pub fn new(device: &wgpu::Device, width: u32, height: u32) -> Result<Self, P216Error> {
-        let layout = P216Layout::new(width, height)?;
+impl SendConverter {
+    pub fn new(
+        device: &wgpu::Device,
+        format: SendFormat,
+        width: u32,
+        height: u32,
+    ) -> Result<Self, ConvertError> {
+        let (stride, byte_len) = format.layout(width, height)?;
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("NDI P216 Bind Group Layout"),
+            label: Some("NDI Send Bind Group Layout"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
@@ -132,24 +185,24 @@ impl P216Converter {
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("NDI P216 Pipeline Layout"),
+            label: Some("NDI Send Pipeline Layout"),
             bind_group_layouts: &[Some(&bind_group_layout)],
             immediate_size: 0,
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("NDI P216 Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("p216.wgsl").into()),
+            label: Some("NDI Send Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("convert.wgsl").into()),
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("NDI P216 Pipeline"),
+            label: Some("NDI Send Pipeline"),
             layout: Some(&pipeline_layout),
             module: &shader,
-            entry_point: Some("main"),
+            entry_point: Some(format.entry_point()),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             cache: None,
         });
         let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("NDI P216 Params"),
+            label: Some("NDI Send Params"),
             contents: bytemuck::bytes_of(&ConvertParams {
                 width,
                 height,
@@ -159,28 +212,30 @@ impl P216Converter {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let output = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("NDI P216 GPU Output"),
-            size: layout.byte_len,
+            label: Some("NDI Send GPU Output"),
+            size: byte_len,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         let staging = std::array::from_fn(|index| {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(if index == 0 {
-                    "NDI P216 Readback A"
+                    "NDI Send Readback A"
                 } else {
-                    "NDI P216 Readback B"
+                    "NDI Send Readback B"
                 }),
-                size: layout.byte_len,
+                size: byte_len,
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 mapped_at_creation: false,
             })
         });
 
         Ok(Self {
+            format,
             width,
             height,
-            layout,
+            stride,
+            byte_len,
             pipeline,
             bind_group_layout,
             params,
@@ -221,7 +276,7 @@ impl P216Converter {
             }),
         );
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("NDI P216 Bind Group"),
+            label: Some("NDI Send Bind Group"),
             layout: &self.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -240,20 +295,14 @@ impl P216Converter {
         });
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("NDI P216 Convert"),
+                label: Some("NDI Send Convert"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
             pass.dispatch_workgroups(self.width.div_ceil(16), self.height.div_ceil(8), 1);
         }
-        encoder.copy_buffer_to_buffer(
-            &self.output,
-            0,
-            &self.staging[slot],
-            0,
-            self.layout.byte_len,
-        );
+        encoder.copy_buffer_to_buffer(&self.output, 0, &self.staging[slot], 0, self.byte_len);
         self.slots[slot] = SlotState::Copied;
         true
     }
@@ -279,7 +328,7 @@ impl P216Converter {
                             self.staging[index]
                                 .slice(..)
                                 .get_mapped_range()
-                                .expect("successful P216 map has a mapped range")
+                                .expect("a successful map has a mapped range")
                                 .to_vec(),
                         );
                         self.staging[index].unmap();
@@ -288,7 +337,7 @@ impl P216Converter {
                         self.slots[index] = SlotState::Mapping(receiver);
                     }
                     Ok(Err(error)) => {
-                        log::warn!("NDI P216 readback failed: {error}");
+                        log::warn!("NDI readback failed: {error}");
                         self.staging[index].unmap();
                     }
                     Err(TryRecvError::Disconnected) => {
@@ -300,18 +349,22 @@ impl P216Converter {
         frame
     }
 
-    pub const fn layout(&self) -> P216Layout {
-        self.layout
+    pub const fn format(&self) -> SendFormat {
+        self.format
+    }
+
+    pub const fn stride(&self) -> u32 {
+        self.stride
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{P216Converter, P216Error, P216Layout, REC709_METADATA};
+    use super::{ConvertError, P216Layout, REC709_METADATA, SendConverter, SendFormat};
 
     fn encode_once(
         context: &crate::renderer::context::GpuContext,
-        converter: &mut P216Converter,
+        converter: &mut SendConverter,
         source: &wgpu::TextureView,
         dither: bool,
     ) -> Vec<u8> {
@@ -346,21 +399,24 @@ mod tests {
 
     #[test]
     fn odd_width_is_rejected() {
-        assert_eq!(P216Layout::new(1919, 1080), Err(P216Error::OddWidth(1919)));
+        assert_eq!(
+            P216Layout::new(1919, 1080),
+            Err(ConvertError::OddWidth(1919))
+        );
     }
 
     #[test]
     fn chaos_empty_and_overflowing_frames_are_rejected() {
-        assert_eq!(P216Layout::new(0, 1080), Err(P216Error::EmptyFrame));
-        assert_eq!(P216Layout::new(1920, 0), Err(P216Error::EmptyFrame));
-        assert_eq!(P216Layout::new(2, 0), Err(P216Error::EmptyFrame));
+        assert_eq!(P216Layout::new(0, 1080), Err(ConvertError::EmptyFrame));
+        assert_eq!(P216Layout::new(1920, 0), Err(ConvertError::EmptyFrame));
+        assert_eq!(P216Layout::new(2, 0), Err(ConvertError::EmptyFrame));
         assert_eq!(
             P216Layout::new(u32::MAX, 2),
-            Err(P216Error::OddWidth(u32::MAX))
+            Err(ConvertError::OddWidth(u32::MAX))
         );
         assert_eq!(
             P216Layout::new(u32::MAX - 1, u32::MAX),
-            Err(P216Error::FrameTooLarge)
+            Err(ConvertError::FrameTooLarge)
         );
     }
 
@@ -420,7 +476,7 @@ mod tests {
             },
         );
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut converter = P216Converter::new(&context.device, 2, 1).unwrap();
+        let mut converter = SendConverter::new(&context.device, SendFormat::P216, 2, 1).unwrap();
         let bytes = encode_once(&context, &mut converter, &view, false);
 
         // Y plane: limited-range black 64 and white 940. UV plane: neutral 512.
@@ -476,7 +532,8 @@ mod tests {
             },
         );
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut converter = P216Converter::new(&context.device, WIDTH, 1).unwrap();
+        let mut converter =
+            SendConverter::new(&context.device, SendFormat::P216, WIDTH, 1).unwrap();
 
         let undithered = encode_once(&context, &mut converter, &view, false);
         let first = encode_once(&context, &mut converter, &view, true);
@@ -497,5 +554,87 @@ mod tests {
                 "dither changed a component by more than one ten-bit LSB"
             );
         }
+    }
+
+    /// A 2x1 linear `Rgba16Float` texture holding `left` and `right`.
+    fn pair_texture(
+        context: &crate::renderer::context::GpuContext,
+        left: [f32; 3],
+        right: [f32; 3],
+    ) -> wgpu::TextureView {
+        let texture = context.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("UYVY Known Values"),
+            size: wgpu::Extent3d {
+                width: 2,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let mut pixels = Vec::with_capacity(16);
+        for rgb in [left, right] {
+            for channel in [rgb[0], rgb[1], rgb[2], 1.0] {
+                pixels.extend_from_slice(&half::f16::from_f32(channel).to_bits().to_le_bytes());
+            }
+        }
+        context.queue.write_texture(
+            texture.as_image_copy(),
+            &pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(16),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d {
+                width: 2,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        texture.create_view(&wgpu::TextureViewDescriptor::default())
+    }
+
+    #[test]
+    fn uyvy_layout_is_two_bytes_per_pixel_and_refuses_odd_widths() {
+        assert_eq!(SendFormat::Uyvy.layout(1920, 1080), Ok((3840, 4_147_200)));
+        assert_eq!(
+            SendFormat::Uyvy.layout(1919, 1080),
+            Err(ConvertError::OddWidth(1919))
+        );
+        assert_eq!(
+            SendFormat::Uyvy.layout(0, 1080),
+            Err(ConvertError::EmptyFrame)
+        );
+    }
+
+    /// Eight-bit BT.709 limited range: black 16, white 235, neutral chroma 128.
+    #[test]
+    fn gpu_packs_black_and_white_into_limited_range_uyvy() {
+        let Ok(context) = crate::renderer::context::GpuContext::new_headless() else {
+            return;
+        };
+        let view = pair_texture(&context, [0.0; 3], [1.0; 3]);
+        let mut converter = SendConverter::new(&context.device, SendFormat::Uyvy, 2, 1).unwrap();
+        let bytes = encode_once(&context, &mut converter, &view, false);
+        // U, Y0, V, Y1. The pair's average is gray, so chroma is neutral.
+        assert_eq!(bytes, [128, 16, 128, 235]);
+    }
+
+    /// Full red through the BT.709 matrix: Y 63, Cb 102, Cr 240, the standard
+    /// eight-bit limited-range values.
+    #[test]
+    fn gpu_packs_red_with_the_bt709_matrix() {
+        let Ok(context) = crate::renderer::context::GpuContext::new_headless() else {
+            return;
+        };
+        let view = pair_texture(&context, [1.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+        let mut converter = SendConverter::new(&context.device, SendFormat::Uyvy, 2, 1).unwrap();
+        let bytes = encode_once(&context, &mut converter, &view, false);
+        assert_eq!(bytes, [102, 63, 240, 63]);
     }
 }
