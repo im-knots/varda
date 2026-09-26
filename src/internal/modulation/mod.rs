@@ -1122,7 +1122,7 @@ mod tests {
     #[test]
     fn audio_energy_empty_fft() {
         let source = AudioSourceValues {
-            fft: vec![],
+            fft: vec![].into(),
             level: 0.0,
             sample_rate: 48000.0,
         };
@@ -1132,7 +1132,7 @@ mod tests {
     #[test]
     fn audio_energy_zero_sample_rate() {
         let source = AudioSourceValues {
-            fft: vec![0.5; 256],
+            fft: vec![0.5; 256].into(),
             level: 0.5,
             sample_rate: 0.0,
         };
@@ -1142,7 +1142,7 @@ mod tests {
     #[test]
     fn audio_energy_silent() {
         let source = AudioSourceValues {
-            fft: vec![0.0; 256],
+            fft: vec![0.0; 256].into(),
             level: 0.0,
             sample_rate: 48000.0,
         };
@@ -1152,7 +1152,7 @@ mod tests {
     #[test]
     fn audio_energy_loud_signal() {
         let source = AudioSourceValues {
-            fft: vec![1.0; 256],
+            fft: vec![1.0; 256].into(),
             level: 1.0,
             sample_rate: 48000.0,
         };
@@ -1166,7 +1166,7 @@ mod tests {
         av.sources.insert(
             5,
             AudioSourceValues {
-                fft: vec![],
+                fft: vec![].into(),
                 level: 0.5,
                 sample_rate: 48000.0,
             },
@@ -1174,7 +1174,7 @@ mod tests {
         av.sources.insert(
             2,
             AudioSourceValues {
-                fft: vec![],
+                fft: vec![].into(),
                 level: 0.8,
                 sample_rate: 48000.0,
             },
@@ -1422,7 +1422,7 @@ mod tests {
         audio.sources.insert(
             0,
             AudioSourceValues {
-                fft: vec![0.001; 256],
+                fft: vec![0.001; 256].into(),
                 level: 0.001,
                 sample_rate: 48000.0,
             },

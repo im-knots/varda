@@ -29,7 +29,8 @@ pub enum DispatchMode {
 pub struct ComputePipeline {
     pub compute_pipeline: wgpu::ComputePipeline,
     pub bind_group_layout: wgpu::BindGroupLayout,
-    pub uniform_buffer: wgpu::Buffer,
+    /// Uniforms, one slot per pass.
+    uniforms: super::pass_uniforms::PassUniforms,
     pub output_texture: wgpu::Texture,
     pub output_view: wgpu::TextureView,
     pub storage_buffers: Vec<StorageBuffer>,
@@ -76,14 +77,6 @@ impl ComputePipeline {
         let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("ISF Compute Shader Module"),
             source: wgpu::ShaderSource::Wgsl(wgsl.into()),
-        });
-
-        // Create uniform buffer
-        let uniforms = ISFUniforms::default();
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("ISF Compute Uniform Buffer"),
-            contents: bytemuck::cast_slice(&[uniforms]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
         // Build bind group layout entries
@@ -225,7 +218,7 @@ impl ComputePipeline {
         Ok(Self {
             compute_pipeline,
             bind_group_layout,
-            uniform_buffer,
+            uniforms: super::pass_uniforms::PassUniforms::new(device),
             output_texture,
             output_view,
             storage_buffers,
@@ -237,16 +230,28 @@ impl ComputePipeline {
         })
     }
 
-    /// Create a bind group for compute dispatch.
-    pub fn create_bind_group(
+    /// Create a bind group for one compute pass, reading the uniforms in `slot`.
+    pub fn create_pass_bind_group(
         &self,
         device: &wgpu::Device,
+        slot: usize,
+        user_params_buffer: Option<&wgpu::Buffer>,
+    ) -> wgpu::BindGroup {
+        self.uniforms.with_binding(slot, |uniforms| {
+            self.bind_group(device, uniforms, user_params_buffer)
+        })
+    }
+
+    fn bind_group(
+        &self,
+        device: &wgpu::Device,
+        uniforms: wgpu::BindingResource<'_>,
         user_params_buffer: Option<&wgpu::Buffer>,
     ) -> wgpu::BindGroup {
         let mut entries = vec![
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: self.uniform_buffer.as_entire_binding(),
+                resource: uniforms,
             },
             wgpu::BindGroupEntry {
                 binding: 1,
@@ -274,9 +279,14 @@ impl ComputePipeline {
         })
     }
 
-    /// Update uniforms
-    pub fn update_uniforms(&self, queue: &wgpu::Queue, uniforms: &ISFUniforms) {
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[*uniforms]));
+    /// Make room for every pass's uniforms this frame.
+    pub fn ensure_pass_slots(&self, device: &wgpu::Device) {
+        self.uniforms.ensure_slots(device, self.num_passes as usize);
+    }
+
+    /// Write one pass's uniforms into `slot`.
+    pub fn write_pass_uniforms(&self, queue: &wgpu::Queue, slot: usize, uniforms: &ISFUniforms) {
+        self.uniforms.write(queue, slot, uniforms);
     }
 
     /// Get the output texture view

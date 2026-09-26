@@ -1614,9 +1614,8 @@ mod tests {
             .add_source(ModulationSource::sine_lfo(1.0));
         let key = Macro::value_mod_key(&macro_uuid);
         mixer.modulation_mut().assign(&key, &src, 1.0, None);
-        mixer.update_modulation(
-            None,
-            None,
+        mixer.modulation_mut().update_free_running(
+            0.25,
             &AudioValues::default(),
             &AnalyzerValues::default(),
         );

@@ -43,9 +43,8 @@ fn mixer_with_macros(gpu: &GpuContext, macros: usize) -> Mixer {
             .modulation_mut()
             .assign(&Macro::value_mod_key(&uuid), &source, 1.0, None);
     }
-    mixer.update_modulation(
-        None,
-        None,
+    mixer.modulation_mut().update_free_running(
+        0.25,
         &AudioValues::default(),
         &AnalyzerValues::default(),
     );

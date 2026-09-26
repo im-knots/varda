@@ -57,7 +57,8 @@ pub struct UnifiedPipeline {
     /// `COLOR_PATH_FORMAT`, so one pipeline covers all of them.
     pub pipeline: wgpu::RenderPipeline,
     pub bind_group_layout: wgpu::BindGroupLayout,
-    pub uniform_buffer: wgpu::Buffer,
+    /// Uniforms, one slot per pass.
+    uniforms: super::pass_uniforms::PassUniforms,
     /// Sampler — present when shader has textures (input image, pass buffers, or imported)
     pub sampler: Option<wgpu::Sampler>,
     /// Whether this shader has an input image binding (i.e. it's a filter)
@@ -122,13 +123,7 @@ impl UnifiedPipeline {
             source: wgpu::ShaderSource::Wgsl(wgsl.into()),
         });
 
-        // Create uniform buffer
-        let uniforms = ISFUniforms::default();
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("ISF Uniform Buffer"),
-            contents: bytemuck::cast_slice(&[uniforms]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        let uniforms = super::pass_uniforms::PassUniforms::new(device);
 
         let has_textures = has_input_image
             || num_pass_buffers > 0
@@ -346,7 +341,7 @@ impl UnifiedPipeline {
         Ok(Self {
             pipeline,
             bind_group_layout,
-            uniform_buffer,
+            uniforms,
             sampler,
             has_input_image,
             num_pass_buffers,
@@ -379,13 +374,66 @@ impl UnifiedPipeline {
         preprocessor_views: &[&wgpu::TextureView],
         user_params_buffer: Option<&wgpu::Buffer>,
     ) -> wgpu::BindGroup {
+        self.create_pass_bind_group(
+            device,
+            0,
+            input_view,
+            pass_buffer_views,
+            imported_views,
+            preprocessor_views,
+            user_params_buffer,
+        )
+    }
+
+    /// [`Self::create_bind_group`] for one pass of a multi-pass shader, reading
+    /// the uniforms in `slot`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the pipeline was built with `has_input_image` but `input_view`
+    /// is `None`.
+    #[allow(clippy::too_many_arguments)] // one per binding group the layout can hold
+    pub fn create_pass_bind_group(
+        &self,
+        device: &wgpu::Device,
+        slot: usize,
+        input_view: Option<&wgpu::TextureView>,
+        pass_buffer_views: &[&wgpu::TextureView],
+        imported_views: &[&wgpu::TextureView],
+        preprocessor_views: &[&wgpu::TextureView],
+        user_params_buffer: Option<&wgpu::Buffer>,
+    ) -> wgpu::BindGroup {
+        self.uniforms.with_binding(slot, |uniforms| {
+            self.bind_group(
+                device,
+                uniforms,
+                input_view,
+                pass_buffer_views,
+                imported_views,
+                preprocessor_views,
+                user_params_buffer,
+            )
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)] // one per binding group the layout can hold
+    fn bind_group(
+        &self,
+        device: &wgpu::Device,
+        uniforms: wgpu::BindingResource<'_>,
+        input_view: Option<&wgpu::TextureView>,
+        pass_buffer_views: &[&wgpu::TextureView],
+        imported_views: &[&wgpu::TextureView],
+        preprocessor_views: &[&wgpu::TextureView],
+        user_params_buffer: Option<&wgpu::Buffer>,
+    ) -> wgpu::BindGroup {
         let mut entries = vec![];
         let mut next_binding: u32 = 0;
 
         // Binding 0: Uniforms
         entries.push(wgpu::BindGroupEntry {
             binding: next_binding,
-            resource: self.uniform_buffer.as_entire_binding(),
+            resource: uniforms,
         });
         next_binding += 1;
 
@@ -458,8 +506,18 @@ impl UnifiedPipeline {
         self.create_bind_group(device, None, &[], &[], &[], Some(user_params_buffer))
     }
 
-    /// Update uniforms
+    /// Update a single-pass shader's uniforms.
     pub fn update_uniforms(&self, queue: &wgpu::Queue, uniforms: &ISFUniforms) {
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[*uniforms]));
+        self.uniforms.write(queue, 0, uniforms);
+    }
+
+    /// Make room for `passes` passes' uniforms this frame.
+    pub fn ensure_pass_slots(&self, device: &wgpu::Device, passes: usize) {
+        self.uniforms.ensure_slots(device, passes);
+    }
+
+    /// Write one pass's uniforms into `slot`.
+    pub fn write_pass_uniforms(&self, queue: &wgpu::Queue, slot: usize, uniforms: &ISFUniforms) {
+        self.uniforms.write(queue, slot, uniforms);
     }
 }

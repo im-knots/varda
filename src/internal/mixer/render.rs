@@ -70,19 +70,6 @@ impl Mixer {
         })
     }
 
-    /// Pre-update modulation engine with latest audio + analyzer data.
-    pub fn update_modulation(
-        &mut self,
-        beat_time: Option<f64>,
-        transport: Option<crate::timebase::TransportSample>,
-        audio_values: &crate::modulation::AudioValues,
-        analyzer_values: &crate::modulation::AnalyzerValues,
-    ) {
-        let timebases = self.resolve_timebases(None, beat_time, transport);
-        self.modulation
-            .update(&timebases, audio_values, analyzer_values);
-    }
-
     /// Drive knob/fader macros from any modulation assigned to their value, then
     /// fan the modulated value out to every target. The macro's stored value is
     /// the base (manual set point); modulation rides on top as an offset. Only
@@ -953,118 +940,42 @@ impl Mixer {
         // the over-black display path are unchanged. See /spec/html-source.md §2.
         let opacities = self.compositing_opacities();
 
-        // Batch channel compositing into command buffers for deferred submission.
-        let mut is_first = true;
-        let mut slot: usize = 0;
-        for (channel, &opacity) in self.channels.iter().zip(opacities.iter()) {
-            if opacity <= 0.0 {
-                continue;
-            }
-
-            if is_first {
-                // First visible channel: per-draw params blit.
-                // Channel composites are premultiplied-alpha (see blit_pipeline blend).
-                self.blit_pipeline.write_params_slot(
-                    &context.queue,
-                    slot,
-                    opacity,
-                    [1.0, 1.0],
-                    [0.0, 0.0],
-                    true,
-                );
-                let bind_group = self.blit_pipeline.create_ring_bind_group(
-                    &context.device,
+        let visible: Vec<(&wgpu::TextureView, f32, u32)> = self
+            .channels
+            .iter()
+            .zip(opacities.iter())
+            .filter(|&(_, &opacity)| opacity > 0.0)
+            .map(|(channel, &opacity)| {
+                (
                     &channel.composite_view,
-                    slot,
-                );
-                let mut encoder =
-                    context
-                        .device
-                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("Mixer Composite Encoder (first)"),
-                        });
-                {
-                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Mixer Composite Pass (first)"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &self.composite_view,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                store: wgpu::StoreOp::Store,
-                            },
-                            depth_slice: None,
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    });
-                    self.blit_pipeline
-                        .render_at_slot(&mut render_pass, &bind_group);
-                }
-                cmd_buffers.push(encoder.finish());
-                is_first = false;
-            } else {
-                // Subsequent channels: snapshot + per-draw params composite
-                let mut copy_encoder =
-                    context
-                        .device
-                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("Mixer Snapshot Copy"),
-                        });
-                copy_encoder.copy_texture_to_texture(
-                    self.composite_texture.as_image_copy(),
-                    self.effect_ping_texture.as_image_copy(),
-                    self.composite_texture.size(),
-                );
-
-                let blend_mode = channel.blend_mode;
-                self.composite_pipeline.write_params_slot(
-                    &context.queue,
-                    slot,
                     opacity,
-                    blend_mode.to_index(),
-                    [1.0, 1.0],
-                    [0.0, 0.0],
-                    true,
-                );
-                let bind_group = self.composite_pipeline.create_ring_bind_group(
-                    &context.device,
-                    &channel.composite_view,
-                    &self.effect_ping_view,
-                    slot,
-                );
-                let mut encoder =
-                    context
-                        .device
-                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("Mixer Composite Encoder"),
-                        });
-                {
-                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Mixer Composite Pass"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &self.composite_view,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                store: wgpu::StoreOp::Store,
-                            },
-                            depth_slice: None,
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    });
-                    self.composite_pipeline
-                        .render_at_slot(&mut render_pass, &bind_group);
-                }
-                cmd_buffers.push(copy_encoder.finish());
-                cmd_buffers.push(encoder.finish());
-            }
-            slot += 1;
+                    channel.blend_mode.to_index(),
+                )
+            })
+            .collect();
+        let pipelines = crate::renderer::layers::LayerPipelines {
+            blit: &self.blit_pipeline,
+            composite: &self.composite_pipeline,
+        };
+        let mut stack = crate::renderer::layers::LayerStack::new(
+            (&self.composite_texture, &self.composite_view),
+            (&self.effect_ping_texture, &self.effect_ping_view),
+            visible.len(),
+            wgpu::Color::TRANSPARENT,
+        );
+        for (view, opacity, blend_mode) in visible {
+            // Channel composites are premultiplied-alpha (see blit_pipeline blend).
+            stack.blend(
+                context,
+                &pipelines,
+                &crate::renderer::layers::BlendLayer {
+                    view,
+                    opacity,
+                    blend_mode,
+                    premultiplied: true,
+                },
+                &mut cmd_buffers,
+            );
         }
 
         cmd_buffers
@@ -1123,126 +1034,47 @@ impl Mixer {
 
         let opacities = self.compositing_opacities();
 
+        let visible: Vec<(&wgpu::TextureView, f32, u32)> = indices
+            .iter()
+            .filter_map(|&ch_idx| {
+                let channel = self.channels.get(ch_idx)?;
+                let opacity = opacities.get(ch_idx).copied().unwrap_or(0.0);
+                (opacity > 0.0).then(|| {
+                    (
+                        &channel.composite_view,
+                        opacity,
+                        channel.blend_mode.to_index(),
+                    )
+                })
+            })
+            .collect();
         let mut cmd_buffers: Vec<wgpu::CommandBuffer> = Vec::new();
-        let mut is_first = true;
-        let mut slot: usize = 0;
-        for &ch_idx in indices {
-            if ch_idx >= self.channels.len() {
-                continue;
-            }
-            let channel = &self.channels[ch_idx];
-            let opacity = opacities.get(ch_idx).copied().unwrap_or(0.0);
-            if opacity <= 0.0 {
-                continue;
-            }
-
-            if is_first {
-                // First visible channel: per-draw params blit.
-                // Channel composites are premultiplied-alpha (see blit_pipeline blend).
-                self.blit_pipeline.write_params_slot(
-                    &context.queue,
-                    slot,
+        let pipelines = crate::renderer::layers::LayerPipelines {
+            blit: &self.blit_pipeline,
+            composite: &self.composite_pipeline,
+        };
+        let mut stack = crate::renderer::layers::LayerStack::new(
+            (sub_tex, sub_view),
+            (&self.effect_ping_texture, &self.effect_ping_view),
+            visible.len(),
+            wgpu::Color::BLACK,
+        );
+        let empty = visible.is_empty();
+        for (view, opacity, blend_mode) in visible {
+            stack.blend(
+                context,
+                &pipelines,
+                &crate::renderer::layers::BlendLayer {
+                    view,
                     opacity,
-                    [1.0, 1.0],
-                    [0.0, 0.0],
-                    true,
-                );
-                let bind_group = self.blit_pipeline.create_ring_bind_group(
-                    &context.device,
-                    &channel.composite_view,
-                    slot,
-                );
-                let mut encoder =
-                    context
-                        .device
-                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("Sub-mix Composite Encoder (first)"),
-                        });
-                {
-                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Sub-mix Composite Pass (first)"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: sub_view,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                store: wgpu::StoreOp::Store,
-                            },
-                            depth_slice: None,
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    });
-                    self.blit_pipeline
-                        .render_at_slot(&mut render_pass, &bind_group);
-                }
-                cmd_buffers.push(encoder.finish());
-                is_first = false;
-            } else {
-                // Subsequent channels: snapshot sub-mix → effect_ping, per-draw params composite
-                let mut copy_encoder =
-                    context
-                        .device
-                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("Sub-mix Snapshot Copy"),
-                        });
-                copy_encoder.copy_texture_to_texture(
-                    sub_tex.as_image_copy(),
-                    self.effect_ping_texture.as_image_copy(),
-                    sub_tex.size(),
-                );
-
-                let blend_mode = channel.blend_mode;
-                self.composite_pipeline.write_params_slot(
-                    &context.queue,
-                    slot,
-                    opacity,
-                    blend_mode.to_index(),
-                    [1.0, 1.0],
-                    [0.0, 0.0],
-                    true,
-                );
-                let bind_group = self.composite_pipeline.create_ring_bind_group(
-                    &context.device,
-                    &channel.composite_view,
-                    &self.effect_ping_view,
-                    slot,
-                );
-                let mut encoder =
-                    context
-                        .device
-                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("Sub-mix Composite Encoder"),
-                        });
-                {
-                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Sub-mix Composite Pass"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: sub_view,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                store: wgpu::StoreOp::Store,
-                            },
-                            depth_slice: None,
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    });
-                    self.composite_pipeline
-                        .render_at_slot(&mut render_pass, &bind_group);
-                }
-                cmd_buffers.push(copy_encoder.finish());
-                cmd_buffers.push(encoder.finish());
-            }
-            slot += 1;
+                    blend_mode,
+                    premultiplied: true,
+                },
+                &mut cmd_buffers,
+            );
         }
 
-        if is_first {
+        if empty {
             let mut encoder =
                 context
                     .device

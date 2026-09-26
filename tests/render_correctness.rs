@@ -1507,27 +1507,37 @@ fn chroma_flow_auto_palette_does_not_lurch_on_smooth_input() {
 ///   persistence broken and with easing removed, because whole-frame luminance
 ///   delta is dominated by the flow rather than by the palette.
 ///
-/// With those held, every remaining frame-to-frame change is the palette easing
-/// toward its target. A palette that is carried keeps moving for many frames. A
-/// palette re-derived per frame, which is what happens if `paletteBuf` does not
-/// persist, is final at frame one and the picture goes still.
+/// Even with those held, whole-frame luminance barely sees the palette: the
+/// flow buffer dominates it, and the snapped and eased palettes score the same
+/// to eight digits. So the final pass is replaced with one that shows
+/// `paletteBuf` itself, and the palette pass, the thing under test, runs as
+/// shipped.
+///
+/// A static source seeds the palette on its first frame with nothing left to
+/// ease toward, so the source changes once the picture has settled, and the
+/// palette is graded on how it follows. Carried and eased, it is still moving
+/// ten frames later. Re-derived or snapped, it lands in one frame and stops.
+///
+/// Measured, not chosen: after the change the shipped shader keeps 0.695 of its
+/// first frame's movement at frame ten, and with the easing removed it keeps
+/// none. An earlier version graded the settle from a cleared buffer instead,
+/// which only moved because the palette pass ran a frame behind its input and
+/// so seeded from black; that lag is gone. See
+/// /spec/performance-hot-paths.md item D.
 #[test]
 fn chroma_flow_auto_palette_is_carried_between_frames() {
     const W: u32 = 64;
     const H: u32 = 64;
+    /// Frames for the flow buffer and palette to settle before the change.
+    const SETTLE: usize = 60;
     /// `tau` is 0.5s at full stability and a frame is 1/60s, so an easing
     /// palette is nowhere near settled by here.
     const LATE: usize = 10;
-    /// Movement at LATE as a fraction of movement at the start.
-    ///
-    /// Measured, not chosen: the shipped shader scores 0.586, and both ways of
-    /// breaking it, no persistence and no easing, score 0.275. A palette that
-    /// snaps has roughly double the first-frame movement of one that eases,
-    /// while the later background motion is identical, so the ratio separates
-    /// them by 2.1x. This threshold sits in the middle of that gap.
-    const MIN_RESIDUAL: f32 = 0.40;
+    /// Movement at LATE as a fraction of the first frame's after the change:
+    /// 0.695 eased, 0.0 snapped. The threshold sits midway.
+    const MIN_RESIDUAL: f32 = 0.35;
     /// How much a frame delta may exceed the one before it. Easing decays, so
-    /// the true value is 1.0; measured on Metal the worst step is 0.99. The
+    /// the true value is 1.0; measured on Metal the worst step is 1.11. The
     /// allowance is for readback noise, not for a real rise.
     const MAX_RISE: f32 = 1.35;
 
@@ -1538,7 +1548,19 @@ fn chroma_flow_auto_palette_is_carried_between_frames() {
     let fx_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders/chroma_flow.fs");
     let src_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders/gradient.fs");
     let src_shader = varda::isf::ISFShader::from_file(&src_path).expect("parse gradient.fs");
-    let fx_shader = varda::isf::ISFShader::from_file(&fx_path).expect("parse chroma_flow.fs");
+    let shipped = std::fs::read_to_string(&fx_path).expect("read chroma_flow.fs");
+    let display = "    // Composite pass. Display only: nothing below is ever read back.";
+    assert!(
+        shipped.contains(display),
+        "chroma_flow.fs's composite pass moved"
+    );
+    let showing_palette = shipped.replacen(
+        display,
+        "    fragColor = vec4(texture(sampler2D(paletteBuf, texSampler), vec2(uv.x, 0.5)).rgb, 1.0);\n    return;",
+        1,
+    );
+    let fx_shader =
+        varda::isf::ISFShader::from_string(&showing_palette).expect("parse chroma_flow.fs");
 
     let mut mixer = Mixer::new(&ctx, W, H).expect("mixer");
     mixer.set_tonemap_mode(&ctx.queue, TonemapMode::Bypass);
@@ -1576,12 +1598,19 @@ fn chroma_flow_auto_palette_is_carried_between_frames() {
         a.iter().zip(b).map(|(x, y)| (x - y).abs()).sum::<f32>() / a.len() as f32
     };
 
+    for frame in 1..=SETTLE {
+        render_at(&ctx, &mut mixer, frame);
+    }
+    mixer.channel_mut(0).expect("channel 0").decks[0]
+        .deck
+        .generator_params
+        .set_color("color_c", [1.0, 0.35, 0.0, 1.0]);
+
     // Every consecutive frame, not just two windows, because the *shape* of the
     // sequence says more than any single pair.
-    render_at(&ctx, &mut mixer, 1);
     let mut prev = luminance(&ctx, &mixer);
     let mut deltas = Vec::with_capacity(LATE);
-    for frame in 2..=(LATE + 1) {
+    for frame in (SETTLE + 1)..=(SETTLE + LATE) {
         render_at(&ctx, &mut mixer, frame);
         let cur = luminance(&ctx, &mixer);
         deltas.push(mean_delta(&prev, &cur));
@@ -1592,35 +1621,29 @@ fn chroma_flow_auto_palette_is_carried_between_frames() {
     let late = deltas[LATE - 1];
     assert!(
         early > 0.0,
-        "the palette never moved even at the start, so this proves nothing"
+        "the palette did not follow the source at all, so this proves nothing\n  sequence: {deltas:.8?}"
     );
 
     // 1. It has to still be moving late, which is what carried state buys.
     let residual = late / early;
     assert!(
         residual >= MIN_RESIDUAL,
-        "the auto palette is not carried between frames: with the source static \
-         and every flow control zeroed, movement fell from {early:.6} to \
-         {late:.6} ({residual:.4} of the start) by frame {LATE}. An eased palette \
-         is still seeking here; one re-derived each frame is already final. Check \
-         that the PERSISTENT paletteBuf survives the frame.\n  sequence: {deltas:.6?}"
+        "the auto palette is not carried between frames: after the source changed, \
+         its movement fell from {early:.8} to {late:.8} ({residual:.4} of the start) \
+         by frame {LATE}. An eased palette is still seeking here; one re-derived \
+         each frame is already final. Check that paletteBuf survives the frame.\
+         \n  sequence: {deltas:.8?}"
     );
 
     // 2. And it has to move *every* frame, decaying smoothly.
     //
-    // This is the part aimed at what Windows is actually reporting. A p95 of
-    // 4.64x the median, while the fixed palette scores 1.95x on both platforms,
-    // is the signature of a palette that updates on some frames and not others:
-    // the frames it sits out move only as much as the source does, dragging the
-    // median down, and the frame it catches up on carries several frames of
-    // easing at once, pushing the tail up. Nothing about that shows in a test
-    // that only compares two windows, which is why the first version of this
-    // test would have passed straight through it.
-    //
-    // Easing is a decaying exponential, so each delta should be no larger than
-    // the one before. The seed frame is excluded: the buffer starts cleared, so
-    // frame 1 to 2 is a partial step and frame 2 to 3 is legitimately larger.
-    for (i, pair) in deltas.windows(2).enumerate().skip(1) {
+    // This is the part aimed at what Windows reported: a p95 of 4.64x the
+    // median, against 1.95x for a fixed palette, which is the signature of a
+    // palette that updates on some frames and not others. The frames it sits out
+    // barely move, and the frame it catches up on carries several frames of
+    // easing at once. Easing is a decaying exponential, so each delta should be
+    // no larger than the one before.
+    for (i, pair) in deltas.windows(2).enumerate() {
         assert!(
             pair[1] <= pair[0] * MAX_RISE,
             "the auto palette stutters: frame delta rose from {:.8} to {:.8} \
@@ -2481,4 +2504,77 @@ fn a_scene_without_taps_allocates_no_tap_targets() {
         mixer.has_no_tap_targets(),
         "removing the last tap deck must release the tap target"
     );
+}
+
+// ── Multi-pass ordering ──────────────────────────────────────────────
+
+/// Pass 0 writes red only when it sees its own `PASSINDEX`; the final pass
+/// shows what pass 0 wrote and adds green.
+const PASS_ORDER_SHADER: &str = r#"/*{
+    "ISFVSN": "2.0",
+    "CATEGORIES": ["Generator"],
+    "INPUTS": [{"NAME": "unused", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 1.0}],
+    "PASSES": [{"TARGET": "first"}, {}]
+}*/
+
+#version 450
+
+layout(location = 0) out vec4 fragColor;
+layout(location = 0) in vec2 uv;
+
+layout(set = 0, binding = 0) uniform ISFUniforms {
+    float TIME;
+    float TIMEDELTA;
+    uint FRAMEINDEX;
+    int PASSINDEX;
+    vec2 RENDERSIZE;
+    float audio_level;
+    float audio_bass;
+    float audio_mid;
+    float audio_treble;
+    float audio_bpm;
+    float audio_beat_phase;
+    vec4 DATE;
+    float PHASE_TIME_0;
+    float PHASE_TIME_1;
+    float PHASE_TIME_2;
+    float PHASE_TIME_3;
+};
+
+layout(set = 0, binding = 1) uniform sampler texSampler;
+layout(set = 0, binding = 2) uniform texture2D first;
+
+layout(set = 0, binding = 3) uniform UserParams {
+    float unused;
+};
+
+void main() {
+    if (PASSINDEX == 0) {
+        fragColor = vec4(1.0, 0.0, 0.0, 1.0);
+    } else {
+        fragColor = vec4(texture(sampler2D(first, texSampler), uv).rgb + vec3(0.0, 1.0, 0.0), 1.0);
+    }
+}
+"#;
+
+/// Every pass of a multi-pass shader now encodes into one command buffer. Each
+/// must still read its own uniforms, and a later pass must see what an earlier
+/// one wrote in the same frame. See /spec/performance-hot-paths.md item D.
+#[test]
+fn a_later_pass_reads_what_an_earlier_pass_wrote_this_frame() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    let shader = varda::isf::ISFShader::from_string(PASS_ORDER_SHADER).expect("parse");
+    let mut mixer = new_mixer(&ctx);
+    let deck = Deck::new(&ctx, shader, W, H).expect("deck");
+    mixer.channel_mut(0).unwrap().add_deck(deck);
+
+    let px = center(&render_and_read(&ctx, &mut mixer));
+    assert_hi(
+        px[0],
+        "pass 0 ran with its own PASSINDEX, before the final pass",
+    );
+    assert_hi(px[1], "the final pass ran");
+    assert_lo(px[2], "blue");
 }

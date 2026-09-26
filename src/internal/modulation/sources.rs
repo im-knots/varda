@@ -559,7 +559,7 @@ mod tests {
         av.sources.insert(
             0,
             AudioSourceValues {
-                fft: vec![1.0; 256],
+                fft: vec![1.0; 256].into(),
                 level: 1.0,
                 sample_rate: 48000.0,
             },

@@ -770,10 +770,19 @@ impl Deck {
 
                 let num_passes = pipeline.num_passes;
 
-                // Multi-pass compute dispatch loop.
-                // Each pass is submitted separately so the GPU completes it before
-                // the next pass begins (implicit barrier between queue submits).
+                // All passes encode into one command buffer, each in its own
+                // compute pass with its own uniform slot. wgpu orders the
+                // passes' storage and texture accesses within the buffer.
+                pipeline.ensure_pass_slots(&context.device);
+                let mut encoder =
+                    context
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Compute Shader Dispatch Encoder"),
+                        });
+                pipeline.clear_non_persistent_buffers(&mut encoder);
                 for pass_idx in 0..num_passes {
+                    let slot = pass_idx as usize;
                     let uniforms = ISFUniforms {
                         time,
                         time_delta,
@@ -789,37 +798,24 @@ impl Deck {
                         date: get_current_date(),
                         phase_times: generator_phase_times,
                     };
-                    pipeline.update_uniforms(&context.queue, &uniforms);
-
-                    let bind_group =
-                        pipeline.create_bind_group(&context.device, Some(user_params_buffer));
-
-                    let mut encoder =
-                        context
-                            .device
-                            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                                label: Some("Compute Shader Dispatch Encoder"),
-                            });
-
-                    // Clear non-persistent storage buffers before the first pass
-                    if pass_idx == 0 {
-                        pipeline.clear_non_persistent_buffers(&mut encoder);
-                    }
-
-                    {
-                        let mut compute_pass =
-                            encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                                label: Some("Compute Shader Pass"),
-                                timestamp_writes: None,
-                            });
-                        compute_pass.set_pipeline(&pipeline.compute_pipeline);
-                        compute_pass.set_bind_group(0, &bind_group, &[]);
-                        compute_pass.dispatch_workgroups(dispatch_x, dispatch_y, dispatch_z);
-                    }
-
-                    // Submit each pass individually for implicit GPU synchronization
-                    context.submit(std::iter::once(encoder.finish()));
+                    pipeline.write_pass_uniforms(&context.queue, slot, &uniforms);
+                    let bind_group = pipeline.create_pass_bind_group(
+                        &context.device,
+                        slot,
+                        Some(user_params_buffer),
+                    );
+                    let mut compute_pass =
+                        encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                            label: Some("Compute Shader Pass"),
+                            timestamp_writes: None,
+                        });
+                    compute_pass.set_pipeline(&pipeline.compute_pipeline);
+                    compute_pass.set_bind_group(0, &bind_group, &[]);
+                    compute_pass.dispatch_workgroups(dispatch_x, dispatch_y, dispatch_z);
                 }
+                // Submitted now rather than with the frame's batch, so the GPU
+                // starts on the simulation while the frame is still recording.
+                context.submit(std::iter::once(encoder.finish()));
 
                 // Copy final compute output to the generator target texture
                 let dest_texture = if source_to_b {
@@ -1122,18 +1118,36 @@ impl Deck {
             .buffer()
             .expect("Buffer should exist after ensure_buffer");
 
-        for pass_idx in 0..passes.len() {
-            let pass = &passes[pass_idx];
-
-            let iterations = if pass.persistent.unwrap_or(false) {
+        let iterations_of = |pass: &ISFPass| {
+            if pass.persistent.unwrap_or(false) {
                 SIMULATION_ITERATIONS
             } else {
                 1
-            };
+            }
+        };
+        // One uniform slot per pass iteration, then one for the final pass, so
+        // every pass is written up front. The targeted passes share one command
+        // buffer, submitted now so the GPU starts on the simulation while the
+        // frame is still recording; the final pass joins the frame's batch.
+        let slots = passes
+            .iter()
+            .filter(|p| p.target.is_some())
+            .map(iterations_of)
+            .sum::<usize>()
+            + 1;
+        multi_pass.ensure_pass_slots(&context.device, slots);
+        let mut encoder = context
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Multi-pass Encoder"),
+            });
+        let mut slot = 0;
 
+        for (pass_idx, pass) in passes.iter().enumerate() {
             let Some(target_name) = &pass.target else {
                 continue;
             };
+            let iterations = iterations_of(pass);
 
             // Use the pass buffer's actual dimensions as RENDERSIZE so
             // shaders that store per-pixel state (e.g. particle buffers)
@@ -1164,62 +1178,23 @@ impl Deck {
                     date: get_current_date(),
                     phase_times,
                 };
-
-                multi_pass.update_uniforms(&context.queue, &uniforms);
-
-                let pass_buffer_views: Vec<&wgpu::TextureView> = passes
-                    .iter()
-                    .filter_map(|p| p.target.as_ref().and_then(|t| pass_buffers.get(t)))
-                    .map(super::PassBuffer::read_view)
-                    .collect();
-
-                let bind_group = multi_pass.create_bind_group(
-                    &context.device,
-                    None,
-                    &pass_buffer_views,
-                    imported_views,
-                    preprocessor_views,
-                    Some(user_params_buffer),
-                );
-
+                multi_pass.write_pass_uniforms(&context.queue, slot, &uniforms);
                 let target_view = pass_buffers
                     .get(target_name)
                     .map_or(final_target, super::PassBuffer::write_view);
-
-                let mut encoder =
-                    context
-                        .device
-                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("Sim Pass Encoder"),
-                        });
-
-                {
-                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Sim Pass Render"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: target_view,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                store: wgpu::StoreOp::Store,
-                            },
-                            depth_slice: None,
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    });
-
-                    render_pass.set_pipeline(&multi_pass.pipeline);
-                    render_pass.set_bind_group(0, &bind_group, &[]);
-                    render_pass.draw(0..3, 0..1);
-                }
-
-                // Multipass intermediate passes MUST submit immediately —
-                // update_uniforms() overwrites the same buffer each iteration,
-                // so batching would cause all passes to see the last pass's data.
-                context.submit(std::iter::once(encoder.finish()));
+                Self::encode_multi_pass(
+                    context,
+                    multi_pass,
+                    &mut encoder,
+                    slot,
+                    passes,
+                    pass_buffers,
+                    imported_views,
+                    preprocessor_views,
+                    user_params_buffer,
+                    target_view,
+                );
+                slot += 1;
 
                 if let Some(pb) = pass_buffers.get_mut(target_name) {
                     pb.swap();
@@ -1227,73 +1202,95 @@ impl Deck {
             }
         }
 
-        // Final render pass to screen
-        {
-            let uniforms = ISFUniforms {
-                time,
-                time_delta,
-                frame_index: frame_count,
-                pass_index: i32::try_from(passes.len()).unwrap_or(i32::MAX),
-                render_size: [render_width as f32, render_height as f32],
-                audio_level: audio_data.level,
-                audio_bass: audio_data.bass(),
-                audio_mid: audio_data.mid(),
-                audio_treble: audio_data.treble(),
-                audio_bpm: audio_data.bpm.unwrap_or(0.0),
-                audio_beat_phase: audio_data.beat_phase(),
-                date: get_current_date(),
-                phase_times,
-            };
-
-            multi_pass.update_uniforms(&context.queue, &uniforms);
-
-            let pass_buffer_views: Vec<&wgpu::TextureView> = passes
-                .iter()
-                .filter_map(|p| p.target.as_ref().and_then(|t| pass_buffers.get(t)))
-                .map(super::PassBuffer::read_view)
-                .collect();
-
-            let bind_group = multi_pass.create_bind_group(
-                &context.device,
-                None,
-                &pass_buffer_views,
-                imported_views,
-                preprocessor_views,
-                Some(user_params_buffer),
-            );
-
-            let mut encoder =
-                context
-                    .device
-                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("Final Pass Encoder"),
-                    });
-
-            {
-                let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Final Pass Render"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: final_target,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                            store: wgpu::StoreOp::Store,
-                        },
-                        depth_slice: None,
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
+        if slot > 0 {
+            context.submit(std::iter::once(encoder.finish()));
+            encoder = context
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Multi-pass Final Encoder"),
                 });
-
-                render_pass.set_pipeline(&multi_pass.pipeline);
-                render_pass.set_bind_group(0, &bind_group, &[]);
-                render_pass.draw(0..3, 0..1);
-            }
-
-            cmd_buffers.push(encoder.finish());
         }
+
+        // Final pass to the deck's target.
+        let uniforms = ISFUniforms {
+            time,
+            time_delta,
+            frame_index: frame_count,
+            pass_index: i32::try_from(passes.len()).unwrap_or(i32::MAX),
+            render_size: [render_width as f32, render_height as f32],
+            audio_level: audio_data.level,
+            audio_bass: audio_data.bass(),
+            audio_mid: audio_data.mid(),
+            audio_treble: audio_data.treble(),
+            audio_bpm: audio_data.bpm.unwrap_or(0.0),
+            audio_beat_phase: audio_data.beat_phase(),
+            date: get_current_date(),
+            phase_times,
+        };
+        multi_pass.write_pass_uniforms(&context.queue, slot, &uniforms);
+        Self::encode_multi_pass(
+            context,
+            multi_pass,
+            &mut encoder,
+            slot,
+            passes,
+            pass_buffers,
+            imported_views,
+            preprocessor_views,
+            user_params_buffer,
+            final_target,
+        );
+        cmd_buffers.push(encoder.finish());
+    }
+
+    /// Encode one pass of a multi-pass generator into `target`, reading its
+    /// uniforms from `slot` and every pass buffer's current contents.
+    #[allow(clippy::too_many_arguments)] // the pass's bindings, all borrowed from different owners
+    fn encode_multi_pass(
+        context: &GpuContext,
+        multi_pass: &UnifiedPipeline,
+        encoder: &mut wgpu::CommandEncoder,
+        slot: usize,
+        passes: &[ISFPass],
+        pass_buffers: &HashMap<String, PassBuffer>,
+        imported_views: &[&wgpu::TextureView],
+        preprocessor_views: &[&wgpu::TextureView],
+        user_params_buffer: &wgpu::Buffer,
+        target: &wgpu::TextureView,
+    ) {
+        let pass_buffer_views: Vec<&wgpu::TextureView> = passes
+            .iter()
+            .filter_map(|p| p.target.as_ref().and_then(|t| pass_buffers.get(t)))
+            .map(super::PassBuffer::read_view)
+            .collect();
+        let bind_group = multi_pass.create_pass_bind_group(
+            &context.device,
+            slot,
+            None,
+            &pass_buffer_views,
+            imported_views,
+            preprocessor_views,
+            Some(user_params_buffer),
+        );
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Multi-pass Render"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        render_pass.set_pipeline(&multi_pass.pipeline);
+        render_pass.set_bind_group(0, &bind_group, &[]);
+        render_pass.draw(0..3, 0..1);
     }
 
     /// Reproject a depth-sensor deck's point cloud into `target`.

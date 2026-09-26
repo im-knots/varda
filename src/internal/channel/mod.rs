@@ -872,32 +872,27 @@ impl Channel {
             .ensure_ring_slots(&context.device, ordered.len());
         self.composite_pipeline
             .ensure_ring_slots(&context.device, ordered.len());
-        let mut copy_count: u32 = 0;
-        let mut bind_group_count: u32 = 0;
-        let mut copy_encode_us: u128 = 0;
-        let mut bind_group_us: u128 = 0;
+        let pipelines = crate::renderer::layers::LayerPipelines {
+            blit: &self.blit_pipeline,
+            composite: &self.composite_pipeline,
+        };
+        let mut stack = crate::renderer::layers::LayerStack::new(
+            (&self.composite_texture, &self.composite_view),
+            (&self.effect_ping_texture, &self.effect_ping_view),
+            ordered.len(),
+            wgpu::Color::TRANSPARENT,
+        );
 
-        for (i, info) in ordered.iter().enumerate() {
+        for info in &ordered {
             let slot = &mut self.decks[info.deck_idx];
+            let mut opacity = info.opacity;
 
-            // Check if this deck is transitioning with a shader
             if let Some(progress) = info.transition_progress {
-                if let Some(effect) = slot.transition_effect.as_mut().filter(|_| i > 0) {
-                    // Snapshot composite-so-far into effect_ping_texture
-                    let mut copy_encoder =
-                        context
-                            .device
-                            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                                label: Some("AT Snapshot Copy"),
-                            });
-                    copy_encoder.copy_texture_to_texture(
-                        self.composite_texture.as_image_copy(),
-                        self.effect_ping_texture.as_image_copy(),
-                        self.composite_texture.size(),
-                    );
-                    composite_cmds.push(copy_encoder.finish());
-
-                    // Run transition shader: start=deck (outgoing), end=composite-below (incoming)
+                if let Some(effect) = slot.transition_effect.as_mut()
+                    && let Some((below, target)) = stack.pass_over()
+                {
+                    // Transition shader: start = the outgoing deck, end = the
+                    // composite below it, which it reveals.
                     let uniforms = ISFUniforms {
                         time,
                         time_delta: dt,
@@ -907,8 +902,6 @@ impl Channel {
                         phase_times: [0.0; 4],
                         ..Default::default()
                     };
-
-                    // Set progress on the transition shader
                     effect.params.set(
                         "progress",
                         crate::params::ParamValue::Float(progress as f32),
@@ -917,236 +910,31 @@ impl Channel {
                     if let Some(buf) = effect.params.buffer() {
                         context.queue.write_buffer(buf, 0, effect.params.scratch());
                     }
-
-                    let cmd = effect.pipeline.render_to_cmd(
+                    composite_cmds.push(effect.pipeline.render_to_cmd(
                         context,
-                        &slot.deck.texture_view, // startImage: outgoing deck
-                        &self.effect_ping_view,  // endImage: composite below
-                        &self.composite_view,    // output: back to composite
+                        &slot.deck.texture_view,
+                        below,
+                        target,
                         &uniforms,
                         effect.params.buffer(),
-                    );
-                    composite_cmds.push(cmd);
+                    ));
                     continue;
                 }
-
-                // Opacity fade fallback (no shader or first deck)
-                let fade_opacity = info.opacity * (1.0 - progress as f32);
-                if i == 0 {
-                    // First deck: simple blit with alpha blending
-                    self.blit_pipeline.write_params_slot(
-                        &context.queue,
-                        i,
-                        fade_opacity,
-                        [1.0, 1.0],
-                        [0.0, 0.0],
-                        false,
-                    );
-                    let bind_group = self.blit_pipeline.create_ring_bind_group(
-                        &context.device,
-                        &slot.deck.texture_view,
-                        i,
-                    );
-                    let mut encoder =
-                        context
-                            .device
-                            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                                label: Some("Channel Composite Encoder (AT fade first)"),
-                            });
-                    {
-                        let mut render_pass =
-                            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                label: Some("Channel Composite Pass (AT fade first)"),
-                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                    view: &self.composite_view,
-                                    resolve_target: None,
-                                    ops: wgpu::Operations {
-                                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                        store: wgpu::StoreOp::Store,
-                                    },
-                                    depth_slice: None,
-                                })],
-                                depth_stencil_attachment: None,
-                                timestamp_writes: None,
-                                occlusion_query_set: None,
-                                multiview_mask: None,
-                            });
-                        self.blit_pipeline
-                            .render_at_slot(&mut render_pass, &bind_group);
-                    }
-                    composite_cmds.push(encoder.finish());
-                } else {
-                    // Subsequent decks: snapshot + composite shader
-                    let mut copy_encoder =
-                        context
-                            .device
-                            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                                label: Some("Composite Snapshot Copy (AT fade)"),
-                            });
-                    copy_encoder.copy_texture_to_texture(
-                        self.composite_texture.as_image_copy(),
-                        self.effect_ping_texture.as_image_copy(),
-                        self.composite_texture.size(),
-                    );
-
-                    self.composite_pipeline.write_params_slot(
-                        &context.queue,
-                        i,
-                        fade_opacity,
-                        info.blend_mode.to_index(),
-                        [1.0, 1.0],
-                        [0.0, 0.0],
-                        false,
-                    );
-                    let bind_group = self.composite_pipeline.create_ring_bind_group(
-                        &context.device,
-                        &slot.deck.texture_view,
-                        &self.effect_ping_view,
-                        i,
-                    );
-                    let mut encoder =
-                        context
-                            .device
-                            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                                label: Some("Channel Composite Encoder (AT fade)"),
-                            });
-                    {
-                        let mut render_pass =
-                            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                label: Some("Channel Composite Pass (AT fade)"),
-                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                    view: &self.composite_view,
-                                    resolve_target: None,
-                                    ops: wgpu::Operations {
-                                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                        store: wgpu::StoreOp::Store,
-                                    },
-                                    depth_slice: None,
-                                })],
-                                depth_stencil_attachment: None,
-                                timestamp_writes: None,
-                                occlusion_query_set: None,
-                                multiview_mask: None,
-                            });
-                        self.composite_pipeline
-                            .render_at_slot(&mut render_pass, &bind_group);
-                    }
-                    composite_cmds.push(copy_encoder.finish());
-                    composite_cmds.push(encoder.finish());
-                }
-                continue;
+                // No shader, or nothing below to transition to: fade out.
+                opacity *= 1.0 - progress as f32;
             }
 
-            // Normal compositing
-            if i == 0 {
-                // First deck: simple blit with per-draw params
-                self.blit_pipeline.write_params_slot(
-                    &context.queue,
-                    i,
-                    info.opacity,
-                    [1.0, 1.0],
-                    [0.0, 0.0],
-                    false,
-                );
-                let t_bg = std::time::Instant::now();
-                let bind_group = self.blit_pipeline.create_ring_bind_group(
-                    &context.device,
-                    &slot.deck.texture_view,
-                    i,
-                );
-                bind_group_us += t_bg.elapsed().as_micros();
-                bind_group_count += 1;
-                let mut encoder =
-                    context
-                        .device
-                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("Channel Composite Encoder (first)"),
-                        });
-                {
-                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Channel Composite Pass (first)"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &self.composite_view,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                store: wgpu::StoreOp::Store,
-                            },
-                            depth_slice: None,
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    });
-                    self.blit_pipeline
-                        .render_at_slot(&mut render_pass, &bind_group);
-                }
-                composite_cmds.push(encoder.finish());
-            } else {
-                // Subsequent decks: snapshot composite → ping, blend src + ping → composite
-                let t_copy = std::time::Instant::now();
-                let mut copy_encoder =
-                    context
-                        .device
-                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("Composite Snapshot Copy"),
-                        });
-                copy_encoder.copy_texture_to_texture(
-                    self.composite_texture.as_image_copy(),
-                    self.effect_ping_texture.as_image_copy(),
-                    self.composite_texture.size(),
-                );
-                copy_encode_us += t_copy.elapsed().as_micros();
-                copy_count += 1;
-
-                self.composite_pipeline.write_params_slot(
-                    &context.queue,
-                    i,
-                    info.opacity,
-                    info.blend_mode.to_index(),
-                    [1.0, 1.0],
-                    [0.0, 0.0],
-                    false,
-                );
-                let t_bg = std::time::Instant::now();
-                let bind_group = self.composite_pipeline.create_ring_bind_group(
-                    &context.device,
-                    &slot.deck.texture_view,
-                    &self.effect_ping_view,
-                    i,
-                );
-                bind_group_us += t_bg.elapsed().as_micros();
-                bind_group_count += 1;
-                let mut encoder =
-                    context
-                        .device
-                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("Channel Composite Encoder"),
-                        });
-                {
-                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Channel Composite Pass"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &self.composite_view,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                store: wgpu::StoreOp::Store,
-                            },
-                            depth_slice: None,
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    });
-                    self.composite_pipeline
-                        .render_at_slot(&mut render_pass, &bind_group);
-                }
-                composite_cmds.push(copy_encoder.finish());
-                composite_cmds.push(encoder.finish());
-            }
+            stack.blend(
+                context,
+                &pipelines,
+                &crate::renderer::layers::BlendLayer {
+                    view: &slot.deck.texture_view,
+                    opacity,
+                    blend_mode: info.blend_mode.to_index(),
+                    premultiplied: false,
+                },
+                &mut composite_cmds,
+            );
         }
         let composite_encode_us = t_composite.elapsed().as_micros();
 
@@ -1286,8 +1074,7 @@ impl Channel {
                 .join(", ");
             log::debug!(
                 "[PERF] ch={} decks={} | deck_render={}us [{}] deck_submit={}us | \
-                 composite_encode={}us composite_submit={}us copies={} \
-                 copy_encode={}us bind_groups={} bind_group={}us | \
+                 composite_encode={}us composite_submit={}us | \
                  effects={} effects={}us | total={}us ({:.1}ms)",
                 self.name,
                 active_count,
@@ -1296,10 +1083,6 @@ impl Channel {
                 deck_submit_us,
                 composite_encode_us,
                 composite_submit_us,
-                copy_count,
-                copy_encode_us,
-                bind_group_count,
-                bind_group_us,
                 effects_count,
                 effects_us,
                 total_us,

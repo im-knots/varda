@@ -23,6 +23,15 @@
 //!                               persistent single-buffer pool that is rewritten
 //!                               at offset 0 every frame exposes its WAR stall
 //!                               here (the regression triple-buffering fixes).
+//!
+//! Two more groups measure what /spec/performance-hot-paths.md item E would
+//! cache, per surface per output per frame:
+//!   `surface_geometry`          — the CPU geometry each warp mode rebuilds:
+//!                               a 12-point polygon's ear clip, a corner pin's
+//!                               homography and clip, and a Bézier cage's
+//!                               tessellation at the default six steps.
+//!   `bind_group_create`         — one per-frame bind group, the composite
+//!                               ring's shape.
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use varda::renderer::{
@@ -231,5 +240,74 @@ fn bench_render_pipelined(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_prepare, bench_render, bench_render_pipelined);
+/// A 12-point star outline in canvas space, so ear clipping has real work.
+fn star() -> Vec<[f32; 2]> {
+    (0..12)
+        .map(|i| {
+            let a = i as f32 * std::f32::consts::TAU / 12.0;
+            let r = if i % 2 == 0 { 0.45 } else { 0.25 };
+            [0.5 + r * a.cos(), 0.5 + r * a.sin()]
+        })
+        .collect()
+}
+
+fn bench_surface_geometry(c: &mut Criterion) {
+    use varda::surface::warp::{
+        BezierWarp, DEFAULT_BEZIER_TESS, WarpMesh, compute_forward_homography,
+    };
+
+    let star = star();
+    let pinned = [[0.05, 0.02], [0.97, 0.0], [1.0, 0.95], [0.0, 1.0]];
+    let mut group = c.benchmark_group("surface_geometry");
+    group.bench_function("polygon_12", |b| {
+        b.iter(|| {
+            PolygonBlitPipeline::triangulate_verts(criterion::black_box(&star), 0.0, 0.0, 1.0, 1.0)
+        });
+    });
+    group.bench_function("corner_pin", |b| {
+        b.iter(|| {
+            let h = compute_forward_homography(criterion::black_box(&QUAD), &pinned);
+            (
+                h,
+                PolygonBlitPipeline::triangulate_verts(&QUAD, 0.0, 0.0, 1.0, 1.0),
+            )
+        });
+    });
+    for anchors in [4u32, 8] {
+        let cage =
+            BezierWarp::from_mesh(&WarpMesh::identity(anchors, anchors), DEFAULT_BEZIER_TESS);
+        group.bench_with_input(BenchmarkId::new("bezier", anchors), &cage, |b, cage| {
+            b.iter(|| PolygonBlitPipeline::mesh_verts(&criterion::black_box(cage).tessellate()));
+        });
+    }
+    group.finish();
+}
+
+fn bench_bind_group(c: &mut Criterion) {
+    let Some(ctx) = make_context() else {
+        eprintln!("no GPU adapter — skipping");
+        return;
+    };
+    let layer = ctx.create_render_texture(W, H);
+    let layer_view = layer.create_view(&wgpu::TextureViewDescriptor::default());
+    let below = ctx.create_render_texture(W, H);
+    let below_view = below.create_view(&wgpu::TextureViewDescriptor::default());
+    let composite =
+        varda::renderer::blit::CompositeBlitPipeline::new(&ctx.device, ctx.compositing_format)
+            .expect("pipeline");
+    let mut group = c.benchmark_group("bind_group_create");
+    group.bench_function("composite_ring", |b| {
+        b.iter(|| composite.create_ring_bind_group(&ctx.device, &layer_view, &below_view, 0));
+    });
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_prepare,
+    bench_render,
+    bench_render_pipelined,
+    bench_surface_geometry,
+    bench_bind_group
+);
 criterion_main!(benches);

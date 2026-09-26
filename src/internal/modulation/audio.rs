@@ -3,7 +3,7 @@
 /// Audio analysis values for a single source, passed to modulation engine.
 #[derive(Debug, Clone)]
 pub struct AudioSourceValues {
-    pub fft: Vec<f32>,
+    pub fft: std::sync::Arc<[f32]>,
     pub level: f32,
     pub sample_rate: f32,
 }
@@ -41,6 +41,27 @@ pub struct AudioValues {
 }
 
 impl AudioValues {
+    /// This frame's modulation inputs from each active source's latest data.
+    pub fn collect<'a>(
+        sources: impl IntoIterator<Item = (crate::audio::AudioSourceId, &'a crate::audio::AudioData)>,
+    ) -> Self {
+        Self {
+            sources: sources
+                .into_iter()
+                .map(|(id, data)| {
+                    (
+                        id,
+                        AudioSourceValues {
+                            fft: std::sync::Arc::clone(&data.fft),
+                            level: data.level,
+                            sample_rate: data.sample_rate,
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
+
     /// Get the first/primary source's data (convenience).
     pub fn primary(&self) -> Option<&AudioSourceValues> {
         self.sources
@@ -97,5 +118,24 @@ impl AnalyzerValues {
     /// Clear all entries (for reuse across frames without reallocation).
     pub fn clear(&mut self) {
         self.entries.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AudioValues;
+    use crate::audio::AudioData;
+
+    /// A frame's modulation inputs share each source's spectrum rather than
+    /// copying it. See /spec/performance-hot-paths.md item I.
+    #[test]
+    fn collected_values_share_each_sources_spectrum() {
+        let data = AudioData::default();
+        let values = AudioValues::collect([(3, &data)]);
+        assert!(std::sync::Arc::ptr_eq(&values.sources[&3].fft, &data.fft));
+        assert!(std::sync::Arc::ptr_eq(
+            &data.clone().waveform,
+            &data.waveform
+        ));
     }
 }

@@ -349,6 +349,14 @@ harness = false
 name = "headless_frame"
 harness = false
 
+[[bench]]
+name = "ndi_convert"
+harness = false
+
+[[bench]]
+name = "audio_values"
+harness = false
+
 
 [profile.release]
 opt-level = 3

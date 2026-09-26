@@ -1,15 +1,14 @@
 //! Audio input and analysis for audio-reactive shaders
 
+pub(crate) mod analysis;
+
 use anyhow::{Context, Result};
 use arc_swap::ArcSwap;
-use cpal::Sample;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{Receiver, Sender, bounded};
-use rustfft::{FftPlanner, num_complex::Complex};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
 
 /// Opaque audio source identifier.
 pub type AudioSourceId = u32;
@@ -43,7 +42,7 @@ pub struct PcmChunk {
 /// A registered passthrough consumer. The cpal callback fans raw PCM out to
 /// every subscriber on a source (a "tee").
 #[derive(Clone)]
-struct PcmSubscriber {
+pub(crate) struct PcmSubscriber {
     token: PcmToken,
     sender: Sender<PcmChunk>,
     dropped: Arc<AtomicU64>,
@@ -120,13 +119,14 @@ pub struct AudioDeviceInfo {
     pub name: String,
 }
 
-/// Audio analysis data sent to the rendering thread
+/// Audio analysis data sent to the rendering thread. The sample arrays are
+/// shared, so a copy of the data costs two reference-count bumps.
 #[derive(Clone)]
 pub struct AudioData {
     /// Raw waveform data (normalized -1.0 to 1.0)
-    pub waveform: Vec<f32>,
+    pub waveform: std::sync::Arc<[f32]>,
     /// FFT magnitude spectrum (0.0 to 1.0, normalized)
-    pub fft: Vec<f32>,
+    pub fft: std::sync::Arc<[f32]>,
     /// Current RMS level (0.0 to 1.0)
     pub level: f32,
     /// Detected BPM (if available)
@@ -140,8 +140,8 @@ pub struct AudioData {
 impl Default for AudioData {
     fn default() -> Self {
         Self {
-            waveform: vec![0.0; AUDIO_BUFFER_SIZE],
-            fft: vec![0.0; FFT_SIZE / 2],
+            waveform: vec![0.0; AUDIO_BUFFER_SIZE].into(),
+            fft: vec![0.0; FFT_SIZE / 2].into(),
             level: 0.0,
             bpm: None,
             time_since_beat: 0.0,
@@ -642,6 +642,11 @@ impl AudioManager {
     }
 
     /// Get IDs of all active (open) sources.
+    /// Each active source's latest analysis.
+    pub fn active_data(&self) -> impl Iterator<Item = (AudioSourceId, &AudioData)> {
+        self.active.iter().map(|(id, source)| (*id, &source.latest))
+    }
+
     pub fn active_source_ids(&self) -> Vec<AudioSourceId> {
         self.active.keys().copied().collect()
     }
@@ -662,139 +667,12 @@ impl AudioManager {
         T: cpal::Sample + cpal::SizedSample,
         f32: cpal::FromSample<T>,
     {
-        let channels = config.channels as usize;
-        let mut sample_buffer: Vec<f32> = Vec::with_capacity(AUDIO_BUFFER_SIZE);
-        let mut fft_planner = FftPlanner::new();
-        let fft = Arc::new(fft_planner.plan_fft_forward(FFT_SIZE));
-
-        // Pre-compute Hann window to reduce spectral leakage
-        let hann_window: Vec<f32> = (0..FFT_SIZE)
-            .map(|i| {
-                0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (FFT_SIZE - 1) as f32).cos())
-            })
-            .collect();
-
-        // Ring buffer for overlapping FFT frames
-        let mut ring_buffer: Vec<f32> = vec![0.0; FFT_SIZE];
-        let mut ring_write_pos: usize = 0;
-
-        // Spectral flux onset detection state
-        let mut prev_fft_magnitudes: Vec<f32> = vec![0.0; FFT_SIZE / 2];
-        let mut flux_history: Vec<f32> = Vec::with_capacity(ONSET_MEDIAN_WINDOW + 1);
-
-        // Pre-allocated FFT input buffer (H4: avoid per-callback allocation)
-        let mut fft_input: Vec<Complex<f32>> = vec![Complex::new(0.0, 0.0); FFT_SIZE];
-
-        // BPM detection state
-        let mut last_beat_time = Instant::now();
-        let mut beat_intervals: Vec<f32> = Vec::with_capacity(BPM_HISTORY_SIZE);
-        let mut current_bpm: Option<f32> = None;
-
+        let mut capture =
+            analysis::CaptureState::new(config.channels as usize, sample_rate, sender, pcm_subs)
+                .context("Failed to start audio analysis")?;
         let stream = device.build_input_stream(
             config,
-            move |data: &[T], _: &cpal::InputCallbackInfo| {
-                // Passthrough tee: forward raw interleaved PCM, untouched by the
-                // FFT pipeline, to every subscriber. Skipped entirely when there
-                // are no subscribers so the video-only path pays nothing.
-                let subs = pcm_subs.load();
-                if !subs.is_empty() {
-                    let pcm: Vec<f32> = data
-                        .iter()
-                        .map(|s| <f32 as Sample>::from_sample(*s))
-                        .collect();
-                    fan_out_pcm(&subs, &pcm);
-                }
-
-                for chunk in data.chunks(channels) {
-                    let sample: f32 = chunk
-                        .iter()
-                        .map(|s| <f32 as Sample>::from_sample(*s))
-                        .sum::<f32>()
-                        / channels as f32;
-                    sample_buffer.push(sample);
-                }
-
-                while sample_buffer.len() >= FFT_HOP {
-                    const NOISE_FLOOR: f32 = 1e-4;
-
-                    // Extract waveform chunk for GPU (256 samples)
-                    let waveform: Vec<f32> = sample_buffer.drain(..FFT_HOP).collect();
-                    let level =
-                        (waveform.iter().map(|s| s * s).sum::<f32>() / FFT_HOP as f32).sqrt();
-
-                    // Write hop into ring buffer (wrapping)
-                    for (i, &s) in waveform.iter().enumerate() {
-                        ring_buffer[(ring_write_pos + i) % FFT_SIZE] = s;
-                    }
-                    ring_write_pos = (ring_write_pos + FFT_HOP) % FFT_SIZE;
-
-                    // Extract linearized 2048-sample frame, apply Hann window
-                    // Reuse pre-allocated fft_input buffer (H4 optimisation)
-                    for i in 0..FFT_SIZE {
-                        let idx = (ring_write_pos + i) % FFT_SIZE;
-                        fft_input[i] = Complex::new(ring_buffer[idx] * hann_window[i], 0.0);
-                    }
-                    fft.process(&mut fft_input);
-
-                    // Magnitude scaling with noise floor
-                    let scale = 2.0 / FFT_SIZE as f32;
-                    let fft_magnitudes: Vec<f32> = fft_input[..FFT_SIZE / 2]
-                        .iter()
-                        .map(|c: &Complex<f32>| {
-                            let mag = c.norm() * scale;
-                            if mag < NOISE_FLOOR { 0.0 } else { mag }
-                        })
-                        .collect();
-
-                    // Spectral flux onset detection
-                    let spectral_flux: f32 = fft_magnitudes
-                        .iter()
-                        .zip(prev_fft_magnitudes.iter())
-                        .map(|(curr, prev)| (curr - prev).max(0.0))
-                        .sum();
-
-                    flux_history.push(spectral_flux);
-                    if flux_history.len() > ONSET_MEDIAN_WINDOW {
-                        flux_history.remove(0);
-                    }
-                    let onset_threshold = compute_onset_threshold(&flux_history);
-
-                    let now = Instant::now();
-                    let elapsed = now.duration_since(last_beat_time).as_secs_f32();
-                    let is_onset = spectral_flux > onset_threshold && elapsed > MIN_BEAT_INTERVAL;
-                    prev_fft_magnitudes.clone_from(&fft_magnitudes);
-
-                    // BPM estimation with outlier rejection
-                    if is_onset {
-                        if elapsed < MAX_BEAT_INTERVAL {
-                            beat_intervals.push(elapsed);
-                            if beat_intervals.len() > BPM_HISTORY_SIZE {
-                                beat_intervals.remove(0);
-                            }
-                            if let Some(bpm) = estimate_bpm(&beat_intervals) {
-                                current_bpm = Some(bpm);
-                            }
-                        } else {
-                            beat_intervals.clear();
-                            current_bpm = None;
-                        }
-                        last_beat_time = now;
-                    }
-
-                    let time_since_beat = now.duration_since(last_beat_time).as_secs_f32();
-
-                    let data = AudioData {
-                        waveform,
-                        fft: fft_magnitudes,
-                        level,
-                        bpm: current_bpm,
-                        time_since_beat,
-                        sample_rate,
-                    };
-
-                    let _ = sender.try_send(data);
-                }
-            },
+            move |data: &[T], _: &cpal::InputCallbackInfo| capture.process(data),
             |err| log::error!("Audio stream error: {err}"),
             None,
         )?;
@@ -940,7 +818,7 @@ mod tests {
     #[test]
     fn bin_resolution_at_48khz() {
         let data = AudioData {
-            fft: vec![0.0; FFT_SIZE / 2],
+            fft: vec![0.0; FFT_SIZE / 2].into(),
             sample_rate: 48000.0,
             ..AudioData::default()
         };
@@ -1070,9 +948,9 @@ mod tests {
         fft[4] = 0.5;
 
         let data = AudioData {
-            fft,
+            fft: fft.into(),
             sample_rate: 48000.0,
-            waveform: vec![0.0; AUDIO_BUFFER_SIZE],
+            waveform: vec![0.0; AUDIO_BUFFER_SIZE].into(),
             level: 0.0,
             bpm: None,
             time_since_beat: 0.0,
@@ -1095,8 +973,8 @@ mod tests {
     #[test]
     fn chaos_energy_in_range_nan_freq_low() {
         let data = AudioData {
-            waveform: vec![0.0; 128],
-            fft: vec![0.5; 1024],
+            waveform: vec![0.0; 128].into(),
+            fft: vec![0.5; 1024].into(),
             level: 0.5,
             bpm: None,
             time_since_beat: 0.0,
@@ -1114,8 +992,8 @@ mod tests {
     #[test]
     fn chaos_energy_in_range_nan_freq_high() {
         let data = AudioData {
-            waveform: vec![0.0; 128],
-            fft: vec![0.5; 1024],
+            waveform: vec![0.0; 128].into(),
+            fft: vec![0.5; 1024].into(),
             level: 0.5,
             bpm: None,
             time_since_beat: 0.0,
@@ -1128,8 +1006,8 @@ mod tests {
     #[test]
     fn chaos_energy_in_range_both_nan() {
         let data = AudioData {
-            waveform: vec![0.0; 128],
-            fft: vec![0.5; 1024],
+            waveform: vec![0.0; 128].into(),
+            fft: vec![0.5; 1024].into(),
             level: 0.5,
             bpm: None,
             time_since_beat: 0.0,
@@ -1142,8 +1020,8 @@ mod tests {
     #[test]
     fn chaos_energy_in_range_negative_frequencies() {
         let data = AudioData {
-            waveform: vec![0.0; 128],
-            fft: vec![0.5; 1024],
+            waveform: vec![0.0; 128].into(),
+            fft: vec![0.5; 1024].into(),
             level: 0.5,
             bpm: None,
             time_since_beat: 0.0,
@@ -1160,8 +1038,8 @@ mod tests {
     #[test]
     fn chaos_energy_in_range_infinity() {
         let data = AudioData {
-            waveform: vec![0.0; 128],
-            fft: vec![0.5; 1024],
+            waveform: vec![0.0; 128].into(),
+            fft: vec![0.5; 1024].into(),
             level: 0.5,
             bpm: None,
             time_since_beat: 0.0,
@@ -1174,8 +1052,8 @@ mod tests {
     #[test]
     fn chaos_energy_in_range_inverted_range() {
         let data = AudioData {
-            waveform: vec![0.0; 128],
-            fft: vec![0.5; 1024],
+            waveform: vec![0.0; 128].into(),
+            fft: vec![0.5; 1024].into(),
             level: 0.5,
             bpm: None,
             time_since_beat: 0.0,
@@ -1188,8 +1066,8 @@ mod tests {
     #[test]
     fn chaos_energy_in_range_zero_sample_rate() {
         let data = AudioData {
-            waveform: vec![0.0; 128],
-            fft: vec![0.5; 1024],
+            waveform: vec![0.0; 128].into(),
+            fft: vec![0.5; 1024].into(),
             level: 0.5,
             bpm: None,
             time_since_beat: 0.0,
@@ -1203,8 +1081,8 @@ mod tests {
     #[test]
     fn chaos_energy_in_range_empty_fft() {
         let data = AudioData {
-            waveform: vec![],
-            fft: vec![],
+            waveform: vec![].into(),
+            fft: vec![].into(),
             level: 0.0,
             bpm: None,
             time_since_beat: 0.0,
@@ -1395,8 +1273,8 @@ mod tests {
     #[test]
     fn chaos_energy_in_range_single_bin_fft() {
         let data = AudioData {
-            waveform: vec![0.0; 2],
-            fft: vec![1.0],
+            waveform: vec![0.0; 2].into(),
+            fft: vec![1.0].into(),
             level: 1.0,
             bpm: None,
             time_since_beat: 0.0,

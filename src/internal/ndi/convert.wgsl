@@ -44,7 +44,7 @@ fn quantize_code(code: f32, pixel: vec2<u32>, salt: u32, low: f32, high: f32) ->
 }
 
 @compute @workgroup_size(16, 8, 1)
-fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+fn p216(@builtin(global_invocation_id) id: vec3<u32>) {
     let pair = id.x;
     let y = id.y;
     let x0 = pair * 2u;
@@ -97,3 +97,41 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     output_words[word_index] = y0 | (y1 << 16u);
     output_words[y_plane_words + word_index] = u | (v << 16u);
 }
+
+// Eight-bit BT.709 limited range: luma 16..235, chroma 16..240.
+fn quantize_byte(code: f32, pixel: vec2<u32>, salt: u32, low: f32, high: f32) -> u32 {
+    var adjusted = code;
+    if (params.dither == 1u) {
+        adjusted += hash_noise(pixel, salt);
+    }
+    return u32(round(clamp(adjusted, low, high)));
+}
+
+// One `U Y0 V Y1` quad per pixel pair, packed little-endian into a u32.
+@compute @workgroup_size(16, 8, 1)
+fn uyvy(@builtin(global_invocation_id) id: vec3<u32>) {
+    let pair = id.x;
+    let y = id.y;
+    let x0 = pair * 2u;
+    if (x0 >= params.width || y >= params.height) {
+        return;
+    }
+    let x1 = x0 + 1u;
+    let rgb0 = rec709_oetf(textureLoad(source, vec2<i32>(i32(x0), i32(y)), 0).rgb);
+    let rgb1 = rec709_oetf(textureLoad(source, vec2<i32>(i32(x1), i32(y)), 0).rgb);
+
+    let luma0 = dot(rgb0, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let luma1 = dot(rgb1, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let y0 = quantize_byte(16.0 + luma0 * 219.0, vec2<u32>(x0, y), 0xa511e9b3u, 16.0, 235.0);
+    let y1 = quantize_byte(16.0 + luma1 * 219.0, vec2<u32>(x1, y), 0x63d83595u, 16.0, 235.0);
+
+    let chroma_rgb = (rgb0 + rgb1) * 0.5;
+    let chroma_luma = dot(chroma_rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let cb = (chroma_rgb.b - chroma_luma) / 1.8556;
+    let cr = (chroma_rgb.r - chroma_luma) / 1.5748;
+    let u = quantize_byte(128.0 + cb * 224.0, vec2<u32>(pair, y), 0xc2b2ae35u, 16.0, 240.0);
+    let v = quantize_byte(128.0 + cr * 224.0, vec2<u32>(pair, y), 0x27d4eb2fu, 16.0, 240.0);
+
+    output_words[y * (params.width / 2u) + pair] = u | (y0 << 8u) | (v << 16u) | (y1 << 24u);
+}
+
