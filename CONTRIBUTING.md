@@ -35,6 +35,8 @@ The **engine layer** (`src/engine/`) defines trait contracts (`MixerCommands`, `
 
 The **internal layer** (`src/internal/`) contains domain modules that each own one concern: audio analysis, video decoding, ISF shader compilation, NDI FFI, SRT subprocess management, the modulation engine, etc. Each module is independently testable.
 
+The domain modules are ordered bottom to top, in tiers: foundations (`ids`, `files`, `isf`, `audio`, …), time, GPU, signals, composition (`deck` → `channel` → `macros` → `mixer`), control (`param_router`, `midi`, `osc`, `keymap`), and saved files (`scene`, `persistence`). Production code may name only modules below it; `tests/domain_dependency_guard.rs` holds the order and fails on anything else. When a lower module needs something from a higher one, move the shared type down (often into `engine::value`) or have the higher module pass the behavior in. Don't route it through `EngineCommand`: commands are how consumers reach the engine, not how domains reach each other. See `/spec/domain-dependencies.md`.
+
 The **app layer** (`src/app/`, `VardaApp`) is the concrete implementation. It owns all subsystems and implements the engine traits. It can run headless without any window or UI.
 
 The **usecases layer** (`src/usecases/`) is the only place that touches egui or HTTP routing, and owns all *main-window* presentation (blit pipeline, texture registration, `UIData` construction). It reads engine state snapshots and emits action structs. The UI never mutates engine state directly — commands flow through the app layer via the engine traits. Two documented exceptions touch `winit` (not egui) directly in `app/`: output windows (`app/outputs.rs`, `app/render.rs`) and the HTML interactive window (`app/interactive/`). `tests/egui_layer_boundary_guard.rs` rejects egui types in `src/internal/` and `src/app/`.
@@ -57,23 +59,22 @@ deck/<uuid>/mute                        # deck mute toggle
 deck/<uuid>/solo                        # deck solo toggle
 deck/<uuid>/trigger                     # deck trigger (set opacity to 1)
 deck/<uuid>/param/<name>                # generator shader param
-deck/<uuid>/effect/<index>/param/<name> # deck effect chain param
 deck/<uuid>/at/play_duration            # auto-transition play duration
 deck/<uuid>/at/trans_duration           # auto-transition transition duration
 
 ch/<uuid>/opacity                       # channel opacity
-ch/<uuid>/effect/<index>/param/<name>   # channel effect chain param
 
-master/effect/<index>/param/<name>      # master effect chain param
+effect/<uuid>/param/<name>              # effect param, on any chain (deck, channel, master)
 
-mod/<index>/<param_name>                # modulation source param (frequency, amplitude, etc.)
-mod/<index>/step/<step_idx>             # step sequencer step value
+mod/<uuid>/<param_name>                 # modulation source param (frequency, amplitude, etc.)
+mod/<uuid>/step/<step_idx>              # step sequencer step value
+macro/<uuid>/value                      # macro control
 
 surface/<uuid>/source                   # surface content source (Master, Channel, Channels, Deck)
 output/<uuid>/surface/<surface_uuid>    # output ↔ surface assignment with warp calibration
 ```
 
-Modulation uses a colon-separated key scheme (`deck_<uuid>:<param>`, `fx_<uuid>:<param>`) so the modulation engine can route LFOs, envelopes, and audio reactive sources to any parameter in the graph without coupling to positional indices.
+Modulation keys are these same paths, so the modulation engine can route LFOs, envelopes, and audio reactive sources to any parameter in the graph without coupling to positional indices. In code, build a path with an `engine::value::param::ParamAddress` constructor (`ParamAddress::deck_param`, `ParamAddress::effect_param`, …) rather than `format!`; it is the one parser and printer for the scheme.
 
 When adding a new entity type or parameter, follow this scheme rather than inventing a new addressing convention. MIDI learn, OSC, modulation routing, and the HTTP API all key off of it.
 

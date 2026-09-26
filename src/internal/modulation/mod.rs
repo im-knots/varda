@@ -14,7 +14,7 @@ pub use envelope::{
 };
 pub use sources::ModulationSource;
 
-use crate::deck::generate_short_uuid;
+use crate::ids::generate_short_uuid;
 use crate::timebase::Timebase;
 
 use serde::{Deserialize, Serialize};

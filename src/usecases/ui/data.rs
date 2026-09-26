@@ -816,7 +816,7 @@ pub struct SurfaceUI {
     /// Effective per-surface warp (corner-pin or mesh); `None` = no warp. While
     /// `warp_bound`, this is the shape-conforming warp. Drives the stage
     /// bottom-bar warp editor.
-    pub warp: Option<crate::renderer::warp::WarpMode>,
+    pub warp: Option<crate::surface::warp::WarpMode>,
     /// Whether the warp auto-conforms to the surface shape. When `true` the
     /// bottom-bar warp controls are locked (read-only).
     pub warp_bound: bool,

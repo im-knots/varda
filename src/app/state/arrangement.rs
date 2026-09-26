@@ -268,7 +268,7 @@ impl VardaApp {
             name.to_string()
         };
         let cue = crate::arrangement::Cue {
-            uuid: crate::deck::generate_short_uuid(),
+            uuid: crate::ids::generate_short_uuid(),
             name,
             at,
         };

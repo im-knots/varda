@@ -11,6 +11,7 @@
 //! spec/depth-sensor-preprocessor.md.
 
 use crate::analyzer::traits::{AnalyzerSchema, TextureOutputDef};
+use crate::analyzer::{AnalyzerRegistry, PreprocessorCategory};
 use anyhow::Context as _;
 
 /// The ISF `TYPE` string shaders declare to request this preprocessor.
@@ -82,6 +83,20 @@ impl Output {
             Output::Rgb => "Sensor colour stream, mirrored to match depth",
         }
     }
+}
+
+/// Add the depth preprocessor to `registry`.
+///
+/// Device-backed GPU preprocessor: no factory, no worker thread. Registered
+/// unconditionally. Without the `depth` feature no sensor enumerates, so a
+/// shader declaring it fails its pre-flight with a clear message rather than
+/// an "unknown preprocessor type". See /spec/depth-sensor-preprocessor.md.
+pub(crate) fn register(registry: AnalyzerRegistry) -> AnalyzerRegistry {
+    registry.register_gpu(
+        PREPROCESSOR_TYPE,
+        PreprocessorCategory::GpuDeviceBacked,
+        schema(),
+    )
 }
 
 /// Schema published to the preprocessor registry.

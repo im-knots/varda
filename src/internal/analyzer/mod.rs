@@ -623,15 +623,6 @@ pub(crate) fn default_registry() -> AnalyzerRegistry {
             Box::new(face_detect::FaceDetectAnalyzer::new())
         });
     }
-    // Device-backed GPU preprocessor: no factory, no worker thread. Registered
-    // unconditionally — without the `depth` feature no sensor enumerates, so a
-    // shader declaring it fails its pre-flight with a clear message rather than
-    // an "unknown preprocessor type". See /spec/depth-sensor-preprocessor.md.
-    registry = registry.register_gpu(
-        crate::depth::preprocess::PREPROCESSOR_TYPE,
-        PreprocessorCategory::GpuDeviceBacked,
-        crate::depth::preprocess::schema(),
-    );
     registry
 }
 

@@ -6,7 +6,7 @@
 //! corner-pin warp — which keeps the DLT solve non-degenerate.
 
 use proptest::prelude::*;
-use varda::renderer::warp::compute_forward_homography;
+use varda::surface::warp::compute_forward_homography;
 
 const UNIT_SQUARE: [[f32; 2]; 4] = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
 

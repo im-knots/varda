@@ -15,7 +15,7 @@ use crate::deck::ScalingMode;
 use crate::engine::value::param::{DeckTarget, ModulatorTarget, ParamAddress};
 use crate::mixer::Mixer;
 use crate::modulation::ModulationSource;
-use crate::params::ParamValue;
+use crate::params::{ParamValue, clamp_norm};
 use crate::video::LoopMode;
 
 /// The class of entity a path segment addresses. Used in [`ParamRouteError`]
@@ -195,6 +195,15 @@ fn read_normalized(params: &crate::ShaderParams, name: &str) -> Option<f32> {
     params
         .normalize(name, value)
         .or_else(|| params.get_float(name))
+}
+
+/// Write one target of a macro's modulated fan-out, skipping a target that no
+/// longer resolves. The [`crate::mixer::ParamWriter`] the app hands the mixer
+/// each frame.
+pub fn write_macro_target(mixer: &mut Mixer, path: &str, value: f32) {
+    if let Err(e) = apply_param_by_path(mixer, path, value) {
+        log::debug!("macro modulation target '{path}' skipped: {e}");
+    }
 }
 
 /// Parse a router path, reporting a malformed one as `UnknownPath`.
@@ -435,7 +444,7 @@ pub fn apply_param_by_path(
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
             let applied = mixer.channels_mut()[ch].decks[dk]
                 .deck
-                .video_set_loop_mode(loop_mode_from_value(value));
+                .video_set_loop_mode(LoopMode::from_value(value));
             ok_or_state(applied, path, "deck has no video source")
         }
         ParamAddress::Deck {
@@ -447,7 +456,7 @@ pub fn apply_param_by_path(
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
             mixer.channels_mut()[ch].decks[dk]
                 .deck
-                .set_scaling_mode(scaling_mode_from_value(value));
+                .set_scaling_mode(ScalingMode::from_value(value));
             Ok(())
         }
         ParamAddress::Deck {
@@ -870,24 +879,6 @@ fn clamp_or_full(value: f32) -> f32 {
     }
 }
 
-/// Clamp a normalized value to 0.0–1.0, treating non-finite input as 0.0.
-fn clamp_norm(value: f32) -> f32 {
-    if value.is_finite() {
-        value.clamp(0.0, 1.0)
-    } else {
-        0.0
-    }
-}
-
-/// Map a normalized 0.0–1.0 value to a discrete variant index via fader bucketing.
-/// Splits the range into `n` equal segments: `index = min(floor(value * n), n - 1)`.
-fn bucket_index(value: f32, n: usize) -> usize {
-    if n == 0 {
-        return 0;
-    }
-    ((clamp_norm(value) * n as f32).floor() as usize).min(n - 1)
-}
-
 /// Map a normalized value to a video playback speed multiplier (0.1×–4.0×).
 fn scale_speed(value: f32) -> f64 {
     f64::from(0.1 + clamp_norm(value) * 3.9)
@@ -896,18 +887,6 @@ fn scale_speed(value: f32) -> f64 {
 /// Scale a normalized value to an absolute time in seconds against a clip duration.
 fn scale_to_duration(value: f32, duration: f64) -> f64 {
     f64::from(clamp_norm(value)) * duration.max(0.0)
-}
-
-/// The normalized value at the centre of bucket `index` of `n`.
-///
-/// Inverse of [`bucket_index`] in the only sense a bucketing has one: it returns
-/// a value that maps back to the same bucket, and picks the centre so rounding
-/// at either edge cannot land in a neighbour.
-fn bucket_center(index: usize, n: usize) -> f32 {
-    if n == 0 {
-        return 0.0;
-    }
-    (index.min(n - 1) as f32 + 0.5) / n as f32
 }
 
 /// Inverse of [`scale_speed`]: the normalized value a fader or curve would need
@@ -923,48 +902,6 @@ pub(crate) fn duration_to_norm(secs: f64, duration: f64) -> f32 {
         return 0.0;
     }
     clamp_norm((secs / duration) as f32)
-}
-
-/// Inverse of [`loop_mode_from_value`].
-pub(crate) fn loop_mode_to_value(mode: LoopMode) -> f32 {
-    let index = match mode {
-        LoopMode::Loop => 0,
-        LoopMode::PingPong => 1,
-        LoopMode::OneShot => 2,
-        LoopMode::HoldLast => 3,
-    };
-    bucket_center(index, 4)
-}
-
-/// Inverse of [`scaling_mode_from_value`].
-pub(crate) fn scaling_mode_to_value(mode: ScalingMode) -> f32 {
-    let index = match mode {
-        ScalingMode::Fill => 0,
-        ScalingMode::Fit => 1,
-        ScalingMode::Stretch => 2,
-        ScalingMode::Center => 3,
-    };
-    bucket_center(index, 4)
-}
-
-/// Map a normalized value to a `LoopMode` via fader bucketing.
-pub(crate) fn loop_mode_from_value(value: f32) -> LoopMode {
-    match bucket_index(value, 4) {
-        0 => LoopMode::Loop,
-        1 => LoopMode::PingPong,
-        2 => LoopMode::OneShot,
-        _ => LoopMode::HoldLast,
-    }
-}
-
-/// Map a normalized value to a `ScalingMode` via fader bucketing.
-pub(crate) fn scaling_mode_from_value(value: f32) -> ScalingMode {
-    match bucket_index(value, 4) {
-        0 => ScalingMode::Fill,
-        1 => ScalingMode::Fit,
-        2 => ScalingMode::Stretch,
-        _ => ScalingMode::Center,
-    }
 }
 
 /// Toggle a parameter between its two extremes (keyboard shortcut affordance).
@@ -1164,49 +1101,6 @@ mod tests {
     }
 
     #[test]
-    fn bucket_index_splits_range_evenly() {
-        assert_eq!(bucket_index(0.0, 4), 0);
-        assert_eq!(bucket_index(0.1, 4), 0);
-        assert_eq!(bucket_index(0.25, 4), 1);
-        assert_eq!(bucket_index(0.4, 4), 1);
-        assert_eq!(bucket_index(0.5, 4), 2);
-        assert_eq!(bucket_index(0.74, 4), 2);
-        assert_eq!(bucket_index(0.75, 4), 3);
-        assert_eq!(bucket_index(1.0, 4), 3);
-    }
-
-    #[test]
-    fn bucket_index_clamps_out_of_range() {
-        assert_eq!(bucket_index(-1.0, 4), 0);
-        assert_eq!(bucket_index(2.0, 4), 3);
-        assert_eq!(bucket_index(f32::NAN, 4), 0);
-        assert_eq!(bucket_index(0.5, 0), 0);
-    }
-
-    #[test]
-    fn discrete_modes_round_trip_through_their_buckets() {
-        // The two directions are written out by hand, so a reordering of either
-        // match arm has to show up here rather than as a mode that silently
-        // becomes its neighbour when a live gesture is recorded.
-        for mode in [
-            LoopMode::Loop,
-            LoopMode::PingPong,
-            LoopMode::OneShot,
-            LoopMode::HoldLast,
-        ] {
-            assert_eq!(loop_mode_from_value(loop_mode_to_value(mode)), mode);
-        }
-        for mode in [
-            ScalingMode::Fill,
-            ScalingMode::Fit,
-            ScalingMode::Stretch,
-            ScalingMode::Center,
-        ] {
-            assert_eq!(scaling_mode_from_value(scaling_mode_to_value(mode)), mode);
-        }
-    }
-
-    #[test]
     fn speed_and_position_round_trip_through_their_scales() {
         for speed in [0.1_f64, 0.5, 1.0, 2.05, 4.0] {
             assert!((scale_speed(speed_to_norm(speed)) - speed).abs() < 1e-6);
@@ -1236,22 +1130,6 @@ mod tests {
         assert!((scale_to_duration(1.0, 10.0) - 10.0).abs() < 1e-9);
         assert!((scale_to_duration(0.5, 10.0) - 5.0).abs() < 1e-9);
         assert!((scale_to_duration(0.5, -4.0) - 0.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn loop_mode_buckets() {
-        assert_eq!(loop_mode_from_value(0.0), LoopMode::Loop);
-        assert_eq!(loop_mode_from_value(0.3), LoopMode::PingPong);
-        assert_eq!(loop_mode_from_value(0.6), LoopMode::OneShot);
-        assert_eq!(loop_mode_from_value(1.0), LoopMode::HoldLast);
-    }
-
-    #[test]
-    fn scaling_mode_buckets() {
-        assert_eq!(scaling_mode_from_value(0.0), ScalingMode::Fill);
-        assert_eq!(scaling_mode_from_value(0.3), ScalingMode::Fit);
-        assert_eq!(scaling_mode_from_value(0.6), ScalingMode::Stretch);
-        assert_eq!(scaling_mode_from_value(1.0), ScalingMode::Center);
     }
 
     // ── apply_mod_param: structured-result behavior (no GPU) ──────────

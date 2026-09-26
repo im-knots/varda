@@ -30,6 +30,29 @@ pub use modulation::{
     PlaybackModulation, PlaybackModulationInbox, PositionTarget as ModulatedPosition,
 };
 
+impl LoopMode {
+    /// The mode a fader at `value` (0.0–1.0) selects: four equal buckets.
+    pub fn from_value(value: f32) -> Self {
+        match crate::params::bucket_index(value, 4) {
+            0 => LoopMode::Loop,
+            1 => LoopMode::PingPong,
+            2 => LoopMode::OneShot,
+            _ => LoopMode::HoldLast,
+        }
+    }
+
+    /// The value at the centre of this mode's bucket. Inverse of [`Self::from_value`].
+    pub fn to_value(self) -> f32 {
+        let index = match self {
+            LoopMode::Loop => 0,
+            LoopMode::PingPong => 1,
+            LoopMode::OneShot => 2,
+            LoopMode::HoldLast => 3,
+        };
+        crate::params::bucket_center(index, 4)
+    }
+}
+
 /// Result of advancing playback state.
 pub struct AdvanceResult {
     /// Whether a seek is needed (loop restart, etc.).
@@ -1563,6 +1586,26 @@ impl VideoPlayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loop_mode_buckets() {
+        assert_eq!(LoopMode::from_value(0.0), LoopMode::Loop);
+        assert_eq!(LoopMode::from_value(0.3), LoopMode::PingPong);
+        assert_eq!(LoopMode::from_value(0.6), LoopMode::OneShot);
+        assert_eq!(LoopMode::from_value(1.0), LoopMode::HoldLast);
+    }
+
+    #[test]
+    fn loop_modes_round_trip_through_their_buckets() {
+        for mode in [
+            LoopMode::Loop,
+            LoopMode::PingPong,
+            LoopMode::OneShot,
+            LoopMode::HoldLast,
+        ] {
+            assert_eq!(LoopMode::from_value(mode.to_value()), mode);
+        }
+    }
 
     /// Decode time must come out of the wait, not be added to it. Waiting a
     /// full interval after each decode paced frames at `1/(interval + decode)`,

@@ -73,7 +73,7 @@ mod tests {
     /// A fixture with one surface, selected in the stage editor's shared
     /// selection memory, so `render_bottom_panel` routes to the warp editor.
     fn fixture_with_surface(
-        warp: Option<crate::renderer::warp::WarpMode>,
+        warp: Option<crate::surface::warp::WarpMode>,
         warp_bound: bool,
     ) -> (UIData, String) {
         let mut data = UIData::test_fixture();
@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn render_bottom_panel_smoke_stage_editor_corner_pin() {
-        let warp = crate::renderer::warp::WarpMode::corner_pin([
+        let warp = crate::surface::warp::WarpMode::corner_pin([
             [0.0, 0.0],
             [1.0, 0.0],
             [1.0, 1.0],
@@ -132,7 +132,7 @@ mod tests {
     #[test]
     fn render_bottom_panel_smoke_stage_editor_mesh() {
         let warp =
-            crate::renderer::warp::WarpMode::Mesh(crate::renderer::warp::WarpMesh::identity(3, 3));
+            crate::surface::warp::WarpMode::Mesh(crate::surface::warp::WarpMesh::identity(3, 3));
         let (data, uuid) = fixture_with_surface(Some(warp), false);
         harness_with_selection(&data, &[uuid]);
     }
@@ -140,9 +140,9 @@ mod tests {
     #[test]
     fn render_bottom_panel_smoke_stage_editor_bezier() {
         let warp =
-            crate::renderer::warp::WarpMode::Bezier(crate::renderer::warp::BezierWarp::from_mesh(
-                &crate::renderer::warp::WarpMesh::identity(2, 2),
-                crate::renderer::warp::DEFAULT_BEZIER_TESS,
+            crate::surface::warp::WarpMode::Bezier(crate::surface::warp::BezierWarp::from_mesh(
+                &crate::surface::warp::WarpMesh::identity(2, 2),
+                crate::surface::warp::DEFAULT_BEZIER_TESS,
             ));
         let (data, uuid) = fixture_with_surface(Some(warp), false);
         harness_with_selection(&data, &[uuid]);
@@ -151,7 +151,7 @@ mod tests {
     /// `warp_bound` locks the controls read-only — a distinct render path.
     #[test]
     fn render_bottom_panel_smoke_stage_editor_warp_bound() {
-        let warp = crate::renderer::warp::WarpMode::corner_pin([
+        let warp = crate::surface::warp::WarpMode::corner_pin([
             [0.0, 0.0],
             [1.0, 0.0],
             [1.0, 1.0],
@@ -208,7 +208,7 @@ mod tests {
     /// with no compile error, so assert the whole gesture end to end.
     #[test]
     fn warp_corner_drag_emits_set_warp_corner() {
-        let warp = crate::renderer::warp::WarpMode::corner_pin([
+        let warp = crate::surface::warp::WarpMode::corner_pin([
             [0.0, 0.0],
             [1.0, 0.0],
             [1.0, 1.0],

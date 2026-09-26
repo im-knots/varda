@@ -1156,7 +1156,7 @@ pub enum EngineCommand {
         enabled: bool,
     },
     SetMidiDeviceEnabled {
-        device_id: crate::midi::DeviceId,
+        device_id: crate::engine::value::midi::DeviceId,
         enabled: bool,
     },
 

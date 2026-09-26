@@ -480,7 +480,7 @@ fn new_surface_is_warp_bound_by_default() {
 
 #[test]
 fn effective_warp_bound_rect_is_conforming_mesh() {
-    use crate::renderer::warp::WarpMode;
+    use crate::surface::warp::WarpMode;
     let s = Surface::new_rect("R".into(), 0.2, 0.3, 0.4, 0.2, master_source());
     // Bound → derived conforming warp (a 2×2 mesh at the four corners),
     // regardless of the (empty) stored `warp`.
@@ -523,7 +523,7 @@ fn rebind_clears_stored_warp() {
 
 #[test]
 fn circle_conforming_warp_is_mesh() {
-    use crate::renderer::warp::WarpMode;
+    use crate::surface::warp::WarpMode;
     let hint = CircleHint {
         center: [0.5, 0.5],
         radius: 0.3,
@@ -937,7 +937,7 @@ fn warp_defaults_to_none() {
 
 #[test]
 fn set_warp_corner_seeds_identity_then_moves() {
-    use crate::renderer::warp::WarpMode;
+    use crate::surface::warp::WarpMode;
     let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 1.0, 1.0, master_source());
     s.set_warp_corner(0, [0.2, 0.3]);
     match s.warp {
@@ -955,7 +955,7 @@ fn set_warp_corner_ignored_out_of_range() {
 
 #[test]
 fn set_warp_subdivisions_makes_mesh_and_clamps() {
-    use crate::renderer::warp::{MAX_WARP_SUBDIVISIONS, WarpMode};
+    use crate::surface::warp::{MAX_WARP_SUBDIVISIONS, WarpMode};
     let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 1.0, 1.0, master_source());
     s.set_warp_subdivisions(1, 1000);
     match s.warp {
@@ -978,7 +978,7 @@ fn set_warp_corner_noop_on_mesh() {
 
 #[test]
 fn set_warp_mesh_point_moves_point() {
-    use crate::renderer::warp::WarpMode;
+    use crate::surface::warp::WarpMode;
     let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 1.0, 1.0, master_source());
     s.set_warp_subdivisions(3, 3);
     s.set_warp_mesh_point(1, 1, [0.55, 0.55]);
@@ -1003,7 +1003,7 @@ fn reset_warp_clears() {
 
 #[test]
 fn convert_warp_to_bezier_seeds_cage_from_shape() {
-    use crate::renderer::warp::WarpMode;
+    use crate::surface::warp::WarpMode;
     let mut s = Surface::new_rect("R".into(), 0.1, 0.2, 0.5, 0.4, master_source());
     s.set_warp_bound(false); // manual editing
     s.convert_warp_to_bezier();
@@ -1020,7 +1020,7 @@ fn convert_warp_to_bezier_seeds_cage_from_shape() {
 
 #[test]
 fn convert_warp_to_bezier_preserves_mesh_dims() {
-    use crate::renderer::warp::WarpMode;
+    use crate::surface::warp::WarpMode;
     let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 1.0, 1.0, master_source());
     s.set_warp_bound(false);
     s.set_warp_subdivisions(4, 3);
@@ -1033,7 +1033,7 @@ fn convert_warp_to_bezier_preserves_mesh_dims() {
 
 #[test]
 fn convert_warp_to_bezier_noop_when_already_bezier() {
-    use crate::renderer::warp::WarpMode;
+    use crate::surface::warp::WarpMode;
     let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 1.0, 1.0, master_source());
     s.set_warp_bound(false);
     s.convert_warp_to_bezier();
@@ -1047,7 +1047,7 @@ fn convert_warp_to_bezier_noop_when_already_bezier() {
 
 #[test]
 fn set_warp_bezier_anchor_moves_it() {
-    use crate::renderer::warp::WarpMode;
+    use crate::surface::warp::WarpMode;
     let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 1.0, 1.0, master_source());
     s.set_warp_bound(false);
     s.convert_warp_to_bezier();
@@ -1073,7 +1073,7 @@ fn set_warp_bezier_handle_and_anchor_noop_on_mesh() {
 
 #[test]
 fn effective_warp_bezier_is_returned_when_unbound() {
-    use crate::renderer::warp::WarpMode;
+    use crate::surface::warp::WarpMode;
     let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 1.0, 1.0, master_source());
     s.set_warp_bound(false);
     s.convert_warp_to_bezier();

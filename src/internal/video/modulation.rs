@@ -162,8 +162,8 @@ pub fn play_gate(resolved: &ResolvedModulation, current: bool) -> bool {
 ///
 /// Discrete targets are owned by the modulator when assigned, for the same
 /// reason as the play gate: there is no meaningful sum of "Ping-Pong" and an
-/// offset. The caller feeds this to `param_router::loop_mode_from_value` or
-/// `scaling_mode_from_value` rather than bucketing here, so a fader and an LFO
+/// offset. The caller feeds this to `LoopMode::from_value` or
+/// `ScalingMode::from_value` rather than bucketing here, so a fader and an LFO
 /// land on the same option by construction rather than by agreement.
 pub fn discrete_value(resolved: &ResolvedModulation) -> f32 {
     resolved

@@ -91,12 +91,12 @@ impl Mixer {
     ///
     /// Must run after `ModulationEngine::update` and before compositing so
     /// opacity/param targets take effect the same frame.
-    pub fn apply_macro_modulation(&mut self) {
+    pub fn apply_macro_modulation(&mut self, write: super::ParamWriter) {
         if self.macros.macros().is_empty() || self.modulation.source_count() == 0 {
             return;
         }
         // Gather writes first (shared borrows of macros + modulation), then apply
-        // them mutably through the router — mirrors the `macro/<uuid>/value` route.
+        // them through `write`, as the `macro/<uuid>/value` route does.
         let mut writes: Vec<(String, f32)> = Vec::new();
         for m in self.macros.macros() {
             let key = crate::macros::Macro::value_mod_key(&m.uuid);
@@ -113,9 +113,7 @@ impl Mixer {
             writes.extend(m.modulated_fanout(offset));
         }
         for (path, value) in writes {
-            if let Err(e) = crate::param_router::apply_param_by_path(self, &path, value) {
-                log::debug!("macro modulation target '{path}' skipped: {e}");
-            }
+            write(self, &path, value);
         }
     }
 
@@ -161,9 +159,8 @@ impl Mixer {
                         deck.scaling_mode(),
                         resolve_deck_key(modulation, &mut key, deck_uuid, vm::SCALING_MODE),
                     ) {
-                        let next = crate::param_router::scaling_mode_from_value(
-                            vm::discrete_value(&resolved),
-                        );
+                        let next =
+                            crate::deck::ScalingMode::from_value(vm::discrete_value(&resolved));
                         if next != current {
                             scaling = Some(next);
                         }
@@ -217,9 +214,8 @@ impl Mixer {
                             if let Some(r) =
                                 resolve_deck_key(modulation, &mut key, deck_uuid, vm::LOOP_MODE)
                             {
-                                let next = crate::param_router::loop_mode_from_value(
-                                    vm::discrete_value(&r),
-                                );
+                                let next =
+                                    crate::video::LoopMode::from_value(vm::discrete_value(&r));
                                 if next != snap.loop_mode {
                                     deck.video_set_loop_mode(next);
                                 }
@@ -414,6 +410,7 @@ impl Mixer {
             beat_time,
             transport,
             free_run_time,
+            write_param,
         } = *inputs;
         let now = std::time::Instant::now();
         let dt = (now - self.last_render_time).as_secs_f32();
@@ -533,7 +530,7 @@ impl Mixer {
         let time = timebases.free_run().time;
         // Drive any modulation-assigned macros and fan their values out to targets
         // before compositing reads opacities/params this frame.
-        self.apply_macro_modulation();
+        self.apply_macro_modulation(write_param);
         // The arrangement runs after macros so a scheduled region wins over a
         // macro fan-out on the same deck: a macro turn is a live gesture, and
         // taking a deck back from the show is what an override is for.
@@ -598,7 +595,7 @@ impl Mixer {
 
         // Allocate per-frame GPU timing context (128 queries = 64 deck measurements)
         let mut timing_frame = if self.query_set.is_some() {
-            Some(super::GpuTimingFrame::new(128))
+            Some(crate::channel::GpuTimingFrame::new(128))
         } else {
             None
         };

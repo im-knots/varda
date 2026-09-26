@@ -49,45 +49,6 @@ impl EffectLocation {
     }
 }
 
-/// Per-frame GPU timing allocation context.
-/// Hands out (`begin_query`, `end_query`) index pairs from a shared `QuerySet`.
-pub struct GpuTimingFrame {
-    /// Maximum number of queries in the set (must be even: pairs of begin/end)
-    max_queries: u32,
-    /// Next available query index
-    next_index: u32,
-    /// Records which (`ch_idx`, `deck_idx`) owns which query pair
-    pub allocations: Vec<(usize, usize, u32, u32)>,
-}
-
-impl GpuTimingFrame {
-    pub fn new(max_queries: u32) -> Self {
-        Self {
-            max_queries,
-            next_index: 0,
-            allocations: Vec::new(),
-        }
-    }
-
-    /// Allocate a (begin, end) query index pair for a deck.
-    /// Returns None if capacity exhausted.
-    pub fn allocate(&mut self, ch_idx: usize, deck_idx: usize) -> Option<(u32, u32)> {
-        if self.next_index + 2 > self.max_queries {
-            return None;
-        }
-        let begin = self.next_index;
-        let end = self.next_index + 1;
-        self.next_index += 2;
-        self.allocations.push((ch_idx, deck_idx, begin, end));
-        Some((begin, end))
-    }
-
-    /// Number of queries actually written this frame.
-    pub fn query_count(&self) -> u32 {
-        self.next_index
-    }
-}
-
 /// Everything sampled from outside the mixer that a single frame's rendering
 /// depends on.
 ///
@@ -117,7 +78,14 @@ pub struct FrameInputs<'a> {
     /// measuring how fast the machine renders, and rendering a show to disk
     /// faster (or slower) than real time needs the same handle.
     pub free_run_time: Option<f32>,
+    /// How a macro's modulated value reaches each of its targets: the parameter
+    /// router's write, which sits above the mixer and so is handed in
+    /// (/spec/domain-dependencies.md).
+    pub write_param: ParamWriter,
 }
+
+/// Writes one normalized value to the parameter at a path.
+pub type ParamWriter = fn(&mut Mixer, &str, f32);
 
 /// Mixer - Top-level compositor
 /// Which graded master program an output wants.
@@ -1393,6 +1361,7 @@ mod tests {
             beat_time: None,
             transport: None,
             free_run_time: None,
+            write_param: crate::param_router::write_macro_target,
         };
         mixer
             .render(gpu, &inputs, 60, preview)
@@ -1645,7 +1614,7 @@ mod tests {
             &AnalyzerValues::default(),
         );
 
-        mixer.apply_macro_modulation();
+        mixer.apply_macro_modulation(crate::param_router::write_macro_target);
 
         // The opacity target must equal the modulated (base + offset) value, and
         // the macro's stored base must be untouched.
@@ -1685,7 +1654,7 @@ mod tests {
             .modulation_mut()
             .add_source(ModulationSource::sine_lfo(1.0));
 
-        mixer.apply_macro_modulation();
+        mixer.apply_macro_modulation(crate::param_router::write_macro_target);
 
         assert!(
             (mixer.channel(0).unwrap().decks[0].opacity - 0.33).abs() < 1e-6,

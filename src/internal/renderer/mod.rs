@@ -19,7 +19,6 @@ pub mod submit_stats;
 pub mod subprocess;
 pub mod tonemap;
 pub mod transition;
-pub mod warp;
 
 pub use blit::*;
 pub use compute_pipeline::*;
@@ -37,4 +36,3 @@ pub use submit_stats::*;
 pub use subprocess::*;
 pub use tonemap::*;
 pub use transition::*;
-pub use warp::*;

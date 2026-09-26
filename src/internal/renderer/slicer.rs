@@ -9,7 +9,7 @@
 //!   4. Convert the dome-surface hit point to equidistant azimuthal (domemaster) UV
 //!   5. Store as `WarpMesh` { position = output grid, uv = domemaster coords }
 
-use super::warp::{MeshPoint, WarpMesh};
+use crate::surface::warp::{MeshPoint, WarpMesh};
 
 pub use crate::engine::value::dome::{DomeGeometry, DomePreset, DomeSetup, ProjectorConfig};
 

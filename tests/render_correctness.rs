@@ -107,6 +107,7 @@ fn render_frame(ctx: &GpuContext, mixer: &mut Mixer, free_run_time: Option<f32>)
         beat_time: None,
         transport: None,
         free_run_time,
+        write_param: varda::param_router::write_macro_target,
     };
     mixer.render(ctx, &inputs, 60, &[]).expect("render");
 }

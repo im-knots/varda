@@ -2241,7 +2241,7 @@ fn chaos_state_consistency_after_storm() {
 #[test]
 fn mesh_warp_subdivide_and_drag_point() {
     use varda::renderer::context::{OutputSource, OutputTarget};
-    use varda::renderer::warp::WarpMode;
+    use varda::surface::warp::WarpMode;
 
     let Some(mut app) = headless_app() else {
         return;
@@ -2352,7 +2352,7 @@ fn mesh_warp_subdivide_and_drag_point() {
 #[test]
 fn bezier_warp_convert_and_edit() {
     use varda::renderer::context::OutputSource;
-    use varda::renderer::warp::WarpMode;
+    use varda::surface::warp::WarpMode;
     let Some(mut app) = headless_app() else {
         return;
     };

@@ -178,7 +178,7 @@ impl Effect {
         let params = ShaderParams::from_inputs(inputs);
         let phase_inputs_config = shader.metadata.phase_inputs.clone();
 
-        let uuid = crate::deck::generate_short_uuid();
+        let uuid = crate::ids::generate_short_uuid();
         let param_prefix = crate::engine::value::param::effect_param_prefix(&uuid);
 
         Ok(Self {

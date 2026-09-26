@@ -294,7 +294,7 @@ impl VardaApp {
                     self.note_live_video_write(
                         &deck_uuid,
                         crate::engine::value::param::DeckTarget::ScalingMode,
-                        crate::param_router::scaling_mode_to_value(mode),
+                        mode.to_value(),
                     );
                 }
                 result
@@ -737,7 +737,7 @@ impl VardaApp {
                     self.note_live_video_write(
                         &deck_uuid,
                         crate::engine::value::param::DeckTarget::VideoLoopMode,
-                        crate::param_router::loop_mode_to_value(mode),
+                        mode.to_value(),
                     );
                 }
                 result

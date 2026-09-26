@@ -52,7 +52,7 @@ impl PresetLibrary {
         let path = workspace.deck_presets_dir().join(&filename);
         let json =
             serde_json::to_string_pretty(config).context("Failed to serialize deck preset")?;
-        super::atomic_write(&path, &json)?;
+        crate::files::atomic_write(&path, &json)?;
         log::info!("Saved deck preset '{}' to {}", name, path.display());
         Ok(())
     }
@@ -77,7 +77,7 @@ impl PresetLibrary {
         let path = workspace.channel_presets_dir().join(&filename);
         let json =
             serde_json::to_string_pretty(config).context("Failed to serialize channel preset")?;
-        super::atomic_write(&path, &json)?;
+        crate::files::atomic_write(&path, &json)?;
         log::info!("Saved channel preset '{}' to {}", name, path.display());
         Ok(())
     }
@@ -180,7 +180,7 @@ mod tests {
 
     fn sample_deck_config() -> DeckConfig {
         DeckConfig {
-            uuid: crate::deck::generate_short_uuid(),
+            uuid: crate::ids::generate_short_uuid(),
             name: "test_deck".to_string(),
             source: SourceConfig::SolidColor {
                 color: [1.0, 0.0, 0.0, 1.0],
@@ -200,7 +200,7 @@ mod tests {
 
     fn sample_channel_config() -> ChannelConfig {
         ChannelConfig {
-            uuid: crate::deck::generate_short_uuid(),
+            uuid: crate::ids::generate_short_uuid(),
             name: "test_channel".to_string(),
             opacity: 1.0,
             blend_mode: BlendModeConfig::Normal,
