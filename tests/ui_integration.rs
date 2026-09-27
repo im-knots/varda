@@ -64,8 +64,8 @@ struct AccActions {
     set_transition: Option<Option<String>>,
 
     // Collapsing header item actions
-    open_image_dialog_for_channel: Option<String>,
-    open_video_dialog_for_channel: Option<String>,
+    /// `(source type, channel UUID)` of the file dialog a button asked for.
+    open_file_dialog: Option<(String, String)>,
     midi_device_toggles_count: usize,
     transport_play: bool,
     transport_stop: bool,
@@ -141,13 +141,16 @@ impl AccActions {
                 EngineCommand::MidiLearnSelect { path } => {
                     self.midi_learn_select = Some(path.clone());
                 }
-                EngineCommand::CreateOutput => self.output_create = true,
+                EngineCommand::CreateOutput { .. } => self.output_create = true,
                 EngineCommand::AddSurface { .. }
                 | EngineCommand::AddPolygonSurface { .. }
                 | EngineCommand::AddCircleSurface { .. } => self.surface_add = true,
                 EngineCommand::RescanMidi => self.midi_rescan = true,
                 EngineCommand::ClearMidiMappings => self.midi_clear_mappings = true,
-                EngineCommand::RescanCameras => self.camera_rescan = true,
+                EngineCommand::SourceLibraryAction {
+                    source_type,
+                    action,
+                } if source_type == "Camera" && action == "rescan" => self.camera_rescan = true,
                 EngineCommand::RescanAudio => self.audio_rescan = true,
                 EngineCommand::SetMidiDeviceEnabled { .. } => self.midi_device_toggles_count += 1,
                 EngineCommand::SetTransition { shader_name } => {
@@ -199,13 +202,9 @@ impl AccActions {
         }
 
         // Collapsing header items
-        if a.session.open_image_dialog_for_channel.is_some() {
-            self.open_image_dialog_for_channel
-                .clone_from(&a.session.open_image_dialog_for_channel);
-        }
-        if a.session.open_video_dialog_for_channel.is_some() {
-            self.open_video_dialog_for_channel
-                .clone_from(&a.session.open_video_dialog_for_channel);
+        if let Some(request) = &a.session.open_file_dialog {
+            self.open_file_dialog =
+                Some((request.source_type.clone(), request.channel_uuid.clone()));
         }
     }
 }
@@ -699,7 +698,10 @@ fn click_new_output_creates_output_action() {
     harness.run();
     *harness.state_mut() = AccActions::default();
 
-    harness.get_by_label("+ Windowed").click();
+    // Any output type, from one menu; a window is the first entry.
+    harness.get_by_label("+ Output").click();
+    harness.run();
+    harness.get_by_label("🗔 Window").click();
     harness.run();
 
     assert!(
@@ -2209,8 +2211,15 @@ fn combo_blend_mode_exists_with_correct_value() {
 
 #[test]
 fn combo_scaling_mode_exists_when_deck_selected() {
-    // The fixture has selected_deck = Some((0, 0)) with scaling_mode = Some(Fit)
-    let harness = make_harness(UIData::test_fixture());
+    // An image deck, selected, set to Fit: its type declares a scaling control.
+    let mut data = UIData::test_fixture();
+    let deck = &mut data.channels[0].decks[0];
+    deck.source.source_type = "Image".into();
+    deck.source.status.params.insert(
+        "scaling_mode".into(),
+        varda::source::ControlValue::Float(varda::source::ScalingMode::Fit.to_value()),
+    );
+    let harness = make_harness(data);
 
     // The scaling mode combo should show "Fit" as its value
     assert!(
@@ -2243,9 +2252,9 @@ fn collapsing_image_load_dialog() {
     // The request must name Ch A by UUID. Asserting only `is_some` would pass
     // even if the button targeted a different channel.
     assert_eq!(
-        harness.state().open_image_dialog_for_channel.as_deref(),
-        Some("ca000001"),
-        "Load to Ch A must request a dialog for Ch A's UUID"
+        harness.state().open_file_dialog,
+        Some(("Image".to_string(), "ca000001".to_string())),
+        "Load to Ch A must request an image dialog for Ch A's UUID"
     );
 }
 
@@ -2262,23 +2271,14 @@ fn collapsing_video_load_dialog() {
     harness.run();
     *harness.state_mut() = AccActions::default();
 
-    // Click "📁 Load to Ch A" — note: same label as image, but different header context
-    // There might be label ambiguity, so let's use the first match
-    let loads: Vec<_> = harness.get_all_by_label("📁 Load to Ch A").collect();
-    loads[0].click();
+    // Only the video section is open, so its button is the one on screen.
+    harness.get_by_label("📁 Load to Ch A").click();
     harness.run();
 
-    // Either dialog may fire (the label is shared between the two headers), but
-    // whichever does must name Ch A by UUID.
-    let state = harness.state();
-    let target = state
-        .open_image_dialog_for_channel
-        .as_deref()
-        .or(state.open_video_dialog_for_channel.as_deref());
     assert_eq!(
-        target,
-        Some("ca000001"),
-        "Load to Ch A must request a dialog for Ch A's UUID"
+        harness.state().open_file_dialog,
+        Some(("Video".to_string(), "ca000001".to_string())),
+        "Load to Ch A must request a video dialog for Ch A's UUID"
     );
 }
 

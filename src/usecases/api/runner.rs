@@ -30,24 +30,13 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::system::set_manual_bpm, routes::system::save_workspace,
         routes::system::load_workspace,
         // Devices
-        routes::system::scan_ndi, routes::system::scan_syphon,
-        routes::system::scan_cameras, routes::system::scan_midi,
-        // Depth Sensors
-        routes::system::scan_depth_sensors, routes::decks::add_depth_sensor_deck,
-        // Screen Capture
-        routes::system::scan_capture_targets, routes::system::request_screen_capture_permission,
-        routes::decks::add_screen_capture_deck, routes::library::screen_capture,
-        routes::state::screen_capture,
-        // Program / channel tap
-        routes::decks::add_tap_deck, routes::decks::set_tap_source,
+        routes::system::scan_midi,
         routes::system::scan_audio, routes::system::set_audio_source_enabled,
         routes::system::set_midi_device_enabled, routes::system::clear_midi_mappings,
         routes::system::remove_midi_mapping,
-        // Streams
-        routes::system::add_stream_library_entry, routes::system::remove_stream_library_entry,
-        routes::system::add_hls_library_entry, routes::system::remove_hls_library_entry,
-        routes::system::add_dash_library_entry, routes::system::remove_dash_library_entry,
-        routes::system::add_rtmp_library_entry, routes::system::remove_rtmp_library_entry,
+        // Sources
+        routes::sources::list, routes::sources::add_library_entry,
+        routes::sources::remove_library_entry, routes::sources::library_action,
         // Mixer
         routes::mixer::set_crossfader, routes::mixer::auto_crossfade,
         routes::mixer::beat_crossfade,
@@ -58,26 +47,17 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::channels::add_channel, routes::channels::remove_channel,
         routes::channels::set_opacity, routes::channels::set_blend_mode,
         // Decks
-        routes::decks::add_shader_deck, routes::decks::remove_deck,
+        routes::sources::add_deck, routes::sources::replace,
+        routes::sources::set_param, routes::sources::trigger_action,
+        routes::decks::remove_deck,
         routes::decks::set_opacity, routes::decks::set_blend_mode,
         routes::decks::set_solo, routes::decks::set_mute,
-        routes::decks::add_image_deck, routes::decks::add_video_deck,
-        routes::decks::add_solid_color_deck, routes::decks::add_camera_deck,
-        routes::decks::move_deck, routes::decks::reorder_deck, routes::decks::set_scaling_mode, routes::decks::set_transparent, routes::decks::set_render_fps,
+        routes::decks::move_deck, routes::decks::reorder_deck,
+        routes::decks::set_transparent, routes::decks::set_render_fps,
         routes::decks::set_transition, routes::decks::set_param,
-        routes::decks::add_ndi_deck, routes::decks::add_spout_deck,
-        routes::decks::add_syphon_deck,
-        routes::decks::add_srt_deck, routes::decks::add_hls_deck, routes::decks::add_dash_deck, routes::decks::add_rtmp_deck,
-        routes::decks::add_html_deck, routes::decks::reload_html_deck,
-        routes::decks::set_html_interactive,
         routes::decks::reset_generator_params,
         routes::decks::randomize_generator_params,
         routes::decks::mutate_generator_params,
-        // Video
-        routes::decks::video_toggle_play, routes::decks::video_seek,
-        routes::decks::video_set_speed, routes::decks::video_set_loop_mode,
-        routes::decks::video_set_in_point, routes::decks::video_set_out_point,
-        routes::decks::video_clear_in_out, routes::decks::video_set_transport_sync,
         // Auto Transitions
         routes::decks::set_auto_transition_enabled, routes::decks::set_auto_transition_trigger,
         routes::decks::set_auto_transition_play_duration, routes::decks::set_auto_transition_duration,
@@ -142,24 +122,21 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::macros::clear_modulation_source,
         // Runtime state
         routes::state::mixer, routes::state::audio, routes::state::dome,
-        routes::state::deck_loads, routes::state::libraries, routes::state::keymap,
+        routes::state::deck_loads, routes::state::sources, routes::state::keymap,
         routes::state::presets, routes::state::notifications, routes::state::clipboard,
         routes::state::render, routes::state::system,
         routes::state::modulation, routes::state::macros,
         routes::state::outputs, routes::state::surfaces,
         routes::state::registry, routes::state::midi,
-        routes::state::cameras, routes::state::depth,
-        routes::state::clock, routes::state::ndi,
+        routes::state::cameras, routes::state::clock,
         routes::state::transport, routes::state::timecode,
         routes::state::arrangement,
-        routes::state::syphon, routes::state::streams,
         routes::state::performance,
         // Scene
         routes::scene::scene, routes::scene::channels,
         routes::scene::channel_by_uuid, routes::scene::channel_decks,
         routes::scene::deck_by_uuid, routes::scene::modulation,
         routes::scene::macros, routes::scene::sequences,
-        routes::scene::streams,
         // Stage
         routes::stage::stage, routes::stage::surfaces,
         routes::stage::surface_by_uuid, routes::stage::outputs,
@@ -167,8 +144,7 @@ use utoipa_swagger_ui::SwaggerUi;
         // Library
         routes::library::generators, routes::library::effects,
         routes::library::transitions, routes::library::cameras,
-        routes::library::depth, routes::library::ndi,
-        routes::library::syphon, routes::library::monitors,
+        routes::library::monitors,
         // Analyzers
         routes::library::analyzers,
         routes::decks::request_analyzer, routes::decks::release_analyzer,
@@ -199,8 +175,9 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::stage::detect_dxf, routes::stage::detect_confirm, routes::stage::detect_camera,
         // Outputs
         routes::outputs::create, routes::outputs::close,
-        routes::outputs::set_display, routes::outputs::assign_surface,
-        routes::outputs::unassign_surface, routes::outputs::create_headless,
+        routes::outputs::assign_surface, routes::outputs::unassign_surface,
+        routes::outputs::set_sink_param, routes::outputs::set_unassigned,
+        routes::outputs::sink_library_action, routes::outputs::list_types,
         routes::outputs::start, routes::outputs::stop,
         routes::outputs::set_calibration_mode, routes::outputs::set_target,
         routes::outputs::set_presentation,
@@ -222,12 +199,11 @@ use utoipa_swagger_ui::SwaggerUi;
         (name = "Scene", description = "Read-only scene structure — channels, decks, effects, modulation, macros, sequences"),
         (name = "Stage", description = "Read-only stage structure and contour detection from images, SVG, DXF, and cameras"),
         (name = "Library", description = "What is available to load — shaders, transitions, and discovered sources"),
+        (name = "Sources", description = "Deck source types, their controls, and their libraries (discovered devices, saved URLs)"),
         (name = "Devices", description = "Device scanning, MIDI mappings, audio sources"),
-        (name = "Streams", description = "Stream library management (SRT, HLS, DASH)"),
         (name = "Mixer", description = "Crossfader and transition controls"),
         (name = "Channels", description = "Channel CRUD and properties"),
         (name = "Decks", description = "Deck CRUD and properties"),
-        (name = "Video", description = "Video playback controls"),
         (name = "Auto Transitions", description = "Auto-transition settings"),
         (name = "Effects", description = "Effect chain management"),
         (name = "Audio", description = "Audio device management"),
@@ -241,12 +217,49 @@ use utoipa_swagger_ui::SwaggerUi;
         (name = "Timecode", description = "Which incoming SMPTE signal the transport follows — LTC and MTC input selection"),
         (name = "Arrangement", description = "Deck activity positioned against transport time — lanes, regions, idle behaviour, re-arm"),
         (name = "Params", description = "Shader parameter control"),
-        (name = "Depth Sensors", description = "Depth sensor (Kinect/LIDAR) scanning, listing, and point-cloud deck creation"),
+        (name = "Deprecated", description = "Per-source-type routes kept for one release; each names its generic replacement"),
     )
 )]
 /// The assembled `OpenAPI` spec. Public so `tests/api_docs.rs` can render the
 /// route reference in `docs/13-api.md` from it.
 pub struct ApiDoc;
+
+/// The served `OpenAPI` document: [`ApiDoc`], the deprecated per-source-type
+/// aliases, and the deck source and output sink type ids this build
+/// registers, so a `ProviderConfig` body documents which `type` values exist.
+/// `GET /api/library/sources` and `GET /api/library/outputs` say which apply
+/// where.
+pub fn api_doc() -> utoipa::openapi::OpenApi {
+    let mut doc = ApiDoc::openapi();
+    doc.merge(routes::deprecated_sources::DeprecatedApi::openapi());
+    let sources = crate::app::sources::source_providers();
+    let sinks = crate::app::sources::output_sinks();
+    let ids: Vec<&str> = sources
+        .iter()
+        .map(crate::source::DeckSourceProvider::id)
+        .chain(sinks.iter().map(crate::output::OutputSinkProvider::id))
+        .collect();
+    document_source_types(&mut doc, &ids);
+    doc
+}
+
+/// Narrow the `ProviderConfig` schema's `type` to the registered ids.
+fn document_source_types(doc: &mut utoipa::openapi::OpenApi, ids: &[&str]) {
+    use utoipa::openapi::RefOr;
+    use utoipa::openapi::schema::Schema;
+    let Some(schema) = doc
+        .components
+        .as_mut()
+        .and_then(|c| c.schemas.get_mut("ProviderConfig"))
+    else {
+        return;
+    };
+    if let RefOr::T(Schema::Object(config)) = schema
+        && let Some(RefOr::T(Schema::Object(ty))) = config.properties.get_mut("type")
+    {
+        ty.enum_values = Some(ids.iter().map(|id| serde_json::json!(id)).collect());
+    }
+}
 
 /// Build the axum router with all routes and middleware.
 pub fn build_router(shared: SharedState) -> Router {
@@ -271,17 +284,13 @@ pub fn build_router(shared: SharedState) -> Router {
         .route("/api/state/registry", get(routes::state::registry))
         .route("/api/state/midi", get(routes::state::midi))
         .route("/api/state/cameras", get(routes::state::cameras))
-        .route("/api/state/depth", get(routes::state::depth))
+        .route("/api/state/sources", get(routes::state::sources))
         .route("/api/state/clock", get(routes::state::clock))
         .route("/api/state/transport", get(routes::state::transport))
         .route("/api/state/timecode", get(routes::state::timecode))
         .route("/api/state/dome", get(routes::state::dome))
         .route("/api/state/deck-loads", get(routes::state::deck_loads))
         .route("/api/state/arrangement", get(routes::state::arrangement))
-        .route("/api/state/ndi", get(routes::state::ndi))
-        .route("/api/state/syphon", get(routes::state::syphon))
-        .route("/api/state/streams", get(routes::state::streams))
-        .route("/api/state/libraries", get(routes::state::libraries))
         .route("/api/state/keymap", get(routes::state::keymap))
         .route("/api/state/presets", get(routes::state::presets))
         .route(
@@ -310,7 +319,6 @@ pub fn build_router(shared: SharedState) -> Router {
         .route("/api/scene/modulation", get(routes::scene::modulation))
         .route("/api/scene/macros", get(routes::scene::macros))
         .route("/api/scene/sequences", get(routes::scene::sequences))
-        .route("/api/scene/streams", get(routes::scene::streams))
         // ── Stage ───────────────────────────────────────────────
         .route("/api/stage", get(routes::stage::stage))
         .route("/api/stage/surfaces", get(routes::stage::surfaces))
@@ -345,6 +353,16 @@ pub fn build_router(shared: SharedState) -> Router {
             axum::routing::post(routes::stage::detect_camera),
         )
         // ── Library ─────────────────────────────────────────────
+        .route("/api/library/sources", get(routes::sources::list))
+        .route(
+            "/api/sources/{source_type}/library",
+            axum::routing::post(routes::sources::add_library_entry)
+                .delete(routes::sources::remove_library_entry),
+        )
+        .route(
+            "/api/sources/{source_type}/actions/{action}",
+            axum::routing::post(routes::sources::library_action),
+        )
         .route("/api/library/generators", get(routes::library::generators))
         .route("/api/library/effects", get(routes::library::effects))
         .route(
@@ -352,13 +370,6 @@ pub fn build_router(shared: SharedState) -> Router {
             get(routes::library::transitions),
         )
         .route("/api/library/cameras", get(routes::library::cameras))
-        .route("/api/library/depth", get(routes::library::depth))
-        .route(
-            "/api/devices/depth/scan",
-            axum::routing::post(routes::system::scan_depth_sensors),
-        )
-        .route("/api/library/ndi", get(routes::library::ndi))
-        .route("/api/library/syphon", get(routes::library::syphon))
         .route("/api/library/monitors", get(routes::library::monitors))
         .route("/api/library/analyzers", get(routes::library::analyzers))
         // ── Write: Mixer ────────────────────────────────────────
@@ -405,56 +416,20 @@ pub fn build_router(shared: SharedState) -> Router {
         )
         // ── Write: Decks ────────────────────────────────────────
         .route(
-            "/api/channels/{channel_uuid}/decks/shader",
-            axum::routing::post(routes::decks::add_shader_deck),
+            "/api/channels/{channel_uuid}/decks",
+            axum::routing::post(routes::sources::add_deck),
         )
         .route(
-            "/api/channels/{channel_uuid}/decks/image",
-            axum::routing::post(routes::decks::add_image_deck),
+            "/api/decks/{deck_uuid}/source",
+            axum::routing::put(routes::sources::replace),
         )
         .route(
-            "/api/channels/{channel_uuid}/decks/video",
-            axum::routing::post(routes::decks::add_video_deck),
+            "/api/decks/{deck_uuid}/source/params/{name}",
+            axum::routing::put(routes::sources::set_param),
         )
         .route(
-            "/api/channels/{channel_uuid}/decks/solid",
-            axum::routing::post(routes::decks::add_solid_color_deck),
-        )
-        .route(
-            "/api/channels/{channel_uuid}/decks/camera",
-            axum::routing::post(routes::decks::add_camera_deck),
-        )
-        .route(
-            "/api/channels/{channel_uuid}/decks/depth",
-            axum::routing::post(routes::decks::add_depth_sensor_deck),
-        )
-        .route(
-            "/api/channels/{channel_uuid}/decks/screen",
-            axum::routing::post(routes::decks::add_screen_capture_deck),
-        )
-        .route(
-            "/api/channels/{channel_uuid}/decks/tap",
-            axum::routing::post(routes::decks::add_tap_deck),
-        )
-        .route(
-            "/api/decks/{deck_uuid}/tap/source",
-            axum::routing::put(routes::decks::set_tap_source),
-        )
-        .route(
-            "/api/devices/screen/scan",
-            axum::routing::post(routes::system::scan_capture_targets),
-        )
-        .route(
-            "/api/devices/screen/permission",
-            axum::routing::post(routes::system::request_screen_capture_permission),
-        )
-        .route(
-            "/api/library/screen",
-            axum::routing::get(routes::library::screen_capture),
-        )
-        .route(
-            "/api/state/screen_capture",
-            axum::routing::get(routes::state::screen_capture),
+            "/api/decks/{deck_uuid}/source/actions/{name}",
+            axum::routing::post(routes::sources::trigger_action),
         )
         .route(
             "/api/channels/{channel_uuid}/decks/reorder",
@@ -479,10 +454,6 @@ pub fn build_router(shared: SharedState) -> Router {
         .route(
             "/api/decks/{deck_uuid}/mute",
             axum::routing::put(routes::decks::set_mute),
-        )
-        .route(
-            "/api/decks/{deck_uuid}/scaling-mode",
-            axum::routing::put(routes::decks::set_scaling_mode),
         )
         .route(
             "/api/decks/{deck_uuid}/transparent",
@@ -606,13 +577,22 @@ pub fn build_router(shared: SharedState) -> Router {
         )
         // ── Write: Outputs ─────────────────────────────────────
         .route("/api/outputs", axum::routing::post(routes::outputs::create))
+        .route("/api/library/outputs", get(routes::outputs::list_types))
+        .route(
+            "/api/outputs/{output_uuid}/sink/params/{name}",
+            axum::routing::put(routes::outputs::set_sink_param),
+        )
+        .route(
+            "/api/outputs/{output_uuid}/unassigned",
+            axum::routing::put(routes::outputs::set_unassigned),
+        )
+        .route(
+            "/api/outputs/types/{sink_type}/actions/{action}",
+            axum::routing::post(routes::outputs::sink_library_action),
+        )
         .route(
             "/api/outputs/{output_uuid}",
             axum::routing::delete(routes::outputs::close),
-        )
-        .route(
-            "/api/outputs/{output_uuid}/display",
-            axum::routing::put(routes::outputs::set_display),
         )
         .route(
             "/api/outputs/{output_uuid}/surfaces",
@@ -621,39 +601,6 @@ pub fn build_router(shared: SharedState) -> Router {
         .route(
             "/api/outputs/{output_uuid}/surfaces/{surface_uuid}",
             axum::routing::delete(routes::outputs::unassign_surface),
-        )
-        // ── Write: Video Playback ────────────────────────────────
-        .route(
-            "/api/decks/{deck_uuid}/video/toggle-play",
-            axum::routing::post(routes::decks::video_toggle_play),
-        )
-        .route(
-            "/api/decks/{deck_uuid}/video/seek",
-            axum::routing::put(routes::decks::video_seek),
-        )
-        .route(
-            "/api/decks/{deck_uuid}/video/speed",
-            axum::routing::put(routes::decks::video_set_speed),
-        )
-        .route(
-            "/api/decks/{deck_uuid}/video/loop-mode",
-            axum::routing::put(routes::decks::video_set_loop_mode),
-        )
-        .route(
-            "/api/decks/{deck_uuid}/video/in-point",
-            axum::routing::put(routes::decks::video_set_in_point),
-        )
-        .route(
-            "/api/decks/{deck_uuid}/video/out-point",
-            axum::routing::put(routes::decks::video_set_out_point),
-        )
-        .route(
-            "/api/decks/{deck_uuid}/video/in-out-points",
-            axum::routing::delete(routes::decks::video_clear_in_out),
-        )
-        .route(
-            "/api/decks/{deck_uuid}/video/transport-sync",
-            axum::routing::put(routes::decks::video_set_transport_sync),
         )
         // ── Write: Auto-Transitions ──────────────────────────────
         .route(
@@ -675,47 +622,6 @@ pub fn build_router(shared: SharedState) -> Router {
         .route(
             "/api/decks/{deck_uuid}/auto-transition/shader",
             axum::routing::put(routes::decks::set_auto_transition_shader),
-        )
-        // ── Write: External I/O Sources ──────────────────────────
-        .route(
-            "/api/channels/{channel_uuid}/decks/ndi",
-            axum::routing::post(routes::decks::add_ndi_deck),
-        )
-        .route(
-            "/api/channels/{channel_uuid}/decks/syphon",
-            axum::routing::post(routes::decks::add_syphon_deck),
-        )
-        .route(
-            "/api/channels/{channel_uuid}/decks/spout",
-            axum::routing::post(routes::decks::add_spout_deck),
-        )
-        .route(
-            "/api/channels/{channel_uuid}/decks/srt",
-            axum::routing::post(routes::decks::add_srt_deck),
-        )
-        .route(
-            "/api/channels/{channel_uuid}/decks/hls",
-            axum::routing::post(routes::decks::add_hls_deck),
-        )
-        .route(
-            "/api/channels/{channel_uuid}/decks/dash",
-            axum::routing::post(routes::decks::add_dash_deck),
-        )
-        .route(
-            "/api/channels/{channel_uuid}/decks/rtmp",
-            axum::routing::post(routes::decks::add_rtmp_deck),
-        )
-        .route(
-            "/api/channels/{channel_uuid}/decks/html",
-            axum::routing::post(routes::decks::add_html_deck),
-        )
-        .route(
-            "/api/decks/{deck_uuid}/html/reload",
-            axum::routing::post(routes::decks::reload_html_deck),
-        )
-        .route(
-            "/api/decks/{deck_uuid}/html/interactive",
-            axum::routing::post(routes::decks::set_html_interactive),
         )
         // ── Write: Transport ─────────────────────────────────────
         .route(
@@ -1119,10 +1025,6 @@ pub fn build_router(shared: SharedState) -> Router {
         )
         // ── Write: Outputs extras ───────────────────────────────
         .route(
-            "/api/outputs/headless",
-            axum::routing::post(routes::outputs::create_headless),
-        )
-        .route(
             "/api/outputs/{output_uuid}/start",
             axum::routing::post(routes::outputs::start),
         )
@@ -1268,18 +1170,6 @@ pub fn build_router(shared: SharedState) -> Router {
         )
         // ── Write: Device scanning & MIDI ───────────────────────
         .route(
-            "/api/devices/ndi/scan",
-            axum::routing::post(routes::system::scan_ndi),
-        )
-        .route(
-            "/api/devices/syphon/scan",
-            axum::routing::post(routes::system::scan_syphon),
-        )
-        .route(
-            "/api/devices/cameras/scan",
-            axum::routing::post(routes::system::scan_cameras),
-        )
-        .route(
             "/api/devices/midi/scan",
             axum::routing::post(routes::system::scan_midi),
         )
@@ -1302,27 +1192,6 @@ pub fn build_router(shared: SharedState) -> Router {
         .route(
             "/api/midi/mappings/remove",
             axum::routing::post(routes::system::remove_midi_mapping),
-        )
-        // ── Write: Stream Library ───────────────────────────────
-        .route(
-            "/api/streams/library",
-            axum::routing::post(routes::system::add_stream_library_entry)
-                .delete(routes::system::remove_stream_library_entry),
-        )
-        .route(
-            "/api/streams/hls/library",
-            axum::routing::post(routes::system::add_hls_library_entry)
-                .delete(routes::system::remove_hls_library_entry),
-        )
-        .route(
-            "/api/streams/dash/library",
-            axum::routing::post(routes::system::add_dash_library_entry)
-                .delete(routes::system::remove_dash_library_entry),
-        )
-        .route(
-            "/api/streams/rtmp/library",
-            axum::routing::post(routes::system::add_rtmp_library_entry)
-                .delete(routes::system::remove_rtmp_library_entry),
         )
         // ── Write: Mixer extras ────────────────────────────────
         .route(
@@ -1348,6 +1217,8 @@ pub fn build_router(shared: SharedState) -> Router {
             "/api/command",
             axum::routing::post(routes::decks::generic_command),
         )
+        // ── Deprecated per-source-type aliases (one release) ───
+        .merge(routes::deprecated_sources::router())
         // ── WebSocket ──────────────────────────────────────────
         .route("/api/ws", get(super::ws::ws_upgrade))
         // ── Static file serving for HLS/DASH stream segments ────
@@ -1356,7 +1227,7 @@ pub fn build_router(shared: SharedState) -> Router {
             tower_http::services::ServeDir::new(".varda/streams"),
         )
         // ── OpenAPI / Swagger UI ─────────────────────────────────
-        .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", ApiDoc::openapi()))
+        .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", api_doc()))
         // ── Middleware ───────────────────────────────────────────
         .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)) // 16 MB
         .layer(cors)

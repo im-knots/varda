@@ -350,61 +350,58 @@ fn headless_output_create_and_stop() {
     };
     let r = send_cmd(
         &mut app,
-        EngineCommand::CreateHeadlessOutput {
-            target: varda::renderer::context::OutputTarget::NdiSend {
-                sender_name: "Test NDI".into(),
-            },
+        EngineCommand::CreateOutput {
+            sink: varda::output::SinkConfig::new("ndi_send").with("sender_name", "Test NDI"),
         },
     );
+    let CommandResult::OkWithId { uuid } = r else {
+        panic!("creating an output answers with its UUID, got {r:?}");
+    };
+    let state = app.build_engine_state();
+    let output = state
+        .outputs
+        .windows
+        .iter()
+        .find(|o| o.uuid == uuid)
+        .expect("the output is in the state");
+    assert_eq!(output.sink.type_id, "ndi_send");
+    assert!(output.sink.startable);
+    let r = send_cmd(&mut app, EngineCommand::StopOutput { output_uuid: uuid });
     assert!(matches!(r, CommandResult::Ok));
-    // Verify engine state can be built after the headless output command.
-    // Headless outputs (e.g. NDI send) do not necessarily appear in the
-    // windows list, so we only assert the state builds without panicking.
-    let _state = app.build_engine_state();
 }
 
+/// A saved or requested output whose type this run cannot drive (Syphon with
+/// `--no-syphon`, or off macOS) is kept with its settings, and says why when
+/// started, rather than being dropped or silently publishing nothing. See
+/// /spec/output-sink-providers.md.
 #[test]
-fn headless_output_syphon_create_and_start() {
+fn an_output_this_run_cannot_drive_is_kept_and_refuses_to_start() {
     let Some(mut app) = headless_app() else {
         return;
     };
-    // Create a headless output targeting a Syphon server — the same path the
-    // API takes for `POST /api/outputs/headless` with a SyphonServer target.
-    // This proves the API is co-equal with the UI's Syphon protocol dropdown.
     let r = send_cmd(
         &mut app,
-        EngineCommand::CreateHeadlessOutput {
-            target: varda::renderer::context::OutputTarget::SyphonServer {
-                server_name: "Test Syphon".into(),
-            },
+        EngineCommand::CreateOutput {
+            sink: varda::output::SinkConfig::new("syphon_server")
+                .with("server_name", "Test Syphon"),
         },
     );
-    assert!(matches!(r, CommandResult::Ok));
-
-    // Starting the output activates the publisher on macOS; on other platforms
-    // it must be rejected with Unavailable, mirroring the Syphon receive deck
-    // path (cmd_add_syphon_deck).
-    let output_uuid = app
-        .build_engine_state()
+    let CommandResult::OkWithId { uuid } = r else {
+        panic!("the output is kept, got {r:?}");
+    };
+    let state = app.build_engine_state();
+    let output = state
         .outputs
         .windows
-        .last()
-        .expect("headless output created")
-        .uuid
-        .clone();
-    let r = send_cmd(&mut app, EngineCommand::StartOutput { output_uuid });
-    #[cfg(target_os = "macos")]
-    assert!(matches!(r, CommandResult::Ok));
-    #[cfg(not(target_os = "macos"))]
-    assert!(matches!(
-        r,
-        CommandResult::Err {
-            code: ErrorCode::Unavailable,
-            ..
-        }
-    ));
-
-    let _state = app.build_engine_state();
+        .iter()
+        .find(|o| o.uuid == uuid)
+        .unwrap();
+    assert!(
+        !output.sink.available,
+        "the headless test config disables Syphon"
+    );
+    let r = send_cmd(&mut app, EngineCommand::StartOutput { output_uuid: uuid });
+    assert!(matches!(r, CommandResult::Err { .. }), "got {r:?}");
 }
 
 // ── Stream Library Commands ─────────────────────────────────────────
@@ -414,28 +411,34 @@ fn hls_library_add_remove() {
     let Some(mut app) = headless_app() else {
         return;
     };
+    let entry =
+        varda::source::SourceConfig::new("Hls").with("url", "http://example.com/stream.m3u8");
+    let saved = |app: &mut varda::app::VardaApp| {
+        app.build_engine_state()
+            .sources
+            .iter()
+            .find(|t| t.type_id == "Hls")
+            .map_or(0, |t| t.library.entries.len())
+    };
     let r = send_cmd(
         &mut app,
-        EngineCommand::AddHlsLibraryEntry {
-            url: "http://example.com/stream.m3u8".into(),
+        EngineCommand::AddSourceLibraryEntry {
+            entry: entry.clone(),
         },
     );
     assert!(matches!(r, CommandResult::Ok));
-    // Add duplicate — should be idempotent
+    assert_eq!(saved(&mut app), 1);
+    // Add duplicate: should be idempotent
     send_cmd(
         &mut app,
-        EngineCommand::AddHlsLibraryEntry {
-            url: "http://example.com/stream.m3u8".into(),
+        EngineCommand::AddSourceLibraryEntry {
+            entry: entry.clone(),
         },
     );
-    // Remove
-    let r = send_cmd(
-        &mut app,
-        EngineCommand::RemoveHlsLibraryEntry {
-            url: "http://example.com/stream.m3u8".into(),
-        },
-    );
+    assert_eq!(saved(&mut app), 1);
+    let r = send_cmd(&mut app, EngineCommand::RemoveSourceLibraryEntry { entry });
     assert!(matches!(r, CommandResult::Ok));
+    assert_eq!(saved(&mut app), 0);
 }
 
 // ── DeckSource Kind Verification ────────────────────────────────────
@@ -448,9 +451,9 @@ fn solid_color_deck_source_kind() {
     let ch = channel_uuid(&mut app, 0);
     let deck = new_uuid(send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [1.0, 0.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
         },
     ));
     let state = app.build_engine_state();
@@ -575,9 +578,9 @@ fn deck_preset_save_then_load_roundtrip() {
     let ch = channel_uuid(&mut app, 0);
     let deck = new_uuid(send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch.clone(),
-            color: [1.0, 0.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
         },
     ));
     assert_eq!(app.build_engine_state().mixer.channels[0].decks.len(), 1);
@@ -612,9 +615,9 @@ fn channel_preset_save_then_load_appends_channel() {
     let ch = channel_uuid(&mut app, 0);
     send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch.clone(),
-            color: [0.0, 1.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([0.0, 1.0, 0.0, 1.0]),
         },
     );
     let r = send_cmd(
@@ -650,9 +653,9 @@ fn headless_render_smoke() {
     let ch = channel_uuid(&mut app, 0);
     send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [0.0, 1.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([0.0, 1.0, 0.0, 1.0]),
         },
     );
     for _ in 0..10 {

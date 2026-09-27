@@ -1,4 +1,4 @@
-//! Generates the route reference in `docs/13-api.md` from `ApiDoc::openapi()`
+//! Generates the route reference in `docs/13-api.md` from `api_doc()`
 //! and fails when the committed file has drifted.
 //!
 //! Hand-maintained route docs cannot be kept honest — see
@@ -15,8 +15,6 @@
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-
-use utoipa::OpenApi;
 
 const BEGIN: &str = "<!-- BEGIN GENERATED ROUTES -->";
 const END: &str = "<!-- END GENERATED ROUTES -->";
@@ -43,8 +41,8 @@ fn method_rank(method: &str) -> usize {
 
 /// Every documented operation, grouped by its first `OpenAPI` tag.
 fn operations_by_tag() -> BTreeMap<String, Vec<Operation>> {
-    let json = serde_json::to_value(varda::usecases::api::runner::ApiDoc::openapi())
-        .expect("serialize openapi");
+    let json =
+        serde_json::to_value(varda::usecases::api::runner::api_doc()).expect("serialize openapi");
     let paths = json
         .get("paths")
         .and_then(|p| p.as_object())
@@ -99,7 +97,7 @@ fn render_reference() -> String {
     out.push_str(BEGIN);
     out.push_str("\n\n");
     out.push_str(
-        "<!-- Generated from ApiDoc::openapi() by tests/api_docs.rs.\n     \
+        "<!-- Generated from api_doc() by tests/api_docs.rs.\n     \
          Regenerate with: UPDATE_API_DOCS=1 cargo test --test api_docs -->\n\n",
     );
     out.push_str(

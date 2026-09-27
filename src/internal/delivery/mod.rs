@@ -8,8 +8,6 @@ pub mod presentation;
 
 pub use ffmpeg::*;
 
-use crate::engine::value::render::OutputTarget;
-
 /// A live audio passthrough subscription held by an active output, used to
 /// unsubscribe on stop and to report passthrough health (dropped chunks).
 /// See spec/audio-passthrough.md.
@@ -20,18 +18,6 @@ pub struct AudioPassthrough {
     pub token: crate::audio::PcmToken,
     /// PCM chunks dropped on backpressure (producer side health stat).
     pub dropped: std::sync::Arc<std::sync::atomic::AtomicU64>,
-}
-
-/// Result of delivering a frame to an output target.
-pub enum DeliveryResult {
-    /// Frame delivered successfully (or no-op for unhandled targets).
-    Ok,
-    /// Subprocess write failed — output should be deactivated.
-    Failed(String),
-    /// SRT client disconnected: the old subprocess has been stopped and the
-    /// caller must respawn the listener. The caller owns the respawn so it can
-    /// re-subscribe audio passthrough, which needs the audio manager.
-    SrtNeedsRestart,
 }
 
 /// Audio passthrough health: frames the encoder took, chunks dropped on
@@ -50,81 +36,4 @@ pub struct EncoderHealth {
     pub frames_written: u64,
     pub frames_dropped: u64,
     pub frames_padded: u64,
-}
-
-/// What an active headless output sends through: the ffmpeg process a
-/// recording or stream runs, and the audio feeding it.
-#[derive(Default)]
-pub struct Delivery {
-    /// The encoder, for recording and ffmpeg stream targets.
-    pub subprocess: Option<FfmpegSubprocess>,
-    /// The audio passthrough subscription, when the target carries audio.
-    pub audio: Option<AudioPassthrough>,
-}
-
-impl Delivery {
-    /// Hand one read-back frame to the encoder, if the output runs one. The
-    /// frame's bytes move to the encoder's writer thread, uncopied. A frame
-    /// the encoder cannot take ends the encode, and an SRT listener is handed
-    /// back for a restart. `name` labels a failure. NDI, Syphon, and Spout
-    /// publish from the GPU and never reach here.
-    pub fn deliver(
-        &mut self,
-        target: &OutputTarget,
-        name: &str,
-        frame: crate::renderer::ReadbackFrame,
-    ) -> DeliveryResult {
-        let Some(sub) = &mut self.subprocess else {
-            return DeliveryResult::Ok;
-        };
-        if sub.feed_readback_frame(frame) {
-            return DeliveryResult::Ok;
-        }
-        if let Some(mut sub) = self.subprocess.take() {
-            sub.stop();
-        }
-        if matches!(target, OutputTarget::SrtStream { .. }) {
-            DeliveryResult::SrtNeedsRestart
-        } else {
-            DeliveryResult::Failed(format!("FFmpeg frame contract failed for '{name}'"))
-        }
-    }
-
-    /// How the audio passthrough is keeping up, when the output carries audio.
-    pub fn audio_health(&self) -> Option<AudioHealth> {
-        let audio = self.audio.as_ref()?;
-        let sub = self.subprocess.as_ref();
-        Some(AudioHealth {
-            frames_written: sub
-                .and_then(FfmpegSubprocess::audio_frames_written)
-                .unwrap_or(0),
-            frames_dropped: audio.dropped.load(std::sync::atomic::Ordering::Relaxed),
-            silence_spliced: sub
-                .and_then(FfmpegSubprocess::audio_silence_spliced)
-                .unwrap_or(0),
-        })
-    }
-
-    /// How the encoder is keeping up, when one is running.
-    pub fn encoder_health(&self) -> Option<EncoderHealth> {
-        self.subprocess.as_ref().map(|sub| EncoderHealth {
-            frames_written: sub.frames_written(),
-            frames_dropped: sub.frames_dropped(),
-            frames_padded: sub.frames_padded(),
-        })
-    }
-
-    /// How long the encoder has been running, if there is one.
-    pub fn duration(&self) -> Option<std::time::Duration> {
-        self.subprocess.as_ref().map(FfmpegSubprocess::duration)
-    }
-
-    /// Stop the encoder, if any. Returns the audio subscription so the caller
-    /// can unsubscribe it from the audio manager.
-    pub fn stop(&mut self) -> Option<AudioPassthrough> {
-        if let Some(mut sub) = self.subprocess.take() {
-            sub.stop();
-        }
-        self.audio.take()
-    }
 }

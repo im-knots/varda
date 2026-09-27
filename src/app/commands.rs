@@ -149,12 +149,10 @@ impl VardaApp {
 
     /// True if any command in the batch is undoable. Used by the windowed
     /// runner to make one snapshot decision over the GUI's command stream,
-    /// sharing the single [`command_is_undoable`] predicate with the bus
+    /// sharing the single [`VardaApp::is_undoable`] predicate with the bus
     /// consumers.
-    // Method form is the engine-facing API used by `usecases/ui/runner.rs`.
-    #[allow(clippy::unused_self)]
     pub(crate) fn batch_has_undoable(&self, cmds: &[EngineCommand]) -> bool {
-        cmds.iter().any(super::classify::command_is_undoable)
+        cmds.iter().any(|cmd| self.is_undoable(cmd))
     }
 
     /// Execute a single command and return the result.
@@ -164,6 +162,12 @@ impl VardaApp {
     /// hands that parameter back to the performer.
     pub(crate) fn execute_command(&mut self, cmd: EngineCommand) -> CommandResult {
         let live = self.live_write(&cmd);
+        // A live parameter write (a fader sweep) cannot change what a library
+        // lists; anything else might, so the next snapshot lists afresh.
+        if live.is_none() {
+            self.sources.type_cache.invalidate();
+            self.output.sink_type_cache.invalidate();
+        }
         let result = self.dispatch_command(cmd);
         if let Some((key, value)) = live
             && !matches!(result, CommandResult::Err { .. })
@@ -222,52 +226,18 @@ impl VardaApp {
             }
             EngineCommand::AddDeck {
                 channel_uuid,
-                shader_name,
-            } => wire_id(self.add_deck(&channel_uuid, &shader_name)),
-            EngineCommand::AddImageDeck { channel_uuid, path } => {
-                wire_id(self.add_image_deck(&channel_uuid, &path))
-            }
-            EngineCommand::AddVideoDeck { channel_uuid, path } => {
-                wire_id(self.add_video_deck(&channel_uuid, &path))
-            }
-            EngineCommand::AddSolidColorDeck {
-                channel_uuid,
-                color,
-            } => wire_id(self.add_solid_color_deck(&channel_uuid, color)),
-            EngineCommand::AddCameraDeck {
-                channel_uuid,
-                camera_id,
-            } => wire_id(self.add_camera_deck(&channel_uuid, camera_id)),
-            EngineCommand::AddDepthSensorDeck {
-                channel_uuid,
-                depth_sensor_id,
-            } => wire_id(self.add_depth_sensor_deck(&channel_uuid, depth_sensor_id)),
-            EngineCommand::AddScreenCaptureDeck {
-                channel_uuid,
-                target,
-                rate,
-                crop,
-                show_cursor,
-                exclude_varda,
-            } => {
-                let options = crate::screen_capture::backend::CaptureConfig {
-                    rate: rate.unwrap_or(crate::screen_capture::backend::DEFAULT_CAPTURE_RATE),
-                    crop: crop.map(Into::into).unwrap_or_default(),
-                    show_cursor: show_cursor.unwrap_or(false),
-                    // Displays default to excluding Varda so a full-display
-                    // capture is not an accidental infinite mirror; picking a
-                    // Varda window is an explicit request, so it does not.
-                    exclude_varda: exclude_varda.unwrap_or_else(|| target.is_display()),
-                    scale_to: None,
-                };
-                wire_id(self.add_screen_capture_deck(&channel_uuid, &target, &options))
-            }
-            EngineCommand::AddTapDeck {
-                channel_uuid,
                 source,
-            } => wire_id(self.add_tap_deck(&channel_uuid, &source)),
-            EngineCommand::SetTapSource { deck_uuid, source } => {
-                wire(self.set_tap_source(&deck_uuid, &source))
+            } => wire_id(self.add_deck(&channel_uuid, &source)),
+            EngineCommand::ReplaceDeckSource { deck_uuid, source } => {
+                wire(self.replace_deck_source(&deck_uuid, &source))
+            }
+            EngineCommand::SetSourceParam {
+                deck_uuid,
+                name,
+                value,
+            } => wire(self.mixer.set_source_param(&deck_uuid, &name, &value)),
+            EngineCommand::TriggerSourceAction { deck_uuid, action } => {
+                wire(self.mixer.trigger_source_action(&deck_uuid, &action))
             }
             EngineCommand::RemoveDeck { deck_uuid } => wire(self.remove_deck(&deck_uuid)),
             EngineCommand::MoveDeck {
@@ -301,9 +271,6 @@ impl VardaApp {
                 }
                 Err(e) => not_found(&e),
             },
-            EngineCommand::SetDeckScalingMode { deck_uuid, mode } => {
-                wire(self.mixer.set_deck_scaling_mode(&deck_uuid, mode))
-            }
             EngineCommand::SetDeckTransparent {
                 deck_uuid,
                 transparent,
@@ -357,7 +324,7 @@ impl VardaApp {
                 },
             },
             EngineCommand::ToggleParam { path } => {
-                if let Some(cmd) = super::inputs::surface_command(&path, self.interactive_deck()) {
+                if let Some(cmd) = self.surface_toggle(&path) {
                     return self.execute_command(cmd);
                 }
                 if let Err(e) = crate::param_router::toggle_param_by_path(&mut self.mixer, &path) {
@@ -490,34 +457,45 @@ impl VardaApp {
             }
 
             // ── Output ───────────────────────────────────────
-            EngineCommand::CreateOutput => {
-                self.output.request_create_output();
-                CommandResult::Ok
-            }
+            EngineCommand::CreateOutput { sink } => self.cmd_create_output(sink),
             EngineCommand::CloseOutput { output_uuid } => {
                 match self.output.close_output(&output_uuid) {
                     Ok(passthrough) => {
-                        if let Some(pass) = passthrough {
-                            self.audio
-                                .manager
-                                .unsubscribe_pcm(pass.source_id, pass.token);
-                        }
+                        self.release_passthrough(passthrough);
                         CommandResult::Ok
                     }
                     Err(e) => wire(Err::<(), _>(e)),
                 }
             }
-            EngineCommand::SetOutputDisplay {
+            EngineCommand::SetOutputTarget { output_uuid, sink } => {
+                self.cmd_set_output_target(&output_uuid, &sink)
+            }
+            EngineCommand::SetSinkParam {
                 output_uuid,
-                monitor_name,
-            } => wire(self.output.set_output_display(&output_uuid, &monitor_name)),
-            EngineCommand::SetOutputTarget {
+                name,
+                value,
+            } => self.cmd_set_sink_param(&output_uuid, &name, &value),
+            EngineCommand::SinkLibraryAction { sink_type, action } => {
+                self.cmd_sink_library_action(&sink_type, &action)
+            }
+            EngineCommand::SetSurfaceAssignmentEnabled {
                 output_uuid,
-                target,
-            } => match self.output.resolve_output(&output_uuid) {
-                Ok(idx) => self.cmd_set_output_target(idx, target),
-                Err(e) => not_found(&e),
-            },
+                surface_uuid,
+                enabled,
+            } => {
+                let result = self.output.set_surface_assignment_enabled(
+                    &output_uuid,
+                    &surface_uuid,
+                    enabled,
+                );
+                self.output.recompute_auto_edge_blend();
+                wire(result)
+            }
+            EngineCommand::SetPathText { path, value } => self.set_path_text(&path, value),
+            EngineCommand::SetOutputUnassigned {
+                output_uuid,
+                unassigned,
+            } => self.cmd_set_output_unassigned(&output_uuid, unassigned),
 
             // ── Surfaces ────────────────────────────────────
             EngineCommand::AddSurface { name, source } => {
@@ -755,33 +733,6 @@ impl VardaApp {
                 }
             }
 
-            // ── Video Playback ────────────────────────────────
-            EngineCommand::VideoTogglePlay { deck_uuid } => {
-                self.exec_on_deck(&deck_uuid, |d| d.video_toggle_play())
-            }
-            EngineCommand::VideoSeek {
-                deck_uuid,
-                position_secs,
-            } => self.exec_on_deck(&deck_uuid, |d| d.video_seek(position_secs)),
-            EngineCommand::VideoSetSpeed { deck_uuid, speed } => {
-                self.exec_on_deck(&deck_uuid, |d| d.video_set_speed(speed))
-            }
-            EngineCommand::VideoSetLoopMode { deck_uuid, mode } => {
-                self.exec_on_deck(&deck_uuid, |d| d.video_set_loop_mode(mode))
-            }
-            EngineCommand::VideoSetInPoint { deck_uuid, secs } => {
-                self.exec_on_deck(&deck_uuid, |d| d.video_set_in_point(secs))
-            }
-            EngineCommand::VideoSetOutPoint { deck_uuid, secs } => {
-                self.exec_on_deck(&deck_uuid, |d| d.video_set_out_point(secs))
-            }
-            EngineCommand::VideoClearInOutPoints { deck_uuid } => {
-                self.exec_on_deck(&deck_uuid, |d| d.video_clear_in_out_points())
-            }
-            EngineCommand::VideoSetTransportSync { deck_uuid, sync } => {
-                self.exec_on_deck(&deck_uuid, |d| d.video_set_transport_sync(sync))
-            }
-
             // ── Deck Auto-Transitions ─────────────────────────
             EngineCommand::SetAutoTransitionEnabled { deck_uuid, enabled } => self
                 .exec_auto_transition(&deck_uuid, |at| {
@@ -868,39 +819,7 @@ impl VardaApp {
                     at.transition_duration.set_value(value);
                 }),
 
-            // ── External I/O Deck Sources ─────────────────────
-            EngineCommand::AddNdiDeck {
-                channel_uuid,
-                source_name,
-            } => self.cmd_add_ndi_deck(&channel_uuid, &source_name),
-            EngineCommand::AddSyphonDeck {
-                channel_uuid,
-                server_name,
-            } => self.cmd_add_syphon_deck(&channel_uuid, &server_name),
-            EngineCommand::AddSpoutDeck {
-                channel_uuid,
-                sender_name,
-            } => self.cmd_add_spout_deck(&channel_uuid, &sender_name),
-            EngineCommand::AddSrtDeck {
-                channel_uuid,
-                url,
-                mode,
-            } => self.cmd_add_srt_deck(&channel_uuid, &url, mode),
-            EngineCommand::AddHlsDeck { channel_uuid, url } => {
-                self.cmd_add_hls_deck(&channel_uuid, &url)
-            }
-            EngineCommand::AddDashDeck { channel_uuid, url } => {
-                self.cmd_add_dash_deck(&channel_uuid, &url)
-            }
-            EngineCommand::AddRtmpDeck {
-                channel_uuid,
-                url,
-                mode,
-            } => self.cmd_add_rtmp_deck(&channel_uuid, &url, mode),
-            EngineCommand::ReloadHtmlDeck { deck_uuid } => self.cmd_reload_html_deck(&deck_uuid),
-            EngineCommand::AddHtmlDeck { channel_uuid, url } => {
-                self.cmd_add_html_deck(&channel_uuid, &url)
-            }
+            // ── HTML interactive window ───────────────────────
             EngineCommand::OpenHtmlInteractive { deck_uuid } => {
                 #[cfg(feature = "html")]
                 {
@@ -1043,42 +962,19 @@ impl VardaApp {
                     .set_step_target_amount(&sequence_uuid, step_idx, amount),
             ),
 
-            // ── Stream Library ─────────────────────────────────
-            EngineCommand::AddStreamLibraryEntry { url, mode } => {
-                self.sources.io.cmd_add_stream_library_entry(url, mode)
+            // ── Source Library ─────────────────────────────────
+            EngineCommand::AddSourceLibraryEntry { entry } => {
+                wire(self.source_library(entry.type_id(), |p| p.add_library_entry(entry.clone())))
             }
-            EngineCommand::RemoveStreamLibraryEntry { url } => {
-                self.sources.io.cmd_remove_stream_library_entry(&url)
+            EngineCommand::RemoveSourceLibraryEntry { entry } => {
+                wire(self.source_library(entry.type_id(), |p| p.remove_library_entry(&entry)))
             }
-            EngineCommand::AddHlsLibraryEntry { url } => {
-                self.sources.io.cmd_add_hls_library_entry(url)
-            }
-            EngineCommand::RemoveHlsLibraryEntry { url } => {
-                self.sources.io.cmd_remove_hls_library_entry(&url)
-            }
-            EngineCommand::AddDashLibraryEntry { url } => {
-                self.sources.io.cmd_add_dash_library_entry(url)
-            }
-            EngineCommand::RemoveDashLibraryEntry { url } => {
-                self.sources.io.cmd_remove_dash_library_entry(&url)
-            }
-            EngineCommand::AddRtmpLibraryEntry { url, mode } => {
-                self.sources.io.cmd_add_rtmp_library_entry(url, mode)
-            }
-            EngineCommand::RemoveRtmpLibraryEntry { url } => {
-                self.sources.io.cmd_remove_rtmp_library_entry(&url)
-            }
-            EngineCommand::AddHtmlLibraryEntry { url } => {
-                self.sources.io.cmd_add_html_library_entry(url)
-            }
-            EngineCommand::RemoveHtmlLibraryEntry { url } => {
-                self.sources.io.cmd_remove_html_library_entry(&url)
-            }
+            EngineCommand::SourceLibraryAction {
+                source_type,
+                action,
+            } => self.source_library_action(&source_type, &action),
 
             // ── Output Management ─────────────────────────────────
-            EngineCommand::CreateHeadlessOutput { target } => {
-                self.cmd_create_headless_output(target)
-            }
             EngineCommand::StartOutput { output_uuid } => self.cmd_start_output(&output_uuid),
             EngineCommand::StopOutput { output_uuid } => self.cmd_stop_output(&output_uuid),
             EngineCommand::SetCalibrationMode { output_uuid, mode } => {
@@ -1619,56 +1515,6 @@ impl VardaApp {
             }
 
             // ── Device Scanning ───────────────────────────────────
-            EngineCommand::RescanNdi => {
-                self.sources.io.ndi_manager.discover();
-                CommandResult::Ok
-            }
-            EngineCommand::RescanSyphon => {
-                // Run discovery inline on the render thread and return the fresh
-                // source list in the same response. This makes an external
-                // probe a single non-racy call: the old fire-and-forget rescan +
-                // separate snapshot GET could read a pre-discover (empty) list and
-                // spuriously "defer Syphon init".
-                #[cfg(target_os = "macos")]
-                {
-                    self.sources.io.syphon_manager.discover();
-                    let names = self.sources.io.syphon_manager.discovered_sources();
-                    CommandResult::OkWithData {
-                        data: serde_json::json!(names),
-                    }
-                }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    CommandResult::OkWithData {
-                        data: serde_json::json!([] as [String; 0]),
-                    }
-                }
-            }
-            EngineCommand::RescanSpout => {
-                // Same contract as RescanSyphon: discover inline and answer with
-                // the fresh list, so a probe is one non-racy call. No platform
-                // gate is needed because discovery is a no-op off Windows.
-                self.sources.io.spout_manager.discover();
-                CommandResult::OkWithData {
-                    data: serde_json::json!(self.sources.io.spout_manager.discovered_sources()),
-                }
-            }
-            EngineCommand::RescanCameras => {
-                self.sources.camera_manager.scan_devices();
-                CommandResult::Ok
-            }
-            EngineCommand::RescanDepthSensors => {
-                self.sources.depth_manager.scan_devices();
-                CommandResult::Ok
-            }
-            EngineCommand::RescanCaptureTargets => {
-                self.sources.screen_capture_manager.scan_targets();
-                CommandResult::Ok
-            }
-            EngineCommand::RequestScreenCapturePermission => {
-                self.sources.screen_capture_manager.request_permission();
-                CommandResult::Ok
-            }
             EngineCommand::RescanMidi => {
                 if let Some(ref mut midi) = self.input.midi_devices {
                     midi.load_user_profiles(&self.session.workspace.controller_profiles_dir());
@@ -1887,7 +1733,9 @@ impl VardaApp {
                     return CommandResult::Ok;
                 }
                 if let Some(previous) = self.sources.detection_camera.take() {
-                    self.sources.camera_manager.release_camera(previous);
+                    self.sources
+                        .service_mut::<crate::camera::CameraManager>()
+                        .release_camera(previous);
                 }
                 match self.open_camera(camera_id) {
                     Ok(_) => {
@@ -1907,7 +1755,9 @@ impl VardaApp {
             }
             EngineCommand::ReleaseDetectionCamera => {
                 if let Some(previous) = self.sources.detection_camera.take() {
-                    self.sources.camera_manager.release_camera(previous);
+                    self.sources
+                        .service_mut::<crate::camera::CameraManager>()
+                        .release_camera(previous);
                 }
                 CommandResult::Ok
             }
@@ -2067,9 +1917,7 @@ mod tests {
     use crate::engine::{CommandOutcome, CommandResult};
 
     fn headless_app() -> Option<super::VardaApp> {
-        let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
-        let config = crate::testing::headless_config();
-        super::VardaApp::new(gpu, &config).ok()
+        crate::testing::headless_app()
     }
 
     #[test]
@@ -2078,9 +1926,9 @@ mod tests {
             return;
         };
         let channel_uuid = app.mixer_ref().channels()[0].uuid().to_string();
-        let result = app.execute_command(C::AddSolidColorDeck {
+        let result = app.execute_command(C::AddDeck {
             channel_uuid,
-            color: [1.0, 0.0, 0.0, 1.0],
+            source: crate::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
         });
         let CommandResult::OkWithId { uuid } = result else {
             panic!("expected OkWithId, got {result:?}");
@@ -2097,9 +1945,9 @@ mod tests {
             return;
         };
         let channel_uuid = app.mixer_ref().channels()[0].uuid().to_string();
-        let outcome = app.execute_command_gui(C::AddSolidColorDeck {
+        let outcome = app.execute_command_gui(C::AddDeck {
             channel_uuid,
-            color: [0.0, 1.0, 0.0, 1.0],
+            source: crate::solid_color::SolidColor::config_for([0.0, 1.0, 0.0, 1.0]),
         });
         let CommandOutcome::DecksCreated { uuids } = outcome else {
             panic!("expected DecksCreated, got {outcome:?}");
@@ -2132,9 +1980,9 @@ mod tests {
         let channel_uuid = app.mixer_ref().channels()[0].uuid().to_string();
         drain(
             &mut app,
-            vec![C::AddSolidColorDeck {
+            vec![C::AddDeck {
                 channel_uuid,
-                color: [0.0, 0.0, 1.0, 1.0],
+                source: crate::solid_color::SolidColor::config_for([0.0, 0.0, 1.0, 1.0]),
             }],
             true,
         );
@@ -2155,6 +2003,181 @@ mod tests {
         );
     }
 
+    fn channel_uuids(app: &super::VardaApp) -> Vec<String> {
+        app.mixer_ref()
+            .channels()
+            .iter()
+            .map(|ch| ch.uuid().to_string())
+            .collect()
+    }
+
+    fn deck_uuids(app: &super::VardaApp, channel: usize) -> Vec<String> {
+        app.mixer_ref().channels()[channel]
+            .decks
+            .iter()
+            .map(|slot| slot.deck.uuid().to_string())
+            .collect()
+    }
+
+    fn solid_deck(app: &mut super::VardaApp, channel_uuid: &str) {
+        drain(
+            app,
+            vec![C::AddDeck {
+                channel_uuid: channel_uuid.to_string(),
+                source: crate::solid_color::SolidColor::config_for([0.0, 0.0, 1.0, 1.0]),
+            }],
+            true,
+        );
+    }
+
+    /// Undo brings a removed channel back as itself, so everything that
+    /// names it (MIDI, modulation, arrangement, surfaces) finds it again.
+    #[test]
+    fn undoing_a_channel_removal_restores_its_identity() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        drain(&mut app, vec![C::AddChannel], true);
+        let first = channel_uuids(&app)[0].clone();
+        solid_deck(&mut app, &first);
+        let channels = channel_uuids(&app);
+        let decks = deck_uuids(&app, 0);
+
+        drain(
+            &mut app,
+            vec![C::RemoveChannel {
+                channel_uuid: first,
+            }],
+            true,
+        );
+        assert_eq!(channel_uuids(&app).len(), channels.len() - 1);
+        drain(&mut app, vec![C::Undo], false);
+
+        assert_eq!(channel_uuids(&app), channels);
+        assert_eq!(deck_uuids(&app, 0), decks);
+    }
+
+    /// Two decks with the same source swap places and swap back: each keeps
+    /// its own identity and settings rather than the settings landing on
+    /// whichever deck now sits in that position.
+    #[test]
+    fn undoing_a_reorder_restores_each_decks_identity_and_settings() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        let channel = channel_uuids(&app)[0].clone();
+        solid_deck(&mut app, &channel);
+        solid_deck(&mut app, &channel);
+        let decks = deck_uuids(&app, 0);
+        drain(
+            &mut app,
+            vec![C::SetDeckOpacity {
+                deck_uuid: decks[0].clone(),
+                opacity: 0.25,
+            }],
+            true,
+        );
+
+        drain(
+            &mut app,
+            vec![C::ReorderDeck {
+                channel_uuid: channel,
+                from_idx: 0,
+                to_idx: 1,
+            }],
+            true,
+        );
+        drain(&mut app, vec![C::Undo], false);
+
+        assert_eq!(deck_uuids(&app, 0), decks);
+        let first = &app.mixer_ref().channels()[0].decks[0];
+        assert!((first.opacity - 0.25).abs() < f32::EPSILON);
+    }
+
+    /// The same holds for effects, whose modulation is keyed on their UUID.
+    #[test]
+    fn undoing_an_effect_removal_restores_effect_identities() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        let add = || C::AddEffect {
+            target: crate::engine::value::entity::EffectTarget::Master,
+            shader_name: "invert".into(),
+        };
+        drain(&mut app, vec![add()], true);
+        drain(&mut app, vec![add()], true);
+        let effects = |app: &super::VardaApp| -> Vec<String> {
+            app.mixer_ref()
+                .master_effects()
+                .iter()
+                .map(|e| e.uuid().to_string())
+                .collect()
+        };
+        let before = effects(&app);
+        assert_eq!(before.len(), 2);
+
+        drain(
+            &mut app,
+            vec![C::RemoveEffect {
+                effect_uuid: before[0].clone(),
+            }],
+            true,
+        );
+        drain(&mut app, vec![C::Undo], false);
+
+        assert_eq!(effects(&app), before);
+    }
+
+    /// Add a deck and undo it, leaving one step to redo.
+    fn app_with_a_redo() -> Option<super::VardaApp> {
+        let mut app = headless_app()?;
+        let channel = app.mixer_ref().channels()[0].uuid().to_string();
+        solid_deck(&mut app, &channel);
+        drain(&mut app, vec![C::Undo], false);
+        assert!(app.history_can_redo());
+        Some(app)
+    }
+
+    fn stale_write() -> C {
+        C::RemoveDeck {
+            deck_uuid: "deadbeef".into(),
+        }
+    }
+
+    /// A rejected write from the API (a stale UUID, say) changes nothing, so
+    /// it must not cost the redo it would have forked away.
+    #[test]
+    fn a_rejected_bus_command_keeps_the_redo_history() {
+        let Some(mut app) = app_with_a_redo() else {
+            return;
+        };
+        let _ = app.command_sender().send((stale_write(), None));
+        app.process_commands();
+        assert!(app.history_can_redo());
+    }
+
+    /// The same for a GUI frame whose commands all fail.
+    #[test]
+    fn a_rejected_gui_frame_keeps_the_redo_history() {
+        let Some(mut app) = app_with_a_redo() else {
+            return;
+        };
+        // The frame's housekeeping succeeds; only the rejected edit counts.
+        drain(
+            &mut app,
+            vec![
+                stale_write(),
+                C::SetPreviewChannels {
+                    channel_uuids: Vec::new(),
+                },
+            ],
+            true,
+        );
+        assert!(app.history_can_redo());
+        drain(&mut app, vec![C::Redo], false);
+        assert_eq!(app.mixer_ref().channels()[0].decks.len(), 1);
+    }
+
     /// Only a frame that starts an undo step records one; a held drag's later
     /// frames must not.
     #[test]
@@ -2163,9 +2186,9 @@ mod tests {
             return;
         };
         let channel_uuid = app.mixer_ref().channels()[0].uuid().to_string();
-        let add = || C::AddSolidColorDeck {
+        let add = || C::AddDeck {
             channel_uuid: channel_uuid.clone(),
-            color: [0.0, 0.0, 1.0, 1.0],
+            source: crate::solid_color::SolidColor::config_for([0.0, 0.0, 1.0, 1.0]),
         };
         drain(&mut app, vec![add()], false);
         assert!(!app.history_can_undo());
@@ -2218,7 +2241,7 @@ mod tests {
         let channel_uuid = app.mixer_ref().channels()[0].uuid().to_string();
         let CommandResult::OkWithId { uuid } = app.execute_command(C::AddDeck {
             channel_uuid,
-            shader_name: "plasma".into(),
+            source: crate::source::SourceConfig::new("Shader").with("name", "plasma"),
         }) else {
             return;
         };

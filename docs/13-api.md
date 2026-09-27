@@ -39,8 +39,8 @@ varda --headless --port 8080 --fps 60
 ```
 
 In headless mode:
-- No main window is created (output windows for projectors can still be created via API)
-- The render loop runs at `--fps` rate using sleep-based throttling
+- No main window is created (output windows and displays for projectors are still opened, from `stage.json` or through the API)
+- The render loop runs at the `--fps` rate, waking itself for each frame
 - All outputs defined in `stage.json` auto-start on launch — NDI sends, SRT streams, HLS/DASH outputs, recordings, and display outputs (fullscreen on connected monitors) all activate automatically
 - Graceful shutdown on SIGTERM/SIGINT or `POST /api/shutdown`
 
@@ -93,22 +93,44 @@ curl -X PUT http://localhost:8080/api/mixer/crossfader \
   -d '{"position": 0.75}'
 ```
 
-### Add a shader deck to a channel
+### Add a deck to a channel
+
+Every kind of deck is added through one route. The body is the source's config: `type` names the source type and the other fields are that type's settings. `GET /api/library/sources` lists every type this build offers, the controls each one has, and its library. A library entry's `config` is a ready-made body for this route.
 
 ```sh
-curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks/shader \
+curl http://localhost:8080/api/library/sources
+
+curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks \
   -H "Content-Type: application/json" \
-  -d '{"shader_name": "Sine"}'
+  -d '{"type": "Shader", "name": "Sine"}'
+
+curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks \
+  -H "Content-Type: application/json" \
+  -d '{"type": "Image", "path": "/art/logo.svg"}'
 ```
 
 Shader, image, and video decks are built in the background so a large shader or file never stalls the output. The request answers straight away with the new deck's UUID (`{"status": "ok", "uuid": "..."}`), and the deck joins its channel a moment later. Until then a write to that UUID returns `404`. Poll `GET /api/state/deck-loads` to watch it: each entry is `Loading` until the deck attaches and disappears, or `Failed` with the reason, kept for a minute. Errors that can be known up front (an unknown channel or shader, a missing file, a shader that needs a depth sensor when none is connected) still fail the request itself.
 
+### Drive a deck's source controls
+
+Each source type declares its controls (a clip's play and speed, a capture's rate, a solid color's color) in `GET /api/library/sources`. Write one by name, or fire one of its actions. Numeric controls take a normalized `0.0` to `1.0`, the same value a MIDI fader sends; colors take `[r, g, b, a]`.
+
+```sh
+curl -X PUT http://localhost:8080/api/decks/<deck_uuid>/source/params/speed \
+  -H "Content-Type: application/json" \
+  -d '{"value": 0.5}'
+
+curl -X POST http://localhost:8080/api/decks/<deck_uuid>/source/actions/reload
+```
+
+A deck's current control values are under `source.status` in `GET /api/scene`. To point a deck at a different source while keeping its effects, opacity and modulation, `PUT /api/decks/<deck_uuid>/source` with a new config.
+
 ### Add an HTML deck to a channel
 
 ```sh
-curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks/html \
+curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks \
   -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com/overlay.html"}'
+  -d '{"type": "Html", "url": "https://example.com/overlay.html"}'
 ```
 
 ### Capture a display or window as a deck
@@ -116,12 +138,11 @@ curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks/html \
 Targets are addressed by name, never by platform handle, and are matched against the last enumeration. Scan first if you are not sure what is available. See [Screen & Window Capture](09-streaming-and-io.md#screen--window-capture).
 
 ```sh
-curl -X POST http://localhost:8080/api/devices/screen/scan
-curl http://localhost:8080/api/library/screen
+curl -X POST http://localhost:8080/api/sources/ScreenCapture/actions/rescan
 
-curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks/screen \
+curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks \
   -H "Content-Type: application/json" \
-  -d '{"target": {"kind": "window", "app": "Safari", "title": "Dashboard"}, "rate": 24}'
+  -d '{"type": "ScreenCapture", "target": {"kind": "window", "app": "Safari", "title": "Dashboard"}, "rate": 24}'
 
 # Capture settings are ordinary parameter paths
 curl -X PUT http://localhost:8080/api/params \
@@ -129,12 +150,36 @@ curl -X PUT http://localhost:8080/api/params \
   -d '{"path": "deck/<deck_uuid>/capture/rate", "value": {"Float": 0.5}}'
 ```
 
+### Add an output
+
+Every kind of output is created through one route, from its sink config. `GET /api/library/outputs` lists the types, their settings, and what their libraries offer (monitors for a display). Fields you leave out take the type's defaults.
+
+```sh
+curl http://localhost:8080/api/library/outputs
+
+curl -X POST http://localhost:8080/api/outputs \
+  -H "Content-Type: application/json" \
+  -d '{"type": "recording", "path": "/shows/tonight.mov", "codec": "ProRes 422"}'
+
+# Change one setting by name, or point the output at another sink entirely
+curl -X PUT http://localhost:8080/api/outputs/<output_uuid>/sink/params/path \
+  -H "Content-Type: application/json" \
+  -d '{"value": "/shows/encore.mov"}'
+curl -X PUT http://localhost:8080/api/outputs/<output_uuid>/target \
+  -H "Content-Type: application/json" \
+  -d '{"type": "ndi_send", "sender_name": "Varda Main"}'
+
+curl -X POST http://localhost:8080/api/outputs/<output_uuid>/start
+```
+
+Outputs are addressable like everything else, so a controller can start a recording: `output/<uuid>/start`, `output/<uuid>/stop`, `output/<uuid>/active`, `output/<uuid>/calibration`, `output/<uuid>/rotation`, `output/<uuid>/surface/<surface_uuid>`, and each sink setting at `output/<uuid>/<name>`. A surface's content is `surface/<uuid>/source`, which takes text (`master`, `ch/<uuid>`, `chs/<uuid>,<uuid>`, `deck/<uuid>`, `domemaster`), for example from an OSC message with a string argument.
+
 ### Feed Varda's own output back in
 
 ```sh
-curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks/tap \
+curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks \
   -H "Content-Type: application/json" \
-  -d '{"source": {"kind": "master_program"}}'
+  -d '{"type": "Tap", "source": {"kind": "master_program"}}'
 ```
 
 A tap shows the previous frame. See [Program Tap](09-streaming-and-io.md#program-tap).
@@ -452,6 +497,12 @@ Integers survive in two roles, both of which are payload rather than address:
 
 See [/spec/api-addressing.md] for the full rationale.
 
+## Per-type deck routes (deprecated)
+
+Earlier releases gave each kind of deck its own routes: `POST /api/channels/{channel_uuid}/decks/shader`, `/decks/video`, `/api/decks/{deck_uuid}/video/speed`, `/api/devices/ndi/scan`, `/api/streams/hls/library`, and so on. They still work for one release and are listed under **Deprecated** below. Each one's description names the generic route that replaces it. They will be removed in the release after the one that deprecated them.
+
+The engine state changed shape without a transition release. A deck's per-type fields (`video_playback`, `screen_capture`, `tap`, `point_cloud_params`, `scaling_mode`, `is_html`, `is_depth_sensor`) are now under `source` (`source.type`, `source.status.params`, `source.status.info`). The top-level device and library lists (`ndi_sources`, `syphon_sources`, `spout_sources`, `depth_sensors`, `screen_capture`, `stream_receivers`, `libraries`) are now one list, `sources`, with an entry per source type. `GET /api/state/sources` serves it on its own.
+
 ## Route Reference
 
 For request and response schemas, see the Swagger UI at `/api/docs`.
@@ -462,7 +513,7 @@ bodies and workflow.
 
 <!-- BEGIN GENERATED ROUTES -->
 
-<!-- Generated from ApiDoc::openapi() by tests/api_docs.rs.
+<!-- Generated from api_doc() by tests/api_docs.rs.
      Regenerate with: UPDATE_API_DOCS=1 cargo test --test api_docs -->
 
 Writes address entities by UUID. Positional integers appear only as reorder
@@ -532,14 +583,33 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 
 | Method | Path | Description |
 |---|---|---|
+| `POST` | `/api/channels/{channel_uuid}/decks` | Add a deck of any source type. The body is the source's config, for |
+| `PUT` | `/api/channels/{channel_uuid}/decks/reorder` |  |
+| `DELETE` | `/api/decks/{deck_uuid}` |  |
+| `PUT` | `/api/decks/{deck_uuid}/blend-mode` |  |
+| `POST` | `/api/decks/{deck_uuid}/move` |  |
+| `PUT` | `/api/decks/{deck_uuid}/mute` |  |
+| `PUT` | `/api/decks/{deck_uuid}/opacity` |  |
+| `PUT` | `/api/decks/{deck_uuid}/render-fps` |  |
+| `PUT` | `/api/decks/{deck_uuid}/solo` |  |
+| `PUT` | `/api/decks/{deck_uuid}/source` | Swap a deck's source for another, keeping the deck's identity, effects, |
+| `POST` | `/api/decks/{deck_uuid}/source/actions/{name}` | Fire one of a deck's source actions (reload a page, clear in/out points). |
+| `PUT` | `/api/decks/{deck_uuid}/source/params/{name}` | Write one of a deck's source controls, by the name its type declares in |
+| `PUT` | `/api/decks/{deck_uuid}/transparent` |  |
+
+### Deprecated
+
+| Method | Path | Description |
+|---|---|---|
 | `POST` | `/api/channels/{channel_uuid}/decks/camera` |  |
 | `POST` | `/api/channels/{channel_uuid}/decks/dash` |  |
+| `POST` | `/api/channels/{channel_uuid}/decks/depth` |  |
 | `POST` | `/api/channels/{channel_uuid}/decks/hls` |  |
 | `POST` | `/api/channels/{channel_uuid}/decks/html` |  |
 | `POST` | `/api/channels/{channel_uuid}/decks/image` |  |
 | `POST` | `/api/channels/{channel_uuid}/decks/ndi` |  |
-| `PUT` | `/api/channels/{channel_uuid}/decks/reorder` |  |
 | `POST` | `/api/channels/{channel_uuid}/decks/rtmp` |  |
+| `POST` | `/api/channels/{channel_uuid}/decks/screen` |  |
 | `POST` | `/api/channels/{channel_uuid}/decks/shader` |  |
 | `POST` | `/api/channels/{channel_uuid}/decks/solid` |  |
 | `POST` | `/api/channels/{channel_uuid}/decks/spout` |  |
@@ -547,26 +617,36 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `POST` | `/api/channels/{channel_uuid}/decks/syphon` |  |
 | `POST` | `/api/channels/{channel_uuid}/decks/tap` |  |
 | `POST` | `/api/channels/{channel_uuid}/decks/video` |  |
-| `DELETE` | `/api/decks/{deck_uuid}` |  |
-| `PUT` | `/api/decks/{deck_uuid}/blend-mode` |  |
 | `POST` | `/api/decks/{deck_uuid}/html/interactive` |  |
 | `POST` | `/api/decks/{deck_uuid}/html/reload` |  |
-| `POST` | `/api/decks/{deck_uuid}/move` |  |
-| `PUT` | `/api/decks/{deck_uuid}/mute` |  |
-| `PUT` | `/api/decks/{deck_uuid}/opacity` |  |
-| `PUT` | `/api/decks/{deck_uuid}/render-fps` |  |
 | `PUT` | `/api/decks/{deck_uuid}/scaling-mode` |  |
-| `PUT` | `/api/decks/{deck_uuid}/solo` |  |
 | `PUT` | `/api/decks/{deck_uuid}/tap/source` |  |
-| `PUT` | `/api/decks/{deck_uuid}/transparent` |  |
-
-### Depth Sensors
-
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/api/channels/{channel_uuid}/decks/depth` |  |
+| `DELETE` | `/api/decks/{deck_uuid}/video/in-out-points` |  |
+| `PUT` | `/api/decks/{deck_uuid}/video/in-point` |  |
+| `PUT` | `/api/decks/{deck_uuid}/video/loop-mode` |  |
+| `PUT` | `/api/decks/{deck_uuid}/video/out-point` |  |
+| `PUT` | `/api/decks/{deck_uuid}/video/seek` |  |
+| `PUT` | `/api/decks/{deck_uuid}/video/speed` |  |
+| `POST` | `/api/decks/{deck_uuid}/video/toggle-play` |  |
+| `PUT` | `/api/decks/{deck_uuid}/video/transport-sync` |  |
+| `POST` | `/api/devices/cameras/scan` |  |
 | `POST` | `/api/devices/depth/scan` |  |
-| `GET` | `/api/library/depth` | Depth sensors discovered by the last scan, as name and sensor id. |
+| `POST` | `/api/devices/ndi/scan` |  |
+| `POST` | `/api/devices/screen/permission` |  |
+| `POST` | `/api/devices/screen/scan` |  |
+| `POST` | `/api/devices/syphon/scan` |  |
+| `GET` | `/api/library/depth` |  |
+| `GET` | `/api/library/ndi` |  |
+| `GET` | `/api/library/screen` |  |
+| `GET` | `/api/library/syphon` |  |
+| `POST` | `/api/streams/dash/library` |  |
+| `DELETE` | `/api/streams/dash/library` |  |
+| `POST` | `/api/streams/hls/library` |  |
+| `DELETE` | `/api/streams/hls/library` |  |
+| `POST` | `/api/streams/library` |  |
+| `DELETE` | `/api/streams/library` |  |
+| `POST` | `/api/streams/rtmp/library` |  |
+| `DELETE` | `/api/streams/rtmp/library` |  |
 
 ### Devices
 
@@ -574,11 +654,8 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 |---|---|---|
 | `PUT` | `/api/devices/audio/enabled` |  |
 | `POST` | `/api/devices/audio/scan` |  |
-| `POST` | `/api/devices/cameras/scan` |  |
 | `PUT` | `/api/devices/midi/enabled` |  |
 | `POST` | `/api/devices/midi/scan` |  |
-| `POST` | `/api/devices/ndi/scan` |  |
-| `POST` | `/api/devices/syphon/scan` |  |
 | `DELETE` | `/api/midi/mappings` |  |
 | `POST` | `/api/midi/mappings/remove` |  |
 
@@ -603,8 +680,6 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `GET` | `/api/library/effects` | Effect (filter) shaders available in the registry, with their registry indices. |
 | `GET` | `/api/library/generators` | Generator shaders available in the registry, with their registry indices. |
 | `GET` | `/api/library/monitors` | Connected monitors available as output displays, with name, index, and pixel size. |
-| `GET` | `/api/library/ndi` | Names of the NDI sources discovered by the last scan. |
-| `GET` | `/api/library/syphon` | Names of the Syphon servers discovered by the last scan. |
 | `GET` | `/api/library/transitions` | Names of the transition shaders the crossfader can use. |
 
 ### Macros
@@ -686,20 +761,22 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/outputs` |  |
-| `POST` | `/api/outputs/headless` |  |
+| `GET` | `/api/library/outputs` | Every registered output type: its settings, whether this run can drive |
+| `POST` | `/api/outputs` | Create an output of any sink type. The body is the sink's config, for |
+| `POST` | `/api/outputs/types/{sink_type}/actions/{action}` | Run a library action an output type offers (`rescan`). Answers with the |
 | `DELETE` | `/api/outputs/{output_uuid}` |  |
 | `PUT` | `/api/outputs/{output_uuid}/calibration` |  |
-| `PUT` | `/api/outputs/{output_uuid}/display` |  |
 | `PUT` | `/api/outputs/{output_uuid}/edge-blend` |  |
 | `PUT` | `/api/outputs/{output_uuid}/edge-blend-mode` |  |
 | `PUT` | `/api/outputs/{output_uuid}/presentation` |  |
+| `PUT` | `/api/outputs/{output_uuid}/sink/params/{name}` | Write one of an output's sink settings, by the name its type declares in |
 | `POST` | `/api/outputs/{output_uuid}/start` |  |
 | `POST` | `/api/outputs/{output_uuid}/stop` |  |
 | `POST` | `/api/outputs/{output_uuid}/surfaces` |  |
 | `DELETE` | `/api/outputs/{output_uuid}/surfaces/{surface_uuid}` |  |
-| `PUT` | `/api/outputs/{output_uuid}/target` |  |
+| `PUT` | `/api/outputs/{output_uuid}/target` | Point an output at another sink, keeping its surfaces, warp, edge blend and |
 | `PUT` | `/api/outputs/{output_uuid}/tonemap` |  |
+| `PUT` | `/api/outputs/{output_uuid}/unassigned` | Choose what an output shows with no surfaces assigned. |
 
 ### Params
 
@@ -722,16 +799,6 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `GET` | `/api/scene/macros` | Every macro control with its kind, current value, and parameter targets. |
 | `GET` | `/api/scene/modulation` | Modulation sources, their current output values, and parameter assignments. |
 | `GET` | `/api/scene/sequences` | Every transition sequence with its steps and playback state. |
-| `GET` | `/api/scene/streams` | Active stream receivers with their URL, mode, and connection status. |
-
-### Screen Capture
-
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/api/channels/{channel_uuid}/decks/screen` |  |
-| `POST` | `/api/devices/screen/permission` | Trigger the platform screen-recording permission request. |
-| `POST` | `/api/devices/screen/scan` |  |
-| `GET` | `/api/library/screen` | Displays and windows found by the last capture scan. |
 
 ### Sequences
 
@@ -753,6 +820,15 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `PUT` | `/api/sequences/{sequence_uuid}/steps/{step_idx}/to-ch` |  |
 | `POST` | `/api/sequences/{sequence_uuid}/stop` |  |
 | `POST` | `/api/sequences/{sequence_uuid}/toggle` |  |
+
+### Sources
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/library/sources` | Every registered deck source type: its controls, whether this build can |
+| `POST` | `/api/sources/{source_type}/actions/{action}` | Run a library action a source type offers: `rescan`, or one a library |
+| `POST` | `/api/sources/{source_type}/library` | Save an entry to a source type's library (a stream URL). The body holds the |
+| `DELETE` | `/api/sources/{source_type}/library` | Remove an entry from a source type's library. |
 
 ### Stage
 
@@ -779,41 +855,23 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `GET` | `/api/state/clipboard` | What the clipboard holds, or null when it is empty. |
 | `GET` | `/api/state/clock` | Clock state: resolved BPM, beat phase, active source, and detected clock sources. |
 | `GET` | `/api/state/deck-loads` | Decks being built in the background, then loads that failed in the last minute with the reason. Shader, image, and video decks answer their create request with a UUID straight away and appear in the mixer once built. |
-| `GET` | `/api/state/depth` | Depth sensors discovered by the last scan. |
 | `GET` | `/api/state/dome` | Dome projection the domemaster is rendered for: projector preset and dome geometry, content rotation included. |
 | `GET` | `/api/state/keymap` | Keyboard shortcuts: every binding, whether keyboard learn is active, and what it will bind. |
-| `GET` | `/api/state/libraries` | Saved stream and HTML sources: the HLS, DASH, RTMP, and HTML libraries, with whether each stream is connected and each page is showing. |
 | `GET` | `/api/state/macros` | Every macro control with its kind, current value, and parameter targets. |
 | `GET` | `/api/state/midi` | MIDI state: devices, mappings, and whether learn mode is active. |
 | `GET` | `/api/state/mixer` | Mixer state: channels, crossfader position, master effects, active transition, and sequences. |
 | `GET` | `/api/state/modulation` | Modulation state: sources, their current output values, and parameter assignments. |
-| `GET` | `/api/state/ndi` | NDI runtime availability and the source names found by the last scan. |
 | `GET` | `/api/state/notifications` | Notifications currently shown to the performer: id, level, message, and how far through its display time each is. |
 | `GET` | `/api/state/outputs` | Output state: output windows, surfaces, and connected monitors. |
 | `GET` | `/api/state/performance` | Render loop counters: measured FPS, total frames rendered, and the configured target FPS. |
 | `GET` | `/api/state/presets` | Saved deck and channel presets, by name. |
 | `GET` | `/api/state/registry` | Shader registry: generator and filter shader names with their indices. |
 | `GET` | `/api/state/render` | Render resolution, the largest dimension the GPU allows, and the domemaster resolution. |
-| `GET` | `/api/state/screen_capture` | Screen capture state: enumerated targets, permission state, backend, and active session count. |
-| `GET` | `/api/state/streams` | Active stream receivers with their URL, mode, and connection status. |
+| `GET` | `/api/state/sources` | Every deck source type: its controls, whether this build can run it, and what its library offers. |
 | `GET` | `/api/state/surfaces` | Every surface with its geometry, warp, and source assignment. |
-| `GET` | `/api/state/syphon` | Syphon framework availability and the server names found by the last scan. |
 | `GET` | `/api/state/system` | Load on the machine running the engine (CPU, RAM, GPU utilization) and the GPU adapter it runs on. |
 | `GET` | `/api/state/timecode` | Timecode diagnostics: every LTC and MTC input being listened to with its own position and run state, which one is driving the transport, and the current preference and LTC patch. |
 | `GET` | `/api/state/transport` | Transport state: absolute position, timecode, run status, loop region, and follower count. |
-
-### Streams
-
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/api/streams/dash/library` |  |
-| `DELETE` | `/api/streams/dash/library` |  |
-| `POST` | `/api/streams/hls/library` |  |
-| `DELETE` | `/api/streams/hls/library` |  |
-| `POST` | `/api/streams/library` |  |
-| `DELETE` | `/api/streams/library` |  |
-| `POST` | `/api/streams/rtmp/library` |  |
-| `DELETE` | `/api/streams/rtmp/library` |  |
 
 ### Surfaces
 
@@ -899,19 +957,6 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `PUT` | `/api/transport/record` | Arm or disarm automation recording. Arming from a stop also rolls the show, |
 | `PUT` | `/api/transport/source` |  |
 | `POST` | `/api/transport/stop` |  |
-
-### Video
-
-| Method | Path | Description |
-|---|---|---|
-| `DELETE` | `/api/decks/{deck_uuid}/video/in-out-points` |  |
-| `PUT` | `/api/decks/{deck_uuid}/video/in-point` |  |
-| `PUT` | `/api/decks/{deck_uuid}/video/loop-mode` |  |
-| `PUT` | `/api/decks/{deck_uuid}/video/out-point` |  |
-| `PUT` | `/api/decks/{deck_uuid}/video/seek` |  |
-| `PUT` | `/api/decks/{deck_uuid}/video/speed` |  |
-| `POST` | `/api/decks/{deck_uuid}/video/toggle-play` |  |
-| `PUT` | `/api/decks/{deck_uuid}/video/transport-sync` |  |
 
 <!-- END GENERATED ROUTES -->
 

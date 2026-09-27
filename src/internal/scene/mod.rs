@@ -231,9 +231,6 @@ pub struct ChannelConfig {
 fn default_opacity() -> f32 {
     1.0
 }
-fn default_video_speed() -> f64 {
-    1.0
-}
 
 // ── Deck ───────────────────────────────────────────────────────────
 
@@ -540,283 +537,9 @@ impl From<EasingConfig> for crate::mixer::CrossfadeEasing {
 
 // ── Source ──────────────────────────────────────────────────────────
 
-/// What generates the base image for a deck.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum SourceConfig {
-    /// ISF shader generator
-    Shader {
-        path: String,
-        #[serde(default)]
-        params: HashMap<String, ParamValue>,
-        /// Depth-sensor preprocessor binding, present only when the shader
-        /// declares a `depth_sensor` PREPROCESSOR. Absent on every legacy scene
-        /// and on every shader that does not use one, so `.varda/` directories
-        /// written by earlier builds are unaffected.
-        /// See spec/depth-sensor-preprocessor.md § Persistence.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        depth_prepro: Option<DepthPreproConfig>,
-    },
-    /// Video file (ffmpeg or HAP)
-    Video {
-        path: String,
-        /// Loop mode (default: Loop)
-        #[serde(default)]
-        loop_mode: crate::video::LoopMode,
-        /// Playback speed multiplier (default: 1.0)
-        #[serde(default = "default_video_speed")]
-        speed: f64,
-        /// In-point in seconds (default: 0.0 = start)
-        #[serde(default)]
-        in_point: f64,
-        /// Out-point in seconds (default: 0.0 = end of file)
-        #[serde(default)]
-        out_point: f64,
-        /// How the video is scaled to the deck (default: Fill)
-        #[serde(default)]
-        scaling_mode: crate::deck::ScalingMode,
-        /// Mapping onto the show transport. Default Auto: chase while the
-        /// transport is running. See /spec/timecode.md § Consumer 2.
-        #[serde(default)]
-        transport_sync: crate::video::DeckTransportSync,
-    },
-    /// Static image
-    Image {
-        path: String,
-        /// How the image is scaled to the deck (default: Fill)
-        #[serde(default)]
-        scaling_mode: crate::deck::ScalingMode,
-    },
-    /// Solid color fill
-    SolidColor { color: [f32; 4] },
-    /// Live camera feed (matched by name on restore)
-    Camera { name: String },
-    /// NDI network video source (matched by name on restore)
-    Ndi { name: String },
-    /// Syphon inter-app video source (matched by server name on restore, macOS only)
-    Syphon { name: String },
-    /// Spout inter-app video source (matched by sender name on restore, Windows only)
-    Spout { name: String },
-    /// SRT network video source (url + mode, reconnected on restore)
-    Srt { url: String, mode: String },
-    /// HLS stream source (reconnected on restore)
-    Hls { url: String },
-    /// DASH stream source (reconnected on restore)
-    Dash { url: String },
-    /// RTMP stream source (reconnected on restore)
-    Rtmp { url: String, mode: String },
-    /// HTML content source (URL or file path, rendered via Servo)
-    Html { url: String },
-    /// Depth sensor (Kinect/LIDAR point cloud, matched by name on restore)
-    DepthSensor {
-        name: String,
-        /// Point-cloud view params (None on legacy scenes → engine defaults)
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        params: Option<DepthParamsConfig>,
-    },
-    /// OS display or application window capture. The target is matched by
-    /// **name** on restore, never by platform handle — display ids and window
-    /// numbers are ephemeral across reboots. See spec/screen-capture.md.
-    ScreenCapture {
-        target: CaptureTargetConfig,
-        /// Capture frames per second (1–120).
-        #[serde(default = "default_capture_rate")]
-        rate: f32,
-        /// Normalized crop within the target. Absent means the full frame.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        crop: Option<CaptureCropConfig>,
-        #[serde(default)]
-        show_cursor: bool,
-        /// `None` means "use the per-target default": exclude Varda from a
-        /// display capture, include it when the target *is* a Varda window.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        exclude_varda: Option<bool>,
-        #[serde(default)]
-        scaling_mode: crate::deck::ScalingMode,
-    },
-    /// Varda's own program or a channel composite, re-entered as a source.
-    /// See spec/program-tap.md.
-    Tap {
-        source: TapSourceConfig,
-        #[serde(default)]
-        scaling_mode: crate::deck::ScalingMode,
-    },
-}
-
-/// The tap point a scene records. Channels are referenced by UUID so a tap
-/// survives reordering, which already carries semantic weight in the mixer.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum TapSourceConfig {
-    MasterProgram,
-    Channel { uuid: String },
-}
-
-impl From<&crate::deck::TapSource> for TapSourceConfig {
-    fn from(source: &crate::deck::TapSource) -> Self {
-        match source {
-            crate::deck::TapSource::MasterProgram => Self::MasterProgram,
-            crate::deck::TapSource::Channel(uuid) => Self::Channel { uuid: uuid.clone() },
-        }
-    }
-}
-
-impl From<&TapSourceConfig> for crate::deck::TapSource {
-    fn from(cfg: &TapSourceConfig) -> Self {
-        match cfg {
-            TapSourceConfig::MasterProgram => Self::MasterProgram,
-            TapSourceConfig::Channel { uuid } => Self::Channel(uuid.clone()),
-        }
-    }
-}
-
-fn default_capture_rate() -> f32 {
-    crate::screen_capture::backend::DEFAULT_CAPTURE_RATE
-}
-
-/// A capture target in handle-free form, so a scene survives a reboot.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum CaptureTargetConfig {
-    Display { name: String },
-    Window { app: String, title: String },
-}
-
-impl CaptureTargetConfig {
-    pub fn label(&self) -> String {
-        match self {
-            Self::Display { name } => name.clone(),
-            Self::Window { app, title } if title.is_empty() => app.clone(),
-            Self::Window { app, title } => format!("{app} — {title}"),
-        }
-    }
-
-    /// Whether this target is a display, which is what decides the
-    /// `exclude_varda` default when the scene did not record one.
-    pub fn is_display(&self) -> bool {
-        matches!(self, Self::Display { .. })
-    }
-}
-
-impl From<&crate::screen_capture::backend::TargetIdentity> for CaptureTargetConfig {
-    fn from(id: &crate::screen_capture::backend::TargetIdentity) -> Self {
-        use crate::screen_capture::backend::TargetIdentity;
-        match id {
-            TargetIdentity::Display { label } => Self::Display {
-                name: label.clone(),
-            },
-            TargetIdentity::Window { app, title } => Self::Window {
-                app: app.clone(),
-                title: title.clone(),
-            },
-        }
-    }
-}
-
-impl From<&CaptureTargetConfig> for crate::screen_capture::backend::TargetIdentity {
-    fn from(cfg: &CaptureTargetConfig) -> Self {
-        match cfg {
-            CaptureTargetConfig::Display { name } => Self::Display {
-                label: name.clone(),
-            },
-            CaptureTargetConfig::Window { app, title } => Self::Window {
-                app: app.clone(),
-                title: title.clone(),
-            },
-        }
-    }
-}
-
-/// Normalized crop rectangle (0.0–1.0) within a capture target.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct CaptureCropConfig {
-    pub x: f32,
-    pub y: f32,
-    pub w: f32,
-    pub h: f32,
-}
-
-impl From<crate::screen_capture::backend::CropRect> for CaptureCropConfig {
-    fn from(c: crate::screen_capture::backend::CropRect) -> Self {
-        Self {
-            x: c.x,
-            y: c.y,
-            w: c.w,
-            h: c.h,
-        }
-    }
-}
-
-impl From<CaptureCropConfig> for crate::screen_capture::backend::CropRect {
-    fn from(c: CaptureCropConfig) -> Self {
-        Self {
-            x: c.x,
-            y: c.y,
-            w: c.w,
-            h: c.h,
-        }
-    }
-}
-
-/// Serializable depth-sensor preprocessor binding for shader decks.
-///
-/// The sensor is matched by **name** on restore, matching the convention used by
-/// cameras and depth-sensor decks — device ids are not stable across replugs.
-/// If no matching sensor is present the deck is skipped with a warning, because
-/// `depth_sensor` is a required preprocessor.
-///
-/// Params are stored denormalized (physical units), matching the runtime
-/// `DepthPreprocessParams`. Every field is `#[serde(default)]` so scenes written
-/// before a field existed still load.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DepthPreproConfig {
-    pub sensor_name: String,
-    #[serde(default)]
-    pub near_mm: f32,
-    #[serde(default)]
-    pub far_mm: f32,
-    #[serde(default)]
-    pub smoothing: f32,
-    #[serde(default)]
-    pub hole_fill: f32,
-    #[serde(default)]
-    pub mask_feather: f32,
-    #[serde(default)]
-    pub motion_gain: f32,
-    #[serde(default)]
-    pub mirror: bool,
-}
-
-/// Serializable point-cloud view params for depth-sensor decks. All fields are
-/// `#[serde(default)]` so older scenes (and scenes written before a field was
-/// added) deserialize cleanly. Stored denormalized (physical units), matching
-/// the runtime `PointCloudParams`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DepthParamsConfig {
-    #[serde(default)]
-    pub orbit_yaw: f32,
-    #[serde(default)]
-    pub orbit_pitch: f32,
-    #[serde(default)]
-    pub zoom: f32,
-    #[serde(default)]
-    pub point_size: f32,
-    /// 0 = Rgb, 1 = `DepthRamp`, 2 = Solid
-    #[serde(default)]
-    pub color_mode: u8,
-    #[serde(default)]
-    pub depth_min_mm: f32,
-    #[serde(default)]
-    pub depth_max_mm: f32,
-    #[serde(default)]
-    pub solid_color: [f32; 3],
-    #[serde(default)]
-    pub seed: f32,
-    #[serde(default)]
-    pub drift: f32,
-    #[serde(default)]
-    pub disruption: f32,
-}
+/// What generates a deck's base image: a source type id and that type's
+/// fields, decoded by the provider. See /spec/deck-source-providers.md.
+pub use crate::source::SourceConfig;
 
 // ── Effect ─────────────────────────────────────────────────────────
 
@@ -842,66 +565,6 @@ fn default_true() -> bool {
 
 // ── Output ─────────────────────────────────────────────────────────
 
-/// Serializable output target configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-#[derive(Default)]
-pub enum OutputTargetConfig {
-    #[default]
-    Windowed,
-    Display {
-        name: String,
-    },
-    Recording {
-        path: String,
-        codec: String,
-        /// Audio passthrough device name (None = silent). See spec/audio-passthrough.md.
-        #[serde(default)]
-        audio_device: Option<String>,
-    },
-    SrtStream {
-        url: String,
-        #[serde(default)]
-        codec: String,
-        #[serde(default)]
-        audio_device: Option<String>,
-    },
-    HlsStream {
-        name: String,
-        #[serde(default)]
-        codec: String,
-        #[serde(default)]
-        short_segments: bool,
-        #[serde(default)]
-        audio_device: Option<String>,
-    },
-    DashStream {
-        name: String,
-        #[serde(default)]
-        codec: String,
-        #[serde(default)]
-        audio_device: Option<String>,
-    },
-    RtmpStream {
-        url: String,
-        #[serde(default)]
-        codec: String,
-        #[serde(default)]
-        codec_contract: crate::renderer::context::RtmpCodecContract,
-        #[serde(default)]
-        audio_device: Option<String>,
-    },
-    NdiSend {
-        sender_name: String,
-    },
-    SyphonServer {
-        server_name: String,
-    },
-    SpoutSender {
-        sender_name: String,
-    },
-}
-
 /// Serializable output configuration (unified model).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutputConfig {
@@ -909,21 +572,22 @@ pub struct OutputConfig {
     #[serde(default = "generate_default_uuid")]
     pub uuid: String,
     pub name: String,
-    /// The output target type and config.
-    #[serde(default)]
-    pub target: OutputTargetConfig,
-    /// Legacy field — Display target name. Kept for backwards compat during migration.
-    /// Ignored if `target` is present and not Windowed.
+    /// Where the output delivers: its sink type and that type's settings,
+    /// saved as `{"type": "<id>", ...}` as it always has been. See
+    /// /spec/output-sink-providers.md.
+    #[serde(default = "default_sink")]
+    pub target: crate::output::SinkConfig,
+    /// Legacy field — Display target name. Read only to migrate old files.
     #[serde(default, skip_serializing)]
     pub target_display: Option<String>,
     /// Surface assignments with warp calibration
     #[serde(default)]
     pub surface_assignments: Vec<SurfaceAssignmentConfig>,
-    /// Saved window position [x, y] in physical pixels (for Windowed targets).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Legacy window position; now saved with a window's sink settings.
+    #[serde(default, skip_serializing)]
     pub window_position: Option<[i32; 2]>,
-    /// Saved window size [width, height] in physical pixels (for Windowed targets).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Legacy window size; now saved with a window's sink settings.
+    #[serde(default, skip_serializing)]
     pub window_size: Option<[u32; 2]>,
     /// Whether edge blend is auto-computed or manually configured.
     #[serde(default)]
@@ -941,15 +605,39 @@ pub struct OutputConfig {
     /// which is what every stage written before this field did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tonemap_override: Option<crate::engine::value::render::TonemapMode>,
+    /// Calibration test cards, on any output. Absent means off.
+    #[serde(default, skip_serializing_if = "is_calibration_off")]
+    pub calibration_mode: crate::engine::value::render::CalibrationMode,
+    /// What the output shows with nothing assigned. Absent means the sink's
+    /// default. See /spec/output-sink-providers.md Decision 13.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unassigned: Option<crate::engine::value::render::Unassigned>,
+}
+
+fn default_sink() -> crate::output::SinkConfig {
+    crate::output::SinkConfig::new(crate::output::window::WINDOWED)
+}
+
+#[allow(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if passes a reference"
+)]
+fn is_calibration_off(mode: &crate::engine::value::render::CalibrationMode) -> bool {
+    *mode == crate::engine::value::render::CalibrationMode::Off
 }
 
 impl OutputConfig {
-    /// Create a default windowed output config with an auto-generated name.
+    /// A floating window, named by whoever creates it.
     pub fn default_windowed() -> Self {
+        Self::for_sink(default_sink())
+    }
+
+    /// A new output delivering through `target`.
+    pub fn for_sink(target: crate::output::SinkConfig) -> Self {
         Self {
             uuid: crate::ids::generate_short_uuid(),
             name: String::new(),
-            target: OutputTargetConfig::Windowed,
+            target,
             target_display: None,
             surface_assignments: Vec::new(),
             window_position: None,
@@ -959,6 +647,29 @@ impl OutputConfig {
             rotation: crate::renderer::context::OutputRotation::default(),
             presentation: crate::engine::value::render::PresentationRequest::default(),
             tonemap_override: None,
+            calibration_mode: crate::engine::value::render::CalibrationMode::Off,
+            unassigned: None,
+        }
+    }
+
+    /// Fold fields older files kept outside the sink config into it: a
+    /// display's monitor name, and a window's position and size.
+    pub fn migrate_legacy(&mut self) {
+        use crate::output::window::{DISPLAY, WINDOWED};
+        if self.target.type_id() == WINDOWED
+            && let Some(name) = self.target_display.take()
+        {
+            self.target = crate::output::SinkConfig::new(DISPLAY).with("name", name);
+        }
+        if let Some(position) = self.window_position.take()
+            && self.target.get("position").is_none()
+        {
+            self.target.set("position", position);
+        }
+        if let Some(size) = self.window_size.take()
+            && self.target.get("size").is_none()
+        {
+            self.target.set("size", size);
         }
     }
 }
@@ -1051,132 +762,6 @@ impl From<BlendModeConfig> for BlendMode {
 
 // ── Validation ─────────────────────────────────────────────────────
 
-impl SourceConfig {
-    /// Validate source config. Returns a list of errors (empty = valid).
-    pub fn validate(&self, prefix: &str) -> Vec<String> {
-        let mut errors = Vec::new();
-        match self {
-            SourceConfig::Shader { path, .. } => {
-                if path.trim().is_empty() {
-                    errors.push(format!("{prefix}: shader path is empty"));
-                }
-            }
-            SourceConfig::Video { path, .. } => {
-                if path.trim().is_empty() {
-                    errors.push(format!("{prefix}: video path is empty"));
-                }
-            }
-            SourceConfig::Image { path, .. } => {
-                if path.trim().is_empty() {
-                    errors.push(format!("{prefix}: image path is empty"));
-                }
-            }
-            SourceConfig::SolidColor { color } => {
-                for (i, c) in color.iter().enumerate() {
-                    if !c.is_finite() {
-                        errors.push(format!("{prefix}: color[{i}] is not finite"));
-                    }
-                }
-            }
-            SourceConfig::Camera { name } => {
-                if name.trim().is_empty() {
-                    errors.push(format!("{prefix}: camera name is empty"));
-                }
-            }
-            SourceConfig::Ndi { name } => {
-                if name.trim().is_empty() {
-                    errors.push(format!("{prefix}: NDI name is empty"));
-                }
-            }
-            SourceConfig::Spout { name } => {
-                if name.trim().is_empty() {
-                    errors.push(format!("{prefix}: Spout name is empty"));
-                }
-            }
-            SourceConfig::Syphon { name } => {
-                if name.trim().is_empty() {
-                    errors.push(format!("{prefix}: Syphon name is empty"));
-                }
-            }
-            SourceConfig::Srt { url, .. } => {
-                if url.trim().is_empty() {
-                    errors.push(format!("{prefix}: SRT url is empty"));
-                }
-            }
-            SourceConfig::Hls { url } => {
-                if url.trim().is_empty() {
-                    errors.push(format!("{prefix}: HLS url is empty"));
-                }
-            }
-            SourceConfig::Dash { url } => {
-                if url.trim().is_empty() {
-                    errors.push(format!("{prefix}: DASH url is empty"));
-                }
-            }
-            SourceConfig::Rtmp { url, .. } => {
-                if url.trim().is_empty() {
-                    errors.push(format!("{prefix}: RTMP url is empty"));
-                }
-            }
-            SourceConfig::Html { url } => {
-                if url.trim().is_empty() {
-                    errors.push(format!("{prefix}: HTML url is empty"));
-                }
-            }
-            SourceConfig::DepthSensor { name, .. } => {
-                if name.trim().is_empty() {
-                    errors.push(format!("{prefix}: depth sensor name is empty"));
-                }
-            }
-            SourceConfig::ScreenCapture {
-                target, rate, crop, ..
-            } => {
-                match target {
-                    CaptureTargetConfig::Display { name } if name.trim().is_empty() => {
-                        errors.push(format!("{prefix}: capture display name is empty"));
-                    }
-                    CaptureTargetConfig::Window { app, title } => {
-                        // A window with neither an app nor a title can never be
-                        // matched back to a live target, so it is unrecoverable
-                        // rather than merely stale.
-                        if app.trim().is_empty() && title.trim().is_empty() {
-                            errors.push(format!("{prefix}: capture window has no app or title"));
-                        }
-                    }
-                    CaptureTargetConfig::Display { .. } => {}
-                }
-                if !rate.is_finite()
-                    || *rate < crate::screen_capture::backend::MIN_CAPTURE_RATE
-                    || *rate > crate::screen_capture::backend::MAX_CAPTURE_RATE
-                {
-                    errors.push(format!(
-                        "{prefix}: capture rate {rate} is outside {}–{}",
-                        crate::screen_capture::backend::MIN_CAPTURE_RATE,
-                        crate::screen_capture::backend::MAX_CAPTURE_RATE
-                    ));
-                }
-                if let Some(c) = crop {
-                    if !(c.x.is_finite() && c.y.is_finite() && c.w.is_finite() && c.h.is_finite()) {
-                        errors.push(format!("{prefix}: capture crop is not finite"));
-                    } else if c.x + c.w > 1.0 + f32::EPSILON || c.y + c.h > 1.0 + f32::EPSILON {
-                        errors.push(format!("{prefix}: capture crop extends outside the target"));
-                    }
-                }
-            }
-            SourceConfig::Tap { source, .. } => {
-                if let TapSourceConfig::Channel { uuid } = source {
-                    // A missing channel is a restore-time warning, not a
-                    // validation error; an empty UUID can never match anything.
-                    if uuid.trim().is_empty() {
-                        errors.push(format!("{prefix}: tap channel uuid is empty"));
-                    }
-                }
-            }
-        }
-        errors
-    }
-}
-
 impl EffectConfig {
     /// Validate effect config. Returns a list of errors (empty = valid).
     pub fn validate(&self, prefix: &str) -> Vec<String> {
@@ -1198,7 +783,6 @@ impl DeckConfig {
                 prefix, self.opacity
             ));
         }
-        errors.extend(self.source.validate(&format!("{prefix}/source")));
         for (i, fx) in self.effects.iter().enumerate() {
             errors.extend(fx.validate(&format!("{prefix}/effects[{i}]")));
         }
@@ -1300,75 +884,6 @@ impl SceneConfig {
 mod tests {
     use super::*;
 
-    // ── Program / channel tap ────────────────────────────────────────
-
-    /// Both tap variants have to survive a save/load cycle unchanged, since a
-    /// scene is the only record of what a tap deck was pointed at.
-    #[test]
-    fn tap_source_roundtrips_through_json() {
-        for source in [
-            TapSourceConfig::MasterProgram,
-            TapSourceConfig::Channel {
-                uuid: "a1b2c3d4".into(),
-            },
-        ] {
-            let cfg = SourceConfig::Tap {
-                source: source.clone(),
-                scaling_mode: crate::deck::ScalingMode::Fit,
-            };
-            let json = serde_json::to_string(&cfg).expect("serialize");
-            let back: SourceConfig = serde_json::from_str(&json).expect("deserialize");
-            match back {
-                SourceConfig::Tap {
-                    source: got,
-                    scaling_mode,
-                } => {
-                    assert_eq!(got, source);
-                    assert_eq!(scaling_mode, crate::deck::ScalingMode::Fit);
-                }
-                other => panic!("expected a tap, got {other:?}"),
-            }
-        }
-    }
-
-    /// `scaling_mode` is `#[serde(default)]`, so a scene written before the
-    /// field existed still loads.
-    #[test]
-    fn tap_source_loads_without_a_scaling_mode() {
-        let json = r#"{"type":"Tap","source":{"kind":"master_program"}}"#;
-        let cfg: SourceConfig = serde_json::from_str(json).expect("deserialize");
-        assert!(matches!(
-            cfg,
-            SourceConfig::Tap {
-                source: TapSourceConfig::MasterProgram,
-                ..
-            }
-        ));
-    }
-
-    /// A channel UUID that cannot match anything is a config error; a UUID that
-    /// merely names a deleted channel is not, because the deck is meant to
-    /// survive unbound. See spec/program-tap.md.
-    #[test]
-    fn tap_validation_rejects_only_an_empty_channel_uuid() {
-        let empty = SourceConfig::Tap {
-            source: TapSourceConfig::Channel { uuid: "  ".into() },
-            scaling_mode: crate::deck::ScalingMode::default(),
-        };
-        assert!(!empty.validate("d").is_empty());
-
-        let absent = SourceConfig::Tap {
-            source: TapSourceConfig::Channel {
-                uuid: "deadbeef".into(),
-            },
-            scaling_mode: crate::deck::ScalingMode::default(),
-        };
-        assert!(
-            absent.validate("d").is_empty(),
-            "a tap naming a channel that is not in this scene must load unbound, not fail"
-        );
-    }
-
     // ── Round-trip serialization ─────────────────────────────────────
 
     #[test]
@@ -1408,11 +923,7 @@ mod tests {
                 decks: vec![DeckConfig {
                     uuid: crate::ids::generate_short_uuid(),
                     name: "Color Burn".into(),
-                    source: SourceConfig::Shader {
-                        path: "shaders/color_burn.fs".into(),
-                        params: HashMap::new(),
-                        depth_prepro: None,
-                    },
+                    source: SourceConfig::new("Shader").with("path", "shaders/color_burn.fs"),
                     effects: vec![],
                     opacity: 0.8,
                     transparent: false,
@@ -1481,106 +992,6 @@ mod tests {
         let restored: SceneConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.master_effects.len(), 1);
         assert!(restored.master_effects[0].enabled);
-    }
-
-    #[test]
-    fn scene_config_roundtrip_solid_color_source() {
-        let source = SourceConfig::SolidColor {
-            color: [1.0, 0.0, 0.0, 1.0],
-        };
-        let json = serde_json::to_string(&source).unwrap();
-        let restored: SourceConfig = serde_json::from_str(&json).unwrap();
-        match restored {
-            SourceConfig::SolidColor { color } => {
-                assert!((color[0] - 1.0).abs() < 1e-5);
-            }
-            _ => panic!("Expected SolidColor"),
-        }
-    }
-
-    #[test]
-    fn scene_config_roundtrip_video_source() {
-        let source = SourceConfig::Video {
-            path: "clips/intro.mov".into(),
-            loop_mode: crate::video::LoopMode::Loop,
-            speed: 1.0,
-            in_point: 0.0,
-            out_point: 0.0,
-            scaling_mode: crate::deck::ScalingMode::Fit,
-            transport_sync: crate::video::DeckTransportSync {
-                mode: crate::video::TransportSyncMode::Never,
-                offset: 3600.0,
-                delay_frames: -2,
-            },
-        };
-        let json = serde_json::to_string(&source).unwrap();
-        let restored: SourceConfig = serde_json::from_str(&json).unwrap();
-        match restored {
-            SourceConfig::Video {
-                path,
-                loop_mode,
-                speed,
-                in_point,
-                out_point,
-                scaling_mode,
-                transport_sync,
-            } => {
-                assert_eq!(path, "clips/intro.mov");
-                assert_eq!(loop_mode, crate::video::LoopMode::Loop);
-                assert!((speed - 1.0).abs() < 1e-5);
-                assert!((in_point - 0.0).abs() < 1e-5);
-                assert!((out_point - 0.0).abs() < 1e-5);
-                assert_eq!(scaling_mode, crate::deck::ScalingMode::Fit);
-                assert_eq!(transport_sync.mode, crate::video::TransportSyncMode::Never);
-                assert!((transport_sync.offset - 3600.0).abs() < 1e-9);
-                assert_eq!(transport_sync.delay_frames, -2);
-            }
-            _ => panic!("Expected Video"),
-        }
-    }
-
-    #[test]
-    fn video_source_defaults_transport_sync_to_auto() {
-        let restored: SourceConfig =
-            serde_json::from_str(r#"{"type":"Video","path":"clips/intro.mov"}"#).unwrap();
-        match restored {
-            SourceConfig::Video { transport_sync, .. } => {
-                assert_eq!(transport_sync.mode, crate::video::TransportSyncMode::Auto);
-                assert_eq!(transport_sync.offset, 0.0);
-                assert_eq!(transport_sync.delay_frames, 0);
-            }
-            _ => panic!("Expected Video"),
-        }
-    }
-
-    #[test]
-    fn scene_config_roundtrip_image_source() {
-        let source = SourceConfig::Image {
-            path: "images/logo.png".into(),
-            scaling_mode: crate::deck::ScalingMode::Center,
-        };
-        let json = serde_json::to_string(&source).unwrap();
-        let restored: SourceConfig = serde_json::from_str(&json).unwrap();
-        match restored {
-            SourceConfig::Image { path, scaling_mode } => {
-                assert_eq!(path, "images/logo.png");
-                assert_eq!(scaling_mode, crate::deck::ScalingMode::Center);
-            }
-            _ => panic!("Expected Image"),
-        }
-    }
-
-    #[test]
-    fn scene_config_roundtrip_camera_source() {
-        let source = SourceConfig::Camera {
-            name: "FaceTime HD".into(),
-        };
-        let json = serde_json::to_string(&source).unwrap();
-        let restored: SourceConfig = serde_json::from_str(&json).unwrap();
-        match restored {
-            SourceConfig::Camera { name } => assert_eq!(name, "FaceTime HD"),
-            _ => panic!("Expected Camera"),
-        }
     }
 
     // ── Migration ────────────────────────────────────────────────────
@@ -1948,11 +1359,7 @@ mod tests {
                 decks: vec![DeckConfig {
                     uuid: crate::ids::generate_short_uuid(),
                     name: "Deck".into(),
-                    source: SourceConfig::Shader {
-                        path: "test.fs".into(),
-                        params: HashMap::new(),
-                        depth_prepro: None,
-                    },
+                    source: SourceConfig::new("Shader").with("path", "test.fs"),
                     effects: vec![],
                     opacity: 0.5,
                     transparent: false,
@@ -2050,11 +1457,7 @@ mod tests {
         let deck = DeckConfig {
             uuid: crate::ids::generate_short_uuid(),
             name: "D".into(),
-            source: SourceConfig::Shader {
-                path: "ok.fs".into(),
-                params: HashMap::new(),
-                depth_prepro: None,
-            },
+            source: SourceConfig::new("Shader").with("path", "ok.fs"),
             effects: vec![],
             opacity: -0.5,
             transparent: false,
@@ -2071,40 +1474,6 @@ mod tests {
     }
 
     #[test]
-    fn validate_source_empty_path() {
-        let s = SourceConfig::Shader {
-            path: String::new(),
-            params: HashMap::new(),
-            depth_prepro: None,
-        };
-        assert!(!s.validate("src").is_empty());
-        let s = SourceConfig::Video {
-            path: " ".into(),
-            loop_mode: crate::video::LoopMode::default(),
-            speed: 1.0,
-            in_point: 0.0,
-            out_point: 0.0,
-            scaling_mode: crate::deck::ScalingMode::default(),
-            transport_sync: crate::video::DeckTransportSync::default(),
-        };
-        assert!(!s.validate("src").is_empty());
-        let s = SourceConfig::Image {
-            path: String::new(),
-            scaling_mode: crate::deck::ScalingMode::default(),
-        };
-        assert!(!s.validate("src").is_empty());
-    }
-
-    #[test]
-    fn validate_source_solid_color_non_finite() {
-        let s = SourceConfig::SolidColor {
-            color: [1.0, f32::NAN, 0.0, 1.0],
-        };
-        let errors = s.validate("src");
-        assert!(errors.iter().any(|e| e.contains("color[1]")));
-    }
-
-    #[test]
     fn validate_effect_empty_path() {
         let fx = EffectConfig {
             uuid: "test0001".into(),
@@ -2117,224 +1486,12 @@ mod tests {
     }
 
     #[test]
-    fn scene_config_roundtrip_rtmp_source() {
-        let source = SourceConfig::Rtmp {
-            url: "rtmp://live.example.com/app/stream".to_string(),
-            mode: "pull".to_string(),
-        };
-        let json = serde_json::to_string(&source).unwrap();
-        let restored: SourceConfig = serde_json::from_str(&json).unwrap();
-        match restored {
-            SourceConfig::Rtmp { url, mode } => {
-                assert_eq!(url, "rtmp://live.example.com/app/stream");
-                assert_eq!(mode, "pull");
-            }
-            _ => panic!("Expected Rtmp source"),
-        }
-    }
-
-    #[test]
-    fn scene_config_roundtrip_ndi_source() {
-        let source = SourceConfig::Ndi {
-            name: "STUDIO (Camera 1)".to_string(),
-        };
-        let json = serde_json::to_string(&source).unwrap();
-        let restored: SourceConfig = serde_json::from_str(&json).unwrap();
-        match restored {
-            SourceConfig::Ndi { name } => assert_eq!(name, "STUDIO (Camera 1)"),
-            _ => panic!("Expected Ndi source"),
-        }
-    }
-
-    #[test]
-    fn scene_config_roundtrip_syphon_source() {
-        let source = SourceConfig::Syphon {
-            name: "Simple Server".to_string(),
-        };
-        let json = serde_json::to_string(&source).unwrap();
-        let restored: SourceConfig = serde_json::from_str(&json).unwrap();
-        match restored {
-            SourceConfig::Syphon { name } => assert_eq!(name, "Simple Server"),
-            _ => panic!("Expected Syphon source"),
-        }
-    }
-
-    #[test]
-    fn scene_config_roundtrip_srt_source() {
-        let source = SourceConfig::Srt {
-            url: "srt://192.168.1.10:9000".to_string(),
-            mode: "caller".to_string(),
-        };
-        let json = serde_json::to_string(&source).unwrap();
-        let restored: SourceConfig = serde_json::from_str(&json).unwrap();
-        match restored {
-            SourceConfig::Srt { url, mode } => {
-                assert_eq!(url, "srt://192.168.1.10:9000");
-                assert_eq!(mode, "caller");
-            }
-            _ => panic!("Expected Srt source"),
-        }
-    }
-
-    #[test]
-    fn scene_config_roundtrip_hls_source() {
-        let source = SourceConfig::Hls {
-            url: "https://cdn.example.com/live/index.m3u8".to_string(),
-        };
-        let json = serde_json::to_string(&source).unwrap();
-        let restored: SourceConfig = serde_json::from_str(&json).unwrap();
-        match restored {
-            SourceConfig::Hls { url } => {
-                assert_eq!(url, "https://cdn.example.com/live/index.m3u8");
-            }
-            _ => panic!("Expected Hls source"),
-        }
-    }
-
-    #[test]
-    fn scene_config_roundtrip_dash_source() {
-        let source = SourceConfig::Dash {
-            url: "https://cdn.example.com/live/manifest.mpd".to_string(),
-        };
-        let json = serde_json::to_string(&source).unwrap();
-        let restored: SourceConfig = serde_json::from_str(&json).unwrap();
-        match restored {
-            SourceConfig::Dash { url } => {
-                assert_eq!(url, "https://cdn.example.com/live/manifest.mpd");
-            }
-            _ => panic!("Expected Dash source"),
-        }
-    }
-
-    /// The `#[serde(tag = "type")]` discriminant must keep the URL-only network
-    /// variants (Hls/Dash) distinct — they share the same field shape, so a
-    /// mistagged variant would silently deserialize as the wrong source type.
-    #[test]
-    fn scene_config_url_variants_are_tag_discriminated() {
-        let hls_json = serde_json::to_string(&SourceConfig::Hls {
-            url: "u".to_string(),
-        })
-        .unwrap();
-        let dash_json = serde_json::to_string(&SourceConfig::Dash {
-            url: "u".to_string(),
-        })
-        .unwrap();
-        assert!(hls_json.contains("\"type\":\"Hls\""));
-        assert!(dash_json.contains("\"type\":\"Dash\""));
-        assert!(matches!(
-            serde_json::from_str::<SourceConfig>(&hls_json).unwrap(),
-            SourceConfig::Hls { .. }
-        ));
-        assert!(matches!(
-            serde_json::from_str::<SourceConfig>(&dash_json).unwrap(),
-            SourceConfig::Dash { .. }
-        ));
-    }
-
-    #[test]
-    fn scene_config_roundtrip_html_source() {
-        let source = SourceConfig::Html {
-            url: "https://example.com/visuals.html".to_string(),
-        };
-        let json = serde_json::to_string(&source).unwrap();
-        let restored: SourceConfig = serde_json::from_str(&json).unwrap();
-        match restored {
-            SourceConfig::Html { url } => {
-                assert_eq!(url, "https://example.com/visuals.html");
-            }
-            _ => panic!("Expected Html source"),
-        }
-    }
-
-    #[test]
-    fn scene_config_roundtrip_depth_sensor_source() {
-        let source = SourceConfig::DepthSensor {
-            name: "Kinect v1 (#0)".to_string(),
-            params: None,
-        };
-        let json = serde_json::to_string(&source).unwrap();
-        let restored: SourceConfig = serde_json::from_str(&json).unwrap();
-        match restored {
-            SourceConfig::DepthSensor { name, .. } => assert_eq!(name, "Kinect v1 (#0)"),
-            _ => panic!("Expected DepthSensor source"),
-        }
-    }
-
-    #[test]
-    fn scene_config_roundtrip_depth_sensor_params() {
-        let source = SourceConfig::DepthSensor {
-            name: "Kinect v1 (#0)".to_string(),
-            params: Some(DepthParamsConfig {
-                orbit_yaw: 0.3,
-                orbit_pitch: -0.2,
-                zoom: 1.5,
-                point_size: 4.0,
-                color_mode: 2,
-                depth_min_mm: 500.0,
-                depth_max_mm: 3500.0,
-                solid_color: [0.1, 0.2, 0.3],
-                seed: 0.05,
-                drift: 0.4,
-                disruption: 0.7,
-            }),
-        };
-        let json = serde_json::to_string(&source).unwrap();
-        let restored: SourceConfig = serde_json::from_str(&json).unwrap();
-        match restored {
-            SourceConfig::DepthSensor {
-                params: Some(p), ..
-            } => {
-                assert_eq!(p.color_mode, 2);
-                assert_eq!(p.seed, 0.05);
-                assert_eq!(p.drift, 0.4);
-                assert_eq!(p.disruption, 0.7);
-            }
-            _ => panic!("Expected DepthSensor source with params"),
-        }
-    }
-
-    #[test]
-    fn scene_config_depth_sensor_legacy_json_has_no_params() {
-        // A scene written before point-cloud params existed omits the key entirely.
-        let json = r#"{"type":"DepthSensor","name":"Kinect v1 (#0)"}"#;
-        let restored: SourceConfig = serde_json::from_str(json).unwrap();
-        match restored {
-            SourceConfig::DepthSensor { name, params } => {
-                assert_eq!(name, "Kinect v1 (#0)");
-                assert!(
-                    params.is_none(),
-                    "legacy scenes must default params to None"
-                );
-            }
-            _ => panic!("Expected DepthSensor source"),
-        }
-    }
-
-    #[test]
     fn legacy_output_defaults_to_eight_bit_dithered_presentation() {
         let output: OutputConfig = serde_json::from_str(r#"{"name":"Main"}"#).unwrap();
         assert_eq!(
             output.presentation,
             crate::engine::value::render::PresentationRequest::default()
         );
-    }
-
-    #[test]
-    fn a_stage_written_before_the_short_segments_rename_still_loads() {
-        // The field was called `low_latency` until it was measured and found not
-        // to be RFC low-latency HLS. Existing `.varda/` directories must keep
-        // working, so the old name is accepted as an alias.
-        use crate::engine::value::render::OutputTarget;
-        let json = serde_json::json!({
-            "HlsStream": { "name": "live", "codec": "H265", "low_latency": true }
-        });
-        let target: OutputTarget = serde_json::from_value(json).unwrap();
-        match target {
-            OutputTarget::HlsStream { short_segments, .. } => {
-                assert!(short_segments, "the old field name must still be honoured");
-            }
-            other => panic!("expected an HLS stream, got {other:?}"),
-        }
     }
 
     #[test]
@@ -2418,91 +1575,61 @@ mod tests {
         assert!(value.get("presentation").is_none());
     }
 
+    /// A saved output's target is its sink config, byte for byte the shape
+    /// every older stage has.
     #[test]
-    fn scene_config_roundtrip_rtmp_output() {
-        let target = OutputTargetConfig::RtmpStream {
-            url: "rtmp://live.twitch.tv/app/key".to_string(),
-            codec: "H.264".to_string(),
-            codec_contract: crate::renderer::context::RtmpCodecContract::Enhanced,
-            audio_device: None,
-        };
-        let json = serde_json::to_string(&target).unwrap();
-        let restored: OutputTargetConfig = serde_json::from_str(&json).unwrap();
-        match restored {
-            OutputTargetConfig::RtmpStream {
-                url,
-                codec,
-                codec_contract,
-                audio_device,
-            } => {
-                assert_eq!(url, "rtmp://live.twitch.tv/app/key");
-                assert_eq!(codec, "H.264");
-                assert_eq!(
-                    codec_contract,
-                    crate::renderer::context::RtmpCodecContract::Enhanced
-                );
-                assert_eq!(audio_device, None);
-            }
-            _ => panic!("Expected RtmpStream target"),
-        }
+    fn a_saved_output_target_reads_back_unchanged() {
+        let json = serde_json::json!({
+            "uuid": "o1", "name": "Stream",
+            "target": {"type": "rtmp_stream", "url": "rtmp://live/app/key", "codec": "H.264", "codec_contract": "enhanced", "audio_device": null},
+        });
+        let config: OutputConfig = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(config.target.type_id(), "rtmp_stream");
+        let back = serde_json::to_value(&config).unwrap();
+        assert_eq!(back["target"], json["target"]);
+        assert!(
+            back.get("unassigned").is_none(),
+            "an unset choice is not written"
+        );
+        assert!(
+            back.get("calibration_mode").is_none(),
+            "calibration off is not written"
+        );
     }
 
+    /// Older stages kept a display's monitor and a window's placement outside
+    /// the target; they fold into it on load and are written there after.
     #[test]
-    fn legacy_rtmp_target_defaults_codec_contract() {
-        let restored: OutputTargetConfig = serde_json::from_str(
-            r#"{"type":"rtmp_stream","url":"rtmps://example/live","codec":"H264"}"#,
-        )
+    fn legacy_window_fields_migrate_into_the_sink_config() {
+        let mut config: OutputConfig = serde_json::from_value(serde_json::json!({
+            "uuid": "o1", "name": "Wall",
+            "target": {"type": "windowed"},
+            "target_display": "HDMI-1",
+            "window_position": [10, 20],
+            "window_size": [1920, 1080],
+        }))
         .unwrap();
-        assert!(matches!(
-            restored,
-            OutputTargetConfig::RtmpStream {
-                codec_contract: crate::renderer::context::RtmpCodecContract::Legacy,
-                ..
-            }
-        ));
+        config.migrate_legacy();
+        assert_eq!(config.target.type_id(), "display");
+        assert_eq!(config.target.str("name"), Some("HDMI-1"));
+        assert_eq!(
+            config.target.get("position"),
+            Some(&serde_json::json!([10, 20]))
+        );
+        assert_eq!(
+            config.target.get("size"),
+            Some(&serde_json::json!([1920, 1080]))
+        );
+        let saved = serde_json::to_value(&config).unwrap();
+        assert!(saved.get("window_position").is_none());
+        assert!(saved.get("target_display").is_none());
     }
 
     #[test]
-    fn scene_config_legacy_output_loads_video_only() {
-        // A scene authored before audio passthrough (no `audio_device` field)
-        // must still deserialize, defaulting to video-only (None).
-        let legacy = r#"{"type":"recording","path":"set.mp4","codec":"H.264"}"#;
-        let restored: OutputTargetConfig = serde_json::from_str(legacy).unwrap();
-        match restored {
-            OutputTargetConfig::Recording {
-                path,
-                codec,
-                audio_device,
-            } => {
-                assert_eq!(path, "set.mp4");
-                assert_eq!(codec, "H.264");
-                assert_eq!(audio_device, None, "legacy scene → video-only");
-            }
-            _ => panic!("Expected Recording target"),
-        }
-    }
-
-    #[test]
-    fn scene_config_roundtrip_recording_with_audio() {
-        let target = OutputTargetConfig::Recording {
-            path: "set.mp4".to_string(),
-            codec: "ProRes 422".to_string(),
-            audio_device: Some("Scarlett 2i2".to_string()),
-        };
-        let json = serde_json::to_string(&target).unwrap();
-        let restored: OutputTargetConfig = serde_json::from_str(&json).unwrap();
-        match restored {
-            OutputTargetConfig::Recording {
-                path,
-                codec,
-                audio_device,
-            } => {
-                assert_eq!(path, "set.mp4");
-                assert_eq!(codec, "ProRes 422");
-                assert_eq!(audio_device.as_deref(), Some("Scarlett 2i2"));
-            }
-            _ => panic!("Expected Recording target"),
-        }
+    fn an_output_without_a_target_is_a_window() {
+        let config: OutputConfig =
+            serde_json::from_value(serde_json::json!({"name": "Out"})).unwrap();
+        assert_eq!(config.target.type_id(), "windowed");
     }
 
     // ── Per-surface warp migration (8i.5) ────────────────────────────

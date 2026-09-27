@@ -1,459 +1,42 @@
 mod effect;
 mod render;
 mod source;
-pub mod svg;
 
+pub use crate::generator::{PassBuffer, get_current_date};
+pub use crate::source::{PreprocessorSlot, ScalingMode, preprocessor_texture_format};
 pub(crate) use render::analyzer_registry;
-pub use render::get_current_date;
 
 use crate::isf::{ISFPass, ISFShader};
 use crate::params::ShaderParams;
-use crate::renderer::{BlitPipeline, ComputePipeline, HapConvertPipeline, UnifiedPipeline};
-use crate::video::{HapTextureFormat, PlaybackSnapshot, VideoCommand, VideoDecodeHandle};
+use crate::renderer::UnifiedPipeline;
+use crate::source::DeckSourceInstance;
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-/// Scaling mode for non-shader sources (images, video)
-#[derive(
-    Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema, Default,
-)]
-pub enum ScalingMode {
-    /// Scale to fill the entire target, cropping edges if aspect ratio differs
-    #[default]
-    Fill,
-    /// Scale to fit within the target, letterboxing if aspect ratio differs
-    Fit,
-    /// Stretch to exactly match target dimensions (may distort)
-    Stretch,
-    /// No scaling, center at native resolution
-    Center,
-}
-
-impl ScalingMode {
-    /// The mode a fader at `value` (0.0–1.0) selects: four equal buckets.
-    pub fn from_value(value: f32) -> Self {
-        match crate::params::bucket_index(value, 4) {
-            0 => ScalingMode::Fill,
-            1 => ScalingMode::Fit,
-            2 => ScalingMode::Stretch,
-            _ => ScalingMode::Center,
-        }
-    }
-
-    /// The value at the centre of this mode's bucket. Inverse of [`Self::from_value`].
-    pub fn to_value(self) -> f32 {
-        let index = match self {
-            ScalingMode::Fill => 0,
-            ScalingMode::Fit => 1,
-            ScalingMode::Stretch => 2,
-            ScalingMode::Center => 3,
-        };
-        crate::params::bucket_center(index, 4)
-    }
-
-    /// Compute UV scale and offset for blitting source into target
-    /// Returns (`uv_scale`, `uv_offset`) to transform target UVs to source UVs
-    pub fn compute_uv_transform(
-        &self,
-        source_w: u32,
-        source_h: u32,
-        target_w: u32,
-        target_h: u32,
-    ) -> ([f32; 2], [f32; 2]) {
-        let src_aspect = source_w as f32 / source_h as f32;
-        let tgt_aspect = target_w as f32 / target_h as f32;
-
-        match self {
-            ScalingMode::Stretch => ([1.0, 1.0], [0.0, 0.0]),
-            ScalingMode::Fill => {
-                if src_aspect > tgt_aspect {
-                    let scale_x = tgt_aspect / src_aspect;
-                    let offset_x = (1.0 - scale_x) * 0.5;
-                    ([scale_x, 1.0], [offset_x, 0.0])
-                } else {
-                    let scale_y = src_aspect / tgt_aspect;
-                    let offset_y = (1.0 - scale_y) * 0.5;
-                    ([1.0, scale_y], [0.0, offset_y])
-                }
-            }
-            ScalingMode::Fit => {
-                if src_aspect > tgt_aspect {
-                    let scale_y = src_aspect / tgt_aspect;
-                    let offset_y = (1.0 - scale_y) * 0.5;
-                    ([1.0, scale_y], [0.0, offset_y])
-                } else {
-                    let scale_x = tgt_aspect / src_aspect;
-                    let offset_x = (1.0 - scale_x) * 0.5;
-                    ([scale_x, 1.0], [offset_x, 0.0])
-                }
-            }
-            ScalingMode::Center => {
-                let scale_x = target_w as f32 / source_w as f32;
-                let scale_y = target_h as f32 / source_h as f32;
-                let offset_x = (1.0 - scale_x) * 0.5;
-                let offset_y = (1.0 - scale_y) * 0.5;
-                ([scale_x, scale_y], [offset_x, offset_y])
-            }
-        }
-    }
-}
-
-/// Double-buffered staging buffers for non-blocking GPU texture uploads.
+/// A shader deck's depth-sensor preprocessor as a scene stores it, under the
+/// source config's `depth_prepro` key.
 ///
-/// Uses a ping-pong pattern: CPU writes to buffer\[current\], GPU copies from
-/// buffer\[1-current\]. By the time we circle back two frames later, the GPU
-/// is done with the buffer and it can be re-mapped without stalling.
-///
-/// This eliminates the per-frame staging buffer allocation that
-/// `queue.write_texture()` performs internally, which can block for 2-9ms
-/// under GPU saturation.
-pub struct VideoStagingBuffers {
-    buffers: [wgpu::Buffer; 2],
-    current: usize,
-    mapped: [Arc<AtomicBool>; 2],
-    /// Bytes per row padded to `wgpu::COPY_BYTES_PER_ROW_ALIGNMENT` (256).
-    padded_bpr: u32,
-    /// Unpadded bytes per row (actual source data stride).
-    unpadded_bpr: u32,
-    /// Number of rows (height for RGBA, `blocks_y` for compressed).
-    rows: u32,
-    /// Tracks which buffers need `map_async` after the next `queue.submit()`.
-    needs_remap: [bool; 2],
-}
-
-impl VideoStagingBuffers {
-    /// Create a new double-buffered staging pair.
-    /// Buffers start unmapped — call `request_remap()` after the first
-    /// `queue.submit()` to begin the mapping lifecycle.
-    pub fn new(device: &wgpu::Device, unpadded_bpr: u32, rows: u32, label: &str) -> Self {
-        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let padded_bpr = (unpadded_bpr + align - 1) & !(align - 1);
-        let buffer_size = u64::from(padded_bpr) * u64::from(rows);
-
-        let make_buf = |idx: usize| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(&format!("{label} Staging {idx}")),
-                size: buffer_size,
-                usage: wgpu::BufferUsages::MAP_WRITE | wgpu::BufferUsages::COPY_SRC,
-                mapped_at_creation: false,
-            })
-        };
-
-        let mapped_0 = Arc::new(AtomicBool::new(false));
-        let mapped_1 = Arc::new(AtomicBool::new(false));
-
-        Self {
-            buffers: [make_buf(0), make_buf(1)],
-            current: 0,
-            mapped: [mapped_0, mapped_1],
-            padded_bpr,
-            unpadded_bpr,
-            rows,
-            needs_remap: [true, true],
-        }
-    }
-
-    /// Write frame data into the current staging buffer and encode a copy
-    /// to the destination texture. Returns true if the upload was performed.
-    ///
-    /// # Panics
-    ///
-    /// Panics if a staging slot marked as mapped no longer exposes its mapped range.
-    pub fn upload(
-        &mut self,
-        data: &[u8],
-        texture: &wgpu::Texture,
-        width: u32,
-        height: u32,
-        encoder: &mut wgpu::CommandEncoder,
-    ) -> bool {
-        let idx = self.current;
-        if !self.mapped[idx].load(Ordering::Acquire) {
-            // Buffer not yet mapped — skip this upload.
-            // The stale texture from last frame will remain on screen.
-            return false;
-        }
-
-        {
-            let buf = &self.buffers[idx];
-            let mut view = buf
-                .slice(..)
-                .get_mapped_range_mut()
-                .expect("upload staging buffer must remain mapped");
-            if self.padded_bpr == self.unpadded_bpr {
-                // Row stride matches — single memcpy
-                let copy_len = (self.unpadded_bpr as usize) * (self.rows as usize);
-                view.slice(..copy_len).copy_from_slice(&data[..copy_len]);
-            } else {
-                // Need to copy row-by-row with padding
-                for row in 0..self.rows as usize {
-                    let src_start = row * self.unpadded_bpr as usize;
-                    let dst_start = row * self.padded_bpr as usize;
-                    view.slice(dst_start..dst_start + self.unpadded_bpr as usize)
-                        .copy_from_slice(&data[src_start..src_start + self.unpadded_bpr as usize]);
-                }
-            }
-        }
-
-        self.buffers[idx].unmap();
-        self.mapped[idx].store(false, Ordering::Release);
-
-        encoder.copy_buffer_to_texture(
-            wgpu::TexelCopyBufferInfo {
-                buffer: &self.buffers[idx],
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(self.padded_bpr),
-                    rows_per_image: Some(self.rows),
-                },
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
-
-        // Mark for re-mapping after submit
-        self.needs_remap[idx] = true;
-
-        // Advance to next buffer
-        self.current = 1 - self.current;
-        true
-    }
-
-    /// Request re-mapping of any buffers that were used since the last call.
-    /// **Must be called AFTER `queue.submit()`** — calling `map_async` before
-    /// submit can complete synchronously on UMA/Metal, leaving the buffer
-    /// mapped during submit (which is a validation error).
-    pub fn request_remap(&mut self) {
-        for i in 0..2 {
-            if self.needs_remap[i] {
-                self.needs_remap[i] = false;
-                let flag = self.mapped[i].clone();
-                self.buffers[i]
-                    .slice(..)
-                    .map_async(wgpu::MapMode::Write, move |result| {
-                        if result.is_ok() {
-                            flag.store(true, Ordering::Release);
-                        }
-                    });
-            }
-        }
-    }
-}
-
-/// Source type for a deck - what generates the base image
-pub enum DeckSource {
-    /// ISF shader generator
-    Shader {
-        shader: ISFShader,
-        pipeline: UnifiedPipeline,
-        pass_buffers: HashMap<String, PassBuffer>,
-        passes: Vec<ISFPass>,
-        /// GPU textures loaded from ISF IMPORTED images (sorted by name for deterministic binding)
-        imported_textures: Vec<(String, wgpu::Texture, wgpu::TextureView)>,
-        /// Preprocessor texture slots for analyzer-driven textures
-        preprocessor_textures: Vec<PreprocessorSlot>,
-    },
-    /// Video file playback (ffmpeg CPU decode → RGBA, background decode thread)
-    Video {
-        handle: VideoDecodeHandle,
-        texture: wgpu::Texture,
-        texture_view: wgpu::TextureView,
-        blit_pipeline: BlitPipeline,
-        source_width: u32,
-        source_height: u32,
-        scaling_mode: ScalingMode,
-        staging: VideoStagingBuffers,
-    },
-    /// HAP video playback (GPU-native `BCn`, background decode thread)
-    HapVideo {
-        handle: VideoDecodeHandle,
-        texture: wgpu::Texture,
-        texture_view: wgpu::TextureView,
-        alpha_texture: Option<wgpu::Texture>,
-        alpha_texture_view: Option<wgpu::TextureView>,
-        dummy_alpha_view: wgpu::TextureView,
-        convert_pipeline: HapConvertPipeline,
-        blit_pipeline: BlitPipeline,
-        hap_format: HapTextureFormat,
-        source_width: u32,
-        source_height: u32,
-        scaling_mode: ScalingMode,
-        staging: VideoStagingBuffers,
-        alpha_staging: Option<VideoStagingBuffers>,
-    },
-    /// Static image
-    Image {
-        texture: wgpu::Texture,
-        texture_view: wgpu::TextureView,
-        blit_pipeline: BlitPipeline,
-        source_width: u32,
-        source_height: u32,
-        scaling_mode: ScalingMode,
-        /// Vector artwork this texture was rendered from, kept so a resolution
-        /// change can re-render it at the new size rather than magnifying
-        /// pixels. `None` for raster images, which have nothing to re-render.
-        /// Boxed to keep the enum's other variants from paying for the tree.
-        svg: Option<Box<usvg::Tree>>,
-    },
-    /// Solid color fill
-    SolidColor { color: [f64; 4] },
-    /// External live source (camera, NDI, Syphon, SRT, HLS, DASH, RTMP)
-    ExternalSource {
-        kind: ExternalSourceKind,
-        /// REPLACE blit — writes the source's straight RGBA verbatim. Used when
-        /// the deck is flagged `transparent` (preserves source alpha).
-        blit_pipeline: BlitPipeline,
-        /// `ALPHA_BLENDING` blit over an opaque black clear — flattens the source
-        /// to opaque. Used by default (unflagged), so an HTML source with alpha<1
-        /// composites over black instead of punching transparent holes.
-        blit_pipeline_over_black: BlitPipeline,
-        source_width: u32,
-        source_height: u32,
-        scaling_mode: ScalingMode,
-    },
-    /// GLSL compute shader generator
-    ComputeShader {
-        shader: ISFShader,
-        pipeline: ComputePipeline,
-    },
-}
-
-/// Discriminant for external source types sharing the same `DeckSource` layout.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExternalSourceKind {
-    Camera(crate::camera::CameraId),
-    Ndi(usize),
-    Syphon(usize),
-    /// Spout receiver index. The Windows counterpart to `Syphon`.
-    /// See /spec/spout-output.md.
-    Spout(usize),
-    Srt(usize),
-    Hls(usize),
-    Dash(usize),
-    Rtmp(usize),
-    Html(usize),
-    /// Depth sensor (Kinect/LIDAR). Unlike other external sources, this is
-    /// reprojected as a point cloud into the deck texture rather than blitted.
-    /// See spec/depth-sensors.md.
-    DepthSensor(crate::depth::DepthSensorId),
-    /// OS display or application window. See spec/screen-capture.md.
-    ScreenCapture(crate::screen_capture::CaptureId),
-    /// Varda's own master program or a channel composite, from the previous
-    /// frame. The source it points at lives in `Deck::tap`, because a channel
-    /// UUID is not `Copy`. See spec/program-tap.md.
-    Tap,
-}
-
-impl ExternalSourceKind {
-    /// Get the source type string for serialization.
-    pub fn source_type(&self) -> &str {
-        match self {
-            Self::Camera(_) => "camera",
-            Self::Ndi(_) => "ndi",
-            Self::Syphon(_) => "syphon",
-            Self::Spout(_) => "spout",
-            Self::Srt(_) => "srt",
-            Self::Hls(_) => "hls",
-            Self::Dash(_) => "dash",
-            Self::Rtmp(_) => "rtmp",
-            Self::Html(_) => "html",
-            Self::DepthSensor(_) => "depth_sensor",
-            Self::ScreenCapture(_) => "screen_capture",
-            Self::Tap => "tap",
-        }
-    }
-
-    /// Render label for logging/debug.
-    pub fn label(&self) -> &str {
-        match self {
-            Self::Camera(_) => "Camera",
-            Self::Ndi(_) => "NDI",
-            Self::Syphon(_) => "Syphon",
-            Self::Spout(_) => "Spout",
-            Self::Srt(_) | Self::Hls(_) | Self::Dash(_) | Self::Rtmp(_) => "Stream",
-            Self::Html(_) => "HTML",
-            Self::DepthSensor(_) => "Depth Sensor",
-            Self::ScreenCapture(_) => "Screen Capture",
-            Self::Tap => "Tap",
-        }
-    }
-
-    /// Depth-sensor id if this is a depth source.
-    pub fn depth_sensor_id(&self) -> Option<crate::depth::DepthSensorId> {
-        match self {
-            Self::DepthSensor(id) => Some(*id),
-            _ => None,
-        }
-    }
-
-    /// Screen-capture id if this is a capture source.
-    pub fn screen_capture_id(&self) -> Option<crate::screen_capture::CaptureId> {
-        match self {
-            Self::ScreenCapture(id) => Some(*id),
-            _ => None,
-        }
-    }
-}
-
-/// Live binding for a screen-capture deck.
-///
-/// The `CaptureId` is a runtime handle and is never persisted; `identity` is the
-/// handle-free name a scene stores and rebinds by. See spec/screen-capture.md.
-#[derive(Debug, Clone)]
-pub struct ScreenCaptureState {
-    pub capture_id: crate::screen_capture::CaptureId,
-    pub identity: crate::screen_capture::backend::TargetIdentity,
-    pub config: crate::screen_capture::backend::CaptureConfig,
-    /// Set when the router or UI edits `config`; the render loop pushes the new
-    /// config to the manager and clears it. The deck layer never reaches up into
-    /// a device, so the change travels down rather than sideways.
-    pub config_dirty: bool,
-}
-
-/// What a tap deck reads. See spec/program-tap.md.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TapSource {
-    /// The master program, tapped before tonemap and LUT so the whole feedback
-    /// path stays in linear light and tonemaps exactly once.
-    MasterProgram,
-    /// A channel composite, addressed by the channel's stable UUID so a tap
-    /// survives reordering. See spec/entity-identity.md.
-    Channel(String),
-}
-
-impl TapSource {
-    /// Display name. Channels are resolved through the `(uuid, name)` list the
-    /// caller holds; an unresolvable UUID falls back to the UUID itself, and
-    /// whether it is genuinely missing is reported separately so a stale label
-    /// never masquerades as an error.
-    pub fn label(&self, channels: &[(String, String)]) -> String {
-        match self {
-            Self::MasterProgram => "Master Program".to_string(),
-            Self::Channel(uuid) => channels
-                .iter()
-                .find(|(u, _)| u == uuid)
-                .map_or_else(|| format!("Channel {uuid}"), |(_, n)| n.clone()),
-        }
-    }
-}
-
-/// Live binding for a tap deck. There is no runtime handle to hold: the tap
-/// resolves to a mixer-owned texture view every frame, so an unresolvable
-/// source simply renders black until the channel comes back.
-#[derive(Debug, Clone)]
-pub struct TapState {
-    pub source: TapSource,
+/// The sensor is matched by **name** on restore, the convention cameras and
+/// depth-sensor decks use: device ids are not stable across replugs. Params
+/// are denormalized (physical units), matching `DepthPreprocessParams`, and
+/// every field defaults so scenes written before a field existed still load.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DepthPreproConfig {
+    pub sensor_name: String,
+    #[serde(default)]
+    pub near_mm: f32,
+    #[serde(default)]
+    pub far_mm: f32,
+    #[serde(default)]
+    pub smoothing: f32,
+    #[serde(default)]
+    pub hole_fill: f32,
+    #[serde(default)]
+    pub mask_feather: f32,
+    #[serde(default)]
+    pub motion_gain: f32,
+    #[serde(default)]
+    pub mirror: bool,
 }
 
 /// Live state for a deck's `depth_sensor` shader preprocessor.
@@ -499,39 +82,6 @@ pub struct DepthPreprocessInput {
     pub connected: bool,
 }
 
-/// A preprocessor texture slot — holds a GPU texture that gets updated with analyzer output.
-pub struct PreprocessorSlot {
-    /// Name prefix for shader uniforms (e.g. "depth" → `depth_depth_map`)
-    pub name: String,
-    /// Analyzer type this preprocessor needs (e.g. "`depth_estimate`")
-    pub analyzer_type: String,
-    /// Options to pass when starting the analyzer
-    pub options: serde_json::Value,
-    /// Analyzer value name to live shader parameter name.
-    pub param_bindings: HashMap<String, String>,
-    /// Analyzer value name to phase-accumulator index.
-    pub phase_bindings: HashMap<String, usize>,
-    /// GPU texture (initially 1×1 black, updated at runtime)
-    pub texture: wgpu::Texture,
-    /// Texture view for shader binding
-    pub view: wgpu::TextureView,
-    /// Format the shader declared for this slot, fixed for the slot's lifetime
-    /// because the pipeline layout's filterability is derived from it.
-    pub format: wgpu::TextureFormat,
-    /// Last non-zero analyzer texture generation uploaded to this slot.
-    pub last_uploaded_generation: Option<u64>,
-}
-
-/// The texture format a `PREPROCESSORS` entry's `FORMAT` string names.
-///
-/// `rgba32float` binds non-filterable and carries four raw floats per texel
-/// for `texelFetch`-only data payloads; an unknown or absent declaration is
-/// the filterable byte-packed default.
-pub(crate) fn preprocessor_texture_format(declared: &str) -> wgpu::TextureFormat {
-    crate::analyzer::traits::texture_format_from_str(declared)
-        .unwrap_or(wgpu::TextureFormat::Rgba8Unorm)
-}
-
 /// An effect in the deck's effect chain (ISF filter)
 pub struct Effect {
     /// Stable UUID for this effect (8-char hex).
@@ -564,26 +114,11 @@ pub struct Effect {
 
 // Effect impl is in effect.rs
 
-/// Multi-pass buffer for ISF PASSES array
-/// Uses ping-pong buffers for persistent passes to allow read/write in same frame
-pub struct PassBuffer {
-    /// Buffer name (from ISF PASSES TARGET field)
-    pub name: String,
-    /// Primary texture (read source for persistent buffers)
-    pub texture_a: wgpu::Texture,
-    /// Primary texture view
-    pub view_a: wgpu::TextureView,
-    /// Secondary texture (write target for persistent buffers) - only for persistent
-    pub texture_b: Option<wgpu::Texture>,
-    /// Secondary texture view
-    pub view_b: Option<wgpu::TextureView>,
-    /// Whether this buffer persists across frames
-    pub persistent: bool,
-    /// Current read index (0 = read from A, 1 = read from B)
-    pub read_idx: usize,
-}
-
-/// A Deck is an independent render unit that outputs a texture
+/// A Deck is an independent render unit that outputs a texture: its source,
+/// then its effect chain.
+///
+/// What the source is (a shader, a clip, a camera) is the source's business;
+/// the deck owns what every deck has. See /spec/deck-source-providers.md.
 pub struct Deck {
     /// Stable UUID for this deck (8-char hex, persists across moves/saves)
     uuid: String,
@@ -591,17 +126,15 @@ pub struct Deck {
     /// Cached "deck_{uuid}" prefix for modulation key lookups (avoids per-frame format!)
     param_prefix: String,
 
-    /// Name of this deck's source
+    /// Display name, from the source unless the user renamed the deck.
     source_name: String,
 
-    /// Original file path used to create this deck (for persistence).
-    /// Shader path, video path, or image path. None for solid color / camera.
-    source_path: Option<String>,
+    /// What draws the base image.
+    source: Box<dyn DeckSourceInstance>,
 
-    /// Source type and pipeline (shader, video, or image)
-    source: DeckSource,
-
-    /// Generator shader parameters (if source is a shader)
+    /// Generator parameters, from the source's ISF `INPUTS` when it declares
+    /// them. Owned by the deck so every ISF-style source gets MIDI, OSC,
+    /// modulation, presets and exploration for free.
     pub generator_params: ShaderParams,
 
     /// Render target texture (primary)
@@ -640,38 +173,10 @@ pub struct Deck {
     /// Last wall-clock render instant (for FPS measurement only, not for TIME uniform)
     last_frame_time: Instant,
 
-    /// External source texture view (set each frame for `ExternalSource` decks).
-    /// For `DepthSensor` decks this holds the `R16Uint` depth view.
-    pub external_source_view: Option<wgpu::TextureView>,
-
-    /// Depth-sensor RGB view (set each frame for `DepthSensor` decks).
-    pub depth_rgb_view: Option<wgpu::TextureView>,
-
-    /// Depth-sensor intrinsics (set each frame for `DepthSensor` decks).
-    pub depth_intrinsics: Option<crate::depth::backend::DepthIntrinsics>,
-
-    /// Native depth-sensor resolution `(w, h)` (set each frame).
-    pub depth_source_size: Option<(u32, u32)>,
-
-    /// Point-cloud reprojection params for `DepthSensor` decks (router-driven).
-    pub point_cloud_params: crate::depth::point_cloud::PointCloudParams,
-
-    /// Lazily-built point-cloud pipeline for `DepthSensor` decks.
-    point_cloud_pipeline: Option<crate::depth::point_cloud::PointCloudPipeline>,
-
     /// Depth-sensor shader preprocessor, present when this deck's shader (or one
     /// of its effects) declared a `depth_sensor` PREPROCESSOR and the device was
     /// successfully acquired. See spec/depth-sensor-preprocessor.md.
     pub depth_prepro: Option<DepthPreprocessState>,
-
-    /// Screen-capture binding, present only on `ScreenCapture` decks. Held on
-    /// the deck rather than looked up in the manager so `snapshot_scene` can
-    /// serialize the target and settings from the mixer alone.
-    /// See spec/screen-capture.md § Configuration and Persistence.
-    pub screen_capture: Option<ScreenCaptureState>,
-
-    /// Tap binding, present only on `Tap` decks. See spec/program-tap.md.
-    pub tap: Option<TapState>,
 
     /// Smoothed FPS derived from actual render pipeline timing (EMA of `1/time_delta`)
     fps_smoothed: f32,
@@ -711,7 +216,7 @@ impl Deck {
         self.uuid = uuid;
     }
 
-    /// Get the source name (shader name, video filename, etc.)
+    /// The deck's display name.
     pub fn source_name(&self) -> &str {
         &self.source_name
     }
@@ -721,274 +226,72 @@ impl Deck {
         self.source_name = name;
     }
 
-    /// Get the source file path (for persistence). None for solid color / camera.
-    pub fn source_path(&self) -> Option<&str> {
-        self.source_path.as_deref()
+    /// The deck's source.
+    pub fn source(&self) -> &dyn DeckSourceInstance {
+        self.source.as_ref()
     }
 
-    /// Get the source type as a string for serialization
+    /// The deck's source, for writing its controls.
+    pub fn source_mut(&mut self) -> &mut dyn DeckSourceInstance {
+        self.source.as_mut()
+    }
+
+    /// The deck's source, boxed, for the registry's per-frame servicing.
+    pub fn source_box_mut(&mut self) -> &mut Box<dyn DeckSourceInstance> {
+        &mut self.source
+    }
+
+    /// The source type id (`Shader`, `Video`, ...).
     pub fn source_type(&self) -> &str {
-        match &self.source {
-            DeckSource::Shader { .. } => "shader",
-            DeckSource::Video { .. } | DeckSource::HapVideo { .. } => "video",
-            DeckSource::Image { .. } => "image",
-            DeckSource::SolidColor { .. } => "solid_color",
-            DeckSource::ExternalSource { kind, .. } => kind.source_type(),
-            DeckSource::ComputeShader { .. } => "compute_shader",
+        self.source.source_type()
+    }
+
+    /// Swap in a different source, keeping the deck's identity, effects,
+    /// opacity and modulation. Returns the old source so its device references
+    /// can be released. The generator parameters follow the new source.
+    pub fn replace_source(
+        &mut self,
+        source: Box<dyn DeckSourceInstance>,
+    ) -> Box<dyn DeckSourceInstance> {
+        let (params, phase_inputs) = generator_params_for(source.as_ref());
+        self.generator_params = params;
+        self.generator_phase_inputs = phase_inputs;
+        self.phase_accumulators = [0.0; 4];
+        self.source_name = source.label();
+        std::mem::replace(&mut self.source, source)
+    }
+
+    /// The config that rebuilds this deck's source as it is now, with the
+    /// deck-owned parts every source type shares: generator parameter values
+    /// under `params`, and a shader deck's depth preprocessor under
+    /// `depth_prepro`. Scenes have always stored both there.
+    pub fn source_config(&self) -> crate::source::SourceConfig {
+        let mut config = self.source.config();
+        if !self.generator_params.values.is_empty() {
+            config.set("params", &self.generator_params.values);
         }
-    }
-
-    /// Get a read-only snapshot of the video playback state.
-    pub fn playback_snapshot(&self) -> Option<PlaybackSnapshot> {
-        match &self.source {
-            DeckSource::Video { handle, .. } | DeckSource::HapVideo { handle, .. } => {
-                Some(handle.playback_snapshot())
-            }
-            _ => None,
+        if let Some(state) = &self.depth_prepro {
+            let p = &state.params;
+            config.set(
+                "depth_prepro",
+                DepthPreproConfig {
+                    sensor_name: state.sensor_name.clone(),
+                    near_mm: p.near_mm,
+                    far_mm: p.far_mm,
+                    smoothing: p.smoothing,
+                    hole_fill: p.hole_fill,
+                    mask_feather: p.mask_feather,
+                    motion_gain: p.motion_gain,
+                    mirror: p.mirror,
+                },
+            );
         }
+        config
     }
 
-    /// Bound this deck's decode rate to what the renderer can present
-    /// (0 = uncapped). No-op for non-video decks.
-    pub fn set_video_output_fps(&self, fps: u32) {
-        match &self.source {
-            DeckSource::Video { handle, .. } | DeckSource::HapVideo { handle, .. } => {
-                handle.set_output_fps(fps);
-            }
-            _ => {}
-        }
-    }
-
-    /// Stop or resume this deck's decoding, leaving its play/pause state alone.
-    /// No-op for non-video decks. See /spec/deck-residency.md.
-    pub fn set_video_suspended(&self, suspended: bool) {
-        match &self.source {
-            DeckSource::Video { handle, .. } | DeckSource::HapVideo { handle, .. } => {
-                handle.set_suspended(suspended);
-            }
-            _ => {}
-        }
-    }
-
-    /// Whether this deck's decoding is currently suspended. False for anything
-    /// that is not a video deck, which never suspends.
-    pub fn video_is_suspended(&self) -> bool {
-        match &self.source {
-            DeckSource::Video { handle, .. } | DeckSource::HapVideo { handle, .. } => {
-                handle.is_suspended()
-            }
-            _ => false,
-        }
-    }
-
-    /// Send a command to the video decode thread (no-op for non-video decks).
-    fn video_send(&self, cmd: VideoCommand) -> bool {
-        match &self.source {
-            DeckSource::Video { handle, .. } | DeckSource::HapVideo { handle, .. } => {
-                handle.send(cmd);
-                true
-            }
-            _ => false,
-        }
-    }
-
-    /// Toggle play/pause on the video decode thread.
-    pub fn video_toggle_play(&self) -> bool {
-        if let Some(snap) = self.playback_snapshot() {
-            if snap.playing {
-                self.video_send(VideoCommand::Pause)
-            } else {
-                self.video_send(VideoCommand::Play)
-            }
-        } else {
-            false
-        }
-    }
-
-    /// Set playing state on the video decode thread.
-    pub fn video_set_playing(&self, playing: bool) -> bool {
-        if playing {
-            self.video_send(VideoCommand::Play)
-        } else {
-            self.video_send(VideoCommand::Pause)
-        }
-    }
-
-    /// Set playback speed on the video decode thread.
-    pub fn video_set_speed(&self, speed: f64) -> bool {
-        self.video_send(VideoCommand::SetSpeed(speed))
-    }
-
-    /// Set loop mode on the video decode thread.
-    pub fn video_set_loop_mode(&self, mode: crate::video::LoopMode) -> bool {
-        self.video_send(VideoCommand::SetLoopMode(mode))
-    }
-
-    /// Map this clip onto the show transport. No-op for non-video decks.
-    pub fn video_set_transport_sync(&self, sync: crate::video::DeckTransportSync) -> bool {
-        match &self.source {
-            DeckSource::Video { handle, .. } | DeckSource::HapVideo { handle, .. } => {
-                handle.set_transport_sync(sync);
-                true
-            }
-            _ => false,
-        }
-    }
-
-    pub fn video_transport_sync(&self) -> Option<crate::video::DeckTransportSync> {
-        match &self.source {
-            DeckSource::Video { handle, .. } | DeckSource::HapVideo { handle, .. } => {
-                Some(handle.transport_sync())
-            }
-            _ => None,
-        }
-    }
-
-    /// Publish this frame's transport so a chasing clip can servo.
-    pub fn publish_video_chase(
-        &self,
-        sample: crate::video::VideoChaseBroadcast,
-        discontinuity: bool,
-    ) {
-        match &self.source {
-            DeckSource::Video { handle, .. } | DeckSource::HapVideo { handle, .. } => {
-                handle.publish_chase(sample, discontinuity);
-            }
-            _ => {}
-        }
-    }
-
-    /// Publish this frame's resolved playback modulation so the decode thread
-    /// can act on it. No-op for non-video decks.
-    /// See /spec/video-playback-modulation.md.
-    pub fn publish_video_modulation(&self, value: crate::video::PlaybackModulation) {
-        match &self.source {
-            DeckSource::Video { handle, .. } | DeckSource::HapVideo { handle, .. } => {
-                handle.publish_modulation(value);
-            }
-            _ => {}
-        }
-    }
-
-    /// Set in-point on the video decode thread.
-    pub fn video_set_in_point(&self, secs: f64) -> bool {
-        self.video_send(VideoCommand::SetInPoint(secs))
-    }
-
-    /// Set out-point on the video decode thread.
-    pub fn video_set_out_point(&self, secs: f64) -> bool {
-        self.video_send(VideoCommand::SetOutPoint(secs))
-    }
-
-    /// Clear in/out points on the video decode thread.
-    pub fn video_clear_in_out_points(&self) -> bool {
-        self.video_send(VideoCommand::ClearInOutPoints)
-    }
-
-    /// Seek the video to a specific position in seconds.
-    pub fn video_seek(&self, time_secs: f64) -> bool {
-        self.video_send(VideoCommand::Seek(time_secs))
-    }
-
-    /// Get the solid color value (if source is a solid color)
-    pub fn solid_color(&self) -> Option<[f32; 4]> {
-        match &self.source {
-            DeckSource::SolidColor { color } => Some([
-                color[0] as f32,
-                color[1] as f32,
-                color[2] as f32,
-                color[3] as f32,
-            ]),
-            _ => None,
-        }
-    }
-
-    /// Set the solid color value (only applies to `SolidColor` sources)
-    pub fn set_solid_color(&mut self, new_color: [f32; 4]) {
-        if let DeckSource::SolidColor { color } = &mut self.source {
-            *color = [
-                f64::from(new_color[0]),
-                f64::from(new_color[1]),
-                f64::from(new_color[2]),
-                f64::from(new_color[3]),
-            ];
-        }
-    }
-
-    /// Get the scaling mode (if applicable for this source type)
-    pub fn scaling_mode(&self) -> Option<ScalingMode> {
-        match &self.source {
-            DeckSource::Image { scaling_mode, .. }
-            | DeckSource::Video { scaling_mode, .. }
-            | DeckSource::HapVideo { scaling_mode, .. }
-            | DeckSource::ExternalSource { scaling_mode, .. } => Some(*scaling_mode),
-            _ => None,
-        }
-    }
-
-    /// Set the scaling mode (applies to Image, Video, `HapVideo`, and `ExternalSource` sources)
-    pub fn set_scaling_mode(&mut self, mode: ScalingMode) {
-        match &mut self.source {
-            DeckSource::Image { scaling_mode, .. }
-            | DeckSource::Video { scaling_mode, .. }
-            | DeckSource::HapVideo { scaling_mode, .. }
-            | DeckSource::ExternalSource { scaling_mode, .. } => *scaling_mode = mode,
-            _ => {}
-        }
-    }
-
-    /// Set a screen-capture parameter from a normalized value (0.0–1.0).
-    /// Returns `false` if this deck is not a screen-capture source or `name` is
-    /// not a capture parameter. See spec/screen-capture.md § Parameters.
-    pub fn set_capture_param(&mut self, name: &str, value: f32) -> bool {
-        use crate::screen_capture::backend::{MAX_CAPTURE_RATE, MIN_CAPTURE_RATE};
-        let Some(state) = &mut self.screen_capture else {
-            return false;
-        };
-        let v = value.clamp(0.0, 1.0);
-        match name {
-            "rate" => {
-                state.config.rate = MIN_CAPTURE_RATE + v * (MAX_CAPTURE_RATE - MIN_CAPTURE_RATE);
-            }
-            "crop_x" => state.config.crop.x = v,
-            "crop_y" => state.config.crop.y = v,
-            "crop_w" => state.config.crop.w = v,
-            "crop_h" => state.config.crop.h = v,
-            // Bucketed so a MIDI fader can drive it like every other toggle.
-            "cursor" => state.config.show_cursor = v > 0.5,
-            "exclude_varda" => state.config.exclude_varda = v > 0.5,
-            _ => return false,
-        }
-        state.config = state.config.clone().sanitized();
-        state.config_dirty = true;
-        true
-    }
-
-    /// Set a depth point-cloud parameter from a normalized value (0.0–1.0).
-    /// Returns `false` if this deck is not a depth-sensor source. Continuous
-    /// params map linearly to their range; `color_mode` buckets into 3 modes.
-    /// See spec/depth-sensors.md.
-    pub fn set_depth_param(&mut self, name: &str, value: f32) -> bool {
-        if !matches!(
-            self.external_source_kind(),
-            Some(ExternalSourceKind::DepthSensor(_))
-        ) {
-            return false;
-        }
-        self.point_cloud_params.set_normalized_param(name, value)
-    }
-
-    /// Normalized (`0..1`) value of a point-cloud parameter, for snapshots.
-    /// `None` when this deck is not a depth-sensor source, so a consumer cannot
-    /// render faders for a deck that has no point cloud.
-    pub fn depth_param(&self, name: &str) -> Option<f32> {
-        if !matches!(
-            self.external_source_kind(),
-            Some(ExternalSourceKind::DepthSensor(_))
-        ) {
-            return None;
-        }
-        self.point_cloud_params.normalized_param(name)
+    /// The ISF shader this deck runs, when its source is one.
+    pub fn shader(&self) -> Option<&ISFShader> {
+        self.source.shader()
     }
 
     /// Set a depth-preprocessor parameter from a normalized value (0.0–1.0).
@@ -1042,7 +345,7 @@ impl Deck {
     pub fn rebind_depth_preprocessor_slots(&mut self) {
         use crate::depth::preprocess::{Output, PREPROCESSOR_TYPE};
 
-        // Take the state so the pipeline can be read while `self.source` and
+        // Take the state so the pipeline can be read while the source and
         // `self.effects` are mutably borrowed.
         let Some(mut state) = self.depth_prepro.take() else {
             return;
@@ -1070,12 +373,8 @@ impl Deck {
             }
         };
 
-        if let DeckSource::Shader {
-            preprocessor_textures,
-            ..
-        } = &mut self.source
-        {
-            rebind(preprocessor_textures);
+        if let Some(slots) = self.source.preprocessor_slots_mut() {
+            rebind(slots);
         }
         for effect in &mut self.effects {
             rebind(&mut effect.preprocessor_textures);
@@ -1090,12 +389,10 @@ impl Deck {
     /// reference is still needed.
     fn wants_depth_preprocessor(&self) -> bool {
         let ty = crate::depth::preprocess::PREPROCESSOR_TYPE;
-        let source_wants = matches!(
-            &self.source,
-            DeckSource::Shader { preprocessor_textures, .. }
-                if preprocessor_textures.iter().any(|s| s.analyzer_type == ty)
-        );
-        source_wants
+        self.source
+            .preprocessor_slots()
+            .iter()
+            .any(|s| s.analyzer_type == ty)
             || self.effects.iter().any(|e| {
                 e.preprocessor_textures
                     .iter()
@@ -1116,20 +413,9 @@ impl Deck {
         self.depth_prepro.take().map(|s| s.sensor_id)
     }
 
-    /// Sensor IDs this deck holds ref-counted references to, for release on
-    /// removal. Covers both point-cloud depth sources and shader preprocessors.
-    pub fn held_depth_sensors(&self) -> Vec<crate::depth::DepthSensorId> {
-        let mut ids = Vec::new();
-        if let Some(id) = self
-            .external_source_kind()
-            .and_then(|k| k.depth_sensor_id())
-        {
-            ids.push(id);
-        }
-        if let Some(state) = &self.depth_prepro {
-            ids.push(state.sensor_id);
-        }
-        ids
+    /// The depth sensor this deck's preprocessor holds, for release on removal.
+    pub fn held_depth_prepro_sensor(&self) -> Option<crate::depth::DepthSensorId> {
+        self.depth_prepro.as_ref().map(|s| s.sensor_id)
     }
 
     /// The GPU error that quarantined this deck, if any.
@@ -1158,118 +444,6 @@ impl Deck {
         self.transparent = transparent;
     }
 
-    /// Get the external source kind (if source is external)
-    pub fn external_source_kind(&self) -> Option<ExternalSourceKind> {
-        match &self.source {
-            DeckSource::ExternalSource { kind, .. } => Some(*kind),
-            _ => None,
-        }
-    }
-
-    /// Get the NDI receiver index (if source is NDI)
-    pub fn ndi_receiver_idx(&self) -> Option<usize> {
-        match &self.source {
-            DeckSource::ExternalSource {
-                kind: ExternalSourceKind::Ndi(idx),
-                ..
-            } => Some(*idx),
-            _ => None,
-        }
-    }
-
-    /// Get the Syphon client index (if source is Syphon)
-    pub fn syphon_client_idx(&self) -> Option<usize> {
-        match &self.source {
-            DeckSource::ExternalSource {
-                kind: ExternalSourceKind::Syphon(idx),
-                ..
-            } => Some(*idx),
-            _ => None,
-        }
-    }
-
-    /// Get the Spout receiver index (if source is Spout)
-    pub fn spout_receiver_idx(&self) -> Option<usize> {
-        match &self.source {
-            DeckSource::ExternalSource {
-                kind: ExternalSourceKind::Spout(idx),
-                ..
-            } => Some(*idx),
-            _ => None,
-        }
-    }
-
-    /// Get the SRT/HLS/DASH/RTMP receiver index (if source is a stream)
-    pub fn srt_receiver_idx(&self) -> Option<usize> {
-        match &self.source {
-            DeckSource::ExternalSource {
-                kind: ExternalSourceKind::Srt(idx),
-                ..
-            }
-            | DeckSource::ExternalSource {
-                kind: ExternalSourceKind::Hls(idx),
-                ..
-            }
-            | DeckSource::ExternalSource {
-                kind: ExternalSourceKind::Dash(idx),
-                ..
-            }
-            | DeckSource::ExternalSource {
-                kind: ExternalSourceKind::Rtmp(idx),
-                ..
-            } => Some(*idx),
-            _ => None,
-        }
-    }
-
-    /// Get the camera ID (if source is a camera)
-    pub fn camera_id(&self) -> Option<crate::camera::CameraId> {
-        match &self.source {
-            DeckSource::ExternalSource {
-                kind: ExternalSourceKind::Camera(id),
-                ..
-            } => Some(*id),
-            _ => None,
-        }
-    }
-
-    /// Get the screen-capture ID (if source is a screen capture)
-    pub fn screen_capture_id(&self) -> Option<crate::screen_capture::CaptureId> {
-        match &self.source {
-            DeckSource::ExternalSource {
-                kind: ExternalSourceKind::ScreenCapture(id),
-                ..
-            } => Some(*id),
-            _ => None,
-        }
-    }
-
-    /// Push the live source dimensions of an external source down from its
-    /// manager. Sources whose resolution can change mid-session (a screen
-    /// capture being cropped, a stream reconnecting at a new size) need this or
-    /// the blit keeps letterboxing to a stale aspect ratio.
-    pub fn set_external_source_size(&mut self, width: u32, height: u32) {
-        if let DeckSource::ExternalSource {
-            source_width,
-            source_height,
-            ..
-        } = &mut self.source
-        {
-            *source_width = width;
-            *source_height = height;
-        }
-    }
-
-    /// Get the shader (if source is a shader or compute shader)
-    pub fn shader(&self) -> Option<&ISFShader> {
-        match &self.source {
-            DeckSource::Shader { shader, .. } | DeckSource::ComputeShader { shader, .. } => {
-                Some(shader)
-            }
-            _ => None,
-        }
-    }
-
     /// Set the fixed time step used for the TIME uniform.
     /// Called by the channel to keep `render_dt` in sync with the target FPS.
     pub fn set_render_dt(&mut self, dt: f32) {
@@ -1279,6 +453,19 @@ impl Deck {
     /// Get the smoothed FPS derived from actual render pipeline timing
     pub fn fps(&self) -> f32 {
         self.fps_smoothed
+    }
+}
+
+/// The generator parameters and phase inputs a source's ISF `INPUTS` declare.
+fn generator_params_for(
+    source: &dyn DeckSourceInstance,
+) -> (ShaderParams, Option<Vec<crate::isf::PhaseInput>>) {
+    match source.shader() {
+        Some(shader) => (
+            ShaderParams::from_inputs(shader.metadata.inputs.as_deref().unwrap_or(&[])),
+            shader.metadata.phase_inputs.clone(),
+        ),
+        None => (ShaderParams::from_inputs(&[]), None),
     }
 }
 
@@ -1294,144 +481,5 @@ mod tests {
             crate::analyzer::default_registry().schema_for(ty).is_none(),
             "the analyzer module registers only its own analyzers"
         );
-    }
-
-    #[test]
-    fn scaling_mode_buckets() {
-        assert_eq!(ScalingMode::from_value(0.0), ScalingMode::Fill);
-        assert_eq!(ScalingMode::from_value(0.3), ScalingMode::Fit);
-        assert_eq!(ScalingMode::from_value(0.6), ScalingMode::Stretch);
-        assert_eq!(ScalingMode::from_value(1.0), ScalingMode::Center);
-    }
-
-    #[test]
-    fn scaling_modes_round_trip_through_their_buckets() {
-        // Both directions are written out by hand, so a reordering of either
-        // match has to show up here rather than as a mode that silently becomes
-        // its neighbour when a live gesture is recorded.
-        for mode in [
-            ScalingMode::Fill,
-            ScalingMode::Fit,
-            ScalingMode::Stretch,
-            ScalingMode::Center,
-        ] {
-            assert_eq!(ScalingMode::from_value(mode.to_value()), mode);
-        }
-    }
-
-    #[test]
-    fn scaling_mode_default_is_fill() {
-        assert_eq!(ScalingMode::default(), ScalingMode::Fill);
-    }
-
-    #[test]
-    fn stretch_returns_identity() {
-        let (scale, offset) = ScalingMode::Stretch.compute_uv_transform(800, 600, 1920, 1080);
-        assert_eq!(scale, [1.0, 1.0]);
-        assert_eq!(offset, [0.0, 0.0]);
-    }
-
-    #[test]
-    fn stretch_same_aspect() {
-        let (scale, offset) = ScalingMode::Stretch.compute_uv_transform(1920, 1080, 1920, 1080);
-        assert_eq!(scale, [1.0, 1.0]);
-        assert_eq!(offset, [0.0, 0.0]);
-    }
-
-    #[test]
-    fn fill_same_aspect_is_identity() {
-        let (scale, offset) = ScalingMode::Fill.compute_uv_transform(1920, 1080, 960, 540);
-        assert!((scale[0] - 1.0).abs() < 1e-5);
-        assert!((scale[1] - 1.0).abs() < 1e-5);
-        assert!((offset[0]).abs() < 1e-5);
-        assert!((offset[1]).abs() < 1e-5);
-    }
-
-    #[test]
-    fn fill_wide_source_crops_horizontal() {
-        // Source 2:1, target 1:1 → crop left/right
-        let (scale, offset) = ScalingMode::Fill.compute_uv_transform(200, 100, 100, 100);
-        assert!(
-            (scale[0] - 0.5).abs() < 1e-5,
-            "scale_x should be 0.5, got {}",
-            scale[0]
-        );
-        assert!((scale[1] - 1.0).abs() < 1e-5);
-        assert!(
-            (offset[0] - 0.25).abs() < 1e-5,
-            "offset_x should center crop"
-        );
-        assert!((offset[1]).abs() < 1e-5);
-    }
-
-    #[test]
-    fn fill_tall_source_crops_vertical() {
-        // Source 1:2, target 1:1 → crop top/bottom
-        let (scale, offset) = ScalingMode::Fill.compute_uv_transform(100, 200, 100, 100);
-        assert!((scale[0] - 1.0).abs() < 1e-5);
-        assert!(
-            (scale[1] - 0.5).abs() < 1e-5,
-            "scale_y should be 0.5, got {}",
-            scale[1]
-        );
-        assert!((offset[0]).abs() < 1e-5);
-        assert!(
-            (offset[1] - 0.25).abs() < 1e-5,
-            "offset_y should center crop"
-        );
-    }
-
-    #[test]
-    fn fit_same_aspect_is_identity() {
-        let (scale, offset) = ScalingMode::Fit.compute_uv_transform(1920, 1080, 960, 540);
-        assert!((scale[0] - 1.0).abs() < 1e-5);
-        assert!((scale[1] - 1.0).abs() < 1e-5);
-        assert!((offset[0]).abs() < 1e-5);
-        assert!((offset[1]).abs() < 1e-5);
-    }
-
-    #[test]
-    fn fit_wide_source_letterboxes() {
-        // Source 2:1, target 1:1 → letterbox top/bottom
-        let (scale, _offset) = ScalingMode::Fit.compute_uv_transform(200, 100, 100, 100);
-        assert!((scale[0] - 1.0).abs() < 1e-5);
-        assert!((scale[1] - 2.0).abs() < 1e-5, "scale_y={}", scale[1]);
-    }
-
-    #[test]
-    fn fit_tall_source_pillarboxes() {
-        // Source 1:2, target 1:1 → pillarbox left/right
-        let (scale, _offset) = ScalingMode::Fit.compute_uv_transform(100, 200, 100, 100);
-        assert!((scale[0] - 2.0).abs() < 1e-5, "scale_x={}", scale[0]);
-        assert!((scale[1] - 1.0).abs() < 1e-5);
-    }
-
-    #[test]
-    fn center_smaller_source() {
-        // Source 100x100 in target 200x200 → scale 2.0, offset -0.5
-        let (scale, offset) = ScalingMode::Center.compute_uv_transform(100, 100, 200, 200);
-        assert!((scale[0] - 2.0).abs() < 1e-5);
-        assert!((scale[1] - 2.0).abs() < 1e-5);
-        assert!((offset[0] - -0.5).abs() < 1e-5);
-        assert!((offset[1] - -0.5).abs() < 1e-5);
-    }
-
-    #[test]
-    fn center_larger_source() {
-        // Source 400x400 in target 200x200 → scale 0.5, offset 0.25
-        let (scale, offset) = ScalingMode::Center.compute_uv_transform(400, 400, 200, 200);
-        assert!((scale[0] - 0.5).abs() < 1e-5);
-        assert!((scale[1] - 0.5).abs() < 1e-5);
-        assert!((offset[0] - 0.25).abs() < 1e-5);
-        assert!((offset[1] - 0.25).abs() < 1e-5);
-    }
-
-    #[test]
-    fn center_same_size_is_identity() {
-        let (scale, offset) = ScalingMode::Center.compute_uv_transform(1920, 1080, 1920, 1080);
-        assert!((scale[0] - 1.0).abs() < 1e-5);
-        assert!((scale[1] - 1.0).abs() < 1e-5);
-        assert!((offset[0]).abs() < 1e-5);
-        assert!((offset[1]).abs() < 1e-5);
     }
 }

@@ -26,13 +26,11 @@ use varda::app::VardaApp;
 use varda::app::publish::StatePublication;
 use varda::engine::{CommandResult, EngineCommand};
 use varda::modulation::LFOWaveform;
-use varda::renderer::context::GpuContext;
 
 /// Four channels of four decks each, and four LFOs: about the size of a
 /// working set.
 fn scene() -> Option<VardaApp> {
-    let gpu = GpuContext::new_headless().ok()?;
-    let mut app = VardaApp::new(gpu, &varda::testing::headless_config()).ok()?;
+    let mut app = varda::testing::headless_app()?;
     let send = |app: &mut VardaApp, cmd: EngineCommand| {
         let (tx, rx) = tokio::sync::oneshot::channel();
         app.command_sender().send((cmd, Some(tx))).ok()?;
@@ -53,9 +51,14 @@ fn scene() -> Option<VardaApp> {
         for i in 0..4 {
             let result = send(
                 &mut app,
-                EngineCommand::AddSolidColorDeck {
+                EngineCommand::AddDeck {
                     channel_uuid: channel_uuid.clone(),
-                    color: [i as f32 / 4.0, 0.5, 0.5, 1.0],
+                    source: varda::solid_color::SolidColor::config_for([
+                        i as f32 / 4.0,
+                        0.5,
+                        0.5,
+                        1.0,
+                    ]),
                 },
             )?;
             if !matches!(result, CommandResult::OkWithId { .. }) {
@@ -77,23 +80,24 @@ fn scene() -> Option<VardaApp> {
     for i in 0..4 {
         send(
             &mut app,
-            EngineCommand::AddHlsLibraryEntry {
-                url: format!("https://example.invalid/{i}.m3u8"),
+            EngineCommand::AddSourceLibraryEntry {
+                entry: varda::source::SourceConfig::new("Hls")
+                    .with("url", format!("https://example.invalid/{i}.m3u8")),
             },
         )?;
         send(
             &mut app,
-            EngineCommand::AddHtmlLibraryEntry {
-                url: format!("https://example.invalid/{i}.html"),
+            EngineCommand::AddSourceLibraryEntry {
+                entry: varda::source::SourceConfig::new("Html")
+                    .with("url", format!("https://example.invalid/{i}.html")),
             },
         )?;
     }
     send(
         &mut app,
-        EngineCommand::CreateHeadlessOutput {
-            target: varda::renderer::context::OutputTarget::NdiSend {
-                sender_name: "bench".to_string(),
-            },
+        EngineCommand::CreateOutput {
+            sink: varda::output::SinkConfig::new("ndi_send")
+                .with("sender_name", "bench".to_string()),
         },
     )?;
     Some(app)

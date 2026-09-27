@@ -5,11 +5,80 @@ use super::{
     AudioUIData, CameraDetectMode, ChannelRenderStats, ChannelUIInfo, DeckUIInfo, ModAssignmentUI,
     ModSourceUI, ModSourceUIEntry, ParamUIInfo, ShaderParamsUI, SurfaceUI, UIData,
 };
+use crate::BlendMode;
 use crate::channel::DeckRenderFps;
+use crate::engine::value::provider::{
+    ControlStatus, LibraryEntry, LibrarySection, ProviderTypeSnapshot,
+};
+use crate::engine::value::source::{DeckSourceSnapshot, SourceConfig};
 use crate::renderer::context::OutputSource;
 use crate::renderer::slicer::{DomeGeometry, DomePreset};
 use crate::surface::{ContentMapping, SurfaceOutputType};
-use crate::{BlendMode, ScalingMode};
+
+/// A shader deck's source, as the fixture decks carry it.
+#[cfg(any(test, feature = "test-fixtures"))]
+fn shader_source() -> DeckSourceSnapshot {
+    DeckSourceSnapshot {
+        source_type: "Shader".into(),
+        available: true,
+        status: ControlStatus::default(),
+    }
+}
+
+/// The shader source type listing `generators`, then the image, video and
+/// camera types as their providers describe themselves with no devices found.
+#[cfg(any(test, feature = "test-fixtures"))]
+fn fixture_source_types(generators: &[&str]) -> Vec<ProviderTypeSnapshot> {
+    let shaders = crate::registry::ShaderRegistry::new();
+    let services = crate::source::Services::new();
+    let mut providers = crate::source::SourceRegistry::new();
+    providers
+        .register(crate::still::ImageProvider)
+        .register(crate::video::provider::VideoProvider)
+        .register(crate::camera::provider::CameraProvider::new());
+    let query = crate::source::SourceQuery {
+        services: &services,
+        shaders: &shaders,
+        channels: &[],
+    };
+    let mut types = vec![fixture_shader_type(generators)];
+    types.extend(providers.type_snapshots(&query));
+    types
+}
+
+/// Every output sink type, as a windowed run with no monitors describes them.
+#[cfg(any(test, feature = "test-fixtures"))]
+fn fixture_sink_types() -> Vec<ProviderTypeSnapshot> {
+    let services = crate::source::Services::new().with(crate::output::window::Monitors::default());
+    crate::app::sources::output_sinks().type_snapshots(&crate::output::SinkQuery {
+        services: &services,
+    })
+}
+
+/// The shader source type, its library listing `generators`.
+#[cfg(any(test, feature = "test-fixtures"))]
+fn fixture_shader_type(generators: &[&str]) -> ProviderTypeSnapshot {
+    use crate::source::DeckSourceProvider;
+    let provider = crate::generator::ShaderProvider;
+    ProviderTypeSnapshot {
+        type_id: provider.id().into(),
+        label: provider.label().into(),
+        icon: provider.icon().into(),
+        available: true,
+        unavailable_reason: None,
+        listed: true,
+        params: vec![],
+        library: LibrarySection {
+            entries: generators
+                .iter()
+                .map(|name| {
+                    LibraryEntry::new(*name, SourceConfig::new("Shader").with("name", name))
+                })
+                .collect(),
+            ..LibrarySection::default()
+        },
+    }
+}
 
 #[cfg(any(test, feature = "test-fixtures"))]
 impl SurfaceUI {
@@ -50,20 +119,15 @@ impl UIData {
             deck_idx: 0,
             uuid: "a0000001".to_string(),
             name: "test_generator_a".to_string(),
-            is_html: false,
-            is_depth_sensor: false,
-            point_cloud: None,
+            source: shader_source(),
             depth_prepro: None,
-            screen_capture: None,
-            tap: None,
-            is_html_interactive: false,
+            is_interactive: false,
             opacity: 1.0,
             effective_opacity: 1.0,
             blend_mode: BlendMode::Normal,
             solo: false,
             mute: false,
             transparent: false,
-            scaling_mode: Some(ScalingMode::Fit),
             generator: ShaderParamsUI {
                 shader_name: "test_generator_a".to_string(),
                 params: vec![ParamUIInfo {
@@ -93,7 +157,6 @@ impl UIData {
                     }],
                 },
             )],
-            video_playback: None,
             auto_transition: None,
             render_fps: DeckRenderFps::Auto,
             effective_render_fps: 0.0,
@@ -105,26 +168,20 @@ impl UIData {
             deck_idx: 1,
             uuid: "a0000002".to_string(),
             name: "test_generator_b".to_string(),
-            is_html: false,
-            is_depth_sensor: false,
-            point_cloud: None,
+            source: shader_source(),
             depth_prepro: None,
-            screen_capture: None,
-            tap: None,
-            is_html_interactive: false,
+            is_interactive: false,
             opacity: 0.8,
             effective_opacity: 0.8,
             blend_mode: BlendMode::Normal,
             solo: false,
             mute: false,
             transparent: false,
-            scaling_mode: Some(ScalingMode::Fit),
             generator: ShaderParamsUI {
                 shader_name: "test_generator_b".to_string(),
                 params: vec![],
             },
             effects: vec![],
-            video_playback: None,
             auto_transition: None,
             render_fps: DeckRenderFps::Auto,
             effective_render_fps: 0.0,
@@ -154,26 +211,20 @@ impl UIData {
             deck_idx: 0,
             uuid: "b0000001".to_string(),
             name: "test_generator_c".to_string(),
-            is_html: false,
-            is_depth_sensor: false,
-            point_cloud: None,
+            source: shader_source(),
             depth_prepro: None,
-            screen_capture: None,
-            tap: None,
-            is_html_interactive: false,
+            is_interactive: false,
             opacity: 1.0,
             effective_opacity: 1.0,
             blend_mode: BlendMode::Normal,
             solo: false,
             mute: false,
             transparent: false,
-            scaling_mode: Some(ScalingMode::Fit),
             generator: ShaderParamsUI {
                 shader_name: "test_generator_c".to_string(),
                 params: vec![],
             },
             effects: vec![],
-            video_playback: None,
             auto_transition: None,
             render_fps: DeckRenderFps::Auto,
             effective_render_fps: 0.0,
@@ -185,26 +236,20 @@ impl UIData {
             deck_idx: 1,
             uuid: "b0000002".to_string(),
             name: "test_generator_d".to_string(),
-            is_html: false,
-            is_depth_sensor: false,
-            point_cloud: None,
+            source: shader_source(),
             depth_prepro: None,
-            screen_capture: None,
-            tap: None,
-            is_html_interactive: false,
+            is_interactive: false,
             opacity: 1.0,
             effective_opacity: 1.0,
             blend_mode: BlendMode::Normal,
             solo: false,
             mute: false,
             transparent: false,
-            scaling_mode: Some(ScalingMode::Fit),
             generator: ShaderParamsUI {
                 shader_name: "test_generator_d".to_string(),
                 params: vec![],
             },
             effects: vec![],
-            video_playback: None,
             auto_transition: None,
             render_fps: DeckRenderFps::Auto,
             effective_render_fps: 0.0,
@@ -223,12 +268,6 @@ impl UIData {
         };
 
         UIData {
-            generators: vec![
-                ("test_generator_a".to_string(), 0),
-                ("test_generator_b".to_string(), 1),
-                ("test_generator_c".to_string(), 2),
-                ("test_generator_d".to_string(), 3),
-            ],
             filters: vec![
                 ("test_effect".to_string(), 0),
                 ("ch_effect".to_string(), 1),
@@ -338,21 +377,13 @@ impl UIData {
             midi_devices: vec![],
             midi_mappings: vec![],
             cameras: vec![],
-            depth_sensors: vec![],
-            capture_targets: vec![],
-            screen_capture_permission: "granted".into(),
-            screen_capture_available: true,
-            ndi_sources: vec![],
-            ndi_available: false,
-            syphon_sources: vec![],
-            syphon_available: false,
-            spout_available: false,
-            spout_sources: vec![],
-            srt_library_configs: vec![],
-            hls_library_configs: vec![],
-            dash_library_configs: vec![],
-            rtmp_library_configs: vec![],
-            html_library_configs: vec![],
+            sinks: std::sync::Arc::new(fixture_sink_types()),
+            sources: std::sync::Arc::new(fixture_source_types(&[
+                "test_generator_a",
+                "test_generator_b",
+                "test_generator_c",
+                "test_generator_d",
+            ])),
 
             sequences: vec![],
             channel_count: 2,

@@ -1,16 +1,14 @@
-//! Deck rendering — source rendering, effect chain, video frame updates, and resize.
+//! Deck rendering: the source, then the effect chain, then analyzer capture.
 
-use super::{
-    Deck, DeckSource, Effect, ExternalSourceKind, PassBuffer, PreprocessorSlot, ScalingMode,
-};
+use super::{Deck, Effect, PreprocessorSlot};
 use crate::analyzer::traits::{AnalyzerStateSnapshot, TextureData};
 use crate::analyzer::{AnalyzerRegistry, DeckAnalyzers, PreprocessorCategory};
 use crate::audio::AudioData;
-use crate::isf::{ISFPass, PhaseInput};
+use crate::isf::PhaseInput;
 use crate::modulation::ModulationEngine;
 use crate::params::{ParamValue, ShaderParams};
-use crate::renderer::BlitPipeline;
-use crate::renderer::{GpuContext, ISFUniforms, UnifiedPipeline};
+use crate::renderer::{GpuContext, ISFUniforms};
+use crate::source::{SourceControl, SourceFrame};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::time::Instant;
@@ -162,75 +160,31 @@ fn collect_preprocessor_state(
 }
 
 impl Deck {
-    /// Update video frame using double-buffered staging uploads.
-    /// Takes the latest decoded frame from the background decode thread
-    /// and uploads it to the GPU texture via a pre-allocated mapped buffer.
-    ///
-    /// # Errors
-    ///
-    /// Never fails today — the upload path is infallible and non-video sources
-    /// are a no-op. The `Result` is kept so callers stay source-compatible if
-    /// staging-buffer allocation becomes fallible.
-    pub fn update_video_frame(&mut self, encoder: &mut wgpu::CommandEncoder) -> Result<()> {
-        match self.source {
-            DeckSource::Video {
-                ref handle,
-                ref texture,
-                ref mut staging,
-                ..
-            } => {
-                if let Some(frame) = handle.take_frame() {
-                    let width = handle.width;
-                    let height = handle.height;
-                    staging.upload(&frame.color_data, texture, width, height, encoder);
-                    handle.recycle(frame);
-                }
-            }
-            DeckSource::HapVideo {
-                ref handle,
-                ref texture,
-                ref alpha_texture,
-                ref mut staging,
-                ref mut alpha_staging,
-                ..
-            } => {
-                if let Some(frame) = handle.take_frame() {
-                    let width = handle.width;
-                    let height = handle.height;
-                    staging.upload(&frame.color_data, texture, width, height, encoder);
-
-                    if let (Some(alpha_data), Some(_alpha_fmt), Some(alpha_tex)) = (
-                        frame.alpha_data.as_ref(),
-                        frame.alpha_format,
-                        alpha_texture.as_ref(),
-                    ) && let Some(a_staging) = alpha_staging
-                    {
-                        a_staging.upload(alpha_data, alpha_tex, width, height, encoder);
-                    }
-                    handle.recycle(frame);
-                }
-            }
-            _ => {}
-        }
-        Ok(())
+    /// Apply modulation, the transport and residency to the source's own
+    /// controls. Runs every frame for every deck, visible or not. `scratch` is
+    /// shared across the frame's decks so resolving keys allocates nothing.
+    pub fn control_source(
+        &mut self,
+        modulation: &ModulationEngine,
+        awake: bool,
+        transport: Option<crate::timebase::TransportSample>,
+        target_fps: u32,
+        scratch: &mut String,
+    ) {
+        let mut ctx = SourceControl::new(
+            &self.uuid, modulation, awake, transport, target_fps, scratch,
+        );
+        self.source.control(&mut ctx);
     }
 
-    /// Request re-mapping of staging buffers after `queue.submit()`.
-    pub fn request_video_remap(&mut self) {
-        match &mut self.source {
-            DeckSource::Video { staging, .. } => staging.request_remap(),
-            DeckSource::HapVideo {
-                staging,
-                alpha_staging,
-                ..
-            } => {
-                staging.request_remap();
-                if let Some(a) = alpha_staging {
-                    a.request_remap();
-                }
-            }
-            _ => {}
-        }
+    /// Record the source's CPU-to-GPU uploads for this frame.
+    pub fn upload_source(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        self.source.upload(encoder);
+    }
+
+    /// Called after the frame's uploads were submitted.
+    pub fn after_source_submit(&mut self) {
+        self.source.after_submit();
     }
 
     /// Render the deck to its texture (source + effect chain)
@@ -274,14 +228,8 @@ impl Deck {
     pub(crate) fn ensure_preprocessor_analyzers(&mut self, registry: &AnalyzerRegistry) {
         // Collect all (analyzer_type, options) needed by preprocessor slots
         let mut needed: Vec<(String, serde_json::Value)> = Vec::new();
-        if let DeckSource::Shader {
-            preprocessor_textures,
-            ..
-        } = &self.source
-        {
-            for slot in preprocessor_textures {
-                needed.push((slot.analyzer_type.clone(), slot.options.clone()));
-            }
+        for slot in self.source.preprocessor_slots() {
+            needed.push((slot.analyzer_type.clone(), slot.options.clone()));
         }
         for effect in &self.effects {
             for slot in &effect.preprocessor_textures {
@@ -326,7 +274,6 @@ impl Deck {
         }
     }
 
-    /// Render the deck with a custom param prefix for modulation key lookup
     /// Render this deck, containing any GPU error it raises.
     ///
     /// wgpu reports validation errors through a device-wide handler rather than
@@ -392,7 +339,6 @@ impl Deck {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn render_with_prefix_inner(
         &mut self,
         context: &GpuContext,
@@ -404,13 +350,16 @@ impl Deck {
     ) -> Result<()> {
         // Update preprocessor textures from analyzer snapshots before rendering
         if self.analyzers.has_active_instances() {
-            Self::update_preprocessor_textures(
-                &self.analyzers,
-                &context.device,
-                &context.queue,
-                &mut self.source,
-                &mut self.effects,
-            );
+            if let Some(slots) = self.source.preprocessor_slots_mut() {
+                upload_preprocessor_slots(&self.analyzers, context, slots);
+            }
+            for effect in &mut self.effects {
+                upload_preprocessor_slots(
+                    &self.analyzers,
+                    context,
+                    &mut effect.preprocessor_textures,
+                );
+            }
         }
 
         // Write begin GPU timestamp if timing is enabled
@@ -462,396 +411,33 @@ impl Deck {
 
         let source_to_b = enabled_effects.len() % 2 == 1;
 
-        // Depth-sensor decks render via a point-cloud pass, which needs mutable
-        // access to `self.point_cloud_pipeline` (a field separate from
-        // `self.source`). Handle it before the `&mut self.source` match to avoid
-        // a split-borrow, then skip the ExternalSource blit arm below.
-        let is_depth = matches!(
-            self.external_source_kind(),
-            Some(super::ExternalSourceKind::DepthSensor(_))
-        );
-        if is_depth {
-            self.render_point_cloud(context, source_to_b, time, cmd_buffers);
-        }
-
         // Depth-sensor preprocessor passes run before the shader so its bindings
         // hold this frame's fields. See spec/depth-sensor-preprocessor.md.
         self.run_depth_preprocess(context, cmd_buffers);
 
-        let generator_target = if source_to_b {
-            &self.texture_b_view
+        let (target, target_texture) = if source_to_b {
+            (&self.texture_b_view, &self.texture_b)
         } else {
-            &self.texture_view
+            (&self.texture_view, &self.texture)
         };
-
-        match &mut self.source {
-            DeckSource::Shader {
-                pipeline,
-                pass_buffers,
-                passes,
-                imported_textures,
-                preprocessor_textures,
-                ..
-            } => {
-                let imported_views: Vec<&wgpu::TextureView> =
-                    imported_textures.iter().map(|(_, _, v)| v).collect();
-                let preprocessor_views: Vec<&wgpu::TextureView> =
-                    preprocessor_textures.iter().map(|pp| &pp.view).collect();
-                if pipeline.num_pass_buffers > 0 {
-                    Self::render_multi_pass_static(
-                        context,
-                        pipeline,
-                        passes,
-                        pass_buffers,
-                        time,
-                        time_delta,
-                        self.frame_count,
-                        self.texture.width(),
-                        self.texture.height(),
-                        generator_target,
-                        audio_data,
-                        &mut self.generator_params,
-                        modulation,
-                        param_prefix,
-                        &imported_views,
-                        &preprocessor_views,
-                        generator_phase_times,
-                        cmd_buffers,
-                    );
-                } else {
-                    Self::render_simple_static(
-                        context,
-                        pipeline,
-                        &self.texture,
-                        time,
-                        time_delta,
-                        self.frame_count,
-                        generator_target,
-                        audio_data,
-                        &mut self.generator_params,
-                        modulation,
-                        param_prefix,
-                        &imported_views,
-                        &preprocessor_views,
-                        generator_phase_times,
-                        cmd_buffers,
-                    );
-                }
-            }
-
-            &mut DeckSource::Video {
-                ref texture_view,
-                ref blit_pipeline,
-                ref mut source_width,
-                ref mut source_height,
-                ref mut scaling_mode,
-                ..
-            } => {
-                let (uv_scale, uv_offset) = scaling_mode.compute_uv_transform(
-                    *source_width,
-                    *source_height,
-                    self.texture.width(),
-                    self.texture.height(),
-                );
-                blit_pipeline.set_uv_transform(&context.queue, 1.0, uv_scale, uv_offset);
-
-                let bind_group = blit_pipeline.create_bind_group(&context.device, texture_view);
-                let mut encoder =
-                    context
-                        .device
-                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("Video Blit Encoder"),
-                        });
-                {
-                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Video Blit Pass"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: generator_target,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                store: wgpu::StoreOp::Store,
-                            },
-                            depth_slice: None,
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    });
-                    blit_pipeline.render(&mut render_pass, &bind_group);
-                }
-                cmd_buffers.push(encoder.finish());
-            }
-            &mut DeckSource::HapVideo {
-                ref texture_view,
-                ref alpha_texture_view,
-                ref dummy_alpha_view,
-                ref convert_pipeline,
-                ref hap_format,
-                ref handle,
-                ref mut source_width,
-                ref mut source_height,
-                ref mut scaling_mode,
-                ..
-            } => {
-                let needs_ycocg = hap_format.needs_ycocg_convert();
-                let has_alpha = handle.is_dual_plane && alpha_texture_view.is_some();
-                let (uv_scale, uv_offset) = scaling_mode.compute_uv_transform(
-                    *source_width,
-                    *source_height,
-                    self.texture.width(),
-                    self.texture.height(),
-                );
-                convert_pipeline.set_params_with_uv(
-                    &context.queue,
-                    1.0,
-                    needs_ycocg,
-                    has_alpha,
-                    uv_scale,
-                    uv_offset,
-                );
-
-                let alpha_view = if let Some(av) = alpha_texture_view {
-                    av
-                } else {
-                    dummy_alpha_view
-                };
-                let bind_group =
-                    convert_pipeline.create_bind_group(&context.device, texture_view, alpha_view);
-                let mut encoder =
-                    context
-                        .device
-                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("HAP Convert Encoder"),
-                        });
-                {
-                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("HAP Convert Pass"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: generator_target,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                store: wgpu::StoreOp::Store,
-                            },
-                            depth_slice: None,
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    });
-                    convert_pipeline.draw(&mut render_pass, &bind_group);
-                }
-                cmd_buffers.push(encoder.finish());
-            }
-            DeckSource::Image {
-                texture_view,
-                blit_pipeline,
-                source_width,
-                source_height,
-                scaling_mode,
-                ..
-            } => {
-                let (uv_scale, uv_offset) = scaling_mode.compute_uv_transform(
-                    *source_width,
-                    *source_height,
-                    self.texture.width(),
-                    self.texture.height(),
-                );
-                blit_pipeline.set_uv_transform(&context.queue, 1.0, uv_scale, uv_offset);
-
-                let bind_group = blit_pipeline.create_bind_group(&context.device, texture_view);
-                let mut encoder =
-                    context
-                        .device
-                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("Image Blit Encoder"),
-                        });
-                {
-                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Image Blit Pass"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: generator_target,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                store: wgpu::StoreOp::Store,
-                            },
-                            depth_slice: None,
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    });
-                    blit_pipeline.render(&mut render_pass, &bind_group);
-                }
-                cmd_buffers.push(encoder.finish());
-            }
-            DeckSource::SolidColor { color } => {
-                let mut encoder =
-                    context
-                        .device
-                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("SolidColor Clear Encoder"),
-                        });
-                {
-                    let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("SolidColor Clear Pass"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: generator_target,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color {
-                                    r: color[0],
-                                    g: color[1],
-                                    b: color[2],
-                                    a: color[3],
-                                }),
-                                store: wgpu::StoreOp::Store,
-                            },
-                            depth_slice: None,
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    });
-                }
-                cmd_buffers.push(encoder.finish());
-            }
-            DeckSource::ExternalSource {
-                kind,
-                blit_pipeline,
-                blit_pipeline_over_black,
-                source_width,
-                source_height,
-                scaling_mode,
-            } => {
-                // DepthSensor decks were already reprojected above via the
-                // point-cloud pass; the plain blit only applies to flat sources.
-                if !matches!(kind, ExternalSourceKind::DepthSensor(_))
-                    && let Some(ext_view) = &self.external_source_view
-                {
-                    Self::blit_external_source(
-                        context,
-                        blit_pipeline,
-                        blit_pipeline_over_black,
-                        self.transparent,
-                        ext_view,
-                        *source_width,
-                        *source_height,
-                        self.texture.width(),
-                        self.texture.height(),
-                        *scaling_mode,
-                        generator_target,
-                        kind.label(),
-                        cmd_buffers,
-                    );
-                }
-            }
-            DeckSource::ComputeShader { pipeline, .. } => {
-                self.generator_params.ensure_buffer(&context.device);
-                self.generator_params.update_buffer_with_modulation(
-                    &context.queue,
-                    modulation,
-                    Some(param_prefix),
-                );
-
-                let user_params_buffer = self
-                    .generator_params
-                    .buffer()
-                    .expect("Buffer should exist after ensure_buffer");
-
-                let (dispatch_x, dispatch_y, dispatch_z) =
-                    pipeline.dispatch_counts(self.texture.width(), self.texture.height());
-
-                let num_passes = pipeline.num_passes;
-
-                // All passes encode into one command buffer, each in its own
-                // compute pass with its own uniform slot. wgpu orders the
-                // passes' storage and texture accesses within the buffer.
-                pipeline.ensure_pass_slots(&context.device);
-                let mut encoder =
-                    context
-                        .device
-                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("Compute Shader Dispatch Encoder"),
-                        });
-                pipeline.clear_non_persistent_buffers(&mut encoder);
-                for pass_idx in 0..num_passes {
-                    let slot = pass_idx as usize;
-                    let uniforms = ISFUniforms {
-                        time,
-                        time_delta,
-                        frame_index: self.frame_count,
-                        pass_index: i32::try_from(pass_idx).unwrap_or(i32::MAX),
-                        render_size: [self.texture.width() as f32, self.texture.height() as f32],
-                        audio_level: audio_data.level,
-                        audio_bass: audio_data.bass(),
-                        audio_mid: audio_data.mid(),
-                        audio_treble: audio_data.treble(),
-                        audio_bpm: audio_data.bpm.unwrap_or(0.0),
-                        audio_beat_phase: audio_data.beat_phase(),
-                        date: get_current_date(),
-                        phase_times: generator_phase_times,
-                    };
-                    pipeline.write_pass_uniforms(&context.queue, slot, &uniforms);
-                    let bind_group = pipeline.create_pass_bind_group(
-                        &context.device,
-                        slot,
-                        Some(user_params_buffer),
-                    );
-                    let mut compute_pass =
-                        encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                            label: Some("Compute Shader Pass"),
-                            timestamp_writes: None,
-                        });
-                    compute_pass.set_pipeline(&pipeline.compute_pipeline);
-                    compute_pass.set_bind_group(0, &bind_group, &[]);
-                    compute_pass.dispatch_workgroups(dispatch_x, dispatch_y, dispatch_z);
-                }
-                // Submitted now rather than with the frame's batch, so the GPU
-                // starts on the simulation while the frame is still recording.
-                context.submit(std::iter::once(encoder.finish()));
-
-                // Copy final compute output to the generator target texture
-                let dest_texture = if source_to_b {
-                    &self.texture_b
-                } else {
-                    &self.texture
-                };
-                let mut copy_encoder =
-                    context
-                        .device
-                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("Compute Output Copy Encoder"),
-                        });
-                copy_encoder.copy_texture_to_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &pipeline.output_texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        texture: dest_texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::Extent3d {
-                        width: self.texture.width(),
-                        height: self.texture.height(),
-                        depth_or_array_layers: 1,
-                    },
-                );
-
-                cmd_buffers.push(copy_encoder.finish());
-            }
-        }
+        let mut frame = SourceFrame {
+            gpu: context,
+            target,
+            target_texture,
+            width: self.texture.width(),
+            height: self.texture.height(),
+            transparent: self.transparent,
+            time,
+            time_delta,
+            frame_index: self.frame_count,
+            phase_times: generator_phase_times,
+            audio: audio_data,
+            modulation,
+            param_prefix,
+            params: &mut self.generator_params,
+            cmd_buffers,
+        };
+        self.source.render(&mut frame)?;
 
         // Apply effect chain (ping-pong between textures)
         let mut read_from_b = source_to_b;
@@ -887,7 +473,7 @@ impl Deck {
                 audio_treble: audio_data.treble(),
                 audio_bpm: audio_data.bpm.unwrap_or(0.0),
                 audio_beat_phase: audio_data.beat_phase(),
-                date: get_current_date(),
+                date: crate::generator::get_current_date(),
                 phase_times: effect_phase_times,
             };
             let (input_view, output_view) = if read_from_b {
@@ -911,20 +497,14 @@ impl Deck {
         // asynchronous result can sign the map it actually evaluated.
         let mut analyzer_states = HashMap::new();
         if self.analyzers.has_active_instances() {
-            if let DeckSource::Shader {
-                preprocessor_textures,
-                ..
-            } = &self.source
-            {
-                collect_preprocessor_state(
-                    preprocessor_textures,
-                    &mut self.generator_params,
-                    generator_phase_times,
-                    modulation,
-                    param_prefix,
-                    &mut analyzer_states,
-                );
-            }
+            collect_preprocessor_state(
+                self.source.preprocessor_slots(),
+                &mut self.generator_params,
+                generator_phase_times,
+                modulation,
+                param_prefix,
+                &mut analyzer_states,
+            );
             for effect in &mut self.effects {
                 collect_preprocessor_state(
                     &effect.preprocessor_textures,
@@ -955,399 +535,6 @@ impl Deck {
         }
 
         Ok(())
-    }
-
-    /// Upload analyzer texture data into preprocessor slots.
-    ///
-    /// For each preprocessor slot (on source and effects), looks up the matching
-    /// analyzer snapshot and uploads texture data via `queue.write_texture()`.
-    /// If the texture dimensions changed, recreates the GPU texture.
-    fn update_preprocessor_textures(
-        analyzers: &DeckAnalyzers,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        source: &mut DeckSource,
-        effects: &mut [super::Effect],
-    ) {
-        if let DeckSource::Shader {
-            preprocessor_textures,
-            ..
-        } = source
-        {
-            for slot in preprocessor_textures.iter_mut() {
-                if let Some(snapshot) = analyzers.latest_snapshot(&slot.analyzer_type)
-                    && let Some(tex_data) = snapshot.textures.get(&slot.name)
-                {
-                    upload_texture_to_slot(device, queue, slot, tex_data);
-                }
-            }
-        }
-
-        for effect in effects.iter_mut() {
-            for slot in &mut effect.preprocessor_textures {
-                if let Some(snapshot) = analyzers.latest_snapshot(&slot.analyzer_type)
-                    && let Some(tex_data) = snapshot.textures.get(&slot.name)
-                {
-                    upload_texture_to_slot(device, queue, slot, tex_data);
-                }
-            }
-        }
-    }
-
-    /// Render simple (non-multi-pass) shader (static version)
-    // Hot-path render helper; args are distinct GPU inputs with no shared invariant.
-    #[allow(clippy::too_many_arguments)]
-    fn render_simple_static(
-        context: &GpuContext,
-        pipeline: &UnifiedPipeline,
-        texture: &wgpu::Texture,
-        time: f32,
-        time_delta: f32,
-        frame_count: u32,
-        target_view: &wgpu::TextureView,
-        audio_data: &AudioData,
-        generator_params: &mut ShaderParams,
-        modulation: &ModulationEngine,
-        param_prefix: &str,
-        imported_views: &[&wgpu::TextureView],
-        preprocessor_views: &[&wgpu::TextureView],
-        phase_times: [f32; 4],
-        cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
-    ) {
-        let uniforms = ISFUniforms {
-            time,
-            time_delta,
-            frame_index: frame_count,
-            pass_index: 0,
-            render_size: [texture.width() as f32, texture.height() as f32],
-            audio_level: audio_data.level,
-            audio_bass: audio_data.bass(),
-            audio_mid: audio_data.mid(),
-            audio_treble: audio_data.treble(),
-            audio_bpm: audio_data.bpm.unwrap_or(0.0),
-            audio_beat_phase: audio_data.beat_phase(),
-            date: get_current_date(),
-            phase_times,
-        };
-
-        pipeline.update_uniforms(&context.queue, &uniforms);
-
-        generator_params.ensure_buffer(&context.device);
-        generator_params.update_buffer_with_modulation(
-            &context.queue,
-            modulation,
-            Some(param_prefix),
-        );
-
-        let user_params_buffer = generator_params
-            .buffer()
-            .expect("Buffer should exist after ensure_buffer");
-        let bind_group = pipeline.create_bind_group(
-            &context.device,
-            None,
-            &[],
-            imported_views,
-            preprocessor_views,
-            Some(user_params_buffer),
-        );
-
-        let mut encoder = context
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Deck Source Render Encoder"),
-            });
-
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Deck Source Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-
-            render_pass.set_pipeline(&pipeline.pipeline);
-            render_pass.set_bind_group(0, &bind_group, &[]);
-            render_pass.draw(0..3, 0..1);
-        }
-
-        cmd_buffers.push(encoder.finish());
-    }
-
-    /// Render multi-pass shader with proper ping-pong buffers
-    // Hot-path render helper; args are distinct GPU inputs with no shared invariant.
-    #[allow(clippy::too_many_arguments)]
-    fn render_multi_pass_static(
-        context: &GpuContext,
-        multi_pass: &UnifiedPipeline,
-        passes: &[ISFPass],
-        pass_buffers: &mut HashMap<String, PassBuffer>,
-        time: f32,
-        time_delta: f32,
-        frame_count: u32,
-        render_width: u32,
-        render_height: u32,
-        final_target: &wgpu::TextureView,
-        audio_data: &AudioData,
-        generator_params: &mut ShaderParams,
-        modulation: &ModulationEngine,
-        param_prefix: &str,
-        imported_views: &[&wgpu::TextureView],
-        preprocessor_views: &[&wgpu::TextureView],
-        phase_times: [f32; 4],
-        cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
-    ) {
-        const SIMULATION_ITERATIONS: usize = 4;
-
-        generator_params.ensure_buffer(&context.device);
-        generator_params.update_buffer_with_modulation(
-            &context.queue,
-            modulation,
-            Some(param_prefix),
-        );
-        let user_params_buffer = generator_params
-            .buffer()
-            .expect("Buffer should exist after ensure_buffer");
-
-        let iterations_of = |pass: &ISFPass| {
-            if pass.persistent.unwrap_or(false) {
-                SIMULATION_ITERATIONS
-            } else {
-                1
-            }
-        };
-        // One uniform slot per pass iteration, then one for the final pass, so
-        // every pass is written up front. The targeted passes share one command
-        // buffer, submitted now so the GPU starts on the simulation while the
-        // frame is still recording; the final pass joins the frame's batch.
-        let slots = passes
-            .iter()
-            .filter(|p| p.target.is_some())
-            .map(iterations_of)
-            .sum::<usize>()
-            + 1;
-        multi_pass.ensure_pass_slots(&context.device, slots);
-        let mut encoder = context
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Multi-pass Encoder"),
-            });
-        let mut slot = 0;
-
-        for (pass_idx, pass) in passes.iter().enumerate() {
-            let Some(target_name) = &pass.target else {
-                continue;
-            };
-            let iterations = iterations_of(pass);
-
-            // Use the pass buffer's actual dimensions as RENDERSIZE so
-            // shaders that store per-pixel state (e.g. particle buffers)
-            // can address their own texels correctly.
-            let pass_render_size = pass_buffers.get(target_name).map_or(
-                [render_width as f32, render_height as f32],
-                |pb| {
-                    let sz = pb.texture_a.size();
-                    [sz.width as f32, sz.height as f32]
-                },
-            );
-
-            for iter in 0..iterations {
-                let effective_frame = frame_count * SIMULATION_ITERATIONS as u32 + iter as u32;
-
-                let uniforms = ISFUniforms {
-                    time,
-                    time_delta: time_delta / SIMULATION_ITERATIONS as f32,
-                    frame_index: effective_frame,
-                    pass_index: i32::try_from(pass_idx).unwrap_or(i32::MAX),
-                    render_size: pass_render_size,
-                    audio_level: audio_data.level,
-                    audio_bass: audio_data.bass(),
-                    audio_mid: audio_data.mid(),
-                    audio_treble: audio_data.treble(),
-                    audio_bpm: audio_data.bpm.unwrap_or(0.0),
-                    audio_beat_phase: audio_data.beat_phase(),
-                    date: get_current_date(),
-                    phase_times,
-                };
-                multi_pass.write_pass_uniforms(&context.queue, slot, &uniforms);
-                let target_view = pass_buffers
-                    .get(target_name)
-                    .map_or(final_target, super::PassBuffer::write_view);
-                Self::encode_multi_pass(
-                    context,
-                    multi_pass,
-                    &mut encoder,
-                    slot,
-                    passes,
-                    pass_buffers,
-                    imported_views,
-                    preprocessor_views,
-                    user_params_buffer,
-                    target_view,
-                );
-                slot += 1;
-
-                if let Some(pb) = pass_buffers.get_mut(target_name) {
-                    pb.swap();
-                }
-            }
-        }
-
-        if slot > 0 {
-            context.submit(std::iter::once(encoder.finish()));
-            encoder = context
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Multi-pass Final Encoder"),
-                });
-        }
-
-        // Final pass to the deck's target.
-        let uniforms = ISFUniforms {
-            time,
-            time_delta,
-            frame_index: frame_count,
-            pass_index: i32::try_from(passes.len()).unwrap_or(i32::MAX),
-            render_size: [render_width as f32, render_height as f32],
-            audio_level: audio_data.level,
-            audio_bass: audio_data.bass(),
-            audio_mid: audio_data.mid(),
-            audio_treble: audio_data.treble(),
-            audio_bpm: audio_data.bpm.unwrap_or(0.0),
-            audio_beat_phase: audio_data.beat_phase(),
-            date: get_current_date(),
-            phase_times,
-        };
-        multi_pass.write_pass_uniforms(&context.queue, slot, &uniforms);
-        Self::encode_multi_pass(
-            context,
-            multi_pass,
-            &mut encoder,
-            slot,
-            passes,
-            pass_buffers,
-            imported_views,
-            preprocessor_views,
-            user_params_buffer,
-            final_target,
-        );
-        cmd_buffers.push(encoder.finish());
-    }
-
-    /// Encode one pass of a multi-pass generator into `target`, reading its
-    /// uniforms from `slot` and every pass buffer's current contents.
-    #[allow(clippy::too_many_arguments)] // the pass's bindings, all borrowed from different owners
-    fn encode_multi_pass(
-        context: &GpuContext,
-        multi_pass: &UnifiedPipeline,
-        encoder: &mut wgpu::CommandEncoder,
-        slot: usize,
-        passes: &[ISFPass],
-        pass_buffers: &HashMap<String, PassBuffer>,
-        imported_views: &[&wgpu::TextureView],
-        preprocessor_views: &[&wgpu::TextureView],
-        user_params_buffer: &wgpu::Buffer,
-        target: &wgpu::TextureView,
-    ) {
-        let pass_buffer_views: Vec<&wgpu::TextureView> = passes
-            .iter()
-            .filter_map(|p| p.target.as_ref().and_then(|t| pass_buffers.get(t)))
-            .map(super::PassBuffer::read_view)
-            .collect();
-        let bind_group = multi_pass.create_pass_bind_group(
-            &context.device,
-            slot,
-            None,
-            &pass_buffer_views,
-            imported_views,
-            preprocessor_views,
-            Some(user_params_buffer),
-        );
-        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Multi-pass Render"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-                depth_slice: None,
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        render_pass.set_pipeline(&multi_pass.pipeline);
-        render_pass.set_bind_group(0, &bind_group, &[]);
-        render_pass.draw(0..3, 0..1);
-    }
-
-    /// Reproject a depth-sensor deck's point cloud into `target`.
-    ///
-    /// Needs `self.external_source_view` (`R16Uint` depth), `self.depth_rgb_view`,
-    /// `self.depth_intrinsics`, and `self.depth_source_size` — all set once per
-    /// frame by the app render loop. Lazily builds the pipeline on first use.
-    /// No-op until a depth frame + intrinsics are available.
-    fn render_point_cloud(
-        &mut self,
-        context: &GpuContext,
-        source_to_b: bool,
-        time: f32,
-        cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
-    ) {
-        let (Some(intr), Some((sw, sh))) = (self.depth_intrinsics, self.depth_source_size) else {
-            return;
-        };
-        if self.external_source_view.is_none() || self.depth_rgb_view.is_none() {
-            return;
-        }
-
-        if self.point_cloud_pipeline.is_none() {
-            self.point_cloud_pipeline = Some(crate::depth::point_cloud::PointCloudPipeline::new(
-                &context.device,
-                self.texture.format(),
-            ));
-        }
-        // Take the pipeline out so we can borrow other `self` fields freely.
-        let pipeline = self.point_cloud_pipeline.take().unwrap();
-        let target = if source_to_b {
-            &self.texture_b_view
-        } else {
-            &self.texture_view
-        };
-        let depth_view = self.external_source_view.as_ref().unwrap();
-        let rgb_view = self.depth_rgb_view.as_ref().unwrap();
-
-        pipeline.update_uniform(
-            &context.queue,
-            intr,
-            sw,
-            sh,
-            self.texture.width(),
-            self.texture.height(),
-            time,
-            &self.point_cloud_params,
-        );
-        pipeline.render(
-            &context.device,
-            depth_view,
-            rgb_view,
-            target,
-            sw * sh,
-            cmd_buffers,
-        );
-        self.point_cloud_pipeline = Some(pipeline);
     }
 
     /// Run the depth-sensor preprocessor's conversion passes for this frame.
@@ -1407,155 +594,16 @@ impl Deck {
             .run(&context.device, &depth_view, rgb_view.as_ref(), cmd_buffers);
     }
 
-    /// Blit an external source (Camera, NDI, Syphon) with scaling to the generator target.
-    // Hot-path blit helper; args are distinct GPU inputs with no shared invariant.
-    #[allow(clippy::too_many_arguments)]
-    fn blit_external_source(
-        context: &GpuContext,
-        blit_pipeline: &BlitPipeline,
-        blit_pipeline_over_black: &BlitPipeline,
-        transparent: bool,
-        source_view: &wgpu::TextureView,
-        source_width: u32,
-        source_height: u32,
-        target_width: u32,
-        target_height: u32,
-        scaling_mode: ScalingMode,
-        generator_target: &wgpu::TextureView,
-        label: &str,
-        cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
-    ) {
-        // Flagged transparent → REPLACE over a transparent clear, preserving the
-        // source's straight alpha (and leaving letterbox transparent). Default →
-        // ALPHA_BLENDING over an opaque black clear, flattening to opaque so an
-        // HTML source with alpha<1 doesn't punch holes (/spec/html-source.md §2).
-        let (pipeline, clear) = if transparent {
-            (blit_pipeline, wgpu::Color::TRANSPARENT)
-        } else {
-            (blit_pipeline_over_black, wgpu::Color::BLACK)
-        };
-
-        let (uv_scale, uv_offset) = scaling_mode.compute_uv_transform(
-            source_width,
-            source_height,
-            target_width,
-            target_height,
-        );
-        pipeline.set_uv_transform(&context.queue, 1.0, uv_scale, uv_offset);
-
-        let bind_group = pipeline.create_bind_group(&context.device, source_view);
-        let mut encoder = context
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some(&format!("{label} Blit Encoder")),
-            });
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some(&format!("{label} Blit Pass")),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: generator_target,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(clear),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pipeline.render(&mut render_pass, &bind_group);
-        }
-        cmd_buffers.push(encoder.finish());
-    }
-
-    /// Resize the deck's render targets
+    /// Resize the deck's render targets, and let the source redraw for the new
+    /// size (vector art re-rasterizes rather than being magnified).
     pub fn resize(&mut self, context: &GpuContext, width: u32, height: u32) {
         let width = width.max(1);
         let height = height.max(1);
-        // Include COPY_DST so compute shader decks survive resize
-        let usage = wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC
-            | wgpu::TextureUsages::COPY_DST;
-        self.texture = context.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Deck Texture (Linear)"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: context.compositing_format,
-            usage,
-            view_formats: &[],
-        });
-        self.texture_view = self
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        self.texture_b = context.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Deck Texture B (Linear)"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: context.compositing_format,
-            usage,
-            view_formats: &[],
-        });
-        self.texture_b_view = self
-            .texture_b
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        self.rerasterize_svg(context, width, height);
-    }
-
-    /// Re-render an SVG image source for a `width × height` deck.
-    ///
-    /// This is what makes vector art resolution-independent in practice: the
-    /// same file that was rasterized for a 720p stage is redrawn at 4K when the
-    /// master resolution goes up, instead of the blit magnifying the pixels it
-    /// was first rendered at. Raster images and every other source are skipped.
-    /// A failed re-render keeps the existing texture, so the deck goes soft
-    /// rather than black.
-    fn rerasterize_svg(&mut self, context: &GpuContext, width: u32, height: u32) {
-        let DeckSource::Image {
-            texture,
-            texture_view,
-            source_width,
-            source_height,
-            svg: Some(tree),
-            ..
-        } = &mut self.source
-        else {
-            return;
-        };
-        let (raster_w, raster_h) = crate::deck::svg::raster_size(tree, width, height);
-        if (raster_w, raster_h) == (*source_width, *source_height) {
-            return;
-        }
-        let rgba = match crate::deck::svg::rasterize(tree, width, height) {
-            Ok(rgba) => rgba,
-            Err(e) => {
-                log::warn!(
-                    "Could not re-rasterize SVG deck '{}': {e}",
-                    self.source_name
-                );
-                return;
-            }
-        };
-        let (new_texture, new_view) = super::source::upload_image_texture(context, &rgba);
-        *texture = new_texture;
-        *texture_view = new_view;
-        *source_width = raster_w;
-        *source_height = raster_h;
+        (self.texture, self.texture_view) =
+            super::source::deck_target(context, "Deck Texture (Linear)", width, height);
+        (self.texture_b, self.texture_b_view) =
+            super::source::deck_target(context, "Deck Texture B (Linear)", width, height);
+        self.source.resize(context, width, height);
     }
 
     /// Get the final output texture view (after effect chain)
@@ -1564,30 +612,25 @@ impl Deck {
     }
 }
 
+/// Upload analyzer texture data into preprocessor slots.
+fn upload_preprocessor_slots(
+    analyzers: &DeckAnalyzers,
+    context: &GpuContext,
+    slots: &mut [PreprocessorSlot],
+) {
+    for slot in slots {
+        if let Some(snapshot) = analyzers.latest_snapshot(&slot.analyzer_type)
+            && let Some(tex_data) = snapshot.textures.get(&slot.name)
+        {
+            upload_texture_to_slot(&context.device, &context.queue, slot, tex_data);
+        }
+    }
+}
+
 /// Every analyzer and preprocessor a deck can declare: the analyzer module's
 /// own, plus the depth sensor's.
 pub(crate) fn analyzer_registry() -> AnalyzerRegistry {
     crate::depth::preprocess::register(crate::analyzer::default_registry())
-}
-
-/// Get current date as [year, month, day, `seconds_in_day`]
-pub fn get_current_date() -> [f32; 4] {
-    use std::time::SystemTime;
-
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-
-    let total_seconds = now.as_secs();
-    let seconds_in_day = (total_seconds % 86400) as f32;
-
-    let days_since_epoch = total_seconds / 86400;
-    let year = 1970.0 + (days_since_epoch as f32 / 365.25);
-    let day_of_year = (days_since_epoch % 365) as f32;
-    let month = (day_of_year / 30.0).floor() + 1.0;
-    let day = (day_of_year % 30.0) + 1.0;
-
-    [year, month, day, seconds_in_day]
 }
 
 #[cfg(test)]
@@ -2045,13 +1088,10 @@ mod tests {
 
     #[test]
     fn deck_resize_zero_dimensions_does_not_panic() {
-        let gpu = crate::renderer::GpuContext::new_headless();
-        let Ok(gpu) = gpu else {
-            eprintln!("Skipping: no headless GPU available");
+        let Some(gpu) = crate::testing::headless_gpu() else {
             return;
         };
-        let mut deck = crate::deck::Deck::new_solid_color(&gpu, [1.0, 0.0, 0.0, 1.0], 64, 64)
-            .expect("solid color deck creation should succeed");
+        let mut deck = crate::deck::Deck::solid_color(&gpu, [1.0, 0.0, 0.0, 1.0], 64, 64);
 
         // Zero width — must not panic (clamped to 1)
         deck.resize(&gpu, 0, 64);
@@ -2064,81 +1104,5 @@ mod tests {
 
         // Normal resize still works
         deck.resize(&gpu, 128, 128);
-    }
-
-    // ── SVG image decks rasterize against the master resolution ──────
-
-    /// A 4:1 drawing, so a stretched rasterization is distinguishable from a
-    /// fitted one and the deck's own scaling mode has something to work with.
-    const WIDE_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg"
-        viewBox="0 0 200 50" width="200" height="50">
-        <rect width="200" height="50" fill="#3050ff"/></svg>"##;
-
-    fn image_source_size(deck: &crate::deck::Deck) -> (u32, u32) {
-        match &deck.source {
-            DeckSource::Image {
-                source_width,
-                source_height,
-                ..
-            } => (*source_width, *source_height),
-            _ => panic!("expected an image deck"),
-        }
-    }
-
-    #[test]
-    fn an_svg_deck_is_drawn_at_the_deck_size_not_the_files_own_size() {
-        let Ok(gpu) = crate::renderer::GpuContext::new_headless() else {
-            eprintln!("Skipping: no headless GPU available");
-            return;
-        };
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("art.svg");
-        std::fs::write(&path, WIDE_SVG).expect("write svg");
-
-        let deck = crate::deck::Deck::new_from_image(&gpu, &path, 1920, 1080).expect("svg deck");
-        // Not (200, 50): vector art is drawn for the stage it lands on, and it
-        // fills the width without being stretched to the deck's 16:9.
-        assert_eq!(image_source_size(&deck), (1920, 480));
-    }
-
-    #[test]
-    fn changing_the_master_resolution_redraws_the_svg() {
-        let Ok(gpu) = crate::renderer::GpuContext::new_headless() else {
-            eprintln!("Skipping: no headless GPU available");
-            return;
-        };
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("art.svg");
-        std::fs::write(&path, WIDE_SVG).expect("write svg");
-
-        let mut deck = crate::deck::Deck::new_from_image(&gpu, &path, 640, 360).expect("svg deck");
-        assert_eq!(image_source_size(&deck), (640, 160));
-
-        // Going up to 4K must redraw rather than magnify the 640 px raster.
-        deck.resize(&gpu, 3840, 2160);
-        assert_eq!(image_source_size(&deck), (3840, 960));
-
-        deck.resize(&gpu, 1280, 720);
-        assert_eq!(image_source_size(&deck), (1280, 320));
-    }
-
-    #[test]
-    fn a_raster_image_keeps_its_own_pixels_across_a_resize() {
-        // The counterpart to the SVG behaviour: a PNG has real pixels and there
-        // is nothing to redraw, so resizing must leave the source alone.
-        let Ok(gpu) = crate::renderer::GpuContext::new_headless() else {
-            eprintln!("Skipping: no headless GPU available");
-            return;
-        };
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("art.png");
-        image::RgbaImage::from_pixel(80, 40, image::Rgba([10, 20, 30, 255]))
-            .save(&path)
-            .expect("write png");
-
-        let mut deck = crate::deck::Deck::new_from_image(&gpu, &path, 640, 360).expect("png deck");
-        assert_eq!(image_source_size(&deck), (80, 40));
-        deck.resize(&gpu, 3840, 2160);
-        assert_eq!(image_source_size(&deck), (80, 40));
     }
 }

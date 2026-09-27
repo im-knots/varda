@@ -489,8 +489,7 @@ mod tests {
     use crate::engine::{EffectTarget, EngineCommand as C};
 
     fn headless_app() -> Option<VardaApp> {
-        let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
-        VardaApp::new(gpu, &crate::testing::headless_config()).ok()
+        crate::testing::headless_app()
     }
 
     /// A blue deck in channel 0, returning its UUID.
@@ -498,9 +497,9 @@ mod tests {
         let channel_uuid = crate::app::snapshot::build_mixer_snapshot(app).channels[0]
             .uuid
             .clone();
-        let result = app.execute_command(C::AddSolidColorDeck {
+        let result = app.execute_command(C::AddDeck {
             channel_uuid,
-            color: [0.0, 0.0, 1.0, 1.0],
+            source: crate::solid_color::SolidColor::config_for([0.0, 0.0, 1.0, 1.0]),
         });
         let CommandResult::OkWithId { uuid } = result else {
             panic!("deck was not created: {result:?}");

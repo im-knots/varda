@@ -567,13 +567,11 @@ mod tests {
 
     #[test]
     fn writes_go_through_the_router_by_uuid() {
-        use crate::renderer::GpuContext;
-
-        let Ok(gpu) = GpuContext::new_headless() else {
+        let Some(gpu) = crate::testing::headless_gpu() else {
             return;
         };
         let mut mixer = Mixer::new(&gpu, 64, 64).unwrap();
-        let deck = crate::deck::Deck::new_solid_color(&gpu, [1.0; 4], 64, 64).unwrap();
+        let deck = crate::deck::Deck::solid_color(&gpu, [1.0; 4], 64, 64);
         mixer.channel_mut(0).unwrap().add_deck(deck);
 
         let mut engine = AutoMapEngine::new();

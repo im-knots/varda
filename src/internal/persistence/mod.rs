@@ -334,10 +334,9 @@ impl Workspace {
 // ── Snapshot: Live State → Config ───────────────────────────────────
 
 use crate::mixer::Mixer;
-use crate::renderer::context::{OutputTarget, RecordingCodec, UnifiedOutput};
 use crate::scene::{
-    AutoTransitionConfig, ChannelConfig, DeckConfig, EffectConfig, OutputConfig,
-    OutputTargetConfig, SceneConfig, SourceConfig, SurfaceAssignmentConfig, TriggerConfig,
+    AutoTransitionConfig, ChannelConfig, DeckConfig, EffectConfig, OutputConfig, SceneConfig,
+    SourceConfig, SurfaceAssignmentConfig, TriggerConfig,
 };
 
 // ── DurationSpec ↔ DurationSpecConfig helpers ───────────────────────
@@ -437,21 +436,6 @@ pub fn restore_sequence_steps(
 ///
 /// Stores the device *name* rather than its id, matching how cameras and
 /// depth-sensor decks restore — ids shift when devices are replugged.
-fn depth_prepro_config(deck: &Deck) -> Option<crate::scene::DepthPreproConfig> {
-    let state = deck.depth_prepro.as_ref()?;
-    let p = &state.params;
-    Some(crate::scene::DepthPreproConfig {
-        sensor_name: state.sensor_name.clone(),
-        near_mm: p.near_mm,
-        far_mm: p.far_mm,
-        smoothing: p.smoothing,
-        hole_fill: p.hole_fill,
-        mask_feather: p.mask_feather,
-        motion_gain: p.motion_gain,
-        mirror: p.mirror,
-    })
-}
-
 /// Build a `SceneConfig` snapshot from live app state (show-specific: channels, effects, modulation).
 ///
 /// `transport` contributes only its authored settings (frame rate, loop range);
@@ -470,170 +454,8 @@ pub fn snapshot_scene(
             let decks = ch
                 .decks
                 .iter()
-                .filter_map(|slot| {
-                    let source = match slot.deck.source_type() {
-                        "shader" => {
-                            let path = slot.deck.source_path().unwrap_or_default().to_string();
-                            SourceConfig::Shader {
-                                path,
-                                params: slot.deck.generator_params.values.clone(),
-                                depth_prepro: depth_prepro_config(&slot.deck),
-                            }
-                        }
-                        "video" => {
-                            let pb = slot.deck.playback_snapshot();
-                            SourceConfig::Video {
-                                path: slot.deck.source_path().unwrap_or_default().to_string(),
-                                loop_mode: pb.as_ref().map(|p| p.loop_mode).unwrap_or_default(),
-                                speed: pb.as_ref().map_or(1.0, |p| p.speed),
-                                in_point: pb.as_ref().map_or(0.0, |p| p.in_point),
-                                out_point: pb.as_ref().map_or(0.0, |p| p.out_point),
-                                scaling_mode: slot.deck.scaling_mode().unwrap_or_default(),
-                                transport_sync: slot
-                                    .deck
-                                    .video_transport_sync()
-                                    .unwrap_or_default(),
-                            }
-                        }
-                        "image" => SourceConfig::Image {
-                            path: slot.deck.source_path().unwrap_or_default().to_string(),
-                            scaling_mode: slot.deck.scaling_mode().unwrap_or_default(),
-                        },
-                        "solid_color" => {
-                            let color = slot.deck.solid_color().unwrap_or([0.0, 0.0, 0.0, 1.0]);
-                            SourceConfig::SolidColor { color }
-                        }
-                        "camera" => {
-                            // Store the camera display name (strip the 📹 prefix we add)
-                            let name = slot
-                                .deck
-                                .source_name()
-                                .trim_start_matches("📹 ")
-                                .to_string();
-                            SourceConfig::Camera { name }
-                        }
-                        "ndi" => {
-                            // Store the NDI source name (strip the 📡 prefix we add)
-                            let name = slot
-                                .deck
-                                .source_name()
-                                .trim_start_matches("📡 ")
-                                .to_string();
-                            SourceConfig::Ndi { name }
-                        }
-                        "syphon" => {
-                            // Store the Syphon server name (strip the 🔗 prefix we add)
-                            let name = slot
-                                .deck
-                                .source_name()
-                                .trim_start_matches("🔗 ")
-                                .to_string();
-                            SourceConfig::Syphon { name }
-                        }
-                        "spout" => {
-                            // Same 🔗 prefix as Syphon: both are inter-app
-                            // texture shares and the label is the sender name.
-                            let name = slot
-                                .deck
-                                .source_name()
-                                .trim_start_matches("🔗 ")
-                                .to_string();
-                            SourceConfig::Spout { name }
-                        }
-                        "srt" => {
-                            let url = slot
-                                .deck
-                                .source_name()
-                                .trim_start_matches("📺 ")
-                                .to_string();
-                            let mode = "caller".to_string();
-                            SourceConfig::Srt { url, mode }
-                        }
-                        "hls" => {
-                            let url = slot
-                                .deck
-                                .source_name()
-                                .trim_start_matches("📡 ")
-                                .to_string();
-                            SourceConfig::Hls { url }
-                        }
-                        "dash" => {
-                            let url = slot
-                                .deck
-                                .source_name()
-                                .trim_start_matches("📡 ")
-                                .to_string();
-                            SourceConfig::Dash { url }
-                        }
-                        "rtmp" => {
-                            let url = slot
-                                .deck
-                                .source_name()
-                                .trim_start_matches("📺 ")
-                                .to_string();
-                            SourceConfig::Rtmp {
-                                url,
-                                mode: "pull".to_string(),
-                            }
-                        }
-                        "html" => {
-                            let url = slot
-                                .deck
-                                .source_name()
-                                .trim_start_matches("🌐 ")
-                                .to_string();
-                            SourceConfig::Html { url }
-                        }
-                        "depth_sensor" => {
-                            // Store the sensor display name (strip the 🛰 prefix we add)
-                            let name = slot.deck.source_name().trim_start_matches("🛰 ").to_string();
-                            let p = &slot.deck.point_cloud_params;
-                            let params = Some(crate::scene::DepthParamsConfig {
-                                orbit_yaw: p.orbit_yaw,
-                                orbit_pitch: p.orbit_pitch,
-                                zoom: p.zoom,
-                                point_size: p.point_size,
-                                color_mode: p.color_mode.as_f32() as u8,
-                                depth_min_mm: p.depth_min_mm,
-                                depth_max_mm: p.depth_max_mm,
-                                solid_color: p.solid_color,
-                                seed: p.seed,
-                                drift: p.drift,
-                                disruption: p.disruption,
-                            });
-                            SourceConfig::DepthSensor { name, params }
-                        }
-                        "screen_capture" => {
-                            // The live binding is held on the deck, so the target
-                            // and settings serialize without reaching into the
-                            // capture manager. A capture deck can only exist with
-                            // this state set, so its absence is unrecoverable.
-                            let state = slot.deck.screen_capture.as_ref()?;
-                            let crop = state.config.crop;
-                            SourceConfig::ScreenCapture {
-                                target: crate::scene::CaptureTargetConfig::from(&state.identity),
-                                rate: state.config.rate,
-                                crop: if crop.is_full_frame() {
-                                    None
-                                } else {
-                                    Some(crop.into())
-                                },
-                                show_cursor: state.config.show_cursor,
-                                exclude_varda: Some(state.config.exclude_varda),
-                                scaling_mode: slot.deck.scaling_mode().unwrap_or_default(),
-                            }
-                        }
-                        "tap" => {
-                            // As with screen capture, the binding lives on the
-                            // deck, so no mixer lookup is needed here.
-                            let state = slot.deck.tap.as_ref()?;
-                            SourceConfig::Tap {
-                                source: crate::scene::TapSourceConfig::from(&state.source),
-                                scaling_mode: slot.deck.scaling_mode().unwrap_or_default(),
-                            }
-                        }
-                        _ => return None,
-                    };
+                .map(|slot| {
+                    let source = slot.deck.source_config();
 
                     let effects = slot
                         .deck
@@ -668,7 +490,7 @@ pub fn snapshot_scene(
                             }
                         });
 
-                    Some(DeckConfig {
+                    DeckConfig {
                         uuid: slot.deck.uuid().to_string(),
                         name: slot.deck.source_name().to_string(),
                         source,
@@ -682,7 +504,7 @@ pub fn snapshot_scene(
                         render_fps: slot.render_fps,
                         auto_transition,
                         modulation: vec![],
-                    })
+                    }
                 })
                 .collect();
 
@@ -786,239 +608,40 @@ pub fn snapshot_scene(
     }
 }
 
-/// Convert a live `OutputTarget` to a serializable `OutputTargetConfig`.
-fn target_to_config(target: &OutputTarget) -> OutputTargetConfig {
-    match target {
-        OutputTarget::Windowed => OutputTargetConfig::Windowed,
-        OutputTarget::Display { name, .. } => OutputTargetConfig::Display { name: name.clone() },
-        OutputTarget::Recording {
-            path,
-            codec,
-            audio_device,
-        } => OutputTargetConfig::Recording {
-            path: path.clone(),
-            codec: codec.to_string(),
-            audio_device: audio_device.clone(),
-        },
-        OutputTarget::SrtStream {
-            url,
-            codec,
-            audio_device,
-        } => OutputTargetConfig::SrtStream {
-            url: url.clone(),
-            codec: codec.to_string(),
-            audio_device: audio_device.clone(),
-        },
-        OutputTarget::HlsStream {
-            name,
-            codec,
-            short_segments,
-            audio_device,
-        } => OutputTargetConfig::HlsStream {
-            name: name.clone(),
-            codec: codec.to_string(),
-            short_segments: *short_segments,
-            audio_device: audio_device.clone(),
-        },
-        OutputTarget::DashStream {
-            name,
-            codec,
-            audio_device,
-        } => OutputTargetConfig::DashStream {
-            name: name.clone(),
-            codec: codec.to_string(),
-            audio_device: audio_device.clone(),
-        },
-        OutputTarget::RtmpStream {
-            url,
-            codec,
-            codec_contract,
-            audio_device,
-        } => OutputTargetConfig::RtmpStream {
-            url: url.clone(),
-            codec: codec.to_string(),
-            codec_contract: *codec_contract,
-            audio_device: audio_device.clone(),
-        },
-        OutputTarget::NdiSend { sender_name } => OutputTargetConfig::NdiSend {
-            sender_name: sender_name.clone(),
-        },
-        OutputTarget::SyphonServer { server_name } => OutputTargetConfig::SyphonServer {
-            server_name: server_name.clone(),
-        },
-        OutputTarget::SpoutSender { sender_name } => OutputTargetConfig::SpoutSender {
-            sender_name: sender_name.clone(),
-        },
-    }
-}
-
-/// Convert a serializable `OutputTargetConfig` back to a live `OutputTarget`.
-/// Public variant for use from outputs.rs.
-pub fn config_to_target_pub(config: &OutputTargetConfig) -> OutputTarget {
-    config_to_target(config)
-}
-
-fn config_to_target(config: &OutputTargetConfig) -> OutputTarget {
-    match config {
-        OutputTargetConfig::Windowed => OutputTarget::Windowed,
-        OutputTargetConfig::Display { name } => OutputTarget::Display {
-            name: name.clone(),
-            monitor_index: 0, // Will be matched at runtime
-        },
-        OutputTargetConfig::Recording {
-            path,
-            codec,
-            audio_device,
-        } => OutputTarget::Recording {
-            path: path.clone(),
-            codec: match codec.as_str() {
-                "prores" | "ProRes" | "ProRes 422" => RecordingCodec::ProRes,
-                "prores_4444" | "ProRes4444" | "ProRes 4444" => RecordingCodec::ProRes4444,
-                "h265" | "H265" | "H.265 (HEVC)" => RecordingCodec::H265,
-                "av1" | "AV1" => RecordingCodec::AV1,
-                "hap" | "Hap" | "HAP" => RecordingCodec::Hap,
-                "hap_alpha" | "HapAlpha" | "HAP Alpha" => RecordingCodec::HapAlpha,
-                "hapq" | "HapQ" | "HAP Q" => RecordingCodec::HapQ,
-                _ => RecordingCodec::H264,
-            },
-            audio_device: audio_device.clone(),
-        },
-        OutputTargetConfig::SrtStream {
-            url,
-            codec,
-            audio_device,
-        } => OutputTarget::SrtStream {
-            url: url.clone(),
-            codec: match codec.as_str() {
-                "H.265 (HEVC)" | "H265" | "h265" => crate::renderer::context::SrtCodec::H265,
-                _ => crate::renderer::context::SrtCodec::H264,
-            },
-            audio_device: audio_device.clone(),
-        },
-        OutputTargetConfig::HlsStream {
-            name,
-            codec,
-            short_segments,
-            audio_device,
-        } => OutputTarget::HlsStream {
-            name: name.clone(),
-            codec: match codec.as_str() {
-                "H.265 (HEVC)" | "H265" | "h265" => crate::renderer::context::StreamingCodec::H265,
-                "AV1" | "av1" => crate::renderer::context::StreamingCodec::AV1,
-                _ => crate::renderer::context::StreamingCodec::H264,
-            },
-            short_segments: *short_segments,
-            audio_device: audio_device.clone(),
-        },
-        OutputTargetConfig::DashStream {
-            name,
-            codec,
-            audio_device,
-        } => OutputTarget::DashStream {
-            name: name.clone(),
-            codec: match codec.as_str() {
-                "H.265 (HEVC)" | "H265" | "h265" => crate::renderer::context::StreamingCodec::H265,
-                "AV1" | "av1" => crate::renderer::context::StreamingCodec::AV1,
-                _ => crate::renderer::context::StreamingCodec::H264,
-            },
-            audio_device: audio_device.clone(),
-        },
-        OutputTargetConfig::RtmpStream {
-            url,
-            codec,
-            codec_contract,
-            audio_device,
-        } => OutputTarget::RtmpStream {
-            url: url.clone(),
-            codec: match codec.as_str() {
-                "H.265 (HEVC)" | "H265" | "h265" => crate::renderer::context::StreamingCodec::H265,
-                "AV1" | "av1" => crate::renderer::context::StreamingCodec::AV1,
-                _ => crate::renderer::context::StreamingCodec::H264,
-            },
-            codec_contract: *codec_contract,
-            audio_device: audio_device.clone(),
-        },
-        OutputTargetConfig::NdiSend { sender_name } => OutputTarget::NdiSend {
-            sender_name: sender_name.clone(),
-        },
-        OutputTargetConfig::SyphonServer { server_name } => OutputTarget::SyphonServer {
-            server_name: server_name.clone(),
-        },
-        OutputTargetConfig::SpoutSender { sender_name } => OutputTarget::SpoutSender {
-            sender_name: sender_name.clone(),
-        },
-    }
-}
-
 /// Build a `StagePrefs` snapshot from live app state (venue-specific: surfaces, outputs, editor prefs).
 pub fn snapshot_stage(
     surface_manager: &crate::surface::SurfaceManager,
-    outputs_list: &[UnifiedOutput],
+    outputs_list: &[crate::output::Output],
     editor: &crate::engine::value::editor::EditorPrefs,
     dome: &crate::engine::value::dome::DomeConfig,
     domemaster_resolution: crate::renderer::dome::DomemasterResolution,
 ) -> StagePrefs {
     let outputs = outputs_list
         .iter()
-        .map(|unified| {
-            let (name, target, surface_assignments, window_position, window_size) = match unified {
-                UnifiedOutput::Window(w) => {
-                    // Capture window position and size for restoration
-                    let pos = w.window.outer_position().ok().map(|p| [p.x, p.y]);
-                    let sz = {
-                        let s = w.window.inner_size();
-                        if s.width > 0 && s.height > 0 {
-                            Some([s.width, s.height])
-                        } else {
-                            None
-                        }
-                    };
-                    (
-                        w.name.clone(),
-                        target_to_config(&w.target),
-                        w.surface_assignments
-                            .iter()
-                            .map(|a| SurfaceAssignmentConfig {
-                                surface_uuid: a.surface_uuid.clone(),
-                                legacy_warp_mode: None,
-                                enabled: a.enabled,
-                            })
-                            .collect(),
-                        pos,
-                        sz,
-                    )
-                }
-                UnifiedOutput::Headless(h) => (
-                    h.name.clone(),
-                    target_to_config(&h.target),
-                    h.surface_assignments
-                        .iter()
-                        .map(|a| SurfaceAssignmentConfig {
-                            surface_uuid: a.surface_uuid.clone(),
-                            legacy_warp_mode: None,
-                            enabled: a.enabled,
-                        })
-                        .collect(),
-                    None,
-                    None,
-                ),
-            };
-            let edge_blend_mode = unified.edge_blend_mode();
-            let edge_blend = unified.edge_blend();
-            OutputConfig {
-                uuid: unified.uuid().to_string(),
-                name,
-                target,
-                target_display: None,
-                surface_assignments,
-                window_position,
-                window_size,
-                edge_blend_mode,
-                edge_blend,
-                rotation: unified.rotation(),
-                presentation: unified.presentation_request(),
-                tonemap_override: unified.tonemap_override(),
-            }
+        .map(|output| OutputConfig {
+            uuid: output.uuid.clone(),
+            name: output.name.clone(),
+            // A window's position and size are part of its sink's settings.
+            target: output.sink().config(),
+            target_display: None,
+            surface_assignments: output
+                .surface_assignments
+                .iter()
+                .map(|a| SurfaceAssignmentConfig {
+                    surface_uuid: a.surface_uuid.clone(),
+                    legacy_warp_mode: None,
+                    enabled: a.enabled,
+                })
+                .collect(),
+            window_position: None,
+            window_size: None,
+            edge_blend_mode: output.edge_blend_mode,
+            edge_blend: output.edge_blend,
+            rotation: output.rotation,
+            presentation: output.presentation_request(),
+            tonemap_override: output.tonemap_override,
+            calibration_mode: output.calibration_mode,
+            unassigned: output.unassigned,
         })
         .collect();
 
@@ -1046,45 +669,11 @@ pub fn snapshot_stage(
 use crate::deck::{Deck, Effect};
 use crate::isf::ISFShader;
 use crate::renderer::GpuContext;
-
-/// A Syphon deck whose source could not be resolved at restore time, deferred
-/// for late binding. Varda is the *client* of externally-owned Syphon servers;
-/// on restart the producer may not be publishing yet, so the named server is not in
-/// `SyphonServerDirectory`. Rather than fail the restore (the old behaviour:
-/// "restoration not yet implemented" → `black_hole` placeholder), we record the
-/// intent here and let `VardaApp::reconcile_syphon` auto-attach the real deck
-/// the moment the server appears. Startup order becomes irrelevant.
-#[derive(Debug, Clone)]
-pub struct PendingSyphonDeck {
-    /// UUID of the channel this deck belongs to. Binding happens seconds to
-    /// minutes after restore, by which point a positional index may point at a
-    /// different channel.
-    pub channel_uuid: String,
-    /// Full persisted deck config (carries the `Syphon { name }` source plus
-    /// opacity / blend / mute / solo / z-index to re-apply on bind).
-    pub config: crate::scene::DeckConfig,
-}
-
-/// A Spout deck waiting for its sender, the Windows counterpart to
-/// [`PendingSyphonDeck`].
-#[derive(Debug, Clone)]
-pub struct PendingSpoutDeck {
-    /// UUID of the channel this deck belongs to, for the same reason as
-    /// [`PendingSyphonDeck::channel_uuid`]: positional indices go stale.
-    pub channel_uuid: String,
-    /// Full persisted deck config, carrying the `Spout { name }` source.
-    pub config: crate::scene::DeckConfig,
-}
-
 /// Restore result — contains reconstructed mixer.
 /// Surfaces and outputs are loaded separately from stage.json.
 pub struct RestoreResult {
     pub mixer: Mixer,
     pub warnings: Vec<String>,
-    /// Syphon decks deferred for late binding (see `PendingSyphonDeck`).
-    pub pending_syphon: Vec<PendingSyphonDeck>,
-    /// Spout decks deferred for late binding (see `PendingSpoutDeck`).
-    pub pending_spout: Vec<PendingSpoutDeck>,
 }
 
 /// Reconstruct live state from a `SceneConfig`.
@@ -1099,23 +688,13 @@ pub struct RestoreResult {
 #[allow(clippy::too_many_arguments)]
 pub fn restore_scene(
     config: &SceneConfig,
-    context: &GpuContext,
-    registry: &crate::registry::ShaderRegistry,
-    camera_manager: &mut crate::camera::CameraManager,
-    screen_capture_manager: &mut crate::screen_capture::ScreenCaptureManager,
-    depth_manager: &mut crate::depth::DepthSensorManager,
-    ndi_manager: &mut crate::ndi::NdiManager,
-    stream_manager: &mut crate::stream::StreamManager,
-    html_manager: &mut crate::html::HtmlManager,
-    render_width: u32,
-    render_height: u32,
+    sources: &mut crate::source::SourceRegistry,
+    env: &mut crate::source::SourceEnv,
 ) -> Result<RestoreResult> {
     let mut warnings = Vec::new();
-    // Only pushed to under #[cfg(target_os = "macos")]; on other platforms it
-    // stays empty, so `mut` would be flagged as unused there.
-    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
-    let mut pending_syphon: Vec<PendingSyphonDeck> = Vec::new();
-    let mut pending_spout: Vec<PendingSpoutDeck> = Vec::new();
+    let context = env.gpu;
+    let registry = env.shaders;
+    let (render_width, render_height) = (env.width, env.height);
     let mut mixer = Mixer::new(context, render_width, render_height)?;
 
     // Clear default channels — we'll create from config
@@ -1135,125 +714,58 @@ pub fn restore_scene(
         channel.blend_mode = ch_config.blend_mode.into();
 
         for deck_config in &ch_config.decks {
-            // Externally-owned Syphon decks are resolved at runtime, not at
-            // restore time — the producer may not be publishing yet. Defer to a
-            // pending binding the render thread auto-attaches
-            // once the named server appears (see VardaApp::reconcile_syphon).
-            // This replaces the old hard-fail stub that dropped the channel to a
-            // black_hole placeholder and spammed "restoration not yet implemented".
-            if let SourceConfig::Syphon { name } = &deck_config.source {
-                #[cfg(target_os = "macos")]
-                {
-                    log::info!(
-                        "Syphon deck '{}' on channel {} deferred to late-bind \
-                         (auto-attaches when the server appears)",
-                        name,
-                        channel.name
-                    );
-                    pending_syphon.push(PendingSyphonDeck {
-                        channel_uuid: channel.uuid().to_string(),
-                        config: deck_config.clone(),
-                    });
-                }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    log::debug!("Skipping Syphon deck '{name}' on non-macOS restore");
-                }
-                continue;
+            let (deck, warning) = restore_deck(deck_config, sources, env);
+            if let Some(reason) = warning {
+                let msg = format!(
+                    "Deck '{}' kept as a placeholder: {reason}",
+                    deck_config.name
+                );
+                log::warn!("{msg}");
+                warnings.push(msg);
             }
-            // Spout is the same story on Windows: the producer may not be
-            // publishing yet, so the deck late-binds when its sender appears.
-            if let SourceConfig::Spout { name } = &deck_config.source {
-                // Queued on every platform rather than only Windows: the list is
-                // inert elsewhere, because `reconcile_spout` returns immediately
-                // when the manager reports unavailable. Gating the push instead
-                // would make `pending_spout` conditionally mutable, which is a
-                // platform-shaped wart for no behavioural gain.
-                if cfg!(target_os = "windows") {
-                    log::info!(
-                        "Spout deck '{}' on channel {} deferred to late-bind \
-                         (auto-attaches when the sender appears)",
-                        name,
-                        channel.name
-                    );
-                } else {
-                    log::debug!("Spout deck '{name}' cannot bind off Windows");
-                }
-                pending_spout.push(PendingSpoutDeck {
-                    channel_uuid: channel.uuid().to_string(),
-                    config: deck_config.clone(),
-                });
-                continue;
-            }
-            match restore_deck(
-                deck_config,
-                context,
-                registry,
-                camera_manager,
-                screen_capture_manager,
-                depth_manager,
-                ndi_manager,
-                stream_manager,
-                html_manager,
-                render_width,
-                render_height,
-            ) {
-                Ok(deck) => {
-                    let mut slot = crate::channel::DeckSlot::new(deck);
-                    slot.opacity = deck_config.opacity;
-                    slot.deck.set_transparent(deck_config.transparent);
-                    slot.blend_mode = deck_config.blend_mode.into();
-                    slot.mute = deck_config.mute;
-                    slot.solo = deck_config.solo;
-                    slot.z_index = deck_config.z_index;
-                    slot.render_fps = deck_config.render_fps;
+            let mut slot = crate::channel::DeckSlot::new(deck);
+            slot.opacity = deck_config.opacity;
+            slot.deck.set_transparent(deck_config.transparent);
+            slot.blend_mode = deck_config.blend_mode.into();
+            slot.mute = deck_config.mute;
+            slot.solo = deck_config.solo;
+            slot.z_index = deck_config.z_index;
+            slot.render_fps = deck_config.render_fps;
 
-                    // Restore auto-transition config
-                    if let Some(at_config) = &deck_config.auto_transition {
-                        use crate::channel::{DeckAutoTransition, TransitionTrigger};
-                        let mut at = DeckAutoTransition::new();
-                        at.enabled = at_config.enabled;
-                        at.trigger = match at_config.trigger {
-                            TriggerConfig::Timer => TransitionTrigger::Timer,
-                            TriggerConfig::ClipEnd => TransitionTrigger::ClipEnd,
-                        };
-                        at.play_duration = duration_config_to_spec(&at_config.play_duration);
-                        at.transition_duration =
-                            duration_config_to_spec(&at_config.transition_duration);
-                        at.transition_shader_name
-                            .clone_from(&at_config.transition_shader);
-                        slot.auto_transition = Some(at);
+            // Restore auto-transition config
+            if let Some(at_config) = &deck_config.auto_transition {
+                use crate::channel::{DeckAutoTransition, TransitionTrigger};
+                let mut at = DeckAutoTransition::new();
+                at.enabled = at_config.enabled;
+                at.trigger = match at_config.trigger {
+                    TriggerConfig::Timer => TransitionTrigger::Timer,
+                    TriggerConfig::ClipEnd => TransitionTrigger::ClipEnd,
+                };
+                at.play_duration = duration_config_to_spec(&at_config.play_duration);
+                at.transition_duration = duration_config_to_spec(&at_config.transition_duration);
+                at.transition_shader_name
+                    .clone_from(&at_config.transition_shader);
+                slot.auto_transition = Some(at);
 
-                        // Compile transition shader if specified
-                        if let Some(shader_name) = &at_config.transition_shader {
-                            if let Some(shader) = registry
-                                .transitions()
-                                .iter()
-                                .find(|s| s.name() == *shader_name)
-                            {
-                                if let Err(e) =
-                                    slot.set_transition_shader(context, (*shader).clone())
-                                {
-                                    log::warn!(
-                                        "Failed to restore deck transition shader '{shader_name}': {e}"
-                                    );
-                                }
-                            } else {
-                                log::warn!(
-                                    "Deck transition shader '{shader_name}' not found in registry"
-                                );
-                            }
+                // Compile transition shader if specified
+                if let Some(shader_name) = &at_config.transition_shader {
+                    if let Some(shader) = registry
+                        .transitions()
+                        .iter()
+                        .find(|s| s.name() == *shader_name)
+                    {
+                        if let Err(e) = slot.set_transition_shader(context, (*shader).clone()) {
+                            log::warn!(
+                                "Failed to restore deck transition shader '{shader_name}': {e}"
+                            );
                         }
+                    } else {
+                        log::warn!("Deck transition shader '{shader_name}' not found in registry");
                     }
-
-                    channel.add_deck_slot(slot);
-                }
-                Err(e) => {
-                    let msg = format!("Failed to restore deck '{}': {}", deck_config.name, e);
-                    log::warn!("{msg}");
-                    warnings.push(msg);
                 }
             }
+
+            channel.add_deck_slot(slot);
         }
 
         // Restore channel effects
@@ -1385,35 +897,32 @@ pub fn restore_scene(
         }
     }
 
-    Ok(RestoreResult {
-        mixer,
-        warnings,
-        pending_syphon,
-        pending_spout,
-    })
+    Ok(RestoreResult { mixer, warnings })
 }
 
-/// Restore a single deck from config.
-// Needs many independent GPU/context inputs to rebuild a deck; no shared invariant to bundle.
 /// Reacquire and attach a shader deck's depth-sensor preprocessor on restore.
 ///
 /// Resolves the sensor by saved name when the scene recorded one, falling back
 /// to the ISF header's device selection for scenes written before the binding
 /// was persisted. Returns `Err` when the shader needs a sensor and none is
-/// available, so the caller skips the deck.
+/// available, so the caller keeps a placeholder instead.
 fn restore_depth_preprocessor(
     deck: &mut Deck,
-    saved: Option<&crate::scene::DepthPreproConfig>,
+    saved: Option<&crate::deck::DepthPreproConfig>,
     metadata: &crate::isf::ISFMetadata,
     shader_path: &str,
-    depth_manager: &mut crate::depth::DepthSensorManager,
-    context: &GpuContext,
+    env: &mut crate::source::SourceEnv,
 ) -> Result<()> {
     use crate::depth::preprocess::{DepthPreprocessParams, DepthPreprocessPipeline};
 
     if crate::depth::preprocess::requested_device(metadata).is_none() {
         return Ok(());
     }
+    let context = env.gpu;
+    let depth_manager = env
+        .services
+        .get_mut::<crate::depth::DepthSensorManager>()
+        .context("depth_sensor preprocessor declared but no depth sensors are available")?;
 
     let params = saved.map_or_else(DepthPreprocessParams::default, |c| DepthPreprocessParams {
         near_mm: c.near_mm,
@@ -1459,417 +968,59 @@ fn restore_depth_preprocessor(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Restore a single deck from config.
+///
+/// The source is rebuilt through its provider. A source that cannot run here
+/// (unknown type, missing device, a shader whose depth sensor is gone) becomes
+/// a placeholder holding its config, and the reason comes back so the restore
+/// can report it: moving a scene between machines never loses a deck. See
+/// /spec/deck-source-providers.md Decision 4.
+///
 pub(crate) fn restore_deck(
     config: &DeckConfig,
-    context: &GpuContext,
-    _registry: &crate::registry::ShaderRegistry,
-    camera_manager: &mut crate::camera::CameraManager,
-    screen_capture_manager: &mut crate::screen_capture::ScreenCaptureManager,
-    depth_manager: &mut crate::depth::DepthSensorManager,
-    ndi_manager: &mut crate::ndi::NdiManager,
-    stream_manager: &mut crate::stream::StreamManager,
-    html_manager: &mut crate::html::HtmlManager,
-    render_width: u32,
-    render_height: u32,
-) -> Result<Deck> {
-    let mut deck = match &config.source {
-        SourceConfig::Shader {
-            path,
-            params,
-            depth_prepro,
-        } => {
-            let shader = ISFShader::from_file(path)
-                .with_context(|| format!("Failed to load shader: {path}"))?;
-            let metadata = shader.metadata.clone();
-            let mut deck = if shader.metadata.is_compute() {
-                Deck::new_from_compute_shader(context, shader, render_width, render_height)?
-            } else {
-                Deck::new(context, shader, render_width, render_height)?
-            };
-            // Restore parameter values
-            for (name, value) in params {
-                deck.generator_params.set(name, *value);
-            }
-            // Reacquire the depth sensor this shader needs. `depth_sensor` is a
-            // required preprocessor, so a missing device fails the restore and
-            // the caller skips the deck with a warning — the same handling a
-            // missing camera or depth-sensor deck already gets.
-            restore_depth_preprocessor(
-                &mut deck,
-                depth_prepro.as_ref(),
-                &metadata,
-                path,
-                depth_manager,
-                context,
-            )?;
-            deck
-        }
-        SourceConfig::Video {
-            path,
-            loop_mode,
-            speed,
-            in_point,
-            out_point,
-            scaling_mode,
-            transport_sync,
-        } => {
-            let mut deck = Deck::new_from_video(context, path, render_width, render_height)?;
-            deck.video_set_loop_mode(*loop_mode);
-            deck.video_set_speed(*speed);
-            deck.video_set_in_point(*in_point);
-            deck.video_set_out_point(*out_point);
-            deck.set_scaling_mode(*scaling_mode);
-            deck.video_set_transport_sync(*transport_sync);
-            deck
-        }
-        SourceConfig::Image { path, scaling_mode } => {
-            let mut deck = Deck::new_from_image(context, path, render_width, render_height)?;
-            deck.set_scaling_mode(*scaling_mode);
-            deck
-        }
-        SourceConfig::SolidColor { color } => {
-            Deck::new_solid_color(context, *color, render_width, render_height)?
-        }
-        SourceConfig::Camera { name } => {
-            // Find the camera by name in the manager's device list
-            let device = camera_manager
-                .devices()
-                .iter()
-                .find(|d| d.name == *name)
-                .ok_or_else(|| anyhow::anyhow!("Camera '{name}' not found — is it connected?"))?;
-            let camera_id = device.id;
-            let cam_name = device.name.clone();
+    sources: &mut crate::source::SourceRegistry,
+    env: &mut crate::source::SourceEnv,
+) -> (Deck, Option<String>) {
+    let (source, mut warning) = sources.restore(&config.source, env);
+    let mut deck = Deck::from_source(env.gpu, source, env.width, env.height);
 
-            let (src_w, src_h) = camera_manager
-                .open_camera(camera_id, &context.device)
-                .with_context(|| format!("Failed to open camera '{name}'"))?;
-
-            Deck::new_from_camera(
-                context,
-                camera_id,
-                &cam_name,
-                src_w,
-                src_h,
-                render_width,
-                render_height,
-            )?
+    // Generator parameter values, stored under `params` for every source
+    // that declares ISF inputs.
+    if let Some(params) = config.source.get("params").and_then(|v| {
+        serde_json::from_value::<std::collections::HashMap<String, crate::params::ParamValue>>(
+            v.clone(),
+        )
+        .ok()
+    }) {
+        for (name, value) in params {
+            deck.generator_params.set(&name, value);
         }
-        SourceConfig::ScreenCapture {
-            target,
-            rate,
-            crop,
-            show_cursor,
-            exclude_varda,
-            scaling_mode,
-        } => {
-            let identity = crate::screen_capture::backend::TargetIdentity::from(target);
-            let found = screen_capture_manager.find_target(&identity).cloned();
-            let config = crate::screen_capture::backend::CaptureConfig {
-                rate: *rate,
-                crop: crop.map(Into::into).unwrap_or_default(),
-                show_cursor: *show_cursor,
-                exclude_varda: exclude_varda.unwrap_or_else(|| target.is_display()),
-                // Capped to the deck but kept in the target's own shape, so the
-                // deck's scaling mode still has an aspect mismatch to resolve.
-                // Falls back to the deck box when the target is missing; the
-                // real size is picked up if it comes back and rebinds.
-                scale_to: Some(
-                    found
-                        .as_ref()
-                        .map_or((render_width, render_height), |info| {
-                            crate::screen_capture::resample::fit_within(
-                                info.width,
-                                info.height,
-                                render_width,
-                                render_height,
-                            )
-                        }),
-                ),
-            }
-            .sanitized();
+    }
 
-            // Unlike a camera, a missing capture target does **not** drop the
-            // deck. Windows come and go constantly, and silently losing a deck
-            // (with its effect chain, opacity, and MIDI mappings) because an app
-            // was closed would be a bad live-performance failure. The deck is
-            // restored unbound and renders black until the target reappears or
-            // the user repoints it.
-            // See spec/screen-capture.md § Configuration and Persistence.
-            let opened = found.and_then(|info| {
-                match screen_capture_manager.open(&info, config.clone(), &context.device) {
-                    Ok(bound) => Some((info.label.clone(), bound)),
-                    Err(e) => {
-                        log::warn!(
-                            "Capture target '{}' found but could not be opened: {e}",
-                            info.label
-                        );
-                        None
-                    }
-                }
-            });
-
-            let (label, capture_id, src_w, src_h) = opened.map_or_else(
-                || {
-                    log::warn!(
-                        "Capture target '{}' not available — deck restored unbound",
-                        target.label()
-                    );
-                    (
-                        target.label(),
-                        crate::screen_capture::UNBOUND_CAPTURE_ID,
-                        render_width,
-                        render_height,
-                    )
-                },
-                |(label, (id, w, h))| (label, id, w, h),
+    // Reacquire the depth sensor a shader needs. `depth_sensor` is a required
+    // preprocessor, so a missing device leaves the deck a placeholder rather
+    // than one rendering against blank textures.
+    if let Some(metadata) = deck.shader().map(|s| s.metadata.clone()) {
+        let saved: Option<crate::deck::DepthPreproConfig> = config
+            .source
+            .get("depth_prepro")
+            .and_then(|v| serde_json::from_value(v.clone()).ok());
+        let name = config.source.str("path").unwrap_or_default().to_string();
+        if let Err(e) = restore_depth_preprocessor(&mut deck, saved.as_ref(), &metadata, &name, env)
+        {
+            let reason = format!("{e:#}");
+            deck = Deck::from_source(
+                env.gpu,
+                Box::new(crate::source::UnavailableSource::new(
+                    config.source.clone(),
+                    reason.clone(),
+                )),
+                env.width,
+                env.height,
             );
-
-            let mut deck = Deck::new_from_screen_capture(
-                context,
-                crate::deck::ScreenCaptureState {
-                    capture_id,
-                    identity,
-                    config,
-                    config_dirty: false,
-                },
-                &label,
-                src_w,
-                src_h,
-                render_width,
-                render_height,
-            )?;
-            deck.set_scaling_mode(*scaling_mode);
-            deck
+            warning = Some(reason);
         }
-        SourceConfig::Tap {
-            source,
-            scaling_mode,
-        } => {
-            // A tap holds no handle and acquires nothing, so restore cannot
-            // fail. A source that no longer exists simply renders black until
-            // the channel returns. See spec/program-tap.md.
-            let tap_source = crate::deck::TapSource::from(source);
-            let label = tap_source.label(&[]);
-            let mut deck =
-                Deck::new_from_tap(context, tap_source, &label, render_width, render_height)?;
-            deck.set_scaling_mode(*scaling_mode);
-            deck
-        }
-        SourceConfig::Ndi { name } => match ndi_manager.start_receive(name, &context.device) {
-            Some(receiver_idx) => {
-                let (src_w, src_h) = ndi_manager
-                    .receiver_dimensions(receiver_idx)
-                    .unwrap_or((1920, 1080));
-                Deck::new_from_ndi(
-                    context,
-                    receiver_idx,
-                    name,
-                    src_w,
-                    src_h,
-                    render_width,
-                    render_height,
-                )?
-            }
-            None => {
-                return Err(anyhow::anyhow!(
-                    "NDI source '{name}' not available for restore"
-                ));
-            }
-        },
-        SourceConfig::Syphon { name } => {
-            // Syphon sources are resolved at runtime — skip if not on macOS
-            log::warn!(
-                "Syphon source '{name}' restoration not yet implemented (needs SyphonManager)"
-            );
-            return Err(anyhow::anyhow!(
-                "Syphon source '{name}' not available for restore"
-            ));
-        }
-        SourceConfig::Spout { name } => {
-            // Reached only if the deferred path above was bypassed: a Spout deck
-            // binds through the pending list once its sender appears.
-            return Err(anyhow::anyhow!(
-                "Spout source '{name}' binds at runtime, not at restore"
-            ));
-        }
-        SourceConfig::Srt { url, mode } => {
-            let srt_mode = match mode.as_str() {
-                "listener" => crate::stream::SrtMode::Listener,
-                "caller" => crate::stream::SrtMode::Caller,
-                other => {
-                    log::warn!("Unknown SRT mode '{other}', defaulting to Caller");
-                    crate::stream::SrtMode::Caller
-                }
-            };
-            match stream_manager.start_srt_receive(url, srt_mode, &context.device) {
-                Some(receiver_idx) => {
-                    let (src_w, src_h) = stream_manager
-                        .receiver_dimensions(receiver_idx)
-                        .unwrap_or((1920, 1080));
-                    Deck::new_from_srt(
-                        context,
-                        receiver_idx,
-                        url,
-                        src_w,
-                        src_h,
-                        render_width,
-                        render_height,
-                    )?
-                }
-                None => {
-                    return Err(anyhow::anyhow!(
-                        "SRT source '{url}' not available for restore"
-                    ));
-                }
-            }
-        }
-        SourceConfig::Hls { url } => {
-            match stream_manager.start_receive(
-                url,
-                crate::stream::StreamProtocol::Hls,
-                &context.device,
-            ) {
-                Some(receiver_idx) => {
-                    let (src_w, src_h) = stream_manager
-                        .receiver_dimensions(receiver_idx)
-                        .unwrap_or((1920, 1080));
-                    Deck::new_from_hls(
-                        context,
-                        receiver_idx,
-                        url,
-                        src_w,
-                        src_h,
-                        render_width,
-                        render_height,
-                    )?
-                }
-                None => {
-                    return Err(anyhow::anyhow!(
-                        "HLS source '{url}' not available for restore"
-                    ));
-                }
-            }
-        }
-        SourceConfig::Dash { url } => {
-            match stream_manager.start_receive(
-                url,
-                crate::stream::StreamProtocol::Dash,
-                &context.device,
-            ) {
-                Some(receiver_idx) => {
-                    let (src_w, src_h) = stream_manager
-                        .receiver_dimensions(receiver_idx)
-                        .unwrap_or((1920, 1080));
-                    Deck::new_from_dash(
-                        context,
-                        receiver_idx,
-                        url,
-                        src_w,
-                        src_h,
-                        render_width,
-                        render_height,
-                    )?
-                }
-                None => {
-                    return Err(anyhow::anyhow!(
-                        "DASH source '{url}' not available for restore"
-                    ));
-                }
-            }
-        }
-        SourceConfig::Rtmp { url, mode } => {
-            let rtmp_mode = match mode.as_str() {
-                "listen" | "Listen" => crate::stream::RtmpMode::Listen,
-                _ => crate::stream::RtmpMode::Pull,
-            };
-            match stream_manager.start_rtmp_receive(url, rtmp_mode, &context.device) {
-                Some(receiver_idx) => {
-                    let (src_w, src_h) = stream_manager
-                        .receiver_dimensions(receiver_idx)
-                        .unwrap_or((1920, 1080));
-                    Deck::new_from_rtmp(
-                        context,
-                        receiver_idx,
-                        url,
-                        src_w,
-                        src_h,
-                        render_width,
-                        render_height,
-                    )?
-                }
-                None => {
-                    return Err(anyhow::anyhow!(
-                        "RTMP source '{url}' not available for restore"
-                    ));
-                }
-            }
-        }
-        SourceConfig::Html { url } => {
-            match html_manager.start_render(url, render_width, render_height, &context.device) {
-                Some(instance_idx) => {
-                    let (src_w, src_h) = html_manager
-                        .instance_dimensions(instance_idx)
-                        .unwrap_or((1920, 1080));
-                    Deck::new_from_html(
-                        context,
-                        instance_idx,
-                        url,
-                        src_w,
-                        src_h,
-                        render_width,
-                        render_height,
-                    )?
-                }
-                None => {
-                    return Err(anyhow::anyhow!(
-                        "HTML source '{url}' not available for restore"
-                    ));
-                }
-            }
-        }
-        SourceConfig::DepthSensor { name, params } => {
-            // Match the sensor by name in the manager's device list, then open it.
-            // If absent (e.g. `depth` feature off or unplugged), skip with error.
-            let device = depth_manager
-                .devices()
-                .iter()
-                .find(|d| d.name == *name)
-                .cloned()
-                .ok_or_else(|| {
-                    anyhow::anyhow!("Depth sensor '{name}' not found — is it connected?")
-                })?;
-            let (src_w, src_h) =
-                crate::depth::open_depth_sensor(depth_manager, device.id, &context.device)
-                    .with_context(|| format!("Failed to open depth sensor '{name}'"))?;
-            let mut deck = Deck::new_from_depth_sensor(
-                context,
-                device.id,
-                &device.name,
-                src_w,
-                src_h,
-                render_width,
-                render_height,
-            )?;
-            if let Some(p) = params {
-                use crate::depth::point_cloud::{ColorMode, PointCloudParams};
-                deck.point_cloud_params = PointCloudParams {
-                    orbit_yaw: p.orbit_yaw,
-                    orbit_pitch: p.orbit_pitch,
-                    zoom: p.zoom,
-                    point_size: p.point_size,
-                    color_mode: ColorMode::from_u8(p.color_mode),
-                    depth_min_mm: p.depth_min_mm,
-                    depth_max_mm: p.depth_max_mm,
-                    solid_color: p.solid_color,
-                    seed: p.seed,
-                    drift: p.drift,
-                    disruption: p.disruption,
-                };
-            }
-            deck
-        }
-    };
+    }
 
     // Restore UUID from config
     if !config.uuid.is_empty() {
@@ -1878,13 +1029,13 @@ pub(crate) fn restore_deck(
 
     // Restore effects
     for eff_config in &config.effects {
-        match restore_effect(eff_config, context, context.compositing_format) {
+        match restore_effect(eff_config, env.gpu, env.gpu.compositing_format) {
             Ok(eff) => deck.effects.push(eff),
             Err(e) => log::warn!("Failed to restore deck effect '{}': {}", eff_config.path, e),
         }
     }
 
-    Ok(deck)
+    (deck, warning)
 }
 
 /// Restore a single effect from config.
@@ -1907,54 +1058,15 @@ pub(crate) fn restore_effect(
     Ok(effect)
 }
 
-/// Check if a live deck's source matches a target `SourceConfig` (same type + same path/name).
-/// Used by diff-apply to decide whether a deck can be patched in place or must be rebuilt.
-// Each arm pairs one source_type string with its matching config variant; merging
-// same-bodied arms would let mismatched type/config pairs compare equal.
-#[allow(clippy::match_same_arms)]
-pub(crate) fn source_configs_match(deck: &Deck, config: &SourceConfig) -> bool {
-    match (deck.source_type(), config) {
-        ("shader", SourceConfig::Shader { path, .. }) => deck.source_path() == Some(path.as_str()),
-        ("video", SourceConfig::Video { path, .. }) => deck.source_path() == Some(path.as_str()),
-        ("image", SourceConfig::Image { path, .. }) => deck.source_path() == Some(path.as_str()),
-        ("solid_color", SourceConfig::SolidColor { .. }) => true,
-        ("camera", SourceConfig::Camera { name }) => {
-            deck.source_name().trim_start_matches("📹 ") == name
-        }
-        ("ndi", SourceConfig::Ndi { name }) => deck.source_name().trim_start_matches("📡 ") == name,
-        ("syphon", SourceConfig::Syphon { name }) => {
-            deck.source_name().trim_start_matches("🔗 ") == name
-        }
-        ("spout", SourceConfig::Spout { name }) => {
-            deck.source_name().trim_start_matches("🔗 ") == name
-        }
-        ("srt", SourceConfig::Srt { url, .. }) => {
-            deck.source_name().trim_start_matches("📺 ") == url
-        }
-        ("hls", SourceConfig::Hls { url }) => deck.source_name().trim_start_matches("📡 ") == url,
-        ("dash", SourceConfig::Dash { url }) => deck.source_name().trim_start_matches("📡 ") == url,
-        ("rtmp", SourceConfig::Rtmp { url, .. }) => {
-            deck.source_name().trim_start_matches("📺 ") == url
-        }
-        ("html", SourceConfig::Html { url }) => deck.source_name().trim_start_matches("🌐 ") == url,
-        ("depth_sensor", SourceConfig::DepthSensor { name, .. }) => {
-            deck.source_name().trim_start_matches("🛰 ") == name
-        }
-        // Compare the stored identity rather than the display label: a window
-        // whose title changed is still the same source and must be patched in
-        // place, not torn down and rebuilt mid-show.
-        ("screen_capture", SourceConfig::ScreenCapture { target, .. }) => deck
-            .screen_capture
-            .as_ref()
-            .is_some_and(|s| crate::scene::CaptureTargetConfig::from(&s.identity) == *target),
-        // Compared by tap point, not by label: renaming a channel must patch
-        // the deck in place rather than rebuild it.
-        ("tap", SourceConfig::Tap { source, .. }) => deck
-            .tap
-            .as_ref()
-            .is_some_and(|t| crate::scene::TapSourceConfig::from(&t.source) == *source),
-        _ => false,
-    }
+/// Whether a live deck's source is the same source as `config` names, so a
+/// scene diff can patch the deck in place rather than rebuild it. What "the
+/// same" means is each source type's call (a path, a device name, a tap point).
+pub(crate) fn source_configs_match(
+    deck: &Deck,
+    config: &SourceConfig,
+    sources: &crate::source::SourceRegistry,
+) -> bool {
+    sources.same_source(&deck.source().config(), config)
 }
 
 #[cfg(test)]
@@ -2014,58 +1126,33 @@ mod tests {
         assert_eq!(effect.param_prefix(), "effect/abcd1234/param");
     }
 
-    #[test]
-    fn source_configs_match_solid_color() {
-        let gpu = headless_gpu();
-        let deck = crate::deck::Deck::new_solid_color(&gpu, [1.0, 0.0, 0.0, 1.0], 64, 64).unwrap();
-        // Any solid color config matches a solid color deck
-        assert!(source_configs_match(
-            &deck,
-            &SourceConfig::SolidColor {
-                color: [0.0, 1.0, 0.0, 1.0]
-            }
-        ));
-        // But not other types
-        assert!(!source_configs_match(
-            &deck,
-            &SourceConfig::Video {
-                path: "test.mp4".into(),
-                loop_mode: crate::video::LoopMode::default(),
-                speed: 1.0,
-                in_point: 0.0,
-                out_point: 0.0,
-                scaling_mode: crate::deck::ScalingMode::default(),
-                transport_sync: crate::video::DeckTransportSync::default(),
-            }
-        ));
-        assert!(!source_configs_match(
-            &deck,
-            &SourceConfig::Shader {
-                path: "test.fs".into(),
-                params: HashMap::new(),
-                depth_prepro: None
-            }
-        ));
+    fn registry() -> crate::source::SourceRegistry {
+        let mut r = crate::source::SourceRegistry::new();
+        r.register(crate::solid_color::SolidColorProvider)
+            .register(crate::video::provider::VideoProvider)
+            .register(crate::still::ImageProvider);
+        r
     }
 
     #[test]
-    fn source_configs_match_type_mismatch() {
+    fn any_solid_color_config_patches_a_solid_color_deck_in_place() {
         let gpu = headless_gpu();
-        let deck = crate::deck::Deck::new_solid_color(&gpu, [1.0, 0.0, 0.0, 1.0], 64, 64).unwrap();
-        assert!(!source_configs_match(
+        let deck = crate::deck::Deck::solid_color(&gpu, [1.0, 0.0, 0.0, 1.0], 64, 64);
+        let r = registry();
+        assert!(source_configs_match(
             &deck,
-            &SourceConfig::Image {
-                path: "test.png".into(),
-                scaling_mode: crate::deck::ScalingMode::default()
-            }
+            &crate::solid_color::SolidColor::config_for([0.0, 1.0, 0.0, 1.0]),
+            &r
         ));
         assert!(!source_configs_match(
             &deck,
-            &SourceConfig::Camera { name: "cam".into() }
+            &SourceConfig::new("Video").with("path", "test.mp4"),
+            &r
         ));
         assert!(!source_configs_match(
             &deck,
-            &SourceConfig::Ndi { name: "src".into() }
+            &SourceConfig::new("Image").with("path", "test.png"),
+            &r
         ));
     }
 
@@ -2073,20 +1160,57 @@ mod tests {
     fn snapshot_and_match_solid_color_roundtrip() {
         let gpu = headless_gpu();
         let mut mixer = Mixer::new(&gpu, 64, 64).unwrap();
-        // Clear default channels and add one with a solid color deck
         mixer.channels_mut().clear();
         let mut ch = crate::channel::Channel::new("Ch 0".into(), &gpu, 64, 64).unwrap();
-        let deck = crate::deck::Deck::new_solid_color(&gpu, [1.0, 0.5, 0.0, 1.0], 64, 64).unwrap();
-        ch.add_deck(deck);
+        ch.add_deck(crate::deck::Deck::solid_color(
+            &gpu,
+            [1.0, 0.5, 0.0, 1.0],
+            64,
+            64,
+        ));
         mixer.channels_mut().push(ch);
 
-        // Snapshot and verify source match
         let config = snapshot_scene(&mixer, None, 64, 64);
-        let deck_ref = &mixer.channels()[0].decks[0].deck;
+        let saved = &config.channels[0].decks[0].source;
+        assert_eq!(
+            serde_json::to_value(saved).unwrap(),
+            serde_json::json!({"type": "SolidColor", "color": [1.0, 0.5, 0.0, 1.0]}),
+            "the saved shape is the one every earlier build wrote"
+        );
         assert!(source_configs_match(
-            deck_ref,
-            &config.channels[0].decks[0].source
+            &mixer.channels()[0].decks[0].deck,
+            saved,
+            &registry()
         ));
+    }
+
+    /// A deck whose source type this build does not know is kept, renders
+    /// black, and saves its config back unchanged.
+    #[test]
+    fn an_unknown_source_restores_as_a_placeholder_that_keeps_its_config() {
+        let gpu = headless_gpu();
+        let mut r = registry();
+        let mut services = crate::source::Services::new();
+        let shaders = crate::registry::ShaderRegistry::new();
+        let mut env = crate::source::SourceEnv {
+            gpu: &gpu,
+            width: 64,
+            height: 64,
+            services: &mut services,
+            shaders: &shaders,
+            channels: &[],
+        };
+        let source = SourceConfig::new("FutureThing").with("knob", 3);
+        let config: DeckConfig = serde_json::from_value(serde_json::json!({
+            "uuid": "deck0001",
+            "name": "later",
+            "source": source,
+        }))
+        .unwrap();
+        let (deck, warning) = restore_deck(&config, &mut r, &mut env);
+        assert!(warning.is_some());
+        assert_eq!(deck.uuid(), "deck0001");
+        assert_eq!(deck.source_config(), source);
     }
 
     #[test]
@@ -2155,47 +1279,5 @@ mod tests {
         let ws = Workspace::new(tmp.path().to_path_buf());
         let shaders_dir = ws.shaders_dir();
         assert_eq!(shaders_dir, tmp.path().join(".varda").join("shaders"));
-    }
-
-    #[test]
-    fn output_audio_device_survives_target_config_roundtrip() {
-        // audio_device must round-trip live OutputTarget ↔ persisted config.
-        let recording = OutputTarget::Recording {
-            path: "set.mov".into(),
-            codec: RecordingCodec::ProRes,
-            audio_device: Some("Scarlett 2i2".into()),
-        };
-        let back = config_to_target(&target_to_config(&recording));
-        assert_eq!(back.audio_device(), Some("Scarlett 2i2"));
-
-        // None (video-only) round-trips as None.
-        let silent = OutputTarget::RtmpStream {
-            url: "rtmp://x".into(),
-            codec: crate::renderer::context::StreamingCodec::H264,
-            codec_contract: crate::renderer::context::RtmpCodecContract::Legacy,
-            audio_device: None,
-        };
-        assert_eq!(
-            config_to_target(&target_to_config(&silent)).audio_device(),
-            None
-        );
-    }
-
-    #[test]
-    fn enhanced_rtmp_contract_survives_target_config_roundtrip() {
-        let target = OutputTarget::RtmpStream {
-            url: "rtmps://example/live".into(),
-            codec: crate::renderer::context::StreamingCodec::H265,
-            codec_contract: crate::renderer::context::RtmpCodecContract::Enhanced,
-            audio_device: None,
-        };
-        let restored = config_to_target(&target_to_config(&target));
-        assert!(matches!(
-            restored,
-            OutputTarget::RtmpStream {
-                codec_contract: crate::renderer::context::RtmpCodecContract::Enhanced,
-                ..
-            }
-        ));
     }
 }

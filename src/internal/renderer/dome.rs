@@ -518,15 +518,9 @@ mod tests {
     }
 
     #[test]
-    fn output_source_domemaster_display() {
+    fn output_source_domemaster_path_value() {
         use crate::renderer::context::OutputSource;
-        let source = OutputSource::Domemaster;
-        assert_eq!(format!("{source}"), "Domemaster");
-    }
-
-    #[test]
-    fn output_source_domemaster_channel_indices_none() {
-        use crate::renderer::context::OutputSource;
-        assert!(OutputSource::Domemaster.channel_indices().is_none());
+        assert_eq!(OutputSource::Domemaster.to_path_value(), "domemaster");
+        assert!(OutputSource::Domemaster.channel_uuids().is_none());
     }
 }

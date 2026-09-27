@@ -16,6 +16,7 @@ pub mod backend;
 pub mod freenect_backend;
 pub mod point_cloud;
 pub mod preprocess;
+pub mod provider;
 
 #[cfg(feature = "depth")]
 use anyhow::Context;
@@ -459,7 +460,7 @@ mod tests {
     use crate::renderer::GpuContext;
 
     fn headless() -> Option<GpuContext> {
-        GpuContext::new_headless().ok()
+        crate::testing::headless_gpu()
     }
 
     #[test]

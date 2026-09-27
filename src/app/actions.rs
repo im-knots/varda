@@ -7,21 +7,24 @@ use crate::engine::{CommandOutcome, CommandResult, EngineCommand};
 impl VardaApp {
     /// Run the GUI's commands for this frame, in order.
     ///
-    /// When `starts_undo_step` is set, the pre-mutation state is recorded as one
-    /// undo step before anything runs. The consumer decides that, because only
-    /// it knows whether a drag is continuing.
+    /// When `starts_undo_step` is set, the state before anything runs becomes
+    /// one undo step, kept only if at least one undoable command succeeds: a
+    /// frame whose edits were all rejected changed nothing, and recording it
+    /// would clear the redo history. The consumer decides when a step starts,
+    /// because only it knows whether a drag is continuing.
     pub fn apply_engine_actions(&mut self, commands: Vec<EngineCommand>, starts_undo_step: bool) {
-        if starts_undo_step {
-            let snapshot = self.history_snapshot();
-            self.session.history.push(snapshot);
-        }
+        let before = starts_undo_step.then(|| self.history_snapshot());
+        let mut edited = false;
         // Ordering within the vec is preserved, so a new-channel library drop
         // enqueues `AddChannel` before its `Add*Deck` and the deck resolves
         // against the freshly created channel.
         for cmd in commands {
             let is_deck_add = command_is_deck_add(&cmd);
             let success_toast = gui_success_toast(&cmd);
+            let undoable = self.is_undoable(&cmd);
             let outcome = self.execute_command_gui(cmd);
+            edited |=
+                undoable && !matches!(outcome, CommandOutcome::Plain(CommandResult::Err { .. }));
             if is_deck_add {
                 self.notify_deck_add_outcome(&outcome);
             }
@@ -30,6 +33,11 @@ impl VardaApp {
             {
                 self.session.notifications.info(toast);
             }
+        }
+        if let Some(snapshot) = before
+            && edited
+        {
+            self.session.history.push(snapshot);
         }
     }
 
@@ -89,22 +97,7 @@ fn gui_success_toast(cmd: &EngineCommand) -> Option<&'static str> {
 
 /// True for the deck-creating commands the GUI drain toasts. Mirrors the deck-add arm list in `execute_command_gui`.
 pub(crate) fn command_is_deck_add(cmd: &EngineCommand) -> bool {
-    matches!(
-        cmd,
-        EngineCommand::AddDeck { .. }
-            | EngineCommand::AddImageDeck { .. }
-            | EngineCommand::AddVideoDeck { .. }
-            | EngineCommand::AddSolidColorDeck { .. }
-            | EngineCommand::AddCameraDeck { .. }
-            | EngineCommand::AddDepthSensorDeck { .. }
-            | EngineCommand::AddNdiDeck { .. }
-            | EngineCommand::AddSyphonDeck { .. }
-            | EngineCommand::AddSrtDeck { .. }
-            | EngineCommand::AddHlsDeck { .. }
-            | EngineCommand::AddDashDeck { .. }
-            | EngineCommand::AddRtmpDeck { .. }
-            | EngineCommand::AddHtmlDeck { .. }
-    )
+    matches!(cmd, EngineCommand::AddDeck { .. })
 }
 
 #[cfg(test)]
@@ -116,69 +109,12 @@ mod tests {
     }
 
     #[test]
-    fn every_deck_add_variant_is_recognized() {
-        // Mirrors the deck-add arm list in execute_command_gui: if a new
-        // Add*Deck variant is introduced but omitted from command_is_deck_add,
-        // the GUI silently skips its toast + preview-texture registration.
-        let deck_adds = [
-            EngineCommand::AddDeck {
+    fn a_deck_add_of_any_source_type_is_recognized() {
+        for source in ["Shader", "Image", "Camera", "FutureThing"] {
+            assert!(command_is_deck_add(&EngineCommand::AddDeck {
                 channel_uuid: ch(),
-                shader_name: "solid".into(),
-            },
-            EngineCommand::AddImageDeck {
-                channel_uuid: ch(),
-                path: "/tmp/x.png".into(),
-            },
-            EngineCommand::AddVideoDeck {
-                channel_uuid: ch(),
-                path: "/tmp/x.mp4".into(),
-            },
-            EngineCommand::AddSolidColorDeck {
-                channel_uuid: ch(),
-                color: [0.0, 0.0, 0.0, 1.0],
-            },
-            EngineCommand::AddCameraDeck {
-                channel_uuid: ch(),
-                camera_id: 0,
-            },
-            EngineCommand::AddDepthSensorDeck {
-                channel_uuid: ch(),
-                depth_sensor_id: 0,
-            },
-            EngineCommand::AddNdiDeck {
-                channel_uuid: ch(),
-                source_name: "src".into(),
-            },
-            EngineCommand::AddSyphonDeck {
-                channel_uuid: ch(),
-                server_name: "srv".into(),
-            },
-            EngineCommand::AddSrtDeck {
-                channel_uuid: ch(),
-                url: "srt://h:9000".into(),
-                mode: crate::stream::SrtMode::Caller,
-            },
-            EngineCommand::AddHlsDeck {
-                channel_uuid: ch(),
-                url: "http://h/live.m3u8".into(),
-            },
-            EngineCommand::AddDashDeck {
-                channel_uuid: ch(),
-                url: "http://h/live.mpd".into(),
-            },
-            EngineCommand::AddRtmpDeck {
-                channel_uuid: ch(),
-                url: "rtmp://h/live".into(),
-                mode: crate::stream::RtmpMode::Pull,
-            },
-            EngineCommand::AddHtmlDeck {
-                channel_uuid: ch(),
-                url: "http://h".into(),
-            },
-        ];
-        assert_eq!(deck_adds.len(), 13, "expected 13 deck-add variants");
-        for cmd in &deck_adds {
-            assert!(command_is_deck_add(cmd), "not recognized: {cmd:?}");
+                source: crate::source::SourceConfig::new(source),
+            }));
         }
     }
 

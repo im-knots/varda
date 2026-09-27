@@ -609,34 +609,27 @@ impl Channel {
         self.decks.len()
     }
 
-    /// Tick video frames for all decks without doing a full render.
-    /// Call this every frame even for off-screen channels so video players
-    /// stay in sync and don't show stale/black frames when faded back in.
-    /// `target_fps` is the rate the renderer presents at (0 = uncapped); decode
-    /// threads use it to avoid producing frames that can never be shown.
+    /// Record every awake deck's source uploads for this frame, without a full
+    /// render. Runs for every channel, visible or not, so a clip faded out by
+    /// the crossfader stays in step and never shows a stale frame when it
+    /// comes back.
     ///
     /// The one exception is a deck the arrangement has put to sleep, which is
     /// far enough from its next region that nothing can bring it up in time to
     /// matter. It holds its last frame and resumes from there.
     /// See /spec/deck-residency.md.
-    pub fn tick_video_frames(&mut self, encoder: &mut wgpu::CommandEncoder, target_fps: u32) {
+    pub fn upload_sources(&mut self, encoder: &mut wgpu::CommandEncoder) {
         for slot in &mut self.decks {
-            slot.deck
-                .set_video_suspended(!slot.source_demand.wants_frames());
-            if !slot.source_demand.wants_frames() {
-                continue;
-            }
-            slot.deck.set_video_output_fps(target_fps);
-            if let Err(e) = slot.deck.update_video_frame(encoder) {
-                log::warn!("Video frame update failed: {e}");
+            if slot.source_demand.wants_frames() {
+                slot.deck.upload_source(encoder);
             }
         }
     }
 
-    /// Request re-mapping of staging buffers after `queue.submit()`.
-    pub fn request_video_remap(&mut self) {
+    /// Called after the frame's uploads were submitted.
+    pub fn after_source_submit(&mut self) {
         for slot in &mut self.decks {
-            slot.deck.request_video_remap();
+            slot.deck.after_source_submit();
         }
     }
 
@@ -1213,11 +1206,11 @@ impl Channel {
                     let should_transition = match at.trigger {
                         TransitionTrigger::Timer => *elapsed >= play_secs,
                         TransitionTrigger::ClipEnd => {
-                            // Check if video reached end
-                            let snap = slot.deck.playback_snapshot();
-                            let clip_ended = snap.as_ref().is_some_and(|ps| ps.reached_end);
-                            // Also respect timer as fallback for non-video sources
-                            clip_ended || (snap.is_none() && *elapsed >= play_secs)
+                            // A source that never ends falls back to the timer.
+                            match slot.deck.source().reached_end() {
+                                Some(ended) => ended,
+                                None => *elapsed >= play_secs,
+                            }
                         }
                     };
 

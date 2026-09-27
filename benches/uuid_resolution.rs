@@ -54,8 +54,7 @@ fn setup_mixer(ctx: &GpuContext, n_channels: usize, decks_per_channel: usize) ->
 
     for ch_idx in 0..n_channels {
         for _ in 0..decks_per_channel {
-            let deck =
-                Deck::new_solid_color(ctx, [0.5, 0.5, 0.5, 1.0], WIDTH, HEIGHT).expect("deck");
+            let deck = Deck::solid_color(ctx, [0.5, 0.5, 0.5, 1.0], WIDTH, HEIGHT);
             let ch = mixer.channel_mut(ch_idx).expect("channel");
             ch.add_deck(deck);
             let slot = ch.decks.last_mut().expect("deck slot");

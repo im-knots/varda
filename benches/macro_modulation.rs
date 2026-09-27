@@ -18,7 +18,7 @@ const DECKS: usize = 8;
 fn mixer_with_macros(gpu: &GpuContext, macros: usize) -> Mixer {
     let mut mixer = Mixer::new(gpu, 64, 64).expect("mixer");
     for _ in 0..DECKS {
-        let deck = Deck::new_solid_color(gpu, [1.0; 4], 64, 64).expect("solid deck");
+        let deck = Deck::solid_color(gpu, [1.0; 4], 64, 64);
         mixer.channel_mut(0).expect("channel 0").add_deck(deck);
     }
     let decks: Vec<String> = mixer

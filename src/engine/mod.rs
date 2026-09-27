@@ -90,53 +90,31 @@ pub enum EngineCommand {
         target: f32,
         beats: f32,
     },
+    /// Add a deck whose source `source` describes: `{"type": "<id>", ...}`,
+    /// where the type is one of `EngineState::sources`. Answers with the new
+    /// deck's UUID. A source that loads in the background (a shader, a clip)
+    /// appears once built; `EngineState::deck_loads` reports progress.
     AddDeck {
         channel_uuid: String,
-        shader_name: String,
+        source: crate::engine::value::source::SourceConfig,
     },
-    AddImageDeck {
-        channel_uuid: String,
-        path: std::path::PathBuf,
-    },
-    AddVideoDeck {
-        channel_uuid: String,
-        path: std::path::PathBuf,
-    },
-    AddSolidColorDeck {
-        channel_uuid: String,
-        color: [f32; 4],
-    },
-    AddCameraDeck {
-        channel_uuid: String,
-        camera_id: CameraId,
-    },
-    AddDepthSensorDeck {
-        channel_uuid: String,
-        depth_sensor_id: DepthSensorId,
-    },
-    /// Add a screen / window capture deck. The target is named, not handled, so
-    /// the same payload works from the UI, HTTP, and a restored scene.
-    AddScreenCaptureDeck {
-        channel_uuid: String,
-        target: crate::scene::CaptureTargetConfig,
-        #[serde(default)]
-        rate: Option<f32>,
-        #[serde(default)]
-        crop: Option<crate::scene::CaptureCropConfig>,
-        #[serde(default)]
-        show_cursor: Option<bool>,
-        #[serde(default)]
-        exclude_varda: Option<bool>,
-    },
-    /// Add a deck that re-enters Varda's own output. See spec/program-tap.md.
-    AddTapDeck {
-        channel_uuid: String,
-        source: crate::scene::TapSourceConfig,
-    },
-    /// Repoint an existing tap deck at a different source.
-    SetTapSource {
+    /// Swap a deck's source for another, keeping the deck's identity, effects,
+    /// opacity and modulation (repoint a tap, switch a camera).
+    ReplaceDeckSource {
         deck_uuid: String,
-        source: crate::scene::TapSourceConfig,
+        source: crate::engine::value::source::SourceConfig,
+    },
+    /// Write one of a deck's source controls, by the name its source type
+    /// declares. Numeric controls take normalized values.
+    SetSourceParam {
+        deck_uuid: String,
+        name: String,
+        value: crate::engine::value::provider::ControlValue,
+    },
+    /// Fire one of a deck's source actions (reload a page, clear in/out).
+    TriggerSourceAction {
+        deck_uuid: String,
+        action: String,
     },
     RemoveDeck {
         deck_uuid: String,
@@ -171,10 +149,6 @@ pub enum EngineCommand {
     SetDeckRenderFps {
         deck_uuid: String,
         render_fps: DeckRenderFps,
-    },
-    SetDeckScalingMode {
-        deck_uuid: String,
-        mode: ScalingMode,
     },
     SetDeckTransparent {
         deck_uuid: String,
@@ -303,38 +277,6 @@ pub enum EngineCommand {
         source_id: String,
     },
 
-    // ── Video Playback ────────────────────────────────────────────
-    VideoTogglePlay {
-        deck_uuid: String,
-    },
-    VideoSeek {
-        deck_uuid: String,
-        position_secs: f64,
-    },
-    VideoSetSpeed {
-        deck_uuid: String,
-        speed: f64,
-    },
-    VideoSetLoopMode {
-        deck_uuid: String,
-        mode: crate::engine::value::video::LoopMode,
-    },
-    VideoSetInPoint {
-        deck_uuid: String,
-        secs: f64,
-    },
-    VideoSetOutPoint {
-        deck_uuid: String,
-        secs: f64,
-    },
-    VideoClearInOutPoints {
-        deck_uuid: String,
-    },
-    VideoSetTransportSync {
-        deck_uuid: String,
-        sync: crate::engine::value::video::DeckTransportSync,
-    },
-
     // ── Deck Auto-Transitions ──────────────────────────────────
     SetAutoTransitionEnabled {
         deck_uuid: String,
@@ -373,45 +315,7 @@ pub enum EngineCommand {
         value: f64,
     },
 
-    // ── External I/O Deck Sources ──────────────────────────────
-    AddNdiDeck {
-        channel_uuid: String,
-        source_name: String,
-    },
-    AddSyphonDeck {
-        channel_uuid: String,
-        server_name: String,
-    },
-    /// The Windows counterpart to [`Self::AddSyphonDeck`].
-    AddSpoutDeck {
-        channel_uuid: String,
-        sender_name: String,
-    },
-    AddSrtDeck {
-        channel_uuid: String,
-        url: String,
-        mode: crate::stream::SrtMode,
-    },
-    AddHlsDeck {
-        channel_uuid: String,
-        url: String,
-    },
-    AddDashDeck {
-        channel_uuid: String,
-        url: String,
-    },
-    AddRtmpDeck {
-        channel_uuid: String,
-        url: String,
-        mode: crate::stream::RtmpMode,
-    },
-    AddHtmlDeck {
-        channel_uuid: String,
-        url: String,
-    },
-    ReloadHtmlDeck {
-        deck_uuid: String,
-    },
+    // ── HTML interactive window ────────────────────────────────
     /// Open the interactive window for an HTML deck.
     OpenHtmlInteractive {
         deck_uuid: String,
@@ -507,55 +411,68 @@ pub enum EngineCommand {
         amount: f32,
     },
 
-    // ── Stream Library ─────────────────────────────────────────
-    AddStreamLibraryEntry {
-        url: String,
-        mode: crate::stream::SrtMode,
+    // ── Source Library ─────────────────────────────────────────
+    /// Save an entry a user filled in (a stream URL) to a source type's
+    /// library. `entry.type` names the source type.
+    AddSourceLibraryEntry {
+        entry: crate::engine::value::source::SourceConfig,
     },
-    RemoveStreamLibraryEntry {
-        url: String,
+    RemoveSourceLibraryEntry {
+        entry: crate::engine::value::source::SourceConfig,
     },
-    AddHlsLibraryEntry {
-        url: String,
-    },
-    RemoveHlsLibraryEntry {
-        url: String,
-    },
-    AddDashLibraryEntry {
-        url: String,
-    },
-    RemoveDashLibraryEntry {
-        url: String,
-    },
-    AddRtmpLibraryEntry {
-        url: String,
-        mode: crate::stream::RtmpMode,
-    },
-    RemoveRtmpLibraryEntry {
-        url: String,
-    },
-    AddHtmlLibraryEntry {
-        url: String,
-    },
-    RemoveHtmlLibraryEntry {
-        url: String,
+    /// Run a library action a source type offers: `rescan`, or one a library
+    /// notice names (granting screen-recording access).
+    SourceLibraryAction {
+        source_type: String,
+        action: String,
     },
 
     // ── Output ─────────────────────────────────────────────────
-    CreateOutput,
-    CreateHeadlessOutput {
-        target: crate::engine::value::render::OutputTarget,
+    /// Create an output delivering through `sink`: `{"type": "windowed"}`,
+    /// `{"type": "recording", "path": ...}`, any registered sink type.
+    /// Answers with the new output's UUID. See /spec/output-sink-providers.md.
+    CreateOutput {
+        sink: crate::engine::value::provider::ProviderConfig,
     },
     CloseOutput {
         output_uuid: String,
     },
-    SetOutputDisplay {
-        output_uuid: String,
-        monitor_name: String,
-    },
+    /// Point an output at another sink, keeping its surfaces, warp, edge
+    /// blend and presentation. A running output is stopped first.
     SetOutputTarget {
         output_uuid: String,
-        target: crate::engine::value::render::OutputTarget,
+        sink: crate::engine::value::provider::ProviderConfig,
+    },
+    /// Write one of an output's sink settings, by the name its type declares.
+    SetSinkParam {
+        output_uuid: String,
+        name: String,
+        value: crate::engine::value::provider::ControlValue,
+    },
+    /// Run a library action an output type offers (`rescan`). Answers with
+    /// the type's fresh entries.
+    SinkLibraryAction {
+        sink_type: String,
+        action: String,
+    },
+    /// Show or hide one surface on an output, assigning it when shown for the
+    /// first time: the `output/<uuid>/surface/<surface_uuid>` control.
+    SetSurfaceAssignmentEnabled {
+        output_uuid: String,
+        surface_uuid: String,
+        enabled: bool,
+    },
+    /// Write text to an address that takes it: `surface/<uuid>/source`, or an
+    /// output's text setting at `output/<uuid>/<route>`.
+    SetPathText {
+        path: String,
+        value: String,
+    },
+    /// Choose what an output shows with no surfaces assigned, or `None` for
+    /// its sink's default.
+    SetOutputUnassigned {
+        output_uuid: String,
+        unassigned: Option<crate::engine::value::render::Unassigned>,
     },
     StartOutput {
         output_uuid: String,
@@ -1135,17 +1052,6 @@ pub enum EngineCommand {
     },
 
     // ── Device Scanning ────────────────────────────────────────
-    RescanNdi,
-    RescanSyphon,
-    /// The Windows counterpart to [`Self::RescanSyphon`].
-    RescanSpout,
-    RescanCameras,
-    RescanDepthSensors,
-    /// Re-enumerate displays and windows. Manual: window lists churn constantly
-    /// and polling them would thrash the library panel.
-    RescanCaptureTargets,
-    /// Trigger the platform screen-recording permission request.
-    RequestScreenCapturePermission,
     RescanMidi,
     RescanAudio,
     ToggleAudioSource {

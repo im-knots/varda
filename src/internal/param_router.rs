@@ -11,12 +11,10 @@
 //! [`ParamRouteError`] so callers can log or surface the specific reason
 //! rather than a silent no-op (see `/spec/parameter-routing.md`).
 
-use crate::deck::ScalingMode;
 use crate::engine::value::param::{DeckTarget, ModulatorTarget, ParamAddress};
 use crate::mixer::Mixer;
 use crate::modulation::ModulationSource;
 use crate::params::{ParamValue, clamp_norm};
-use crate::video::LoopMode;
 
 /// The class of entity a path segment addresses. Used in [`ParamRouteError`]
 /// to describe *what* failed to resolve.
@@ -167,6 +165,7 @@ pub fn read_param(mixer: &Mixer, address: &ParamAddress) -> Option<f32> {
                 DeckTarget::Solo => Some(f32::from(u8::from(slot.solo))),
                 DeckTarget::Transparent => Some(f32::from(u8::from(slot.deck.transparent()))),
                 DeckTarget::Param(name) => read_normalized(&slot.deck.generator_params, name),
+                DeckTarget::Source(route) => crate::source::read_route(slot.deck.source(), route),
                 _ => None,
             }
         }
@@ -174,10 +173,13 @@ pub fn read_param(mixer: &Mixer, address: &ParamAddress) -> Option<f32> {
             let location = mixer.find_effect_by_uuid(effect)?;
             read_normalized(&mixer.effect_at(location)?.params, param)
         }
+        // Outputs and surfaces are not mixer state; the app reads them.
         ParamAddress::Action(_)
         | ParamAddress::CueFire { .. }
         | ParamAddress::Modulator { .. }
-        | ParamAddress::MacroValue { .. } => None,
+        | ParamAddress::MacroValue { .. }
+        | ParamAddress::Output { .. }
+        | ParamAddress::SurfaceSource { .. } => None,
     }
 }
 
@@ -344,120 +346,29 @@ pub fn apply_param_by_path(
                 .set_value(0.1 + f64::from(value) * (max - 0.1));
             Ok(())
         }
+        // A control of the deck's source, by the route its source type
+        // declares (`video/speed`, `capture/rate`, `scaling_mode`, ...). The
+        // source maps the normalized value onto its own range.
+        // See /spec/deck-source-providers.md.
         ParamAddress::Deck {
             deck: uuid,
-            target: DeckTarget::VideoPlay,
+            target: DeckTarget::Source(route),
         } => {
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
-            let applied = mixer.channels_mut()[ch].decks[dk]
-                .deck
-                .video_set_playing(value > 0.5);
-            ok_or_state(applied, path, "deck has no video source")
-        }
-        ParamAddress::Deck {
-            deck: uuid,
-            target: DeckTarget::VideoSpeed,
-        } => {
-            let (ch, dk) = mixer
-                .find_deck_by_uuid(uuid)
-                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
-            let applied = mixer.channels_mut()[ch].decks[dk]
-                .deck
-                .video_set_speed(scale_speed(value));
-            ok_or_state(applied, path, "deck has no video source")
-        }
-        ParamAddress::Deck {
-            deck: uuid,
-            target: DeckTarget::VideoPosition,
-        } => {
-            let (ch, dk) = mixer
-                .find_deck_by_uuid(uuid)
-                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
-            let deck = &mixer.channels_mut()[ch].decks[dk].deck;
-            let snap = deck
-                .playback_snapshot()
-                .ok_or(ParamRouteError::WrongState {
+            let source = mixer.channels_mut()[ch].decks[dk].deck.source_mut();
+            crate::source::write_route(source, route, clamp_norm(value)).map_err(|e| match e {
+                crate::source::ControlError::Unknown(_) => ParamRouteError::UnknownPath {
                     path: path.to_string(),
-                    reason: "deck has no playable video",
-                })?;
-            let applied = deck.video_seek(scale_to_duration(value, snap.duration));
-            ok_or_state(applied, path, "video seek failed")
-        }
-        ParamAddress::Deck {
-            deck: uuid,
-            target: DeckTarget::VideoInPoint,
-        } => {
-            let (ch, dk) = mixer
-                .find_deck_by_uuid(uuid)
-                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
-            let deck = &mixer.channels_mut()[ch].decks[dk].deck;
-            let snap = deck
-                .playback_snapshot()
-                .ok_or(ParamRouteError::WrongState {
-                    path: path.to_string(),
-                    reason: "deck has no playable video",
-                })?;
-            let applied = deck.video_set_in_point(scale_to_duration(value, snap.duration));
-            ok_or_state(applied, path, "set in-point failed")
-        }
-        ParamAddress::Deck {
-            deck: uuid,
-            target: DeckTarget::VideoOutPoint,
-        } => {
-            let (ch, dk) = mixer
-                .find_deck_by_uuid(uuid)
-                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
-            let deck = &mixer.channels_mut()[ch].decks[dk].deck;
-            let snap = deck
-                .playback_snapshot()
-                .ok_or(ParamRouteError::WrongState {
-                    path: path.to_string(),
-                    reason: "deck has no playable video",
-                })?;
-            let applied = deck.video_set_out_point(scale_to_duration(value, snap.duration));
-            ok_or_state(applied, path, "set out-point failed")
-        }
-        ParamAddress::Deck {
-            deck: uuid,
-            target: DeckTarget::VideoClearInOut,
-        } => {
-            let (ch, dk) = mixer
-                .find_deck_by_uuid(uuid)
-                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
-            if value > 0.5 {
-                let applied = mixer.channels_mut()[ch].decks[dk]
-                    .deck
-                    .video_clear_in_out_points();
-                ok_or_state(applied, path, "clear in/out points failed")
-            } else {
-                Ok(())
-            }
-        }
-        ParamAddress::Deck {
-            deck: uuid,
-            target: DeckTarget::VideoLoopMode,
-        } => {
-            let (ch, dk) = mixer
-                .find_deck_by_uuid(uuid)
-                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
-            let applied = mixer.channels_mut()[ch].decks[dk]
-                .deck
-                .video_set_loop_mode(LoopMode::from_value(value));
-            ok_or_state(applied, path, "deck has no video source")
-        }
-        ParamAddress::Deck {
-            deck: uuid,
-            target: DeckTarget::ScalingMode,
-        } => {
-            let (ch, dk) = mixer
-                .find_deck_by_uuid(uuid)
-                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
-            mixer.channels_mut()[ch].decks[dk]
-                .deck
-                .set_scaling_mode(ScalingMode::from_value(value));
-            Ok(())
+                },
+                crate::source::ControlError::Invalid(_) | crate::source::ControlError::State(_) => {
+                    ParamRouteError::WrongState {
+                        path: path.to_string(),
+                        reason: "the deck's source refused the value",
+                    }
+                }
+            })
         }
         ParamAddress::Deck {
             deck: uuid,
@@ -467,40 +378,6 @@ pub fn apply_param_by_path(
                 toggle_transparent(mixer, uuid)?;
             }
             Ok(())
-        }
-        // Screen/window capture params. The deck holds the desired config and
-        // the render loop pushes it to the capture manager, so every path here
-        // is MIDI-learnable, OSC-addressable, and macro-drivable.
-        //
-        // Not modulation targets: a route makes a value writable on demand,
-        // while a modulation target is re-evaluated every frame, which each
-        // consumer has to opt into (see `modulation_key_for_path`). Whether
-        // they should be is an open question in
-        // spec/video-playback-modulation.md.
-        // See spec/screen-capture.md § Parameters and Router Paths.
-        ParamAddress::Deck {
-            deck: uuid,
-            target: DeckTarget::Capture(name),
-        } => {
-            let (ch, dk) = mixer
-                .find_deck_by_uuid(uuid)
-                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
-            let applied = mixer.channels_mut()[ch].decks[dk]
-                .deck
-                .set_capture_param(name, clamp_norm(value));
-            ok_or_state(applied, path, "deck is not a screen capture source")
-        }
-        ParamAddress::Deck {
-            deck: uuid,
-            target: DeckTarget::Depth(name),
-        } => {
-            let (ch, dk) = mixer
-                .find_deck_by_uuid(uuid)
-                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
-            let applied = mixer.channels_mut()[ch].decks[dk]
-                .deck
-                .set_depth_param(name, clamp_norm(value));
-            ok_or_state(applied, path, "deck is not a depth sensor source")
         }
         // Depth-sensor *preprocessor* params, distinct from the point-cloud
         // params above: these configure the fields fed to a shader that declared
@@ -879,31 +756,6 @@ fn clamp_or_full(value: f32) -> f32 {
     }
 }
 
-/// Map a normalized value to a video playback speed multiplier (0.1×–4.0×).
-fn scale_speed(value: f32) -> f64 {
-    f64::from(0.1 + clamp_norm(value) * 3.9)
-}
-
-/// Scale a normalized value to an absolute time in seconds against a clip duration.
-fn scale_to_duration(value: f32, duration: f64) -> f64 {
-    f64::from(clamp_norm(value)) * duration.max(0.0)
-}
-
-/// Inverse of [`scale_speed`]: the normalized value a fader or curve would need
-/// to hold to produce `speed`.
-pub(crate) fn speed_to_norm(speed: f64) -> f32 {
-    clamp_norm(((speed - 0.1) / 3.9) as f32)
-}
-
-/// Inverse of [`scale_to_duration`]. A clip of unknown length has no meaningful
-/// normalized position, so it reports the start rather than dividing by zero.
-pub(crate) fn duration_to_norm(secs: f64, duration: f64) -> f32 {
-    if duration <= 0.0 {
-        return 0.0;
-    }
-    clamp_norm((secs / duration) as f32)
-}
-
 /// Toggle a parameter between its two extremes (keyboard shortcut affordance).
 ///
 /// Floats snap 0↔1. Bools invert. Mute/solo flip. Trigger forces opacity to 1.0.
@@ -1010,6 +862,25 @@ pub fn toggle_param_by_path(mixer: &mut Mixer, path: &str) -> Result<(), ParamRo
             deck: uuid,
             target: DeckTarget::Transparent,
         } => toggle_transparent(mixer, uuid),
+        // A source control snaps between its extremes; an action just fires.
+        ParamAddress::Deck {
+            deck: uuid,
+            target: DeckTarget::Source(route),
+        } => {
+            let (ch, dk) = mixer
+                .find_deck_by_uuid(uuid)
+                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
+            let source = mixer.channels_mut()[ch].decks[dk].deck.source_mut();
+            let next = match crate::source::read_route(source, route) {
+                Some(current) if current > 0.5 => 0.0,
+                _ => 1.0,
+            };
+            crate::source::write_route(source, route, next).map_err(|_| {
+                ParamRouteError::UnknownPath {
+                    path: path.to_string(),
+                }
+            })
+        }
         ParamAddress::Modulator { .. } => Err(ParamRouteError::WrongState {
             path: path.to_string(),
             reason: "modulation params are continuous; keyboard toggle does not apply",
@@ -1081,17 +952,15 @@ mod tests {
         );
     }
 
-    /// The crossfader is routable but deliberately not a modulation target, a
-    /// trigger is an event rather than a value, and in/out points define the
-    /// region a position offset is measured against.
+    /// The crossfader is routable but deliberately not a modulation target,
+    /// and a trigger is an event rather than a value. Which source controls
+    /// are modulatable is the source type's schema, checked by the engine when
+    /// an assignment is made, so a source route always has a key here.
     #[test]
     fn a_path_that_names_nothing_automatable_has_no_key() {
         for path in [
             "crossfader",
             "deck/d0000001/trigger",
-            "deck/d0000001/video/in_point",
-            "deck/d0000001/video/out_point",
-            "deck/d0000001/video/clear",
             "macro/m0000001/value",
             "mod/m0000001/frequency",
             "ch/c0000001",
@@ -1099,40 +968,6 @@ mod tests {
             assert_eq!(modulation_key_for_path(path), None, "{path}");
         }
     }
-
-    #[test]
-    fn speed_and_position_round_trip_through_their_scales() {
-        for speed in [0.1_f64, 0.5, 1.0, 2.05, 4.0] {
-            assert!((scale_speed(speed_to_norm(speed)) - speed).abs() < 1e-6);
-        }
-        for secs in [0.0_f64, 7.5, 30.0] {
-            assert!((scale_to_duration(duration_to_norm(secs, 30.0), 30.0) - secs).abs() < 1e-4);
-        }
-    }
-
-    #[test]
-    fn a_clip_of_unknown_length_normalizes_to_the_start() {
-        assert_eq!(duration_to_norm(5.0, 0.0), 0.0);
-        assert_eq!(duration_to_norm(5.0, -2.0), 0.0);
-    }
-
-    #[test]
-    fn scale_speed_maps_to_range() {
-        assert!((scale_speed(0.0) - 0.1).abs() < 1e-6);
-        assert!((scale_speed(1.0) - 4.0).abs() < 1e-6);
-        assert!((scale_speed(0.5) - 2.05).abs() < 1e-6);
-        assert!((scale_speed(2.0) - 4.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn scale_to_duration_scales_against_clip() {
-        assert!((scale_to_duration(0.0, 10.0) - 0.0).abs() < 1e-9);
-        assert!((scale_to_duration(1.0, 10.0) - 10.0).abs() < 1e-9);
-        assert!((scale_to_duration(0.5, 10.0) - 5.0).abs() < 1e-9);
-        assert!((scale_to_duration(0.5, -4.0) - 0.0).abs() < 1e-9);
-    }
-
-    // ── apply_mod_param: structured-result behavior (no GPU) ──────────
 
     #[test]
     fn mod_param_known_returns_ok_and_sets_value() {
@@ -1352,7 +1187,7 @@ mod tests {
     }
 
     fn maybe_mixer() -> Option<(crate::renderer::GpuContext, Mixer)> {
-        let gpu = crate::renderer::GpuContext::new_headless().ok()?;
+        let gpu = crate::testing::headless_gpu()?;
         Mixer::new(&gpu, 64, 64).ok().map(|mixer| (gpu, mixer))
     }
 

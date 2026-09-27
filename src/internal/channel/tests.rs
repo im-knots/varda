@@ -180,7 +180,7 @@ fn test_channel(gpu: &GpuContext, name: &str) -> Channel {
 }
 
 fn add_solid_deck(ch: &mut Channel, gpu: &GpuContext, color: [f32; 4]) {
-    let deck = crate::deck::Deck::new_solid_color(gpu, color, 64, 64).expect("solid color deck");
+    let deck = crate::deck::Deck::solid_color(gpu, color, 64, 64);
     ch.add_deck(deck);
 }
 
@@ -491,7 +491,7 @@ fn empty_channel_render_timing() {
 #[test]
 fn new_deck_fps_starts_at_zero() {
     let gpu = headless_gpu();
-    let deck = crate::deck::Deck::new_solid_color(&gpu, [1.0, 0.0, 0.0, 1.0], 64, 64).unwrap();
+    let deck = crate::deck::Deck::solid_color(&gpu, [1.0, 0.0, 0.0, 1.0], 64, 64);
     assert!((deck.fps() - 0.0).abs() < 1e-5);
 }
 

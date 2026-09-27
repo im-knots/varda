@@ -5,7 +5,7 @@
 
 use super::VardaApp;
 use crate::engine::EngineCommand;
-use crate::engine::value::param::{DeckTarget, ParamAddress};
+use crate::engine::value::param::ParamAddress;
 
 /// Undo/redo/save requested by a control surface (MIDI, OSC, or a macro
 /// trigger) and not yet dispatched.
@@ -16,30 +16,115 @@ pub(crate) struct PendingGlobalActions {
     pub(crate) save: bool,
 }
 
-/// The command a press on `path` asks for, when its target lives outside the
-/// mixer: a cue, or an HTML deck's reload or interactive window. The
-/// interactive window toggles, so `interactive_deck` is the deck it is open on,
-/// if any. `None` for every path the parameter router handles.
-pub(crate) fn surface_command(path: &str, interactive_deck: Option<&str>) -> Option<EngineCommand> {
-    match path.parse::<ParamAddress>().ok()? {
-        ParamAddress::CueFire { cue } => Some(EngineCommand::TriggerCue { uuid: cue }),
-        ParamAddress::Deck {
-            deck,
-            target: DeckTarget::HtmlReload,
-        } => Some(EngineCommand::ReloadHtmlDeck { deck_uuid: deck }),
-        ParamAddress::Deck {
-            deck,
-            target: DeckTarget::HtmlInteractive,
-        } => Some(if interactive_deck == Some(deck.as_str()) {
-            EngineCommand::CloseHtmlInteractive
-        } else {
-            EngineCommand::OpenHtmlInteractive { deck_uuid: deck }
-        }),
-        _ => None,
-    }
+/// Bucket a normalized write into one of `n` choices.
+fn bucket(value: f32, n: usize) -> usize {
+    ((value.clamp(0.0, 1.0) * n as f32) as usize).min(n.saturating_sub(1))
 }
 
 impl VardaApp {
+    /// The command a write of `value` to `path` asks for, when its target
+    /// lives outside the mixer: a cue, an output, a surface. `None` for every
+    /// path the parameter router handles, which includes every deck source's
+    /// actions. Presses (a cue, start, stop) fire on the rising edge, like
+    /// `deck/<uuid>/trigger`.
+    pub(crate) fn surface_command(&self, path: &str, value: f32) -> Option<EngineCommand> {
+        use crate::engine::value::param::OutputControl;
+        let pressed = value > 0.5;
+        match path.parse::<ParamAddress>().ok()? {
+            ParamAddress::CueFire { cue } => {
+                pressed.then_some(EngineCommand::TriggerCue { uuid: cue })
+            }
+            ParamAddress::Output { output, target } => match target {
+                OutputControl::Start => pressed.then_some(EngineCommand::StartOutput {
+                    output_uuid: output,
+                }),
+                OutputControl::Stop => pressed.then_some(EngineCommand::StopOutput {
+                    output_uuid: output,
+                }),
+                OutputControl::Active => Some(if pressed {
+                    EngineCommand::StartOutput {
+                        output_uuid: output,
+                    }
+                } else {
+                    EngineCommand::StopOutput {
+                        output_uuid: output,
+                    }
+                }),
+                OutputControl::Calibration => {
+                    use crate::renderer::context::CalibrationMode as M;
+                    let modes = [M::Off, M::Projector, M::Surfaces];
+                    Some(EngineCommand::SetCalibrationMode {
+                        output_uuid: output,
+                        mode: modes[bucket(value, modes.len())],
+                    })
+                }
+                OutputControl::Rotation => {
+                    let all = crate::renderer::context::OutputRotation::ALL;
+                    Some(EngineCommand::SetOutputRotation {
+                        output_uuid: output,
+                        rotation: all[bucket(value, all.len())],
+                    })
+                }
+                OutputControl::Surface(surface) => {
+                    Some(EngineCommand::SetSurfaceAssignmentEnabled {
+                        output_uuid: output,
+                        surface_uuid: surface,
+                        enabled: pressed,
+                    })
+                }
+                OutputControl::Sink(route) => {
+                    let name = self.sink_setting_for_route(&output, &route)?;
+                    Some(EngineCommand::SetSinkParam {
+                        output_uuid: output,
+                        name,
+                        value: crate::engine::value::provider::ControlValue::Float(value),
+                    })
+                }
+            },
+            // A surface source is text, so a fader has no meaningful
+            // position for it; everything else belongs to the router.
+            _ => None,
+        }
+    }
+
+    /// The command a toggle of `path` asks for, when its target lives
+    /// outside the mixer: a press of a cue or output, and a flip of an
+    /// output's delivery or a surface's place on it.
+    pub(crate) fn surface_toggle(&self, path: &str) -> Option<EngineCommand> {
+        use crate::engine::value::param::OutputControl;
+        let address = path.parse::<ParamAddress>().ok()?;
+        if let ParamAddress::Output { output, target } = &address {
+            let current = self.output.outputs.iter().find(|o| o.uuid == *output)?;
+            match target {
+                OutputControl::Active => {
+                    return self.surface_command(path, if current.active { 0.0 } else { 1.0 });
+                }
+                OutputControl::Surface(surface) => {
+                    let shown = current
+                        .surface_assignments
+                        .iter()
+                        .any(|a| a.surface_uuid == *surface && a.enabled);
+                    return self.surface_command(path, if shown { 0.0 } else { 1.0 });
+                }
+                _ => {}
+            }
+        }
+        self.surface_command(path, 1.0)
+    }
+
+    /// The name of the setting `route` names on output `output`'s sink.
+    pub(crate) fn sink_setting_for_route(&self, output: &str, route: &str) -> Option<String> {
+        self.output
+            .outputs
+            .iter()
+            .find(|o| o.uuid == output)?
+            .sink()
+            .schema()
+            .iter()
+            .find(|spec| spec.route.as_deref() == Some(route))
+            .map(|spec| spec.name.clone())
+    }
+
     /// Hand the pending control-surface actions to a windowed consumer, which
     /// runs them against its UI layout. Clears them.
     pub(crate) fn take_pending_global_actions(&mut self) -> PendingGlobalActions {
@@ -62,19 +147,6 @@ impl VardaApp {
             if let CommandResult::Err { message, .. } = self.execute_command(cmd) {
                 log::info!("Control-surface action not applied: {message}");
             }
-        }
-    }
-
-    /// The HTML deck the interactive window is open on, if any.
-    pub(crate) fn interactive_deck(&self) -> Option<&str> {
-        #[cfg(feature = "html")]
-        {
-            self.interactive_active_deck()
-        }
-        #[cfg(not(feature = "html"))]
-        {
-            let _ = self;
-            None
         }
     }
 
@@ -105,8 +177,15 @@ impl VardaApp {
                 "action/record" => self.set_record_armed(!self.show.recorder.armed()),
                 _ => log::debug!("Unknown action path: {path}"),
             }
-        } else if let Some(cmd) = surface_command(path, self.interactive_deck()) {
-            if value > 0.5 {
+        } else if path.parse::<ParamAddress>().is_ok_and(|a| {
+            matches!(
+                a,
+                ParamAddress::CueFire { .. }
+                    | ParamAddress::Output { .. }
+                    | ParamAddress::SurfaceSource { .. }
+            )
+        }) {
+            if let Some(cmd) = self.surface_command(path, value) {
                 deferred.push(cmd);
             }
         } else {
@@ -212,6 +291,9 @@ impl VardaApp {
             match input {
                 crate::osc::OscInput::Param { ref path, value } => {
                     self.apply_surface_write(path, value, &mut deferred, &mut changed_params);
+                }
+                crate::osc::OscInput::Text { path, value } => {
+                    deferred.push(EngineCommand::SetPathText { path, value });
                 }
                 crate::osc::OscInput::ClockBpm(bpm) => {
                     self.input.clock_manager.process_osc_bpm(bpm);
@@ -544,7 +626,7 @@ impl VardaApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{EngineCommand, VardaApp, surface_command};
+    use super::{EngineCommand, VardaApp};
     use crate::engine::EngineCommand as C;
     use crate::midi::{MidiDeviceManager, MidiKey, MidiMessage};
     use crate::osc::{OscInput, OscReceiver};
@@ -554,14 +636,13 @@ mod tests {
     /// Returns `None` with no GPU adapter, the way every other GPU-backed test
     /// in the tree does.
     fn app_with_a_deck() -> Option<(VardaApp, String)> {
-        let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
-        let mut app = VardaApp::new(gpu, &crate::testing::headless_config()).ok()?;
+        let mut app = crate::testing::headless_app()?;
         let channel = crate::app::snapshot::build_mixer_snapshot(&app).channels[0]
             .uuid
             .clone();
-        let uuid = match app.execute_command(C::AddSolidColorDeck {
+        let uuid = match app.execute_command(C::AddDeck {
             channel_uuid: channel,
-            color: [1.0, 1.0, 1.0, 1.0],
+            source: crate::solid_color::SolidColor::config_for([1.0, 1.0, 1.0, 1.0]),
         }) {
             crate::engine::CommandResult::OkWithId { uuid } => uuid,
             other => panic!("expected a new deck, got {other:?}"),
@@ -1337,45 +1418,73 @@ mod tests {
 
     #[test]
     fn targets_outside_the_mixer_become_commands() {
+        let Some((app, _)) = app_with_a_deck() else {
+            return;
+        };
         assert!(matches!(
-            surface_command("cue/ab12cd34/fire", None),
+            app.surface_command("cue/ab12cd34/fire", 1.0),
             Some(EngineCommand::TriggerCue { uuid }) if uuid == "ab12cd34"
         ));
-        assert!(matches!(
-            surface_command("deck/d1/html/reload", None),
-            Some(EngineCommand::ReloadHtmlDeck { deck_uuid }) if deck_uuid == "d1"
-        ));
-    }
-
-    #[test]
-    fn the_interactive_target_toggles_the_window() {
-        assert!(matches!(
-            surface_command("deck/d1/html/interactive", None),
-            Some(EngineCommand::OpenHtmlInteractive { deck_uuid }) if deck_uuid == "d1"
-        ));
-        assert!(matches!(
-            surface_command("deck/d1/html/interactive", Some("d1")),
-            Some(EngineCommand::CloseHtmlInteractive)
-        ));
         assert!(
-            matches!(
-                surface_command("deck/d1/html/interactive", Some("d2")),
-                Some(EngineCommand::OpenHtmlInteractive { deck_uuid }) if deck_uuid == "d1"
-            ),
-            "open on another deck moves the window here"
+            app.surface_command("cue/ab12cd34/fire", 0.0).is_none(),
+            "fires on the rising edge"
         );
     }
 
     #[test]
     fn other_paths_are_left_to_the_router() {
+        let Some((app, _)) = app_with_a_deck() else {
+            return;
+        };
         for path in [
             "deck/ab12cd34/trigger",
             "deck/ab12cd34/transparent",
+            "deck/ab12cd34/html/reload",
             "cue/ab12cd34",
             "cue//fire",
             "cue/ab12cd34/extra/fire",
         ] {
-            assert!(surface_command(path, None).is_none(), "{path}");
+            assert!(app.surface_command(path, 1.0).is_none(), "{path}");
         }
+    }
+
+    /// Outputs are addressed like everything else, so a pad can start a
+    /// recording and a knob can pick a calibration card. See
+    /// /spec/output-sink-providers.md Decision 11.
+    #[test]
+    fn output_addresses_become_output_commands() {
+        use crate::renderer::context::{CalibrationMode, OutputRotation};
+        let Some((app, _)) = app_with_a_deck() else {
+            return;
+        };
+        assert!(matches!(
+            app.surface_command("output/o1/start", 1.0),
+            Some(EngineCommand::StartOutput { output_uuid }) if output_uuid == "o1"
+        ));
+        assert!(app.surface_command("output/o1/start", 0.0).is_none());
+        assert!(matches!(
+            app.surface_command("output/o1/active", 0.0),
+            Some(EngineCommand::StopOutput { .. })
+        ));
+        assert!(matches!(
+            app.surface_command("output/o1/calibration", 0.5),
+            Some(EngineCommand::SetCalibrationMode {
+                mode: CalibrationMode::Projector,
+                ..
+            })
+        ));
+        assert!(matches!(
+            app.surface_command("output/o1/rotation", 1.0),
+            Some(EngineCommand::SetOutputRotation {
+                rotation: OutputRotation::Deg270,
+                ..
+            })
+        ));
+        assert!(matches!(
+            app.surface_command("output/o1/surface/s1", 1.0),
+            Some(EngineCommand::SetSurfaceAssignmentEnabled { enabled: true, .. })
+        ));
+        // A sink setting the output does not have resolves to nothing.
+        assert!(app.surface_command("output/o1/nope", 1.0).is_none());
     }
 }

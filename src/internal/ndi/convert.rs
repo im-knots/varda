@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn gpu_packs_known_black_white_pair_into_high_bit_planes() {
-        let Ok(context) = crate::renderer::context::GpuContext::new_headless() else {
+        let Some(context) = crate::testing::headless_gpu() else {
             return;
         };
         let texture = context.device.create_texture(&wgpu::TextureDescriptor {
@@ -487,7 +487,7 @@ mod tests {
     #[test]
     fn gpu_dither_is_stable_and_within_one_ten_bit_lsb() {
         const WIDTH: u32 = 32;
-        let Ok(context) = crate::renderer::context::GpuContext::new_headless() else {
+        let Some(context) = crate::testing::headless_gpu() else {
             return;
         };
         let texture = context.device.create_texture(&wgpu::TextureDescriptor {
@@ -615,7 +615,7 @@ mod tests {
     /// Eight-bit BT.709 limited range: black 16, white 235, neutral chroma 128.
     #[test]
     fn gpu_packs_black_and_white_into_limited_range_uyvy() {
-        let Ok(context) = crate::renderer::context::GpuContext::new_headless() else {
+        let Some(context) = crate::testing::headless_gpu() else {
             return;
         };
         let view = pair_texture(&context, [0.0; 3], [1.0; 3]);
@@ -629,7 +629,7 @@ mod tests {
     /// eight-bit limited-range values.
     #[test]
     fn gpu_packs_red_with_the_bt709_matrix() {
-        let Ok(context) = crate::renderer::context::GpuContext::new_headless() else {
+        let Some(context) = crate::testing::headless_gpu() else {
             return;
         };
         let view = pair_texture(&context, [1.0, 0.0, 0.0], [1.0, 0.0, 0.0]);

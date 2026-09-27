@@ -9,6 +9,7 @@ pub mod deck;
 pub mod delivery;
 pub mod depth;
 pub mod files;
+pub mod generator;
 pub mod html;
 pub mod ids;
 pub mod isf;
@@ -20,6 +21,7 @@ pub mod modulation;
 pub mod ndi;
 pub mod notifications;
 pub mod osc;
+pub mod output;
 pub mod param_router;
 pub mod params;
 pub mod persistence;
@@ -27,15 +29,19 @@ pub mod registry;
 pub mod renderer;
 pub mod scene;
 pub mod screen_capture;
+pub mod solid_color;
+pub mod source;
 // The Spout protocol module is pure and builds everywhere so its wire-format
 // tests run on the development machine; the D3D backend it will gain is Windows
 // only. See /spec/spout-output.md § Verification.
 pub mod spout;
+pub mod still;
 pub mod stream;
 pub mod surface;
 #[cfg(target_os = "macos")]
 pub mod syphon;
 pub mod sysmon;
+pub mod tap;
 pub mod timebase;
 pub mod timecode;
 pub mod transport;

@@ -9,16 +9,21 @@ The panel is a stack of collapsible sections, in this order:
 | Section | Contents |
 |---------|----------|
 | **🎨 Generators** | ISF generator shaders. Count shown in the header. |
-| **🔮 Effects** | ISF filter shaders for effect chains. |
 | **🖼 Images** | Per-channel **📁 Load to [Channel]** button (opens a file dialog). |
 | **🎬 Video** | Per-channel **📁 Load to [Channel]** button (opens a file dialog). |
 | **📹 Cameras** | Detected camera devices, with a **🔄 Rescan** button. |
+| **🛰 Depth Sensors** | Connected depth sensors, with a **🔄 Rescan** button. |
 | **🖥 Screen Capture** | Capturable displays and windows, with a **🔄 Rescan** button (see below). |
 | **🔁 Taps** | Varda's own master program and each channel, as sources (see below). |
-| **📡 Stream Sources** | NDI, SRT, HLS, DASH, and RTMP sources (see below). |
+| **📡 NDI** | Discovered NDI senders, with a **🔄 Rescan** button. |
+| **📺 SRT**, **📡 HLS**, **📡 DASH**, **📺 RTMP** | Saved stream URLs, one section per protocol (see below). |
 | **🌐 HTML Sources** | Web pages (HTML/CSS/JS) rendered by Servo (see below). |
+| **🔗 Syphon** / **🔗 Spout** | Discovered Syphon servers (macOS) or Spout senders (Windows), with a **🔄 Rescan** button. Shown only where the platform supports them. |
+| **🔮 Effects** | ISF filter shaders for effect chains. |
 | **💾 Deck Presets** | Saved deck presets (shown only when presets exist). |
 | **💾 Channel Presets** | Saved channel presets (shown only when presets exist). |
+
+Every deck source type gets its own section, in the order the build registers them, so a new source type appears here without any change to the panel.
 
 > The section count badges (e.g. "Generators (40)") reflect the live number of available items.
 
@@ -45,13 +50,15 @@ Effects in a chain can also be reordered by drag-and-drop, and toggled on/off in
 
 ## Stream Sources
 
-The **📡 Stream Sources** section groups all live network inputs. Its header count is the total across every protocol. Inside are nested sub-sections, each with its own count:
+Live network inputs have one section per protocol, each with its own count:
 
-- **NDI** — discovered network senders. Has a **🔄 Rescan** button to re-search the network.
-- **SRT** — each entry shows its **Mode: Listener** or **Mode: Caller**.
-- **HLS**
-- **DASH**
-- **RTMP** — each entry shows its **Mode: Pull** or **Mode: Listen**.
+- **📡 NDI**: discovered network senders. Has a **🔄 Rescan** button to re-search the network.
+- **📺 SRT**: each entry shows its **Mode: Listener** or **Mode: Caller**.
+- **📡 HLS**
+- **📡 DASH**
+- **📺 RTMP**: each entry shows its **Mode: Pull** or **Mode: Listen**.
+
+The SRT, HLS, DASH and RTMP sections each have a **+ Add** form for saving a URL.
 
 **Connection status** is shown as a colored bullet (`●`) next to each entry:
 
@@ -77,7 +84,7 @@ Like stream library entries, the URLs you add here are session-only quick-access
 Camera devices are enumerated automatically at startup (AVFoundation on macOS, V4L2 on Linux) and listed under **📹 Cameras**. Each device is draggable onto a channel to create a camera deck.
 
 - **🔄 Rescan** re-enumerates connected devices. Use it after plugging in a USB camera.
-- Camera decks are persisted by device **name** in `scene.json`. On reload, Varda re-opens the camera by name; if it isn't connected, the deck is skipped with a warning.
+- Camera decks are persisted by device **name** in `scene.json`. On reload, Varda re-opens the camera by name; if it isn't connected, the deck is kept as a placeholder that renders black and keeps its settings, with a warning.
 
 ### Resolution
 

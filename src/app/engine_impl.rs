@@ -4,11 +4,11 @@
 //! parameter writes, and output windows.
 
 use super::VardaApp;
-use super::deck_loads::DeckSource;
 use crate::deck::{Deck, Effect};
 use crate::depth::preprocess::{AcquiredSensor, DepthPreprocessParams};
 use crate::engine::types::{CameraId, EffectTarget, ParamValue};
 use crate::mixer::EffectChain;
+use crate::source::SourceConfig;
 
 use anyhow::{Context as _, Result};
 
@@ -54,7 +54,8 @@ impl VardaApp {
     ) -> Result<Option<AcquiredSensor>> {
         self.check_required_preprocessors(metadata, shader_name)?;
         crate::depth::preprocess::acquire_for_shader(
-            &mut self.sources.depth_manager,
+            self.sources
+                .service_mut::<crate::depth::DepthSensorManager>(),
             &self.render.context.device,
             metadata,
             shader_name,
@@ -100,271 +101,149 @@ impl VardaApp {
         }
     }
 
-    pub(crate) fn add_deck(&mut self, channel_uuid: &str, shader_name: &str) -> Result<String> {
-        self.mixer.resolve_channel(channel_uuid)?;
-        let shader = self
-            .sources
-            .registry
-            .generators()
-            .iter()
-            .find(|s| s.name() == shader_name)
-            .map(|s| (*s).clone())
-            .context("Shader not found")?;
-        self.check_required_preprocessors(&shader.metadata, shader_name)?;
-        crate::depth::preprocess::preflight_for_shader(
-            &self.sources.depth_manager,
-            &shader.metadata,
-            shader_name,
-        )?;
-        Ok(self.spawn_deck_load(channel_uuid, DeckSource::Shader(Box::new(shader))))
-    }
-
-    pub(crate) fn add_image_deck(
-        &mut self,
-        channel_uuid: &str,
-        path: &std::path::Path,
-    ) -> Result<String> {
-        self.mixer.resolve_channel(channel_uuid)?;
-        anyhow::ensure!(path.is_file(), "Image file not found: {}", path.display());
-        Ok(self.spawn_deck_load(channel_uuid, DeckSource::Image(path.to_path_buf())))
-    }
-
-    pub(crate) fn add_video_deck(
-        &mut self,
-        channel_uuid: &str,
-        path: &std::path::Path,
-    ) -> Result<String> {
-        self.mixer.resolve_channel(channel_uuid)?;
-        anyhow::ensure!(path.is_file(), "Video file not found: {}", path.display());
-        Ok(self.spawn_deck_load(channel_uuid, DeckSource::Video(path.to_path_buf())))
-    }
-
-    pub(crate) fn add_solid_color_deck(
-        &mut self,
-        channel_uuid: &str,
-        color: [f32; 4],
-    ) -> Result<String> {
+    /// Add a deck whose source `source` describes, returning the UUID it has
+    /// (or will have, for a source that loads in the background).
+    ///
+    /// A provider that builds slowly hands out a loader that runs off the
+    /// render thread; the deck attaches, finalized, on a later frame. Anything
+    /// wrong with the config, the type, or a device is reported here, before
+    /// any deck exists.
+    pub(crate) fn add_deck(&mut self, channel_uuid: &str, source: &SourceConfig) -> Result<String> {
         let channel_idx = self.mixer.resolve_channel(channel_uuid)?;
-        let deck = Deck::new_solid_color(
-            &self.render.context,
-            color,
-            self.render.width,
-            self.render.height,
-        )?;
+        // A source a controller re-subscribes to on every reconnect converges
+        // on one deck per channel rather than stacking duplicates.
+        if self
+            .sources
+            .providers
+            .get(source.type_id())
+            .is_some_and(crate::source::DeckSourceProvider::one_per_channel)
+            && let Some(existing) = self.mixer.channels()[channel_idx]
+                .decks
+                .iter()
+                .find(|slot| {
+                    self.sources
+                        .providers
+                        .same_source(&slot.deck.source().config(), source)
+                })
+        {
+            return Ok(existing.deck.uuid().to_string());
+        }
+
+        let labels = self.mixer.channel_labels();
+        let query = self.sources.query(&labels);
+        if let Some(loader) = self.sources.providers.loader(source, &query) {
+            let loader = loader?;
+            return Ok(self.spawn_deck_load(channel_uuid, load_name(source), loader));
+        }
+
+        let (width, height) = (self.render.width, self.render.height);
+        let (providers, mut env) = self
+            .sources
+            .env(&self.render.context, width, height, &labels);
+        let instance = providers.create(source, &mut env)?;
+        let mut deck = Deck::from_source(&self.render.context, instance, width, height);
+        if let Err(e) = self.finalize_new_deck(&mut deck) {
+            self.release_source(&mut deck);
+            return Err(e);
+        }
         let uuid = deck.uuid().to_string();
-        let ch = self
-            .mixer
-            .channel_mut(channel_idx)
-            .context("Invalid channel")?;
         let name = deck.source_name().to_string();
-        let idx = ch.add_deck(deck);
-        log::info!("Added solid color deck {idx} to channel {channel_idx}: {name}");
-        Ok(uuid)
-    }
-
-    pub(crate) fn add_camera_deck(
-        &mut self,
-        channel_uuid: &str,
-        camera_id: CameraId,
-    ) -> Result<String> {
-        let channel_idx = self.mixer.resolve_channel(channel_uuid)?;
-        let cam_name = self
-            .sources
-            .camera_manager
-            .devices()
-            .iter()
-            .find(|d| d.id == camera_id)
-            .map_or_else(|| format!("Camera {camera_id}"), |d| d.name.clone());
-        let (src_w, src_h) = self
-            .sources
-            .camera_manager
-            .open_camera(camera_id, &self.render.context.device)?;
-        let deck = Deck::new_from_camera(
-            &self.render.context,
-            camera_id,
-            &cam_name,
-            src_w,
-            src_h,
-            self.render.width,
-            self.render.height,
-        )?;
-        let uuid = deck.uuid().to_string();
         let ch = self
             .mixer
             .channel_mut(channel_idx)
             .context("Invalid channel")?;
         let idx = ch.add_deck(deck);
-        log::info!("Added camera deck {idx} to channel {channel_idx}: {cam_name}");
+        log::info!("Added deck {idx} to channel {channel_idx}: {name}");
         Ok(uuid)
     }
 
-    pub(crate) fn add_screen_capture_deck(
-        &mut self,
-        channel_uuid: &str,
-        target: &crate::scene::CaptureTargetConfig,
-        options: &crate::screen_capture::backend::CaptureConfig,
-    ) -> Result<String> {
-        let channel_idx = self.mixer.resolve_channel(channel_uuid)?;
-        let identity = crate::screen_capture::backend::TargetIdentity::from(target);
-        let info = self
-            .sources
-            .screen_capture_manager
-            .find_target(&identity)
-            .cloned()
-            .with_context(|| {
-                format!(
-                    "No capture target matches '{}' — rescan and try again",
-                    target.label()
-                )
-            })?;
-
-        // Default the capture-time downscale to the largest deck-sized frame
-        // that keeps the target's own shape. Without a cap a 4K display would
-        // move 33 MB per frame only to be scaled down immediately after; without
-        // the shape, a window narrower than the stage would arrive pre-squashed
-        // and the deck's scaling mode would have nothing left to do.
-        // See spec/screen-capture.md § Performance.
-        let config = crate::screen_capture::backend::CaptureConfig {
-            scale_to: options.scale_to.or_else(|| {
-                Some(crate::screen_capture::resample::fit_within(
-                    info.width,
-                    info.height,
-                    self.render.width,
-                    self.render.height,
-                ))
-            }),
-            ..options.clone()
-        };
-        let (capture_id, src_w, src_h) = self
-            .sources
-            .screen_capture_manager
-            .open(&info, config.clone(), &self.render.context.device)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
-        let deck = Deck::new_from_screen_capture(
-            &self.render.context,
-            crate::deck::ScreenCaptureState {
-                capture_id,
-                identity,
-                config,
-                config_dirty: false,
-            },
-            &info.label,
-            src_w,
-            src_h,
-            self.render.width,
-            self.render.height,
-        )
-        .inspect_err(|_| self.sources.screen_capture_manager.release(capture_id))?;
-        let uuid = deck.uuid().to_string();
-        let ch = self
-            .mixer
-            .channel_mut(channel_idx)
-            .context("Invalid channel")?;
-        let idx = ch.add_deck(deck);
-        log::info!(
-            "Added screen capture deck {idx} to channel {channel_idx}: {}",
-            info.label
-        );
-        Ok(uuid)
-    }
-
-    pub(crate) fn add_tap_deck(
-        &mut self,
-        channel_uuid: &str,
-        source: &crate::scene::TapSourceConfig,
-    ) -> Result<String> {
-        let channel_idx = self.mixer.resolve_channel(channel_uuid)?;
-        let tap_source = crate::deck::TapSource::from(source);
-        let label = tap_source.label(&self.mixer.channel_labels());
-        let deck = Deck::new_from_tap(
-            &self.render.context,
-            tap_source,
-            &label,
-            self.render.width,
-            self.render.height,
-        )?;
-        let uuid = deck.uuid().to_string();
-        let ch = self
-            .mixer
-            .channel_mut(channel_idx)
-            .context("Invalid channel")?;
-        let idx = ch.add_deck(deck);
-        log::info!("Added tap deck {idx} to channel {channel_idx}: {label}");
-        Ok(uuid)
-    }
-
-    pub(crate) fn set_tap_source(
+    /// Swap a deck's source for another, keeping its identity, effects,
+    /// opacity and modulation. The new source is built on the render thread.
+    pub(crate) fn replace_deck_source(
         &mut self,
         deck_uuid: &str,
-        source: &crate::scene::TapSourceConfig,
+        source: &SourceConfig,
     ) -> Result<()> {
-        self.mixer
-            .set_tap_source(deck_uuid, crate::deck::TapSource::from(source))
+        let (ch, dk) = self.mixer.resolve_deck(deck_uuid)?;
+        let labels = self.mixer.channel_labels();
+        let (width, height) = (self.render.width, self.render.height);
+        let (providers, mut env) = self
+            .sources
+            .env(&self.render.context, width, height, &labels);
+        let instance = providers.create(source, &mut env)?;
+        let deck = &mut self.mixer.channels_mut()[ch].decks[dk].deck;
+        let mut old = deck.replace_source(instance);
+        let (providers, mut env) = self
+            .sources
+            .env(&self.render.context, width, height, &labels);
+        providers.release(old.as_mut(), &mut env);
+        Ok(())
     }
 
-    pub(crate) fn add_depth_sensor_deck(
+    /// Run `f` on the provider of `source_type` (add or remove a user's
+    /// library entry).
+    pub(crate) fn source_library(
         &mut self,
-        channel_uuid: &str,
-        depth_sensor_id: crate::depth::DepthSensorId,
-    ) -> Result<String> {
-        let channel_idx = self.mixer.resolve_channel(channel_uuid)?;
-        let name = self
+        source_type: &str,
+        f: impl FnOnce(&mut dyn crate::source::DeckSourceProvider) -> Result<()>,
+    ) -> Result<()> {
+        let provider = self
             .sources
-            .depth_manager
-            .devices()
-            .iter()
-            .find(|d| d.id == depth_sensor_id)
-            .map_or_else(
-                || format!("Depth Sensor {depth_sensor_id}"),
-                |d| d.name.clone(),
-            );
-        let (src_w, src_h) = crate::depth::open_depth_sensor(
-            &mut self.sources.depth_manager,
-            depth_sensor_id,
-            &self.render.context.device,
-        )?;
-        let deck = Deck::new_from_depth_sensor(
-            &self.render.context,
-            depth_sensor_id,
-            &name,
-            src_w,
-            src_h,
-            self.render.width,
-            self.render.height,
-        )?;
-        let uuid = deck.uuid().to_string();
-        let ch = self
-            .mixer
-            .channel_mut(channel_idx)
-            .context("Invalid channel")?;
-        let idx = ch.add_deck(deck);
-        log::info!("Added depth sensor deck {idx} to channel {channel_idx}: {name}");
-        Ok(uuid)
+            .providers
+            .get_mut(source_type)
+            .with_context(|| format!("unknown source type '{source_type}'"))?;
+        f(provider)
+    }
+
+    /// Run a library action a source type offers, answering with its fresh
+    /// entries so a probe that rescans is one non-racy call rather than a
+    /// rescan and a separate read that may land before discovery finished.
+    pub(crate) fn source_library_action(
+        &mut self,
+        source_type: &str,
+        action: &str,
+    ) -> crate::engine::CommandResult {
+        use crate::engine::{CommandResult, ErrorCode};
+        let labels = self.mixer.channel_labels();
+        let (width, height) = (self.render.width, self.render.height);
+        let (providers, mut env) = self
+            .sources
+            .env(&self.render.context, width, height, &labels);
+        let Some(provider) = providers.get_mut(source_type) else {
+            return CommandResult::Err {
+                code: ErrorCode::NotFound,
+                message: format!("unknown source type '{source_type}'"),
+            };
+        };
+        if let Err(e) = provider.library_action(action, &mut env) {
+            return CommandResult::Err {
+                code: ErrorCode::InvalidInput,
+                message: format!("{e:#}"),
+            };
+        }
+        let entries = provider.library(&env.query()).entries;
+        CommandResult::OkWithData {
+            data: serde_json::to_value(entries).unwrap_or_default(),
+        }
+    }
+
+    /// Release what a deck's source holds on a device manager.
+    fn release_source(&mut self, deck: &mut Deck) {
+        let (width, height) = (self.render.width, self.render.height);
+        let (providers, mut env) = self.sources.env(&self.render.context, width, height, &[]);
+        providers.release(deck.source_mut(), &mut env);
     }
 
     /// Remove a deck, then release every device it held and its arrangement
     /// lane.
     pub(crate) fn remove_deck(&mut self, deck_uuid: &str) -> Result<()> {
-        let slot = self.mixer.remove_deck(deck_uuid)?;
-        if let Some(cam_id) = slot.deck.camera_id() {
-            self.sources.camera_manager.release_camera(cam_id);
-        }
-        // Covers both point-cloud sources and shader preprocessors.
-        for sensor_id in slot.deck.held_depth_sensors() {
-            self.sources.depth_manager.release(sensor_id);
-        }
-        if let Some(capture_id) = slot.deck.screen_capture_id() {
-            self.sources.screen_capture_manager.release(capture_id);
-        }
-        if let Some(idx) = slot.deck.srt_receiver_idx() {
-            self.sources.io.stream_manager.stop_receive(idx);
-        }
-        if let Some(idx) = slot.deck.ndi_receiver_idx() {
-            self.sources.io.ndi_manager.stop_receive(idx);
-        }
-        #[cfg(target_os = "macos")]
-        if let Some(idx) = slot.deck.syphon_client_idx() {
-            self.sources.io.syphon_manager.stop_receive(idx);
+        let mut slot = self.mixer.remove_deck(deck_uuid)?;
+        self.release_source(&mut slot.deck);
+        // A shader deck's depth preprocessor holds the sensor too.
+        if let Some(sensor_id) = slot.deck.held_depth_prepro_sensor() {
+            self.sources
+                .service_mut::<crate::depth::DepthSensorManager>()
+                .release(sensor_id);
         }
         // A lane is where this deck sits in show time, so it leaves with the
         // deck. See /spec/arrangement.md § A lane is a deck.
@@ -529,7 +408,9 @@ impl VardaApp {
     /// Remove an effect, releasing the depth sensor its deck no longer needs.
     pub(crate) fn remove_effect(&mut self, effect_uuid: &str) -> Result<()> {
         if let Some(sensor_id) = self.mixer.remove_effect(effect_uuid)? {
-            self.sources.depth_manager.release(sensor_id);
+            self.sources
+                .service_mut::<crate::depth::DepthSensorManager>()
+                .release(sensor_id);
         }
         Ok(())
     }
@@ -609,6 +490,22 @@ impl VardaApp {
     }
 }
 
+/// What a background load is reported as before its deck exists: the file or
+/// shader it names, else its type.
+fn load_name(source: &SourceConfig) -> String {
+    ["path", "name", "url"]
+        .iter()
+        .find_map(|key| source.str(key))
+        .map_or_else(
+            || source.type_id().to_string(),
+            |value| {
+                std::path::Path::new(value)
+                    .file_name()
+                    .map_or_else(|| value.to_string(), |f| f.to_string_lossy().into_owned())
+            },
+        )
+}
+
 // ── Audio trait implementations ─────────────────────────────────────
 
 // ── Modulation trait implementations ────────────────────────────────
@@ -638,10 +535,13 @@ impl VardaApp {
         params: &crate::surface::detect::DetectionParams,
     ) -> Result<crate::surface::detect::DetectionResult, crate::surface::import::ImportError> {
         // If camera isn't active yet, open it temporarily for the snapshot.
-        let was_inactive = !self.sources.camera_manager.is_active(camera_id);
+        let was_inactive = !self
+            .sources
+            .service::<crate::camera::CameraManager>()
+            .is_active(camera_id);
         if was_inactive {
             self.sources
-                .camera_manager
+                .service_mut::<crate::camera::CameraManager>()
                 .open_camera(camera_id, &self.render.context.device)
                 .map_err(|e| {
                     crate::surface::import::ImportError::ImageLoad(format!(
@@ -654,7 +554,11 @@ impl VardaApp {
         // Budget: up to 500ms in 10ms increments.
         let mut frame = None;
         for _ in 0..50 {
-            if let Some(f) = self.sources.camera_manager.snapshot_frame(camera_id) {
+            if let Some(f) = self
+                .sources
+                .service::<crate::camera::CameraManager>()
+                .snapshot_frame(camera_id)
+            {
                 frame = Some(f);
                 break;
             }
@@ -663,7 +567,9 @@ impl VardaApp {
 
         // Release the camera if we opened it just for this snapshot.
         if was_inactive {
-            self.sources.camera_manager.release_camera(camera_id);
+            self.sources
+                .service_mut::<crate::camera::CameraManager>()
+                .release_camera(camera_id);
         }
 
         let (rgba, w, h) = frame.ok_or_else(|| {
@@ -682,9 +588,11 @@ mod tests {
     use super::*;
 
     fn headless_app() -> Option<super::super::VardaApp> {
-        let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
-        let config = crate::testing::headless_config();
-        super::super::VardaApp::new(gpu, &config).ok()
+        crate::testing::headless_app()
+    }
+
+    fn shader(name: &str) -> SourceConfig {
+        SourceConfig::new("Shader").with("name", name)
     }
 
     fn channel_uuid(app: &super::super::VardaApp, idx: usize) -> String {
@@ -705,13 +613,13 @@ mod tests {
         let Some(mut app) = headless_app() else {
             return;
         };
-        if !app.sources.depth_manager.devices().is_empty() {
+        if !app.depth_manager().devices().is_empty() {
             // A real sensor is attached; this test asserts the absent case.
             return;
         }
         let ch0 = channel_uuid(&app, 0);
         let err = app
-            .add_deck(&ch0, "liquid_light_depth")
+            .add_deck(&ch0, &shader("liquid_light_depth"))
             .expect_err("must not load without a depth sensor");
         let msg = err.to_string();
         assert!(
@@ -735,7 +643,7 @@ mod tests {
         let Some(mut app) = headless_app() else {
             return;
         };
-        if !app.sources.depth_manager.devices().is_empty() {
+        if !app.depth_manager().devices().is_empty() {
             return;
         }
         let shader = app
@@ -746,7 +654,7 @@ mod tests {
             .find(|s| s.name() == "liquid_light_depth")
             .map(|s| (*s).clone())
             .expect("showcase shader is registered");
-        let mut deck = Deck::new(&app.render.context, shader, 64, 64).expect("deck builds");
+        let mut deck = Deck::from_shader(&app.render.context, shader, 64, 64).expect("deck builds");
         let err = app
             .finalize_new_deck(&mut deck)
             .expect_err("must reject without a depth sensor");
@@ -762,7 +670,7 @@ mod tests {
         let ch0 = channel_uuid(&app, 0);
         // A plain generator with no PREPROCESSORS block must be unaffected by
         // the new required-preprocessor pre-flight.
-        assert!(app.add_deck(&ch0, "liquid_light").is_ok());
+        assert!(app.add_deck(&ch0, &shader("liquid_light")).is_ok());
     }
 
     #[test]
@@ -772,47 +680,38 @@ mod tests {
         };
         // Two decks sharing one mock sensor: the session must survive the first
         // removal and be torn down by the second.
-        app.sources
-            .depth_manager
-            .open_mock(0, 32, 24, &app.render.context.device)
-            .expect("open mock");
-        app.sources
-            .depth_manager
-            .open_mock(0, 32, 24, &app.render.context.device)
-            .expect("share mock");
-        assert_eq!(app.sources.depth_manager.ref_count(0), 2);
+        let device = app.render.context.device.clone();
+        let depth = app
+            .sources
+            .service_mut::<crate::depth::DepthSensorManager>();
+        depth.open_mock(0, 32, 24, &device).expect("open mock");
+        depth.open_mock(0, 32, 24, &device).expect("share mock");
+        assert_eq!(app.depth_manager().ref_count(0), 2);
 
         let ch0 = channel_uuid(&app, 0);
+        let ch_idx = app.mixer.resolve_channel(&ch0).expect("channel");
         let mut uuids = Vec::new();
         for _ in 0..2 {
-            let deck = Deck::new_from_depth_sensor(
-                &app.render.context,
-                0,
-                "Mock Depth (#0)",
-                32,
-                24,
-                64,
-                64,
-            )
-            .expect("build depth deck");
+            let source = crate::depth::provider::DepthSensor::for_open_sensor(0, "Mock Depth (#0)");
+            let deck = Deck::from_source(&app.render.context, Box::new(source), 64, 64);
             uuids.push(deck.uuid().to_string());
-            let ch_idx = app.mixer.resolve_channel(&ch0).expect("channel");
             app.mixer
                 .channel_mut(ch_idx)
                 .expect("channel")
                 .add_deck(deck);
         }
+        let (first, second) = (uuids[0].clone(), uuids[1].clone());
 
-        app.remove_deck(&uuids[0]).expect("remove first");
+        app.remove_deck(&first).expect("remove first");
         assert_eq!(
-            app.sources.depth_manager.ref_count(0),
+            app.depth_manager().ref_count(0),
             1,
             "one consumer left, session must stay open"
         );
 
-        app.remove_deck(&uuids[1]).expect("remove second");
+        app.remove_deck(&second).expect("remove second");
         assert!(
-            !app.sources.depth_manager.is_active(0),
+            !app.depth_manager().is_active(0),
             "last consumer removed — the capture session must be torn down"
         );
     }

@@ -86,8 +86,7 @@ fn the_device_still_works_after_a_validation_error() {
     // A validation error drops the offending command; it does not lose the
     // device. Quarantining one deck and carrying on is only sound if that holds,
     // so assert it rather than assume it.
-    let deck = varda::deck::Deck::new_solid_color(&gpu, [0.2, 0.4, 0.6, 1.0], 32, 32)
-        .expect("deck builds after a validation error");
+    let deck = varda::deck::Deck::solid_color(&gpu, [0.2, 0.4, 0.6, 1.0], 32, 32);
     let audio = varda::audio::AudioData::default();
     let modulation = varda::modulation::ModulationEngine::new();
     let mut deck = deck;

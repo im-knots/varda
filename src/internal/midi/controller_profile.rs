@@ -707,9 +707,8 @@ mod tests {
         mixer.channel_mut(0).unwrap().opacity = 0.42;
 
         // Two decks in channel 0; capture the second (positional index 1).
-        let first = crate::deck::Deck::new_solid_color(&gpu, [1.0, 0.0, 0.0, 1.0], 64, 64).unwrap();
-        let second =
-            crate::deck::Deck::new_solid_color(&gpu, [0.0, 1.0, 0.0, 1.0], 64, 64).unwrap();
+        let first = crate::deck::Deck::solid_color(&gpu, [1.0, 0.0, 0.0, 1.0], 64, 64);
+        let second = crate::deck::Deck::solid_color(&gpu, [0.0, 1.0, 0.0, 1.0], 64, 64);
         mixer.channel_mut(0).unwrap().add_deck(first);
         mixer.channel_mut(0).unwrap().add_deck(second);
         let deck_uuid = mixer.channel(0).unwrap().decks[1].deck.uuid().to_string();

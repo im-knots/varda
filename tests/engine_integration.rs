@@ -69,9 +69,9 @@ fn multi_step_add_deck_set_opacity_verify() {
     let ch = channel_uuid(&mut app, 0);
     let deck = new_uuid(send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [1.0, 0.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
         },
     ));
     fire(
@@ -92,9 +92,9 @@ fn add_deck_add_effect_verify_chain() {
     let ch = channel_uuid(&mut app, 0);
     let deck = new_uuid(send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [0.0, 1.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([0.0, 1.0, 0.0, 1.0]),
         },
     ));
     let r = send_cmd(
@@ -448,9 +448,9 @@ fn a_recorded_pass_becomes_a_curve_on_a_parameter_that_had_none() {
     let ch = channel_uuid(&mut app, 0);
     let deck = new_uuid(send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [1.0, 1.0, 1.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 1.0, 1.0, 1.0]),
         },
     ));
     let key = varda::arrangement::opacity_param_key(&deck);
@@ -513,9 +513,9 @@ fn nothing_is_recorded_while_the_transport_is_not_running() {
     let ch = channel_uuid(&mut app, 0);
     let deck = new_uuid(send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [1.0, 1.0, 1.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 1.0, 1.0, 1.0]),
         },
     ));
     fire(&mut app, EngineCommand::SetRecordArmed { armed: true });
@@ -626,14 +626,25 @@ fn a_curve_on_a_channel_fader_drives_the_composite() {
 /// the command has to report the write itself.
 ///
 /// Scaling mode is the one playback parameter that applies to any deck with a
-/// source texture, so it is the one this can prove without a video file.
+/// source texture, so an image deck proves this without a video file.
 #[test]
 fn a_hand_on_a_playback_control_takes_its_lane_back() {
     use varda::modulation::Breakpoint;
-    let Some((mut app, deck)) = app_with_one_region(0.0, 30.0) else {
+    let Some(mut app) = headless_app() else {
         return;
     };
-    let target = format!("deck/{deck}/{}", varda::video::modulation::SCALING_MODE);
+    let ch = channel_uuid(&mut app, 0);
+    let icon = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icon.png");
+    let deck = new_uuid(send_cmd(
+        &mut app,
+        EngineCommand::AddDeck {
+            channel_uuid: ch,
+            source: varda::still::Image::config_for(icon),
+        },
+    ));
+    settle_deck_loads(&mut app);
+    add_region(&mut app, &deck, 0.0, 30.0);
+    let target = format!("deck/{deck}/{}", varda::source::SCALING_MODE);
     let envelope = new_uuid(send_cmd(
         &mut app,
         EngineCommand::AddAutomationLane {
@@ -661,9 +672,10 @@ fn a_hand_on_a_playback_control_takes_its_lane_back() {
 
     fire(
         &mut app,
-        EngineCommand::SetDeckScalingMode {
+        EngineCommand::SetSourceParam {
             deck_uuid: deck.clone(),
-            mode: varda::deck::ScalingMode::Center,
+            name: "scaling_mode".into(),
+            value: varda::source::ControlValue::Float(0.9),
         },
     );
     step(&mut app);
@@ -687,9 +699,10 @@ fn a_playback_gesture_on_a_missing_deck_holds_nothing() {
     run_from(&mut app, 5.0);
     fire(
         &mut app,
-        EngineCommand::SetDeckScalingMode {
+        EngineCommand::SetSourceParam {
             deck_uuid: "no-such-deck".to_string(),
-            mode: varda::deck::ScalingMode::Center,
+            name: "scaling_mode".into(),
+            value: varda::source::ControlValue::Float(0.9),
         },
     );
     step(&mut app);
@@ -891,9 +904,9 @@ fn macro_value_modulation_drives_targets_live() {
     let ch = channel_uuid(&mut app, 0);
     let deck_uuid = new_uuid(send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [1.0, 0.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
         },
     ));
 
@@ -1034,16 +1047,16 @@ fn deck_solo_mute_interactions() {
     let ch = channel_uuid(&mut app, 0);
     let first = new_uuid(send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch.clone(),
-            color: [1.0, 0.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
         },
     ));
     let second = new_uuid(send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [0.0, 0.0, 1.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([0.0, 0.0, 1.0, 1.0]),
         },
     ));
     fire(
@@ -1088,9 +1101,9 @@ fn blend_mode_roundtrip() {
     let ch = channel_uuid(&mut app, 0);
     let deck = new_uuid(send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [1.0, 1.0, 1.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 1.0, 1.0, 1.0]),
         },
     ));
     fire(
@@ -1122,9 +1135,9 @@ fn render_frames_after_mutations() {
     let ch = channel_uuid(&mut app, 0);
     send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [1.0, 0.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
         },
     );
     fire(&mut app, EngineCommand::SetCrossfader(0.5));
@@ -1288,9 +1301,9 @@ fn publish_state_reflects_mutations() {
     let ch = channel_uuid(&mut app, 0);
     send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [1.0, 0.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
         },
     );
     app.publish_state();
@@ -1306,9 +1319,9 @@ fn effect_toggle_and_remove() {
     let ch = channel_uuid(&mut app, 0);
     let deck = new_uuid(send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [1.0, 0.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
         },
     ));
     let effect = new_uuid(send_cmd(
@@ -1353,9 +1366,9 @@ fn move_deck_between_channels() {
     let ch1 = channel_uuid(&mut app, 1);
     let deck = new_uuid(send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch0,
-            color: [1.0, 0.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
         },
     ));
     let before_ch0 = app.build_engine_state().mixer.channels[0].decks.len();
@@ -1382,16 +1395,16 @@ fn reorder_deck_via_command() {
     let ch = channel_uuid(&mut app, 0);
     let first = new_uuid(send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch.clone(),
-            color: [1.0, 0.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
         },
     ));
     let second = new_uuid(send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch.clone(),
-            color: [0.0, 1.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([0.0, 1.0, 0.0, 1.0]),
         },
     ));
     let r = send_cmd(
@@ -1423,9 +1436,9 @@ fn chaos_unknown_channel_uuid_does_not_panic() {
     // Add deck to a channel that does not exist
     let r = send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: "no-such-channel".into(),
-            color: [1.0, 0.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
         },
     );
     assert!(
@@ -1481,9 +1494,9 @@ fn chaos_unknown_deck_uuid_errors_not_found() {
     let ch1 = channel_uuid(&mut app, 1);
     let deck = new_uuid(send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch0,
-            color: [1.0, 0.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
         },
     ));
     let is_not_found = |r: &CommandResult| {
@@ -1555,9 +1568,9 @@ fn chaos_nan_opacity_via_command() {
     let ch = channel_uuid(&mut app, 0);
     let deck = new_uuid(send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch.clone(),
-            color: [1.0, 0.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
         },
     ));
     fire(
@@ -1668,9 +1681,9 @@ fn chaos_rapid_deck_add_remove_cycle() {
         let color = [(i as f32) / 20.0, 0.0, 0.0, 1.0];
         decks.push(new_uuid(send_cmd(
             &mut app,
-            EngineCommand::AddSolidColorDeck {
+            EngineCommand::AddDeck {
                 channel_uuid: ch.clone(),
-                color,
+                source: varda::solid_color::SolidColor::config_for(color),
             },
         )));
     }
@@ -1736,9 +1749,9 @@ fn chaos_interleaved_add_remove_render() {
     for _ in 0..10 {
         let deck = new_uuid(send_cmd(
             &mut app,
-            EngineCommand::AddSolidColorDeck {
+            EngineCommand::AddDeck {
                 channel_uuid: ch.clone(),
-                color: [1.0, 1.0, 1.0, 1.0],
+                source: varda::solid_color::SolidColor::config_for([1.0, 1.0, 1.0, 1.0]),
             },
         ));
         app.update_frame_timing();
@@ -1809,16 +1822,16 @@ fn chaos_command_storm_crossfader_sweep() {
     let ch1 = channel_uuid(&mut app, 1);
     send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch0,
-            color: [1.0, 0.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
         },
     );
     send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch1,
-            color: [0.0, 0.0, 1.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([0.0, 0.0, 1.0, 1.0]),
         },
     );
     // Sweep crossfader through 100 steps while rendering
@@ -1843,9 +1856,9 @@ fn chaos_command_storm_opacity_sweep() {
     let ch = channel_uuid(&mut app, 0);
     let deck = new_uuid(send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [1.0, 0.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
         },
     ));
     // Sweep deck opacity 0→1→0 rapidly
@@ -1883,9 +1896,9 @@ fn chaos_command_storm_mixed_mutations() {
     let ch1 = channel_uuid(&mut app, 1);
     let deck = new_uuid(send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch0.clone(),
-            color: [1.0, 0.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
         },
     ));
     // Fire 50 rapid mixed commands without rendering between them
@@ -1897,9 +1910,9 @@ fn chaos_command_storm_mixed_mutations() {
                 channel_uuid: ch0.clone(),
                 opacity: (50 - i) as f32 / 50.0,
             },
-            2 => EngineCommand::AddSolidColorDeck {
+            2 => EngineCommand::AddDeck {
                 channel_uuid: if i % 2 == 0 { ch0.clone() } else { ch1.clone() },
-                color: [1.0, 1.0, 1.0, 1.0],
+                source: varda::solid_color::SolidColor::config_for([1.0, 1.0, 1.0, 1.0]),
             },
             3 => EngineCommand::SetDeckOpacity {
                 deck_uuid: deck.clone(),
@@ -1928,16 +1941,16 @@ fn chaos_render_many_frames_with_content() {
     let ch1 = channel_uuid(&mut app, 1);
     send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch0,
-            color: [1.0, 0.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
         },
     );
     send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch1,
-            color: [0.0, 1.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([0.0, 1.0, 0.0, 1.0]),
         },
     );
     // Render 100 frames — looking for GPU resource leaks or accumulation bugs
@@ -1958,16 +1971,16 @@ fn chaos_crossfader_extremes_render() {
     let ch1 = channel_uuid(&mut app, 1);
     send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch0,
-            color: [1.0, 0.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
         },
     );
     send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch1,
-            color: [0.0, 0.0, 1.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([0.0, 0.0, 1.0, 1.0]),
         },
     );
     for &val in &[0.0, 1.0, -1.0, 2.0, -100.0, 100.0, f32::MIN, f32::MAX] {
@@ -1985,9 +1998,9 @@ fn chaos_opacity_extremes_render() {
     let ch = channel_uuid(&mut app, 0);
     let deck = new_uuid(send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch.clone(),
-            color: [1.0, 0.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
         },
     ));
     for &val in &[
@@ -2032,9 +2045,9 @@ fn chaos_resolution_change_during_render() {
     let ch = channel_uuid(&mut app, 0);
     send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [1.0, 0.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
         },
     );
     app.update_frame_timing();
@@ -2077,16 +2090,16 @@ fn chaos_blend_mode_rapid_cycling() {
     let ch = channel_uuid(&mut app, 0);
     send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch.clone(),
-            color: [1.0, 0.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
         },
     );
     let top = new_uuid(send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [0.0, 1.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([0.0, 1.0, 0.0, 1.0]),
         },
     ));
     let modes = [
@@ -2121,9 +2134,9 @@ fn chaos_solo_mute_all_decks() {
         let c = i as f32 / 5.0;
         decks.push(new_uuid(send_cmd(
             &mut app,
-            EngineCommand::AddSolidColorDeck {
+            EngineCommand::AddDeck {
                 channel_uuid: ch.clone(),
-                color: [c, c, c, 1.0],
+                source: varda::solid_color::SolidColor::config_for([c, c, c, 1.0]),
             },
         )));
     }
@@ -2186,16 +2199,16 @@ fn chaos_state_consistency_after_storm() {
     for ch in &channels {
         let first = new_uuid(send_cmd(
             &mut app,
-            EngineCommand::AddSolidColorDeck {
+            EngineCommand::AddDeck {
                 channel_uuid: ch.clone(),
-                color: [1.0, 0.0, 0.0, 1.0],
+                source: varda::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
             },
         ));
         let second = new_uuid(send_cmd(
             &mut app,
-            EngineCommand::AddSolidColorDeck {
+            EngineCommand::AddDeck {
                 channel_uuid: ch.clone(),
-                color: [0.0, 1.0, 0.0, 1.0],
+                source: varda::solid_color::SolidColor::config_for([0.0, 1.0, 0.0, 1.0]),
             },
         ));
         decks.push(vec![first, second]);
@@ -2240,7 +2253,7 @@ fn chaos_state_consistency_after_storm() {
 /// per-assignment mesh warp.
 #[test]
 fn mesh_warp_subdivide_and_drag_point() {
-    use varda::renderer::context::{OutputSource, OutputTarget};
+    use varda::renderer::context::OutputSource;
     use varda::surface::warp::WarpMode;
 
     let Some(mut app) = headless_app() else {
@@ -2266,10 +2279,8 @@ fn mesh_warp_subdivide_and_drag_point() {
         .clone();
     send_cmd(
         &mut app,
-        EngineCommand::CreateHeadlessOutput {
-            target: OutputTarget::NdiSend {
-                sender_name: "Warp Out".into(),
-            },
+        EngineCommand::CreateOutput {
+            sink: varda::output::SinkConfig::new("ndi_send").with("sender_name", "Warp Out"),
         },
     );
     let output_uuid = app
@@ -2647,9 +2658,9 @@ fn add_effect_on_unknown_target_is_not_found_and_creates_nothing() {
     let ch = channel_uuid(&mut app, 0);
     let deck = new_uuid(send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [1.0, 1.0, 1.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 1.0, 1.0, 1.0]),
         },
     ));
 
@@ -2710,9 +2721,9 @@ fn add_effect_reports_a_uuid_that_resolves_in_the_next_snapshot() {
     let ch = channel_uuid(&mut app, 0);
     let deck = new_uuid(send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch.clone(),
-            color: [1.0, 1.0, 1.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 1.0, 1.0, 1.0]),
         },
     ));
 
@@ -2820,14 +2831,32 @@ fn remove_unknown_modulation_source_is_a_silent_noop() {
 // region compiled to an envelope, transport moved, deck opacity out.
 
 /// A deck with one hard-edged region on it.
+/// Run frames until every background deck load has attached or failed.
+fn settle_deck_loads(app: &mut VardaApp) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while app
+        .build_engine_state()
+        .deck_loads
+        .iter()
+        .any(|l| l.status == varda::engine::DeckLoadStatus::Loading)
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "deck loads never finished"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        app.process_commands();
+    }
+}
+
 fn app_with_one_region(start: f64, end: f64) -> Option<(VardaApp, String)> {
     let mut app = headless_app()?;
     let ch = channel_uuid(&mut app, 0);
     let deck = new_uuid(send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [1.0, 1.0, 1.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 1.0, 1.0, 1.0]),
         },
     ));
     add_region(&mut app, &deck, start, end);
@@ -3318,9 +3347,9 @@ fn deleting_a_channel_takes_its_decks_lanes_with_it() {
     let spare = channel_uuid(&mut app, 2);
     let stranger = new_uuid(send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: spare,
-            color: [1.0, 1.0, 1.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 1.0, 1.0, 1.0]),
         },
     ));
     add_region(&mut app, &stranger, 30.0, 40.0);
@@ -3383,9 +3412,9 @@ fn re_arming_everything_hands_back_every_parameter() {
     let ch = channel_uuid(&mut app, 0);
     let second = new_uuid(send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [1.0, 1.0, 1.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 1.0, 1.0, 1.0]),
         },
     ));
     add_region(&mut app, &second, 10.0, 20.0);
@@ -4200,17 +4229,14 @@ fn a_sequence_cannot_start_while_the_arrangement_has_authority() {
 #[test]
 fn presentation_request_keeps_ten_bit_intent_and_reports_ndi_fallback() {
     use varda::engine::value::render::{PresentationDepth, PresentationRequest};
-    use varda::renderer::context::OutputTarget;
 
     let Some(mut app) = headless_app() else {
         return;
     };
     send_cmd(
         &mut app,
-        EngineCommand::CreateHeadlessOutput {
-            target: OutputTarget::NdiSend {
-                sender_name: "Precision Test".into(),
-            },
+        EngineCommand::CreateOutput {
+            sink: varda::output::SinkConfig::new("ndi_send").with("sender_name", "Precision Test"),
         },
     );
     let output_uuid = app
@@ -4254,17 +4280,15 @@ fn presentation_request_keeps_ten_bit_intent_and_reports_ndi_fallback() {
 #[test]
 fn output_tonemap_override_is_settable_and_clearable_through_the_engine() {
     use varda::engine::value::render::TonemapMode;
-    use varda::renderer::context::OutputTarget;
 
     let Some(mut app) = headless_app() else {
         return;
     };
     send_cmd(
         &mut app,
-        EngineCommand::CreateHeadlessOutput {
-            target: OutputTarget::NdiSend {
-                sender_name: "Tonemap Override".into(),
-            },
+        EngineCommand::CreateOutput {
+            sink: varda::output::SinkConfig::new("ndi_send")
+                .with("sender_name", "Tonemap Override"),
         },
     );
     let output_uuid = last_output_uuid(&mut app);
@@ -4322,7 +4346,6 @@ fn output_tonemap_override_is_settable_and_clearable_through_the_engine() {
 #[test]
 fn output_tonemap_override_does_not_disturb_the_show_wide_curve() {
     use varda::engine::value::render::TonemapMode;
-    use varda::renderer::context::OutputTarget;
 
     let Some(mut app) = headless_app() else {
         return;
@@ -4330,10 +4353,8 @@ fn output_tonemap_override_does_not_disturb_the_show_wide_curve() {
     send_cmd(&mut app, EngineCommand::SetTonemapMode(TonemapMode::Aces));
     send_cmd(
         &mut app,
-        EngineCommand::CreateHeadlessOutput {
-            target: OutputTarget::NdiSend {
-                sender_name: "Independent".into(),
-            },
+        EngineCommand::CreateOutput {
+            sink: varda::output::SinkConfig::new("ndi_send").with("sender_name", "Independent"),
         },
     );
     let output_uuid = last_output_uuid(&mut app);
@@ -4413,21 +4434,19 @@ fn presentation_request_unknown_output_is_not_found() {
 }
 
 #[test]
-fn presentation_request_keeps_ten_bit_intent_on_syphon_fallback() {
-    use varda::engine::value::render::{
-        PresentationDepth, PresentationPixelFormat, PresentationRequest,
-    };
-    use varda::renderer::context::OutputTarget;
+fn presentation_request_keeps_ten_bit_intent_on_an_eight_bit_fallback() {
+    use varda::engine::value::render::{PresentationDepth, PresentationRequest};
 
     let Some(mut app) = headless_app() else {
         return;
     };
     send_cmd(
         &mut app,
-        EngineCommand::CreateHeadlessOutput {
-            target: OutputTarget::SyphonServer {
-                server_name: "Precision Syphon".into(),
-            },
+        EngineCommand::CreateOutput {
+            // H.264 is eight-bit whatever FFmpeg is installed.
+            sink: varda::output::SinkConfig::new("recording")
+                .with("path", "precision.mp4")
+                .with("codec", "H.264"),
         },
     );
     let output_uuid = last_output_uuid(&mut app);
@@ -4458,10 +4477,6 @@ fn presentation_request_keeps_ten_bit_intent_on_syphon_fallback() {
     assert_eq!(
         output.resolved_presentation.resolved,
         PresentationDepth::Sdr8
-    );
-    assert_eq!(
-        output.resolved_presentation.pixel_format,
-        PresentationPixelFormat::Bgra8
     );
     assert!(output.resolved_presentation.fallback_reason.is_some());
 }
@@ -4494,17 +4509,14 @@ fn chaos_unknown_output_uuid_presentation_does_not_panic() {
 #[test]
 fn chaos_rapid_presentation_toggle_while_rendering() {
     use varda::engine::value::render::{PresentationDepth, PresentationRequest};
-    use varda::renderer::context::OutputTarget;
 
     let Some(mut app) = headless_app() else {
         return;
     };
     send_cmd(
         &mut app,
-        EngineCommand::CreateHeadlessOutput {
-            target: OutputTarget::NdiSend {
-                sender_name: "Storm".into(),
-            },
+        EngineCommand::CreateOutput {
+            sink: varda::output::SinkConfig::new("ndi_send").with("sender_name", "Storm"),
         },
     );
     let output_uuid = last_output_uuid(&mut app);
@@ -4547,45 +4559,36 @@ fn chaos_retarget_and_presentation_storm() {
     use varda::engine::value::render::{
         PresentationDepth, PresentationRequest, RecordingCodec, StreamingCodec,
     };
-    use varda::renderer::context::OutputTarget;
 
     let Some(mut app) = headless_app() else {
         return;
     };
     send_cmd(
         &mut app,
-        EngineCommand::CreateHeadlessOutput {
-            target: OutputTarget::NdiSend {
-                sender_name: "Storm".into(),
-            },
+        EngineCommand::CreateOutput {
+            sink: varda::output::SinkConfig::new("ndi_send").with("sender_name", "Storm"),
         },
     );
     let output_uuid = last_output_uuid(&mut app);
     let targets = [
-        OutputTarget::SyphonServer {
-            server_name: "Storm Syphon".into(),
-        },
-        OutputTarget::Recording {
-            path: "/tmp/varda-chaos-presentation.mov".into(),
-            codec: RecordingCodec::Hap,
-            audio_device: None,
-        },
-        OutputTarget::HlsStream {
-            name: "storm".into(),
-            codec: StreamingCodec::H265,
-            short_segments: true,
-            audio_device: None,
-        },
-        OutputTarget::NdiSend {
-            sender_name: "Storm".into(),
-        },
+        varda::output::SinkConfig::new("syphon_server").with("server_name", "Storm Syphon"),
+        varda::output::SinkConfig::new("recording")
+            .with("path", "/tmp/varda-chaos-presentation.mov")
+            .with("codec", (RecordingCodec::Hap).to_string())
+            .with("audio_device", None::<String>),
+        varda::output::SinkConfig::new("hls_stream")
+            .with("name", "storm")
+            .with("codec", (StreamingCodec::H265).to_string())
+            .with("short_segments", true)
+            .with("audio_device", None::<String>),
+        varda::output::SinkConfig::new("ndi_send").with("sender_name", "Storm"),
     ];
     for (i, target) in targets.into_iter().cycle().take(24).enumerate() {
         fire(
             &mut app,
             EngineCommand::SetOutputTarget {
                 output_uuid: output_uuid.clone(),
-                target,
+                sink: target,
             },
         );
         fire(
@@ -4623,7 +4626,6 @@ fn chaos_retarget_and_presentation_storm() {
 #[test]
 fn chaos_create_close_presentation_cycle() {
     use varda::engine::value::render::{PresentationDepth, PresentationRequest};
-    use varda::renderer::context::OutputTarget;
 
     let Some(mut app) = headless_app() else {
         return;
@@ -4631,10 +4633,9 @@ fn chaos_create_close_presentation_cycle() {
     for i in 0..16 {
         send_cmd(
             &mut app,
-            EngineCommand::CreateHeadlessOutput {
-                target: OutputTarget::NdiSend {
-                    sender_name: format!("Cycle {i}"),
-                },
+            EngineCommand::CreateOutput {
+                sink: varda::output::SinkConfig::new("ndi_send")
+                    .with("sender_name", format!("Cycle {i}")),
             },
         );
         let output_uuid = last_output_uuid(&mut app);
@@ -4672,20 +4673,18 @@ fn chaos_create_close_presentation_cycle() {
 #[test]
 fn a_stream_outputs_availability_tracks_its_codec_through_the_engine() {
     use varda::engine::value::render::{PresentationMode, StreamingCodec};
-    use varda::renderer::context::OutputTarget;
 
     let Some(mut app) = headless_app() else {
         return;
     };
     send_cmd(
         &mut app,
-        EngineCommand::CreateHeadlessOutput {
-            target: OutputTarget::HlsStream {
-                name: "offer-test".into(),
-                codec: StreamingCodec::H264,
-                short_segments: false,
-                audio_device: None,
-            },
+        EngineCommand::CreateOutput {
+            sink: varda::output::SinkConfig::new("hls_stream")
+                .with("name", "offer-test")
+                .with("codec", (StreamingCodec::H264).to_string())
+                .with("short_segments", false)
+                .with("audio_device", None::<String>),
         },
     );
     let output_uuid = last_output_uuid(&mut app);
@@ -4720,12 +4719,11 @@ fn a_stream_outputs_availability_tracks_its_codec_through_the_engine() {
             &mut app,
             EngineCommand::SetOutputTarget {
                 output_uuid: output_uuid.clone(),
-                target: OutputTarget::HlsStream {
-                    name: "offer-test".into(),
-                    codec: StreamingCodec::H265,
-                    short_segments: false,
-                    audio_device: None,
-                },
+                sink: varda::output::SinkConfig::new("hls_stream")
+                    .with("name", "offer-test")
+                    .with("codec", (StreamingCodec::H265).to_string())
+                    .with("short_segments", false)
+                    .with("audio_device", None::<String>),
             },
         ),
         CommandResult::Ok

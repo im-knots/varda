@@ -20,36 +20,31 @@ cargo test --test ui_integration   # GPU-free integration tests
 
 ## Architecture
 
-Varda is built with domain-driven design and clean architecture principles. Think Uncle Bob. The codebase separates concerns into four layers:
+The code has four layers:
 
 ```
 src/
   engine/        # contracts: EngineCommand, EngineState snapshots, engine::value types
   internal/      # domain modules (audio, camera, channel, deck, mixer, renderer, etc.)
-  app/           # application layer (VardaApp: owns the domain modules, dispatches commands, runs the frame)
-  usecases/      # delivery layer (UI panels, action handlers, HTTP API routes)
-  main.rs        # thin orchestrator: parse CLI, init logger, run UI
+  app/           # VardaApp: owns the domain modules, dispatches commands, runs the frame
+  usecases/      # UI panels, action handlers, HTTP API routes
+  main.rs        # parses the CLI, starts the logger, runs the UI
 ```
 
-The **engine layer** (`src/engine/`) defines the contracts every consumer speaks: the `EngineCommand` vocabulary, the `EngineState` snapshots, and the plain value types in `engine::value`, using only primitives and engine-defined types. No wgpu, egui, or framework types leak through.
+- **`engine/`** defines what every consumer speaks: the `EngineCommand` vocabulary, the `EngineState` snapshots, and plain value types in `engine::value`. It uses no wgpu, egui or framework types.
+- **`internal/`** holds domain modules, one concern each (audio analysis, video decoding, ISF compilation, NDI, the modulation engine). Each is tested on its own. The modules are ordered in tiers, and a module may only use modules below it. `tests/domain_dependency_guard.rs` holds the order. If a lower module needs something from a higher one, move the shared type down (often into `engine::value`) or pass the behavior in. Do not route it through `EngineCommand`, which is for consumers, not for domains. See `/spec/domain-dependencies.md`.
+- **`app/`** is the engine. `VardaApp` owns every subsystem, dispatches every `EngineCommand`, and runs the frame (`begin_frame`, `render_frame`). Work on one domain goes on that domain (`Mixer`, `SurfaceManager`, `MacroBank`); `app/` holds work that spans several. It runs without a window.
+- **`usecases/`** is the only layer that uses egui or HTTP routing. It reads snapshots and sends commands, and never mutates engine state. Two places in `app/` use `winit` directly: output windows (`app/outputs.rs`) and the HTML interactive window (`app/interactive/`). `tests/egui_layer_boundary_guard.rs` rejects egui types in `internal/` and `app/`.
 
-The **internal layer** (`src/internal/`) contains domain modules that each own one concern: audio analysis, video decoding, ISF shader compilation, NDI FFI, SRT subprocess management, the modulation engine, etc. Each module is independently testable.
+The GUI, the HTTP API and the tests all drive the same engine. A new feature usually needs a UI panel, an HTTP route and MIDI/OSC mapping.
 
-The domain modules are ordered bottom to top, in tiers: foundations (`ids`, `files`, `isf`, `audio`, …), time, GPU, signals, composition (`deck` → `channel` → `macros` → `mixer`), control (`param_router`, `midi`, `osc`, `keymap`), and saved files (`scene`, `persistence`). Production code may name only modules below it; `tests/domain_dependency_guard.rs` holds the order and fails on anything else. When a lower module needs something from a higher one, move the shared type down (often into `engine::value`) or have the higher module pass the behavior in. Don't route it through `EngineCommand`: commands are how consumers reach the engine, not how domains reach each other. See `/spec/domain-dependencies.md`.
+Network and file outputs (NDI, SRT, HLS/DASH, RTMP, recording) run in subprocesses or threads fed by bounded channels, so the render thread never waits on them. The renderer skips decks and channels at zero opacity, except the selected channel, which always renders so its preview works while it is off air.
 
-The **app layer** (`src/app/`, `VardaApp`) is the concrete engine. It owns every subsystem, grouped by what uses them (render target, audio, deck sources, outputs, inputs, show, session), dispatches every `EngineCommand`, and runs the frame through `begin_frame` and `render_frame`. An operation that touches one domain belongs on that domain (`Mixer`, `SurfaceManager`, `MacroBank`, ...); `app/` holds the work that spans several. It can run headless without any window or UI.
+### Addresses
 
-The **usecases layer** (`src/usecases/`) is the only place that touches egui or HTTP routing, and owns all *main-window* presentation (blit pipeline, texture registration, `UIData` construction). It reads engine state snapshots and emits `EngineCommand`s. The UI never mutates engine state directly; commands flow through the app layer. Two documented exceptions touch `winit` (not egui) directly in `app/`: output windows (`app/outputs.rs`, `app/render.rs`) and the HTML interactive window (`app/interactive/`). `tests/egui_layer_boundary_guard.rs` rejects egui types in `src/internal/` and `src/app/`.
+Channels, decks, effects, surfaces and outputs get an 8-character hex UUID (such as `a3f1b20c`) when created. The UUID survives moves, reorders and save/restore, so MIDI mappings and modulation keep working after you rearrange things.
 
-This separation means the same engine can be driven from the GUI, the HTTP API, or a test harness without changing engine code. When adding a feature, think about whether it needs updates in *all* delivery paths (UI panel, HTTP route, MIDI/OSC mapping) or just one.
-
-External I/O (NDI, SRT, HLS/DASH, RTMP, and recording) uses a non-blocking subprocess architecture with bounded channels to keep the render thread fast. GPU work is batched into minimal command buffer submissions. The render pass culls zero opacity decks and channels so you only pay for whats live with one exception: the currently selected channel is force rendered even when off-air, so you can cue and build a composition on it and watch its preview update live without it touching the output.
-
-### Entity Identity & Address Scheme
-
-Every mutable entity in the signal graph (channels, decks, effects, surfaces, and outputs) is assigned a stable 8-character hex UUID on creation (e.g. `a3f1b20c`). UUIDs persist across moves, reorders, and scene save/restore. This means MIDI mappings, modulation assignments, and scene references never break when you rearrange your setup. Outputs (windowed, recording, NDI, SRT) carry their own UUIDs so surface assignments and saved window positions survive reconfiguration.
-
-Parameters are addressed with a slash-delimited path rooted at the entity UUID:
+Parameters are addressed by a path starting at the UUID:
 
 ```
 crossfader                              # mixer crossfader position
@@ -70,123 +65,99 @@ mod/<uuid>/<param_name>                 # modulation source param (frequency, am
 mod/<uuid>/step/<step_idx>              # step sequencer step value
 macro/<uuid>/value                      # macro control
 
-surface/<uuid>/source                   # surface content source (Master, Channel, Channels, Deck)
-output/<uuid>/surface/<surface_uuid>    # output ↔ surface assignment with warp calibration
+surface/<uuid>/source                   # surface content: master, ch/<uuid>, chs/<uuid>,<uuid>, deck/<uuid>, domemaster
+output/<uuid>/start | stop | active     # start, stop or toggle an output
+output/<uuid>/calibration | rotation    # calibration card and rotation
+output/<uuid>/surface/<surface_uuid>    # whether a surface is shown on the output
+output/<uuid>/<name>                    # one of the output's sink settings
 ```
 
-Modulation keys are these same paths, so the modulation engine can route LFOs, envelopes, and audio reactive sources to any parameter in the graph without coupling to positional indices. In code, build a path with an `engine::value::param::ParamAddress` constructor (`ParamAddress::deck_param`, `ParamAddress::effect_param`, …) rather than `format!`; it is the one parser and printer for the scheme.
+MIDI learn, OSC, modulation and the HTTP API all use these paths. Build them with `engine::value::param::ParamAddress` (`ParamAddress::deck_param`, `ParamAddress::effect_param`, ...), not `format!`. New entities and parameters use the same scheme.
 
-When adding a new entity type or parameter, follow this scheme rather than inventing a new addressing convention. MIDI learn, OSC, modulation routing, and the HTTP API all key off of it.
+### Adding a Deck Source
+
+Every deck source (shader, clip, camera, NDI feed, web page) is a provider. A new one needs:
+
+1. **A provider module next to its backend** in `src/internal/` (for example `internal/camera/provider.rs` or `internal/solid_color.rs`), implementing two traits from `crate::source`:
+   - `DeckSourceProvider`, once per type: `id`, `label`, `icon`, the controls every deck of the type has (`params`), what the library panel offers (`library`), and `create` (or `loader` to build off the render thread). Optional: `tick`, `prepare`, `release`, `restore`.
+   - `DeckSourceInstance`, once per deck: `render`, `config`, and `param`/`set_param`/`trigger`. Optional: `control`, `upload`, resizing.
+2. **One line in `src/app/sources.rs`** registering it.
+
+The library panel, the deck controls, the deck API routes, save and restore, undo, MIDI learn and modulation then work through the traits. `tests/deck_source_guard.rs` fails if a source type id appears anywhere else in `src/`.
+
+- **Never rename the id.** It is the `type` tag in every `scene.json` (`{"type": "Video", "path": ...}`). Use CamelCase. A scene with an unknown type keeps it as a placeholder deck.
+- **Declare controls as `ControlSpec`s** (`float`, `toggle`, `choice`, `color`, `text`, `action`, ...). `routed("my_source/thing")` makes a control addressable as `deck/<uuid>/my_source/thing`; `modulatable()` lets an LFO drive it. Numeric controls take `0.0` to `1.0`. Widget hints (`Transport`, `Orbit`, `CropRect`) group controls into richer widgets; a new hint is a GUI change.
+- **Shared devices go through `Services`.** Register a device manager that other features use (cameras, depth sensors, NDI) in `source_services` in `app/sources.rs`, and reach it with `env.services.get_mut::<MyManager>()`.
+- **Test the provider directly** by building a `SourceEnv` with an empty `Services` and `ShaderRegistry` and calling `create`, as `tests/render_correctness.rs` does. Get the GPU from `varda::testing::headless_gpu()` and an engine from `varda::testing::headless_app()`: they skip when there is no adapter, fail under `VARDA_REQUIRE_GPU=1` (as CI runs), and fail when the engine does not build.
+
+### Adding an Output Type
+
+Every output (window, display, recording, stream, NDI sender, Syphon or Spout server) is a sink provider from `crate::output`. A new one is a module next to its backend plus one line in `output_sinks` in `src/app/sources.rs`.
+
+- `OutputSinkProvider`, once per type: `id`, `label`, `icon`, `params`, `default_config`, `availability`, an optional `library` (the display type lists monitors), and `create`.
+- `OutputSinkInstance`, once per output: `config`, `frame_path` (`Present` for a window, `Gpu` for a shared texture, `Converted` for NDI, `Readback` for ffmpeg), `configure` to resolve a presentation request, and the per-frame hooks for its path (`acquire`/`present`, `encode`, `publish`, `deliver`). Recordings and streams also implement `startable`, `start` and `stop`.
+
+`Output` in `internal/output/compose.rs` composes surfaces, edge blend and rotation, so a sink only gets the finished texture. A sink that needs a window asks through `window_request` and gets it in `attach_window`. The id is the `type` tag in `stage.json` (snake_case, never renamed). Settings are `ControlSpec`s, addressable at `output/<uuid>/<name>`. `tests/deck_source_guard.rs` checks sink ids like source ids.
 
 ## Engineering Practices
 
-These are the practices we hold changes to. They apply whether you're fixing a bug or adding a feature.
-
-- **Match existing layering.** New subsystems belong in `src/internal/` as an independently-testable domain module, wired together in `src/app/`, and exposed through `src/usecases/` (UI panel and/or HTTP route). Don't reach across layers — the UI and API should never mutate engine state directly, only emit actions/commands.
-- **Consider every delivery path.** A new feature usually needs a UI panel, an HTTP route, and MIDI/OSC/keyboard mappability. Plan for all of them, not just the one you're testing against.
-- **Test-driven, and tests stay green.** Write tests alongside new code, and update existing tests when you change the code they cover. Run `cargo test --lib` and `cargo test --test ui_integration` before opening a PR — see [`tests/`](tests/) for the full suite (some integration tests require a GPU adapter and are gated separately in CI).
-- **No dead code.** Remove old code paths when you replace them; don't leave unused branches or backwards-compatibility shims around "just in case." Refactor in place rather than duplicating a module under a new name.
-- **`.varda/` compatibility.** If a change alters the shape of `scene.json`, `stage.json`, or anything else persisted under `.varda/`, call it out explicitly in your PR description. Prefer backwards-compatible migrations, but don't contort the design to preserve compatibility with old files — flag the break and describe the migration path instead.
-- **Use `log`, not `println!`.** Use the existing `log`/`env_logger` macros (`log::info!`, `log::warn!`, `log::error!`, etc.) so log output stays consistent and filterable; don't add ad hoc `println!`/`eprintln!` debugging output to committed code.
-- **Zero warnings, pedantic included.** `cargo clippy --all-targets -- -D warnings` and `cargo fmt --all -- --check` must be clean. CI enforces both (see `.github/workflows/clippy.yml` and `fmt.yml`) run them locally before pushing. `clippy::pedantic` is part of that gate — see [Lints](#lints) for how it is configured and when an `#[allow]` is acceptable.
-- **Performance-sensitive changes get benchmarked.** If your change touches rendering, compositing, GPU pipelines, audio processing, or another hot path, use the criterion harness in [`benches/`](benches/) — see [Benchmarking](#benchmarking) below for the suites and the before/after baseline workflow. Don't eyeball performance against a stale run; save a baseline before your change and compare after.
+- **Keep the layers.** New subsystems go in `src/internal/`, get wired in `src/app/`, and are exposed through `src/usecases/`. The UI and API only send commands.
+- **Cover every delivery path.** Plan for the UI panel, the HTTP route and MIDI/OSC/keyboard mapping.
+- **Write tests with the code**, and update tests when you change what they cover. Run `cargo test --lib` and `cargo test --test ui_integration` before opening a PR. Some integration tests need a GPU and run separately in CI; see [`tests/`](tests/).
+- **Delete replaced code.** No unused branches or compatibility shims. Change a module in place instead of copying it under a new name.
+- **Flag `.varda/` changes.** If a change alters `scene.json`, `stage.json` or anything else under `.varda/`, say so in the PR and describe the migration. Prefer migrating old files, but not at the cost of a worse design.
+- **Log with `log`** (`log::info!`, `log::warn!`, `log::error!`), not `println!`.
+- **No warnings.** `cargo clippy --all-targets -- -D warnings` (pedantic included, see [Lints](#lints)) and `cargo fmt --all -- --check` must pass. CI runs both.
+- **Benchmark hot paths.** Changes to rendering, compositing, GPU pipelines or audio need a before/after run; see [Benchmarking](#benchmarking).
 
 ## Lints
 
-The lint configuration lives in the `[lints.clippy]` section of `Cargo.toml`, not in CI flags or
-`#![allow]` attributes at the crate root. That means `cargo clippy` locally reproduces CI exactly,
-and the config applies uniformly to the library, the binary, tests, benches, and examples.
+Lint settings live in `[lints.clippy]` in `Cargo.toml`, so `cargo clippy` locally matches CI for the library, binary, tests, benches and examples. Do not put lint settings in CI flags or crate-root `#![allow]`s.
 
-`clippy::pedantic` is enabled at `warn`, and CI runs `cargo clippy --all-targets -- -D warnings`, so
-a pedantic finding fails your PR. Run it before pushing:
+`clippy::pedantic` is on at `warn`, and CI runs with `-D warnings`, so a pedantic finding fails the PR:
 
 ```sh
 cargo clippy --all-targets -- -D warnings
 ```
 
-**Clippy only sees code that compiles for your host platform.** Anything behind
-`#[cfg(target_os = "…")]` for a *different* OS is invisible to your local run — the NDI library
-loader, the CLI installer, shader search paths, and the Syphon restore path all have per-platform
-branches. `clippy.yml` therefore runs three jobs (linux, macos, windows) so every branch is linted
-somewhere. If CI reports a lint you cannot reproduce, check whether the file is platform-gated before
-assuming a version difference. The Windows job matches the release build's feature set
-(`--no-default-features --features face-detection,html,screen-capture`), since `depth` has no vcpkg port.
+Clippy only checks code compiled for your OS. Code behind `#[cfg(target_os = "...")]` for another OS (the NDI loader, the CLI installer, shader search paths, Syphon restore) is skipped locally, so `clippy.yml` runs on Linux, macOS and Windows. If CI reports a lint you cannot reproduce, check for platform gating first. The Windows job uses the release feature set (`--no-default-features --features face-detection,html,screen-capture`) because `depth` has no vcpkg port.
 
-Five pedantic lints are allowed crate-wide. Each has a rationale comment in `Cargo.toml`:
+Five pedantic lints are allowed crate-wide, each with a comment in `Cargo.toml`:
 
 | Lint | Why it's off |
 |---|---|
-| `cast_precision_loss`, `cast_possible_truncation`, `cast_sign_loss` | Pixel/sample/vertex math converts between integer extents and float coordinates constantly. The conversions are intentional, and the alternatives push `try_from` error handling into the render hot path. |
-| `must_use_candidate` | Fires on essentially every `&self` snapshot accessor in the engine trait impls — hundreds of attributes that catch no bugs. |
-| `too_many_lines` | The one deferred entry: ~130 functions exceed 100 lines and splitting them is a real refactor, not a lint fix. Tracked in [`/spec/roadmap.md`](spec/roadmap.md) § DEBT: Function Decomposition. |
+| `cast_precision_loss`, `cast_possible_truncation`, `cast_sign_loss` | Pixel, sample and vertex math converts between integers and floats everywhere, and `try_from` would add error handling to the render loop. |
+| `must_use_candidate` | Fires on hundreds of snapshot accessors and catches no bugs. |
+| `too_many_lines` | About 130 functions are over 100 lines. Splitting them is tracked in [`/spec/roadmap.md`](spec/roadmap.md) § DEBT: Function Decomposition. |
 
-Adding to that list needs a strong argument and a rationale comment — reach for it only when a lint's
-advice is wrong for the whole codebase, not when a specific site is awkward.
+Add to this list only when a lint is wrong for the whole codebase. `clippy::float_cmp` is also allowed in tests (see `src/lib.rs`), where assertions compare against literals the test just set.
 
-`clippy::float_cmp` is additionally allowed under `cfg(test)` only (see `src/lib.rs`): test
-assertions compare against the exact literals the test just assigned, where exact equality is the
-correct assertion. It stays live in non-test code, where an exact float comparison usually is a bug.
+Anywhere else, put a narrow `#[allow(clippy::lint_name)]` on the item with a one-line reason. Accepted cases:
 
-For a specific site, use a narrowly scoped `#[allow(clippy::lint_name)]` on the function, struct, or
-statement, with a one-line comment saying why. The cases that come up legitimately:
+- `many_single_char_names` and `similar_names` in geometry and DSP math, where `x`, `y`, `u`, `v`, `t` and `minx`/`miny` are the clearest names.
+- `float_cmp` in tests, as above.
 
-- **`many_single_char_names` / `similar_names` in geometry and DSP math.** `x`, `y`, `u`, `v`, `t`,
-  and pairs like `minx`/`miny` are the clearest possible names for bezier, matrix, and blend math.
-  Renaming them to satisfy the lint makes the math harder to read, which is the opposite of the point.
-- **`float_cmp` in tests** that assert against a literal the test itself just assigned. An exact
-  comparison is the correct assertion there; an epsilon would weaken it.
-
-Prefer a real fix everywhere else. "Fixing it is tedious" is not a rationale — in particular,
-`missing_errors_doc` and `missing_panics_doc` should be answered with an accurate `# Errors` /
-`# Panics` section describing the real failure conditions, not with an `#[allow]` or with filler
-prose like "Returns an error if it fails."
+Otherwise fix the finding. Answer `missing_errors_doc` and `missing_panics_doc` with `# Errors` and `# Panics` sections that name the real failure conditions.
 
 ## Benchmarking
 
-Criterion harness for the compositing pipeline and per-frame shader parameter buffer build. Ensures perf changes land with quantitative evidence.
-
-### Quick Start
+Benchmarks use criterion and live in [`benches/`](benches/), one file per hot path (compositing, shader parameters, modulation, audio, outputs, snapshots and others). Each file's header says what it measures.
 
 ```sh
-cargo bench --bench compositing      # GPU suites; needs an adapter, headless ok
-cargo bench --bench shader_params    # CPU suite
-
-./scripts/bench-smoke.sh             # --test on both, no sampling (CI/pre-commit)
+cargo bench --bench compositing      # GPU; needs an adapter, headless is fine
+cargo bench --bench shader_params    # CPU
+./scripts/bench-smoke.sh             # runs both once without sampling (CI, pre-commit)
 ```
 
-### Before/After Comparison
+Compare before and after a change in the same session:
 
 ```sh
 cargo bench --bench compositing -- --save-baseline pre
-# ... make your perf change ...
+# make the change
 cargo bench --bench compositing -- --baseline pre
 ```
 
-### GPU Suites (`benches/compositing.rs`)
-
-| Benchmark | What it measures |
-|---|---|
-| `channel_composite_solid` | Solid-color decks (LoadOp::Clear, no fragment shader). Slope across deck counts isolates per-deck copy-on-composite cost. |
-| `channel_composite_shader` | Same shape with `bars.fs` on every pixel. Difference vs solid at N decks ≈ N × per-deck shader execution cost. |
-| `mixer_crossfade` | Two channels through the crossfader at 50%. |
-
-A 60fps preflight panics if 8-deck solid composite at 1080p exceeds the 16.67ms frame budget. Disable with `VARDA_BENCH_SKIP_SLO=1`. After the criterion groups, a per-deck slope (decks/8 − decks/1, ÷ 7) is computed and printed.
-
-### CPU Suite (`benches/shader_params.rs`)
-
-| Variant | What it measures |
-|---|---|
-| `no_mod` | std140 byte buffer serialization only |
-| `empty_mod` | Modulation engine present but no assignments — isolates per-param key construction cost |
-| `active_lfo` | Full modulation path: lookup, LFO read, clamp, write |
-
-The `empty_mod − no_mod` gap is the per-param allocation cost paid even when nothing is modulated. Multiply by params × decks × effects to estimate the per-frame floor.
-
-### Notes
-
-Criterion HTML reports land in `target/criterion/`.
-
-`compositing` runs at 1920×1080 and calls `device.poll(Wait)` after each iteration so wall-clock reflects GPU work. Without a GPU adapter it prints `no GPU adapter — skipping` and exits clean. Numbers are machine-local; close other GPU work and warm the machine for stability.
+`compositing` waits for the GPU after each iteration, so its times include GPU work. GPU benches skip themselves without an adapter. `compositing` also fails if 8 solid decks at 1080p exceed a 60 fps frame; set `VARDA_BENCH_SKIP_SLO=1` to skip that check. Reports go to `target/criterion/`. Close other GPU work while measuring.
 
 ## Pull Requests
 

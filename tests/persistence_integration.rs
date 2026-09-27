@@ -95,9 +95,9 @@ fn save_load_with_decks() {
     let ch = channel_uuid(&mut app, 0);
     send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [1.0, 0.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
         },
     );
     app.save_workspace().expect("save workspace");
@@ -205,9 +205,9 @@ fn save_load_automation_envelope() {
     let ch = channel_uuid(&mut app, 0);
     let deck_uuid = match send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [1.0, 1.0, 1.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 1.0, 1.0, 1.0]),
         },
     ) {
         CommandResult::OkWithId { uuid } => uuid,
@@ -280,9 +280,9 @@ fn save_load_arrangement_edits() {
     let ch = channel_uuid(&mut app, 0);
     let deck_uuid = match send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [1.0, 1.0, 1.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 1.0, 1.0, 1.0]),
         },
     ) {
         CommandResult::OkWithId { uuid } => uuid,
@@ -560,9 +560,9 @@ fn save_load_svg_image_deck() {
     let ch = channel_uuid(&mut app, 0);
     let result = send_cmd(
         &mut app,
-        EngineCommand::AddImageDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            path: art.clone(),
+            source: varda::still::Image::config_for(art.to_str().unwrap()),
         },
     );
     assert!(
@@ -594,9 +594,10 @@ fn load_missing_assets_graceful() {
     let ch = channel_uuid(&mut app, 0);
     let _ = send_cmd(
         &mut app,
-        EngineCommand::AddVideoDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            path: std::path::PathBuf::from("/nonexistent/path/video.mp4"),
+            source: varda::source::SourceConfig::new("Video")
+                .with("path", "/nonexistent/path/video.mp4"),
         },
     );
     app.save_workspace().expect("save workspace");
@@ -645,9 +646,9 @@ fn save_load_deck_fidelity_opacity_transparent_blend() {
     let ch = channel_uuid(&mut app, 0);
     let deck = match send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [0.25, 0.5, 0.75, 1.0],
+            source: varda::solid_color::SolidColor::config_for([0.25, 0.5, 0.75, 1.0]),
         },
     ) {
         CommandResult::OkWithId { uuid } => uuid,
@@ -707,9 +708,9 @@ fn save_load_deck_effect_survives() {
     let ch = channel_uuid(&mut app, 0);
     let deck = match send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [1.0, 0.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
         },
     ) {
         CommandResult::OkWithId { uuid } => uuid,
@@ -904,4 +905,49 @@ fn undo_restores_dome_config() {
         CommandResult::Ok
     ));
     assert_eq!(app.build_engine_state().dome, before);
+}
+
+/// A stage saved before surfaces named channels by UUID stored `{"Channel": 1}`,
+/// a position. Loading it must point the surface at the channel that was at
+/// that position when the file was saved, and the next save must write the
+/// UUID. See /spec/output-sink-providers.md Decision 12.
+#[test]
+fn an_index_based_surface_source_is_migrated_to_the_channel_uuid() {
+    let tmp = TempDir::new().unwrap();
+    let Some(mut app) = headless_app_in(tmp.path()) else {
+        return;
+    };
+    let second = channel_uuid(&mut app, 1);
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSurface {
+            name: "Wall".into(),
+            source: varda::renderer::context::OutputSource::Master,
+        },
+    );
+    app.save_workspace().expect("save workspace");
+
+    // Rewrite the saved source the way an older build wrote it.
+    let stage_path = tmp.path().join(".varda").join("stage.json");
+    let mut stage: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&stage_path).unwrap()).unwrap();
+    stage["surfaces"]["surfaces"][0]["source"] = serde_json::json!({ "Channel": 1 });
+    std::fs::write(&stage_path, serde_json::to_string_pretty(&stage).unwrap()).unwrap();
+
+    let Some(mut app2) = headless_app_in(tmp.path()) else {
+        return;
+    };
+    let _ = app2.load_workspace();
+    let surfaces = app2.build_engine_state().outputs.surfaces;
+    assert_eq!(
+        surfaces[0].source,
+        varda::renderer::context::OutputSource::Channel(second.clone())
+    );
+
+    app2.save_workspace().expect("resave workspace");
+    let resaved = std::fs::read_to_string(&stage_path).unwrap();
+    assert!(
+        resaved.contains(&format!("\"Channel\": \"{second}\"")),
+        "the next save writes the UUID"
+    );
 }

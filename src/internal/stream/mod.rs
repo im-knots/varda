@@ -7,6 +7,8 @@
 //! Architecture mirrors `NdiManager`: background thread decodes frames into
 //! `Arc<Mutex<Option<Vec<u8>>>>`, main thread uploads to GPU each frame.
 
+pub mod provider;
+
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -83,6 +85,9 @@ struct StreamReceiver {
     thread: Option<JoinHandle<()>>,
     width: u32,
     height: u32,
+    /// Decks reading this receiver. Two decks on one URL share a receiver, so
+    /// it stops only when the last of them is removed.
+    holders: u32,
 }
 
 /// Manages stream input receivers (background decode threads + GPU textures).
@@ -124,6 +129,7 @@ impl StreamManager {
             .position(|r| r.url == url && !r.stop_flag.load(Ordering::SeqCst))
         {
             log::info!("Reusing existing stream receiver {idx} for '{url}'");
+            self.receivers[idx].holders += 1;
             return Some(idx);
         }
 
@@ -203,6 +209,7 @@ impl StreamManager {
             thread,
             width,
             height,
+            holders: 1,
         });
         self.textures.push((texture, texture_view));
         log::info!("Stream receiver started for '{url}'");
@@ -307,8 +314,14 @@ impl StreamManager {
         })
     }
 
+    /// Release one deck's hold on receiver `idx`, stopping it when no deck
+    /// reads it any more.
     pub fn stop_receive(&mut self, idx: usize) {
         if let Some(r) = self.receivers.get_mut(idx) {
+            r.holders = r.holders.saturating_sub(1);
+            if r.holders > 0 {
+                return;
+            }
             r.stop_flag.store(true, Ordering::SeqCst);
             // Don't join — the thread may be blocked in ffmpeg I/O.
             // The interrupt callback will cause ffmpeg to abort, and

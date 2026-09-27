@@ -4,7 +4,7 @@
 //! The engine (`VardaApp`) is owned here and driven each frame.
 //! For headless operation (HTTP API, CLI), this module is simply not used.
 
-use crate::app::render::{FileDialogKind, FileDialogResult};
+use crate::app::render::FileDialogResult;
 use crate::app::{AppConfig, VardaApp};
 use crate::engine::EngineCommand;
 use crate::engine::value::editor::EditorPrefs;
@@ -578,13 +578,7 @@ impl UIRunner {
             // stream. The dialog carries a channel UUID rather than an index:
             // the user may have spent minutes browsing while the UI stayed live.
             while let Ok(result) = self.file_dialog_rx.try_recv() {
-                for path in result.paths {
-                    let channel_uuid = result.channel_uuid.clone();
-                    ui_actions.commands.push(match result.kind {
-                        FileDialogKind::Image => EngineCommand::AddImageDeck { channel_uuid, path },
-                        FileDialogKind::Video => EngineCommand::AddVideoDeck { channel_uuid, path },
-                    });
-                }
+                ui_actions.commands.extend(result.commands());
             }
 
             // ── Undo/redo: snapshot before undoable mutations ──
@@ -670,11 +664,8 @@ impl UIRunner {
             }
 
             // Spawn file dialogs on background threads (non-blocking)
-            if let Some(uuid) = ui_actions.session.open_image_dialog_for_channel.take() {
-                VardaApp::open_file_dialog(&self.file_dialog_tx, FileDialogKind::Image, uuid);
-            }
-            if let Some(uuid) = ui_actions.session.open_video_dialog_for_channel.take() {
-                VardaApp::open_file_dialog(&self.file_dialog_tx, FileDialogKind::Video, uuid);
+            if let Some(request) = ui_actions.session.open_file_dialog.take() {
+                VardaApp::open_file_dialog(&self.file_dialog_tx, request);
             }
         }
 
@@ -1049,7 +1040,7 @@ mod tests {
     /// has no GPU adapter — matching the skip-without-adapter pattern used by the
     /// other GPU tests.
     fn headless_runner() -> Option<UIRunner> {
-        let gpu = GpuContext::new_headless().ok()?;
+        let gpu = crate::testing::headless_gpu()?;
         // One config for both halves, so the engine and the runner agree on
         // which scratch workspace a shutdown save writes to. The scratch
         // workspace is not optional: `render_headless` saves on shutdown.

@@ -789,7 +789,7 @@ mod tests {
 
     #[test]
     fn pipeline_builds_on_headless() {
-        let Ok(gpu) = crate::renderer::GpuContext::new_headless() else {
+        let Some(gpu) = crate::testing::headless_gpu() else {
             return;
         };
         let pipeline = DepthPreprocessPipeline::new(&gpu.device, 64, 48);
@@ -943,7 +943,7 @@ mod tests {
 
     #[test]
     fn depth_normalizes_within_range_and_invalidates_outside_it() {
-        let Ok(gpu) = crate::renderer::GpuContext::new_headless() else {
+        let Some(gpu) = crate::testing::headless_gpu() else {
             return;
         };
         // Column 0 too near, column 1 at the far end, column 2 mid-range,
@@ -976,7 +976,7 @@ mod tests {
 
     #[test]
     fn hole_fill_closes_a_punched_hole_from_its_nearest_valid_neighbour() {
-        let Ok(gpu) = crate::renderer::GpuContext::new_headless() else {
+        let Some(gpu) = crate::testing::headless_gpu() else {
             return;
         };
         let mut mm = vec![1500u16; (W * H) as usize];
@@ -1000,7 +1000,7 @@ mod tests {
 
     #[test]
     fn mirror_flips_the_x_axis() {
-        let Ok(gpu) = crate::renderer::GpuContext::new_headless() else {
+        let Some(gpu) = crate::testing::headless_gpu() else {
             return;
         };
         // Only the leftmost column is in range.
@@ -1024,7 +1024,7 @@ mod tests {
 
     #[test]
     fn motion_is_zero_on_the_first_frame_and_on_a_static_scene() {
-        let Ok(gpu) = crate::renderer::GpuContext::new_headless() else {
+        let Some(gpu) = crate::testing::headless_gpu() else {
             return;
         };
         // A ramp, so the depth gradient is non-zero everywhere and motion is

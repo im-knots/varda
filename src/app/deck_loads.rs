@@ -1,51 +1,22 @@
-//! Background deck loading. Shader compiles and media decodes run off the
-//! render thread; finished decks attach at the start of a later frame, where
-//! they are finalized. This is the only path that builds a deck from a shader,
-//! image, or video, whichever consumer asked. See /spec/ui-engine-boundary.md
-//! (Decision #15).
+//! Background deck loading. Slow source constructions (a shader compile, a
+//! media decode) run off the render thread through the loader their provider
+//! hands out; finished decks attach at the start of a later frame, where they
+//! are finalized. This is the only path that builds such a deck, whichever
+//! consumer asked. See /spec/ui-engine-boundary.md (Decision #15) and
+//! /spec/deck-source-providers.md.
 
 use super::VardaApp;
 use crate::deck::Deck;
 use crate::engine::types::{DeckLoadSnapshot, DeckLoadStatus};
 use crate::renderer::GpuContext;
+use crate::source::SourceLoader;
 use anyhow::Context;
-use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 /// How long a failed load stays listed, so a client that polls state can see
 /// why its deck never appeared.
 const FAILED_LOAD_RETENTION: Duration = Duration::from_secs(60);
-
-/// What a background load builds.
-pub(crate) enum DeckSource {
-    Shader(Box<crate::isf::ISFShader>),
-    Image(PathBuf),
-    Video(PathBuf),
-}
-
-impl DeckSource {
-    fn name(&self) -> String {
-        match self {
-            Self::Shader(shader) => shader.name(),
-            Self::Image(path) | Self::Video(path) => path.file_name().map_or_else(
-                || path.display().to_string(),
-                |f| f.to_string_lossy().into_owned(),
-            ),
-        }
-    }
-
-    fn build(self, context: &GpuContext, width: u32, height: u32) -> anyhow::Result<Deck> {
-        match self {
-            Self::Shader(shader) if shader.metadata.is_compute() => {
-                Deck::new_from_compute_shader(context, *shader, width, height)
-            }
-            Self::Shader(shader) => Deck::new(context, *shader, width, height),
-            Self::Image(path) => Deck::new_from_image(context, &path, width, height),
-            Self::Video(path) => Deck::new_from_video(context, &path, width, height),
-        }
-    }
-}
 
 /// A load that has been requested and not yet attached or failed.
 struct Load {
@@ -90,12 +61,12 @@ impl DeckLoader {
         &mut self,
         context: &GpuContext,
         channel_uuid: &str,
-        source: DeckSource,
+        name: String,
+        loader: SourceLoader,
         width: u32,
         height: u32,
     ) -> String {
         let uuid = uuid::Uuid::new_v4().to_string();
-        let name = source.name();
         let tx = self.tx.clone();
         let context = context.clone();
         let deck_uuid = uuid.clone();
@@ -103,7 +74,8 @@ impl DeckLoader {
             .name(format!("deck-load-{name}"))
             .spawn(move || {
                 let deck = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    source.build(&context, width, height)
+                    loader(&context, width, height)
+                        .map(|source| Deck::from_source(&context, source, width, height))
                 }))
                 .unwrap_or_else(|_| Err(anyhow::anyhow!("the loader panicked")))
                 .map(|mut deck| {
@@ -179,13 +151,20 @@ impl DeckLoader {
 }
 
 impl VardaApp {
-    /// Start a background load of `source` into `channel_uuid` at the current
-    /// render size, returning the UUID the deck will have.
-    pub(crate) fn spawn_deck_load(&mut self, channel_uuid: &str, source: DeckSource) -> String {
+    /// Start a background load into `channel_uuid` at the current render size,
+    /// returning the UUID the deck will have. `name` is what the load is
+    /// reported as until the deck exists.
+    pub(crate) fn spawn_deck_load(
+        &mut self,
+        channel_uuid: &str,
+        name: String,
+        loader: SourceLoader,
+    ) -> String {
         self.sources.deck_loader.spawn(
             &self.render.context,
             channel_uuid,
-            source,
+            name,
+            loader,
             self.render.width,
             self.render.height,
         )
@@ -257,12 +236,15 @@ mod tests {
     use crate::engine::{CommandResult, EngineCommand as C, ErrorCode};
 
     fn headless_app() -> Option<super::VardaApp> {
-        let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
-        super::VardaApp::new(gpu, &crate::testing::headless_config()).ok()
+        crate::testing::headless_app()
     }
 
     fn channel_uuid(app: &super::VardaApp, idx: usize) -> String {
         app.mixer_ref().channels()[idx].uuid().to_string()
+    }
+
+    fn shader(name: &str) -> crate::source::SourceConfig {
+        crate::source::SourceConfig::new("Shader").with("name", name)
     }
 
     fn has_deck(app: &super::VardaApp, uuid: &str) -> bool {
@@ -279,7 +261,9 @@ mod tests {
             return;
         };
         let ch = channel_uuid(&app, 0);
-        let uuid = app.add_deck(&ch, "liquid_light").expect("known shader");
+        let uuid = app
+            .add_deck(&ch, &shader("liquid_light"))
+            .expect("known shader");
 
         assert!(!has_deck(&app, &uuid), "decks attach on a later frame");
         let loads = app.build_engine_state().deck_loads;
@@ -299,7 +283,9 @@ mod tests {
             return;
         };
         let ch = channel_uuid(&app, 0);
-        let uuid = app.add_deck(&ch, "liquid_light").expect("known shader");
+        let uuid = app
+            .add_deck(&ch, &shader("liquid_light"))
+            .expect("known shader");
 
         let result = app.execute_command(C::SetDeckOpacity {
             deck_uuid: uuid,
@@ -323,7 +309,12 @@ mod tests {
         let path = dir.path().join("not-an-image.png");
         std::fs::write(&path, b"this is not a png").unwrap();
         let ch = channel_uuid(&app, 0);
-        let uuid = app.add_image_deck(&ch, &path).expect("the file exists");
+        let uuid = app
+            .add_deck(
+                &ch,
+                &crate::still::Image::config_for(&path.to_string_lossy()),
+            )
+            .expect("the file exists");
 
         app.settle_deck_loads();
         assert!(!has_deck(&app, &uuid));
@@ -349,7 +340,9 @@ mod tests {
         };
         app.execute_command(C::AddChannel);
         let doomed = channel_uuid(&app, 2);
-        let uuid = app.add_deck(&doomed, "liquid_light").expect("known shader");
+        let uuid = app
+            .add_deck(&doomed, &shader("liquid_light"))
+            .expect("known shader");
         assert!(matches!(
             app.execute_command(C::RemoveChannel {
                 channel_uuid: doomed
@@ -371,9 +364,15 @@ mod tests {
             return;
         };
         let ch = channel_uuid(&app, 0);
-        let missing = std::path::Path::new("/nonexistent/clip.mp4");
-        assert!(app.add_video_deck(&ch, missing).is_err());
-        assert!(app.add_image_deck(&ch, missing).is_err());
+        let missing = "/nonexistent/clip.mp4";
+        assert!(
+            app.add_deck(&ch, &crate::video::provider::Video::config_for(missing))
+                .is_err()
+        );
+        assert!(
+            app.add_deck(&ch, &crate::still::Image::config_for(missing))
+                .is_err()
+        );
         assert!(app.build_engine_state().deck_loads.is_empty());
     }
 }

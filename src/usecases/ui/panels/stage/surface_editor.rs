@@ -165,7 +165,11 @@ pub(crate) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
             canvas_rect.left() + center.x * canvas_width,
             canvas_rect.top() + center.y * canvas_height,
         );
-        let label = format!("{}\n{}", surface.name, surface.source);
+        let label = format!(
+            "{}\n{}",
+            surface.name,
+            data.surface_source_label(&surface.source)
+        );
         painter.text(
             center_px,
             egui::Align2::CENTER_CENTER,
@@ -393,7 +397,7 @@ pub(crate) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
 
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Source:").weak().size(10.0));
-                    let current_label = format!("{}", surface.source);
+                    let current_label = data.surface_source_label(&surface.source);
                     let response = ui.button(format!("{current_label} ▼"));
                     let popup_id = response.id.with("surf_src_popup");
                     egui::Popup::from_toggle_button_response(&response)
@@ -414,29 +418,33 @@ pub(crate) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                             }
                             ui.separator();
                             ui.label(egui::RichText::new("Channels:").weak().size(10.0));
-                            // Get currently selected channel indices
-                            let selected_indices: Vec<usize> = match &surface.source {
-                                OutputSource::Channel(idx) => vec![*idx],
-                                OutputSource::Channels(indices) => indices.clone(),
-                                _ => vec![],
-                            };
+                            // Currently selected channels, by UUID.
+                            let selected: Vec<String> = surface
+                                .source
+                                .channel_uuids()
+                                .map(<[String]>::to_vec)
+                                .unwrap_or_default();
                             for ch in &data.channels {
-                                let is_selected = selected_indices.contains(&ch.ch_idx);
-                                let mut checked = is_selected;
+                                let mut checked = selected.contains(&ch.uuid);
                                 if ui.checkbox(&mut checked, &ch.name).changed() {
-                                    let mut new_indices = selected_indices.clone();
-                                    if checked {
-                                        if !new_indices.contains(&ch.ch_idx) {
-                                            new_indices.push(ch.ch_idx);
-                                        }
-                                    } else {
-                                        new_indices.retain(|&idx| idx != ch.ch_idx);
-                                    }
-                                    new_indices.sort_unstable();
-                                    let new_source = match new_indices.len() {
+                                    // Kept in mixer order, so the same set of
+                                    // channels always reads the same way.
+                                    let chosen: Vec<String> = data
+                                        .channels
+                                        .iter()
+                                        .filter(|c| {
+                                            if c.uuid == ch.uuid {
+                                                checked
+                                            } else {
+                                                selected.contains(&c.uuid)
+                                            }
+                                        })
+                                        .map(|c| c.uuid.clone())
+                                        .collect();
+                                    let new_source = match chosen.len() {
                                         0 => OutputSource::Master,
-                                        1 => OutputSource::Channel(new_indices[0]),
-                                        _ => OutputSource::Channels(new_indices),
+                                        1 => OutputSource::Channel(chosen[0].clone()),
+                                        _ => OutputSource::Channels(chosen),
                                     };
                                     actions.commands.push(EngineCommand::SetSurfaceSource {
                                         uuid: surface.uuid.clone(),

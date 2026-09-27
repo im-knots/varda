@@ -4,31 +4,23 @@ use std::fmt::Write as _;
 
 use super::super::{UIActions, UIData};
 use crate::engine::EngineCommand;
-use crate::renderer::context::OutputTarget;
+use crate::engine::value::param::{OutputControl, ParamAddress};
 
 pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
-    // New output buttons
+    // New output: any listed sink type.
     ui.horizontal(|ui| {
-        if ui.button("+ Windowed").clicked() {
-            actions.commands.push(EngineCommand::CreateOutput);
-        }
-        if ui.button("+ Recording").clicked() {
-            use crate::renderer::context::RecordingCodec;
-            actions.commands.push(EngineCommand::CreateHeadlessOutput {
-                target: OutputTarget::Recording {
-                    path: "output.mp4".to_string(),
-                    codec: RecordingCodec::H264,
-                    audio_device: None,
-                },
-            });
-        }
-        if ui.button("+ Stream").clicked() {
-            actions.commands.push(EngineCommand::CreateHeadlessOutput {
-                target: OutputTarget::NdiSend {
-                    sender_name: "Varda NDI".to_string(),
-                },
-            });
-        }
+        ui.menu_button("+ Output", |ui| {
+            for ty in data.sinks.iter().filter(|t| t.listed) {
+                if ui.button(format!("{} {}", ty.icon, ty.label)).clicked() {
+                    actions.commands.push(EngineCommand::CreateOutput {
+                        sink: crate::engine::value::provider::ProviderConfig::new(
+                            ty.type_id.clone(),
+                        ),
+                    });
+                    ui.close();
+                }
+            }
+        });
     });
 
     ui.add_space(4.0);
@@ -65,8 +57,8 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
                         });
                     });
 
-                    // Target label
-                    ui.label(egui::RichText::new(&output.target_label).small().weak());
+                    // What the sink is sending to
+                    ui.label(egui::RichText::new(&output.sink.label).small().weak());
 
                     // Audio passthrough health (active outputs with audio only)
                     if let Some(audio) = &output.audio_passthrough {
@@ -140,13 +132,7 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
                         }
                     }
 
-                    if output.is_windowed {
-                        // Windowed output controls
-                        render_windowed_controls(ui, &output.uuid, output, data, actions);
-                    } else {
-                        // Headless output controls (recording/SRT/NDI/Syphon)
-                        render_headless_controls(ui, &output.uuid, output, data, actions);
-                    }
+                    render_output_controls(ui, &output.uuid, output, data, actions);
                     render_presentation_controls(ui, &output.uuid, output, data, actions);
                 });
             ui.add_space(4.0);
@@ -433,42 +419,112 @@ fn render_presentation_controls(
     }
 }
 
-/// Controls specific to windowed outputs (display selector, calibration, surfaces).
-fn render_windowed_controls(
+/// Every output's controls: its sink type and settings, start and stop for a
+/// sink that runs, rotation, calibration, what it shows with nothing
+/// assigned, its surfaces, and edge blending. Drawn from the sink type's
+/// schema, so a new output type needs no code here.
+/// See /spec/output-sink-providers.md.
+fn render_output_controls(
     ui: &mut egui::Ui,
     output_uuid: &str,
     output: &super::super::OutputUI,
     data: &UIData,
     actions: &mut UIActions,
 ) {
-    // Display target selector
+    let sink_type = data.sink_type(&output.sink.type_id);
+
+    // Sink type. Switching keeps the output's surfaces, warp and presentation.
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("Display:").small());
-        egui::ComboBox::from_id_salt(format!("output_target_{output_uuid}"))
-            .selected_text(egui::RichText::new(&output.target_label).small())
-            .width(160.0)
+        ui.label(egui::RichText::new("Type:").small());
+        let current = sink_type.map_or(output.sink.type_id.as_str(), |t| t.label.as_str());
+        egui::ComboBox::from_id_salt(format!("output_type_{output_uuid}"))
+            .selected_text(egui::RichText::new(current).small())
+            .width(140.0)
             .show_ui(ui, |ui| {
-                let is_windowed = matches!(output.target, OutputTarget::Windowed);
-                if ui.selectable_label(is_windowed, "Windowed").clicked() {
-                    actions.commands.push(EngineCommand::SetOutputTarget {
-                        output_uuid: output_uuid.to_string(),
-                        target: OutputTarget::Windowed,
-                    });
-                }
-                for monitor in &data.available_monitors {
-                    let label = format!("{} ({}x{})", monitor.name, monitor.width, monitor.height);
-                    if ui.selectable_label(false, &label).clicked() {
+                for ty in data.sinks.iter().filter(|t| t.listed) {
+                    let selected = ty.type_id == output.sink.type_id;
+                    if ui
+                        .selectable_label(selected, format!("{} {}", ty.icon, ty.label))
+                        .clicked()
+                        && !selected
+                    {
                         actions.commands.push(EngineCommand::SetOutputTarget {
                             output_uuid: output_uuid.to_string(),
-                            target: OutputTarget::Display {
-                                name: monitor.name.clone(),
-                                monitor_index: monitor.index,
-                            },
+                            sink: crate::engine::value::provider::ProviderConfig::new(
+                                ty.type_id.clone(),
+                            ),
                         });
                     }
                 }
             });
     });
+    if !output.sink.available {
+        ui.label(
+            egui::RichText::new(&output.sink.label)
+                .small()
+                .color(egui::Color32::from_rgb(255, 190, 80)),
+        );
+    }
+
+    // Settings. A running encoder is stopped by a change, so they lock while
+    // it runs.
+    if let Some(ty) = sink_type {
+        let locked = output.is_active && output.sink.startable;
+        ui.add_enabled_ui(!locked, |ui| {
+            for spec in &ty.params {
+                sink_param(ui, output_uuid, output, spec, data, actions);
+            }
+        });
+    }
+    if let Some(links) = output
+        .sink
+        .status
+        .info
+        .get("links")
+        .and_then(|l| l.as_array())
+    {
+        for link in links {
+            if let (Some(icon), Some(url)) = (
+                link.get("icon").and_then(|v| v.as_str()),
+                link.get("url").and_then(|v| v.as_str()),
+            ) {
+                render_copyable_url(ui, icon, url, 9.5, actions);
+            }
+        }
+    }
+
+    if output.sink.startable {
+        ui.horizontal(|ui| {
+            if output.is_active {
+                let secs = output.active_duration.as_secs();
+                ui.label(
+                    egui::RichText::new(format!(
+                        "● {:02}:{:02}:{:02}",
+                        secs / 3600,
+                        (secs / 60) % 60,
+                        secs % 60
+                    ))
+                    .small()
+                    .color(egui::Color32::from_rgb(255, 80, 80)),
+                );
+                let stop = ui.button("⏹ Stop");
+                if stop.clicked() {
+                    actions.commands.push(EngineCommand::StopOutput {
+                        output_uuid: output_uuid.to_string(),
+                    });
+                }
+                active_learn(ui, stop.rect, output_uuid, data, actions);
+            } else {
+                let start = ui.button("▶ Start");
+                if start.clicked() {
+                    actions.commands.push(EngineCommand::StartOutput {
+                        output_uuid: output_uuid.to_string(),
+                    });
+                }
+                active_learn(ui, start.rect, output_uuid, data, actions);
+            }
+        });
+    }
 
     // Rotation selector
     ui.horizontal(|ui| {
@@ -491,8 +547,8 @@ fn render_windowed_controls(
             });
     });
 
-    // Calibration mode selector (Off / Projector test card / per-Surface cards).
-    // Warp editing itself now lives in the stage editor's bottom detail bar.
+    // Calibration mode selector (Off / Projector test card / per-Surface
+    // cards), on every output. Warp editing lives in the stage editor.
     ui.horizontal(|ui| {
         use crate::renderer::context::CalibrationMode;
         ui.label(egui::RichText::new("🔧 Calibrate:").small());
@@ -501,19 +557,24 @@ fn render_windowed_controls(
             ("Projector", CalibrationMode::Projector),
             ("Surfaces", CalibrationMode::Surfaces),
         ] {
-            if ui
-                .selectable_label(output.calibration_mode == mode, label)
-                .clicked()
-            {
+            let response = ui.selectable_label(output.calibration_mode == mode, label);
+            if response.clicked() {
                 actions.commands.push(EngineCommand::SetCalibrationMode {
                     output_uuid: output_uuid.to_string(),
                     mode,
                 });
             }
+            super::deck_detail::learn_overlay(
+                ui,
+                response.rect,
+                ParamAddress::output(output_uuid, OutputControl::Calibration).to_string(),
+                data,
+                actions,
+            );
         }
     });
 
-    // Surface assignments
+    // Surface assignments, and what shows when there are none.
     ui.add_space(2.0);
     ui.label(egui::RichText::new("Surfaces:").small().strong());
     ui.horizontal(|ui| {
@@ -535,7 +596,27 @@ fn render_windowed_controls(
                 }
             });
     });
-
+    if output.surface_assignments.is_empty() {
+        ui.horizontal(|ui| {
+            use crate::engine::value::render::Unassigned;
+            ui.label(egui::RichText::new("Showing:").small());
+            for choice in Unassigned::ALL {
+                if ui
+                    .selectable_label(output.unassigned == choice, choice.label())
+                    .on_hover_text(match choice {
+                        Unassigned::Stage => "Every surface on the stage",
+                        Unassigned::Program => "The master program over the whole output",
+                    })
+                    .clicked()
+                {
+                    actions.commands.push(EngineCommand::SetOutputUnassigned {
+                        output_uuid: output_uuid.to_string(),
+                        unassigned: Some(choice),
+                    });
+                }
+            }
+        });
+    }
     for assignment in &output.surface_assignments {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(&assignment.surface_name).small());
@@ -550,641 +631,181 @@ fn render_windowed_controls(
         });
     }
 
-    // Edge blending
     render_edge_blend_controls(ui, output_uuid, output, actions);
 }
 
-/// Controls specific to headless outputs (start/stop, duration, inline config).
-fn render_headless_controls(
-    ui: &mut egui::Ui,
+/// MIDI and keyboard learn on start/stop, bound to `output/<uuid>/active` so
+/// one pad toggles delivery.
+fn active_learn(
+    ui: &egui::Ui,
+    rect: egui::Rect,
     output_uuid: &str,
-    output: &super::super::OutputUI,
     data: &UIData,
     actions: &mut UIActions,
 ) {
-    use crate::renderer::context::RecordingCodec;
-
-    // Inline config for Recording outputs
-    if let OutputTarget::Recording {
-        ref path,
-        ref codec,
-        ref audio_device,
-    } = output.target
-        && !output.is_active
-    {
-        // Codec selector
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Codec:").small());
-            let codec_id = egui::Id::new(format!("rec_codec_{output_uuid}"));
-            egui::ComboBox::from_id_salt(codec_id)
-                .selected_text(egui::RichText::new(codec.to_string()).small())
-                .width(120.0)
-                .show_ui(ui, |ui| {
-                    for c in &[
-                        RecordingCodec::H264,
-                        RecordingCodec::H265,
-                        RecordingCodec::AV1,
-                        RecordingCodec::ProRes,
-                        RecordingCodec::ProRes4444,
-                        RecordingCodec::Hap,
-                        RecordingCodec::HapAlpha,
-                        RecordingCodec::HapQ,
-                    ] {
-                        if ui.selectable_label(*codec == *c, c.to_string()).clicked() {
-                            actions.commands.push(EngineCommand::SetOutputTarget {
-                                output_uuid: output_uuid.to_string(),
-                                target: OutputTarget::Recording {
-                                    path: path.clone(),
-                                    codec: c.clone(),
-                                    audio_device: audio_device.clone(),
-                                },
-                            });
-                        }
-                    }
-                });
-        });
-        // File path input
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("File:").small());
-            let path_id = egui::Id::new(format!("rec_path_{output_uuid}"));
-            let mut current_path: String = ui
-                .data(|d| d.get_temp(path_id))
-                .unwrap_or_else(|| path.clone());
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut current_path)
-                    .desired_width(160.0)
-                    .font(egui::TextStyle::Small),
-            );
-            if response.lost_focus() || response.changed() {
-                ui.data_mut(|d| d.insert_temp(path_id, current_path.clone()));
-                if response.lost_focus() {
-                    actions.commands.push(EngineCommand::SetOutputTarget {
-                        output_uuid: output_uuid.to_string(),
-                        target: OutputTarget::Recording {
-                            path: current_path,
-                            codec: codec.clone(),
-                            audio_device: audio_device.clone(),
-                        },
-                    });
-                }
-            }
-        });
-    }
-
-    // Unified stream config (SRT, HLS, DASH, RTMP, NDI, Syphon)
-    let is_stream = matches!(
-        output.target,
-        OutputTarget::SrtStream { .. }
-            | OutputTarget::HlsStream { .. }
-            | OutputTarget::DashStream { .. }
-            | OutputTarget::RtmpStream { .. }
-            | OutputTarget::NdiSend { .. }
-            | OutputTarget::SyphonServer { .. }
+    super::deck_detail::learn_overlay(
+        ui,
+        rect,
+        ParamAddress::output(output_uuid, OutputControl::Active).to_string(),
+        data,
+        actions,
     );
-    if is_stream {
-        render_stream_config(ui, output_uuid, output, actions);
-    }
-
-    // Audio passthrough device selector (ffmpeg targets only; locked while active)
-    let is_ffmpeg = matches!(
-        output.target,
-        OutputTarget::Recording { .. }
-            | OutputTarget::SrtStream { .. }
-            | OutputTarget::HlsStream { .. }
-            | OutputTarget::DashStream { .. }
-            | OutputTarget::RtmpStream { .. }
-    );
-    if is_ffmpeg && !output.is_active {
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Audio:").small());
-            let current = output.target.audio_device();
-            let selected_text = current.unwrap_or("None (silent)");
-            egui::ComboBox::from_id_salt(format!("out_audio_{output_uuid}"))
-                .selected_text(egui::RichText::new(selected_text).small())
-                .width(160.0)
-                .show_ui(ui, |ui| {
-                    if ui
-                        .selectable_label(current.is_none(), "None (silent)")
-                        .clicked()
-                    {
-                        actions.commands.push(EngineCommand::SetOutputTarget {
-                            output_uuid: output_uuid.to_string(),
-                            target: output.target.with_audio_device(None),
-                        });
-                    }
-                    for dev in &data.audio.devices {
-                        let selected = current == Some(dev.name.as_str());
-                        if ui.selectable_label(selected, &dev.name).clicked() {
-                            actions.commands.push(EngineCommand::SetOutputTarget {
-                                output_uuid: output_uuid.to_string(),
-                                target: output.target.with_audio_device(Some(dev.name.clone())),
-                            });
-                        }
-                    }
-                });
-        });
-    }
-
-    // Rotation selector
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("Rotation:").small());
-        egui::ComboBox::from_id_salt(format!("headless_rotation_{output_uuid}"))
-            .selected_text(egui::RichText::new(output.rotation.label()).small())
-            .width(80.0)
-            .show_ui(ui, |ui| {
-                for rot in crate::renderer::context::OutputRotation::ALL {
-                    if ui
-                        .selectable_label(output.rotation == rot, rot.label())
-                        .clicked()
-                    {
-                        actions.commands.push(EngineCommand::SetOutputRotation {
-                            output_uuid: output_uuid.to_string(),
-                            rotation: rot,
-                        });
-                    }
-                }
-            });
-    });
-
-    // Surface assignments
-    ui.add_space(2.0);
-    ui.label(egui::RichText::new("Surfaces:").small().strong());
-    ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt(format!("assign_surf_{output_uuid}"))
-            .selected_text("+ Assign Surface")
-            .width(140.0)
-            .show_ui(ui, |ui| {
-                for surface in &data.surfaces {
-                    let already_assigned = output
-                        .surface_assignments
-                        .iter()
-                        .any(|a| a.surface_uuid == surface.uuid);
-                    if !already_assigned && ui.selectable_label(false, &surface.name).clicked() {
-                        actions.commands.push(EngineCommand::AssignSurfaceToOutput {
-                            output_uuid: output_uuid.to_string(),
-                            surface_uuid: surface.uuid.clone(),
-                        });
-                    }
-                }
-            });
-    });
-
-    for assignment in &output.surface_assignments {
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(&assignment.surface_name).small());
-            if ui.small_button("x").on_hover_text("Unassign").clicked() {
-                actions
-                    .commands
-                    .push(EngineCommand::UnassignSurfaceFromOutput {
-                        output_uuid: output_uuid.to_string(),
-                        surface_uuid: assignment.surface_uuid.clone(),
-                    });
-            }
-        });
-    }
-
-    // Start/Stop + duration
-    ui.horizontal(|ui| {
-        if output.is_active {
-            let dur = output.active_duration.as_secs_f32();
-            ui.label(
-                egui::RichText::new(format!("{dur:.1}s"))
-                    .monospace()
-                    .color(egui::Color32::from_rgb(255, 80, 80)),
-            );
-            if ui.button("⏹ Stop").clicked() {
-                actions.commands.push(EngineCommand::StopOutput {
-                    output_uuid: output_uuid.to_string(),
-                });
-            }
-        } else if ui.button("▶ Start").clicked() {
-            actions.commands.push(EngineCommand::StartOutput {
-                output_uuid: output_uuid.to_string(),
-            });
-        }
-    });
-
-    // Edge blending
-    render_edge_blend_controls(ui, output_uuid, output, actions);
 }
 
-/// Unified stream output config with protocol dropdown (SRT, HLS, DASH, RTMP, NDI, Syphon).
-fn render_stream_config(
+fn set_sink(
+    actions: &mut UIActions,
+    output_uuid: &str,
+    name: &str,
+    value: crate::engine::value::provider::ControlValue,
+) {
+    actions.commands.push(EngineCommand::SetSinkParam {
+        output_uuid: output_uuid.to_string(),
+        name: name.to_string(),
+        value,
+    });
+}
+
+/// One sink setting, drawn by its kind or widget hint.
+fn sink_param(
     ui: &mut egui::Ui,
     output_uuid: &str,
     output: &super::super::OutputUI,
+    spec: &crate::engine::value::provider::ControlSpec,
+    data: &UIData,
     actions: &mut UIActions,
 ) {
-    use crate::renderer::context::{RtmpCodecContract, SrtCodec, StreamingCodec};
-
-    // Determine current protocol label
-    let current_proto = match &output.target {
-        OutputTarget::SrtStream { .. } => "SRT",
-        OutputTarget::HlsStream { .. } => "HLS",
-        OutputTarget::DashStream { .. } => "DASH",
-        OutputTarget::RtmpStream { .. } => "RTMP",
-        OutputTarget::NdiSend { .. } => "NDI",
-        OutputTarget::SyphonServer { .. } => "Syphon",
-        _ => return,
+    use crate::engine::value::provider::{ControlKind, ControlValue, WidgetHint};
+    let current = output.sink.status.params.get(&spec.name);
+    let text = match current {
+        Some(ControlValue::Text(t)) => t.clone(),
+        _ => String::new(),
     };
-
-    // Protocol dropdown (disabled while active)
-    if output.is_active {
-        ui.label(
-            egui::RichText::new(format!("Protocol: {current_proto}"))
-                .small()
-                .weak(),
-        );
-    } else {
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Protocol:").small());
-            egui::ComboBox::from_id_salt(format!("stream_proto_{output_uuid}"))
-                .selected_text(egui::RichText::new(current_proto).small())
-                .width(80.0)
-                .show_ui(ui, |ui| {
-                    // Syphon and Spout are each pushed only on their own platform,
-                    // so on Linux neither push compiles and the binding is
-                    // unused-mut.
-                    #[cfg_attr(
-                        not(any(target_os = "macos", target_os = "windows")),
-                        allow(unused_mut)
-                    )]
-                    let mut protocols: Vec<(&str, OutputTarget)> = vec![
-                        (
-                            "SRT",
-                            OutputTarget::SrtStream {
-                                url: "srt://0.0.0.0:9001".to_string(),
-                                codec: SrtCodec::default(),
-                                audio_device: None,
-                            },
-                        ),
-                        (
-                            "HLS",
-                            OutputTarget::HlsStream {
-                                name: "live".to_string(),
-                                codec: StreamingCodec::default(),
-                                short_segments: false,
-                                audio_device: None,
-                            },
-                        ),
-                        (
-                            "DASH",
-                            OutputTarget::DashStream {
-                                name: "live".to_string(),
-                                codec: StreamingCodec::default(),
-                                audio_device: None,
-                            },
-                        ),
-                        (
-                            "RTMP",
-                            OutputTarget::RtmpStream {
-                                url: "rtmp://".to_string(),
-                                codec: StreamingCodec::default(),
-                                codec_contract: RtmpCodecContract::default(),
-                                audio_device: None,
-                            },
-                        ),
-                        (
-                            "NDI",
-                            OutputTarget::NdiSend {
-                                sender_name: "Varda NDI".to_string(),
-                            },
-                        ),
-                    ];
-                    #[cfg(target_os = "macos")]
-                    protocols.push((
-                        "Syphon",
-                        OutputTarget::SyphonServer {
-                            server_name: "Varda".to_string(),
-                        },
-                    ));
-                    // Offered only on Windows, for the same reason Syphon is
-                    // offered only on macOS: a target that can never resolve is a
-                    // dead control. See /spec/spout-output.md.
-                    #[cfg(target_os = "windows")]
-                    protocols.push((
-                        "Spout",
-                        OutputTarget::SpoutSender {
-                            sender_name: "Varda".to_string(),
-                        },
-                    ));
-                    for (label, default_target) in &protocols {
-                        if ui
-                            .selectable_label(current_proto == *label, *label)
-                            .clicked()
-                            && current_proto != *label
-                        {
-                            actions.commands.push(EngineCommand::SetOutputTarget {
-                                output_uuid: output_uuid.to_string(),
-                                target: default_target.clone(),
-                            });
-                        }
-                    }
-                });
-        });
-    }
-
-    // Protocol-specific config
-    match &output.target {
-        OutputTarget::SrtStream {
-            url,
-            codec,
-            audio_device,
-        } => {
-            if !output.is_active {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Codec:").small());
-                    egui::ComboBox::from_id_salt(format!("srt_codec_{output_uuid}"))
-                        .selected_text(egui::RichText::new(codec.to_string()).small())
-                        .width(120.0)
-                        .show_ui(ui, |ui| {
-                            for c in &[SrtCodec::H264, SrtCodec::H265] {
-                                if ui.selectable_label(*codec == *c, c.to_string()).clicked() {
-                                    actions.commands.push(EngineCommand::SetOutputTarget {
-                                        output_uuid: output_uuid.to_string(),
-                                        target: OutputTarget::SrtStream {
-                                            url: url.clone(),
-                                            codec: c.clone(),
-                                            audio_device: audio_device.clone(),
-                                        },
-                                    });
-                                }
-                            }
-                        });
-                });
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("URL:").small());
-                    let url_id = egui::Id::new(format!("srt_url_{output_uuid}"));
-                    let mut current_url: String = ui
-                        .data(|d| d.get_temp(url_id))
-                        .unwrap_or_else(|| url.clone());
-                    let response = ui.add(
-                        egui::TextEdit::singleline(&mut current_url)
-                            .desired_width(180.0)
-                            .font(egui::TextStyle::Small),
-                    );
-                    if response.lost_focus() || response.changed() {
-                        ui.data_mut(|d| d.insert_temp(url_id, current_url.clone()));
-                        if response.lost_focus() {
-                            actions.commands.push(EngineCommand::SetOutputTarget {
-                                output_uuid: output_uuid.to_string(),
-                                target: OutputTarget::SrtStream {
-                                    url: current_url,
-                                    codec: codec.clone(),
-                                    audio_device: audio_device.clone(),
-                                },
-                            });
-                        }
-                    }
-                });
-            }
-        }
-        OutputTarget::HlsStream {
-            name,
-            codec,
-            short_segments,
-            audio_device,
-        } => {
-            render_hls_dash_name_codec(
-                ui,
-                output_uuid,
-                "hls",
-                name,
-                codec,
-                output.is_active,
-                actions,
-                |n, c| OutputTarget::HlsStream {
-                    name: n,
-                    codec: c,
-                    short_segments: *short_segments,
-                    audio_device: audio_device.clone(),
-                },
-            );
-            if !output.is_active {
-                ui.horizontal(|ui| {
-                    let mut ll = *short_segments;
-                    if ui
-                        .checkbox(
-                            &mut ll,
-                            egui::RichText::new("Short segments (lower latency)").small(),
-                        )
-                        .on_hover_text(
-                            "One-second segments instead of two. Not RFC low-latency HLS: \
-                             FFmpeg writes no partial segments, so expect a couple of \
-                             seconds of latency rather than sub-second.",
-                        )
-                        .changed()
-                    {
-                        actions.commands.push(EngineCommand::SetOutputTarget {
-                            output_uuid: output_uuid.to_string(),
-                            target: OutputTarget::HlsStream {
-                                name: name.clone(),
-                                codec: codec.clone(),
-                                short_segments: ll,
-                                audio_device: audio_device.clone(),
-                            },
-                        });
-                    }
-                });
-            }
-            let player_url = format!("http://localhost:8080/streams/{name}/player.html");
-            let manifest_url = format!("http://localhost:8080/streams/{name}/index.m3u8");
-            render_copyable_url(ui, "▶", &player_url, 10.0, actions);
-            render_copyable_url(ui, "🌐", &manifest_url, 9.0, actions);
-        }
-        OutputTarget::DashStream {
-            name,
-            codec,
-            audio_device,
-        } => {
-            render_hls_dash_name_codec(
-                ui,
-                output_uuid,
-                "dash",
-                name,
-                codec,
-                output.is_active,
-                actions,
-                |n, c| OutputTarget::DashStream {
-                    name: n,
-                    codec: c,
-                    audio_device: audio_device.clone(),
-                },
-            );
-            let player_url = format!("http://localhost:8080/streams/{name}/player.html");
-            let manifest_url = format!("http://localhost:8080/streams/{name}/manifest.mpd");
-            render_copyable_url(ui, "▶", &player_url, 10.0, actions);
-            render_copyable_url(ui, "🌐", &manifest_url, 9.0, actions);
-        }
-        OutputTarget::RtmpStream {
-            url,
-            codec,
-            codec_contract,
-            audio_device,
-        } => {
-            if !output.is_active {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Codec:").small());
-                    egui::ComboBox::from_id_salt(format!("rtmp_codec_{output_uuid}"))
-                        .selected_text(egui::RichText::new(codec.to_string()).small())
-                        .width(120.0)
-                        .show_ui(ui, |ui| {
-                            for c in &[
-                                StreamingCodec::H264,
-                                StreamingCodec::H265,
-                                StreamingCodec::AV1,
-                            ] {
-                                if ui.selectable_label(*codec == *c, c.to_string()).clicked() {
-                                    actions.commands.push(EngineCommand::SetOutputTarget {
-                                        output_uuid: output_uuid.to_string(),
-                                        target: OutputTarget::RtmpStream {
-                                            url: url.clone(),
-                                            codec: c.clone(),
-                                            codec_contract: *codec_contract,
-                                            audio_device: audio_device.clone(),
-                                        },
-                                    });
-                                }
-                            }
-                        });
-                });
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Endpoint:").small());
-                    egui::ComboBox::from_id_salt(format!("rtmp_contract_{output_uuid}"))
-                        .selected_text(match codec_contract {
-                            RtmpCodecContract::Legacy => "Legacy RTMP",
-                            RtmpCodecContract::Enhanced => "Enhanced RTMP",
-                        })
-                        .show_ui(ui, |ui| {
-                            for (contract, label) in [
-                                (RtmpCodecContract::Legacy, "Legacy RTMP"),
-                                (RtmpCodecContract::Enhanced, "Enhanced RTMP"),
-                            ] {
-                                if ui
-                                    .selectable_label(*codec_contract == contract, label)
-                                    .clicked()
-                                {
-                                    actions.commands.push(EngineCommand::SetOutputTarget {
-                                        output_uuid: output_uuid.to_string(),
-                                        target: OutputTarget::RtmpStream {
-                                            url: url.clone(),
-                                            codec: codec.clone(),
-                                            codec_contract: contract,
-                                            audio_device: audio_device.clone(),
-                                        },
-                                    });
-                                }
-                            }
-                        });
-                });
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("URL:").small());
-                    let url_id = egui::Id::new(format!("rtmp_url_{output_uuid}"));
-                    let mut current_url: String = ui
-                        .data(|d| d.get_temp(url_id))
-                        .unwrap_or_else(|| url.clone());
-                    let response = ui.add(
-                        egui::TextEdit::singleline(&mut current_url)
-                            .desired_width(180.0)
-                            .font(egui::TextStyle::Small),
-                    );
-                    if response.lost_focus() || response.changed() {
-                        ui.data_mut(|d| d.insert_temp(url_id, current_url.clone()));
-                        if response.lost_focus() {
-                            actions.commands.push(EngineCommand::SetOutputTarget {
-                                output_uuid: output_uuid.to_string(),
-                                target: OutputTarget::RtmpStream {
-                                    url: current_url,
-                                    codec: codec.clone(),
-                                    codec_contract: *codec_contract,
-                                    audio_device: audio_device.clone(),
-                                },
-                            });
-                        }
-                    }
-                });
-            }
-        }
-        OutputTarget::NdiSend { sender_name } if !output.is_active => {
+    match (&spec.widget, &spec.kind) {
+        (Some(WidgetHint::Monitor), _) => {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Name:").small());
-                let name_id = egui::Id::new(format!("ndi_name_{output_uuid}"));
-                let mut current_name: String = ui
-                    .data(|d| d.get_temp(name_id))
-                    .unwrap_or_else(|| sender_name.clone());
+                ui.label(egui::RichText::new(format!("{}:", spec.label)).small());
+                let shown = if text.is_empty() {
+                    "Choose a monitor"
+                } else {
+                    text.as_str()
+                };
+                egui::ComboBox::from_id_salt(("sink_monitor", output_uuid, &spec.name))
+                    .selected_text(egui::RichText::new(shown).small())
+                    .width(160.0)
+                    .show_ui(ui, |ui| {
+                        for monitor in &data.available_monitors {
+                            let label =
+                                format!("{} ({}x{})", monitor.name, monitor.width, monitor.height);
+                            if ui.selectable_label(monitor.name == text, label).clicked() {
+                                set_sink(
+                                    actions,
+                                    output_uuid,
+                                    &spec.name,
+                                    ControlValue::Text(monitor.name.clone()),
+                                );
+                            }
+                        }
+                    });
+            });
+        }
+        (Some(WidgetHint::AudioDevice), _) => {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(format!("{}:", spec.label)).small());
+                let shown = if text.is_empty() {
+                    "None"
+                } else {
+                    text.as_str()
+                };
+                egui::ComboBox::from_id_salt(("sink_audio", output_uuid, &spec.name))
+                    .selected_text(egui::RichText::new(shown).small())
+                    .width(160.0)
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_label(text.is_empty(), "None").clicked() {
+                            set_sink(
+                                actions,
+                                output_uuid,
+                                &spec.name,
+                                ControlValue::Text(String::new()),
+                            );
+                        }
+                        for dev in &data.audio.devices {
+                            if ui.selectable_label(dev.name == text, &dev.name).clicked() {
+                                set_sink(
+                                    actions,
+                                    output_uuid,
+                                    &spec.name,
+                                    ControlValue::Text(dev.name.clone()),
+                                );
+                            }
+                        }
+                    });
+            });
+        }
+        (_, ControlKind::Text) => {
+            // Edited in a buffer and sent on Enter or when focus leaves, so a
+            // path or URL is not applied one keystroke at a time.
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(format!("{}:", spec.label)).small());
+                let id = egui::Id::new(("sink_text", output_uuid, &spec.name));
+                let mut buffer: String =
+                    ui.data(|d| d.get_temp(id)).unwrap_or_else(|| text.clone());
                 let response = ui.add(
-                    egui::TextEdit::singleline(&mut current_name)
-                        .desired_width(140.0)
+                    egui::TextEdit::singleline(&mut buffer)
+                        .desired_width(170.0)
                         .font(egui::TextStyle::Small),
                 );
-                if response.lost_focus() || response.changed() {
-                    ui.data_mut(|d| d.insert_temp(name_id, current_name.clone()));
-                    if response.lost_focus() {
-                        actions.commands.push(EngineCommand::SetOutputTarget {
-                            output_uuid: output_uuid.to_string(),
-                            target: OutputTarget::NdiSend {
-                                sender_name: current_name,
-                            },
-                        });
+                if response.changed() {
+                    ui.data_mut(|d| d.insert_temp(id, buffer.clone()));
+                }
+                if response.lost_focus() {
+                    ui.data_mut(|d| d.remove::<String>(id));
+                    if buffer != text {
+                        set_sink(actions, output_uuid, &spec.name, ControlValue::Text(buffer));
                     }
+                } else if !response.has_focus() {
+                    ui.data_mut(|d| d.remove::<String>(id));
                 }
             });
         }
-        OutputTarget::SyphonServer { server_name } if !output.is_active => {
+        (_, ControlKind::Choice { options }) => {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Name:").small());
-                let name_id = egui::Id::new(format!("syphon_name_{output_uuid}"));
-                let mut current_name: String = ui
-                    .data(|d| d.get_temp(name_id))
-                    .unwrap_or_else(|| server_name.clone());
-                let response = ui.add(
-                    egui::TextEdit::singleline(&mut current_name)
-                        .desired_width(140.0)
-                        .font(egui::TextStyle::Small),
-                );
-                if response.lost_focus() || response.changed() {
-                    ui.data_mut(|d| d.insert_temp(name_id, current_name.clone()));
-                    if response.lost_focus() {
-                        actions.commands.push(EngineCommand::SetOutputTarget {
-                            output_uuid: output_uuid.to_string(),
-                            target: OutputTarget::SyphonServer {
-                                server_name: current_name,
-                            },
-                        });
-                    }
+                ui.label(egui::RichText::new(format!("{}:", spec.label)).small());
+                let n = options.len().max(1);
+                let norm = current.and_then(ControlValue::as_f32).unwrap_or(0.0);
+                let index = ((norm * n as f32).floor() as usize).min(n - 1);
+                let mut chosen = index;
+                egui::ComboBox::from_id_salt(("sink_choice", output_uuid, &spec.name))
+                    .selected_text(
+                        egui::RichText::new(options.get(index).cloned().unwrap_or_default())
+                            .small(),
+                    )
+                    .width(140.0)
+                    .show_ui(ui, |ui| {
+                        for (i, option) in options.iter().enumerate() {
+                            ui.selectable_value(&mut chosen, i, option);
+                        }
+                    });
+                if chosen != index {
+                    let value = (chosen as f32 + 0.5) / n as f32;
+                    set_sink(actions, output_uuid, &spec.name, ControlValue::Float(value));
                 }
             });
         }
-        OutputTarget::SpoutSender { sender_name } if !output.is_active => {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Name:").small());
-                let name_id = egui::Id::new(format!("spout_name_{output_uuid}"));
-                let mut current_name: String = ui
-                    .data(|d| d.get_temp(name_id))
-                    .unwrap_or_else(|| sender_name.clone());
-                let response = ui.add(
-                    egui::TextEdit::singleline(&mut current_name)
-                        .desired_width(140.0)
-                        .font(egui::TextStyle::Small),
-                );
-                if response.lost_focus() || response.changed() {
-                    ui.data_mut(|d| d.insert_temp(name_id, current_name.clone()));
-                    if response.lost_focus() {
-                        actions.commands.push(EngineCommand::SetOutputTarget {
-                            output_uuid: output_uuid.to_string(),
-                            target: OutputTarget::SpoutSender {
-                                sender_name: current_name,
-                            },
-                        });
-                    }
-                }
-            });
+        (_, ControlKind::Toggle) => {
+            let mut on = current
+                .and_then(ControlValue::as_f32)
+                .is_some_and(|v| v > 0.5);
+            if ui
+                .checkbox(&mut on, egui::RichText::new(&spec.label).small())
+                .changed()
+            {
+                set_sink(actions, output_uuid, &spec.name, ControlValue::Bool(on));
+            }
         }
         _ => {}
     }
 }
 
-/// Render a clickable URL label that copies to clipboard on click.
 fn render_copyable_url(
     ui: &mut egui::Ui,
     icon: &str,
@@ -1208,65 +829,6 @@ fn render_copyable_url(
         });
     }
     response.on_hover_text("Click to copy URL");
-}
-
-/// Shared codec + name config for HLS and DASH stream outputs.
-// UI render fn taking many independent egui state/handle args; no shared invariant to bundle.
-#[allow(clippy::too_many_arguments)]
-fn render_hls_dash_name_codec(
-    ui: &mut egui::Ui,
-    output_uuid: &str,
-    prefix: &str,
-    name: &str,
-    codec: &crate::renderer::context::StreamingCodec,
-    is_active: bool,
-    actions: &mut UIActions,
-    make_target: impl Fn(String, crate::renderer::context::StreamingCodec) -> OutputTarget,
-) {
-    use crate::renderer::context::StreamingCodec;
-    if !is_active {
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Codec:").small());
-            egui::ComboBox::from_id_salt(format!("{prefix}_codec_{output_uuid}"))
-                .selected_text(egui::RichText::new(codec.to_string()).small())
-                .width(120.0)
-                .show_ui(ui, |ui| {
-                    for c in &[
-                        StreamingCodec::H264,
-                        StreamingCodec::H265,
-                        StreamingCodec::AV1,
-                    ] {
-                        if ui.selectable_label(*codec == *c, c.to_string()).clicked() {
-                            actions.commands.push(EngineCommand::SetOutputTarget {
-                                output_uuid: output_uuid.to_string(),
-                                target: make_target(name.to_string(), c.clone()),
-                            });
-                        }
-                    }
-                });
-        });
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Name:").small());
-            let name_id = egui::Id::new(format!("{prefix}_name_{output_uuid}"));
-            let mut current_name: String = ui
-                .data(|d| d.get_temp(name_id))
-                .unwrap_or_else(|| name.to_string());
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut current_name)
-                    .desired_width(140.0)
-                    .font(egui::TextStyle::Small),
-            );
-            if response.lost_focus() || response.changed() {
-                ui.data_mut(|d| d.insert_temp(name_id, current_name.clone()));
-                if response.lost_focus() {
-                    actions.commands.push(EngineCommand::SetOutputTarget {
-                        output_uuid: output_uuid.to_string(),
-                        target: make_target(current_name, codec.clone()),
-                    });
-                }
-            }
-        });
-    }
 }
 
 /// Render edge blending controls for an output (shared by windowed and headless).
@@ -1434,10 +996,15 @@ mod tests {
         crate::usecases::ui::OutputUI {
             uuid: "out00001".to_string(),
             name: "Main".to_string(),
-            target: OutputTarget::Windowed,
-            target_label: "Windowed".to_string(),
-            is_windowed: true,
+            sink: crate::engine::types::OutputSinkSnapshot {
+                type_id: "windowed".into(),
+                label: "Floating window".into(),
+                available: true,
+                startable: false,
+                status: crate::engine::value::provider::ControlStatus::default(),
+            },
             is_active: true,
+            unassigned: crate::engine::value::render::Unassigned::Stage,
             active_duration: std::time::Duration::ZERO,
             surface_assignments: vec![],
             calibration_mode: crate::renderer::context::CalibrationMode::Off,

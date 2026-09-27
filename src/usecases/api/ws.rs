@@ -136,8 +136,9 @@ async fn handle_ws(socket: WebSocket, state: SharedState) {
                         last = current;
                     }
                 }
-                Some(text) = cmd_rx.recv() => {
-                    // Process command from client
+                received = cmd_rx.recv() => {
+                    // The reader is gone, so the client is too.
+                    let Some(text) = received else { break };
                     let response = match serde_json::from_str::<WsCommand>(&text) {
                         Ok(ws_cmd) => {
                             let result = state.send_command(ws_cmd.command).await;
@@ -163,22 +164,63 @@ async fn handle_ws(socket: WebSocket, state: SharedState) {
                         break;
                     }
                 }
-                else => break,
             }
         }
     });
 
-    // Wait for either task to finish, then abort the other.
-    tokio::select! {
-        _ = read_handle => {}
-        _ = write_handle => {}
-    }
+    until_either_ends(read_handle, write_handle).await;
+}
+
+/// Wait for either half of a connection to end, then cancel the other and
+/// wait for it to stop, so neither outlives the connection. Dropping a
+/// `JoinHandle` would only detach its task.
+async fn until_either_ends(
+    mut reader: tokio::task::JoinHandle<()>,
+    mut writer: tokio::task::JoinHandle<()>,
+) {
+    let reader_ended = tokio::select! {
+        _ = &mut reader => true,
+        _ = &mut writer => false,
+    };
+    let survivor = if reader_ended { writer } else { reader };
+    survivor.abort();
+    let _ = survivor.await;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::engine::ErrorCode;
+
+    /// Sets its flag when dropped, which is when an aborted task stops.
+    struct Stopped(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+    impl Drop for Stopped {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// When one half of a connection ends, the other is cancelled and has
+    /// stopped by the time the connection handler returns.
+    #[tokio::test]
+    async fn the_surviving_half_is_stopped_when_the_other_ends() {
+        for reader_ends_first in [true, false] {
+            let stopped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let guard = Stopped(std::sync::Arc::clone(&stopped));
+            let forever = tokio::spawn(async move {
+                let _guard = guard;
+                std::future::pending::<()>().await;
+            });
+            let done = tokio::spawn(async {});
+            if reader_ends_first {
+                until_either_ends(done, forever).await;
+            } else {
+                until_either_ends(forever, done).await;
+            }
+            assert!(stopped.load(std::sync::atomic::Ordering::SeqCst));
+        }
+    }
 
     #[test]
     fn test_ws_result_payload_ok() {

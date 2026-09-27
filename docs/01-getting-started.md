@@ -211,7 +211,7 @@ To load **video or images**, use the Video or Image sections in the Library — 
 
 ## Output to a Display
 
-1. In the right panel, open the **📺 Outputs** section and click **"+ Windowed"** to create a new output window
+1. In the right panel, open the **📺 Outputs** section and choose **+ Output → Window** to create a new output window
 2. A floating window appears — this is your output
 3. In the output settings, select a **display target** (enumerate monitors from the dropdown)
 4. Click **Fullscreen** to send the output to the selected projector or display

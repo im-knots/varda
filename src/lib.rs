@@ -17,5 +17,5 @@ pub use internal::*;
 
 // Re-export commonly used types at crate root for convenience
 pub use channel::BlendMode;
-pub use deck::ScalingMode;
 pub use params::ShaderParams;
+pub use source::ScalingMode;

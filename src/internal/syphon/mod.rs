@@ -882,6 +882,77 @@ impl Drop for SyphonManager {
     }
 }
 
+impl crate::source::ShareReceiver for SyphonManager {
+    fn is_available(&self) -> bool {
+        SyphonManager::is_available(self)
+    }
+    fn server_names(&self) -> Vec<String> {
+        self.discovered_sources()
+    }
+    fn discover(&mut self) {
+        SyphonManager::discover(self);
+    }
+    fn start_receive(&mut self, name: &str, device: &wgpu::Device) -> Option<usize> {
+        SyphonManager::start_receive(self, name, device)
+    }
+    fn stop_receive(&mut self, client: usize) {
+        SyphonManager::stop_receive(self, client);
+    }
+    fn update(&mut self, device: &wgpu::Device) {
+        SyphonManager::update(self, device);
+    }
+    fn texture_view(&self, client: usize) -> Option<&wgpu::TextureView> {
+        SyphonManager::texture_view(self, client)
+    }
+    fn client_dimensions(&self, client: usize) -> Option<(u32, u32)> {
+        SyphonManager::client_dimensions(self, client)
+    }
+    fn is_connected(&self, client: usize) -> bool {
+        SyphonManager::is_connected(self, client)
+    }
+}
+
+/// Syphon servers as a deck source (macOS).
+pub fn provider() -> crate::source::ShareProvider<SyphonManager> {
+    crate::source::ShareProvider::new(crate::source::ShareProtocol {
+        id: "Syphon",
+        label: "Syphon Servers",
+        unavailable: "Syphon is not installed",
+    })
+}
+
+impl crate::output::share::ShareSender for SyphonManager {
+    fn is_available(&self) -> bool {
+        SyphonManager::is_available(self)
+    }
+
+    fn publish(
+        &mut self,
+        gpu: &crate::renderer::context::GpuContext,
+        name: &str,
+        view: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+    ) {
+        self.publish_frame_gpu(gpu, name, view, width, height);
+    }
+}
+
+/// Syphon outputs: a server other macOS applications read the output from.
+static SYPHON_OUTPUT: crate::output::share::ShareOutput = crate::output::share::ShareOutput {
+    id: "syphon_server",
+    label: "Syphon",
+    icon: "🔗",
+    name_field: "server_name",
+    unavailable: "Syphon is not installed",
+    presentation: crate::delivery::presentation::syphon_presentation,
+};
+
+/// The Syphon output type.
+pub fn sink_provider() -> crate::output::share::ShareSinkProvider<SyphonManager> {
+    crate::output::share::ShareSinkProvider::new(&SYPHON_OUTPUT)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1001,7 +1072,7 @@ mod tests {
     /// See /spec/syphon-zero-copy.md § The send path corrupts colour today.
     #[test]
     fn publish_slot_matches_syphons_destination_pixel_format() {
-        let Ok(ctx) = crate::renderer::context::GpuContext::new_headless() else {
+        let Some(ctx) = crate::testing::headless_gpu() else {
             return; // no GPU on this machine
         };
         let Some(mtl_dev) =
@@ -1036,7 +1107,7 @@ mod tests {
         if !mgr.is_available() {
             return; // Syphon.framework not installed on this machine
         }
-        let Ok(ctx) = crate::renderer::context::GpuContext::new_headless() else {
+        let Some(ctx) = crate::testing::headless_gpu() else {
             return;
         };
 
@@ -1167,7 +1238,7 @@ mod tests {
         if !mgr.is_available() {
             return; // Syphon.framework not installed on this machine
         }
-        let Ok(ctx) = crate::renderer::context::GpuContext::new_headless() else {
+        let Some(ctx) = crate::testing::headless_gpu() else {
             return;
         };
         let Some(mtl_dev) = mgr.wgpu_metal_device(&ctx.device) else {
@@ -1343,7 +1414,7 @@ mod tests {
         if !mgr.is_available() {
             return; // Syphon.framework not installed on this machine
         }
-        let Ok(ctx) = crate::renderer::context::GpuContext::new_headless() else {
+        let Some(ctx) = crate::testing::headless_gpu() else {
             return;
         };
 

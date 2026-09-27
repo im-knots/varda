@@ -810,30 +810,25 @@ fn collect_target_paths(data: &UIData) -> Vec<(String, String)> {
                     }
                 }
             }
-            // Video playback, for the same reason the 〰 dropdowns exist: a
-            // macro that can move a clip's rate and playhead is worth as much
-            // as one that can move a shader's. Only the continuous and
-            // bucketable controls; in/out points define the region a position
-            // offset is measured against.
-            // See /spec/video-playback-modulation.md.
-            if d.video_playback.is_some() {
-                for (label, target) in [
-                    ("speed", DeckTarget::VideoSpeed),
-                    ("playhead", DeckTarget::VideoPosition),
-                    ("play", DeckTarget::VideoPlay),
-                    ("loop mode", DeckTarget::VideoLoopMode),
-                ] {
-                    out.push((
-                        format!("{} · {} · {label}", ch.name, d.name),
-                        ParamAddress::deck(&d.uuid, target).to_string(),
-                    ));
+            // Every modulatable source control, for the same reason the 〰
+            // dropdowns exist: a macro that can move a clip's rate and
+            // playhead is worth as much as one that can move a shader's. In
+            // and out points are not offered, since they define the region a
+            // position offset is measured against. See
+            // /spec/video-playback-modulation.md.
+            if let Some(ty) = data
+                .sources
+                .iter()
+                .find(|t| t.type_id == d.source.source_type)
+            {
+                for spec in ty.params.iter().filter(|s| s.modulatable) {
+                    if let Some(route) = spec.route.as_deref() {
+                        out.push((
+                            format!("{} · {} · {}", ch.name, d.name, spec.label.to_lowercase()),
+                            ParamAddress::deck(&d.uuid, DeckTarget::source(route)).to_string(),
+                        ));
+                    }
                 }
-            }
-            if d.scaling_mode.is_some() {
-                out.push((
-                    format!("{} · {} · scaling", ch.name, d.name),
-                    ParamAddress::deck(&d.uuid, DeckTarget::ScalingMode).to_string(),
-                ));
             }
         }
     }

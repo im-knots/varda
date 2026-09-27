@@ -5,6 +5,7 @@
 //! touch the engine directly (/spec/ui-engine-boundary.md).
 
 use super::{CameraDetectMode, panels};
+use crate::BlendMode;
 use crate::audio::AudioSourceId;
 use crate::channel::DeckRenderFps;
 use crate::modulation::{ADSRStage, AudioReactMode, LFOWaveform, StepInterpolation};
@@ -13,7 +14,6 @@ use crate::renderer::context::OutputSource;
 use crate::renderer::slicer::{DomeGeometry, DomePreset};
 use crate::surface::detect::DetectedContour;
 use crate::surface::{CircleHint, ContentMapping, SurfaceOutputType, SurfacePath};
-use crate::{BlendMode, ScalingMode};
 
 /// Parameter info for UI rendering (collected before egui to avoid borrow conflicts)
 #[derive(Clone)]
@@ -158,27 +158,6 @@ pub struct ModAssignmentUI {
 /// Effect info for UI: (uuid, name, enabled, params)
 pub type EffectInfo = (String, String, bool, ShaderParamsUI);
 
-/// Video playback state snapshot for UI display
-#[derive(Clone)]
-pub struct VideoPlaybackUI {
-    pub playing: bool,
-    pub position: f64,
-    pub duration: f64,
-    /// The performer's set point, which is what the slider shows.
-    pub speed: f64,
-    /// The rate playback is actually running at, which is what the ghost
-    /// indicator draws. See /spec/video-playback-modulation.md.
-    pub effective_speed: f64,
-    /// How far a modulator has carried the playhead. The scrub bar's ghost sits
-    /// at `position - position_offset`, the point the swing is centred on.
-    pub position_offset: f64,
-    pub loop_mode: crate::video::LoopMode,
-    pub in_point: f64,
-    pub out_point: f64,
-    pub frame_rate: f64,
-    pub transport_sync: crate::video::DeckTransportSync,
-}
-
 /// Auto-transition state snapshot for UI display
 // Mirrors independent engine-side flags one-for-one; collapsing them would obscure the mapping.
 #[allow(clippy::struct_excessive_bools)]
@@ -192,23 +171,6 @@ pub struct AutoTransitionUI {
     pub transition_duration_is_beats: bool,
     pub transition_shader_name: Option<String>,
     pub phase: crate::channel::DeckTransitionPhase,
-}
-
-/// Normalized (`0..1`) point-cloud params backing the bottom-bar faders.
-/// See spec/depth-sensors.md.
-#[derive(Clone)]
-pub struct PointCloudUI {
-    pub orbit_yaw: f32,
-    pub orbit_pitch: f32,
-    pub zoom: f32,
-    pub point_size: f32,
-    pub depth_min: f32,
-    pub depth_max: f32,
-    pub seed: f32,
-    pub drift: f32,
-    pub disruption: f32,
-    /// 0 = Rgb, 1 = `DepthRamp`, 2 = Solid.
-    pub color_mode: u8,
 }
 
 /// Normalized (`0..1`) depth-preprocessor params backing the bottom-bar faders.
@@ -225,34 +187,6 @@ pub struct DepthPreproUI {
     pub mirror: bool,
 }
 
-/// Screen-capture controls for the deck detail panel.
-/// See spec/screen-capture.md.
-#[allow(clippy::struct_excessive_bools)]
-#[derive(Clone)]
-pub struct ScreenCaptureUI {
-    pub target_label: String,
-    pub is_display: bool,
-    /// Normalized rate, matching `deck/<uuid>/capture/rate`.
-    pub rate: f32,
-    pub rate_fps: f32,
-    /// `[x, y, w, h]`, normalized.
-    pub crop: [f32; 4],
-    pub show_cursor: bool,
-    pub exclude_varda: bool,
-    pub bound: bool,
-    pub connected: bool,
-}
-
-/// Tap controls for the deck detail panel. See spec/program-tap.md.
-#[derive(Clone)]
-pub struct TapUI {
-    /// `"master_program"` or `"channel"`.
-    pub kind: String,
-    pub channel_uuid: Option<String>,
-    pub label: String,
-    pub bound: bool,
-}
-
 /// Deck info for UI display
 // Flat projection of independent deck flags (solo/mute/transparent/source kind).
 #[allow(clippy::struct_excessive_bools)]
@@ -261,20 +195,13 @@ pub struct DeckUIInfo {
     pub deck_idx: usize,
     pub uuid: String,
     pub name: String,
-    /// True when this deck's source is an HTML/Servo instance.
-    pub is_html: bool,
-    /// True when this deck's source is a depth sensor (point-cloud) source.
-    pub is_depth_sensor: bool,
-    /// Point-cloud controls (None = not a depth-sensor source).
-    pub point_cloud: Option<PointCloudUI>,
+    /// The deck's source: its type and the state of its controls. The type's
+    /// schema is in [`UIData::sources`].
+    pub source: crate::engine::value::source::DeckSourceSnapshot,
     /// Depth-preprocessor controls (None = no `depth_sensor` preprocessor).
     pub depth_prepro: Option<DepthPreproUI>,
-    /// Screen-capture controls (None = not a screen-capture source).
-    pub screen_capture: Option<ScreenCaptureUI>,
-    /// Tap controls (None = not a tap source).
-    pub tap: Option<TapUI>,
     /// True when the interactive window is currently open for this deck.
-    pub is_html_interactive: bool,
+    pub is_interactive: bool,
     pub opacity: f32,
     /// Effective opacity accounting for auto-transition state (for visual feedback only)
     pub effective_opacity: f32,
@@ -283,11 +210,8 @@ pub struct DeckUIInfo {
     pub mute: bool,
     /// True when this deck preserves source alpha (transparent compositing).
     pub transparent: bool,
-    pub scaling_mode: Option<ScalingMode>,
     pub generator: ShaderParamsUI,
     pub effects: Vec<EffectInfo>,
-    /// Video playback state (only present for video decks)
-    pub video_playback: Option<VideoPlaybackUI>,
     /// Auto-transition state (None = no auto-transition configured)
     pub auto_transition: Option<AutoTransitionUI>,
     /// Per-deck render FPS setting
@@ -359,48 +283,10 @@ pub struct ChannelRenderStats {
     pub render_time_ms: f32,
 }
 
-/// SRT source entry for the library panel config card
-#[derive(Clone)]
-pub struct SrtLibraryEntry {
-    pub url: String,
-    pub mode: crate::stream::SrtMode,
-    pub connected: bool,
-}
-
-/// HLS source entry for the library panel
-#[derive(Clone)]
-pub struct HlsLibraryEntry {
-    pub url: String,
-    pub connected: bool,
-}
-
-/// DASH source entry for the library panel
-#[derive(Clone)]
-pub struct DashLibraryEntry {
-    pub url: String,
-    pub connected: bool,
-}
-
-/// RTMP source entry for the library panel
-#[derive(Clone)]
-pub struct RtmpLibraryEntry {
-    pub url: String,
-    pub mode: crate::stream::RtmpMode,
-    pub connected: bool,
-}
-
-/// HTML source entry for the library panel
-#[derive(Clone)]
-pub struct HtmlLibraryEntry {
-    pub url: String,
-    pub active: bool,
-}
-
 /// All collected data needed to render the UI
 // Aggregate view model; its bools are unrelated engine states, not a state machine.
 #[allow(clippy::struct_excessive_bools)]
 pub struct UIData {
-    pub generators: Vec<(String, usize)>,
     pub filters: Vec<(String, usize)>,
     pub shader_count: usize,
     pub channels: Vec<ChannelUIInfo>,
@@ -523,38 +409,11 @@ pub struct UIData {
     pub midi_mappings: Vec<MidiMappingUI>,
     /// Available camera devices (name, id)
     pub cameras: Vec<(String, crate::camera::CameraId)>,
-    /// Detected depth sensors (name, id)
-    pub depth_sensors: Vec<(String, crate::depth::DepthSensorId)>,
-    /// Capture targets found by the last screen-capture scan.
-    pub capture_targets: Vec<crate::engine::CaptureTargetSnapshot>,
-    /// Screen-recording permission state (`granted` / `denied` / …). Rendered
-    /// inline in the library panel, because it is the reason a capture deck can
-    /// be black. See spec/screen-capture.md § Permissions.
-    pub screen_capture_permission: String,
-    /// Whether screen capture is compiled in and not disabled by CLI flag.
-    pub screen_capture_available: bool,
-    /// Discovered NDI sources (name)
-    pub ndi_sources: Vec<String>,
-    /// Whether NDI runtime is available
-    pub ndi_available: bool,
-    /// Discovered Syphon servers (name)
-    pub syphon_sources: Vec<String>,
-    /// Whether Syphon framework is available
-    pub syphon_available: bool,
-    /// Discovered Spout senders (names)
-    pub spout_sources: Vec<String>,
-    /// Whether Spout can run here
-    pub spout_available: bool,
-    /// SRT library source configs for the library panel
-    pub srt_library_configs: Vec<SrtLibraryEntry>,
-    /// HLS library source configs
-    pub hls_library_configs: Vec<HlsLibraryEntry>,
-    /// DASH library source configs
-    pub dash_library_configs: Vec<DashLibraryEntry>,
-    /// RTMP library source configs
-    pub rtmp_library_configs: Vec<RtmpLibraryEntry>,
-    /// HTML library source configs
-    pub html_library_configs: Vec<HtmlLibraryEntry>,
+    /// Every registered deck source type: its controls and what its library
+    /// offers. See /spec/deck-source-providers.md.
+    pub sources: std::sync::Arc<Vec<crate::engine::value::provider::ProviderTypeSnapshot>>,
+    /// Every output sink type: its settings and what its library offers.
+    pub sinks: std::sync::Arc<Vec<crate::engine::value::provider::ProviderTypeSnapshot>>,
     // Recording/SRT state is now per-output (see OutputUI.is_active, active_duration)
     /// Transition sequences (multiple named sequences)
     pub sequences: Vec<SequenceUIData>,
@@ -633,6 +492,67 @@ pub struct UIData {
     pub deck_presets: Vec<String>,
     /// Loaded channel preset names (from `PresetLibrary`)
     pub channel_presets: Vec<String>,
+}
+
+impl UIData {
+    /// The schema of a source type, from the snapshot.
+    pub fn source_type(
+        &self,
+        source_type: &str,
+    ) -> Option<&crate::engine::value::provider::ProviderTypeSnapshot> {
+        self.sources.iter().find(|t| t.type_id == source_type)
+    }
+
+    /// The schema of an output sink type, from the snapshot.
+    pub fn sink_type(
+        &self,
+        type_id: &str,
+    ) -> Option<&crate::engine::value::provider::ProviderTypeSnapshot> {
+        self.sinks.iter().find(|t| t.type_id == type_id)
+    }
+
+    /// A surface source as the performer reads it: channel and deck names
+    /// rather than UUIDs. A reference to something that no longer exists reads
+    /// as missing rather than silently as the master.
+    pub fn surface_source_label(&self, source: &crate::renderer::context::OutputSource) -> String {
+        use crate::renderer::context::OutputSource;
+        let channel = |uuid: &str| {
+            self.channels
+                .iter()
+                .find(|c| c.uuid == uuid)
+                .map_or_else(|| "(missing channel)".to_string(), |c| c.name.clone())
+        };
+        match source {
+            OutputSource::Master => "Master".into(),
+            OutputSource::Domemaster => "Domemaster".into(),
+            OutputSource::Channel(uuid) => channel(uuid),
+            OutputSource::Channels(uuids) => uuids
+                .iter()
+                .map(|u| channel(u))
+                .collect::<Vec<_>>()
+                .join("+"),
+            OutputSource::Deck(uuid) => self
+                .channels
+                .iter()
+                .find_map(|c| {
+                    c.decks
+                        .iter()
+                        .find(|d| d.uuid == *uuid)
+                        .map(|d| format!("{} / {}", c.name, d.name))
+                })
+                .unwrap_or_else(|| "(missing deck)".into()),
+        }
+    }
+
+    /// The label `deck`'s source gives the control at `route`, so every panel
+    /// names a source control the way the deck's own column does.
+    pub fn source_param_label(&self, deck: &DeckUIInfo, route: &str) -> Option<&str> {
+        self.source_type(&deck.source.source_type)?
+            .params
+            .iter()
+            .find(|spec| spec.route.as_deref() == Some(route))
+            .map(|spec| spec.label.as_str())
+    }
 }
 
 /// Read-only snapshot of a single transition sequence
@@ -725,14 +645,14 @@ pub struct SurfaceAssignmentUI {
 pub struct OutputUI {
     pub uuid: String,
     pub name: String,
-    /// The output target (unified enum)
-    pub target: crate::renderer::context::OutputTarget,
-    /// Current display target label (e.g. "Windowed", "Rec: /path", "SRT: srt://...")
-    pub target_label: String,
-    /// Whether this output is windowed (has an OS window)
-    pub is_windowed: bool,
-    /// Whether this output is actively recording/streaming (headless only)
+    /// Where the output delivers: its sink type, settings and state. The
+    /// type's settings schema is in [`UIData::sinks`].
+    pub sink: crate::engine::types::OutputSinkSnapshot,
+    /// Whether the output is showing: a window always, a startable sink
+    /// while it runs.
     pub is_active: bool,
+    /// What the output shows with no surfaces assigned.
+    pub unassigned: crate::engine::value::render::Unassigned,
     /// Duration of active recording/streaming
     pub active_duration: std::time::Duration,
     pub surface_assignments: Vec<SurfaceAssignmentUI>,

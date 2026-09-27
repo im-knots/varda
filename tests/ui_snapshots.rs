@@ -186,29 +186,50 @@ fn snapshot_bottom_bar_deck_detail() {
 /// at all. See /spec/video-playback-modulation.md § UI.
 #[test]
 fn snapshot_bottom_bar_video_playback() {
+    use varda::source::DeckSourceProvider;
     let mut data = UIData::test_fixture();
     data.selected_deck = Some((0, 0));
     data.selected_channel = None;
     data.selected_master = false;
 
     let uuid = data.channels[0].decks[0].uuid.clone();
-    data.channels[0].decks[0].video_playback = Some(varda::usecases::ui::VideoPlaybackUI {
-        playing: true,
-        position: 4.25,
-        duration: 30.0,
-        // Set point and live rate differ, which is the whole point of the ghost:
-        // a golden with them equal would not show whether it is drawn.
-        speed: 1.0,
-        effective_speed: 2.4,
-        // Non-zero so the scrub bar's ghost sits away from the handle, where a
-        // golden can tell the two apart.
-        position_offset: -3.0,
-        loop_mode: varda::video::LoopMode::Loop,
-        in_point: 0.0,
-        out_point: 0.0,
-        frame_rate: 30.0,
-        transport_sync: varda::video::DeckTransportSync::default(),
+    // The video source type and a clip deck, as the engine would report them.
+    let provider = varda::video::provider::VideoProvider;
+    std::sync::Arc::make_mut(&mut data.sources).push(varda::source::ProviderTypeSnapshot {
+        type_id: provider.id().into(),
+        label: provider.label().into(),
+        icon: provider.icon().into(),
+        available: true,
+        unavailable_reason: None,
+        listed: true,
+        params: provider.params().to_vec(),
+        library: varda::source::LibrarySection::default(),
     });
+    let deck = &mut data.channels[0].decks[0];
+    deck.source.source_type = provider.id().into();
+    let info = &mut deck.source.status.info;
+    info.insert("playing".into(), true.into());
+    info.insert("position".into(), 4.25.into());
+    info.insert("duration".into(), 30.0.into());
+    // Set point and live rate differ, which is the whole point of the ghost:
+    // a golden with them equal would not show whether it is drawn.
+    info.insert("speed".into(), 1.0.into());
+    info.insert("effective_speed".into(), 2.4.into());
+    // Non-zero so the scrub bar's ghost sits away from the handle, where a
+    // golden can tell the two apart.
+    info.insert("position_offset".into(), (-3.0).into());
+    info.insert("in_point".into(), 0.0.into());
+    info.insert("out_point".into(), 0.0.into());
+    info.insert("frame_rate".into(), 30.0.into());
+    info.insert("loop_mode".into(), "Loop".into());
+    info.insert(
+        "transport_sync".into(),
+        serde_json::to_value(varda::video::DeckTransportSync::default()).unwrap(),
+    );
+    deck.source
+        .status
+        .params
+        .insert("speed".into(), varda::source::ControlValue::Float(0.5));
     for name in [
         varda::video::modulation::SPEED,
         varda::video::modulation::POSITION,

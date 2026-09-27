@@ -182,9 +182,7 @@ mod tests {
         DeckConfig {
             uuid: crate::ids::generate_short_uuid(),
             name: "test_deck".to_string(),
-            source: SourceConfig::SolidColor {
-                color: [1.0, 0.0, 0.0, 1.0],
-            },
+            source: crate::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
             effects: vec![],
             opacity: 0.8,
             transparent: false,

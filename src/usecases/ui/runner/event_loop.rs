@@ -239,17 +239,13 @@ impl ApplicationHandler for UIRunner {
             .map_or(self.config.target_fps, crate::app::VardaApp::target_fps);
 
         if self.config.headless {
-            // Headless: adaptive sleep-based pacing
-            if target_fps > 0
-                && let Some(deadline) = self.cadence_anchor
-            {
-                let now = std::time::Instant::now();
-                if deadline > now {
-                    std::thread::sleep(deadline - now);
-                }
+            // No window means no OS events, so the loop schedules its own
+            // wake-up for the next frame instead of waiting for one.
+            if headless_frame_due(target_fps, self.cadence_anchor, std::time::Instant::now()) {
+                self.render_headless(event_loop);
+                self.advance_cadence_anchor(target_fps);
             }
-            self.render_headless(event_loop);
-            self.advance_cadence_anchor(target_fps);
+            event_loop.set_control_flow(headless_wake(target_fps, self.cadence_anchor));
         } else {
             // Windowed: adaptive cadence pacing.
             // Only request_redraw when the cadence anchor says it's time.
@@ -280,5 +276,56 @@ impl ApplicationHandler for UIRunner {
                 }
             }
         }
+    }
+}
+
+/// Whether a headless frame is due: always when uncapped, otherwise once the
+/// next frame's start time has passed.
+fn headless_frame_due(
+    target_fps: u32,
+    next_frame: Option<std::time::Instant>,
+    now: std::time::Instant,
+) -> bool {
+    target_fps == 0 || next_frame.is_none_or(|due| due <= now)
+}
+
+/// When the headless loop wakes next. A headless run has no window, so no OS
+/// event arrives to wake it: it must always name a time, never plain `Wait`.
+fn headless_wake(
+    target_fps: u32,
+    next_frame: Option<std::time::Instant>,
+) -> winit::event_loop::ControlFlow {
+    use winit::event_loop::ControlFlow;
+    match next_frame {
+        Some(due) if target_fps > 0 => ControlFlow::WaitUntil(due),
+        _ => ControlFlow::Poll,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{headless_frame_due, headless_wake};
+    use std::time::{Duration, Instant};
+    use winit::event_loop::ControlFlow;
+
+    #[test]
+    fn a_headless_frame_is_due_at_its_start_time() {
+        let now = Instant::now();
+        let later = now + Duration::from_millis(10);
+        assert!(headless_frame_due(60, None, now));
+        assert!(headless_frame_due(60, Some(now), now));
+        assert!(!headless_frame_due(60, Some(later), now));
+        assert!(
+            headless_frame_due(0, Some(later), now),
+            "uncapped runs every pass"
+        );
+    }
+
+    #[test]
+    fn the_headless_loop_always_names_its_next_wake() {
+        let due = Instant::now() + Duration::from_millis(16);
+        assert_eq!(headless_wake(60, Some(due)), ControlFlow::WaitUntil(due));
+        assert_eq!(headless_wake(0, Some(due)), ControlFlow::Poll);
+        assert_eq!(headless_wake(60, None), ControlFlow::Poll);
     }
 }

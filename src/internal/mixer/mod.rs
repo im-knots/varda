@@ -462,22 +462,24 @@ impl Mixer {
         self.look_texture = None;
     }
 
-    /// Resolve every tap deck for this frame.
+    /// Resolve every source that re-enters Varda's own output (a tap) for this
+    /// frame.
     ///
     /// Allocates the targets that are actually read, exchanges each one with
     /// the live composite so reads and writes never collide, and binds the
-    /// resulting views onto the tapping decks. Must run before any deck
-    /// renders — that ordering is what makes a tap uniformly one frame old
-    /// instead of depending on where the tapping deck sits.
+    /// resulting views onto the decks that asked. Must run before any deck
+    /// renders — that ordering is what makes feedback uniformly one frame old
+    /// instead of depending on where the reading deck sits.
     /// See spec/program-tap.md.
     pub fn prepare_taps(&mut self, context: &GpuContext) {
+        use crate::source::FeedbackSource;
         let mut master_tapped = false;
         let mut tapped_channels = std::collections::HashSet::new();
         for channel in &self.channels {
             for slot in &channel.decks {
-                match slot.deck.tap.as_ref().map(|t| &t.source) {
-                    Some(crate::deck::TapSource::MasterProgram) => master_tapped = true,
-                    Some(crate::deck::TapSource::Channel(uuid)) => {
+                match slot.deck.source().feedback_request() {
+                    Some(FeedbackSource::MasterProgram) => master_tapped = true,
+                    Some(FeedbackSource::Channel(uuid)) => {
                         tapped_channels.insert(uuid.clone());
                     }
                     None => {}
@@ -506,21 +508,25 @@ impl Mixer {
 
         for channel in &mut self.channels {
             for slot in &mut channel.decks {
-                let Some(tap) = slot.deck.tap.as_ref() else {
+                let Some(request) = slot.deck.source().feedback_request().cloned() else {
                     continue;
                 };
-                let (view, label) = match &tap.source {
-                    crate::deck::TapSource::MasterProgram => {
+                let (view, label) = match &request {
+                    FeedbackSource::MasterProgram => {
                         (master_view.clone(), "Master Program".to_string())
                     }
-                    crate::deck::TapSource::Channel(uuid) => {
-                        (channel_views.get(uuid).cloned(), tap.source.label(&labels))
-                    }
+                    FeedbackSource::Channel(uuid) => (
+                        channel_views.get(uuid).cloned(),
+                        labels
+                            .iter()
+                            .find(|(u, _)| u == uuid)
+                            .map_or_else(|| format!("Channel {uuid}"), |(_, n)| n.clone()),
+                    ),
                 };
-                slot.deck.external_source_view = view;
-                // Renaming a channel has to move the tap deck's label with it,
-                // and this is the only place that sees both.
-                let name = format!("🔁 {label}");
+                slot.deck.source_mut().bind_feedback(view, &label);
+                // Renaming a channel has to move the tapping deck's label with
+                // it, and this is the only place that sees both.
+                let name = slot.deck.source().label();
                 if slot.deck.source_name() != name {
                     slot.deck.set_source_name(name);
                 }
@@ -646,20 +652,6 @@ impl Mixer {
     pub fn channels_mut(&mut self) -> &mut Vec<Channel> {
         &mut self.channels
     }
-
-    /// Push this frame's transport to every video deck's decode thread.
-    pub fn publish_video_chase(
-        &self,
-        sample: crate::video::VideoChaseBroadcast,
-        discontinuity: bool,
-    ) {
-        for channel in &self.channels {
-            for slot in &channel.decks {
-                slot.deck.publish_video_chase(sample, discontinuity);
-            }
-        }
-    }
-
     /// Number of channels.
     pub fn channel_count(&self) -> usize {
         self.channels.len()
@@ -1279,7 +1271,7 @@ mod tests {
         let mut mixer = Mixer::new(&gpu, 64, 64).unwrap();
 
         // Add a solid color deck to channel 0
-        let deck = crate::deck::Deck::new_solid_color(&gpu, [1.0, 0.0, 0.0, 1.0], 64, 64).unwrap();
+        let deck = crate::deck::Deck::solid_color(&gpu, [1.0, 0.0, 0.0, 1.0], 64, 64);
         mixer.channel_mut(0).unwrap().add_deck(deck);
         mixer.channel_mut(0).unwrap().decks[0].opacity = 0.33;
 
@@ -1350,7 +1342,7 @@ mod tests {
     // ── Channel preview / cue tests (issue #72) ──────────────────────
 
     fn add_solid_deck_to(mixer: &mut Mixer, gpu: &GpuContext, ch_idx: usize, color: [f32; 4]) {
-        let deck = crate::deck::Deck::new_solid_color(gpu, color, 64, 64).expect("solid deck");
+        let deck = crate::deck::Deck::solid_color(gpu, color, 64, 64);
         mixer
             .channel_mut(ch_idx)
             .expect("channel exists")

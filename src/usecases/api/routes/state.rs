@@ -78,22 +78,16 @@ state_route!(
     midi
 );
 state_route!(
+    sources,
+    "/api/state/sources",
+    "Every deck source type: its controls, whether this build can run it, and what its library offers.",
+    sources
+);
+state_route!(
     cameras,
     "/api/state/cameras",
     "Camera devices discovered by the last scan.",
     cameras
-);
-state_route!(
-    depth,
-    "/api/state/depth",
-    "Depth sensors discovered by the last scan.",
-    depth_sensors
-);
-state_route!(
-    screen_capture,
-    "/api/state/screen_capture",
-    "Screen capture state: enumerated targets, permission state, backend, and active session count.",
-    screen_capture
 );
 state_route!(
     clock,
@@ -132,12 +126,6 @@ state_route!(
     arrangement
 );
 state_route!(
-    libraries,
-    "/api/state/libraries",
-    "Saved stream and HTML sources: the HLS, DASH, RTMP, and HTML libraries, with whether each stream is connected and each page is showing.",
-    libraries
-);
-state_route!(
     keymap,
     "/api/state/keymap",
     "Keyboard shortcuts: every binding, whether keyboard learn is active, and what it will bind.",
@@ -173,43 +161,6 @@ state_route!(
     "Load on the machine running the engine (CPU, RAM, GPU utilization) and the GPU adapter it runs on.",
     system
 );
-state_route!(
-    streams,
-    "/api/state/streams",
-    "Active stream receivers with their URL, mode, and connection status.",
-    stream_receivers
-);
-
-/// NDI runtime availability and the source names found by the last scan.
-#[utoipa::path(get, path = "/api/state/ndi",
-    responses((status = 200, body = projection::NdiResponse), (status = 503, description = "Engine not yet initialized")),
-    tag = "State")]
-pub async fn ndi(State(state): State<SharedState>) -> impl IntoResponse {
-    match read_or_error(&state) {
-        Ok(s) => Json(projection::NdiResponse {
-            available: s.ndi_available,
-            sources: s.ndi_sources.clone(),
-        })
-        .into_response(),
-        Err((status, msg)) => (status, msg).into_response(),
-    }
-}
-
-/// Syphon framework availability and the server names found by the last scan.
-#[utoipa::path(get, path = "/api/state/syphon",
-    responses((status = 200, body = projection::SyphonResponse), (status = 503, description = "Engine not yet initialized")),
-    tag = "State")]
-pub async fn syphon(State(state): State<SharedState>) -> impl IntoResponse {
-    match read_or_error(&state) {
-        Ok(s) => Json(projection::SyphonResponse {
-            available: s.syphon_available,
-            sources: s.syphon_sources.clone(),
-        })
-        .into_response(),
-        Err((status, msg)) => (status, msg).into_response(),
-    }
-}
-
 /// Render loop counters: measured FPS, total frames rendered, and the configured target FPS.
 #[utoipa::path(get, path = "/api/state/performance",
     responses((status = 200, body = projection::PerformanceResponse), (status = 503, description = "Engine not yet initialized")),

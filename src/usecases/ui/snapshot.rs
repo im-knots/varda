@@ -31,9 +31,8 @@ pub(crate) fn build_ui_data(
     use crate::usecases::ui::{
         AudioDeviceUI, AudioPassthroughUI, AudioUIData, AutoTransitionUI, ChannelUIInfo,
         DeckUIInfo, DepthPreproUI, MidiDeviceUI, MidiMappingUI, ModAssignmentUI, ModSourceUI,
-        ModSourceUIEntry, MonitorInfo, NotificationUI, OutputUI, PointCloudUI, ScreenCaptureUI,
-        SequenceStepKindUI, SequenceStepUI, SequenceUIData, SrtLibraryEntry, SurfaceAssignmentUI,
-        SurfaceUI, TapUI, UIData, VideoPlaybackUI,
+        ModSourceUIEntry, MonitorInfo, NotificationUI, OutputUI, SequenceStepKindUI,
+        SequenceStepUI, SequenceUIData, SurfaceAssignmentUI, SurfaceUI, UIData,
     };
 
     // ── Map EngineState → UIData ──────────────────────────────────────
@@ -50,19 +49,6 @@ pub(crate) fn build_ui_data(
                 .map(|d| {
                     let generator = params_snapshot_to_ui(&d.generator);
                     let effects = d.effects.iter().map(effect_snapshot_to_ui).collect();
-                    let video_playback = d.video_playback.as_ref().map(|vp| VideoPlaybackUI {
-                        playing: vp.playing,
-                        position: vp.position,
-                        duration: vp.duration,
-                        speed: vp.speed,
-                        effective_speed: vp.effective_speed,
-                        position_offset: vp.position_offset,
-                        loop_mode: vp.loop_mode,
-                        in_point: vp.in_point,
-                        out_point: vp.out_point,
-                        frame_rate: vp.frame_rate,
-                        transport_sync: vp.transport_sync,
-                    });
                     let auto_transition = d.auto_transition.as_ref().map(|at| AutoTransitionUI {
                         enabled: at.enabled,
                         trigger_is_clip_end: at.trigger_is_clip_end,
@@ -72,18 +58,6 @@ pub(crate) fn build_ui_data(
                         transition_duration_is_beats: at.transition_duration_is_beats,
                         transition_shader_name: at.transition_shader_name.clone(),
                         phase: at.phase,
-                    });
-                    let point_cloud = d.point_cloud_params.as_ref().map(|p| PointCloudUI {
-                        orbit_yaw: p.orbit_yaw,
-                        orbit_pitch: p.orbit_pitch,
-                        zoom: p.zoom,
-                        point_size: p.point_size,
-                        depth_min: p.depth_min,
-                        depth_max: p.depth_max,
-                        seed: p.seed,
-                        drift: p.drift,
-                        disruption: p.disruption,
-                        color_mode: p.color_mode,
                     });
                     let depth_prepro = d.depth_prepro_params.as_ref().map(|p| DepthPreproUI {
                         sensor_name: p.sensor_name.clone(),
@@ -95,44 +69,21 @@ pub(crate) fn build_ui_data(
                         motion_gain: p.motion_gain,
                         mirror: p.mirror,
                     });
-                    let screen_capture = d.screen_capture.as_ref().map(|s| ScreenCaptureUI {
-                        target_label: s.target_label.clone(),
-                        is_display: s.is_display,
-                        rate: s.rate_norm,
-                        rate_fps: s.rate_fps,
-                        crop: s.crop,
-                        show_cursor: s.show_cursor,
-                        exclude_varda: s.exclude_varda,
-                        bound: s.bound,
-                        connected: s.connected,
-                    });
-                    let tap = d.tap.as_ref().map(|t| TapUI {
-                        kind: t.kind.clone(),
-                        channel_uuid: t.channel_uuid.clone(),
-                        label: t.label.clone(),
-                        bound: t.bound,
-                    });
                     DeckUIInfo {
                         deck_idx: d.idx,
                         uuid: d.uuid.clone(),
                         name: d.name.clone(),
-                        is_html: d.is_html,
-                        is_depth_sensor: d.is_depth_sensor,
-                        point_cloud,
+                        source: d.source.clone(),
                         depth_prepro,
-                        screen_capture,
-                        tap,
-                        is_html_interactive: d.is_html_interactive,
+                        is_interactive: d.is_interactive,
                         opacity: d.opacity,
                         effective_opacity: d.effective_opacity,
                         blend_mode: d.blend_mode,
                         solo: d.solo,
                         mute: d.mute,
                         transparent: d.transparent,
-                        scaling_mode: d.scaling_mode,
                         generator,
                         effects,
-                        video_playback,
                         auto_transition,
                         render_fps: d.render_fps,
                         effective_render_fps: d.effective_render_fps,
@@ -290,16 +241,14 @@ pub(crate) fn build_ui_data(
         .windows
         .iter()
         .map(|o| {
-            let is_windowed = o.target.is_windowed();
             OutputUI {
                 uuid: o.uuid.clone(),
                 name: o.name.clone(),
-                target: o.target.clone(),
-                target_label: o.target_label.clone(),
-                is_windowed,
-                // A window shows whenever it exists; a headless output only
+                sink: o.sink.clone(),
+                // A window shows whenever it exists; a startable sink only
                 // while it sends.
-                is_active: is_windowed || o.is_active,
+                is_active: !o.sink.startable || o.is_active,
+                unassigned: o.unassigned,
                 active_duration: std::time::Duration::from_secs_f64(o.active_seconds),
                 surface_assignments: o
                     .surface_assignments
@@ -466,7 +415,6 @@ pub(crate) fn build_ui_data(
         .collect();
 
     UIData {
-        generators: engine.registry.generators.clone(),
         filters: engine.registry.filters.clone(),
         shader_count: engine.registry.shader_count,
         channels,
@@ -543,68 +491,8 @@ pub(crate) fn build_ui_data(
         midi_devices,
         midi_mappings,
         cameras: engine.cameras.devices.clone(),
-        depth_sensors: engine.depth_sensors.devices.clone(),
-        capture_targets: engine.screen_capture.targets.clone(),
-        screen_capture_permission: engine.screen_capture.permission.clone(),
-        screen_capture_available: engine.screen_capture.available,
-        ndi_sources: engine.ndi_sources.clone(),
-        ndi_available: engine.ndi_available,
-        syphon_sources: engine.syphon_sources.clone(),
-        syphon_available: engine.syphon_available,
-        spout_sources: engine.spout_sources.clone(),
-        spout_available: engine.spout_available,
-        srt_library_configs: engine
-            .stream_receivers
-            .iter()
-            .map(|r| {
-                let mode = match r.mode.as_str() {
-                    "listener" => crate::stream::SrtMode::Listener,
-                    _ => crate::stream::SrtMode::Caller,
-                };
-                SrtLibraryEntry {
-                    url: r.url.clone(),
-                    mode,
-                    connected: r.connected,
-                }
-            })
-            .collect(),
-        hls_library_configs: engine
-            .libraries
-            .hls
-            .iter()
-            .map(|e| crate::usecases::ui::HlsLibraryEntry {
-                url: e.url.clone(),
-                connected: e.connected,
-            })
-            .collect(),
-        dash_library_configs: engine
-            .libraries
-            .dash
-            .iter()
-            .map(|e| crate::usecases::ui::DashLibraryEntry {
-                url: e.url.clone(),
-                connected: e.connected,
-            })
-            .collect(),
-        rtmp_library_configs: engine
-            .libraries
-            .rtmp
-            .iter()
-            .map(|e| crate::usecases::ui::RtmpLibraryEntry {
-                url: e.url.clone(),
-                mode: e.mode,
-                connected: e.connected,
-            })
-            .collect(),
-        html_library_configs: engine
-            .libraries
-            .html
-            .iter()
-            .map(|e| crate::usecases::ui::HtmlLibraryEntry {
-                url: e.url.clone(),
-                active: e.active,
-            })
-            .collect(),
+        sources: engine.sources.clone(),
+        sinks: engine.sinks.clone(),
 
         sequences,
         channel_count: engine.mixer.channels.len(),
