@@ -54,7 +54,10 @@ naga = { version = "30.0", features = ["spv-in", "wgsl-out", "hlsl-out"] }
 
 # ISF metadata parsing
 serde = { version = "1.0", features = ["derive", "rc"] }
-serde_json = "1.0"
+# `preserve_order` keeps provider configs (`ProviderConfig`) in the order their
+# fields were written, which saved files and the API show. Asked for here, not
+# left to whichever dependency happens to enable it (servo, only with `html`).
+serde_json = { version = "1.0", features = ["preserve_order"] }
 
 # UI
 egui = "0.36"
