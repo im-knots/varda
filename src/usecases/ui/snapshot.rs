@@ -241,16 +241,14 @@ pub(crate) fn build_ui_data(
         .windows
         .iter()
         .map(|o| {
-            let is_windowed = o.target.is_windowed();
             OutputUI {
                 uuid: o.uuid.clone(),
                 name: o.name.clone(),
-                target: o.target.clone(),
-                target_label: o.target_label.clone(),
-                is_windowed,
-                // A window shows whenever it exists; a headless output only
+                sink: o.sink.clone(),
+                // A window shows whenever it exists; a startable sink only
                 // while it sends.
-                is_active: is_windowed || o.is_active,
+                is_active: !o.sink.startable || o.is_active,
+                unassigned: o.unassigned,
                 active_duration: std::time::Duration::from_secs_f64(o.active_seconds),
                 surface_assignments: o
                     .surface_assignments
@@ -494,6 +492,7 @@ pub(crate) fn build_ui_data(
         midi_mappings,
         cameras: engine.cameras.devices.clone(),
         sources: engine.sources.clone(),
+        sinks: engine.sinks.clone(),
 
         sequences,
         channel_count: engine.mixer.channels.len(),

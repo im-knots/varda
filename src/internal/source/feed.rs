@@ -1,8 +1,7 @@
 //! A live texture from a device or another application, blitted onto the deck.
 
 use super::{
-    AlphaPolicy, ScaledBlit, SourceControl, SourceFrame, SourceParamError, SourceStatus,
-    SourceValue,
+    AlphaPolicy, ControlError, ControlStatus, ControlValue, ScaledBlit, SourceControl, SourceFrame,
 };
 use crate::renderer::GpuContext;
 use anyhow::Result;
@@ -51,24 +50,24 @@ impl Feed {
         self.blit.control(ctx);
     }
 
-    pub fn param(&self, name: &str) -> Option<SourceValue> {
+    pub fn param(&self, name: &str) -> Option<ControlValue> {
         self.blit.param(name)
     }
 
     /// # Errors
     ///
     /// Fails for anything but the scaling-mode control.
-    pub fn set_param(&mut self, name: &str, value: &SourceValue) -> Result<(), SourceParamError> {
+    pub fn set_param(&mut self, name: &str, value: &ControlValue) -> Result<(), ControlError> {
         self.blit
             .set_param(name, value)
-            .unwrap_or_else(|| Err(SourceParamError::Unknown(name.to_string())))
+            .unwrap_or_else(|| Err(ControlError::Unknown(name.to_string())))
     }
 
     /// Status with the scaling mode and whether frames are arriving.
-    pub fn status(&self, connected: Option<bool>) -> SourceStatus {
-        let mut status = SourceStatus {
+    pub fn status(&self, connected: Option<bool>) -> ControlStatus {
+        let mut status = ControlStatus {
             connected,
-            ..SourceStatus::default()
+            ..ControlStatus::default()
         };
         if let Some(v) = self.param(super::SCALING_MODE) {
             status.params.insert(super::SCALING_MODE.into(), v);

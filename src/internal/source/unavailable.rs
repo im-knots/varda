@@ -1,6 +1,6 @@
 //! The placeholder a deck gets when its source type cannot run.
 
-use super::{DeckSourceInstance, SourceConfig, SourceFrame, SourceStatus};
+use super::{ControlStatus, DeckSourceInstance, SourceConfig, SourceFrame};
 use anyhow::Result;
 
 /// A deck whose source type this build cannot run, or that failed to open.
@@ -28,11 +28,11 @@ impl UnavailableSource {
 
 impl DeckSourceInstance for UnavailableSource {
     fn source_type(&self) -> &str {
-        self.config.source_type()
+        self.config.type_id()
     }
 
     fn label(&self) -> String {
-        format!("⚠ {} (unavailable)", self.config.source_type())
+        format!("⚠ {} (unavailable)", self.config.type_id())
     }
 
     fn config(&self) -> SourceConfig {
@@ -44,10 +44,10 @@ impl DeckSourceInstance for UnavailableSource {
         Ok(())
     }
 
-    fn status(&self) -> SourceStatus {
-        let mut status = SourceStatus {
+    fn status(&self) -> ControlStatus {
+        let mut status = ControlStatus {
             bound: Some(false),
-            ..SourceStatus::default()
+            ..ControlStatus::default()
         };
         status.info.insert(
             "unavailable_reason".into(),

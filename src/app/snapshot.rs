@@ -705,12 +705,8 @@ pub(crate) fn build_output_snapshot(app: &VardaApp) -> OutputSnapshot {
             .outputs
             .iter()
             .map(|o| {
-                use crate::renderer::context::{OutputTarget, UnifiedOutput};
-                let assignments = match o {
-                    UnifiedOutput::Window(w) => &w.surface_assignments,
-                    UnifiedOutput::Headless(h) => &h.surface_assignments,
-                };
-                let surface_assignments = assignments
+                let surface_assignments = o
+                    .surface_assignments
                     .iter()
                     .map(|a| {
                         let surface_name = app
@@ -729,74 +725,48 @@ pub(crate) fn build_output_snapshot(app: &VardaApp) -> OutputSnapshot {
                         }
                     })
                     .collect();
-                let (
-                    target,
-                    is_on_display,
-                    is_active,
-                    calibration_mode,
-                    audio_passthrough,
-                    delivery,
-                ) = match o {
-                    UnifiedOutput::Window(w) => (
-                        w.target.clone(),
-                        matches!(w.target, OutputTarget::Display { .. }),
-                        false,
-                        w.calibration_mode,
-                        None,
-                        None,
-                    ),
-                    UnifiedOutput::Headless(h) => {
-                        let delivery = app.output.deliveries.get(&h.uuid);
-                        let audio = delivery
-                            .and_then(crate::delivery::Delivery::audio_health)
-                            .map(|health| AudioPassthroughSnapshot {
-                                device: h.target.audio_device().unwrap_or_default().to_string(),
-                                frames_written: health.frames_written,
-                                frames_dropped: health.frames_dropped,
-                                silence_spliced: health.silence_spliced,
-                            });
-                        let delivery = delivery
-                            .and_then(crate::delivery::Delivery::encoder_health)
-                            .map(|health| DeliveryHealthSnapshot {
-                                frames_written: health.frames_written,
-                                frames_dropped: health.frames_dropped,
-                                frames_padded: health.frames_padded,
-                            });
-                        (
-                            h.target.clone(),
-                            false,
-                            h.active,
-                            crate::renderer::context::CalibrationMode::Off,
-                            audio,
-                            delivery,
-                        )
-                    }
-                };
-                let (width, height) = match o {
-                    UnifiedOutput::Window(w) => {
-                        (w.preview_texture.width(), w.preview_texture.height())
-                    }
-                    UnifiedOutput::Headless(h) => (h.width, h.height),
-                };
+                let sink = o.sink();
+                // Audio health combines the encoder's counts with the drops
+                // the output's own subscription saw.
+                let audio_passthrough = o.audio.as_ref().and_then(|pass| {
+                    let health = sink.audio_health()?;
+                    Some(AudioPassthroughSnapshot {
+                        device: sink.audio_device().unwrap_or_default().to_string(),
+                        frames_written: health.frames_written,
+                        frames_dropped: pass.dropped.load(std::sync::atomic::Ordering::Relaxed),
+                        silence_spliced: health.silence_spliced,
+                    })
+                });
+                let delivery = sink.encoder_health().map(|health| DeliveryHealthSnapshot {
+                    frames_written: health.frames_written,
+                    frames_dropped: health.frames_dropped,
+                    frames_padded: health.frames_padded,
+                });
+                let (width, height) = o.size();
                 OutputWindowSnapshot {
-                    uuid: o.uuid().to_string(),
-                    name: o.name().to_string(),
-                    target_label: format!("{target}"),
-                    target,
-                    is_on_display,
-                    is_active,
+                    uuid: o.uuid.clone(),
+                    name: o.name.clone(),
+                    sink: crate::engine::types::OutputSinkSnapshot {
+                        type_id: sink.sink_type().to_string(),
+                        label: sink.label(),
+                        available: !sink.as_any().is::<crate::output::UnavailableSink>(),
+                        startable: sink.startable(),
+                        status: sink.status(),
+                    },
+                    is_active: o.active,
+                    unassigned: o.effective_unassigned(),
                     surface_assignments,
-                    calibration_mode,
+                    calibration_mode: o.calibration_mode,
                     presentation_request: o.presentation_request(),
                     resolved_presentation: o.resolved_presentation().clone(),
                     mode_availability: o.mode_availability().to_vec(),
-                    tonemap_override: o.tonemap_override(),
+                    tonemap_override: o.tonemap_override,
                     audio_passthrough,
                     delivery,
-                    edge_blend_mode: o.edge_blend_mode(),
-                    edge_blend: o.edge_blend(),
-                    rotation: o.rotation(),
-                    active_seconds: app.output.active_duration(o).as_secs_f64(),
+                    edge_blend_mode: o.edge_blend_mode,
+                    edge_blend: o.edge_blend,
+                    rotation: o.rotation,
+                    active_seconds: crate::app::Outputs::active_duration(o).as_secs_f64(),
                     width,
                     height,
                 }
@@ -824,8 +794,11 @@ pub(crate) fn build_output_snapshot(app: &VardaApp) -> OutputSnapshot {
             })
             .collect(),
         monitors: app
-            .output
-            .cached_monitors
+            .sources
+            .services
+            .get::<crate::output::window::Monitors>()
+            .map(|m| m.list.as_slice())
+            .unwrap_or_default()
             .iter()
             .enumerate()
             .map(|(i, (name, handle))| {
@@ -879,6 +852,11 @@ pub(crate) fn build_engine_state(app: &VardaApp) -> EngineState {
         midi: build_midi_snapshot(app),
         cameras: build_camera_snapshot(app),
         sources: app.sources.type_snapshots(&app.mixer.channel_labels()),
+        sinks: app.output.sink_type_cache.get_or_build(|| {
+            app.output.sinks.type_snapshots(&crate::output::SinkQuery {
+                services: &app.sources.services,
+            })
+        }),
         clock: build_clock_snapshot(app),
         transport: build_transport_snapshot(app),
         timecode: build_timecode_snapshot(app),
@@ -979,7 +957,7 @@ mod tests {
         let hls = state
             .sources
             .iter()
-            .find(|t| t.source_type == "Hls")
+            .find(|t| t.type_id == "Hls")
             .expect("every registered type is published");
         assert_eq!(hls.library.entries.len(), 1);
         assert_eq!(

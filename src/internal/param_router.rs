@@ -173,10 +173,13 @@ pub fn read_param(mixer: &Mixer, address: &ParamAddress) -> Option<f32> {
             let location = mixer.find_effect_by_uuid(effect)?;
             read_normalized(&mixer.effect_at(location)?.params, param)
         }
+        // Outputs and surfaces are not mixer state; the app reads them.
         ParamAddress::Action(_)
         | ParamAddress::CueFire { .. }
         | ParamAddress::Modulator { .. }
-        | ParamAddress::MacroValue { .. } => None,
+        | ParamAddress::MacroValue { .. }
+        | ParamAddress::Output { .. }
+        | ParamAddress::SurfaceSource { .. } => None,
     }
 }
 
@@ -356,14 +359,15 @@ pub fn apply_param_by_path(
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
             let source = mixer.channels_mut()[ch].decks[dk].deck.source_mut();
             crate::source::write_route(source, route, clamp_norm(value)).map_err(|e| match e {
-                crate::source::SourceParamError::Unknown(_) => ParamRouteError::UnknownPath {
+                crate::source::ControlError::Unknown(_) => ParamRouteError::UnknownPath {
                     path: path.to_string(),
                 },
-                crate::source::SourceParamError::Invalid(_)
-                | crate::source::SourceParamError::State(_) => ParamRouteError::WrongState {
-                    path: path.to_string(),
-                    reason: "the deck's source refused the value",
-                },
+                crate::source::ControlError::Invalid(_) | crate::source::ControlError::State(_) => {
+                    ParamRouteError::WrongState {
+                        path: path.to_string(),
+                        reason: "the deck's source refused the value",
+                    }
+                }
             })
         }
         ParamAddress::Deck {

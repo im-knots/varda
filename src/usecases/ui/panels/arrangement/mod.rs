@@ -2159,15 +2159,15 @@ mod tests {
         let mut data = fixture_with_arrangement();
         let provider = crate::video::provider::VideoProvider;
         std::sync::Arc::make_mut(&mut data.sources).push(
-            crate::engine::value::source::SourceTypeSnapshot {
-                source_type: provider.id().into(),
+            crate::engine::value::provider::ProviderTypeSnapshot {
+                type_id: provider.id().into(),
                 label: provider.label().into(),
                 icon: provider.icon().into(),
                 available: true,
                 unavailable_reason: None,
                 listed: true,
                 params: provider.params().to_vec(),
-                library: crate::engine::value::source::LibrarySection::default(),
+                library: crate::engine::value::provider::LibrarySection::default(),
             },
         );
         data.channels[0].decks[0].source.source_type = provider.id().into();

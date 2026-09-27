@@ -215,62 +215,29 @@ impl UIRunner {
     /// surface geometry and warp, and is the window's size); every headless
     /// source is a render-resolution composite, deck, or sub-mix.
     fn output_preview_source<'a>(
-        output: &'a crate::renderer::context::UnifiedOutput,
+        output: &'a crate::output::Output,
         mixer: &'a crate::mixer::Mixer,
     ) -> (&'a wgpu::TextureView, u32, u32) {
-        use crate::renderer::context::UnifiedOutput;
         let view = Self::output_preview_view(output, mixer);
-        let (w, h) = match output {
-            UnifiedOutput::Window(w) => (w.preview_texture.width(), w.preview_texture.height()),
-            UnifiedOutput::Headless(_) => {
-                let ct = mixer.composite_texture();
-                (ct.width(), ct.height())
-            }
+        let (w, h) = if output.preview_view().is_some() {
+            output.preview_size()
+        } else {
+            let ct = mixer.composite_texture();
+            (ct.width(), ct.height())
         };
         (view, w, h)
     }
 
-    /// Resolve the texture view to use for an output preview.
-    /// Windowed outputs use their intermediate render texture (shows surface geometry + warp).
-    /// Headless outputs resolve their source.
+    /// Resolve the texture view to use for an output preview: the output's
+    /// composed picture (surface geometry and warp) when its last frame made
+    /// one, otherwise the program it shows.
     pub(super) fn output_preview_view<'a>(
-        output: &'a crate::renderer::context::UnifiedOutput,
+        output: &'a crate::output::Output,
         mixer: &'a crate::mixer::Mixer,
     ) -> &'a wgpu::TextureView {
-        use crate::renderer::context::{OutputSource, UnifiedOutput};
-        match output {
-            UnifiedOutput::Window(w) => &w.preview_texture_view,
-            UnifiedOutput::Headless(h) => match &h.source {
-                OutputSource::Master => {
-                    mixer.program_view(crate::mixer::ProgramKey::sdr(mixer.tonemap_mode()))
-                }
-                OutputSource::Channel(idx) => mixer.channels().get(*idx).map_or_else(
-                    || mixer.program_view(crate::mixer::ProgramKey::sdr(mixer.tonemap_mode())),
-                    |c| &c.composite_view,
-                ),
-                OutputSource::Deck(ch, dk) => mixer
-                    .channels()
-                    .get(*ch)
-                    .and_then(|c| c.decks.get(*dk))
-                    .map_or_else(
-                        || mixer.program_view(crate::mixer::ProgramKey::sdr(mixer.tonemap_mode())),
-                        |s| &s.deck.texture_view,
-                    ),
-                OutputSource::Channels(indices) => {
-                    let mut sorted = indices.clone();
-                    sorted.sort_unstable();
-                    sorted.dedup();
-                    mixer.get_sub_mix_view(&sorted).unwrap_or_else(|| {
-                        mixer.program_view(crate::mixer::ProgramKey::sdr(mixer.tonemap_mode()))
-                    })
-                }
-                OutputSource::Domemaster => {
-                    // Domemaster preview falls back to composite view;
-                    // the actual domemaster texture is rendered in the output pipeline.
-                    mixer.program_view(crate::mixer::ProgramKey::sdr(mixer.tonemap_mode()))
-                }
-            },
-        }
+        output.preview_view().unwrap_or_else(|| {
+            mixer.program_view(crate::mixer::ProgramKey::sdr(mixer.tonemap_mode()))
+        })
     }
 
     /// Re-register GPU textures when deck/channel/output layout changes.

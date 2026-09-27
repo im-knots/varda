@@ -39,7 +39,7 @@ varda --headless --port 8080 --fps 60
 ```
 
 In headless mode:
-- No main window is created (output windows for projectors can still be created via API)
+- No main window is created (output windows and displays for projectors are still opened, from `stage.json` or through the API)
 - The render loop runs at `--fps` rate using sleep-based throttling
 - All outputs defined in `stage.json` auto-start on launch — NDI sends, SRT streams, HLS/DASH outputs, recordings, and display outputs (fullscreen on connected monitors) all activate automatically
 - Graceful shutdown on SIGTERM/SIGINT or `POST /api/shutdown`
@@ -149,6 +149,30 @@ curl -X PUT http://localhost:8080/api/params \
   -H "Content-Type: application/json" \
   -d '{"path": "deck/<deck_uuid>/capture/rate", "value": {"Float": 0.5}}'
 ```
+
+### Add an output
+
+Every kind of output is created through one route, from its sink config. `GET /api/library/outputs` lists the types, their settings, and what their libraries offer (monitors for a display). Fields you leave out take the type's defaults.
+
+```sh
+curl http://localhost:8080/api/library/outputs
+
+curl -X POST http://localhost:8080/api/outputs \
+  -H "Content-Type: application/json" \
+  -d '{"type": "recording", "path": "/shows/tonight.mov", "codec": "ProRes 422"}'
+
+# Change one setting by name, or point the output at another sink entirely
+curl -X PUT http://localhost:8080/api/outputs/<output_uuid>/sink/params/path \
+  -H "Content-Type: application/json" \
+  -d '{"value": "/shows/encore.mov"}'
+curl -X PUT http://localhost:8080/api/outputs/<output_uuid>/target \
+  -H "Content-Type: application/json" \
+  -d '{"type": "ndi_send", "sender_name": "Varda Main"}'
+
+curl -X POST http://localhost:8080/api/outputs/<output_uuid>/start
+```
+
+Outputs are addressable like everything else, so a controller can start a recording: `output/<uuid>/start`, `output/<uuid>/stop`, `output/<uuid>/active`, `output/<uuid>/calibration`, `output/<uuid>/rotation`, `output/<uuid>/surface/<surface_uuid>`, and each sink setting at `output/<uuid>/<name>`. A surface's content is `surface/<uuid>/source`, which takes text (`master`, `ch/<uuid>`, `chs/<uuid>,<uuid>`, `deck/<uuid>`, `domemaster`), for example from an OSC message with a string argument.
 
 ### Feed Varda's own output back in
 
@@ -737,20 +761,22 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/outputs` |  |
-| `POST` | `/api/outputs/headless` |  |
+| `GET` | `/api/library/outputs` | Every registered output type: its settings, whether this run can drive |
+| `POST` | `/api/outputs` | Create an output of any sink type. The body is the sink's config, for |
+| `POST` | `/api/outputs/types/{sink_type}/actions/{action}` | Run a library action an output type offers (`rescan`). Answers with the |
 | `DELETE` | `/api/outputs/{output_uuid}` |  |
 | `PUT` | `/api/outputs/{output_uuid}/calibration` |  |
-| `PUT` | `/api/outputs/{output_uuid}/display` |  |
 | `PUT` | `/api/outputs/{output_uuid}/edge-blend` |  |
 | `PUT` | `/api/outputs/{output_uuid}/edge-blend-mode` |  |
 | `PUT` | `/api/outputs/{output_uuid}/presentation` |  |
+| `PUT` | `/api/outputs/{output_uuid}/sink/params/{name}` | Write one of an output's sink settings, by the name its type declares in |
 | `POST` | `/api/outputs/{output_uuid}/start` |  |
 | `POST` | `/api/outputs/{output_uuid}/stop` |  |
 | `POST` | `/api/outputs/{output_uuid}/surfaces` |  |
 | `DELETE` | `/api/outputs/{output_uuid}/surfaces/{surface_uuid}` |  |
-| `PUT` | `/api/outputs/{output_uuid}/target` |  |
+| `PUT` | `/api/outputs/{output_uuid}/target` | Point an output at another sink, keeping its surfaces, warp, edge blend and |
 | `PUT` | `/api/outputs/{output_uuid}/tonemap` |  |
+| `PUT` | `/api/outputs/{output_uuid}/unassigned` | Choose what an output shows with no surfaces assigned. |
 
 ### Params
 

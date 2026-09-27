@@ -25,11 +25,12 @@ pub use services::Services;
 pub use share::{ShareProtocol, ShareProvider, ShareReceiver};
 pub use unavailable::UnavailableSource;
 
-pub use crate::engine::value::source::{
-    DeckSourceSnapshot, LibraryCreate, LibraryEntry, LibraryNotice, LibrarySection, ScalingMode,
-    SourceConfig, SourceParamKind, SourceParamSpec, SourceStatus, SourceTypeSnapshot, SourceValue,
-    WidgetHint,
+pub use crate::engine::value::provider::{
+    ControlKind, ControlSpec, ControlStatus, ControlValue, LibraryCreate, LibraryEntry,
+    LibraryNotice, LibrarySection, ProviderTypeSnapshot, WidgetHint,
 };
+
+pub use crate::engine::value::source::{DeckSourceSnapshot, ScalingMode, SourceConfig};
 
 use crate::audio::AudioData;
 use crate::isf::ISFShader;
@@ -42,7 +43,7 @@ use std::collections::HashMap;
 
 /// Why a control write was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SourceParamError {
+pub enum ControlError {
     /// This source has no control by that name or route.
     Unknown(String),
     /// The value has the wrong shape for the control.
@@ -51,7 +52,7 @@ pub enum SourceParamError {
     State(String),
 }
 
-impl std::fmt::Display for SourceParamError {
+impl std::fmt::Display for ControlError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unknown(name) => write!(f, "unknown source parameter '{name}'"),
@@ -60,7 +61,7 @@ impl std::fmt::Display for SourceParamError {
     }
 }
 
-impl std::error::Error for SourceParamError {}
+impl std::error::Error for ControlError {}
 
 /// What a source re-enters from Varda's own output. See spec/program-tap.md.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -206,7 +207,7 @@ pub trait DeckSourceProvider: 'static {
     fn icon(&self) -> &'static str;
 
     /// The controls every deck of this type has.
-    fn params(&self) -> &'static [SourceParamSpec] {
+    fn params(&self) -> &'static [ControlSpec] {
         &[]
     }
 
@@ -321,7 +322,7 @@ pub trait DeckSourceProvider: 'static {
 
     /// The instance's state for snapshots, with anything only the provider
     /// knows (a device's connection state) folded in.
-    fn status(&self, instance: &dyn DeckSourceInstance, _query: &SourceQuery) -> SourceStatus {
+    fn status(&self, instance: &dyn DeckSourceInstance, _query: &SourceQuery) -> ControlStatus {
         instance.status()
     }
 }
@@ -364,12 +365,12 @@ pub trait DeckSourceInstance: Send + 'static {
     fn after_submit(&mut self) {}
 
     /// The controls this source has. The same for every deck of a type.
-    fn schema(&self) -> &'static [SourceParamSpec] {
+    fn schema(&self) -> &'static [ControlSpec] {
         &[]
     }
 
     /// Current value of a control. Numeric controls read normalized.
-    fn param(&self, _name: &str) -> Option<SourceValue> {
+    fn param(&self, _name: &str) -> Option<ControlValue> {
         None
     }
 
@@ -378,8 +379,8 @@ pub trait DeckSourceInstance: Send + 'static {
     /// # Errors
     ///
     /// Fails for an unknown control or a value of the wrong shape.
-    fn set_param(&mut self, name: &str, _value: &SourceValue) -> Result<(), SourceParamError> {
-        Err(SourceParamError::Unknown(name.to_string()))
+    fn set_param(&mut self, name: &str, _value: &ControlValue) -> Result<(), ControlError> {
+        Err(ControlError::Unknown(name.to_string()))
     }
 
     /// Fire an action control.
@@ -387,12 +388,12 @@ pub trait DeckSourceInstance: Send + 'static {
     /// # Errors
     ///
     /// Fails for an unknown action.
-    fn trigger(&mut self, action: &str) -> Result<(), SourceParamError> {
-        Err(SourceParamError::Unknown(action.to_string()))
+    fn trigger(&mut self, action: &str) -> Result<(), ControlError> {
+        Err(ControlError::Unknown(action.to_string()))
     }
 
     /// State for snapshots. Defaults to the current value of every control.
-    fn status(&self) -> SourceStatus {
+    fn status(&self) -> ControlStatus {
         status_from_params(self)
     }
 
@@ -447,8 +448,8 @@ pub trait DeckSourceInstance: Send + 'static {
 }
 
 /// Every declared control's current value.
-pub fn status_from_params<S: DeckSourceInstance + ?Sized>(source: &S) -> SourceStatus {
-    let mut status = SourceStatus::default();
+pub fn status_from_params<S: DeckSourceInstance + ?Sized>(source: &S) -> ControlStatus {
+    let mut status = ControlStatus::default();
     for spec in source.schema() {
         if let Some(value) = source.param(&spec.name) {
             status.params.insert(spec.name.clone(), value);
@@ -467,27 +468,27 @@ pub fn write_route(
     source: &mut dyn DeckSourceInstance,
     route: &str,
     normalized: f32,
-) -> Result<(), SourceParamError> {
+) -> Result<(), ControlError> {
     let spec = source
         .schema()
         .iter()
         .find(|s| s.route.as_deref() == Some(route))
-        .ok_or_else(|| SourceParamError::Unknown(route.to_string()))?;
+        .ok_or_else(|| ControlError::Unknown(route.to_string()))?;
     let name = spec.name.clone();
     match spec.kind {
-        SourceParamKind::Action => {
+        ControlKind::Action => {
             if normalized > 0.5 {
                 source.trigger(&name)
             } else {
                 Ok(())
             }
         }
-        SourceParamKind::Float { .. } | SourceParamKind::Choice { .. } => {
-            source.set_param(&name, &SourceValue::Float(normalized.clamp(0.0, 1.0)))
+        ControlKind::Float { .. } | ControlKind::Choice { .. } => {
+            source.set_param(&name, &ControlValue::Float(normalized.clamp(0.0, 1.0)))
         }
-        SourceParamKind::Toggle => source.set_param(&name, &SourceValue::Bool(normalized > 0.5)),
-        SourceParamKind::Color | SourceParamKind::Text | SourceParamKind::Number { .. } => Err(
-            SourceParamError::Invalid(format!("'{route}' takes a typed value, not a fader")),
+        ControlKind::Toggle => source.set_param(&name, &ControlValue::Bool(normalized > 0.5)),
+        ControlKind::Color | ControlKind::Text | ControlKind::Number { .. } => Err(
+            ControlError::Invalid(format!("'{route}' takes a typed value, not a fader")),
         ),
     }
 }
@@ -515,11 +516,11 @@ pub fn route_is_modulatable(source: &dyn DeckSourceInstance, route: &str) -> boo
 /// # Errors
 ///
 /// Fails when the value is not a number or a boolean.
-pub fn expect_norm(name: &str, value: &SourceValue) -> Result<f32, SourceParamError> {
+pub fn expect_norm(name: &str, value: &ControlValue) -> Result<f32, ControlError> {
     value
         .as_f32()
         .map(|v| v.clamp(0.0, 1.0))
-        .ok_or_else(|| SourceParamError::Invalid(format!("'{name}' takes a number")))
+        .ok_or_else(|| ControlError::Invalid(format!("'{name}' takes a number")))
 }
 
 /// Read text out of a control write.
@@ -527,10 +528,10 @@ pub fn expect_norm(name: &str, value: &SourceValue) -> Result<f32, SourceParamEr
 /// # Errors
 ///
 /// Fails when the value is not text.
-pub fn expect_text<'v>(name: &str, value: &'v SourceValue) -> Result<&'v str, SourceParamError> {
+pub fn expect_text<'v>(name: &str, value: &'v ControlValue) -> Result<&'v str, ControlError> {
     value
         .as_str()
-        .ok_or_else(|| SourceParamError::Invalid(format!("'{name}' takes text")))
+        .ok_or_else(|| ControlError::Invalid(format!("'{name}' takes text")))
 }
 
 /// Read a color out of a control write.
@@ -538,10 +539,10 @@ pub fn expect_text<'v>(name: &str, value: &'v SourceValue) -> Result<&'v str, So
 /// # Errors
 ///
 /// Fails when the value is not a color.
-pub fn expect_color(name: &str, value: &SourceValue) -> Result<[f32; 4], SourceParamError> {
+pub fn expect_color(name: &str, value: &ControlValue) -> Result<[f32; 4], ControlError> {
     match value {
-        SourceValue::Color(c) => Ok(*c),
-        _ => Err(SourceParamError::Invalid(format!("'{name}' takes a color"))),
+        ControlValue::Color(c) => Ok(*c),
+        _ => Err(ControlError::Invalid(format!("'{name}' takes a color"))),
     }
 }
 
@@ -561,7 +562,7 @@ pub fn encode_config<T: serde::Serialize>(source_type: &str, value: &T) -> Sourc
 pub fn decode_config<T: serde::de::DeserializeOwned>(config: &SourceConfig) -> Result<T> {
     config
         .decode()
-        .map_err(|e| anyhow::anyhow!("invalid {} source config: {e}", config.source_type()))
+        .map_err(|e| anyhow::anyhow!("invalid {} source config: {e}", config.type_id()))
 }
 
 /// The normalized value a discrete control's modulation points at, ready for

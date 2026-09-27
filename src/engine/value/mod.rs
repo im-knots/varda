@@ -17,6 +17,7 @@ pub mod keymap;
 pub mod midi;
 pub mod notification;
 pub mod param;
+pub mod provider;
 pub mod render;
 pub mod source;
 pub mod surface;

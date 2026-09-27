@@ -534,6 +534,38 @@ pub fn provider() -> crate::source::ShareProvider<SpoutManager> {
     })
 }
 
+impl crate::output::share::ShareSender for SpoutManager {
+    fn is_available(&self) -> bool {
+        SpoutManager::is_available(self)
+    }
+
+    fn publish(
+        &mut self,
+        gpu: &crate::renderer::context::GpuContext,
+        name: &str,
+        view: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+    ) {
+        self.publish_frame_gpu(gpu, name, view, width, height);
+    }
+}
+
+/// Spout outputs: a sender other Windows applications read the output from.
+static SPOUT_OUTPUT: crate::output::share::ShareOutput = crate::output::share::ShareOutput {
+    id: "spout_sender",
+    label: "Spout",
+    icon: "🔗",
+    name_field: "sender_name",
+    unavailable: "Spout is available on Windows only",
+    presentation: crate::delivery::presentation::spout_presentation,
+};
+
+/// The Spout output type.
+pub fn sink_provider() -> crate::output::share::ShareSinkProvider<SpoutManager> {
+    crate::output::share::ShareSinkProvider::new(&SPOUT_OUTPUT)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -411,7 +411,9 @@ pub struct UIData {
     pub cameras: Vec<(String, crate::camera::CameraId)>,
     /// Every registered deck source type: its controls and what its library
     /// offers. See /spec/deck-source-providers.md.
-    pub sources: std::sync::Arc<Vec<crate::engine::value::source::SourceTypeSnapshot>>,
+    pub sources: std::sync::Arc<Vec<crate::engine::value::provider::ProviderTypeSnapshot>>,
+    /// Every output sink type: its settings and what its library offers.
+    pub sinks: std::sync::Arc<Vec<crate::engine::value::provider::ProviderTypeSnapshot>>,
     // Recording/SRT state is now per-output (see OutputUI.is_active, active_duration)
     /// Transition sequences (multiple named sequences)
     pub sequences: Vec<SequenceUIData>,
@@ -497,8 +499,49 @@ impl UIData {
     pub fn source_type(
         &self,
         source_type: &str,
-    ) -> Option<&crate::engine::value::source::SourceTypeSnapshot> {
-        self.sources.iter().find(|t| t.source_type == source_type)
+    ) -> Option<&crate::engine::value::provider::ProviderTypeSnapshot> {
+        self.sources.iter().find(|t| t.type_id == source_type)
+    }
+
+    /// The schema of an output sink type, from the snapshot.
+    pub fn sink_type(
+        &self,
+        type_id: &str,
+    ) -> Option<&crate::engine::value::provider::ProviderTypeSnapshot> {
+        self.sinks.iter().find(|t| t.type_id == type_id)
+    }
+
+    /// A surface source as the performer reads it: channel and deck names
+    /// rather than UUIDs. A reference to something that no longer exists reads
+    /// as missing rather than silently as the master.
+    pub fn surface_source_label(&self, source: &crate::renderer::context::OutputSource) -> String {
+        use crate::renderer::context::OutputSource;
+        let channel = |uuid: &str| {
+            self.channels
+                .iter()
+                .find(|c| c.uuid == uuid)
+                .map_or_else(|| "(missing channel)".to_string(), |c| c.name.clone())
+        };
+        match source {
+            OutputSource::Master => "Master".into(),
+            OutputSource::Domemaster => "Domemaster".into(),
+            OutputSource::Channel(uuid) => channel(uuid),
+            OutputSource::Channels(uuids) => uuids
+                .iter()
+                .map(|u| channel(u))
+                .collect::<Vec<_>>()
+                .join("+"),
+            OutputSource::Deck(uuid) => self
+                .channels
+                .iter()
+                .find_map(|c| {
+                    c.decks
+                        .iter()
+                        .find(|d| d.uuid == *uuid)
+                        .map(|d| format!("{} / {}", c.name, d.name))
+                })
+                .unwrap_or_else(|| "(missing deck)".into()),
+        }
     }
 
     /// The label `deck`'s source gives the control at `route`, so every panel
@@ -602,14 +645,14 @@ pub struct SurfaceAssignmentUI {
 pub struct OutputUI {
     pub uuid: String,
     pub name: String,
-    /// The output target (unified enum)
-    pub target: crate::renderer::context::OutputTarget,
-    /// Current display target label (e.g. "Windowed", "Rec: /path", "SRT: srt://...")
-    pub target_label: String,
-    /// Whether this output is windowed (has an OS window)
-    pub is_windowed: bool,
-    /// Whether this output is actively recording/streaming (headless only)
+    /// Where the output delivers: its sink type, settings and state. The
+    /// type's settings schema is in [`UIData::sinks`].
+    pub sink: crate::engine::types::OutputSinkSnapshot,
+    /// Whether the output is showing: a window always, a startable sink
+    /// while it runs.
     pub is_active: bool,
+    /// What the output shows with no surfaces assigned.
+    pub unassigned: crate::engine::value::render::Unassigned,
     /// Duration of active recording/streaming
     pub active_duration: std::time::Duration,
     pub surface_assignments: Vec<SurfaceAssignmentUI>,

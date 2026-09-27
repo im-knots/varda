@@ -13,7 +13,9 @@ use axum::response::IntoResponse;
 use serde::Deserialize;
 use utoipa::ToSchema;
 
-use crate::engine::value::source::{SourceConfig, SourceTypeSnapshot, SourceValue};
+use crate::engine::value::provider::{ControlValue, ProviderTypeSnapshot};
+
+use crate::engine::value::source::SourceConfig;
 use crate::engine::{CommandResult, EngineCommand};
 use crate::usecases::api::{SharedState, command_response};
 
@@ -27,7 +29,7 @@ async fn send(state: &SharedState, cmd: EngineCommand) -> axum::response::Respon
 /// Every registered deck source type: its controls, whether this build can
 /// run it, and what its library offers (discovered devices, saved URLs).
 #[utoipa::path(get, path = "/api/library/sources",
-    responses((status = 200, body = Vec<SourceTypeSnapshot>), (status = 503, description = "Engine not yet initialized")),
+    responses((status = 200, body = Vec<ProviderTypeSnapshot>), (status = 503, description = "Engine not yet initialized")),
     tag = "Sources")]
 pub async fn list(State(state): State<SharedState>) -> impl IntoResponse {
     match read_or_error(&state) {
@@ -85,7 +87,7 @@ pub struct SourceValueBody {
     /// Numeric controls take a normalized 0.0–1.0 value (a choice is bucketed,
     /// a toggle is on above 0.5); colors take `[r, g, b, a]`; text takes a
     /// string; a number control takes its own units.
-    pub value: SourceValue,
+    pub value: ControlValue,
 }
 
 /// Write one of a deck's source controls, by the name its type declares in

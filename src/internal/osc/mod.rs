@@ -84,6 +84,9 @@ pub const OSC_PREFIX: &str = "/varda/";
 pub enum OscInput {
     /// Parameter path + normalized value → [`crate::param_router::apply_param_by_path`]
     Param { path: String, value: f32 },
+    /// Parameter path + text, for an address that takes text
+    /// (`surface/<uuid>/source`).
+    Text { path: String, value: String },
     /// Clock BPM (raw, not normalized, e.g. 120.0)
     ClockBpm(f32),
     /// Clock beat phase (0.0–1.0)
@@ -140,6 +143,11 @@ pub fn parse_osc_message(addr: &str, args: &[OscType]) -> OscInput {
                 OscInput::Param {
                     path: path.to_string(),
                     value: v,
+                }
+            } else if let Some(OscType::String(text)) = args.first() {
+                OscInput::Text {
+                    path: path.to_string(),
+                    value: text.clone(),
                 }
             } else {
                 OscInput::Unknown(addr.to_string())
@@ -663,5 +671,21 @@ mod tests {
 
         // Must not panic even with multiple messages in a bundle
         OscReceiver::handle_packet(bundle, &tx);
+    }
+
+    /// A string argument is a text write, for an address that takes text.
+    #[test]
+    fn a_string_argument_is_a_text_write() {
+        let input = parse_osc_message(
+            "/varda/surface/s1/source",
+            &[OscType::String("ch/c1".into())],
+        );
+        assert_eq!(
+            input,
+            OscInput::Text {
+                path: "surface/s1/source".into(),
+                value: "ch/c1".into()
+            }
+        );
     }
 }

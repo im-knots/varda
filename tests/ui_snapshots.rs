@@ -195,8 +195,8 @@ fn snapshot_bottom_bar_video_playback() {
     let uuid = data.channels[0].decks[0].uuid.clone();
     // The video source type and a clip deck, as the engine would report them.
     let provider = varda::video::provider::VideoProvider;
-    std::sync::Arc::make_mut(&mut data.sources).push(varda::source::SourceTypeSnapshot {
-        source_type: provider.id().into(),
+    std::sync::Arc::make_mut(&mut data.sources).push(varda::source::ProviderTypeSnapshot {
+        type_id: provider.id().into(),
         label: provider.label().into(),
         icon: provider.icon().into(),
         available: true,
@@ -229,7 +229,7 @@ fn snapshot_bottom_bar_video_playback() {
     deck.source
         .status
         .params
-        .insert("speed".into(), varda::source::SourceValue::Float(0.5));
+        .insert("speed".into(), varda::source::ControlValue::Float(0.5));
     for name in [
         varda::video::modulation::SPEED,
         varda::video::modulation::POSITION,

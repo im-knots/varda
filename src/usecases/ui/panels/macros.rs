@@ -819,7 +819,7 @@ fn collect_target_paths(data: &UIData) -> Vec<(String, String)> {
             if let Some(ty) = data
                 .sources
                 .iter()
-                .find(|t| t.source_type == d.source.source_type)
+                .find(|t| t.type_id == d.source.source_type)
             {
                 for spec in ty.params.iter().filter(|s| s.modulatable) {
                     if let Some(route) = spec.route.as_deref() {

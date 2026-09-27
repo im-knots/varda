@@ -141,7 +141,7 @@ impl AccActions {
                 EngineCommand::MidiLearnSelect { path } => {
                     self.midi_learn_select = Some(path.clone());
                 }
-                EngineCommand::CreateOutput => self.output_create = true,
+                EngineCommand::CreateOutput { .. } => self.output_create = true,
                 EngineCommand::AddSurface { .. }
                 | EngineCommand::AddPolygonSurface { .. }
                 | EngineCommand::AddCircleSurface { .. } => self.surface_add = true,
@@ -698,7 +698,10 @@ fn click_new_output_creates_output_action() {
     harness.run();
     *harness.state_mut() = AccActions::default();
 
-    harness.get_by_label("+ Windowed").click();
+    // Any output type, from one menu; a window is the first entry.
+    harness.get_by_label("+ Output").click();
+    harness.run();
+    harness.get_by_label("🗔 Window").click();
     harness.run();
 
     assert!(
@@ -2214,7 +2217,7 @@ fn combo_scaling_mode_exists_when_deck_selected() {
     deck.source.source_type = "Image".into();
     deck.source.status.params.insert(
         "scaling_mode".into(),
-        varda::source::SourceValue::Float(varda::source::ScalingMode::Fit.to_value()),
+        varda::source::ControlValue::Float(varda::source::ScalingMode::Fit.to_value()),
     );
     let harness = make_harness(data);
 

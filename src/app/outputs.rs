@@ -1,9 +1,9 @@
-//! Output action processing for `VardaApp` (unified windowed + headless).
+//! Creating outputs, and the window host that gives window sinks their OS
+//! windows. See /spec/output-sink-providers.md.
 
 use super::VardaApp;
-use crate::renderer::context::{
-    HeadlessOutput, OutputSource, OutputTarget, OutputWindow, SurfaceAssignment, UnifiedOutput,
-};
+use crate::output::Output;
+use crate::renderer::context::SurfaceAssignment;
 use crate::renderer::edge_blend::SurfaceOverlapZones;
 
 /// Logical box a new output window is fitted into when the stage has no saved
@@ -31,177 +31,193 @@ fn default_output_window_size(render_width: u32, render_height: u32) -> (f64, f6
 }
 
 impl VardaApp {
-    /// Create pending outputs (deferred from UI actions).
-    /// Windowed/Display outputs need the event loop; headless outputs are created directly.
-    pub fn create_pending_outputs(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        use winit::window::Window;
-
-        let pending: Vec<crate::scene::OutputConfig> =
-            std::mem::take(&mut self.output.pending_output_creates);
-        for config in pending {
-            // One-time migration: pre-8i.5 `.varda` files stored warp on the
-            // assignment. Move it onto the surface (first assignment wins; an
-            // existing surface warp — e.g. dome mesh — takes precedence).
-            for a in &config.surface_assignments {
-                if let Some(warp) = &a.legacy_warp_mode
-                    && let Some((_, surface)) = self
-                        .output
-                        .surface_manager
-                        .find_by_uuid_mut(&a.surface_uuid)
-                    && surface.warp.is_none()
-                {
-                    surface.warp = Some(warp.clone());
-                }
-            }
-            let idx = self.output.outputs.len() + 1;
-            let name = if config.name.is_empty() {
-                format!("Output {idx}")
-            } else {
-                config.name.clone()
+    /// Build an output from its saved or requested config and add it. A sink
+    /// this run cannot build is kept as a placeholder holding its config, so
+    /// the output survives a save; the reason is shown. Returns the UUID.
+    ///
+    /// # Errors
+    ///
+    /// Fails only when no GPU resources can be built for the output at all.
+    pub(crate) fn create_output(
+        &mut self,
+        config: &crate::scene::OutputConfig,
+    ) -> anyhow::Result<String> {
+        let mut config = config.clone();
+        config.migrate_legacy();
+        let render = (self.render.width, self.render.height);
+        let (sink, reason) = {
+            let mut env = crate::output::SinkEnv {
+                gpu: &self.render.context,
+                services: &mut self.sources.services,
+                width: render.0,
+                height: render.1,
             };
-            let target = crate::persistence::config_to_target_pub(&config.target);
+            self.output.sinks.restore(&config.target, &mut env)
+        };
+        let name = if config.name.is_empty() {
+            format!("Output {}", self.output.outputs.len() + 1)
+        } else {
+            config.name.clone()
+        };
+        if let Some(reason) = reason {
+            let message = format!("Output '{name}' is unavailable here and kept as is: {reason}");
+            log::warn!("{message}");
+            self.session.notifications.warn(message);
+        }
+        let mut output = Output::new(
+            &self.render.context,
+            &self.sources.services,
+            config.uuid.clone(),
+            name.clone(),
+            sink,
+            render,
+        )?;
+        output.surface_assignments = config
+            .surface_assignments
+            .iter()
+            .map(|a| SurfaceAssignment {
+                surface_uuid: a.surface_uuid.clone(),
+                enabled: a.enabled,
+                overlap_zones: SurfaceOverlapZones::default(),
+            })
+            .collect();
+        // One-time migration: pre-8i.5 files stored warp on the assignment.
+        // Move it onto the surface (first assignment wins; an existing surface
+        // warp, such as a dome mesh, takes precedence).
+        for a in &config.surface_assignments {
+            if let Some(warp) = &a.legacy_warp_mode
+                && let Some((_, surface)) = self
+                    .output
+                    .surface_manager
+                    .find_by_uuid_mut(&a.surface_uuid)
+                && surface.warp.is_none()
+            {
+                surface.warp = Some(warp.clone());
+            }
+        }
+        output.edge_blend_mode = config.edge_blend_mode;
+        output.edge_blend = config.edge_blend;
+        output.calibration_mode = config.calibration_mode;
+        output.unassigned = config.unassigned;
+        output.tonemap_override = config.tonemap_override;
+        output.set_rotation(&self.render.context, config.rotation)?;
+        if let Err(error) = output.set_presentation_request(
+            &self.render.context,
+            &self.sources.services,
+            config.presentation,
+        ) {
+            log::warn!("Output '{name}' presentation request fell back during restore: {error}");
+        }
+        log::info!("Created output '{name}' ({})", output.sink().sink_type());
+        let uuid = output.uuid.clone();
+        self.output.outputs.push(output);
+        self.refresh_presentation_notification(self.output.outputs.len() - 1);
+        Ok(uuid)
+    }
 
-            if target.is_windowed() {
-                // Windowed/Display: needs an OS window
-                let mut window_attrs =
-                    Window::default_attributes().with_title(format!("Varda - {name}"));
-
-                // Restore saved window size, or open at the master's shape.
-                if let Some([w, h]) = config.window_size {
-                    window_attrs =
-                        window_attrs.with_inner_size(winit::dpi::PhysicalSize::new(w, h));
-                } else {
-                    let (w, h) = default_output_window_size(self.render.width, self.render.height);
-                    window_attrs = window_attrs.with_inner_size(winit::dpi::LogicalSize::new(w, h));
+    /// The window host: create the OS windows window sinks are waiting for,
+    /// and hand each its window. Windows need the event loop, so the runner
+    /// calls this with it once per loop.
+    pub fn create_pending_outputs(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        let render = (self.render.width, self.render.height);
+        for idx in 0..self.output.outputs.len() {
+            let output = &mut self.output.outputs[idx];
+            let Some(mut attrs) = output.sink().window_request() else {
+                continue;
+            };
+            attrs = attrs.with_title(format!("Varda - {}", output.name));
+            if attrs.inner_size.is_none() {
+                let (w, h) = default_output_window_size(render.0, render.1);
+                attrs = attrs.with_inner_size(winit::dpi::LogicalSize::new(w, h));
+            }
+            let window = match event_loop.create_window(attrs) {
+                Ok(window) => window,
+                Err(e) => {
+                    log::error!("Failed to create output window: {e}");
+                    self.session
+                        .notifications
+                        .error(format!("Failed to create window: {e}"));
+                    continue;
                 }
+            };
+            let gpu = &self.render.context;
+            let services = &self.sources.services;
+            let attached = output
+                .sink_mut()
+                .attach_window(gpu, services, window)
+                .and_then(|()| output.resize(gpu, render))
+                .and_then(|()| {
+                    output.set_presentation_request(gpu, services, output.presentation_request())
+                });
+            if let Err(e) = attached {
+                log::error!("Failed to open output window '{}': {e:#}", output.name);
+                self.session
+                    .notifications
+                    .error(format!("Failed to create output: {e:#}"));
+                continue;
+            }
+            if let Some(notice) = output.sink_mut().take_notice() {
+                log::warn!("{notice}");
+                self.session.notifications.warn(notice);
+            }
+            log::info!("Opened output window '{}'", output.name);
+            self.refresh_presentation_notification(idx);
+        }
+    }
 
-                // Set position hint in attributes (works on some platforms)
-                if let Some([x, y]) = config.window_position {
-                    window_attrs =
-                        window_attrs.with_position(winit::dpi::PhysicalPosition::new(x, y));
-                }
+    /// Refresh the monitors the display type offers, from the event loop.
+    pub fn refresh_monitors(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        if let Some(monitors) = self
+            .sources
+            .services
+            .get_mut::<crate::output::window::Monitors>()
+        {
+            monitors.list = event_loop
+                .available_monitors()
+                .map(|m| (m.name().unwrap_or_else(|| "Unknown".to_string()), m))
+                .collect();
+        }
+    }
 
-                match event_loop.create_window(window_attrs) {
-                    Ok(window) => {
-                        let window_static: &'static Window = Box::leak(Box::new(window));
-                        match OutputWindow::new(&self.render.context, window_static, name.clone()) {
-                            Ok(mut output) => {
-                                output.uuid.clone_from(&config.uuid);
-                                // Force position after full initialization — macOS
-                                // ignores with_position() in attrs and surface.configure()
-                                // can reset position, so we set it last.
-                                if let Some([x, y]) = config.window_position {
-                                    output.window.set_outer_position(
-                                        winit::dpi::PhysicalPosition::new(x, y),
-                                    );
-                                    log::info!(
-                                        "Restored output '{}' position to ({}, {})",
-                                        output.name,
-                                        x,
-                                        y
-                                    );
-                                }
-                                // Restore surface assignments from config
-                                output.surface_assignments = config
-                                    .surface_assignments
-                                    .iter()
-                                    .map(|a| SurfaceAssignment {
-                                        surface_uuid: a.surface_uuid.clone(),
-                                        enabled: a.enabled,
-                                        overlap_zones: SurfaceOverlapZones::default(),
-                                    })
-                                    .collect();
-                                output.edge_blend_mode = config.edge_blend_mode;
-                                output.edge_blend = config.edge_blend;
-                                output.rotation = config.rotation;
-                                // If Display target, set fullscreen — or fall back to
-                                // Windowed if the target monitor is no longer connected.
-                                if let OutputTarget::Display { ref name, .. } = target {
-                                    if let Some((_, handle)) =
-                                        self.output.cached_monitors.iter().find(|(n, _)| n == name)
-                                    {
-                                        output.set_target(target.clone(), Some(handle.clone()));
-                                    } else {
-                                        log::warn!(
-                                            "Monitor '{}' not available for output '{}' — falling back to windowed",
-                                            name,
-                                            output.name,
-                                        );
-                                        self.session.notifications.warn(format!(
-                                            "Monitor '{}' not connected — output '{}' opened as window",
-                                            name, output.name,
-                                        ));
-                                        output.set_target(OutputTarget::Windowed, None);
-                                    }
-                                }
-                                output.tonemap_override = config.tonemap_override;
-                                if let Err(error) = output.set_presentation_request(
-                                    &self.render.context,
-                                    config.presentation,
-                                ) {
-                                    log::warn!(
-                                        "Output '{}' presentation request fell back during restore: {error}",
-                                        output.name
-                                    );
-                                }
-                                log::info!("Created output window '{}'", output.name);
-                                self.output.outputs.push(UnifiedOutput::Window(output));
-                                self.refresh_presentation_notification(
-                                    self.output.outputs.len() - 1,
-                                );
-                            }
-                            Err(e) => {
-                                log::error!("Failed to create output window: {e}");
-                                self.session
-                                    .notifications
-                                    .error(format!("Failed to create output: {e}"));
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        log::error!("Failed to create output window: {e}");
-                        self.session
-                            .notifications
-                            .error(format!("Failed to create window: {e}"));
-                    }
-                }
-            } else {
-                // Headless output (Recording, SRT, NDI, Syphon)
-                let mut headless = HeadlessOutput::new(
-                    &self.render.context.device,
-                    name.clone(),
-                    OutputSource::Master,
-                    target,
-                    self.render.width,
-                    self.render.height,
-                    crate::delivery::presentation::plan,
+    /// Close the output shown in the OS window `window_id`. Returns its name.
+    pub fn close_output_window_by_id(
+        &mut self,
+        window_id: winit::window::WindowId,
+    ) -> Option<String> {
+        let idx = self
+            .output
+            .outputs
+            .iter()
+            .position(|o| o.sink().window_id() == Some(window_id))?;
+        let uuid = self.output.outputs[idx].uuid.clone();
+        let name = self.output.outputs[idx].name.clone();
+        let passthrough = self.output.close_output(&uuid).ok().flatten();
+        self.release_passthrough(passthrough);
+        Some(name)
+    }
+
+    /// Follow a resize of the OS window `window_id`.
+    pub fn resize_output_window_by_id(
+        &mut self,
+        window_id: winit::window::WindowId,
+        new_size: winit::dpi::PhysicalSize<u32>,
+    ) {
+        let render = (self.render.width, self.render.height);
+        let gpu = &self.render.context;
+        if let Some(output) = self
+            .output
+            .outputs
+            .iter_mut()
+            .find(|o| o.sink().window_id() == Some(window_id))
+        {
+            output
+                .sink_mut()
+                .window_resized(gpu, new_size.width, new_size.height);
+            if let Err(e) = output.resize(gpu, render) {
+                log::error!(
+                    "Output '{}' could not follow its window: {e:#}",
+                    output.name
                 );
-                headless.uuid.clone_from(&config.uuid);
-                // Restore surface assignments from config
-                headless.surface_assignments = config
-                    .surface_assignments
-                    .iter()
-                    .map(|a| SurfaceAssignment {
-                        surface_uuid: a.surface_uuid.clone(),
-                        enabled: a.enabled,
-                        overlap_zones: SurfaceOverlapZones::default(),
-                    })
-                    .collect();
-                headless.edge_blend_mode = config.edge_blend_mode;
-                headless.edge_blend = config.edge_blend;
-                headless.rotation = config.rotation;
-                headless.set_presentation_request(&self.render.context.device, config.presentation);
-                headless.tonemap_override = config.tonemap_override;
-                if matches!(&headless.target, OutputTarget::NdiSend { .. }) {
-                    let resolved = self
-                        .sources
-                        .service::<crate::ndi::NdiManager>()
-                        .resolve_presentation(config.presentation);
-                    headless.set_resolved_presentation(&self.render.context.device, resolved);
-                }
-                log::info!("Created headless output '{name}'");
-                self.output.outputs.push(UnifiedOutput::Headless(headless));
-                self.refresh_presentation_notification(self.output.outputs.len() - 1);
             }
         }
     }

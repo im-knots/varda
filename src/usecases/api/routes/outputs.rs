@@ -10,20 +10,23 @@ use crate::engine::{CommandResult, EngineCommand};
 use crate::usecases::api::{SharedState, command_response};
 
 #[derive(Deserialize, ToSchema)]
-pub struct SetDisplayBody {
-    /// Name of the display monitor to target.
-    pub monitor_name: String,
-}
-
-#[derive(Deserialize, ToSchema)]
 pub struct AssignSurfaceBody {
     /// UUID of the surface to assign to this output.
     pub surface_uuid: String,
 }
 
-#[utoipa::path(post, path = "/api/outputs", responses((status = 200, body = CommandResult)), tag = "Outputs")]
-pub async fn create(State(s): State<SharedState>) -> impl IntoResponse {
-    match s.send_command(EngineCommand::CreateOutput).await {
+/// Create an output of any sink type. The body is the sink's config, for
+/// example `{"type": "windowed"}`, `{"type": "recording", "path": "take.mov",
+/// "codec": "ProRes 422"}` or `{"type": "ndi_send", "sender_name": "Varda"}`;
+/// `GET /api/library/outputs` lists the types and their settings. Answers with
+/// the new output's UUID. A window opens on the next frame of a run with
+/// windows; a headless run cannot create one.
+#[utoipa::path(post, path = "/api/outputs", request_body = crate::engine::value::provider::ProviderConfig, responses((status = 200, body = CommandResult)), tag = "Outputs")]
+pub async fn create(
+    State(s): State<SharedState>,
+    Json(sink): Json<crate::engine::value::provider::ProviderConfig>,
+) -> impl IntoResponse {
+    match s.send_command(EngineCommand::CreateOutput { sink }).await {
         Ok(r) => command_response(r),
         Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
     }
@@ -36,24 +39,6 @@ pub async fn close(
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::CloseOutput { output_uuid })
-        .await
-    {
-        Ok(r) => command_response(r),
-        Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
-    }
-}
-
-#[utoipa::path(put, path = "/api/outputs/{output_uuid}/display", params(("output_uuid" = String, Path, description = "Output UUID")), request_body = SetDisplayBody, responses((status = 200, body = CommandResult), (status = 404, description = "Output not found")), tag = "Outputs")]
-pub async fn set_display(
-    State(s): State<SharedState>,
-    Path(output_uuid): Path<String>,
-    Json(b): Json<SetDisplayBody>,
-) -> impl IntoResponse {
-    match s
-        .send_command(EngineCommand::SetOutputDisplay {
-            output_uuid,
-            monitor_name: b.monitor_name,
-        })
         .await
     {
         Ok(r) => command_response(r),
@@ -98,25 +83,6 @@ pub async fn unassign_surface(
 
 // ── Headless / Start / Stop / Calibration / Warp ───────────────────
 
-#[derive(Deserialize, ToSchema)]
-pub struct CreateHeadlessBody {
-    /// Output target configuration for the headless output.
-    pub target: crate::renderer::context::OutputTarget,
-}
-
-#[utoipa::path(post, path = "/api/outputs/headless", request_body = CreateHeadlessBody, responses((status = 200, body = CommandResult)), tag = "Outputs")]
-pub async fn create_headless(
-    State(s): State<SharedState>,
-    Json(b): Json<CreateHeadlessBody>,
-) -> impl IntoResponse {
-    match s
-        .send_command(EngineCommand::CreateHeadlessOutput { target: b.target })
-        .await
-    {
-        Ok(r) => command_response(r),
-        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
-    }
-}
 #[utoipa::path(post, path = "/api/outputs/{output_uuid}/start", params(("output_uuid" = String, Path, description = "Output UUID")), responses((status = 200, body = CommandResult), (status = 404, description = "Output not found")), tag = "Outputs")]
 pub async fn start(
     State(s): State<SharedState>,
@@ -169,27 +135,103 @@ pub async fn set_calibration_mode(
 
 // ── Missing Parity Routes ─────────────────────────────────────────
 
-#[derive(Deserialize, ToSchema)]
-pub struct SetOutputTargetBody {
-    /// Output target configuration.
-    pub target: crate::renderer::context::OutputTarget,
-}
-
-#[utoipa::path(put, path = "/api/outputs/{output_uuid}/target", params(("output_uuid" = String, Path, description = "Output UUID")), request_body = SetOutputTargetBody, responses((status = 200, body = CommandResult), (status = 404, description = "Output not found")), tag = "Outputs")]
+/// Point an output at another sink, keeping its surfaces, warp, edge blend and
+/// presentation. The body is the new sink's config. A window moving between
+/// monitors keeps its window; a running recording or stream is stopped first.
+#[utoipa::path(put, path = "/api/outputs/{output_uuid}/target", params(("output_uuid" = String, Path, description = "Output UUID")), request_body = crate::engine::value::provider::ProviderConfig, responses((status = 200, body = CommandResult), (status = 404, description = "Output not found")), tag = "Outputs")]
 pub async fn set_target(
     State(s): State<SharedState>,
     Path(output_uuid): Path<String>,
-    Json(b): Json<SetOutputTargetBody>,
+    Json(sink): Json<crate::engine::value::provider::ProviderConfig>,
 ) -> impl IntoResponse {
     match s
-        .send_command(EngineCommand::SetOutputTarget {
+        .send_command(EngineCommand::SetOutputTarget { output_uuid, sink })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct SinkValueBody {
+    /// A text setting takes a string; a choice or toggle takes a normalized
+    /// 0.0–1.0 value, as its `GET /api/library/outputs` schema says.
+    pub value: crate::engine::value::provider::ControlValue,
+}
+
+/// Write one of an output's sink settings, by the name its type declares in
+/// `GET /api/library/outputs`. A setting that changes what an encoder is
+/// opened with stops a running output.
+#[utoipa::path(put, path = "/api/outputs/{output_uuid}/sink/params/{name}", params(("output_uuid" = String, Path, description = "Output UUID"), ("name" = String, Path, description = "Setting name")), request_body = SinkValueBody, responses((status = 200, body = CommandResult), (status = 404, description = "Output not found")), tag = "Outputs")]
+pub async fn set_sink_param(
+    State(s): State<SharedState>,
+    Path((output_uuid, name)): Path<(String, String)>,
+    Json(b): Json<SinkValueBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::SetSinkParam {
             output_uuid,
-            target: b.target,
+            name,
+            value: b.value,
         })
         .await
     {
         Ok(r) => command_response(r),
         Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct UnassignedBody {
+    /// `stage`, `program`, or null for the sink's default.
+    pub unassigned: Option<crate::engine::value::render::Unassigned>,
+}
+
+/// Choose what an output shows with no surfaces assigned.
+#[utoipa::path(put, path = "/api/outputs/{output_uuid}/unassigned", params(("output_uuid" = String, Path, description = "Output UUID")), request_body = UnassignedBody, responses((status = 200, body = CommandResult), (status = 404, description = "Output not found")), tag = "Outputs")]
+pub async fn set_unassigned(
+    State(s): State<SharedState>,
+    Path(output_uuid): Path<String>,
+    Json(b): Json<UnassignedBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::SetOutputUnassigned {
+            output_uuid,
+            unassigned: b.unassigned,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+/// Run a library action an output type offers (`rescan`). Answers with the
+/// type's fresh entries.
+#[utoipa::path(post, path = "/api/outputs/types/{sink_type}/actions/{action}", params(("sink_type" = String, Path, description = "Output type id"), ("action" = String, Path, description = "Library action")), responses((status = 200, body = CommandResult), (status = 404, description = "Unknown output type")), tag = "Outputs")]
+pub async fn sink_library_action(
+    State(s): State<SharedState>,
+    Path((sink_type, action)): Path<(String, String)>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::SinkLibraryAction { sink_type, action })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+/// Every registered output type: its settings, whether this run can drive
+/// it, and what its library offers (monitors for a display).
+#[utoipa::path(get, path = "/api/library/outputs",
+    responses((status = 200, body = Vec<crate::engine::value::provider::ProviderTypeSnapshot>), (status = 503, description = "Engine not yet initialized")),
+    tag = "Outputs")]
+pub async fn list_types(State(s): State<SharedState>) -> impl IntoResponse {
+    match super::read_or_error(&s) {
+        Ok(state) => Json(state.sinks.clone()).into_response(),
+        Err((status, msg)) => (status, msg).into_response(),
     }
 }
 

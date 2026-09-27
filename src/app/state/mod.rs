@@ -20,4 +20,4 @@ pub(crate) mod recorder;
 mod sequences;
 mod surfaces;
 
-pub(crate) use outputs::{encoder_fps, resolve_output_audio};
+pub(crate) use outputs::encoder_fps;

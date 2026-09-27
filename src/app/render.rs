@@ -2,8 +2,7 @@
 
 use super::VardaApp;
 use crate::mixer::Mixer;
-use crate::notifications::NotificationSystem;
-use crate::renderer::context::{OutputSource, SurfaceRenderInfo};
+use crate::renderer::context::{CalibrationMode, OutputSource, SurfaceRenderInfo};
 use crate::surface::ContentMapping;
 
 /// A file picker a source type asked for (see `LibraryCreate::File`): which
@@ -42,40 +41,6 @@ impl FileDialogResult {
             })
             .collect()
     }
-}
-
-/// Mutable external delivery sinks the headless render loop feeds frames and
-/// audio into. Bundled so the render helper stays under the argument-count lint
-/// while each manager remains a disjoint `&mut` borrow of `VardaApp`.
-struct HeadlessDeliverySinks<'a> {
-    ndi_manager: &'a mut crate::ndi::NdiManager,
-    #[cfg(target_os = "macos")]
-    syphon_manager: &'a mut crate::syphon::SyphonManager,
-    spout_manager: &'a mut crate::spout::SpoutManager,
-    audio_manager: &'a mut crate::audio::AudioManager,
-    notifications: &'a mut crate::notifications::NotificationSystem,
-    /// What each active headless output sends through, by output UUID.
-    deliveries: &'a mut std::collections::HashMap<String, crate::delivery::Delivery>,
-    /// Master render rate, resolved through `encoder_fps` so an uncapped stage
-    /// still names a real number. Used to reopen an ffmpeg output on the SRT
-    /// reconnect path — it must match what `cmd_start_output` used, or a
-    /// reconnected stream would be timed differently from the one it replaced —
-    /// and to declare the NDI sender's frame rate.
-    encoder_fps: u32,
-}
-
-/// Deactivate a headless output and tell the operator. A log line alone is
-/// not enough: the gray inactive dot is easy to miss mid-show.
-fn stop_headless_output(
-    name: &str,
-    active: &mut bool,
-    notifications: &mut NotificationSystem,
-    reason: impl Into<String>,
-) {
-    let reason = reason.into();
-    log::error!("{reason}");
-    *active = false;
-    notifications.error(format!("Output '{name}' stopped: {reason}"));
 }
 
 /// How long [`VardaApp::render_frame`] spent in each stage.
@@ -402,12 +367,10 @@ impl VardaApp {
             let mut seen: std::collections::HashSet<Vec<usize>> = std::collections::HashSet::new();
             let mut sub_mix_sources: Vec<Vec<usize>> = Vec::new();
             for surface in &self.output.surface_manager.surfaces {
-                if let OutputSource::Channels(indices) = &surface.source {
-                    let mut sorted = indices.clone();
-                    sorted.sort_unstable();
-                    sorted.dedup();
-                    if seen.insert(sorted.clone()) {
-                        sub_mix_sources.push(sorted);
+                if let OutputSource::Channels(uuids) = &surface.source {
+                    let positions = self.mixer.channel_positions(uuids);
+                    if seen.insert(positions.clone()) {
+                        sub_mix_sources.push(positions);
                     }
                 }
             }
@@ -419,10 +382,11 @@ impl VardaApp {
             let mut channel_indices: Vec<usize> = Vec::new();
             let mut seen = std::collections::HashSet::new();
             for surface in &self.output.surface_manager.surfaces {
-                if let OutputSource::Channel(idx) = &surface.source
-                    && seen.insert(*idx)
+                if let OutputSource::Channel(uuid) = &surface.source
+                    && let Some(idx) = self.mixer.find_channel_by_uuid(uuid)
+                    && seen.insert(idx)
                 {
-                    channel_indices.push(*idx);
+                    channel_indices.push(idx);
                 }
             }
             if !channel_indices.is_empty() {
@@ -457,176 +421,142 @@ impl VardaApp {
             None
         };
 
+        let fps = crate::app::state::encoder_fps(self.render.target_fps);
+        let mut ended: Vec<(String, crate::output::RenderedFrame)> = Vec::new();
         for output in &mut self.output.outputs {
-            match output {
-                crate::renderer::context::UnifiedOutput::Window(output) => {
-                    Self::render_window_output(
-                        output,
-                        context,
-                        mixer,
-                        &self.output.surface_manager,
-                        &self.output.calibration_textures,
-                        domemaster_view,
-                        render_aspect,
-                    );
+            if !output.is_live() {
+                continue;
+            }
+            let program_key = Self::program_key_for(output, mixer);
+            let program = || crate::output::Content::Picture {
+                view: mixer.program_view(program_key),
+                fit_aspect: Some(render_aspect),
+            };
+            let calibration = &self.output.calibration_textures;
+            let surfaces = &self.output.surface_manager;
+            let infos: Vec<SurfaceRenderInfo<'_>>;
+            let shown = if output.calibration_mode == CalibrationMode::Projector
+                && !calibration.is_empty()
+            {
+                // One full-frame test card over the whole output, bypassing
+                // surface geometry and warp: physical projector alignment.
+                crate::output::Content::Picture {
+                    view: &calibration[0].1,
+                    fit_aspect: None,
                 }
-                crate::renderer::context::UnifiedOutput::Headless(_) => {
-                    // Headless rendering handled separately (needs &mut for subprocess)
+            } else if surfaces.surfaces.is_empty() {
+                // No stage geometry, so the master's shape is the only thing
+                // that can define the picture.
+                program()
+            } else if output.surface_assignments.is_empty()
+                && output.effective_unassigned()
+                    == crate::engine::value::render::Unassigned::Program
+            {
+                program()
+            } else {
+                infos = Self::surface_infos(
+                    output,
+                    surfaces,
+                    calibration,
+                    mixer,
+                    domemaster_view,
+                    program_key,
+                );
+                crate::output::Content::Surfaces(&infos)
+            };
+            match output.render(context, &mut self.sources.services, shown, fps) {
+                crate::output::RenderedFrame::Stop(reason) => {
+                    ended.push((
+                        output.uuid.clone(),
+                        crate::output::RenderedFrame::Stop(reason),
+                    ));
                 }
+                crate::output::RenderedFrame::Restart => {
+                    ended.push((output.uuid.clone(), crate::output::RenderedFrame::Restart));
+                }
+                crate::output::RenderedFrame::Done | crate::output::RenderedFrame::Skipped => {}
             }
         }
-
-        // Render headless outputs (needs &mut self for subprocess feeding)
-        #[cfg(target_os = "macos")]
-        let (Some(ndi_manager), Some(syphon_manager), Some(spout_manager)) =
-            self.sources.services.get3_mut::<
-                crate::ndi::NdiManager,
-                crate::syphon::SyphonManager,
-                crate::spout::SpoutManager,
-            >()
-        else {
-            return;
-        };
-        #[cfg(not(target_os = "macos"))]
-        let (Some(ndi_manager), Some(spout_manager)) =
-            self.sources
-                .services
-                .get2_mut::<crate::ndi::NdiManager, crate::spout::SpoutManager>()
-        else {
-            return;
-        };
-        let sinks = HeadlessDeliverySinks {
-            ndi_manager,
-            #[cfg(target_os = "macos")]
-            syphon_manager,
-            spout_manager,
-            audio_manager: &mut self.audio.manager,
-            notifications: &mut self.session.notifications,
-            deliveries: &mut self.output.deliveries,
-            encoder_fps: crate::app::state::encoder_fps(self.render.target_fps),
-        };
-        Self::render_headless_outputs_inner(
-            &mut self.output.outputs,
-            context,
-            mixer,
-            &self.output.surface_manager,
-            sinks,
-            domemaster_view,
-        );
+        for (uuid, frame) in ended {
+            match frame {
+                crate::output::RenderedFrame::Stop(reason) => self.stop_output(&uuid, Some(reason)),
+                // A stream listener whose client left starts again for the
+                // next one, with a fresh audio tap.
+                crate::output::RenderedFrame::Restart => {
+                    self.stop_output(&uuid, None);
+                    if let crate::engine::CommandResult::Err { message, .. } =
+                        self.cmd_start_output(&uuid)
+                    {
+                        self.session
+                            .notifications
+                            .error(format!("Failed to restart output: {message}"));
+                    } else {
+                        log::info!("Output {uuid} restarted for its next client");
+                    }
+                }
+                crate::output::RenderedFrame::Done | crate::output::RenderedFrame::Skipped => {}
+            }
+        }
     }
 
-    fn render_window_output(
-        output: &mut crate::renderer::context::OutputWindow,
-        context: &crate::renderer::context::GpuContext,
-        mixer: &crate::mixer::Mixer,
-        surface_manager: &crate::surface::SurfaceManager,
-        calibration_textures: &[(wgpu::Texture, wgpu::TextureView)],
-        domemaster_view: Option<&wgpu::TextureView>,
-        render_aspect: f32,
-    ) {
-        use crate::renderer::context::CalibrationMode;
-
-        // Derived here rather than passed in: everything it needs is already an
-        // argument, and computing it at the call site duplicated the rule.
-        let program_key = crate::mixer::ProgramKey::for_output(
-            output
-                .tonemap_override
-                .unwrap_or_else(|| mixer.tonemap_mode()),
-            output
-                .resolved_presentation
-                .transfer
-                .is_hdr()
-                .then_some(output.resolved_presentation.peak_nits)
-                .flatten(),
-        );
-        // Projector calibration: one full-frame test card over the whole output,
-        // bypassing surface geometry/warp (physical projector alignment).
-        if output.calibration_mode == CalibrationMode::Projector && !calibration_textures.is_empty()
-        {
-            output.render(context, &calibration_textures[0].1);
-            output.window.request_redraw();
-            return;
-        }
-        // Surfaces calibration: each surface shows a colored test card through its warp.
-        let surfaces_cal = output.calibration_mode == CalibrationMode::Surfaces;
-        if surface_manager.surfaces.is_empty() {
-            // No stage geometry, so the window is the whole canvas and the
-            // master's shape is the only thing that can define the picture.
-            // Surfaces below are user-placed and carry their own aspect.
-            output.render_fit(context, mixer.program_view(program_key), render_aspect);
-        } else if !output.surface_assignments.is_empty() {
-            // Draw in global stacking order (surface-manager Vec order, index 0 =
-            // bottom), not per-assignment order — see 8i.12. For each surface, find
-            // its enabled assignment on this output.
-            let render_infos: Vec<SurfaceRenderInfo<'_>> = surface_manager
-                .surfaces
-                .iter()
-                .filter_map(|surface| {
+    /// The surfaces `output` shows, in global stacking order (surface-manager
+    /// order, index 0 = bottom; see 8i.12): its enabled assignments, or every
+    /// surface when it has none. Calibration swaps each surface's content for a
+    /// test card through its own warp.
+    fn surface_infos<'a>(
+        output: &crate::output::Output,
+        surface_manager: &'a crate::surface::SurfaceManager,
+        calibration_textures: &'a [(wgpu::Texture, wgpu::TextureView)],
+        mixer: &'a Mixer,
+        domemaster_view: Option<&'a wgpu::TextureView>,
+        program_key: crate::mixer::ProgramKey,
+    ) -> Vec<SurfaceRenderInfo<'a>> {
+        let calibrating = output.calibration_mode == CalibrationMode::Surfaces
+            && !calibration_textures.is_empty();
+        let all = output.surface_assignments.is_empty();
+        surface_manager
+            .surfaces
+            .iter()
+            .enumerate()
+            .filter_map(|(si, surface)| {
+                let (card, overlap_zones) = if all {
+                    (
+                        si,
+                        crate::renderer::edge_blend::SurfaceOverlapZones::default(),
+                    )
+                } else {
                     let (ai, assignment) = output
                         .surface_assignments
                         .iter()
                         .enumerate()
                         .find(|(_, a)| a.enabled && a.surface_uuid == surface.uuid)?;
-                    let bb = surface.bounding_box();
-                    let content_view = if surfaces_cal && !calibration_textures.is_empty() {
-                        &calibration_textures[ai % calibration_textures.len()].1
-                    } else {
-                        Self::resolve_source(mixer, &surface.source, domemaster_view, program_key)?
-                    };
-                    let (uv_scale, uv_offset) = if surfaces_cal {
-                        ([1.0, 1.0], [0.0, 0.0])
-                    } else {
-                        Self::compute_uv(surface.content_mapping, &bb)
-                    };
-                    Some(SurfaceRenderInfo {
-                        uuid: &surface.uuid,
-                        content_view,
-                        vertices: &surface.vertices,
-                        extra_contours: &surface.extra_contours,
-                        bounding_box: [bb.x, bb.y, bb.width, bb.height],
-                        uv_scale,
-                        uv_offset,
-                        warp_mode: surface.effective_warp(),
-                        overlap_zones: assignment.overlap_zones.clone(),
-                        hole_uv_contours: surface.hole_uv_contours(),
-                    })
+                    (ai, assignment.overlap_zones.clone())
+                };
+                let bb = surface.bounding_box();
+                let content_view = if calibrating {
+                    &calibration_textures[card % calibration_textures.len()].1
+                } else {
+                    Self::resolve_source(mixer, &surface.source, domemaster_view, program_key)?
+                };
+                let (uv_scale, uv_offset) = if calibrating {
+                    ([1.0, 1.0], [0.0, 0.0])
+                } else {
+                    Self::compute_uv(surface.content_mapping, &bb)
+                };
+                Some(SurfaceRenderInfo {
+                    uuid: &surface.uuid,
+                    content_view,
+                    vertices: &surface.vertices,
+                    extra_contours: &surface.extra_contours,
+                    bounding_box: [bb.x, bb.y, bb.width, bb.height],
+                    uv_scale,
+                    uv_offset,
+                    warp_mode: surface.effective_warp(),
+                    overlap_zones,
+                    hole_uv_contours: surface.hole_uv_contours(),
                 })
-                .collect();
-            output.render_surfaces(context, &render_infos);
-        } else {
-            let render_infos: Vec<SurfaceRenderInfo<'_>> = surface_manager
-                .surfaces
-                .iter()
-                .enumerate()
-                .filter_map(|(si, surface)| {
-                    let bb = surface.bounding_box();
-                    let content_view = if surfaces_cal && !calibration_textures.is_empty() {
-                        &calibration_textures[si % calibration_textures.len()].1
-                    } else {
-                        Self::resolve_source(mixer, &surface.source, domemaster_view, program_key)?
-                    };
-                    let (uv_scale, uv_offset) = if surfaces_cal {
-                        ([1.0, 1.0], [0.0, 0.0])
-                    } else {
-                        Self::compute_uv(surface.content_mapping, &bb)
-                    };
-                    Some(SurfaceRenderInfo {
-                        uuid: &surface.uuid,
-                        content_view,
-                        vertices: &surface.vertices,
-                        extra_contours: &surface.extra_contours,
-                        bounding_box: [bb.x, bb.y, bb.width, bb.height],
-                        uv_scale,
-                        uv_offset,
-                        warp_mode: surface.effective_warp(),
-                        overlap_zones: crate::renderer::edge_blend::SurfaceOverlapZones::default(),
-                        hole_uv_contours: surface.hole_uv_contours(),
-                    })
-                })
-                .collect();
-            output.render_surfaces(context, &render_infos);
-        }
-        output.window.request_redraw();
+            })
+            .collect()
     }
 
     /// Output transform this output wants.
@@ -634,14 +564,11 @@ impl VardaApp {
     /// The mixer's mode is the show-wide default; an output may override it. An
     /// output whose contract resolved to HDR grades to its own peak instead of
     /// to display white.
-    fn program_key_for(
-        output: &crate::renderer::context::UnifiedOutput,
-        mixer: &Mixer,
-    ) -> crate::mixer::ProgramKey {
+    fn program_key_for(output: &crate::output::Output, mixer: &Mixer) -> crate::mixer::ProgramKey {
         let resolved = output.resolved_presentation();
         crate::mixer::ProgramKey::for_output(
             output
-                .tonemap_override()
+                .tonemap_override
                 .unwrap_or_else(|| mixer.tonemap_mode()),
             resolved
                 .transfer
@@ -660,7 +587,7 @@ impl VardaApp {
     /// Every distinct program the active outputs need this frame, plus the
     /// show-wide one the previews read.
     fn program_keys_for_outputs(
-        outputs: &[crate::renderer::context::UnifiedOutput],
+        outputs: &[crate::output::Output],
         mixer: &Mixer,
     ) -> Vec<crate::mixer::ProgramKey> {
         let mut keys = vec![Self::master_program_key(mixer)];
@@ -681,20 +608,23 @@ impl VardaApp {
     ) -> Option<&'a wgpu::TextureView> {
         match source {
             OutputSource::Master => Some(mixer.program_view(program_key)),
-            OutputSource::Channel(ch_idx) => mixer
-                .get_tonemapped_channel_view(*ch_idx)
-                .or_else(|| mixer.channels().get(*ch_idx).map(|ch| &ch.composite_view)),
-            OutputSource::Channels(indices) => {
-                let mut sorted = indices.clone();
-                sorted.sort_unstable();
-                sorted.dedup();
-                mixer.get_sub_mix_view(&sorted)
+            OutputSource::Channel(uuid) => {
+                let ch_idx = mixer.find_channel_by_uuid(uuid)?;
+                mixer
+                    .get_tonemapped_channel_view(ch_idx)
+                    .or_else(|| mixer.channels().get(ch_idx).map(|ch| &ch.composite_view))
             }
-            OutputSource::Deck(ch_idx, deck_idx) => mixer
-                .channels()
-                .get(*ch_idx)
-                .and_then(|ch| ch.decks.get(*deck_idx))
-                .map(|slot| &slot.deck.texture_view),
+            OutputSource::Channels(uuids) => {
+                mixer.get_sub_mix_view(&mixer.channel_positions(uuids))
+            }
+            OutputSource::Deck(uuid) => {
+                let (ch_idx, deck_idx) = mixer.find_deck_by_uuid(uuid)?;
+                mixer
+                    .channels()
+                    .get(ch_idx)
+                    .and_then(|ch| ch.decks.get(deck_idx))
+                    .map(|slot| &slot.deck.texture_view)
+            }
             OutputSource::Domemaster => domemaster_view,
         }
     }
@@ -706,445 +636,6 @@ impl VardaApp {
         match mapping {
             ContentMapping::Fill => ([1.0, 1.0], [0.0, 0.0]),
             ContentMapping::Mapped => ([bb.width, bb.height], [bb.x, bb.y]),
-        }
-    }
-
-    /// Refresh monitors from the event loop.
-    pub fn refresh_monitors(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        self.output.cached_monitors = event_loop
-            .available_monitors()
-            .map(|m| {
-                let name = m.name().unwrap_or_else(|| "Unknown".to_string());
-                (name, m)
-            })
-            .collect();
-    }
-
-    /// Render all active headless outputs — readback + deliver frames.
-    // `sinks` bundles `&mut` borrows used mutably here; a shared ref won't do.
-    #[allow(clippy::needless_pass_by_value)]
-    fn render_headless_outputs_inner(
-        outputs: &mut [crate::renderer::context::UnifiedOutput],
-        context: &crate::renderer::context::GpuContext,
-        mixer: &crate::mixer::Mixer,
-        surface_manager: &crate::surface::SurfaceManager,
-        sinks: HeadlessDeliverySinks,
-        domemaster_view: Option<&wgpu::TextureView>,
-    ) {
-        for output in outputs.iter_mut() {
-            let h = match output {
-                crate::renderer::context::UnifiedOutput::Headless(h) if h.active => h,
-                _ => continue,
-            };
-
-            let mut encoder =
-                context
-                    .device
-                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("Headless Output Encoder"),
-                    });
-
-            let program_key = crate::mixer::ProgramKey::for_output(
-                h.tonemap_override.unwrap_or_else(|| mixer.tonemap_mode()),
-                h.resolved_presentation
-                    .transfer
-                    .is_hdr()
-                    .then_some(h.resolved_presentation.peak_nits)
-                    .flatten(),
-            );
-
-            // Post-process edge blend only for Manual mode; Auto uses per-surface shader blend.
-            let use_edge_blend = h.edge_blend_mode
-                == crate::renderer::edge_blend::EdgeBlendMode::Manual
-                && h.edge_blend.any_enabled();
-            // When edge blending: render to intermediate, then blend → final texture.
-            let render_target = if use_edge_blend {
-                &h.edge_blend_texture_view
-            } else {
-                &h.texture_view
-            };
-
-            if h.surface_assignments.is_empty() {
-                // Fallback: simple blit from source
-                let Some(source_view) =
-                    Self::resolve_source(mixer, &h.source, domemaster_view, program_key)
-                else {
-                    continue;
-                };
-                h.blit_pipeline.set_presentation(
-                    &context.queue,
-                    h.rotation.index(),
-                    &h.resolved_presentation,
-                );
-                let bind_group = h
-                    .blit_pipeline
-                    .create_bind_group(&context.device, source_view);
-                {
-                    let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Headless Blit Pass"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: render_target,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                store: wgpu::StoreOp::Store,
-                            },
-                            depth_slice: None,
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    });
-                    h.blit_pipeline.render(&mut rp, &bind_group);
-                }
-            } else {
-                // Surface-routed rendering: render assigned surfaces with warp
-                // Triangulate on the CPU, then prepare draws from the pipeline's
-                // persistent param/vertex pools (no per-frame GPU buffer alloc).
-                // Draw in global stacking order (surface-manager Vec order, index 0
-                // = bottom), not per-assignment order — see 8i.12.
-                let draws: Vec<crate::renderer::blit::PolygonDrawDesc<'_>> = surface_manager
-                    .surfaces
-                    .iter()
-                    .filter_map(|surface| {
-                        let assignment = h
-                            .surface_assignments
-                            .iter()
-                            .find(|a| a.enabled && a.surface_uuid == surface.uuid)?;
-                        let bb = surface.bounding_box();
-                        let content_view = Self::resolve_source(
-                            mixer,
-                            &surface.source,
-                            domemaster_view,
-                            program_key,
-                        )?;
-                        let (uv_scale, uv_offset) = Self::compute_uv(surface.content_mapping, &bb);
-                        // Warp is per-surface now; `None` = no warp (native
-                        // position). `effective_warp` applies auto-warp binding.
-                        let eff_warp = surface.effective_warp();
-                        // Combined (multi-contour) surface: a single warp mesh
-                        // can't represent disjoint contours, so render every
-                        // contour as a bounding-box UV fill (matches the editor).
-                        let (homography, vertices) = if surface.extra_contours.is_empty() {
-                            match eff_warp.as_ref() {
-                                Some(crate::surface::warp::WarpMode::CornerPin { corners }) => {
-                                    let src_corners = [
-                                        [bb.x, bb.y],
-                                        [bb.x + bb.width, bb.y],
-                                        [bb.x + bb.width, bb.y + bb.height],
-                                        [bb.x, bb.y + bb.height],
-                                    ];
-                                    let homography =
-                                        crate::surface::warp::compute_forward_homography(
-                                            &src_corners,
-                                            corners,
-                                        );
-                                    let verts =
-                                    crate::renderer::blit::PolygonBlitPipeline::triangulate_verts(
-                                        &surface.vertices,
-                                        bb.x,
-                                        bb.y,
-                                        bb.width,
-                                        bb.height,
-                                    );
-                                    (Some(homography), verts)
-                                }
-                                Some(crate::surface::warp::WarpMode::Mesh(mesh)) => (
-                                    None,
-                                    crate::renderer::blit::PolygonBlitPipeline::mesh_verts(mesh),
-                                ),
-                                // Bezier: tessellate the control cage into a mesh,
-                                // then bake to verts (identity homography).
-                                Some(crate::surface::warp::WarpMode::Bezier(b)) => (
-                                    None,
-                                    crate::renderer::blit::PolygonBlitPipeline::mesh_verts(
-                                        &b.tessellate(),
-                                    ),
-                                ),
-                                None => (
-                                    None,
-                                    crate::renderer::blit::PolygonBlitPipeline::triangulate_verts(
-                                        &surface.vertices,
-                                        bb.x,
-                                        bb.y,
-                                        bb.width,
-                                        bb.height,
-                                    ),
-                                ),
-                            }
-                        } else {
-                            (
-                                None,
-                                crate::renderer::blit::PolygonBlitPipeline::triangulate_multi(
-                                    &surface.vertices,
-                                    &surface.extra_contours,
-                                    bb.x,
-                                    bb.y,
-                                    bb.width,
-                                    bb.height,
-                                ),
-                            )
-                        };
-                        Some(crate::renderer::blit::PolygonDrawDesc {
-                            content_view,
-                            uv_scale,
-                            uv_offset,
-                            homography,
-                            overlap_zones: &assignment.overlap_zones,
-                            vertices,
-                            mask_uuid: &surface.uuid,
-                            mask_uv_contours: surface.hole_uv_contours(),
-                        })
-                    })
-                    .collect();
-
-                let (prepared, vertex_pool) =
-                    h.polygon_pipeline
-                        .prepare(&context.device, &context.queue, &draws);
-
-                {
-                    let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Headless Surface Pass"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: render_target,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                store: wgpu::StoreOp::Store,
-                            },
-                            depth_slice: None,
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    });
-                    h.polygon_pipeline.draw(&mut rp, &prepared, &vertex_pool);
-                }
-            }
-
-            // Apply edge blend post-process if any edge is enabled
-            if use_edge_blend {
-                h.edge_blend_pipeline.render(
-                    &context.device,
-                    &context.queue,
-                    &mut encoder,
-                    &h.edge_blend_texture_view,
-                    &h.texture_view,
-                    &h.edge_blend,
-                );
-            }
-
-            // Syphon (macOS) publishes GPU-side (zero-copy): skip the CPU
-            // readback entirely and hand the rendered texture to the server.
-            #[cfg(target_os = "macos")]
-            let is_syphon = matches!(
-                &h.target,
-                crate::renderer::context::OutputTarget::SyphonServer { .. }
-            );
-            #[cfg(not(target_os = "macos"))]
-            let is_syphon = false;
-
-            // Spout publishes GPU-side for the same reason, so it skips the
-            // readback too.
-            let is_spout = matches!(
-                &h.target,
-                crate::renderer::context::OutputTarget::SpoutSender { .. }
-            );
-
-            // NDI converts to its pixel format on the GPU and reads that back,
-            // so it skips the RGBA readback. See /spec/performance-hot-paths.md A.
-            let is_ndi = matches!(
-                &h.target,
-                crate::renderer::context::OutputTarget::NdiSend { .. }
-            );
-            if is_ndi {
-                if let crate::renderer::context::OutputTarget::NdiSend { sender_name } = &h.target
-                    && let Err(error) = sinks.ndi_manager.begin_frame(
-                        sender_name,
-                        crate::ndi::FrameConversion {
-                            device: &context.device,
-                            queue: &context.queue,
-                            encoder: &mut encoder,
-                            source: &h.texture_view,
-                            width: h.width,
-                            height: h.height,
-                            dither: h.presentation_request.dither,
-                            pixel_format: h.resolved_presentation.pixel_format.clone(),
-                        },
-                    )
-                {
-                    stop_headless_output(
-                        &h.name,
-                        &mut h.active,
-                        sinks.notifications,
-                        format!("NDI P216 conversion failed: {error}"),
-                    );
-                }
-            } else if !is_syphon {
-                // Enqueue readback copy from the now-rendered texture
-                h.readback.begin_readback(&mut encoder, &h.texture);
-            }
-
-            // Measure content light levels for an active HDR recording. The
-            // source is the frame about to be written, so what is measured is
-            // what the file contains. See /spec/hdr-recording-output.md.
-            if h.active && h.resolved_presentation.transfer.is_hdr() {
-                if h.light_meter.is_none() {
-                    match crate::renderer::measure::ContentLightMeter::new(&context.device) {
-                        Ok(meter) => h.light_meter = Some(Box::new(meter)),
-                        Err(error) => {
-                            log::warn!(
-                                "Output '{}': content light measurement unavailable: {error}",
-                                h.name
-                            );
-                        }
-                    }
-                }
-                if let Some(meter) = h.light_meter.as_mut() {
-                    meter.measure(
-                        &context.device,
-                        &mut encoder,
-                        &h.texture_view,
-                        h.width,
-                        h.height,
-                    );
-                }
-            } else if h.light_meter.is_some() {
-                h.light_meter = None;
-            }
-            context.submit(std::iter::once(encoder.finish()));
-
-            if is_ndi
-                && let crate::renderer::context::OutputTarget::NdiSend { sender_name } = &h.target
-                && let Err(error) = sinks.ndi_manager.try_send(
-                    sender_name,
-                    &context.device,
-                    h.width,
-                    h.height,
-                    sinks.encoder_fps,
-                )
-            {
-                stop_headless_output(
-                    &h.name,
-                    &mut h.active,
-                    sinks.notifications,
-                    format!("NDI P216 submission failed: {error}"),
-                );
-            }
-
-            #[cfg(target_os = "macos")]
-            if let crate::renderer::context::OutputTarget::SyphonServer { ref server_name } =
-                h.target
-            {
-                sinks.syphon_manager.publish_frame_gpu(
-                    context,
-                    server_name,
-                    &h.texture_view,
-                    h.width,
-                    h.height,
-                );
-            }
-
-            if let crate::renderer::context::OutputTarget::SpoutSender { ref sender_name } =
-                h.target
-            {
-                sinks.spout_manager.publish_frame_gpu(
-                    context,
-                    sender_name,
-                    &h.texture_view,
-                    h.width,
-                    h.height,
-                );
-            }
-
-            // Fold in any completed light measurement. Asynchronous like every
-            // other readback, so a frame's numbers arrive a frame or two later,
-            // which is immaterial for a running maximum.
-            if let Some(meter) = h.light_meter.as_mut()
-                && let Some(levels) = meter.try_read(&context.device)
-            {
-                h.light_levels.observe(levels);
-            }
-
-            // Deliver previous frame's readback data to target
-            if !is_syphon
-                && !is_spout
-                && !is_ndi
-                && let Some(frame_data) = h.readback.try_read(&context.device)
-            {
-                // Looked up before inserting, so a running output costs no key
-                // allocation per frame.
-                if !sinks.deliveries.contains_key(&h.uuid) {
-                    sinks
-                        .deliveries
-                        .insert(h.uuid.clone(), crate::delivery::Delivery::default());
-                }
-                let Some(delivery) = sinks.deliveries.get_mut(&h.uuid) else {
-                    continue;
-                };
-                match delivery.deliver(&h.target, &h.name, frame_data) {
-                    crate::delivery::DeliveryResult::Failed(msg) => {
-                        stop_headless_output(&h.name, &mut h.active, sinks.notifications, msg);
-                    }
-                    crate::delivery::DeliveryResult::SrtNeedsRestart => {
-                        // The disconnected client's PCM tap is now stale; drop it,
-                        // then respawn the listener with a fresh audio tap so the
-                        // reconnecting client gets audio again (parity with start).
-                        if let Some(stale) = delivery.audio.take() {
-                            sinks
-                                .audio_manager
-                                .unsubscribe_pcm(stale.source_id, stale.token);
-                        }
-                        let (url, codec) = match &h.target {
-                            crate::renderer::context::OutputTarget::SrtStream {
-                                url,
-                                codec,
-                                ..
-                            } => (url.clone(), codec.clone()),
-                            _ => continue,
-                        };
-                        let device = h.target.audio_device().map(str::to_string);
-                        let name = h.name.clone();
-                        let (audio_input, passthrough) = super::state::resolve_output_audio(
-                            sinks.audio_manager,
-                            sinks.notifications,
-                            device.as_deref(),
-                            &name,
-                        );
-                        match crate::delivery::FfmpegSubprocess::spawn_srt(
-                            &url,
-                            &codec,
-                            h.presentation_request,
-                            h.width,
-                            h.height,
-                            sinks.encoder_fps,
-                            audio_input,
-                        ) {
-                            Ok(new_sub) => {
-                                delivery.subprocess = Some(new_sub);
-                                delivery.audio = passthrough;
-                                log::info!("SRT restarted for '{name}'");
-                            }
-                            Err(e) => {
-                                if let Some(pass) = passthrough {
-                                    sinks
-                                        .audio_manager
-                                        .unsubscribe_pcm(pass.source_id, pass.token);
-                                }
-                                stop_headless_output(
-                                    &name,
-                                    &mut h.active,
-                                    sinks.notifications,
-                                    format!("Failed to restart SRT listener: {e}"),
-                                );
-                            }
-                        }
-                    }
-                    crate::delivery::DeliveryResult::Ok => {}
-                }
-            }
         }
     }
 
@@ -1261,26 +752,5 @@ mod tests {
             60,
             "Window should cap at 60 entries"
         );
-    }
-
-    #[test]
-    fn stopping_a_headless_output_toasts_the_operator() {
-        let mut notifications = crate::notifications::NotificationSystem::new();
-        let mut active = true;
-        super::stop_headless_output(
-            "Show rec",
-            &mut active,
-            &mut notifications,
-            "Subprocess write failed for 'Show rec'",
-        );
-        assert!(!active);
-        let visible = notifications.visible();
-        assert_eq!(visible.len(), 1);
-        assert_eq!(
-            visible[0].level,
-            crate::notifications::NotificationLevel::Error
-        );
-        assert!(visible[0].message.contains("Show rec"));
-        assert!(visible[0].message.contains("stopped"));
     }
 }

@@ -11,7 +11,7 @@ use crate::BlendMode;
 use crate::channel::DeckRenderFps;
 use crate::engine::EngineCommand;
 use crate::engine::value::param::{DeckTarget, ParamAddress};
-use crate::engine::value::source::{SourceParamKind, SourceParamSpec, SourceValue, WidgetHint};
+use crate::engine::value::provider::{ControlKind, ControlSpec, ControlValue, WidgetHint};
 use crate::modulation::DEFAULT_ASSIGNMENT_AMOUNT;
 use crate::params::ParamValue;
 
@@ -92,7 +92,7 @@ fn draw_slider_ghost(
 /// Apply MIDI + keyboard learn affordances (glow + click-to-select) to a just-drawn
 /// control. `path` is the parameter-router path the control binds to. The two learn
 /// modes are mutually exclusive, so at most one overlay is active at a time.
-fn learn_overlay(
+pub(super) fn learn_overlay(
     ui: &egui::Ui,
     rect: egui::Rect,
     path: String,
@@ -197,13 +197,13 @@ fn render_depth_prepro_controls(
 }
 
 /// A source control's router path on this deck, when it has one.
-fn source_path(deck_uuid: &str, spec: &SourceParamSpec) -> Option<String> {
+fn source_path(deck_uuid: &str, spec: &ControlSpec) -> Option<String> {
     spec.route
         .as_deref()
         .map(|route| ParamAddress::deck(deck_uuid, DeckTarget::source(route)).to_string())
 }
 
-fn set_source(actions: &mut UIActions, deck_uuid: &str, name: &str, value: SourceValue) {
+fn set_source(actions: &mut UIActions, deck_uuid: &str, name: &str, value: ControlValue) {
     actions.commands.push(EngineCommand::SetSourceParam {
         deck_uuid: deck_uuid.to_string(),
         name: name.to_string(),
@@ -216,7 +216,7 @@ fn source_affordances(
     ui: &mut egui::Ui,
     rect: egui::Rect,
     deck_uuid: &str,
-    spec: &SourceParamSpec,
+    spec: &ControlSpec,
     data: &UIData,
     actions: &mut UIActions,
 ) {
@@ -241,7 +241,7 @@ fn norm(deck: &DeckUIInfo, name: &str) -> f32 {
         .status
         .params
         .get(name)
-        .and_then(SourceValue::as_f32)
+        .and_then(ControlValue::as_f32)
         .unwrap_or_default()
 }
 
@@ -249,14 +249,14 @@ fn norm(deck: &DeckUIInfo, name: &str) -> f32 {
 fn source_param(
     ui: &mut egui::Ui,
     deck: &DeckUIInfo,
-    spec: &SourceParamSpec,
+    spec: &ControlSpec,
     data: &UIData,
     actions: &mut UIActions,
 ) {
     let uuid = deck.uuid.as_str();
     let current = deck.source.status.params.get(&spec.name);
     match &spec.kind {
-        SourceParamKind::Float {
+        ControlKind::Float {
             display_min,
             display_max,
             unit,
@@ -266,7 +266,7 @@ fn source_param(
                 let mut v = norm(deck, &spec.name);
                 let resp = ui.add(egui::Slider::new(&mut v, 0.0..=1.0).show_value(false));
                 if resp.changed() {
-                    set_source(actions, uuid, &spec.name, SourceValue::Float(v));
+                    set_source(actions, uuid, &spec.name, ControlValue::Float(v));
                 }
                 let shown = deck
                     .source
@@ -285,17 +285,17 @@ fn source_param(
                 source_affordances(ui, resp.rect, uuid, spec, data, actions);
             });
         }
-        SourceParamKind::Toggle => {
+        ControlKind::Toggle => {
             ui.horizontal(|ui| {
-                let mut on = current.and_then(SourceValue::as_f32).unwrap_or_default() > 0.5;
+                let mut on = current.and_then(ControlValue::as_f32).unwrap_or_default() > 0.5;
                 let resp = ui.checkbox(&mut on, &spec.label);
                 if resp.changed() {
-                    set_source(actions, uuid, &spec.name, SourceValue::Bool(on));
+                    set_source(actions, uuid, &spec.name, ControlValue::Bool(on));
                 }
                 source_affordances(ui, resp.rect, uuid, spec, data, actions);
             });
         }
-        SourceParamKind::Choice { options } => {
+        ControlKind::Choice { options } => {
             ui.horizontal(|ui| {
                 ui.label(format!("{}:", spec.label));
                 let n = options.len().max(1);
@@ -311,56 +311,56 @@ fn source_param(
                     });
                 if chosen != index {
                     let value = (chosen as f32 + 0.5) / n as f32;
-                    set_source(actions, uuid, &spec.name, SourceValue::Float(value));
+                    set_source(actions, uuid, &spec.name, ControlValue::Float(value));
                 }
                 source_affordances(ui, combo.response.rect, uuid, spec, data, actions);
             });
         }
-        SourceParamKind::Color => {
+        ControlKind::Color => {
             ui.horizontal(|ui| {
                 ui.label(&spec.label);
                 let mut rgba = match current {
-                    Some(SourceValue::Color(c)) => *c,
+                    Some(ControlValue::Color(c)) => *c,
                     _ => [0.0, 0.0, 0.0, 1.0],
                 };
                 if ui.color_edit_button_rgba_unmultiplied(&mut rgba).changed() {
-                    set_source(actions, uuid, &spec.name, SourceValue::Color(rgba));
+                    set_source(actions, uuid, &spec.name, ControlValue::Color(rgba));
                 }
             });
         }
-        SourceParamKind::Text => {
+        ControlKind::Text => {
             ui.horizontal(|ui| {
                 ui.label(format!("{}:", spec.label));
                 let id = ui.id().with(("source_text", uuid, &spec.name));
                 let mut text: String = ui.data(|d| d.get_temp(id)).unwrap_or_else(|| {
                     current
-                        .and_then(SourceValue::as_str)
+                        .and_then(ControlValue::as_str)
                         .unwrap_or_default()
                         .to_string()
                 });
                 let resp = ui.text_edit_singleline(&mut text);
                 if resp.lost_focus() {
-                    set_source(actions, uuid, &spec.name, SourceValue::Text(text.clone()));
+                    set_source(actions, uuid, &spec.name, ControlValue::Text(text.clone()));
                     ui.data_mut(|d| d.remove::<String>(id));
                 } else {
                     ui.data_mut(|d| d.insert_temp(id, text));
                 }
             });
         }
-        SourceParamKind::Number { unit, step } => {
+        ControlKind::Number { unit, step } => {
             ui.horizontal(|ui| {
                 ui.label(format!("{}:", spec.label));
-                let mut v = current.and_then(SourceValue::as_f32).unwrap_or_default();
+                let mut v = current.and_then(ControlValue::as_f32).unwrap_or_default();
                 let mut drag = egui::DragValue::new(&mut v).speed(*step);
                 if let Some(unit) = unit {
                     drag = drag.suffix(format!(" {unit}"));
                 }
                 if ui.add(drag).changed() {
-                    set_source(actions, uuid, &spec.name, SourceValue::Float(v));
+                    set_source(actions, uuid, &spec.name, ControlValue::Float(v));
                 }
             });
         }
-        SourceParamKind::Action => {
+        ControlKind::Action => {
             let label = if spec.name == "interactive" && deck.is_interactive {
                 format!("Exit {}", spec.label)
             } else {
@@ -383,7 +383,7 @@ fn source_param(
 fn crop_widget(
     ui: &mut egui::Ui,
     deck: &DeckUIInfo,
-    specs: &[&SourceParamSpec],
+    specs: &[&ControlSpec],
     data: &UIData,
     actions: &mut UIActions,
 ) {
@@ -398,7 +398,7 @@ fn crop_widget(
                     actions,
                     &deck.uuid,
                     &spec.name,
-                    SourceValue::Float(if full { 1.0 } else { 0.0 }),
+                    ControlValue::Float(if full { 1.0 } else { 0.0 }),
                 );
             }
         }
@@ -413,7 +413,7 @@ fn crop_widget(
 fn transport_widget(
     ui: &mut egui::Ui,
     deck: &DeckUIInfo,
-    specs: &[&SourceParamSpec],
+    specs: &[&ControlSpec],
     data: &UIData,
     actions: &mut UIActions,
 ) {
@@ -447,7 +447,7 @@ fn transport_widget(
         ui.horizontal(|ui| {
             let resp = ui.button(if playing { "⏸ Pause" } else { "▶ Play" });
             if resp.clicked() {
-                set_source(actions, uuid, &play.name, SourceValue::Bool(!playing));
+                set_source(actions, uuid, &play.name, ControlValue::Bool(!playing));
             }
             source_affordances(ui, resp.rect, uuid, play, data, actions);
         });
@@ -469,7 +469,7 @@ fn transport_widget(
                     actions,
                     uuid,
                     &pos_spec.name,
-                    SourceValue::Float((f64::from(pos) / duration) as f32),
+                    ControlValue::Float((f64::from(pos) / duration) as f32),
                 );
             }
             if let Some(path) = source_path(uuid, pos_spec)
@@ -487,7 +487,7 @@ fn transport_widget(
     // The slider stays on the set point, so the ghost is the only thing
     // showing the live rate.
     if let Some(speed_spec) = spec("speed")
-        && let SourceParamKind::Float {
+        && let ControlKind::Float {
             display_min,
             display_max,
             ..
@@ -503,7 +503,7 @@ fn transport_widget(
             );
             if resp.changed() {
                 let v = (speed - display_min) / (display_max - display_min);
-                set_source(actions, uuid, &speed_spec.name, SourceValue::Float(v));
+                set_source(actions, uuid, &speed_spec.name, ControlValue::Float(v));
             }
             if let Some(path) = source_path(uuid, speed_spec)
                 && let Some(color) = mod_color_for_key(&path, data)
@@ -585,7 +585,7 @@ fn transport_widget(
                     actions,
                     uuid,
                     &point.name,
-                    SourceValue::Float((f64::from(v) / duration) as f32),
+                    ControlValue::Float((f64::from(v) / duration) as f32),
                 );
             }
             source_affordances(ui, resp.rect, uuid, point, data, actions);
@@ -593,7 +593,7 @@ fn transport_widget(
         });
     }
     ui.horizontal(|ui| {
-        let here = SourceValue::Float((position / duration) as f32);
+        let here = ControlValue::Float((position / duration) as f32);
         if let Some(point) = spec("in_point")
             && ui
                 .small_button("[ Set In")
@@ -728,7 +728,10 @@ fn render_source_column(
                     match spec.widget {
                         Some(WidgetHint::Transport) => transport.push(spec),
                         Some(WidgetHint::CropRect) => crop.push(spec),
-                        Some(WidgetHint::Orbit) | None => {}
+                        // Orbit is drawn as its plain parameters; the output
+                        // hints never appear on a deck source.
+                        Some(WidgetHint::Orbit | WidgetHint::Monitor | WidgetHint::AudioDevice)
+                        | None => {}
                     }
                 }
                 if !transport.is_empty() {

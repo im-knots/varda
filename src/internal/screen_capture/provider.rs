@@ -6,10 +6,10 @@ use super::backend::{
 };
 use super::{CaptureId, ScreenCaptureManager, UNBOUND_CAPTURE_ID};
 use crate::source::{
-    DeckSourceInstance, DeckSourceProvider, Feed, LibraryEntry, LibraryNotice, LibrarySection,
-    SourceConfig, SourceControl, SourceEnv, SourceFrame, SourceParamError, SourceParamSpec,
-    SourceQuery, SourceStatus, SourceValue, WidgetHint, decode_config, downcast_mut, downcast_ref,
-    encode_config, expect_norm, scaling_mode_spec,
+    ControlError, ControlSpec, ControlStatus, ControlValue, DeckSourceInstance, DeckSourceProvider,
+    Feed, LibraryEntry, LibraryNotice, LibrarySection, SourceConfig, SourceControl, SourceEnv,
+    SourceFrame, SourceQuery, WidgetHint, decode_config, downcast_mut, downcast_ref, encode_config,
+    expect_norm, scaling_mode_spec,
 };
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
@@ -19,25 +19,25 @@ pub const SOURCE_TYPE: &str = "ScreenCapture";
 
 /// Every capture control is MIDI-learnable, OSC-addressable and macro-drivable,
 /// but none is a modulation target: see spec/video-playback-modulation.md.
-static PARAMS: LazyLock<Vec<SourceParamSpec>> = LazyLock::new(|| {
+static PARAMS: LazyLock<Vec<ControlSpec>> = LazyLock::new(|| {
     vec![
-        SourceParamSpec::float("rate", "Rate", MIN_CAPTURE_RATE, MAX_CAPTURE_RATE)
+        ControlSpec::float("rate", "Rate", MIN_CAPTURE_RATE, MAX_CAPTURE_RATE)
             .unit("fps")
             .routed("capture/rate"),
-        SourceParamSpec::float("crop_x", "Crop X", 0.0, 1.0)
+        ControlSpec::float("crop_x", "Crop X", 0.0, 1.0)
             .routed("capture/crop_x")
             .in_widget(WidgetHint::CropRect),
-        SourceParamSpec::float("crop_y", "Crop Y", 0.0, 1.0)
+        ControlSpec::float("crop_y", "Crop Y", 0.0, 1.0)
             .routed("capture/crop_y")
             .in_widget(WidgetHint::CropRect),
-        SourceParamSpec::float("crop_w", "Crop W", 0.0, 1.0)
+        ControlSpec::float("crop_w", "Crop W", 0.0, 1.0)
             .routed("capture/crop_w")
             .in_widget(WidgetHint::CropRect),
-        SourceParamSpec::float("crop_h", "Crop H", 0.0, 1.0)
+        ControlSpec::float("crop_h", "Crop H", 0.0, 1.0)
             .routed("capture/crop_h")
             .in_widget(WidgetHint::CropRect),
-        SourceParamSpec::toggle("cursor", "Show cursor").routed("capture/cursor"),
-        SourceParamSpec::toggle("exclude_varda", "Exclude Varda").routed("capture/exclude_varda"),
+        ControlSpec::toggle("cursor", "Show cursor").routed("capture/cursor"),
+        ControlSpec::toggle("exclude_varda", "Exclude Varda").routed("capture/exclude_varda"),
         scaling_mode_spec(),
     ]
 });
@@ -241,7 +241,7 @@ impl DeckSourceProvider for ScreenCaptureProvider {
         "🖥"
     }
 
-    fn params(&self) -> &'static [SourceParamSpec] {
+    fn params(&self) -> &'static [ControlSpec] {
         &PARAMS
     }
 
@@ -402,7 +402,7 @@ impl DeckSourceProvider for ScreenCaptureProvider {
         }
     }
 
-    fn status(&self, instance: &dyn DeckSourceInstance, query: &SourceQuery) -> SourceStatus {
+    fn status(&self, instance: &dyn DeckSourceInstance, query: &SourceQuery) -> ControlStatus {
         let Some(deck) = downcast_ref::<ScreenCapture>(instance) else {
             return instance.status();
         };
@@ -499,25 +499,25 @@ impl DeckSourceInstance for ScreenCapture {
         self.feed.control(ctx);
     }
 
-    fn schema(&self) -> &'static [SourceParamSpec] {
+    fn schema(&self) -> &'static [ControlSpec] {
         &PARAMS
     }
 
-    fn param(&self, name: &str) -> Option<SourceValue> {
+    fn param(&self, name: &str) -> Option<ControlValue> {
         let c = &self.config;
         Some(match name {
-            "rate" => SourceValue::Float(self.rate_norm()),
-            "crop_x" => SourceValue::Float(c.crop.x),
-            "crop_y" => SourceValue::Float(c.crop.y),
-            "crop_w" => SourceValue::Float(c.crop.w),
-            "crop_h" => SourceValue::Float(c.crop.h),
-            "cursor" => SourceValue::Bool(c.show_cursor),
-            "exclude_varda" => SourceValue::Bool(c.exclude_varda),
+            "rate" => ControlValue::Float(self.rate_norm()),
+            "crop_x" => ControlValue::Float(c.crop.x),
+            "crop_y" => ControlValue::Float(c.crop.y),
+            "crop_w" => ControlValue::Float(c.crop.w),
+            "crop_h" => ControlValue::Float(c.crop.h),
+            "cursor" => ControlValue::Bool(c.show_cursor),
+            "exclude_varda" => ControlValue::Bool(c.exclude_varda),
             _ => return self.feed.param(name),
         })
     }
 
-    fn set_param(&mut self, name: &str, value: &SourceValue) -> Result<(), SourceParamError> {
+    fn set_param(&mut self, name: &str, value: &ControlValue) -> Result<(), ControlError> {
         let c = &mut self.config;
         match name {
             "rate" => {
@@ -538,7 +538,7 @@ impl DeckSourceInstance for ScreenCapture {
         Ok(())
     }
 
-    fn status(&self) -> SourceStatus {
+    fn status(&self) -> ControlStatus {
         let mut status = crate::source::status_from_params(self);
         status
             .display

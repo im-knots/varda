@@ -239,7 +239,7 @@ pub(super) fn handle_library_dnd(ui: &egui::Ui, data: &UIData, actions: &mut UIA
                 if let Some(source) = source {
                     log::info!(
                         "Library drop (deferred): {} source -> ch {channel_uuid}",
-                        source.source_type()
+                        source.type_id()
                     );
                     actions.commands.push(EngineCommand::AddDeck {
                         channel_uuid: channel_uuid.clone(),

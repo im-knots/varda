@@ -163,7 +163,7 @@ use crate::notifications::NotificationSystem;
 use crate::osc::{OscConfig, OscFeedbackSender, OscReceiver};
 use crate::persistence::Workspace;
 use crate::registry::ShaderRegistry;
-use crate::renderer::context::{GpuContext, UnifiedOutput};
+use crate::renderer::context::GpuContext;
 use crate::screen_capture::ScreenCaptureManager;
 use crate::surface::SurfaceManager;
 
@@ -210,7 +210,11 @@ pub(crate) struct LtcTap {
 // `outputs` is the list this group is named for.
 #[allow(clippy::struct_field_names)]
 pub(crate) struct Outputs {
-    pub outputs: Vec<UnifiedOutput>,
+    pub outputs: Vec<crate::output::Output>,
+    /// Every output sink type. See `sources.rs`.
+    pub sinks: crate::output::SinkRegistry,
+    /// The last sink type listing, reused by snapshots.
+    pub sink_type_cache: sources::TypeCache,
     pub surface_manager: SurfaceManager,
     pub calibration_textures: Vec<(wgpu::Texture, wgpu::TextureView)>,
     pub domemaster: Option<crate::renderer::dome::DomemasterRenderer>,
@@ -221,10 +225,6 @@ pub(crate) struct Outputs {
     pub domemaster_resolution: crate::renderer::dome::DomemasterResolution,
     /// Dome projection the domemaster is rendered for.
     pub dome: crate::engine::value::dome::DomeConfig,
-    pub pending_output_creates: Vec<crate::scene::OutputConfig>,
-    pub cached_monitors: Vec<(String, winit::monitor::MonitorHandle)>,
-    /// What each active headless output sends through, by output UUID.
-    pub deliveries: std::collections::HashMap<String, crate::delivery::Delivery>,
 }
 
 /// Frame timing and system monitoring.
@@ -544,14 +544,13 @@ impl VardaApp {
             },
             output: Outputs {
                 outputs: Vec::new(),
+                sinks: sources::output_sinks(),
+                sink_type_cache: sources::TypeCache::default(),
                 surface_manager: SurfaceManager::new(),
                 calibration_textures,
                 domemaster: None,
                 domemaster_resolution: crate::renderer::dome::DomemasterResolution::default(),
                 dome: crate::engine::value::dome::DomeConfig::default(),
-                pending_output_creates: Vec::new(),
-                cached_monitors: Vec::new(),
-                deliveries: std::collections::HashMap::new(),
             },
             input: Inputs {
                 osc_receiver,
@@ -749,7 +748,7 @@ impl VardaApp {
     }
 
     /// Read-only access to the outputs.
-    pub fn outputs_ref(&self) -> &[crate::renderer::context::UnifiedOutput] {
+    pub fn outputs_ref(&self) -> &[crate::output::Output] {
         &self.output.outputs
     }
 
@@ -882,44 +881,6 @@ impl VardaApp {
     /// Tick notification expiry timers.
     pub fn update_notifications(&mut self) {
         self.session.notifications.update();
-    }
-
-    /// Close an output window by its winit `WindowId`. Returns the name if found.
-    pub fn close_output_window_by_id(
-        &mut self,
-        window_id: winit::window::WindowId,
-    ) -> Option<String> {
-        if let Some(idx) = self.output.outputs.iter().position(|o| {
-            if let UnifiedOutput::Window(w) = o {
-                w.window.id() == window_id
-            } else {
-                false
-            }
-        }) {
-            let name = self.output.outputs[idx].name().to_string();
-            if let UnifiedOutput::Window(w) = self.output.outputs.remove(idx) {
-                w.destroy();
-            }
-            Some(name)
-        } else {
-            None
-        }
-    }
-
-    /// Resize an output window by its winit `WindowId`.
-    pub fn resize_output_window_by_id(
-        &mut self,
-        window_id: winit::window::WindowId,
-        new_size: winit::dpi::PhysicalSize<u32>,
-    ) {
-        for o in &mut self.output.outputs {
-            if let UnifiedOutput::Window(w) = o
-                && w.window.id() == window_id
-            {
-                w.resize(&self.render.context.device, new_size);
-                return;
-            }
-        }
     }
 
     /// Current render width.
@@ -1522,12 +1483,8 @@ mod tests {
         };
         fire(
             &mut app,
-            crate::engine::EngineCommand::CreateHeadlessOutput {
-                target: crate::engine::value::render::OutputTarget::Recording {
-                    path: "unused.mp4".into(),
-                    codec: crate::renderer::context::RecordingCodec::H264,
-                    audio_device: None,
-                },
+            crate::engine::EngineCommand::CreateOutput {
+                sink: crate::output::SinkConfig::new("recording").with("path", "unused.mp4"),
             },
         );
 
@@ -1535,10 +1492,7 @@ mod tests {
             app.output
                 .outputs
                 .iter()
-                .filter_map(|o| match o {
-                    UnifiedOutput::Headless(h) => Some((h.width, h.height)),
-                    UnifiedOutput::Window(_) => None,
-                })
+                .map(crate::output::Output::size)
                 .collect::<Vec<_>>()
         };
         assert_eq!(
@@ -1659,7 +1613,7 @@ mod tests {
             crate::engine::EngineCommand::SetSourceParam {
                 deck_uuid: uuid.clone(),
                 name: "speed".into(),
-                value: crate::source::SourceValue::Float(0.75),
+                value: crate::source::ControlValue::Float(0.75),
             },
         );
         assert!(matches!(
@@ -1701,7 +1655,7 @@ mod tests {
         let crate::engine::CommandResult::OkWithId { uuid } = added else {
             panic!("expected OkWithId, got {added:?}");
         };
-        let green = crate::source::SourceValue::Color([0.0, 1.0, 0.0, 1.0]);
+        let green = crate::source::ControlValue::Color([0.0, 1.0, 0.0, 1.0]);
         let result = send_cmd(
             &mut app,
             crate::engine::EngineCommand::SetSourceParam {

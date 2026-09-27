@@ -7,10 +7,10 @@ use super::{
 };
 use crate::BlendMode;
 use crate::channel::DeckRenderFps;
-use crate::engine::value::source::{
-    DeckSourceSnapshot, LibraryEntry, LibrarySection, SourceConfig, SourceStatus,
-    SourceTypeSnapshot,
+use crate::engine::value::provider::{
+    ControlStatus, LibraryEntry, LibrarySection, ProviderTypeSnapshot,
 };
+use crate::engine::value::source::{DeckSourceSnapshot, SourceConfig};
 use crate::renderer::context::OutputSource;
 use crate::renderer::slicer::{DomeGeometry, DomePreset};
 use crate::surface::{ContentMapping, SurfaceOutputType};
@@ -21,14 +21,14 @@ fn shader_source() -> DeckSourceSnapshot {
     DeckSourceSnapshot {
         source_type: "Shader".into(),
         available: true,
-        status: SourceStatus::default(),
+        status: ControlStatus::default(),
     }
 }
 
 /// The shader source type listing `generators`, then the image, video and
 /// camera types as their providers describe themselves with no devices found.
 #[cfg(any(test, feature = "test-fixtures"))]
-fn fixture_source_types(generators: &[&str]) -> Vec<SourceTypeSnapshot> {
+fn fixture_source_types(generators: &[&str]) -> Vec<ProviderTypeSnapshot> {
     let shaders = crate::registry::ShaderRegistry::new();
     let services = crate::source::Services::new();
     let mut providers = crate::source::SourceRegistry::new();
@@ -46,13 +46,22 @@ fn fixture_source_types(generators: &[&str]) -> Vec<SourceTypeSnapshot> {
     types
 }
 
+/// Every output sink type, as a windowed run with no monitors describes them.
+#[cfg(any(test, feature = "test-fixtures"))]
+fn fixture_sink_types() -> Vec<ProviderTypeSnapshot> {
+    let services = crate::source::Services::new().with(crate::output::window::Monitors::default());
+    crate::app::sources::output_sinks().type_snapshots(&crate::output::SinkQuery {
+        services: &services,
+    })
+}
+
 /// The shader source type, its library listing `generators`.
 #[cfg(any(test, feature = "test-fixtures"))]
-fn fixture_shader_type(generators: &[&str]) -> SourceTypeSnapshot {
+fn fixture_shader_type(generators: &[&str]) -> ProviderTypeSnapshot {
     use crate::source::DeckSourceProvider;
     let provider = crate::generator::ShaderProvider;
-    SourceTypeSnapshot {
-        source_type: provider.id().into(),
+    ProviderTypeSnapshot {
+        type_id: provider.id().into(),
         label: provider.label().into(),
         icon: provider.icon().into(),
         available: true,
@@ -368,6 +377,7 @@ impl UIData {
             midi_devices: vec![],
             midi_mappings: vec![],
             cameras: vec![],
+            sinks: std::sync::Arc::new(fixture_sink_types()),
             sources: std::sync::Arc::new(fixture_source_types(&[
                 "test_generator_a",
                 "test_generator_b",

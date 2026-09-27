@@ -2,21 +2,21 @@
 
 use super::HtmlManager;
 use crate::source::{
-    DeckSourceInstance, DeckSourceProvider, Feed, LibraryCreate, LibraryEntry, LibrarySection,
-    SourceConfig, SourceControl, SourceEnv, SourceFrame, SourceParamError, SourceParamSpec,
-    SourceQuery, SourceStatus, SourceValue, decode_config, downcast_mut, downcast_ref,
-    encode_config, scaling_mode_spec,
+    ControlError, ControlSpec, ControlStatus, ControlValue, DeckSourceInstance, DeckSourceProvider,
+    Feed, LibraryCreate, LibraryEntry, LibrarySection, SourceConfig, SourceControl, SourceEnv,
+    SourceFrame, SourceQuery, decode_config, downcast_mut, downcast_ref, encode_config,
+    scaling_mode_spec,
 };
 use anyhow::{Context, Result};
 use std::sync::LazyLock;
 
 pub const SOURCE_TYPE: &str = "Html";
 
-static PARAMS: LazyLock<Vec<SourceParamSpec>> = LazyLock::new(|| {
+static PARAMS: LazyLock<Vec<ControlSpec>> = LazyLock::new(|| {
     vec![
         scaling_mode_spec(),
-        SourceParamSpec::action("reload", "Reload").routed("html/reload"),
-        SourceParamSpec::action("interactive", "Interactive").routed("html/interactive"),
+        ControlSpec::action("reload", "Reload").routed("html/reload"),
+        ControlSpec::action("interactive", "Interactive").routed("html/interactive"),
     ]
 });
 
@@ -52,7 +52,7 @@ impl DeckSourceProvider for HtmlProvider {
         "🌐"
     }
 
-    fn params(&self) -> &'static [SourceParamSpec] {
+    fn params(&self) -> &'static [ControlSpec] {
         &PARAMS
     }
 
@@ -88,7 +88,7 @@ impl DeckSourceProvider for HtmlProvider {
                 })
                 .collect(),
             create: Some(LibraryCreate::Entry {
-                fields: vec![SourceParamSpec::text("url", "URL")],
+                fields: vec![ControlSpec::text("url", "URL")],
                 defaults,
                 label: "+ Add HTML".into(),
                 hint: None,
@@ -166,7 +166,7 @@ impl DeckSourceProvider for HtmlProvider {
         );
     }
 
-    fn status(&self, instance: &dyn DeckSourceInstance, _query: &SourceQuery) -> SourceStatus {
+    fn status(&self, instance: &dyn DeckSourceInstance, _query: &SourceQuery) -> ControlStatus {
         match downcast_ref::<HtmlFeed>(instance) {
             Some(deck) => deck.feed.status(None),
             None => instance.status(),
@@ -250,23 +250,23 @@ impl DeckSourceInstance for HtmlFeed {
         self.feed.control(ctx);
     }
 
-    fn schema(&self) -> &'static [SourceParamSpec] {
+    fn schema(&self) -> &'static [ControlSpec] {
         &PARAMS
     }
 
-    fn param(&self, name: &str) -> Option<SourceValue> {
+    fn param(&self, name: &str) -> Option<ControlValue> {
         self.feed.param(name)
     }
 
-    fn set_param(&mut self, name: &str, value: &SourceValue) -> Result<(), SourceParamError> {
+    fn set_param(&mut self, name: &str, value: &ControlValue) -> Result<(), ControlError> {
         self.feed.set_param(name, value)
     }
 
-    fn trigger(&mut self, action: &str) -> Result<(), SourceParamError> {
+    fn trigger(&mut self, action: &str) -> Result<(), ControlError> {
         match action {
             "reload" => self.reload_requested = true,
             "interactive" => self.interactive_requested = true,
-            _ => return Err(SourceParamError::Unknown(action.to_string())),
+            _ => return Err(ControlError::Unknown(action.to_string())),
         }
         Ok(())
     }

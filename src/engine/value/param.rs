@@ -74,6 +74,38 @@ pub enum ParamAddress {
     },
     /// `macro/<uuid>/value`
     MacroValue { macro_uuid: String },
+    /// `output/<uuid>/...`. See /spec/output-sink-providers.md Decision 11.
+    Output {
+        output: String,
+        target: OutputControl,
+    },
+    /// `surface/<uuid>/source`: what a surface shows, as text
+    /// (`master`, `domemaster`, `ch/<uuid>`, `chs/<uuid>,<uuid>`,
+    /// `deck/<uuid>`). See /spec/output-sink-providers.md Decision 12.
+    SurfaceSource { surface: String },
+}
+
+/// What on an output an address names.
+///
+/// The output's own controls are listed here. Its sink's settings are
+/// [`OutputControl::Sink`], a route the sink type declares: the address layer
+/// names no sink type.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum OutputControl {
+    /// `start`: begin delivering (a press).
+    Start,
+    /// `stop`: stop delivering (a press).
+    Stop,
+    /// `active`: delivering or not, as one toggle.
+    Active,
+    /// `calibration`: Off, Projector or Surfaces.
+    Calibration,
+    /// `rotation`: 0°, 90°, 180° or 270°.
+    Rotation,
+    /// `surface/<uuid>`: whether the surface is shown on this output.
+    Surface(String),
+    /// A setting of the output's sink, by the route its sink type declares.
+    Sink(String),
 }
 
 /// What on a deck an address names.
@@ -168,6 +200,19 @@ impl ParamAddress {
         }
     }
 
+    pub fn output(output: &str, target: OutputControl) -> Self {
+        Self::Output {
+            output: output.to_string(),
+            target,
+        }
+    }
+
+    pub fn surface_source(surface: &str) -> Self {
+        Self::SurfaceSource {
+            surface: surface.to_string(),
+        }
+    }
+
     pub fn cue_fire(cue: &str) -> Self {
         Self::CueFire {
             cue: cue.to_string(),
@@ -193,7 +238,11 @@ impl ParamAddress {
                 target,
                 DeckTarget::Opacity | DeckTarget::Param(_) | DeckTarget::Source(_)
             ),
-            Self::Crossfader
+            // Output controls start encoders, rebuild sinks and re-route
+            // surfaces: discrete changes no curve should sweep.
+            Self::Output { .. }
+            | Self::SurfaceSource { .. }
+            | Self::Crossfader
             | Self::Action(_)
             | Self::CueFire { .. }
             | Self::Modulator {
@@ -256,6 +305,20 @@ impl fmt::Display for DeckTarget {
     }
 }
 
+impl fmt::Display for OutputControl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Start => f.write_str("start"),
+            Self::Stop => f.write_str("stop"),
+            Self::Active => f.write_str("active"),
+            Self::Calibration => f.write_str("calibration"),
+            Self::Rotation => f.write_str("rotation"),
+            Self::Surface(surface) => write!(f, "surface/{surface}"),
+            Self::Sink(route) => f.write_str(route),
+        }
+    }
+}
+
 impl fmt::Display for ParamAddress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -274,6 +337,8 @@ impl fmt::Display for ParamAddress {
                 target: ModulatorTarget::Step(n),
             } => write!(f, "mod/{source}/step/{n}"),
             Self::MacroValue { macro_uuid } => write!(f, "macro/{macro_uuid}/value"),
+            Self::Output { output, target } => write!(f, "output/{output}/{target}"),
+            Self::SurfaceSource { surface } => write!(f, "surface/{surface}/source"),
         }
     }
 }
@@ -311,6 +376,22 @@ impl FromStr for ParamAddress {
             },
             ["mod", source, param] => Self::modulator_param(source, param),
             ["macro", macro_uuid, "value"] => Self::macro_value(macro_uuid),
+            ["surface", surface, "source"] => Self::surface_source(surface),
+            ["output", output, rest @ ..] => {
+                let target = match rest {
+                    ["start"] => OutputControl::Start,
+                    ["stop"] => OutputControl::Stop,
+                    ["active"] => OutputControl::Active,
+                    ["calibration"] => OutputControl::Calibration,
+                    ["rotation"] => OutputControl::Rotation,
+                    ["surface", surface] => OutputControl::Surface(owned(surface)),
+                    [] => return Err(unknown()),
+                    // Anything else is a sink setting; whether the output's
+                    // sink has it is answered when the path is routed.
+                    route => OutputControl::Sink(route.join("/")),
+                };
+                Self::output(output, target)
+            }
             ["deck", deck, rest @ ..] => {
                 let target = match rest {
                     ["opacity"] => DeckTarget::Opacity,
@@ -357,6 +438,50 @@ impl<'de> serde::Deserialize<'de> for ParamAddress {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Outputs and surfaces are addressed like every other entity, by UUID.
+    /// See /spec/output-sink-providers.md Decisions 11 and 12.
+    #[test]
+    fn output_and_surface_paths_round_trip() {
+        let cases = [
+            (
+                "output/o1/start",
+                ParamAddress::output("o1", OutputControl::Start),
+            ),
+            (
+                "output/o1/stop",
+                ParamAddress::output("o1", OutputControl::Stop),
+            ),
+            (
+                "output/o1/active",
+                ParamAddress::output("o1", OutputControl::Active),
+            ),
+            (
+                "output/o1/calibration",
+                ParamAddress::output("o1", OutputControl::Calibration),
+            ),
+            (
+                "output/o1/rotation",
+                ParamAddress::output("o1", OutputControl::Rotation),
+            ),
+            (
+                "output/o1/surface/s1",
+                ParamAddress::output("o1", OutputControl::Surface("s1".into())),
+            ),
+            (
+                "output/o1/stream/name",
+                ParamAddress::output("o1", OutputControl::Sink("stream/name".into())),
+            ),
+            ("surface/s1/source", ParamAddress::surface_source("s1")),
+        ];
+        for (path, address) in cases {
+            assert_eq!(path.parse::<ParamAddress>(), Ok(address.clone()), "{path}");
+            assert_eq!(address.to_string(), path);
+            assert!(!address.is_modulatable(), "{path}");
+        }
+        assert!("output/o1".parse::<ParamAddress>().is_err());
+        assert!("surface/s1/warp".parse::<ParamAddress>().is_err());
+    }
 
     /// Every canonical form, as written today and after v8.
     const CANONICAL: &[&str] = &[

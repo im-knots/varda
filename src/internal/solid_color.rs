@@ -4,16 +4,16 @@
 //! See /spec/deck-source-providers.md.
 
 use crate::source::{
-    DeckSourceInstance, DeckSourceProvider, SourceConfig, SourceEnv, SourceFrame, SourceParamError,
-    SourceParamSpec, SourceValue, clear_target, decode_config, encode_config, expect_color,
+    ControlError, ControlSpec, ControlValue, DeckSourceInstance, DeckSourceProvider, SourceConfig,
+    SourceEnv, SourceFrame, clear_target, decode_config, encode_config, expect_color,
 };
 use anyhow::Result;
 use std::sync::LazyLock;
 
 pub const SOURCE_TYPE: &str = "SolidColor";
 
-static PARAMS: LazyLock<Vec<SourceParamSpec>> =
-    LazyLock::new(|| vec![SourceParamSpec::color("color", "Color")]);
+static PARAMS: LazyLock<Vec<ControlSpec>> =
+    LazyLock::new(|| vec![ControlSpec::color("color", "Color")]);
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Config {
@@ -36,7 +36,7 @@ impl DeckSourceProvider for SolidColorProvider {
         "■"
     }
 
-    fn params(&self) -> &'static [SourceParamSpec] {
+    fn params(&self) -> &'static [ControlSpec] {
         &PARAMS
     }
 
@@ -105,21 +105,21 @@ impl DeckSourceInstance for SolidColor {
         }
     }
 
-    fn schema(&self) -> &'static [SourceParamSpec] {
+    fn schema(&self) -> &'static [ControlSpec] {
         &PARAMS
     }
 
-    fn param(&self, name: &str) -> Option<SourceValue> {
-        (name == "color").then_some(SourceValue::Color(self.color))
+    fn param(&self, name: &str) -> Option<ControlValue> {
+        (name == "color").then_some(ControlValue::Color(self.color))
     }
 
-    fn set_param(&mut self, name: &str, value: &SourceValue) -> Result<(), SourceParamError> {
+    fn set_param(&mut self, name: &str, value: &ControlValue) -> Result<(), ControlError> {
         match name {
             "color" => {
                 self.color = expect_color(name, value)?;
                 Ok(())
             }
-            _ => Err(SourceParamError::Unknown(name.to_string())),
+            _ => Err(ControlError::Unknown(name.to_string())),
         }
     }
 
@@ -149,13 +149,13 @@ mod tests {
     #[test]
     fn the_color_is_a_typed_control() {
         let mut deck = SolidColor::new([0.0; 4]);
-        deck.set_param("color", &SourceValue::Color([1.0, 0.0, 0.0, 1.0]))
+        deck.set_param("color", &ControlValue::Color([1.0, 0.0, 0.0, 1.0]))
             .unwrap();
         assert_eq!(
             deck.param("color"),
-            Some(SourceValue::Color([1.0, 0.0, 0.0, 1.0]))
+            Some(ControlValue::Color([1.0, 0.0, 0.0, 1.0]))
         );
-        assert!(deck.set_param("color", &SourceValue::Float(0.5)).is_err());
-        assert!(deck.set_param("nope", &SourceValue::Float(0.5)).is_err());
+        assert!(deck.set_param("color", &ControlValue::Float(0.5)).is_err());
+        assert!(deck.set_param("nope", &ControlValue::Float(0.5)).is_err());
     }
 }

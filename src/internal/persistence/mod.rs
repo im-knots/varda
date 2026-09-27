@@ -334,10 +334,9 @@ impl Workspace {
 // ── Snapshot: Live State → Config ───────────────────────────────────
 
 use crate::mixer::Mixer;
-use crate::renderer::context::{OutputTarget, RecordingCodec, UnifiedOutput};
 use crate::scene::{
-    AutoTransitionConfig, ChannelConfig, DeckConfig, EffectConfig, OutputConfig,
-    OutputTargetConfig, SceneConfig, SourceConfig, SurfaceAssignmentConfig, TriggerConfig,
+    AutoTransitionConfig, ChannelConfig, DeckConfig, EffectConfig, OutputConfig, SceneConfig,
+    SourceConfig, SurfaceAssignmentConfig, TriggerConfig,
 };
 
 // ── DurationSpec ↔ DurationSpecConfig helpers ───────────────────────
@@ -609,239 +608,40 @@ pub fn snapshot_scene(
     }
 }
 
-/// Convert a live `OutputTarget` to a serializable `OutputTargetConfig`.
-fn target_to_config(target: &OutputTarget) -> OutputTargetConfig {
-    match target {
-        OutputTarget::Windowed => OutputTargetConfig::Windowed,
-        OutputTarget::Display { name, .. } => OutputTargetConfig::Display { name: name.clone() },
-        OutputTarget::Recording {
-            path,
-            codec,
-            audio_device,
-        } => OutputTargetConfig::Recording {
-            path: path.clone(),
-            codec: codec.to_string(),
-            audio_device: audio_device.clone(),
-        },
-        OutputTarget::SrtStream {
-            url,
-            codec,
-            audio_device,
-        } => OutputTargetConfig::SrtStream {
-            url: url.clone(),
-            codec: codec.to_string(),
-            audio_device: audio_device.clone(),
-        },
-        OutputTarget::HlsStream {
-            name,
-            codec,
-            short_segments,
-            audio_device,
-        } => OutputTargetConfig::HlsStream {
-            name: name.clone(),
-            codec: codec.to_string(),
-            short_segments: *short_segments,
-            audio_device: audio_device.clone(),
-        },
-        OutputTarget::DashStream {
-            name,
-            codec,
-            audio_device,
-        } => OutputTargetConfig::DashStream {
-            name: name.clone(),
-            codec: codec.to_string(),
-            audio_device: audio_device.clone(),
-        },
-        OutputTarget::RtmpStream {
-            url,
-            codec,
-            codec_contract,
-            audio_device,
-        } => OutputTargetConfig::RtmpStream {
-            url: url.clone(),
-            codec: codec.to_string(),
-            codec_contract: *codec_contract,
-            audio_device: audio_device.clone(),
-        },
-        OutputTarget::NdiSend { sender_name } => OutputTargetConfig::NdiSend {
-            sender_name: sender_name.clone(),
-        },
-        OutputTarget::SyphonServer { server_name } => OutputTargetConfig::SyphonServer {
-            server_name: server_name.clone(),
-        },
-        OutputTarget::SpoutSender { sender_name } => OutputTargetConfig::SpoutSender {
-            sender_name: sender_name.clone(),
-        },
-    }
-}
-
-/// Convert a serializable `OutputTargetConfig` back to a live `OutputTarget`.
-/// Public variant for use from outputs.rs.
-pub fn config_to_target_pub(config: &OutputTargetConfig) -> OutputTarget {
-    config_to_target(config)
-}
-
-fn config_to_target(config: &OutputTargetConfig) -> OutputTarget {
-    match config {
-        OutputTargetConfig::Windowed => OutputTarget::Windowed,
-        OutputTargetConfig::Display { name } => OutputTarget::Display {
-            name: name.clone(),
-            monitor_index: 0, // Will be matched at runtime
-        },
-        OutputTargetConfig::Recording {
-            path,
-            codec,
-            audio_device,
-        } => OutputTarget::Recording {
-            path: path.clone(),
-            codec: match codec.as_str() {
-                "prores" | "ProRes" | "ProRes 422" => RecordingCodec::ProRes,
-                "prores_4444" | "ProRes4444" | "ProRes 4444" => RecordingCodec::ProRes4444,
-                "h265" | "H265" | "H.265 (HEVC)" => RecordingCodec::H265,
-                "av1" | "AV1" => RecordingCodec::AV1,
-                "hap" | "Hap" | "HAP" => RecordingCodec::Hap,
-                "hap_alpha" | "HapAlpha" | "HAP Alpha" => RecordingCodec::HapAlpha,
-                "hapq" | "HapQ" | "HAP Q" => RecordingCodec::HapQ,
-                _ => RecordingCodec::H264,
-            },
-            audio_device: audio_device.clone(),
-        },
-        OutputTargetConfig::SrtStream {
-            url,
-            codec,
-            audio_device,
-        } => OutputTarget::SrtStream {
-            url: url.clone(),
-            codec: match codec.as_str() {
-                "H.265 (HEVC)" | "H265" | "h265" => crate::renderer::context::SrtCodec::H265,
-                _ => crate::renderer::context::SrtCodec::H264,
-            },
-            audio_device: audio_device.clone(),
-        },
-        OutputTargetConfig::HlsStream {
-            name,
-            codec,
-            short_segments,
-            audio_device,
-        } => OutputTarget::HlsStream {
-            name: name.clone(),
-            codec: match codec.as_str() {
-                "H.265 (HEVC)" | "H265" | "h265" => crate::renderer::context::StreamingCodec::H265,
-                "AV1" | "av1" => crate::renderer::context::StreamingCodec::AV1,
-                _ => crate::renderer::context::StreamingCodec::H264,
-            },
-            short_segments: *short_segments,
-            audio_device: audio_device.clone(),
-        },
-        OutputTargetConfig::DashStream {
-            name,
-            codec,
-            audio_device,
-        } => OutputTarget::DashStream {
-            name: name.clone(),
-            codec: match codec.as_str() {
-                "H.265 (HEVC)" | "H265" | "h265" => crate::renderer::context::StreamingCodec::H265,
-                "AV1" | "av1" => crate::renderer::context::StreamingCodec::AV1,
-                _ => crate::renderer::context::StreamingCodec::H264,
-            },
-            audio_device: audio_device.clone(),
-        },
-        OutputTargetConfig::RtmpStream {
-            url,
-            codec,
-            codec_contract,
-            audio_device,
-        } => OutputTarget::RtmpStream {
-            url: url.clone(),
-            codec: match codec.as_str() {
-                "H.265 (HEVC)" | "H265" | "h265" => crate::renderer::context::StreamingCodec::H265,
-                "AV1" | "av1" => crate::renderer::context::StreamingCodec::AV1,
-                _ => crate::renderer::context::StreamingCodec::H264,
-            },
-            codec_contract: *codec_contract,
-            audio_device: audio_device.clone(),
-        },
-        OutputTargetConfig::NdiSend { sender_name } => OutputTarget::NdiSend {
-            sender_name: sender_name.clone(),
-        },
-        OutputTargetConfig::SyphonServer { server_name } => OutputTarget::SyphonServer {
-            server_name: server_name.clone(),
-        },
-        OutputTargetConfig::SpoutSender { sender_name } => OutputTarget::SpoutSender {
-            sender_name: sender_name.clone(),
-        },
-    }
-}
-
 /// Build a `StagePrefs` snapshot from live app state (venue-specific: surfaces, outputs, editor prefs).
 pub fn snapshot_stage(
     surface_manager: &crate::surface::SurfaceManager,
-    outputs_list: &[UnifiedOutput],
+    outputs_list: &[crate::output::Output],
     editor: &crate::engine::value::editor::EditorPrefs,
     dome: &crate::engine::value::dome::DomeConfig,
     domemaster_resolution: crate::renderer::dome::DomemasterResolution,
 ) -> StagePrefs {
     let outputs = outputs_list
         .iter()
-        .map(|unified| {
-            let (name, target, surface_assignments, window_position, window_size) = match unified {
-                UnifiedOutput::Window(w) => {
-                    // Capture window position and size for restoration
-                    let pos = w.window.outer_position().ok().map(|p| [p.x, p.y]);
-                    let sz = {
-                        let s = w.window.inner_size();
-                        if s.width > 0 && s.height > 0 {
-                            Some([s.width, s.height])
-                        } else {
-                            None
-                        }
-                    };
-                    (
-                        w.name.clone(),
-                        target_to_config(&w.target),
-                        w.surface_assignments
-                            .iter()
-                            .map(|a| SurfaceAssignmentConfig {
-                                surface_uuid: a.surface_uuid.clone(),
-                                legacy_warp_mode: None,
-                                enabled: a.enabled,
-                            })
-                            .collect(),
-                        pos,
-                        sz,
-                    )
-                }
-                UnifiedOutput::Headless(h) => (
-                    h.name.clone(),
-                    target_to_config(&h.target),
-                    h.surface_assignments
-                        .iter()
-                        .map(|a| SurfaceAssignmentConfig {
-                            surface_uuid: a.surface_uuid.clone(),
-                            legacy_warp_mode: None,
-                            enabled: a.enabled,
-                        })
-                        .collect(),
-                    None,
-                    None,
-                ),
-            };
-            let edge_blend_mode = unified.edge_blend_mode();
-            let edge_blend = unified.edge_blend();
-            OutputConfig {
-                uuid: unified.uuid().to_string(),
-                name,
-                target,
-                target_display: None,
-                surface_assignments,
-                window_position,
-                window_size,
-                edge_blend_mode,
-                edge_blend,
-                rotation: unified.rotation(),
-                presentation: unified.presentation_request(),
-                tonemap_override: unified.tonemap_override(),
-            }
+        .map(|output| OutputConfig {
+            uuid: output.uuid.clone(),
+            name: output.name.clone(),
+            // A window's position and size are part of its sink's settings.
+            target: output.sink().config(),
+            target_display: None,
+            surface_assignments: output
+                .surface_assignments
+                .iter()
+                .map(|a| SurfaceAssignmentConfig {
+                    surface_uuid: a.surface_uuid.clone(),
+                    legacy_warp_mode: None,
+                    enabled: a.enabled,
+                })
+                .collect(),
+            window_position: None,
+            window_size: None,
+            edge_blend_mode: output.edge_blend_mode,
+            edge_blend: output.edge_blend,
+            rotation: output.rotation,
+            presentation: output.presentation_request(),
+            tonemap_override: output.tonemap_override,
+            calibration_mode: output.calibration_mode,
+            unassigned: output.unassigned,
         })
         .collect();
 
@@ -1479,47 +1279,5 @@ mod tests {
         let ws = Workspace::new(tmp.path().to_path_buf());
         let shaders_dir = ws.shaders_dir();
         assert_eq!(shaders_dir, tmp.path().join(".varda").join("shaders"));
-    }
-
-    #[test]
-    fn output_audio_device_survives_target_config_roundtrip() {
-        // audio_device must round-trip live OutputTarget ↔ persisted config.
-        let recording = OutputTarget::Recording {
-            path: "set.mov".into(),
-            codec: RecordingCodec::ProRes,
-            audio_device: Some("Scarlett 2i2".into()),
-        };
-        let back = config_to_target(&target_to_config(&recording));
-        assert_eq!(back.audio_device(), Some("Scarlett 2i2"));
-
-        // None (video-only) round-trips as None.
-        let silent = OutputTarget::RtmpStream {
-            url: "rtmp://x".into(),
-            codec: crate::renderer::context::StreamingCodec::H264,
-            codec_contract: crate::renderer::context::RtmpCodecContract::Legacy,
-            audio_device: None,
-        };
-        assert_eq!(
-            config_to_target(&target_to_config(&silent)).audio_device(),
-            None
-        );
-    }
-
-    #[test]
-    fn enhanced_rtmp_contract_survives_target_config_roundtrip() {
-        let target = OutputTarget::RtmpStream {
-            url: "rtmps://example/live".into(),
-            codec: crate::renderer::context::StreamingCodec::H265,
-            codec_contract: crate::renderer::context::RtmpCodecContract::Enhanced,
-            audio_device: None,
-        };
-        let restored = config_to_target(&target_to_config(&target));
-        assert!(matches!(
-            restored,
-            OutputTarget::RtmpStream {
-                codec_contract: crate::renderer::context::RtmpCodecContract::Enhanced,
-                ..
-            }
-        ));
     }
 }

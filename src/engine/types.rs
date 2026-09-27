@@ -103,7 +103,10 @@ pub struct EngineState {
     /// offers. See /spec/deck-source-providers.md.
     /// Shared with the engine's cached listing, so cloning a snapshot does not
     /// copy every library.
-    pub sources: std::sync::Arc<Vec<crate::engine::value::source::SourceTypeSnapshot>>,
+    pub sources: std::sync::Arc<Vec<crate::engine::value::provider::ProviderTypeSnapshot>>,
+    /// Every registered output sink type: its settings and what its library
+    /// offers. See /spec/output-sink-providers.md.
+    pub sinks: std::sync::Arc<Vec<crate::engine::value::provider::ProviderTypeSnapshot>>,
     pub clock: ClockSnapshot,
     pub transport: TransportSnapshot,
     pub timecode: TimecodeSnapshot,
@@ -681,16 +684,34 @@ pub struct OutputSnapshot {
     pub monitors: Vec<MonitorSnapshot>,
 }
 
+/// An output's sink in a snapshot.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct OutputSinkSnapshot {
+    /// Sink type id; its schema is in [`EngineState::sinks`].
+    #[serde(rename = "type")]
+    pub type_id: String,
+    /// What the sink is sending to, for display.
+    pub label: String,
+    /// False when this run cannot drive the type, and the output is a
+    /// placeholder holding its settings.
+    pub available: bool,
+    /// Whether the sink is started and stopped rather than always showing.
+    pub startable: bool,
+    pub status: crate::engine::value::provider::ControlStatus,
+}
+
 #[derive(Clone, Serialize)]
 pub struct OutputWindowSnapshot {
     pub uuid: String,
     pub name: String,
-    /// Full output target (carries `audio_device` for ffmpeg-backed outputs).
-    pub target: crate::engine::value::render::OutputTarget,
-    pub target_label: String,
-    pub is_on_display: bool,
-    /// Whether a headless output is actively recording/streaming.
+    /// Where the output delivers: its sink type, settings and state.
+    pub sink: OutputSinkSnapshot,
+    /// Whether a startable sink is delivering. Always false for a window,
+    /// which shows without being started.
     pub is_active: bool,
+    /// What the output shows with no surfaces assigned: the user's choice, or
+    /// the sink's default.
+    pub unassigned: crate::engine::value::render::Unassigned,
     pub surface_assignments: Vec<SurfaceAssignmentSnapshot>,
     pub calibration_mode: crate::engine::value::render::CalibrationMode,
     /// Persisted precision and dithering request.
@@ -964,6 +985,7 @@ mod tests {
             frame_count: 0,
             target_fps: 60,
             sources: std::sync::Arc::default(),
+            sinks: std::sync::Arc::default(),
             analyzers: vec![],
             can_undo: false,
             can_redo: false,
@@ -1053,6 +1075,7 @@ mod tests {
             frame_count: 42,
             target_fps: 60,
             sources: std::sync::Arc::default(),
+            sinks: std::sync::Arc::default(),
             analyzers: vec![],
             can_undo: false,
             can_redo: false,
@@ -1147,7 +1170,7 @@ mod tests {
             source: crate::engine::value::source::DeckSourceSnapshot {
                 source_type: "DepthSensor".into(),
                 available: true,
-                status: crate::engine::value::source::SourceStatus::default(),
+                status: crate::engine::value::provider::ControlStatus::default(),
             },
             is_interactive: false,
             has_depth_prepro: true,

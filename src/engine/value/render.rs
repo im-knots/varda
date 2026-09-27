@@ -714,45 +714,170 @@ impl OutputRotation {
 
 // ── Output source ────────────────────────────────────────────────────
 
-/// Content source that an output window can display
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+/// What a surface shows: the master, one channel, a sub-mix of channels, one
+/// deck, or the domemaster. Channels and decks are named by UUID, so
+/// reordering the mixer never re-routes a surface. See
+/// /spec/output-sink-providers.md Decision 12.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, utoipa::ToSchema)]
 pub enum OutputSource {
     /// The master mix (final composited output)
     Master,
-    /// A specific channel's composited output (by index)
-    Channel(usize),
-    /// A subset of channels composited together (sub-mix).
+    /// One channel's composited output, by channel UUID.
+    Channel(String),
+    /// A subset of channels composited together (sub-mix), by channel UUID.
     /// Each channel contributes with its own opacity and blend mode.
     /// Master effects are NOT applied to sub-mixes.
-    Channels(Vec<usize>),
-    /// A specific deck's raw output (channel index, deck index)
-    Deck(usize, usize),
+    Channels(Vec<String>),
+    /// One deck's raw output, by deck UUID.
+    Deck(String),
     /// The domemaster fisheye output (equidistant azimuthal projection)
     Domemaster,
 }
 
+/// Marks a reference read from a `stage.json` written before surfaces named
+/// channels and decks by UUID: `#2` is channel index 2, `#0/1` is deck 1 of
+/// channel 0. [`OutputSource::resolve_legacy`] rewrites it once the scene is
+/// loaded. No UUID starts with `#`.
+const LEGACY_INDEX: char = '#';
+
+impl<'de> serde::Deserialize<'de> for OutputSource {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum ChannelRef {
+            Uuid(String),
+            Index(usize),
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum DeckRef {
+            Uuid(String),
+            Index(usize, usize),
+        }
+        #[derive(serde::Deserialize)]
+        enum Saved {
+            Master,
+            Channel(ChannelRef),
+            Channels(Vec<ChannelRef>),
+            Deck(DeckRef),
+            Domemaster,
+        }
+        let channel = |r: ChannelRef| match r {
+            ChannelRef::Uuid(uuid) => uuid,
+            ChannelRef::Index(idx) => format!("{LEGACY_INDEX}{idx}"),
+        };
+        Ok(match Saved::deserialize(deserializer)? {
+            Saved::Master => Self::Master,
+            Saved::Domemaster => Self::Domemaster,
+            Saved::Channel(r) => Self::Channel(channel(r)),
+            Saved::Channels(refs) => Self::Channels(refs.into_iter().map(channel).collect()),
+            Saved::Deck(DeckRef::Uuid(uuid)) => Self::Deck(uuid),
+            Saved::Deck(DeckRef::Index(ch, dk)) => Self::Deck(format!("{LEGACY_INDEX}{ch}/{dk}")),
+        })
+    }
+}
+
 impl OutputSource {
-    /// Returns the channel indices involved in this source, if any.
-    pub fn channel_indices(&self) -> Option<Vec<usize>> {
+    /// The channel UUIDs this source composites, if it names channels.
+    pub fn channel_uuids(&self) -> Option<&[String]> {
         match self {
-            OutputSource::Channel(idx) => Some(vec![*idx]),
-            OutputSource::Channels(indices) => Some(indices.clone()),
+            OutputSource::Channel(uuid) => Some(std::slice::from_ref(uuid)),
+            OutputSource::Channels(uuids) => Some(uuids),
             _ => None,
+        }
+    }
+
+    /// Rewrite references read from an index-based `stage.json` against the
+    /// channel and deck order that file was written with. A reference that no
+    /// longer resolves falls back to the master; the returned reason says so.
+    /// `channels[i]` is channel `i`'s UUID and `decks[i]` its deck UUIDs.
+    pub fn resolve_legacy(&mut self, channels: &[String], decks: &[Vec<String>]) -> Option<String> {
+        let legacy = |r: &str| r.strip_prefix(LEGACY_INDEX).map(str::to_string);
+        let channel = |r: &str| -> Result<String, String> {
+            let Some(idx) = legacy(r) else {
+                return Ok(r.to_string());
+            };
+            idx.parse::<usize>()
+                .ok()
+                .and_then(|i| channels.get(i).cloned())
+                .ok_or_else(|| format!("channel {idx} no longer exists"))
+        };
+        let resolved = match self {
+            OutputSource::Channel(r) => channel(r).map(OutputSource::Channel),
+            OutputSource::Channels(refs) => refs
+                .iter()
+                .map(|r| channel(r))
+                .collect::<Result<Vec<_>, _>>()
+                .map(OutputSource::Channels),
+            OutputSource::Deck(r) => {
+                let pos = legacy(r)?;
+                pos.split_once('/')
+                    .and_then(|(c, d)| Some((c.parse::<usize>().ok()?, d.parse::<usize>().ok()?)))
+                    .and_then(|(c, d)| decks.get(c)?.get(d).cloned())
+                    .map(OutputSource::Deck)
+                    .ok_or_else(|| format!("deck {pos} no longer exists"))
+            }
+            OutputSource::Master | OutputSource::Domemaster => return None,
+        };
+        match resolved {
+            Ok(source) => {
+                *self = source;
+                None
+            }
+            Err(reason) => {
+                *self = OutputSource::Master;
+                Some(reason)
+            }
+        }
+    }
+
+    /// The source as the text a `surface/<uuid>/source` path takes: `master`,
+    /// `domemaster`, `ch/<uuid>`, `chs/<uuid>,<uuid>`, or `deck/<uuid>`.
+    pub fn to_path_value(&self) -> String {
+        match self {
+            OutputSource::Master => "master".into(),
+            OutputSource::Domemaster => "domemaster".into(),
+            OutputSource::Channel(uuid) => format!("ch/{uuid}"),
+            OutputSource::Channels(uuids) => format!("chs/{}", uuids.join(",")),
+            OutputSource::Deck(uuid) => format!("deck/{uuid}"),
         }
     }
 }
 
-impl std::fmt::Display for OutputSource {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            OutputSource::Master => write!(f, "Master"),
-            OutputSource::Channel(idx) => write!(f, "Ch {idx}"),
-            OutputSource::Channels(indices) => {
-                let names: Vec<String> = indices.iter().map(|i| format!("Ch {i}")).collect();
-                write!(f, "{}", names.join("+"))
+impl std::str::FromStr for OutputSource {
+    type Err = String;
+
+    /// Parse the text form [`OutputSource::to_path_value`] writes.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        match s {
+            "master" => return Ok(Self::Master),
+            "domemaster" => return Ok(Self::Domemaster),
+            _ => {}
+        }
+        let (kind, rest) = s
+            .split_once('/')
+            .ok_or_else(|| format!("'{s}' is not a surface source"))?;
+        if rest.is_empty() {
+            return Err(format!("'{s}' names no entity"));
+        }
+        match kind {
+            "ch" => Ok(Self::Channel(rest.to_string())),
+            "deck" => Ok(Self::Deck(rest.to_string())),
+            "chs" => {
+                let uuids: Vec<String> = rest
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|u| !u.is_empty())
+                    .map(str::to_string)
+                    .collect();
+                match uuids.len() {
+                    0 => Err(format!("'{s}' names no channels")),
+                    1 => Ok(Self::Channel(uuids[0].clone())),
+                    _ => Ok(Self::Channels(uuids)),
+                }
             }
-            OutputSource::Deck(ch, dk) => write!(f, "Ch {} Deck {}", ch + 1, dk + 1),
-            OutputSource::Domemaster => write!(f, "Domemaster"),
+            _ => Err(format!("'{s}' is not a surface source")),
         }
     }
 }
@@ -783,145 +908,30 @@ pub enum CalibrationMode {
     Surfaces,
 }
 
-// ── Output target ────────────────────────────────────────────────────
+// ── Unassigned content ───────────────────────────────────────────────
 
-/// Where an output sends its content — unified across windowed and headless outputs.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
-pub enum OutputTarget {
-    /// Floating window (default)
-    Windowed,
-    /// Fullscreen/borderless on a specific monitor (identified by name + index)
-    Display {
-        /// Monitor name (e.g. "Built-in Retina Display", "HDMI-1")
-        name: String,
-        /// Index into the available monitors list (for lookup)
-        monitor_index: usize,
-    },
-    /// Record frames to a video file via ffmpeg subprocess
-    Recording {
-        path: String,
-        codec: RecordingCodec,
-        /// Audio passthrough device NAME (None = silent). See spec/audio-passthrough.md.
-        #[serde(default)]
-        audio_device: Option<String>,
-    },
-    /// Stream frames via SRT (Secure Reliable Transport) through ffmpeg
-    SrtStream {
-        url: String,
-        codec: SrtCodec,
-        #[serde(default)]
-        audio_device: Option<String>,
-    },
-    /// Stream frames as HLS segments via ffmpeg
-    HlsStream {
-        name: String,
-        codec: StreamingCodec,
-        /// One-second segments instead of two.
-        ///
-        /// Not RFC 8216bis low-latency HLS: FFmpeg's muxer writes no partial
-        /// segments, so there are none to deliver. This shortens segments and
-        /// nothing more. Named `low_latency` until it was measured; the alias
-        /// keeps existing `stage.json` files loading.
-        /// See /spec/hls-dash-io.md and /spec/ll-hls-output.md.
-        #[serde(alias = "low_latency")]
-        short_segments: bool,
-        #[serde(default)]
-        audio_device: Option<String>,
-    },
-    /// Stream frames as DASH segments via ffmpeg
-    DashStream {
-        name: String,
-        codec: StreamingCodec,
-        #[serde(default)]
-        audio_device: Option<String>,
-    },
-    /// Push frames to an RTMP/RTMPS ingest endpoint via ffmpeg
-    RtmpStream {
-        url: String,
-        codec: StreamingCodec,
-        /// Receiver codec signaling contract. Legacy is the interoperable default.
-        #[serde(default)]
-        codec_contract: RtmpCodecContract,
-        #[serde(default)]
-        audio_device: Option<String>,
-    },
-    /// Send frames over NDI network protocol
-    NdiSend { sender_name: String },
-    /// Publish frames via Syphon (macOS inter-app sharing)
-    SyphonServer { server_name: String },
-    /// Publish frames via Spout (Windows inter-app sharing).
-    ///
-    /// The Windows counterpart to [`Self::SyphonServer`], and like it, only ever
-    /// resolvable on its own platform. See /spec/spout-output.md.
-    SpoutSender { sender_name: String },
+/// What an output shows when no surfaces are assigned to it.
+/// See /spec/output-sink-providers.md Decision 13.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Unassigned {
+    /// Every surface on the stage, or the master fitted to the output when the
+    /// stage has none. What a projector expects.
+    Stage,
+    /// The master program over the whole output. What a recording or a stream
+    /// expects.
+    Program,
 }
 
-impl OutputTarget {
-    /// Whether this target requires an OS window.
-    pub fn is_windowed(&self) -> bool {
-        matches!(self, OutputTarget::Windowed | OutputTarget::Display { .. })
-    }
+impl Unassigned {
+    pub const ALL: [Self; 2] = [Self::Stage, Self::Program];
 
-    /// Whether this target is headless (no OS window).
-    pub fn is_headless(&self) -> bool {
-        !self.is_windowed()
-    }
-
-    /// The selected audio passthrough device name, if this is an ffmpeg target
-    /// configured with audio. `None` for video-only or non-ffmpeg targets.
-    pub fn audio_device(&self) -> Option<&str> {
+    pub fn label(self) -> &'static str {
         match self {
-            OutputTarget::Recording { audio_device, .. }
-            | OutputTarget::SrtStream { audio_device, .. }
-            | OutputTarget::HlsStream { audio_device, .. }
-            | OutputTarget::DashStream { audio_device, .. }
-            | OutputTarget::RtmpStream { audio_device, .. } => audio_device.as_deref(),
-            _ => None,
-        }
-    }
-
-    /// Return a clone of this target with the audio passthrough device replaced.
-    /// No-op for non-ffmpeg targets. Lets the GUI flip the device without
-    /// re-specifying every variant field.
-    #[must_use]
-    pub fn with_audio_device(&self, device: Option<String>) -> OutputTarget {
-        let mut target = self.clone();
-        match &mut target {
-            OutputTarget::Recording { audio_device, .. }
-            | OutputTarget::SrtStream { audio_device, .. }
-            | OutputTarget::HlsStream { audio_device, .. }
-            | OutputTarget::DashStream { audio_device, .. }
-            | OutputTarget::RtmpStream { audio_device, .. } => *audio_device = device,
-            _ => {}
-        }
-        target
-    }
-}
-
-impl std::fmt::Display for OutputTarget {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            OutputTarget::Windowed => write!(f, "Windowed"),
-            OutputTarget::Display { name, .. } => write!(f, "{name}"),
-            OutputTarget::Recording { path, codec, .. } => write!(f, "Rec [{codec}]: {path}"),
-            OutputTarget::SrtStream { url, codec, .. } => write!(f, "SRT [{codec}]: {url}"),
-            OutputTarget::HlsStream {
-                name,
-                codec,
-                short_segments,
-                ..
-            } => {
-                if *short_segments {
-                    write!(f, "HLS-short [{codec}]: {name}")
-                } else {
-                    write!(f, "HLS [{codec}]: {name}")
-                }
-            }
-            OutputTarget::DashStream { name, codec, .. } => write!(f, "DASH [{codec}]: {name}"),
-            OutputTarget::RtmpStream { url, codec, .. } => write!(f, "RTMP [{codec}]: {url}"),
-            OutputTarget::NdiSend { sender_name } => write!(f, "NDI: {sender_name}"),
-            OutputTarget::SyphonServer { server_name } => write!(f, "Syphon: {server_name}"),
-            OutputTarget::SpoutSender { sender_name } => write!(f, "Spout: {sender_name}"),
+            Self::Stage => "Stage",
+            Self::Program => "Program",
         }
     }
 }
@@ -947,6 +957,34 @@ pub enum RecordingCodec {
     HapAlpha,
     /// HAP Q (-c:v hap -format `hap_q`)
     HapQ,
+}
+
+impl RecordingCodec {
+    pub const ALL: [Self; 8] = [
+        Self::H264,
+        Self::H265,
+        Self::AV1,
+        Self::ProRes,
+        Self::ProRes4444,
+        Self::Hap,
+        Self::HapAlpha,
+        Self::HapQ,
+    ];
+
+    /// Read a codec as `stage.json` saves it: its label, or the older short
+    /// spellings. Anything unknown is H.264.
+    pub fn from_saved(saved: &str) -> Self {
+        match saved {
+            "prores" | "ProRes" | "ProRes 422" => Self::ProRes,
+            "prores_4444" | "ProRes4444" | "ProRes 4444" => Self::ProRes4444,
+            "h265" | "H265" | "H.265 (HEVC)" => Self::H265,
+            "av1" | "AV1" => Self::AV1,
+            "hap" | "Hap" | "HAP" => Self::Hap,
+            "hap_alpha" | "HapAlpha" | "HAP Alpha" => Self::HapAlpha,
+            "hapq" | "HapQ" | "HAP Q" => Self::HapQ,
+            _ => Self::H264,
+        }
+    }
 }
 
 impl std::fmt::Display for RecordingCodec {
@@ -976,6 +1014,18 @@ pub enum SrtCodec {
     H265,
 }
 
+impl SrtCodec {
+    pub const ALL: [Self; 2] = [Self::H264, Self::H265];
+
+    /// Read a codec as `stage.json` saves it. Anything unknown is H.264.
+    pub fn from_saved(saved: &str) -> Self {
+        match saved {
+            "H.265 (HEVC)" | "H265" | "h265" => Self::H265,
+            _ => Self::H264,
+        }
+    }
+}
+
 impl std::fmt::Display for SrtCodec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -997,6 +1047,19 @@ pub enum StreamingCodec {
     H265,
     /// AV1 via SVT-AV1
     AV1,
+}
+
+impl StreamingCodec {
+    pub const ALL: [Self; 3] = [Self::H264, Self::H265, Self::AV1];
+
+    /// Read a codec as `stage.json` saves it. Anything unknown is H.264.
+    pub fn from_saved(saved: &str) -> Self {
+        match saved {
+            "H.265 (HEVC)" | "H265" | "h265" => Self::H265,
+            "AV1" | "av1" => Self::AV1,
+            _ => Self::H264,
+        }
+    }
 }
 
 impl std::fmt::Display for StreamingCodec {
@@ -1031,6 +1094,17 @@ pub enum RtmpCodecContract {
     Legacy,
     /// Enhanced RTMP signaling declared by the configured endpoint.
     Enhanced,
+}
+
+impl RtmpCodecContract {
+    pub const ALL: [Self; 2] = [Self::Legacy, Self::Enhanced];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Legacy => "Legacy (H.264)",
+            Self::Enhanced => "Enhanced",
+        }
+    }
 }
 
 // ── Tonemap ──────────────────────────────────────────────────────────
@@ -1287,164 +1361,67 @@ mod tests {
     // ── OutputSource ─────────────────────────────────────────────────
 
     #[test]
-    fn source_channel_indices_extracts_only_channel_variants() {
-        assert_eq!(OutputSource::Master.channel_indices(), None);
-        assert_eq!(OutputSource::Domemaster.channel_indices(), None);
-        assert_eq!(OutputSource::Deck(0, 1).channel_indices(), None);
-        assert_eq!(OutputSource::Channel(2).channel_indices(), Some(vec![2]));
+    fn source_channel_uuids_come_only_from_channel_variants() {
+        assert_eq!(OutputSource::Master.channel_uuids(), None);
+        assert_eq!(OutputSource::Deck("d1".into()).channel_uuids(), None);
         assert_eq!(
-            OutputSource::Channels(vec![0, 3, 5]).channel_indices(),
-            Some(vec![0, 3, 5])
+            OutputSource::Channel("c1".into()).channel_uuids(),
+            Some(&["c1".to_string()][..])
         );
     }
 
     #[test]
-    fn source_display_formats() {
-        assert_eq!(OutputSource::Master.to_string(), "Master");
-        assert_eq!(OutputSource::Channel(0).to_string(), "Ch 0");
-        assert_eq!(OutputSource::Channels(vec![0, 1]).to_string(), "Ch 0+Ch 1");
-        // Deck display is 1-indexed for humans.
-        assert_eq!(OutputSource::Deck(0, 0).to_string(), "Ch 1 Deck 1");
-        assert_eq!(OutputSource::Domemaster.to_string(), "Domemaster");
+    fn a_surface_source_reads_back_as_uuids() {
+        for source in [
+            OutputSource::Master,
+            OutputSource::Domemaster,
+            OutputSource::Channel("ab12cd34".into()),
+            OutputSource::Channels(vec!["ab12cd34".into(), "ef567890".into()]),
+            OutputSource::Deck("0badf00d".into()),
+        ] {
+            let json = serde_json::to_string(&source).unwrap();
+            assert_eq!(serde_json::from_str::<OutputSource>(&json).unwrap(), source);
+            assert_eq!(source.to_path_value().parse::<OutputSource>(), Ok(source));
+        }
     }
 
-    // ── OutputTarget ─────────────────────────────────────────────────
-
+    /// A stage saved before Decision 12 names channels and decks by position.
+    /// Those positions are resolved against the scene they were saved with.
     #[test]
-    fn target_windowed_predicates() {
-        assert!(OutputTarget::Windowed.is_windowed());
-        assert!(!OutputTarget::Windowed.is_headless());
-        let display = OutputTarget::Display {
-            name: "HDMI-1".into(),
-            monitor_index: 0,
-        };
-        assert!(display.is_windowed());
-        assert!(!display.is_headless());
-    }
-
-    #[test]
-    fn target_headless_predicates() {
-        let ndi = OutputTarget::NdiSend {
-            sender_name: "Out".into(),
-        };
-        assert!(ndi.is_headless());
-        assert!(!ndi.is_windowed());
-        let rec = OutputTarget::Recording {
-            path: "/tmp/out.mov".into(),
-            codec: RecordingCodec::H264,
-            audio_device: None,
-        };
-        assert!(rec.is_headless());
-    }
-
-    #[test]
-    fn target_audio_device_only_for_configured_ffmpeg_targets() {
-        // No audio configured → None even on an ffmpeg target.
-        assert_eq!(
-            OutputTarget::Recording {
-                path: "/tmp/a.mov".into(),
-                codec: RecordingCodec::H264,
-                audio_device: None,
-            }
-            .audio_device(),
-            None
-        );
-        // Configured audio → Some.
-        assert_eq!(
-            OutputTarget::SrtStream {
-                url: "srt://host:9000".into(),
-                codec: SrtCodec::H264,
-                audio_device: Some("BlackHole 2ch".into()),
-            }
-            .audio_device(),
-            Some("BlackHole 2ch")
-        );
-        // Non-ffmpeg targets never carry audio.
-        assert_eq!(OutputTarget::Windowed.audio_device(), None);
-        assert_eq!(
-            OutputTarget::NdiSend {
-                sender_name: "Out".into(),
-            }
-            .audio_device(),
-            None
-        );
+    fn index_based_sources_migrate_against_the_scene_order() {
+        let channels = vec!["c0".to_string(), "c1".to_string()];
+        let decks = vec![
+            vec!["d00".to_string()],
+            vec!["d10".to_string(), "d11".to_string()],
+        ];
+        let cases = [
+            (r#"{"Channel":1}"#, OutputSource::Channel("c1".into())),
+            (
+                r#"{"Channels":[0,1]}"#,
+                OutputSource::Channels(vec!["c0".into(), "c1".into()]),
+            ),
+            (r#"{"Deck":[1,1]}"#, OutputSource::Deck("d11".into())),
+        ];
+        for (json, expected) in cases {
+            let mut source: OutputSource = serde_json::from_str(json).unwrap();
+            assert_eq!(source.resolve_legacy(&channels, &decks), None, "{json}");
+            assert_eq!(source, expected, "{json}");
+        }
     }
 
     #[test]
-    fn target_with_audio_device_updates_ffmpeg_targets() {
-        let rec = OutputTarget::Recording {
-            path: "/tmp/a.mov".into(),
-            codec: RecordingCodec::H264,
-            audio_device: None,
-        };
-        let updated = rec.with_audio_device(Some("Mic".into()));
-        assert_eq!(updated.audio_device(), Some("Mic"));
-        // Clearing it back to None works too.
-        assert_eq!(updated.with_audio_device(None).audio_device(), None);
+    fn a_legacy_reference_past_the_end_falls_back_to_the_master() {
+        let mut source: OutputSource = serde_json::from_str(r#"{"Deck":[4,0]}"#).unwrap();
+        let reason = source.resolve_legacy(&["c0".into()], &[vec![]]);
+        assert_eq!(source, OutputSource::Master);
+        assert!(reason.is_some_and(|r| r.contains("deck")));
     }
 
     #[test]
-    fn target_with_audio_device_is_noop_for_non_ffmpeg() {
-        let windowed = OutputTarget::Windowed;
-        let updated = windowed.with_audio_device(Some("Mic".into()));
-        // Still Windowed, still no audio device.
-        assert_eq!(updated, OutputTarget::Windowed);
-        assert_eq!(updated.audio_device(), None);
-    }
-
-    #[test]
-    fn target_display_formats() {
-        assert_eq!(OutputTarget::Windowed.to_string(), "Windowed");
-        assert_eq!(
-            OutputTarget::Display {
-                name: "Built-in".into(),
-                monitor_index: 1,
-            }
-            .to_string(),
-            "Built-in"
-        );
-        assert_eq!(
-            OutputTarget::HlsStream {
-                name: "live".into(),
-                codec: StreamingCodec::H264,
-                short_segments: true,
-                audio_device: None,
-            }
-            .to_string(),
-            "HLS-short [H.264]: live"
-        );
-        assert_eq!(
-            OutputTarget::HlsStream {
-                name: "live".into(),
-                codec: StreamingCodec::H264,
-                short_segments: false,
-                audio_device: None,
-            }
-            .to_string(),
-            "HLS [H.264]: live"
-        );
-    }
-
-    #[test]
-    fn rtmp_codec_contract_defaults_to_legacy_and_roundtrips_enhanced() {
-        let legacy: RtmpCodecContract = serde_json::from_str(r#""legacy""#).unwrap();
-        assert_eq!(legacy, RtmpCodecContract::Legacy);
-        assert_eq!(
-            serde_json::to_string(&RtmpCodecContract::Enhanced).unwrap(),
-            r#""enhanced""#
-        );
-
-        let target: OutputTarget = serde_json::from_str(
-            r#"{"RtmpStream":{"url":"rtmps://example/live","codec":"H264","audio_device":null}}"#,
-        )
-        .unwrap();
-        assert!(matches!(
-            target,
-            OutputTarget::RtmpStream {
-                codec_contract: RtmpCodecContract::Legacy,
-                ..
-            }
-        ));
+    fn surface_source_text_rejects_nonsense() {
+        assert!("chan/1".parse::<OutputSource>().is_err());
+        assert!("ch/".parse::<OutputSource>().is_err());
+        assert!("chs/,".parse::<OutputSource>().is_err());
     }
 
     // ── EdgeBlend ────────────────────────────────────────────────────

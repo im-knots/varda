@@ -6,9 +6,10 @@
 
 use super::super::{LibraryDrag, UIActions, UIData};
 use crate::engine::EngineCommand;
-use crate::engine::value::source::{
-    LibraryCreate, LibraryEntry, LibraryNotice, SourceConfig, SourceParamKind, SourceTypeSnapshot,
+use crate::engine::value::provider::{
+    ControlKind, LibraryCreate, LibraryEntry, LibraryNotice, ProviderTypeSnapshot,
 };
+use crate::engine::value::source::SourceConfig;
 
 /// egui memory key carrying the dragged source from the library panel to the
 /// deferred drop handler in `panels/dnd.rs`.
@@ -170,7 +171,7 @@ fn create(
                 ui.horizontal(|ui| {
                     ui.label(format!("{}:", field.label));
                     match &field.kind {
-                        SourceParamKind::Choice { options } => {
+                        ControlKind::Choice { options } => {
                             egui::ComboBox::from_id_salt((
                                 "lib_form_choice",
                                 source_type,
@@ -237,7 +238,7 @@ fn create(
 /// One source type's collapsible section.
 fn source_section(
     ui: &mut egui::Ui,
-    ty: &SourceTypeSnapshot,
+    ty: &ProviderTypeSnapshot,
     data: &UIData,
     actions: &mut UIActions,
 ) {
@@ -248,7 +249,7 @@ fn source_section(
         format!("{} {} ({})", ty.icon, ty.label, section.entries.len())
     };
     egui::CollapsingHeader::new(egui::RichText::new(header).strong())
-        .id_salt(("lib_source_section", &ty.source_type))
+        .id_salt(("lib_source_section", &ty.type_id))
         .default_open(false)
         .show(ui, |ui| {
             if !ty.available {
@@ -260,7 +261,7 @@ fn source_section(
                 ui.horizontal(|ui| {
                     if section.rescan && ui.small_button("🔄 Rescan").clicked() {
                         actions.commands.push(EngineCommand::SourceLibraryAction {
-                            source_type: ty.source_type.clone(),
+                            source_type: ty.type_id.clone(),
                             action: "rescan".into(),
                         });
                     }
@@ -270,10 +271,10 @@ fn source_section(
                 });
             }
             for n in &section.notices {
-                notice(ui, &ty.source_type, n, actions);
+                notice(ui, &ty.type_id, n, actions);
             }
             if let Some(how) = &section.create {
-                create(ui, &ty.source_type, how, data, actions);
+                create(ui, &ty.type_id, how, data, actions);
             }
             if section.entries.is_empty() && section.create.is_none() {
                 let hint = if section.rescan {
@@ -300,7 +301,7 @@ fn source_section(
                 }
                 for (idx, entry) in section.entries.iter().enumerate() {
                     if entry.group.as_deref() == group {
-                        entry_row(ui, &ty.source_type, idx, entry, data, actions);
+                        entry_row(ui, &ty.type_id, idx, entry, data, actions);
                     }
                 }
             }

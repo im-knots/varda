@@ -166,6 +166,7 @@ impl VardaApp {
         // lists; anything else might, so the next snapshot lists afresh.
         if live.is_none() {
             self.sources.type_cache.invalidate();
+            self.output.sink_type_cache.invalidate();
         }
         let result = self.dispatch_command(cmd);
         if let Some((key, value)) = live
@@ -323,7 +324,7 @@ impl VardaApp {
                 },
             },
             EngineCommand::ToggleParam { path } => {
-                if let Some(cmd) = super::inputs::surface_command(&path) {
+                if let Some(cmd) = self.surface_toggle(&path) {
                     return self.execute_command(cmd);
                 }
                 if let Err(e) = crate::param_router::toggle_param_by_path(&mut self.mixer, &path) {
@@ -456,34 +457,45 @@ impl VardaApp {
             }
 
             // ── Output ───────────────────────────────────────
-            EngineCommand::CreateOutput => {
-                self.output.request_create_output();
-                CommandResult::Ok
-            }
+            EngineCommand::CreateOutput { sink } => self.cmd_create_output(sink),
             EngineCommand::CloseOutput { output_uuid } => {
                 match self.output.close_output(&output_uuid) {
                     Ok(passthrough) => {
-                        if let Some(pass) = passthrough {
-                            self.audio
-                                .manager
-                                .unsubscribe_pcm(pass.source_id, pass.token);
-                        }
+                        self.release_passthrough(passthrough);
                         CommandResult::Ok
                     }
                     Err(e) => wire(Err::<(), _>(e)),
                 }
             }
-            EngineCommand::SetOutputDisplay {
+            EngineCommand::SetOutputTarget { output_uuid, sink } => {
+                self.cmd_set_output_target(&output_uuid, &sink)
+            }
+            EngineCommand::SetSinkParam {
                 output_uuid,
-                monitor_name,
-            } => wire(self.output.set_output_display(&output_uuid, &monitor_name)),
-            EngineCommand::SetOutputTarget {
+                name,
+                value,
+            } => self.cmd_set_sink_param(&output_uuid, &name, &value),
+            EngineCommand::SinkLibraryAction { sink_type, action } => {
+                self.cmd_sink_library_action(&sink_type, &action)
+            }
+            EngineCommand::SetSurfaceAssignmentEnabled {
                 output_uuid,
-                target,
-            } => match self.output.resolve_output(&output_uuid) {
-                Ok(idx) => self.cmd_set_output_target(idx, target),
-                Err(e) => not_found(&e),
-            },
+                surface_uuid,
+                enabled,
+            } => {
+                let result = self.output.set_surface_assignment_enabled(
+                    &output_uuid,
+                    &surface_uuid,
+                    enabled,
+                );
+                self.output.recompute_auto_edge_blend();
+                wire(result)
+            }
+            EngineCommand::SetPathText { path, value } => self.set_path_text(&path, value),
+            EngineCommand::SetOutputUnassigned {
+                output_uuid,
+                unassigned,
+            } => self.cmd_set_output_unassigned(&output_uuid, unassigned),
 
             // ── Surfaces ────────────────────────────────────
             EngineCommand::AddSurface { name, source } => {
@@ -951,11 +963,11 @@ impl VardaApp {
             ),
 
             // ── Source Library ─────────────────────────────────
-            EngineCommand::AddSourceLibraryEntry { entry } => wire(
-                self.source_library(entry.source_type(), |p| p.add_library_entry(entry.clone())),
-            ),
+            EngineCommand::AddSourceLibraryEntry { entry } => {
+                wire(self.source_library(entry.type_id(), |p| p.add_library_entry(entry.clone())))
+            }
             EngineCommand::RemoveSourceLibraryEntry { entry } => {
-                wire(self.source_library(entry.source_type(), |p| p.remove_library_entry(&entry)))
+                wire(self.source_library(entry.type_id(), |p| p.remove_library_entry(&entry)))
             }
             EngineCommand::SourceLibraryAction {
                 source_type,
@@ -963,9 +975,6 @@ impl VardaApp {
             } => self.source_library_action(&source_type, &action),
 
             // ── Output Management ─────────────────────────────────
-            EngineCommand::CreateHeadlessOutput { target } => {
-                self.cmd_create_headless_output(target)
-            }
             EngineCommand::StartOutput { output_uuid } => self.cmd_start_output(&output_uuid),
             EngineCommand::StopOutput { output_uuid } => self.cmd_stop_output(&output_uuid),
             EngineCommand::SetCalibrationMode { output_uuid, mode } => {

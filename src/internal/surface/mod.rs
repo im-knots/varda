@@ -737,6 +737,32 @@ pub struct SurfaceManager {
 }
 
 impl SurfaceManager {
+    /// Rewrite surface sources read from a `stage.json` that named channels
+    /// and decks by position, against the mixer order that file was saved
+    /// with. Returns a warning for each reference that no longer resolves and
+    /// was pointed at the master instead. See
+    /// /spec/output-sink-providers.md Decision 12.
+    pub fn resolve_legacy_sources(
+        &mut self,
+        channels: &[String],
+        decks: &[Vec<String>],
+    ) -> Vec<String> {
+        self.surfaces
+            .iter_mut()
+            .filter_map(|surface| {
+                surface
+                    .source
+                    .resolve_legacy(channels, decks)
+                    .map(|reason| {
+                        format!(
+                            "Surface '{}' now shows the master: its saved source {reason}",
+                            surface.name
+                        )
+                    })
+            })
+            .collect()
+    }
+
     pub fn new() -> Self {
         Self {
             surfaces: Vec::new(),

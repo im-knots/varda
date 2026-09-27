@@ -7,16 +7,16 @@
 //! and shows black until then.
 
 use super::{
-    DeckSourceInstance, DeckSourceProvider, Feed, LibraryEntry, LibrarySection, ScalingMode,
-    SourceConfig, SourceControl, SourceEnv, SourceFrame, SourceParamError, SourceParamSpec,
-    SourceQuery, SourceStatus, SourceValue, decode_config, downcast_mut, downcast_ref,
-    encode_config, scaling_mode_spec,
+    ControlError, ControlSpec, ControlStatus, ControlValue, DeckSourceInstance, DeckSourceProvider,
+    Feed, LibraryEntry, LibrarySection, ScalingMode, SourceConfig, SourceControl, SourceEnv,
+    SourceFrame, SourceQuery, decode_config, downcast_mut, downcast_ref, encode_config,
+    scaling_mode_spec,
 };
 use anyhow::{Context, Result};
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
-static PARAMS: LazyLock<Vec<SourceParamSpec>> = LazyLock::new(|| vec![scaling_mode_spec()]);
+static PARAMS: LazyLock<Vec<ControlSpec>> = LazyLock::new(|| vec![scaling_mode_spec()]);
 
 /// How often the server directory is re-read, so a producer that starts or
 /// restarts after Varda is found without anyone pressing rescan.
@@ -98,7 +98,7 @@ impl<M: ShareReceiver> DeckSourceProvider for ShareProvider<M> {
         "🔗"
     }
 
-    fn params(&self) -> &'static [SourceParamSpec] {
+    fn params(&self) -> &'static [ControlSpec] {
         &PARAMS
     }
 
@@ -231,7 +231,7 @@ impl<M: ShareReceiver> DeckSourceProvider for ShareProvider<M> {
         }
     }
 
-    fn status(&self, instance: &dyn DeckSourceInstance, query: &SourceQuery) -> SourceStatus {
+    fn status(&self, instance: &dyn DeckSourceInstance, query: &SourceQuery) -> ControlStatus {
         let Some(deck) = downcast_ref::<ShareFeed>(instance) else {
             return instance.status();
         };
@@ -287,15 +287,15 @@ impl DeckSourceInstance for ShareFeed {
         self.feed.control(ctx);
     }
 
-    fn schema(&self) -> &'static [SourceParamSpec] {
+    fn schema(&self) -> &'static [ControlSpec] {
         &PARAMS
     }
 
-    fn param(&self, name: &str) -> Option<SourceValue> {
+    fn param(&self, name: &str) -> Option<ControlValue> {
         self.feed.param(name)
     }
 
-    fn set_param(&mut self, name: &str, value: &SourceValue) -> Result<(), SourceParamError> {
+    fn set_param(&mut self, name: &str, value: &ControlValue) -> Result<(), ControlError> {
         self.feed.set_param(name, value)
     }
 

@@ -175,8 +175,9 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::stage::detect_dxf, routes::stage::detect_confirm, routes::stage::detect_camera,
         // Outputs
         routes::outputs::create, routes::outputs::close,
-        routes::outputs::set_display, routes::outputs::assign_surface,
-        routes::outputs::unassign_surface, routes::outputs::create_headless,
+        routes::outputs::assign_surface, routes::outputs::unassign_surface,
+        routes::outputs::set_sink_param, routes::outputs::set_unassigned,
+        routes::outputs::sink_library_action, routes::outputs::list_types,
         routes::outputs::start, routes::outputs::stop,
         routes::outputs::set_calibration_mode, routes::outputs::set_target,
         routes::outputs::set_presentation,
@@ -224,27 +225,32 @@ use utoipa_swagger_ui::SwaggerUi;
 pub struct ApiDoc;
 
 /// The served `OpenAPI` document: [`ApiDoc`], the deprecated per-source-type
-/// aliases, and the source type ids this build registers, so a `SourceConfig`
-/// body documents which `type` values it accepts.
+/// aliases, and the deck source and output sink type ids this build
+/// registers, so a `ProviderConfig` body documents which `type` values exist.
+/// `GET /api/library/sources` and `GET /api/library/outputs` say which apply
+/// where.
 pub fn api_doc() -> utoipa::openapi::OpenApi {
     let mut doc = ApiDoc::openapi();
     doc.merge(routes::deprecated_sources::DeprecatedApi::openapi());
-    let ids: Vec<&str> = crate::app::sources::source_providers()
+    let sources = crate::app::sources::source_providers();
+    let sinks = crate::app::sources::output_sinks();
+    let ids: Vec<&str> = sources
         .iter()
         .map(crate::source::DeckSourceProvider::id)
+        .chain(sinks.iter().map(crate::output::OutputSinkProvider::id))
         .collect();
     document_source_types(&mut doc, &ids);
     doc
 }
 
-/// Narrow the `SourceConfig` schema's `type` to the registered ids.
+/// Narrow the `ProviderConfig` schema's `type` to the registered ids.
 fn document_source_types(doc: &mut utoipa::openapi::OpenApi, ids: &[&str]) {
     use utoipa::openapi::RefOr;
     use utoipa::openapi::schema::Schema;
     let Some(schema) = doc
         .components
         .as_mut()
-        .and_then(|c| c.schemas.get_mut("SourceConfig"))
+        .and_then(|c| c.schemas.get_mut("ProviderConfig"))
     else {
         return;
     };
@@ -571,13 +577,22 @@ pub fn build_router(shared: SharedState) -> Router {
         )
         // ── Write: Outputs ─────────────────────────────────────
         .route("/api/outputs", axum::routing::post(routes::outputs::create))
+        .route("/api/library/outputs", get(routes::outputs::list_types))
+        .route(
+            "/api/outputs/{output_uuid}/sink/params/{name}",
+            axum::routing::put(routes::outputs::set_sink_param),
+        )
+        .route(
+            "/api/outputs/{output_uuid}/unassigned",
+            axum::routing::put(routes::outputs::set_unassigned),
+        )
+        .route(
+            "/api/outputs/types/{sink_type}/actions/{action}",
+            axum::routing::post(routes::outputs::sink_library_action),
+        )
         .route(
             "/api/outputs/{output_uuid}",
             axum::routing::delete(routes::outputs::close),
-        )
-        .route(
-            "/api/outputs/{output_uuid}/display",
-            axum::routing::put(routes::outputs::set_display),
         )
         .route(
             "/api/outputs/{output_uuid}/surfaces",
@@ -1009,10 +1024,6 @@ pub fn build_router(shared: SharedState) -> Router {
             axum::routing::put(routes::surfaces::set_bezier_cage_subdivisions),
         )
         // ── Write: Outputs extras ───────────────────────────────
-        .route(
-            "/api/outputs/headless",
-            axum::routing::post(routes::outputs::create_headless),
-        )
         .route(
             "/api/outputs/{output_uuid}/start",
             axum::routing::post(routes::outputs::start),

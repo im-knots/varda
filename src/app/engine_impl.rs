@@ -115,7 +115,7 @@ impl VardaApp {
         if self
             .sources
             .providers
-            .get(source.source_type())
+            .get(source.type_id())
             .is_some_and(crate::source::DeckSourceProvider::one_per_channel)
             && let Some(existing) = self.mixer.channels()[channel_idx]
                 .decks
@@ -497,7 +497,7 @@ fn load_name(source: &SourceConfig) -> String {
         .iter()
         .find_map(|key| source.str(key))
         .map_or_else(
-            || source.source_type().to_string(),
+            || source.type_id().to_string(),
             |value| {
                 std::path::Path::new(value)
                     .file_name()

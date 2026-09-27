@@ -21,6 +21,19 @@ pub enum EffectChain {
 }
 
 impl Mixer {
+    /// The sorted, deduplicated positions of the channels `uuids` names, the
+    /// key a sub-mix is prepared and looked up under. Channels that no longer
+    /// exist are left out.
+    pub fn channel_positions(&self, uuids: &[String]) -> Vec<usize> {
+        let mut positions: Vec<usize> = uuids
+            .iter()
+            .filter_map(|uuid| self.find_channel_by_uuid(uuid))
+            .collect();
+        positions.sort_unstable();
+        positions.dedup();
+        positions
+    }
+
     /// Resolve a channel UUID to its current index.
     ///
     /// # Errors

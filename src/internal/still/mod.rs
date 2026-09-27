@@ -8,9 +8,9 @@ pub mod svg;
 
 use crate::renderer::GpuContext;
 use crate::source::{
-    AlphaPolicy, DeckSourceInstance, DeckSourceProvider, LibraryCreate, LibrarySection, ScaledBlit,
-    ScalingMode, SourceConfig, SourceEnv, SourceFrame, SourceLoader, SourceParamError,
-    SourceParamSpec, SourceQuery, SourceValue, decode_config, encode_config, scaling_mode_spec,
+    AlphaPolicy, ControlError, ControlSpec, ControlValue, DeckSourceInstance, DeckSourceProvider,
+    LibraryCreate, LibrarySection, ScaledBlit, ScalingMode, SourceConfig, SourceEnv, SourceFrame,
+    SourceLoader, SourceQuery, decode_config, encode_config, scaling_mode_spec,
 };
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -23,7 +23,7 @@ pub const EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "bmp", "tiff", "tga", "webp", "svg", "svgz",
 ];
 
-static PARAMS: LazyLock<Vec<SourceParamSpec>> = LazyLock::new(|| vec![scaling_mode_spec()]);
+static PARAMS: LazyLock<Vec<ControlSpec>> = LazyLock::new(|| vec![scaling_mode_spec()]);
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Config {
@@ -48,7 +48,7 @@ impl DeckSourceProvider for ImageProvider {
         "🖼"
     }
 
-    fn params(&self) -> &'static [SourceParamSpec] {
+    fn params(&self) -> &'static [ControlSpec] {
         &PARAMS
     }
 
@@ -226,18 +226,18 @@ impl DeckSourceInstance for Image {
         self.blit.control(ctx);
     }
 
-    fn schema(&self) -> &'static [SourceParamSpec] {
+    fn schema(&self) -> &'static [ControlSpec] {
         &PARAMS
     }
 
-    fn param(&self, name: &str) -> Option<SourceValue> {
+    fn param(&self, name: &str) -> Option<ControlValue> {
         self.blit.param(name)
     }
 
-    fn set_param(&mut self, name: &str, value: &SourceValue) -> Result<(), SourceParamError> {
+    fn set_param(&mut self, name: &str, value: &ControlValue) -> Result<(), ControlError> {
         self.blit
             .set_param(name, value)
-            .unwrap_or_else(|| Err(SourceParamError::Unknown(name.to_string())))
+            .unwrap_or_else(|| Err(ControlError::Unknown(name.to_string())))
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

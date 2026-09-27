@@ -921,6 +921,38 @@ pub fn provider() -> crate::source::ShareProvider<SyphonManager> {
     })
 }
 
+impl crate::output::share::ShareSender for SyphonManager {
+    fn is_available(&self) -> bool {
+        SyphonManager::is_available(self)
+    }
+
+    fn publish(
+        &mut self,
+        gpu: &crate::renderer::context::GpuContext,
+        name: &str,
+        view: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+    ) {
+        self.publish_frame_gpu(gpu, name, view, width, height);
+    }
+}
+
+/// Syphon outputs: a server other macOS applications read the output from.
+static SYPHON_OUTPUT: crate::output::share::ShareOutput = crate::output::share::ShareOutput {
+    id: "syphon_server",
+    label: "Syphon",
+    icon: "🔗",
+    name_field: "server_name",
+    unavailable: "Syphon is not installed",
+    presentation: crate::delivery::presentation::syphon_presentation,
+};
+
+/// The Syphon output type.
+pub fn sink_provider() -> crate::output::share::ShareSinkProvider<SyphonManager> {
+    crate::output::share::ShareSinkProvider::new(&SYPHON_OUTPUT)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

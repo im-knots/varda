@@ -183,16 +183,10 @@ impl VardaApp {
                     // whatever this says.
                     self.output.domemaster_resolution = prefs.domemaster_resolution;
                     for output_config in &prefs.outputs {
-                        // Migrate legacy target_display field to new target config
-                        let mut config = output_config.clone();
-                        if matches!(config.target, crate::scene::OutputTargetConfig::Windowed)
-                            && let Some(ref display_name) = config.target_display
-                        {
-                            config.target = crate::scene::OutputTargetConfig::Display {
-                                name: display_name.clone(),
-                            };
+                        if let Err(e) = self.create_output(output_config) {
+                            log::error!("Failed to restore output '{}': {e:#}", output_config.name);
+                            errors.push(format!("output '{}': {e:#}", output_config.name));
                         }
-                        self.output.pending_output_creates.push(config);
                     }
                     log::info!(
                         "Loaded stage with {} surfaces, {} outputs",
@@ -280,6 +274,25 @@ impl VardaApp {
                     log::warn!("Failed to load scene file: {e}");
                     errors.push(format!("scene: {e}"));
                 }
+            }
+        }
+        // A stage saved before surfaces named channels by UUID is resolved
+        // against the scene it was saved with, which is now loaded.
+        {
+            let channels = self.mixer.channels();
+            let channel_uuids: Vec<String> =
+                channels.iter().map(|c| c.uuid().to_string()).collect();
+            let deck_uuids: Vec<Vec<String>> = channels
+                .iter()
+                .map(|c| c.decks.iter().map(|s| s.deck.uuid().to_string()).collect())
+                .collect();
+            for warning in self
+                .output
+                .surface_manager
+                .resolve_legacy_sources(&channel_uuids, &deck_uuids)
+            {
+                log::warn!("{warning}");
+                self.session.notifications.warn(warning);
             }
         }
         if self.session.workspace.has_midi() {
@@ -754,48 +767,29 @@ impl VardaApp {
         //     ignored for lifecycle.
         let mut restored_output_indices = Vec::new();
         for (idx, output) in self.output.outputs.iter_mut().enumerate() {
-            let uuid = output.uuid().to_string();
-            if let Some(cfg) = target.outputs.iter().find(|c| c.uuid == uuid) {
-                *output.surface_assignments_mut() = cfg
-                    .surface_assignments
-                    .iter()
-                    .map(|a| crate::renderer::context::SurfaceAssignment {
-                        surface_uuid: a.surface_uuid.clone(),
-                        enabled: a.enabled,
-                        overlap_zones: crate::renderer::edge_blend::SurfaceOverlapZones::default(),
-                    })
-                    .collect();
-                match output {
-                    crate::renderer::context::UnifiedOutput::Window(w) => {
-                        w.tonemap_override = cfg.tonemap_override;
-                    }
-                    crate::renderer::context::UnifiedOutput::Headless(h) => {
-                        h.tonemap_override = cfg.tonemap_override;
-                    }
-                }
-                match output.set_presentation_request(&self.render.context, cfg.presentation) {
-                    Ok(()) => {
-                        if let crate::renderer::context::UnifiedOutput::Headless(headless) = output
-                            && matches!(
-                                &headless.target,
-                                crate::renderer::context::OutputTarget::NdiSend { .. }
-                            )
-                        {
-                            let resolved = self
-                                .sources
-                                .service::<crate::ndi::NdiManager>()
-                                .resolve_presentation(cfg.presentation);
-                            headless
-                                .set_resolved_presentation(&self.render.context.device, resolved);
-                        }
-                        restored_output_indices.push(idx);
-                    }
-                    Err(error) => {
-                        log::warn!(
-                            "Could not restore presentation precision for output '{uuid}': {error}"
-                        );
-                    }
-                }
+            let Some(cfg) = target.outputs.iter().find(|c| c.uuid == output.uuid) else {
+                continue;
+            };
+            output.surface_assignments = cfg
+                .surface_assignments
+                .iter()
+                .map(|a| crate::renderer::context::SurfaceAssignment {
+                    surface_uuid: a.surface_uuid.clone(),
+                    enabled: a.enabled,
+                    overlap_zones: crate::renderer::edge_blend::SurfaceOverlapZones::default(),
+                })
+                .collect();
+            output.tonemap_override = cfg.tonemap_override;
+            match output.set_presentation_request(
+                &self.render.context,
+                &self.sources.services,
+                cfg.presentation,
+            ) {
+                Ok(()) => restored_output_indices.push(idx),
+                Err(error) => log::warn!(
+                    "Could not restore presentation precision for output '{}': {error}",
+                    output.uuid
+                ),
             }
         }
         for idx in restored_output_indices {
@@ -1017,19 +1011,15 @@ mod tests {
     fn save_load_roundtrip_keeps_requested_presentation() {
         use crate::engine::value::render::{PresentationDepth, PresentationRequest};
         use crate::engine::{CommandResult, EngineCommand};
-        use crate::renderer::context::OutputTarget;
-
         let tmp = TempDir::new().unwrap();
         let Some(mut app) = headless_app_in(tmp.path()) else {
             return;
         };
         assert!(matches!(
-            app.execute_command(EngineCommand::CreateHeadlessOutput {
-                target: OutputTarget::SyphonServer {
-                    server_name: "Precision".into(),
-                },
+            app.execute_command(EngineCommand::CreateOutput {
+                sink: crate::output::SinkConfig::new("recording").with("path", "precision.mov"),
             }),
-            CommandResult::Ok
+            CommandResult::OkWithId { .. }
         ));
         let output_uuid = app.build_engine_state().outputs.windows[0].uuid.clone();
         assert!(matches!(

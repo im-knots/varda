@@ -1313,11 +1313,31 @@ mod tests {
         let (status, json) = post_json(
             router_with_mock_engine(),
             "/api/outputs",
-            serde_json::json!({}),
+            serde_json::json!({"type": "windowed"}),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["status"], "ok");
+    }
+
+    /// Any output type is created through one route, from its sink config.
+    #[tokio::test]
+    async fn output_creation_carries_the_sink_config() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = post_json(
+            app,
+            "/api/outputs",
+            serde_json::json!({"type": "recording", "path": "take.mov", "codec": "ProRes 422"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::CreateOutput { sink } => {
+                assert_eq!(sink.type_id(), "recording");
+                assert_eq!(sink.str("path"), Some("take.mov"));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -1334,16 +1354,32 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
+    /// A display output moves to another monitor through its sink setting.
     #[tokio::test]
-    async fn test_set_output_display() {
-        let (status, json) = put_json(
-            router_with_mock_engine(),
-            "/api/outputs/out-001/display",
-            serde_json::json!({"monitor_name": "HDMI-1"}),
+    async fn a_sink_setting_route_carries_name_and_value() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = put_json(
+            app,
+            "/api/outputs/out-001/sink/params/monitor",
+            serde_json::json!({"value": "HDMI-1"}),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(json["status"], "ok");
+        match take_command(&seen) {
+            crate::engine::EngineCommand::SetSinkParam {
+                output_uuid,
+                name,
+                value,
+            } => {
+                assert_eq!(output_uuid, "out-001");
+                assert_eq!(name, "monitor");
+                assert_eq!(
+                    value,
+                    crate::engine::value::provider::ControlValue::Text("HDMI-1".into())
+                );
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -2108,17 +2144,17 @@ mod tests {
     #[tokio::test]
     async fn gui_parity_state_routes_serve_their_subtrees() {
         let mut state = make_test_state();
-        let mut hls = crate::engine::value::source::SourceTypeSnapshot {
-            source_type: "Hls".into(),
+        let mut hls = crate::engine::value::provider::ProviderTypeSnapshot {
+            type_id: "Hls".into(),
             label: "HLS".into(),
             icon: String::new(),
             available: true,
             unavailable_reason: None,
             listed: true,
             params: vec![],
-            library: crate::engine::value::source::LibrarySection::default(),
+            library: crate::engine::value::provider::LibrarySection::default(),
         };
-        let mut entry = crate::engine::value::source::LibraryEntry::new(
+        let mut entry = crate::engine::value::provider::LibraryEntry::new(
             "a.m3u8",
             crate::engine::value::source::SourceConfig::new("Hls")
                 .with("url", "https://example.invalid/a.m3u8"),
@@ -3999,7 +4035,7 @@ mod tests {
 
     #[tokio::test]
     async fn deprecated_transport_sync_writes_the_three_chase_controls() {
-        use crate::engine::value::source::SourceValue::Float;
+        use crate::engine::value::provider::ControlValue::Float;
         let (app, seen) = router_capturing_commands();
         let (status, _) = put_json(
             app,
@@ -4012,7 +4048,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        let writes: Vec<(String, String, crate::engine::value::source::SourceValue)> = seen
+        let writes: Vec<(String, String, crate::engine::value::provider::ControlValue)> = seen
             .lock()
             .unwrap()
             .drain(..)
@@ -4051,7 +4087,7 @@ mod tests {
                 source,
             } => {
                 assert_eq!(channel_uuid, "ch-042");
-                assert_eq!(source.source_type(), "Shader");
+                assert_eq!(source.type_id(), "Shader");
                 assert_eq!(source.str("name"), Some("Sine"));
             }
             other => panic!("unexpected command: {other:?}"),
@@ -4074,7 +4110,7 @@ mod tests {
                 source,
             } => {
                 assert_eq!(channel_uuid, "ch-042");
-                assert_eq!(source.source_type(), "Shader");
+                assert_eq!(source.type_id(), "Shader");
                 assert_eq!(source.str("name"), Some("Sine"));
             }
             other => panic!("unexpected command: {other:?}"),
@@ -4101,7 +4137,7 @@ mod tests {
                 assert_eq!(name, "speed");
                 assert_eq!(
                     value,
-                    crate::engine::value::source::SourceValue::Float(0.25)
+                    crate::engine::value::provider::ControlValue::Float(0.25)
                 );
             }
             other => panic!("unexpected command: {other:?}"),
@@ -4120,7 +4156,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         match take_command(&seen) {
             crate::engine::EngineCommand::AddSourceLibraryEntry { entry } => {
-                assert_eq!(entry.source_type(), "Hls");
+                assert_eq!(entry.type_id(), "Hls");
                 assert_eq!(entry.str("url"), Some("https://example.invalid/a.m3u8"));
             }
             other => panic!("unexpected command: {other:?}"),
@@ -4130,14 +4166,22 @@ mod tests {
     #[test]
     fn openapi_lists_every_registered_source_type() {
         let doc = serde_json::to_value(crate::usecases::api::runner::api_doc()).unwrap();
-        let ids = &doc["components"]["schemas"]["SourceConfig"]["properties"]["type"]["enum"];
+        let ids = &doc["components"]["schemas"]["ProviderConfig"]["properties"]["type"]["enum"];
         let ids: Vec<&str> = ids
             .as_array()
             .expect("SourceConfig.type documents its ids")
             .iter()
             .filter_map(serde_json::Value::as_str)
             .collect();
-        for id in ["Shader", "Image", "Video", "SolidColor", "Tap"] {
+        for id in [
+            "Shader",
+            "Image",
+            "Video",
+            "SolidColor",
+            "Tap",
+            "windowed",
+            "recording",
+        ] {
             assert!(ids.contains(&id), "{id} missing from {ids:?}");
         }
         let alias = &doc["paths"]["/api/channels/{channel_uuid}/decks/shader"]["post"];

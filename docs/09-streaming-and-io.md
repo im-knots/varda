@@ -53,9 +53,8 @@ declared from your peak setting rather than measured.
 | H.264, ProRes, HAP | No | No |
 
 Legacy RTMP cannot carry HDR at all and falls back with
-`the endpoint contract is legacy RTMP`. NDI is not planned: the public NDI SDK has no
-standardized HDR transfer signalling, so any claim there would be a private convention no
-receiver agrees on.
+`the endpoint contract is legacy RTMP`. NDI is not planned as the public NDI SDK has no
+standardized HDR transfer signalling.
 
 ### Verifying a stream or file
 
@@ -100,8 +99,8 @@ caveat, and the current limitations around LUTs, tonemap curves, and mastering m
 
 Each output can send video over NDI to other applications and machines on the network.
 
-1. In the output panel, click **"+ Stream"**
-2. Select **NDI** from the protocol dropdown
+1. In the output panel, choose **+ Output → NDI**
+2. Set the **Sender name** on its card
 3. Enter a sender name (e.g., "Varda Main")
 4. The NDI stream is discoverable by any NDI-compatible application on the LAN
 
@@ -131,8 +130,8 @@ NDI uses dynamic SDK loading (`libloading`). If the SDK is not installed, NDI fe
 
 SRT output uses **listener mode**. Varda acts as an SRT server that clients connect to.
 
-1. Click **"+ Stream"** → select **SRT**
-2. Enter a URL (default: `srt://0.0.0.0:9001?mode=listener`)
+1. Choose **+ Output → SRT stream**
+2. Set the **URL** on its card (default: `srt://0.0.0.0:9001`)
 3. Start the output — Varda begins listening for SRT clients
 
 When a client disconnects, the SRT listener automatically restarts so new clients can connect. Frame delivery is non-blocking.
@@ -155,7 +154,7 @@ SRT input supports receiver deduplication such that the same URL used by multipl
 
 ### Output
 
-1. Click **"+ Stream"** → select **HLS** or **DASH**
+1. Choose **+ Output → HLS stream** or **DASH stream**
 2. Choose a codec: **H.264**, **H.265**, or **AV1**
 3. For HLS, optionally enable **Short segments** for 2 to 5 second end-to-end latency
 4. Start the output
@@ -207,7 +206,7 @@ Each output can record to a video file independently. Multiple simultaneous reco
 
 ### Usage
 
-1. In the output panel, click **+ Recording** to create a recording output (repeat for each simultaneous recording, each runs its own ffmpeg subprocess).
+1. In the output panel, choose **+ Output → Recording** to create a recording output (repeat for each simultaneous recording, each runs its own ffmpeg subprocess).
 2. Set the **File:** path (plain text input; default `output.mp4`, relative to the working directory). Paths are literal there is **no automatic timestamping**, so give each recording a distinct name.
 3. Pick a **Codec:** from the table above.
 4. Click **▶ Start** to begin; the button becomes **⏹ Stop** and a red elapsed-time counter shows while recording.
@@ -251,7 +250,7 @@ If a scene selects a device that isn't present at load (unplugged, renamed), the
 
 Push video directly to Twitch, YouTube, Kick, or any RTMP/RTMPS ingest endpoint.
 
-1. Click **"+ Stream"** → select **RTMP**
+1. Choose **+ Output → RTMP stream**
 2. Enter the ingest URL (e.g., `rtmp://live.twitch.tv/app/<stream-key>` or `rtmps://a.rtmps.youtube.com/live2/<stream-key>`)
 3. Choose a codec: **H.264**, **H.265**, or **AV1** (H.265 and AV1 via Enhanced RTMP)
 4. Choose **Enhanced** only when the endpoint explicitly accepts Enhanced RTMP signaling
@@ -331,8 +330,8 @@ Syphon enables inter-application GPU texture sharing on macOS. Varda works both 
 
 **Publish (server):**
 
-1. In the output panel, click **+ Stream**
-2. Select **Syphon** from the protocol dropdown
+1. In the output panel, choose **+ Output → Syphon**
+2. Set its **Name** on its card
 3. Enter a server name (e.g., "Varda Main")
 4. Start the output — other Syphon apps then see it in their source list
 
@@ -398,8 +397,8 @@ Nothing needs installing. Spout's sharing lives in Windows itself, so there is n
 
 **Publish:**
 
-1. In the output panel, click **+ Stream**
-2. Select **Spout** from the protocol dropdown
+1. In the output panel, choose **+ Output → Spout**
+2. Set its **Name** on its card
 3. Enter a sender name (e.g., "Varda Main")
 4. Start the output, and other Spout applications see it in their source list
 
@@ -411,18 +410,11 @@ Spout needs Varda running on the **DirectX 12** graphics backend, which is the d
 
 ### Colour
 
-Spout carries display-encoded pixels, and Varda publishes 8-bit BGRA by default: that is Spout's own default and what every receiving application understands.
+Spout carries display-encoded pixels, and Varda publishes 8-bit BGRA by default because that is Spout's own default and what every receiving application understands.
 
 **10-bit** is available too, chosen per output like any other format, and worth using when the receiving application reads it. Most Spout applications expect 8-bit BGRA, so check the other end before switching a show over to it.
 
-There is no HDR over Spout, in either direction. Spout shares a texture and nothing else: no transfer function, no primaries, no mastering metadata. Selecting HDR10 or HLG on a Spout output is therefore not offered, and the picker says why. For HDR delivery, use a recording or one of the streaming protocols (see [HDR Delivery](#hdr-delivery)).
-
-### Performance
-
-Frames stay on the GPU in both directions and never round-trip through the CPU, so resolution costs bandwidth rather than frame time.
-
-- **Receiving** reads the sending application's shared texture directly on the GPU. Varda re-binds only when that application resizes or restarts.
-- **Publishing** converts the frame and hands it to the shared texture receivers read.
+There is no HDR over Spout. For HDR delivery, use a recording or one of the streaming protocols (see [HDR Delivery](#hdr-delivery)).
 
 ---
 

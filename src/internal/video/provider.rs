@@ -9,10 +9,10 @@ use super::{
 };
 use crate::renderer::{GpuContext, HapConvertPipeline};
 use crate::source::{
-    AlphaPolicy, DeckSourceInstance, DeckSourceProvider, LibraryCreate, LibrarySection, ScaledBlit,
-    ScalingMode, SourceConfig, SourceControl, SourceEnv, SourceFrame, SourceLoader,
-    SourceParamError, SourceParamSpec, SourceQuery, SourceStatus, SourceValue, WidgetHint,
-    choice_index, choice_value, decode_config, encode_config, expect_norm, scaling_mode_spec,
+    AlphaPolicy, ControlError, ControlSpec, ControlStatus, ControlValue, DeckSourceInstance,
+    DeckSourceProvider, LibraryCreate, LibrarySection, ScaledBlit, ScalingMode, SourceConfig,
+    SourceControl, SourceEnv, SourceFrame, SourceLoader, SourceQuery, WidgetHint, choice_index,
+    choice_value, decode_config, encode_config, expect_norm, scaling_mode_spec,
 };
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -39,22 +39,22 @@ const SYNC_MODES: [TransportSyncMode; 3] = [
 /// modulatable where a continuous or discrete value makes sense. In and out
 /// points are not: they are the reference a position offset is scaled against,
 /// so modulating them would feed back. See /spec/video-playback-modulation.md.
-static PARAMS: LazyLock<Vec<SourceParamSpec>> = LazyLock::new(|| {
+static PARAMS: LazyLock<Vec<ControlSpec>> = LazyLock::new(|| {
     vec![
-        SourceParamSpec::toggle("play", "Play")
+        ControlSpec::toggle("play", "Play")
             .routed(vm::PLAY)
             .modulatable()
             .in_widget(WidgetHint::Transport),
-        SourceParamSpec::float("position", "Position", 0.0, 1.0)
+        ControlSpec::float("position", "Position", 0.0, 1.0)
             .routed(vm::POSITION)
             .modulatable()
             .in_widget(WidgetHint::Transport),
-        SourceParamSpec::float("speed", "Speed", vm::SPEED_MIN as f32, vm::SPEED_MAX as f32)
+        ControlSpec::float("speed", "Speed", vm::SPEED_MIN as f32, vm::SPEED_MAX as f32)
             .unit("x")
             .routed(vm::SPEED)
             .modulatable()
             .in_widget(WidgetHint::Transport),
-        SourceParamSpec::choice(
+        ControlSpec::choice(
             "loop_mode",
             "Loop",
             &["Loop", "Ping-Pong", "One Shot", "Hold Last"],
@@ -62,20 +62,19 @@ static PARAMS: LazyLock<Vec<SourceParamSpec>> = LazyLock::new(|| {
         .routed(vm::LOOP_MODE)
         .modulatable()
         .in_widget(WidgetHint::Transport),
-        SourceParamSpec::float("in_point", "In", 0.0, 1.0)
+        ControlSpec::float("in_point", "In", 0.0, 1.0)
             .routed("video/in_point")
             .in_widget(WidgetHint::Transport),
-        SourceParamSpec::float("out_point", "Out", 0.0, 1.0)
+        ControlSpec::float("out_point", "Out", 0.0, 1.0)
             .routed("video/out_point")
             .in_widget(WidgetHint::Transport),
-        SourceParamSpec::action("clear", "Clear In/Out")
+        ControlSpec::action("clear", "Clear In/Out")
             .routed("video/clear")
             .in_widget(WidgetHint::Transport),
-        SourceParamSpec::choice("chase", "Chase", &["Auto", "Always", "Never"])
+        ControlSpec::choice("chase", "Chase", &["Auto", "Always", "Never"])
             .in_widget(WidgetHint::Transport),
-        SourceParamSpec::number("chase_offset", "Offset", "s", 0.01)
-            .in_widget(WidgetHint::Transport),
-        SourceParamSpec::number("chase_delay", "Delay", "f", 1.0).in_widget(WidgetHint::Transport),
+        ControlSpec::number("chase_offset", "Offset", "s", 0.01).in_widget(WidgetHint::Transport),
+        ControlSpec::number("chase_delay", "Delay", "f", 1.0).in_widget(WidgetHint::Transport),
         scaling_mode_spec(),
     ]
 });
@@ -145,7 +144,7 @@ impl DeckSourceProvider for VideoProvider {
         "🎬"
     }
 
-    fn params(&self) -> &'static [SourceParamSpec] {
+    fn params(&self) -> &'static [ControlSpec] {
         &PARAMS
     }
 
@@ -644,45 +643,45 @@ impl DeckSourceInstance for Video {
         }
     }
 
-    fn schema(&self) -> &'static [SourceParamSpec] {
+    fn schema(&self) -> &'static [ControlSpec] {
         &PARAMS
     }
 
-    fn param(&self, name: &str) -> Option<SourceValue> {
+    fn param(&self, name: &str) -> Option<ControlValue> {
         let pb = || self.handle.playback_snapshot();
         let sync = || self.handle.transport_sync();
         Some(match name {
-            "play" => SourceValue::Bool(pb().playing),
+            "play" => ControlValue::Bool(pb().playing),
             "position" => {
                 let pb = pb();
-                SourceValue::Float(secs_to_norm(pb.position, pb.duration))
+                ControlValue::Float(secs_to_norm(pb.position, pb.duration))
             }
-            "speed" => SourceValue::Float(speed_to_norm(pb().speed)),
+            "speed" => ControlValue::Float(speed_to_norm(pb().speed)),
             "loop_mode" => {
                 let mode = pb().loop_mode;
                 let index = LOOP_MODES.iter().position(|m| *m == mode).unwrap_or(0);
-                SourceValue::Float(choice_value(index, LOOP_MODES.len()))
+                ControlValue::Float(choice_value(index, LOOP_MODES.len()))
             }
             "in_point" => {
                 let pb = pb();
-                SourceValue::Float(secs_to_norm(pb.in_point, pb.duration))
+                ControlValue::Float(secs_to_norm(pb.in_point, pb.duration))
             }
             "out_point" => {
                 let pb = pb();
-                SourceValue::Float(secs_to_norm(pb.effective_out(), pb.duration))
+                ControlValue::Float(secs_to_norm(pb.effective_out(), pb.duration))
             }
             "chase" => {
                 let mode = sync().mode;
                 let index = SYNC_MODES.iter().position(|m| *m == mode).unwrap_or(0);
-                SourceValue::Float(choice_value(index, SYNC_MODES.len()))
+                ControlValue::Float(choice_value(index, SYNC_MODES.len()))
             }
-            "chase_offset" => SourceValue::Float(sync().offset as f32),
-            "chase_delay" => SourceValue::Float(sync().delay_frames as f32),
+            "chase_offset" => ControlValue::Float(sync().offset as f32),
+            "chase_delay" => ControlValue::Float(sync().delay_frames as f32),
             _ => return self.blit.param(name),
         })
     }
 
-    fn set_param(&mut self, name: &str, value: &SourceValue) -> Result<(), SourceParamError> {
+    fn set_param(&mut self, name: &str, value: &ControlValue) -> Result<(), ControlError> {
         match name {
             "play" => self.set_playing(expect_norm(name, value)? > 0.5),
             "position" => {
@@ -721,38 +720,38 @@ impl DeckSourceInstance for Video {
                 self.set_sync(|s| s.mode = SYNC_MODES[index]);
             }
             "chase_offset" => {
-                let v = value.as_f32().ok_or_else(|| {
-                    SourceParamError::Invalid("'chase_offset' takes seconds".into())
-                })?;
+                let v = value
+                    .as_f32()
+                    .ok_or_else(|| ControlError::Invalid("'chase_offset' takes seconds".into()))?;
                 self.set_sync(|s| s.offset = f64::from(v));
             }
             "chase_delay" => {
-                let v = value.as_f32().ok_or_else(|| {
-                    SourceParamError::Invalid("'chase_delay' takes frames".into())
-                })?;
+                let v = value
+                    .as_f32()
+                    .ok_or_else(|| ControlError::Invalid("'chase_delay' takes frames".into()))?;
                 self.set_sync(|s| s.delay_frames = v.round() as i32);
             }
             _ => {
                 return self
                     .blit
                     .set_param(name, value)
-                    .unwrap_or_else(|| Err(SourceParamError::Unknown(name.to_string())));
+                    .unwrap_or_else(|| Err(ControlError::Unknown(name.to_string())));
             }
         }
         Ok(())
     }
 
-    fn trigger(&mut self, action: &str) -> Result<(), SourceParamError> {
+    fn trigger(&mut self, action: &str) -> Result<(), ControlError> {
         match action {
             "clear" => {
                 self.handle.send(VideoCommand::ClearInOutPoints);
                 Ok(())
             }
-            _ => Err(SourceParamError::Unknown(action.to_string())),
+            _ => Err(ControlError::Unknown(action.to_string())),
         }
     }
 
-    fn status(&self) -> SourceStatus {
+    fn status(&self) -> ControlStatus {
         let pb = self.handle.playback_snapshot();
         let sync = self.handle.transport_sync();
         let mut status = crate::source::status_from_params(self);

@@ -6,7 +6,7 @@
 //! names a source type. See /spec/deck-source-providers.md.
 
 use super::{AppConfig, DeckSources};
-use crate::engine::value::source::SourceTypeSnapshot;
+use crate::engine::value::provider::ProviderTypeSnapshot;
 use crate::renderer::GpuContext;
 use crate::source::{Services, SourceEnv, SourceRegistry};
 use std::sync::{Arc, Mutex};
@@ -21,9 +21,28 @@ const TYPE_LISTING_TTL: Duration = Duration::from_millis(250);
 /// every library (the whole shader library among them), so snapshots reuse it
 /// rather than rebuilding it every frame.
 #[derive(Default)]
-pub(crate) struct TypeCache(Mutex<Option<(Instant, Arc<Vec<SourceTypeSnapshot>>)>>);
+pub(crate) struct TypeCache(Mutex<Option<(Instant, Arc<Vec<ProviderTypeSnapshot>>)>>);
 
 impl TypeCache {
+    /// The cached listing, or `build`'s when it is missing or stale.
+    pub(crate) fn get_or_build(
+        &self,
+        build: impl FnOnce() -> Vec<ProviderTypeSnapshot>,
+    ) -> Arc<Vec<ProviderTypeSnapshot>> {
+        let now = Instant::now();
+        let Ok(mut cached) = self.0.lock() else {
+            return Arc::new(build());
+        };
+        if let Some((built, types)) = cached.as_ref()
+            && now.duration_since(*built) < TYPE_LISTING_TTL
+        {
+            return Arc::clone(types);
+        }
+        let types = Arc::new(build());
+        *cached = Some((now, Arc::clone(&types)));
+        types
+    }
+
     /// Forget the listing, so the next snapshot rebuilds it.
     pub(crate) fn invalidate(&self) {
         if let Ok(mut cached) = self.0.lock() {
@@ -63,6 +82,24 @@ pub(crate) fn source_providers() -> SourceRegistry {
     r
 }
 
+/// Every output sink type, in the order the output panel lists them.
+pub(crate) fn output_sinks() -> crate::output::SinkRegistry {
+    use crate::output::ffmpeg::{FfmpegKind, FfmpegProvider};
+    let mut r = crate::output::SinkRegistry::new();
+    r.register(crate::output::window::WindowedProvider)
+        .register(crate::output::window::DisplayProvider)
+        .register(FfmpegProvider::new(FfmpegKind::Recording))
+        .register(FfmpegProvider::new(FfmpegKind::Srt))
+        .register(FfmpegProvider::new(FfmpegKind::Hls))
+        .register(FfmpegProvider::new(FfmpegKind::Dash))
+        .register(FfmpegProvider::new(FfmpegKind::Rtmp))
+        .register(crate::ndi::sink::NdiSinkProvider)
+        .register(crate::spout::sink_provider());
+    #[cfg(target_os = "macos")]
+    r.register(crate::syphon::sink_provider());
+    r
+}
+
 /// The device managers that providers and other features share: cameras (the
 /// stage editor snapshots them), depth sensors (shader preprocessors read
 /// them), and the NDI, Syphon and Spout runtimes (outputs send through them).
@@ -92,6 +129,8 @@ pub(crate) fn source_services(config: &AppConfig) -> Services {
             crate::spout::SpoutManager::new()
         })
         .with(crate::stream::StreamManager::new())
+        // Filled by the window host, which headless runs have too.
+        .with(crate::output::window::Monitors::default())
         .with(if config.html_disabled {
             crate::html::HtmlManager::new_disabled()
         } else {
@@ -154,19 +193,9 @@ impl DeckSources {
     pub(crate) fn type_snapshots(
         &self,
         channels: &[(String, String)],
-    ) -> Arc<Vec<SourceTypeSnapshot>> {
-        let now = Instant::now();
-        let Ok(mut cached) = self.type_cache.0.lock() else {
-            return Arc::new(self.providers.type_snapshots(&self.query(channels)));
-        };
-        if let Some((built, types)) = cached.as_ref()
-            && now.duration_since(*built) < TYPE_LISTING_TTL
-        {
-            return Arc::clone(types);
-        }
-        let types = Arc::new(self.providers.type_snapshots(&self.query(channels)));
-        *cached = Some((now, Arc::clone(&types)));
-        types
+    ) -> Arc<Vec<ProviderTypeSnapshot>> {
+        self.type_cache
+            .get_or_build(|| self.providers.type_snapshots(&self.query(channels)))
     }
 
     /// The read-only view providers answer snapshots from.
@@ -216,6 +245,33 @@ mod tests {
         assert!(ids.contains(&"Syphon"), "Syphon is not registered");
     }
 
+    #[test]
+    fn every_sink_registers_once_under_its_saved_tag() {
+        let registry = output_sinks();
+        let ids: Vec<&str> = registry
+            .iter()
+            .map(crate::output::OutputSinkProvider::id)
+            .collect();
+        for id in [
+            "windowed",
+            "display",
+            "recording",
+            "srt_stream",
+            "hls_stream",
+            "dash_stream",
+            "rtmp_stream",
+            "ndi_send",
+            "spout_sender",
+        ] {
+            assert!(ids.contains(&id), "{id} is not registered");
+        }
+        #[cfg(target_os = "macos")]
+        assert!(
+            ids.contains(&"syphon_server"),
+            "Syphon output is not registered"
+        );
+    }
+
     fn headless_app() -> Option<super::super::VardaApp> {
         let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
         super::super::VardaApp::new(gpu, &crate::testing::headless_config()).ok()
@@ -249,10 +305,7 @@ mod tests {
         });
         let after = app.build_engine_state().sources;
         assert!(!Arc::ptr_eq(&first, &after));
-        let hls = after
-            .iter()
-            .find(|t| t.source_type == "Hls")
-            .expect("HLS type");
+        let hls = after.iter().find(|t| t.type_id == "Hls").expect("HLS type");
         assert!(
             hls.library
                 .entries

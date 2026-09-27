@@ -565,66 +565,6 @@ fn default_true() -> bool {
 
 // ── Output ─────────────────────────────────────────────────────────
 
-/// Serializable output target configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-#[derive(Default)]
-pub enum OutputTargetConfig {
-    #[default]
-    Windowed,
-    Display {
-        name: String,
-    },
-    Recording {
-        path: String,
-        codec: String,
-        /// Audio passthrough device name (None = silent). See spec/audio-passthrough.md.
-        #[serde(default)]
-        audio_device: Option<String>,
-    },
-    SrtStream {
-        url: String,
-        #[serde(default)]
-        codec: String,
-        #[serde(default)]
-        audio_device: Option<String>,
-    },
-    HlsStream {
-        name: String,
-        #[serde(default)]
-        codec: String,
-        #[serde(default)]
-        short_segments: bool,
-        #[serde(default)]
-        audio_device: Option<String>,
-    },
-    DashStream {
-        name: String,
-        #[serde(default)]
-        codec: String,
-        #[serde(default)]
-        audio_device: Option<String>,
-    },
-    RtmpStream {
-        url: String,
-        #[serde(default)]
-        codec: String,
-        #[serde(default)]
-        codec_contract: crate::renderer::context::RtmpCodecContract,
-        #[serde(default)]
-        audio_device: Option<String>,
-    },
-    NdiSend {
-        sender_name: String,
-    },
-    SyphonServer {
-        server_name: String,
-    },
-    SpoutSender {
-        sender_name: String,
-    },
-}
-
 /// Serializable output configuration (unified model).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutputConfig {
@@ -632,21 +572,22 @@ pub struct OutputConfig {
     #[serde(default = "generate_default_uuid")]
     pub uuid: String,
     pub name: String,
-    /// The output target type and config.
-    #[serde(default)]
-    pub target: OutputTargetConfig,
-    /// Legacy field — Display target name. Kept for backwards compat during migration.
-    /// Ignored if `target` is present and not Windowed.
+    /// Where the output delivers: its sink type and that type's settings,
+    /// saved as `{"type": "<id>", ...}` as it always has been. See
+    /// /spec/output-sink-providers.md.
+    #[serde(default = "default_sink")]
+    pub target: crate::output::SinkConfig,
+    /// Legacy field — Display target name. Read only to migrate old files.
     #[serde(default, skip_serializing)]
     pub target_display: Option<String>,
     /// Surface assignments with warp calibration
     #[serde(default)]
     pub surface_assignments: Vec<SurfaceAssignmentConfig>,
-    /// Saved window position [x, y] in physical pixels (for Windowed targets).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Legacy window position; now saved with a window's sink settings.
+    #[serde(default, skip_serializing)]
     pub window_position: Option<[i32; 2]>,
-    /// Saved window size [width, height] in physical pixels (for Windowed targets).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Legacy window size; now saved with a window's sink settings.
+    #[serde(default, skip_serializing)]
     pub window_size: Option<[u32; 2]>,
     /// Whether edge blend is auto-computed or manually configured.
     #[serde(default)]
@@ -664,15 +605,39 @@ pub struct OutputConfig {
     /// which is what every stage written before this field did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tonemap_override: Option<crate::engine::value::render::TonemapMode>,
+    /// Calibration test cards, on any output. Absent means off.
+    #[serde(default, skip_serializing_if = "is_calibration_off")]
+    pub calibration_mode: crate::engine::value::render::CalibrationMode,
+    /// What the output shows with nothing assigned. Absent means the sink's
+    /// default. See /spec/output-sink-providers.md Decision 13.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unassigned: Option<crate::engine::value::render::Unassigned>,
+}
+
+fn default_sink() -> crate::output::SinkConfig {
+    crate::output::SinkConfig::new(crate::output::window::WINDOWED)
+}
+
+#[allow(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if passes a reference"
+)]
+fn is_calibration_off(mode: &crate::engine::value::render::CalibrationMode) -> bool {
+    *mode == crate::engine::value::render::CalibrationMode::Off
 }
 
 impl OutputConfig {
-    /// Create a default windowed output config with an auto-generated name.
+    /// A floating window, named by whoever creates it.
     pub fn default_windowed() -> Self {
+        Self::for_sink(default_sink())
+    }
+
+    /// A new output delivering through `target`.
+    pub fn for_sink(target: crate::output::SinkConfig) -> Self {
         Self {
             uuid: crate::ids::generate_short_uuid(),
             name: String::new(),
-            target: OutputTargetConfig::Windowed,
+            target,
             target_display: None,
             surface_assignments: Vec::new(),
             window_position: None,
@@ -682,6 +647,29 @@ impl OutputConfig {
             rotation: crate::renderer::context::OutputRotation::default(),
             presentation: crate::engine::value::render::PresentationRequest::default(),
             tonemap_override: None,
+            calibration_mode: crate::engine::value::render::CalibrationMode::Off,
+            unassigned: None,
+        }
+    }
+
+    /// Fold fields older files kept outside the sink config into it: a
+    /// display's monitor name, and a window's position and size.
+    pub fn migrate_legacy(&mut self) {
+        use crate::output::window::{DISPLAY, WINDOWED};
+        if self.target.type_id() == WINDOWED
+            && let Some(name) = self.target_display.take()
+        {
+            self.target = crate::output::SinkConfig::new(DISPLAY).with("name", name);
+        }
+        if let Some(position) = self.window_position.take()
+            && self.target.get("position").is_none()
+        {
+            self.target.set("position", position);
+        }
+        if let Some(size) = self.window_size.take()
+            && self.target.get("size").is_none()
+        {
+            self.target.set("size", size);
         }
     }
 }
@@ -1507,24 +1495,6 @@ mod tests {
     }
 
     #[test]
-    fn a_stage_written_before_the_short_segments_rename_still_loads() {
-        // The field was called `low_latency` until it was measured and found not
-        // to be RFC low-latency HLS. Existing `.varda/` directories must keep
-        // working, so the old name is accepted as an alias.
-        use crate::engine::value::render::OutputTarget;
-        let json = serde_json::json!({
-            "HlsStream": { "name": "live", "codec": "H265", "low_latency": true }
-        });
-        let target: OutputTarget = serde_json::from_value(json).unwrap();
-        match target {
-            OutputTarget::HlsStream { short_segments, .. } => {
-                assert!(short_segments, "the old field name must still be honoured");
-            }
-            other => panic!("expected an HLS stream, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn tonemap_override_survives_a_stage_round_trip() {
         use crate::engine::value::render::TonemapMode;
         let mut output: OutputConfig = serde_json::from_str(r#"{"name":"Main"}"#).unwrap();
@@ -1605,91 +1575,61 @@ mod tests {
         assert!(value.get("presentation").is_none());
     }
 
+    /// A saved output's target is its sink config, byte for byte the shape
+    /// every older stage has.
     #[test]
-    fn scene_config_roundtrip_rtmp_output() {
-        let target = OutputTargetConfig::RtmpStream {
-            url: "rtmp://live.twitch.tv/app/key".to_string(),
-            codec: "H.264".to_string(),
-            codec_contract: crate::renderer::context::RtmpCodecContract::Enhanced,
-            audio_device: None,
-        };
-        let json = serde_json::to_string(&target).unwrap();
-        let restored: OutputTargetConfig = serde_json::from_str(&json).unwrap();
-        match restored {
-            OutputTargetConfig::RtmpStream {
-                url,
-                codec,
-                codec_contract,
-                audio_device,
-            } => {
-                assert_eq!(url, "rtmp://live.twitch.tv/app/key");
-                assert_eq!(codec, "H.264");
-                assert_eq!(
-                    codec_contract,
-                    crate::renderer::context::RtmpCodecContract::Enhanced
-                );
-                assert_eq!(audio_device, None);
-            }
-            _ => panic!("Expected RtmpStream target"),
-        }
+    fn a_saved_output_target_reads_back_unchanged() {
+        let json = serde_json::json!({
+            "uuid": "o1", "name": "Stream",
+            "target": {"type": "rtmp_stream", "url": "rtmp://live/app/key", "codec": "H.264", "codec_contract": "enhanced", "audio_device": null},
+        });
+        let config: OutputConfig = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(config.target.type_id(), "rtmp_stream");
+        let back = serde_json::to_value(&config).unwrap();
+        assert_eq!(back["target"], json["target"]);
+        assert!(
+            back.get("unassigned").is_none(),
+            "an unset choice is not written"
+        );
+        assert!(
+            back.get("calibration_mode").is_none(),
+            "calibration off is not written"
+        );
     }
 
+    /// Older stages kept a display's monitor and a window's placement outside
+    /// the target; they fold into it on load and are written there after.
     #[test]
-    fn legacy_rtmp_target_defaults_codec_contract() {
-        let restored: OutputTargetConfig = serde_json::from_str(
-            r#"{"type":"rtmp_stream","url":"rtmps://example/live","codec":"H264"}"#,
-        )
+    fn legacy_window_fields_migrate_into_the_sink_config() {
+        let mut config: OutputConfig = serde_json::from_value(serde_json::json!({
+            "uuid": "o1", "name": "Wall",
+            "target": {"type": "windowed"},
+            "target_display": "HDMI-1",
+            "window_position": [10, 20],
+            "window_size": [1920, 1080],
+        }))
         .unwrap();
-        assert!(matches!(
-            restored,
-            OutputTargetConfig::RtmpStream {
-                codec_contract: crate::renderer::context::RtmpCodecContract::Legacy,
-                ..
-            }
-        ));
+        config.migrate_legacy();
+        assert_eq!(config.target.type_id(), "display");
+        assert_eq!(config.target.str("name"), Some("HDMI-1"));
+        assert_eq!(
+            config.target.get("position"),
+            Some(&serde_json::json!([10, 20]))
+        );
+        assert_eq!(
+            config.target.get("size"),
+            Some(&serde_json::json!([1920, 1080]))
+        );
+        let saved = serde_json::to_value(&config).unwrap();
+        assert!(saved.get("window_position").is_none());
+        assert!(saved.get("target_display").is_none());
     }
 
     #[test]
-    fn scene_config_legacy_output_loads_video_only() {
-        // A scene authored before audio passthrough (no `audio_device` field)
-        // must still deserialize, defaulting to video-only (None).
-        let legacy = r#"{"type":"recording","path":"set.mp4","codec":"H.264"}"#;
-        let restored: OutputTargetConfig = serde_json::from_str(legacy).unwrap();
-        match restored {
-            OutputTargetConfig::Recording {
-                path,
-                codec,
-                audio_device,
-            } => {
-                assert_eq!(path, "set.mp4");
-                assert_eq!(codec, "H.264");
-                assert_eq!(audio_device, None, "legacy scene → video-only");
-            }
-            _ => panic!("Expected Recording target"),
-        }
-    }
-
-    #[test]
-    fn scene_config_roundtrip_recording_with_audio() {
-        let target = OutputTargetConfig::Recording {
-            path: "set.mp4".to_string(),
-            codec: "ProRes 422".to_string(),
-            audio_device: Some("Scarlett 2i2".to_string()),
-        };
-        let json = serde_json::to_string(&target).unwrap();
-        let restored: OutputTargetConfig = serde_json::from_str(&json).unwrap();
-        match restored {
-            OutputTargetConfig::Recording {
-                path,
-                codec,
-                audio_device,
-            } => {
-                assert_eq!(path, "set.mp4");
-                assert_eq!(codec, "ProRes 422");
-                assert_eq!(audio_device.as_deref(), Some("Scarlett 2i2"));
-            }
-            _ => panic!("Expected Recording target"),
-        }
+    fn an_output_without_a_target_is_a_window() {
+        let config: OutputConfig =
+            serde_json::from_value(serde_json::json!({"name": "Out"})).unwrap();
+        assert_eq!(config.target.type_id(), "windowed");
     }
 
     // ── Per-surface warp migration (8i.5) ────────────────────────────

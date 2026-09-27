@@ -18,7 +18,9 @@ use axum::routing::{delete, get, post, put};
 use serde::Deserialize;
 use utoipa::ToSchema;
 
-use crate::engine::value::source::{SourceConfig, SourceValue};
+use crate::engine::value::provider::ControlValue;
+
+use crate::engine::value::source::SourceConfig;
 use crate::engine::{CommandResult, EngineCommand, ErrorCode};
 use crate::usecases::api::{SharedState, command_response};
 
@@ -50,7 +52,7 @@ async fn set(
     state: &SharedState,
     deck_uuid: String,
     name: &str,
-    value: SourceValue,
+    value: ControlValue,
 ) -> axum::response::Response {
     send(
         state,
@@ -232,7 +234,7 @@ fn entry_at(state: &SharedState, source_type: &str, index: usize) -> Option<Sour
     published
         .sources
         .iter()
-        .find(|t| t.source_type == source_type)?
+        .find(|t| t.type_id == source_type)?
         .library
         .entries
         .get(index)
@@ -490,7 +492,7 @@ pub async fn set_scaling_mode(
         &state,
         deck_uuid,
         "scaling_mode",
-        SourceValue::Float(b.mode.to_value()),
+        ControlValue::Float(b.mode.to_value()),
     )
     .await
 }
@@ -504,7 +506,7 @@ pub async fn video_toggle_play(
     let playing = deck_info(&state, &deck_uuid, "playing")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    set(&state, deck_uuid, "play", SourceValue::Bool(!playing)).await
+    set(&state, deck_uuid, "play", ControlValue::Bool(!playing)).await
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -521,7 +523,7 @@ pub async fn video_seek(
     Json(b): Json<SeekBody>,
 ) -> impl IntoResponse {
     let value = crate::video::provider::secs_to_norm(b.position_secs, duration(&state, &deck_uuid));
-    set(&state, deck_uuid, "position", SourceValue::Float(value)).await
+    set(&state, deck_uuid, "position", ControlValue::Float(value)).await
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -538,7 +540,7 @@ pub async fn video_set_speed(
     Json(b): Json<SpeedBody>,
 ) -> impl IntoResponse {
     let value = crate::video::provider::speed_to_norm(b.speed);
-    set(&state, deck_uuid, "speed", SourceValue::Float(value)).await
+    set(&state, deck_uuid, "speed", ControlValue::Float(value)).await
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -558,7 +560,7 @@ pub async fn video_set_loop_mode(
         &state,
         deck_uuid,
         "loop_mode",
-        SourceValue::Float(b.mode.to_value()),
+        ControlValue::Float(b.mode.to_value()),
     )
     .await
 }
@@ -577,7 +579,7 @@ pub async fn video_set_in_point(
     Json(b): Json<PointBody>,
 ) -> impl IntoResponse {
     let value = crate::video::provider::secs_to_norm(b.secs, duration(&state, &deck_uuid));
-    set(&state, deck_uuid, "in_point", SourceValue::Float(value)).await
+    set(&state, deck_uuid, "in_point", ControlValue::Float(value)).await
 }
 
 #[deprecated(note = "PUT /api/decks/{deck_uuid}/source/params/out_point")]
@@ -588,7 +590,7 @@ pub async fn video_set_out_point(
     Json(b): Json<PointBody>,
 ) -> impl IntoResponse {
     let value = crate::video::provider::secs_to_norm(b.secs, duration(&state, &deck_uuid));
-    set(&state, deck_uuid, "out_point", SourceValue::Float(value)).await
+    set(&state, deck_uuid, "out_point", ControlValue::Float(value)).await
 }
 
 #[deprecated(note = "POST /api/decks/{deck_uuid}/source/actions/clear")]
@@ -632,10 +634,10 @@ pub async fn video_set_transport_sync(
     let writes = [
         (
             "chase",
-            SourceValue::Float(crate::source::choice_value(index, 3)),
+            ControlValue::Float(crate::source::choice_value(index, 3)),
         ),
-        ("chase_offset", SourceValue::Float(b.offset as f32)),
-        ("chase_delay", SourceValue::Float(b.delay_frames as f32)),
+        ("chase_offset", ControlValue::Float(b.offset as f32)),
+        ("chase_delay", ControlValue::Float(b.delay_frames as f32)),
     ];
     // Stop at the first refusal (a deck that is not a clip), so the answer
     // is that refusal rather than the last write's.
@@ -839,7 +841,7 @@ fn entry_names(state: &SharedState, source_type: &str) -> axum::response::Respon
             let names: Vec<serde_json::Value> = s
                 .sources
                 .iter()
-                .find(|t| t.source_type == source_type)
+                .find(|t| t.type_id == source_type)
                 .map(|t| {
                     t.library
                         .entries

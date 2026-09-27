@@ -3,15 +3,15 @@
 
 use super::{RtmpMode, SrtMode, StreamManager, StreamProtocol};
 use crate::source::{
-    DeckSourceInstance, DeckSourceProvider, Feed, LibraryCreate, LibraryEntry, LibrarySection,
-    SourceConfig, SourceControl, SourceEnv, SourceFrame, SourceParamError, SourceParamSpec,
-    SourceQuery, SourceStatus, SourceValue, decode_config, downcast_mut, downcast_ref,
-    encode_config, scaling_mode_spec,
+    ControlError, ControlSpec, ControlStatus, ControlValue, DeckSourceInstance, DeckSourceProvider,
+    Feed, LibraryCreate, LibraryEntry, LibrarySection, SourceConfig, SourceControl, SourceEnv,
+    SourceFrame, SourceQuery, decode_config, downcast_mut, downcast_ref, encode_config,
+    scaling_mode_spec,
 };
 use anyhow::{Context, Result};
 use std::sync::LazyLock;
 
-static PARAMS: LazyLock<Vec<SourceParamSpec>> = LazyLock::new(|| vec![scaling_mode_spec()]);
+static PARAMS: LazyLock<Vec<ControlSpec>> = LazyLock::new(|| vec![scaling_mode_spec()]);
 
 /// Which of the four stream protocols a provider serves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,7 +154,7 @@ impl DeckSourceProvider for StreamProvider {
         self.kind.glyph()
     }
 
-    fn params(&self) -> &'static [SourceParamSpec] {
+    fn params(&self) -> &'static [ControlSpec] {
         &PARAMS
     }
 
@@ -191,13 +191,13 @@ impl DeckSourceProvider for StreamProvider {
         let mut fields = Vec::new();
         let mut defaults = serde_json::Map::new();
         if !self.kind.modes().is_empty() {
-            fields.push(SourceParamSpec::choice("mode", "Mode", self.kind.modes()));
+            fields.push(ControlSpec::choice("mode", "Mode", self.kind.modes()));
             defaults.insert(
                 "mode".into(),
                 self.kind.default_mode().unwrap_or_default().into(),
             );
         }
-        fields.push(SourceParamSpec::text("url", "URL"));
+        fields.push(ControlSpec::text("url", "URL"));
         defaults.insert("url".into(), self.kind.default_url().into());
 
         LibrarySection {
@@ -310,7 +310,7 @@ impl DeckSourceProvider for StreamProvider {
         }
     }
 
-    fn status(&self, instance: &dyn DeckSourceInstance, query: &SourceQuery) -> SourceStatus {
+    fn status(&self, instance: &dyn DeckSourceInstance, query: &SourceQuery) -> ControlStatus {
         let Some(deck) = downcast_ref::<StreamFeed>(instance) else {
             return instance.status();
         };
@@ -366,15 +366,15 @@ impl DeckSourceInstance for StreamFeed {
         self.feed.control(ctx);
     }
 
-    fn schema(&self) -> &'static [SourceParamSpec] {
+    fn schema(&self) -> &'static [ControlSpec] {
         &PARAMS
     }
 
-    fn param(&self, name: &str) -> Option<SourceValue> {
+    fn param(&self, name: &str) -> Option<ControlValue> {
         self.feed.param(name)
     }
 
-    fn set_param(&mut self, name: &str, value: &SourceValue) -> Result<(), SourceParamError> {
+    fn set_param(&mut self, name: &str, value: &ControlValue) -> Result<(), ControlError> {
         self.feed.set_param(name, value)
     }
 

@@ -10,6 +10,7 @@ pub mod ffi;
 pub mod provider;
 mod receive;
 pub mod sdk;
+pub mod sink;
 
 use std::collections::HashMap;
 use std::sync::{

@@ -17,7 +17,7 @@ use crate::audio::PcmChunk;
 use crate::engine::value::render::{
     AlphaMode, HdrMetadataSource, PresentationColorProfile, PresentationDepth,
     PresentationPixelFormat, PresentationRequest, PresentationTransfer, RecordingCodec,
-    ResolvedPresentation, RtmpCodecContract, SrtCodec, StreamingCodec,
+    ResolvedPresentation, RtmpCodecContract, StreamingCodec,
 };
 use crate::renderer::{ReadbackFormat, ReadbackFrame};
 
@@ -48,20 +48,17 @@ impl RecordingPlan {
     /// Readback is assumed to be whatever the codec needs, because it is:
     /// `HeadlessOutput::set_resolved_presentation` rebuilds the readback buffer
     /// from the resolution this returns, so the assumption is self-fulfilling.
-    pub(crate) fn resolved_for_target(
-        target: &crate::engine::value::render::OutputTarget,
+    pub(crate) fn resolved_for_codec(
+        codec: &RecordingCodec,
         request: PresentationRequest,
-    ) -> Option<ResolvedPresentation> {
-        let crate::engine::value::render::OutputTarget::Recording { codec, .. } = target else {
-            return None;
-        };
+    ) -> ResolvedPresentation {
         let readback = if matches!(codec, RecordingCodec::ProRes4444) {
             ReadbackFormat::Rgba16Unorm
         } else {
             ReadbackFormat::Rgb10A2
         };
         let help = recording_encoder_help(codec);
-        Some(Self::resolve(codec, request, readback, help.as_deref()).resolved)
+        Self::resolve(codec, request, readback, help.as_deref()).resolved
     }
 
     fn resolve(
@@ -583,8 +580,9 @@ fn probe_enhanced_flv(encoder: &str, profile: &str) -> bool {
         .is_ok_and(|status| status.success())
 }
 
+/// The container and transport a stream is sent over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StreamingProtocol {
+pub(crate) enum StreamingProtocol {
     Srt,
     Hls,
     Dash,
@@ -732,47 +730,14 @@ impl StreamingPlan {
         }
     }
 
-    pub(crate) fn for_target(
-        target: &crate::engine::value::render::OutputTarget,
+    /// The plan a stream over `protocol` with `codec` runs with for
+    /// `request`, against the installed FFmpeg.
+    pub(crate) fn for_stream(
+        protocol: StreamingProtocol,
+        codec: StreamingCodec,
         request: PresentationRequest,
-    ) -> Option<Self> {
-        let capabilities = StreamingCapabilities::installed();
-        match target {
-            crate::engine::value::render::OutputTarget::SrtStream { codec, .. } => {
-                let codec = match codec {
-                    SrtCodec::H264 => StreamingCodec::H264,
-                    SrtCodec::H265 => StreamingCodec::H265,
-                };
-                Some(Self::resolve(
-                    StreamingProtocol::Srt,
-                    codec,
-                    request,
-                    capabilities,
-                ))
-            }
-            crate::engine::value::render::OutputTarget::HlsStream { codec, .. } => Some(
-                Self::resolve(StreamingProtocol::Hls, codec.clone(), request, capabilities),
-            ),
-            crate::engine::value::render::OutputTarget::DashStream { codec, .. } => {
-                Some(Self::resolve(
-                    StreamingProtocol::Dash,
-                    codec.clone(),
-                    request,
-                    capabilities,
-                ))
-            }
-            crate::engine::value::render::OutputTarget::RtmpStream {
-                codec,
-                codec_contract,
-                ..
-            } => Some(Self::resolve(
-                StreamingProtocol::Rtmp(*codec_contract),
-                codec.clone(),
-                request,
-                capabilities,
-            )),
-            _ => None,
-        }
+    ) -> Self {
+        Self::resolve(protocol, codec, request, StreamingCapabilities::installed())
     }
 }
 

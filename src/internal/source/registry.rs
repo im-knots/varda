@@ -2,8 +2,8 @@
 //! the right one.
 
 use super::{
-    DeckSourceInstance, DeckSourceProvider, DeckSourceSnapshot, SourceConfig, SourceEnv,
-    SourceLoader, SourceQuery, SourceTypeSnapshot, UnavailableSource,
+    DeckSourceInstance, DeckSourceProvider, DeckSourceSnapshot, ProviderTypeSnapshot, SourceConfig,
+    SourceEnv, SourceLoader, SourceQuery, UnavailableSource,
 };
 use anyhow::Result;
 
@@ -78,7 +78,7 @@ impl SourceRegistry {
         config: &SourceConfig,
         query: &SourceQuery,
     ) -> Option<Result<SourceLoader>> {
-        match self.available_provider(config.source_type(), query) {
+        match self.available_provider(config.type_id(), query) {
             Ok(provider) => provider.loader(config, query),
             Err(e) => Some(Err(e)),
         }
@@ -95,10 +95,10 @@ impl SourceRegistry {
         config: &SourceConfig,
         env: &mut SourceEnv,
     ) -> Result<Box<dyn DeckSourceInstance>> {
-        self.available_provider(config.source_type(), &env.query())?;
+        self.available_provider(config.type_id(), &env.query())?;
         let provider = self
-            .get_mut(config.source_type())
-            .ok_or_else(|| anyhow::anyhow!("unknown source type '{}'", config.source_type()))?;
+            .get_mut(config.type_id())
+            .ok_or_else(|| anyhow::anyhow!("unknown source type '{}'", config.type_id()))?;
         if let Some(loader) = provider.loader(config, &env.query()) {
             return loader?(env.gpu, env.width, env.height);
         }
@@ -115,12 +115,12 @@ impl SourceRegistry {
         env: &mut SourceEnv,
     ) -> (Box<dyn DeckSourceInstance>, Option<String>) {
         let built = self
-            .available_provider(config.source_type(), &env.query())
+            .available_provider(config.type_id(), &env.query())
             .map(|_| ())
             .and_then(|()| {
-                let provider = self.get_mut(config.source_type()).ok_or_else(|| {
-                    anyhow::anyhow!("unknown source type '{}'", config.source_type())
-                })?;
+                let provider = self
+                    .get_mut(config.type_id())
+                    .ok_or_else(|| anyhow::anyhow!("unknown source type '{}'", config.type_id()))?;
                 if let Some(loader) = provider.loader(config, &env.query()) {
                     return loader?(env.gpu, env.width, env.height);
                 }
@@ -141,10 +141,10 @@ impl SourceRegistry {
     /// Whether two configs name the same source, so a deck built from one can
     /// be patched in place to the other.
     pub fn same_source(&self, a: &SourceConfig, b: &SourceConfig) -> bool {
-        if a.source_type() != b.source_type() {
+        if a.type_id() != b.type_id() {
             return false;
         }
-        match self.get(a.source_type()) {
+        match self.get(a.type_id()) {
             Some(provider) => provider.identity(a) == provider.identity(b),
             None => a == b,
         }
@@ -202,13 +202,13 @@ impl SourceRegistry {
     }
 
     /// Every registered type, for snapshots.
-    pub fn type_snapshots(&self, query: &SourceQuery) -> Vec<SourceTypeSnapshot> {
+    pub fn type_snapshots(&self, query: &SourceQuery) -> Vec<ProviderTypeSnapshot> {
         self.providers
             .iter()
             .map(|provider| {
                 let availability = provider.availability(query);
-                SourceTypeSnapshot {
-                    source_type: provider.id().to_string(),
+                ProviderTypeSnapshot {
+                    type_id: provider.id().to_string(),
                     label: provider.label().to_string(),
                     icon: provider.icon().to_string(),
                     available: availability.is_ok(),
@@ -316,7 +316,7 @@ mod tests {
             channels: &[],
         };
         let types = r.type_snapshots(&query);
-        assert_eq!(types[0].source_type, "on");
+        assert_eq!(types[0].type_id, "on");
         assert!(types[0].available);
         assert_eq!(
             types[1].unavailable_reason.as_deref(),

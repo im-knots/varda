@@ -21,6 +21,7 @@ pub mod modulation;
 pub mod ndi;
 pub mod notifications;
 pub mod osc;
+pub mod output;
 pub mod param_router;
 pub mod params;
 pub mod persistence;

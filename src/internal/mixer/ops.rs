@@ -146,7 +146,7 @@ impl Mixer {
         &mut self,
         deck_uuid: &str,
         name: &str,
-        value: &crate::source::SourceValue,
+        value: &crate::source::ControlValue,
     ) -> Result<()> {
         let (ch, dk) = self.resolve_deck(deck_uuid)?;
         self.channels_mut()[ch].decks[dk]

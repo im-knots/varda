@@ -1,4 +1,5 @@
-//! Guard: no code outside a deck source's own provider names its type.
+//! Guard: no code outside a deck source's or output sink's own provider names
+//! its type.
 //!
 //! Adding a deck source means writing a provider next to its backend and one
 //! line in `app/sources.rs`. That only stays true while the engine, the GUI and
@@ -32,6 +33,21 @@ const SOURCE_TYPES: &[&str] = &[
     "Html",
 ];
 
+/// Every output sink type id, as `app/sources.rs` registers them. See
+/// /spec/output-sink-providers.md.
+const SINK_TYPES: &[&str] = &[
+    "windowed",
+    "display",
+    "recording",
+    "srt_stream",
+    "hls_stream",
+    "dash_stream",
+    "rtmp_stream",
+    "ndi_send",
+    "syphon_server",
+    "spout_sender",
+];
+
 /// Where an id may be written, relative to `src/`: each provider beside its
 /// backend, and the registration list.
 const ALLOWED: &[&str] = &[
@@ -49,6 +65,7 @@ const ALLOWED: &[&str] = &[
     "internal/spout",
     "internal/stream",
     "internal/html",
+    "internal/output",
     // One-release aliases for the old per-type routes (Decision 6).
     "usecases/api/routes/deprecated_sources.rs",
     // Test fixtures: compiled only for tests and the `test-fixtures` feature.
@@ -123,7 +140,7 @@ fn source_type_ids_appear_only_in_their_providers() {
         };
         for (line_no, line) in code.lines().enumerate() {
             let code_part = line.split("//").next().unwrap_or_default();
-            for id in SOURCE_TYPES {
+            for id in SOURCE_TYPES.iter().chain(SINK_TYPES) {
                 let same_spelling = SAME_SPELLING
                     .iter()
                     .any(|(file, word, _)| *file == rel && word == id);
@@ -139,6 +156,22 @@ fn source_type_ids_appear_only_in_their_providers() {
          through the provider traits instead:\n{}",
         offenders.join("\n")
     );
+}
+
+#[test]
+fn the_guard_lists_every_registered_sink_type() {
+    let sources =
+        std::fs::read_to_string(src_root().join("app/sources.rs")).expect("app/sources.rs");
+    let registered = sources
+        .split("#[cfg(test)]")
+        .nth(1)
+        .expect("app/sources.rs lists its ids in a test");
+    for id in SINK_TYPES {
+        assert!(
+            registered.contains(&format!("\"{id}\"")),
+            "{id} is guarded here but not registered in app/sources.rs"
+        );
+    }
 }
 
 #[test]

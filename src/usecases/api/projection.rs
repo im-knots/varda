@@ -150,7 +150,7 @@ pub(crate) mod tests {
                         source: crate::engine::value::source::DeckSourceSnapshot {
                             source_type: "Shader".into(),
                             available: true,
-                            status: crate::engine::value::source::SourceStatus::default(),
+                            status: crate::engine::value::provider::ControlStatus::default(),
                         },
                         is_interactive: false,
                         has_depth_prepro: false,
@@ -211,13 +211,15 @@ pub(crate) mod tests {
                 windows: vec![OutputWindowSnapshot {
                     uuid: "out-001".into(),
                     name: "Output 1".into(),
-                    target: crate::renderer::context::OutputTarget::Display {
-                        name: "HDMI-1".into(),
-                        monitor_index: 0,
+                    sink: crate::engine::types::OutputSinkSnapshot {
+                        type_id: "display".into(),
+                        label: "HDMI-1".into(),
+                        available: true,
+                        startable: false,
+                        status: crate::engine::value::provider::ControlStatus::default(),
                     },
-                    target_label: "HDMI-1".into(),
-                    is_on_display: true,
                     is_active: false,
+                    unassigned: crate::engine::value::render::Unassigned::Stage,
                     surface_assignments: vec![],
                     calibration_mode: crate::renderer::context::CalibrationMode::Off,
                     presentation_request:
@@ -296,23 +298,27 @@ pub(crate) mod tests {
             fps: 60.0,
             frame_count: 100,
             target_fps: 60,
-            sources: std::sync::Arc::new(vec![crate::engine::value::source::SourceTypeSnapshot {
-                source_type: "Ndi".into(),
-                label: "NDI".into(),
-                icon: String::new(),
-                available: true,
-                unavailable_reason: None,
-                listed: true,
-                params: vec![],
-                library: crate::engine::value::source::LibrarySection {
-                    entries: vec![crate::engine::value::source::LibraryEntry::new(
-                        "OBS",
-                        crate::engine::value::source::SourceConfig::new("Ndi").with("name", "OBS"),
-                    )],
-                    rescan: true,
-                    ..Default::default()
+            sinks: std::sync::Arc::default(),
+            sources: std::sync::Arc::new(vec![
+                crate::engine::value::provider::ProviderTypeSnapshot {
+                    type_id: "Ndi".into(),
+                    label: "NDI".into(),
+                    icon: String::new(),
+                    available: true,
+                    unavailable_reason: None,
+                    listed: true,
+                    params: vec![],
+                    library: crate::engine::value::provider::LibrarySection {
+                        entries: vec![crate::engine::value::provider::LibraryEntry::new(
+                            "OBS",
+                            crate::engine::value::source::SourceConfig::new("Ndi")
+                                .with("name", "OBS"),
+                        )],
+                        rescan: true,
+                        ..Default::default()
+                    },
                 },
-            }]),
+            ]),
             analyzers: vec![],
             macros: vec![],
             can_undo: false,
@@ -396,14 +402,15 @@ pub(crate) mod tests {
         let snap = OutputWindowSnapshot {
             uuid: "out-rec".into(),
             name: "Rec".into(),
-            target: crate::renderer::context::OutputTarget::Recording {
-                path: "/tmp/out.mp4".into(),
-                codec: crate::renderer::context::RecordingCodec::H264,
-                audio_device: Some("Scarlett 2i2".into()),
+            sink: crate::engine::types::OutputSinkSnapshot {
+                type_id: "recording".into(),
+                label: "/tmp/out.mp4 (H.264)".into(),
+                available: true,
+                startable: true,
+                status: crate::engine::value::provider::ControlStatus::default(),
             },
-            target_label: "Rec: /tmp/out.mp4".into(),
-            is_on_display: false,
             is_active: true,
+            unassigned: crate::engine::value::render::Unassigned::Program,
             surface_assignments: vec![],
             calibration_mode: crate::renderer::context::CalibrationMode::Off,
             presentation_request: crate::engine::value::render::PresentationRequest::default(),
@@ -433,7 +440,7 @@ pub(crate) mod tests {
             }),
         };
         let v = serde_json::to_value(&snap).unwrap();
-        assert_eq!(v["target"]["Recording"]["audio_device"], "Scarlett 2i2");
+        assert_eq!(v["sink"]["type"], "recording");
         assert_eq!(v["is_active"], true);
         assert_eq!(v["audio_passthrough"]["device"], "Scarlett 2i2");
         assert_eq!(v["audio_passthrough"]["frames_written"], 42);

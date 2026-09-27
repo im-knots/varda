@@ -31,6 +31,7 @@ const ORDER: &[&str] = &[
     "analyzer",
     // Deck sources: the provider contract, then every source backend.
     "source",
+    "output",
     "solid_color",
     "still",
     "camera",

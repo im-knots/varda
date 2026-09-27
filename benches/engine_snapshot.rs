@@ -97,10 +97,9 @@ fn scene() -> Option<VardaApp> {
     }
     send(
         &mut app,
-        EngineCommand::CreateHeadlessOutput {
-            target: varda::renderer::context::OutputTarget::NdiSend {
-                sender_name: "bench".to_string(),
-            },
+        EngineCommand::CreateOutput {
+            sink: varda::output::SinkConfig::new("ndi_send")
+                .with("sender_name", "bench".to_string()),
         },
     )?;
     Some(app)

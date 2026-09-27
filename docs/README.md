@@ -71,11 +71,11 @@ Here you will find everything you need to start throwing those pixels.
 ### Part III — Output & Display
 
 - **7. [Outputs](07-outputs.md)**
-  - [Creating an Output](07-outputs.md#creating-an-output) — windowed, recording, stream
-  - [Output Targets](07-outputs.md#output-targets) — display selection, hot-plug
-  - [Output Rotation](07-outputs.md#output-rotation) — 0/90/180/270 for portrait
-  - [Source Routing](07-outputs.md#source-routing) — Master / Channel / Channels sub-mix / Deck
-  - [Recording Outputs](07-outputs.md#recording-outputs)
+  - [Creating an Output](07-outputs.md#creating-an-output) (output types, choosing a monitor)
+  - [Output Format](07-outputs.md#output-format) (8-bit, 10-bit, HDR10, HLG, EDR)
+  - [Rotation](07-outputs.md#rotation)
+  - [Surface Sources](07-outputs.md#surface-sources) (Master, Channel, Channels sub-mix, Deck)
+  - [Recording](07-outputs.md#recording)
 - **8. [Projection Mapping](08-projection.md)**
   - [Basic Projection](08-projection.md#basic-projection) — drawing tools, surfaces, corner-pin warp, combine/multi-contour
   - [Advanced Projection](08-projection.md#advanced-projection) — multi-output edge blending (auto/manual), multi-channel routing, mesh warp

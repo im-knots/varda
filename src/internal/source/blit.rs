@@ -2,7 +2,7 @@
 //! sources do last.
 
 use super::{
-    SourceControl, SourceFrame, SourceParamError, SourceParamSpec, SourceValue, choice_index,
+    ControlError, ControlSpec, ControlValue, SourceControl, SourceFrame, choice_index,
     choice_value, expect_norm,
 };
 use crate::engine::value::source::ScalingMode;
@@ -13,8 +13,8 @@ use anyhow::Result;
 pub const SCALING_MODE: &str = "scaling_mode";
 
 /// The scaling-mode control, for a provider's schema.
-pub fn scaling_mode_spec() -> SourceParamSpec {
-    SourceParamSpec::choice(
+pub fn scaling_mode_spec() -> ControlSpec {
+    ControlSpec::choice(
         SCALING_MODE,
         "Scaling",
         &["Fill", "Fit", "Stretch", "Center"],
@@ -214,16 +214,16 @@ impl ScaledBlit {
     }
 
     /// The scaling-mode control's value, if `name` is it.
-    pub fn param(&self, name: &str) -> Option<SourceValue> {
-        (name == SCALING_MODE).then(|| SourceValue::Float(self.scaling_mode.to_value()))
+    pub fn param(&self, name: &str) -> Option<ControlValue> {
+        (name == SCALING_MODE).then(|| ControlValue::Float(self.scaling_mode.to_value()))
     }
 
     /// Write the scaling-mode control. `None` when `name` is some other control.
     pub fn set_param(
         &mut self,
         name: &str,
-        value: &SourceValue,
-    ) -> Option<Result<(), SourceParamError>> {
+        value: &ControlValue,
+    ) -> Option<Result<(), ControlError>> {
         if name != SCALING_MODE {
             return None;
         }

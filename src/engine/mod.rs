@@ -109,7 +109,7 @@ pub enum EngineCommand {
     SetSourceParam {
         deck_uuid: String,
         name: String,
-        value: crate::engine::value::source::SourceValue,
+        value: crate::engine::value::provider::ControlValue,
     },
     /// Fire one of a deck's source actions (reload a page, clear in/out).
     TriggerSourceAction {
@@ -428,20 +428,51 @@ pub enum EngineCommand {
     },
 
     // ── Output ─────────────────────────────────────────────────
-    CreateOutput,
-    CreateHeadlessOutput {
-        target: crate::engine::value::render::OutputTarget,
+    /// Create an output delivering through `sink`: `{"type": "windowed"}`,
+    /// `{"type": "recording", "path": ...}`, any registered sink type.
+    /// Answers with the new output's UUID. See /spec/output-sink-providers.md.
+    CreateOutput {
+        sink: crate::engine::value::provider::ProviderConfig,
     },
     CloseOutput {
         output_uuid: String,
     },
-    SetOutputDisplay {
-        output_uuid: String,
-        monitor_name: String,
-    },
+    /// Point an output at another sink, keeping its surfaces, warp, edge
+    /// blend and presentation. A running output is stopped first.
     SetOutputTarget {
         output_uuid: String,
-        target: crate::engine::value::render::OutputTarget,
+        sink: crate::engine::value::provider::ProviderConfig,
+    },
+    /// Write one of an output's sink settings, by the name its type declares.
+    SetSinkParam {
+        output_uuid: String,
+        name: String,
+        value: crate::engine::value::provider::ControlValue,
+    },
+    /// Run a library action an output type offers (`rescan`). Answers with
+    /// the type's fresh entries.
+    SinkLibraryAction {
+        sink_type: String,
+        action: String,
+    },
+    /// Show or hide one surface on an output, assigning it when shown for the
+    /// first time: the `output/<uuid>/surface/<surface_uuid>` control.
+    SetSurfaceAssignmentEnabled {
+        output_uuid: String,
+        surface_uuid: String,
+        enabled: bool,
+    },
+    /// Write text to an address that takes it: `surface/<uuid>/source`, or an
+    /// output's text setting at `output/<uuid>/<route>`.
+    SetPathText {
+        path: String,
+        value: String,
+    },
+    /// Choose what an output shows with no surfaces assigned, or `None` for
+    /// its sink's default.
+    SetOutputUnassigned {
+        output_uuid: String,
+        unassigned: Option<crate::engine::value::render::Unassigned>,
     },
     StartOutput {
         output_uuid: String,

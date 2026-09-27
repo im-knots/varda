@@ -4,41 +4,40 @@
 use super::point_cloud::{ColorMode, PointCloudParams, PointCloudPipeline};
 use super::{DepthSensorId, DepthSensorManager, backend::DepthIntrinsics};
 use crate::source::{
-    DeckSourceInstance, DeckSourceProvider, LibraryEntry, LibrarySection, SourceConfig, SourceEnv,
-    SourceFrame, SourceParamError, SourceParamSpec, SourceQuery, SourceStatus, SourceValue,
-    WidgetHint, clear_target, decode_config, downcast_mut, downcast_ref, encode_config,
-    expect_norm,
+    ControlError, ControlSpec, ControlStatus, ControlValue, DeckSourceInstance, DeckSourceProvider,
+    LibraryEntry, LibrarySection, SourceConfig, SourceEnv, SourceFrame, SourceQuery, WidgetHint,
+    clear_target, decode_config, downcast_mut, downcast_ref, encode_config, expect_norm,
 };
 use anyhow::{Context, Result};
 use std::sync::LazyLock;
 
 pub const SOURCE_TYPE: &str = "DepthSensor";
 
-static PARAMS: LazyLock<Vec<SourceParamSpec>> = LazyLock::new(|| {
+static PARAMS: LazyLock<Vec<ControlSpec>> = LazyLock::new(|| {
     vec![
-        SourceParamSpec::float("orbit_yaw", "Yaw", -180.0, 180.0)
+        ControlSpec::float("orbit_yaw", "Yaw", -180.0, 180.0)
             .unit("°")
             .routed("depth/orbit_yaw")
             .in_widget(WidgetHint::Orbit),
-        SourceParamSpec::float("orbit_pitch", "Pitch", -90.0, 90.0)
+        ControlSpec::float("orbit_pitch", "Pitch", -90.0, 90.0)
             .unit("°")
             .routed("depth/orbit_pitch")
             .in_widget(WidgetHint::Orbit),
-        SourceParamSpec::float("zoom", "Zoom", 0.1, 5.0)
+        ControlSpec::float("zoom", "Zoom", 0.1, 5.0)
             .routed("depth/zoom")
             .in_widget(WidgetHint::Orbit),
-        SourceParamSpec::float("point_size", "Point Size", 0.25, 10.0).routed("depth/point_size"),
-        SourceParamSpec::choice("color_mode", "Color", &["RGB", "Depth Ramp", "Solid"])
+        ControlSpec::float("point_size", "Point Size", 0.25, 10.0).routed("depth/point_size"),
+        ControlSpec::choice("color_mode", "Color", &["RGB", "Depth Ramp", "Solid"])
             .routed("depth/color_mode"),
-        SourceParamSpec::float("depth_min", "Near", 0.0, 8000.0)
+        ControlSpec::float("depth_min", "Near", 0.0, 8000.0)
             .unit("mm")
             .routed("depth/depth_min"),
-        SourceParamSpec::float("depth_max", "Far", 0.0, 8000.0)
+        ControlSpec::float("depth_max", "Far", 0.0, 8000.0)
             .unit("mm")
             .routed("depth/depth_max"),
-        SourceParamSpec::float("seed", "Jitter", 0.0, 0.1).routed("depth/seed"),
-        SourceParamSpec::float("drift", "Drift", 0.0, 1.0).routed("depth/drift"),
-        SourceParamSpec::float("disruption", "Disruption", 0.0, 1.0).routed("depth/disruption"),
+        ControlSpec::float("seed", "Jitter", 0.0, 0.1).routed("depth/seed"),
+        ControlSpec::float("drift", "Drift", 0.0, 1.0).routed("depth/drift"),
+        ControlSpec::float("disruption", "Disruption", 0.0, 1.0).routed("depth/disruption"),
     ]
 });
 
@@ -132,7 +131,7 @@ impl DeckSourceProvider for DepthSensorProvider {
         "🛰"
     }
 
-    fn params(&self) -> &'static [SourceParamSpec] {
+    fn params(&self) -> &'static [ControlSpec] {
         &PARAMS
     }
 
@@ -247,7 +246,7 @@ impl DeckSourceProvider for DepthSensorProvider {
         }
     }
 
-    fn status(&self, instance: &dyn DeckSourceInstance, query: &SourceQuery) -> SourceStatus {
+    fn status(&self, instance: &dyn DeckSourceInstance, query: &SourceQuery) -> ControlStatus {
         let mut status = instance.status();
         if let Some(deck) = downcast_ref::<DepthSensor>(instance) {
             status.connected = query
@@ -369,22 +368,22 @@ impl DeckSourceInstance for DepthSensor {
         }
     }
 
-    fn schema(&self) -> &'static [SourceParamSpec] {
+    fn schema(&self) -> &'static [ControlSpec] {
         &PARAMS
     }
 
-    fn param(&self, name: &str) -> Option<SourceValue> {
-        self.params.normalized_param(name).map(SourceValue::Float)
+    fn param(&self, name: &str) -> Option<ControlValue> {
+        self.params.normalized_param(name).map(ControlValue::Float)
     }
 
     /// Continuous params map linearly onto their range; `color_mode` buckets
     /// into three modes.
-    fn set_param(&mut self, name: &str, value: &SourceValue) -> Result<(), SourceParamError> {
+    fn set_param(&mut self, name: &str, value: &ControlValue) -> Result<(), ControlError> {
         let v = expect_norm(name, value)?;
         if self.params.set_normalized_param(name, v) {
             Ok(())
         } else {
-            Err(SourceParamError::Unknown(name.to_string()))
+            Err(ControlError::Unknown(name.to_string()))
         }
     }
 

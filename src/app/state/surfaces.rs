@@ -62,7 +62,7 @@ impl Outputs {
         self.surface_manager.remove_surface(source_uuid);
         for output in &mut self.outputs {
             output
-                .surface_assignments_mut()
+                .surface_assignments
                 .retain(|a| a.surface_uuid != source_uuid);
         }
         self.recompute_auto_edge_blend();
@@ -74,7 +74,7 @@ impl Outputs {
         // Purge dangling surface assignments from all outputs
         for output in &mut self.outputs {
             output
-                .surface_assignments_mut()
+                .surface_assignments
                 .retain(|a| a.surface_uuid != uuid);
         }
         self.recompute_auto_edge_blend();
@@ -130,7 +130,7 @@ impl Outputs {
             // Purge dangling assignments for combined (removed) surfaces
             for output in &mut self.outputs {
                 output
-                    .surface_assignments_mut()
+                    .surface_assignments
                     .retain(|a| !uuids.contains(&a.surface_uuid) || a.surface_uuid == new_uuid);
             }
             self.recompute_auto_edge_blend();

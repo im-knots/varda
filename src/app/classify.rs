@@ -56,11 +56,13 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
             | C::SourceLibraryAction { .. }
             // Output-window lifecycle / device config (spec: ❌, excluded).
             // Surface→output *assignments* remain undoable (default true).
-            | C::CreateOutput
-            | C::CreateHeadlessOutput { .. }
+            | C::CreateOutput { .. }
             | C::CloseOutput { .. }
-            | C::SetOutputDisplay { .. }
             | C::SetOutputTarget { .. }
+            | C::SetSinkParam { .. }
+            | C::SinkLibraryAction { .. }
+            | C::SetOutputUnassigned { .. }
+            | C::SetPathText { .. }
             | C::StartOutput { .. }
             | C::StopOutput { .. }
             | C::SetCalibrationMode { .. }
@@ -322,11 +324,14 @@ impl VardaApp {
         | C::RemoveSourceLibraryEntry { .. }
         | C::SourceLibraryAction { .. }
         // Output
-        | C::CreateOutput
-        | C::CreateHeadlessOutput { .. }
+        | C::CreateOutput { .. }
         | C::CloseOutput { .. }
-        | C::SetOutputDisplay { .. }
         | C::SetOutputTarget { .. }
+        | C::SetSinkParam { .. }
+        | C::SinkLibraryAction { .. }
+        | C::SetOutputUnassigned { .. }
+        | C::SetSurfaceAssignmentEnabled { .. }
+        | C::SetPathText { .. }
         | C::StartOutput { .. }
         | C::StopOutput { .. }
         | C::SetCalibrationMode { .. }
@@ -582,7 +587,7 @@ mod tests {
                 C::SetSourceParam {
                     deck_uuid: image.clone(),
                     name: "scaling_mode".into(),
-                    value: crate::source::SourceValue::Float(0.3),
+                    value: crate::source::ControlValue::Float(0.3),
                 },
                 ParamAddress::deck(&image, DeckTarget::source("scaling_mode")).to_string(),
             ),
@@ -681,7 +686,9 @@ mod tests {
         assert!(!command_is_undoable(&C::StartOutput {
             output_uuid: "o".into(),
         }));
-        assert!(!command_is_undoable(&C::CreateOutput));
+        assert!(!command_is_undoable(&C::CreateOutput {
+            sink: crate::output::SinkConfig::new("windowed"),
+        }));
         assert!(!command_is_undoable(&C::Undo));
         assert!(!command_is_undoable(&C::Redo));
         assert!(!command_is_undoable(&C::SaveWorkspace));
