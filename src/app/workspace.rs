@@ -31,6 +31,13 @@ impl WorkspaceLoad {
         }
     }
 }
+/// The restore report line for a deck kept as a placeholder, if it was.
+fn placeholder_warning(
+    config: &crate::scene::DeckConfig,
+    reason: Option<String>,
+) -> Option<String> {
+    reason.map(|r| format!("Deck '{}' kept as a placeholder: {r}", config.name))
+}
 
 fn duration_config_to_spec(
     config: &crate::scene::DurationSpecConfig,
@@ -220,19 +227,13 @@ impl VardaApp {
                         self.render.height = h;
                         log::info!("Scene render resolution: {w}×{h}");
                     }
-                    match crate::persistence::restore_scene(
-                        &scene_config,
-                        &self.render.context,
-                        &self.sources.registry,
-                        &mut self.sources.camera_manager,
-                        &mut self.sources.screen_capture_manager,
-                        &mut self.sources.depth_manager,
-                        &mut self.sources.io.ndi_manager,
-                        &mut self.sources.io.stream_manager,
-                        &mut self.sources.io.html_manager,
-                        self.render.width,
-                        self.render.height,
-                    ) {
+                    let (width, height) = (self.render.width, self.render.height);
+                    let restored = {
+                        let (providers, mut env) =
+                            self.sources.env(&self.render.context, width, height, &[]);
+                        crate::persistence::restore_scene(&scene_config, providers, &mut env)
+                    };
+                    match restored {
                         Ok(result) => {
                             self.mixer = result.mixer;
                             // How the show counts frames and where it loops are
@@ -248,20 +249,6 @@ impl VardaApp {
                             for warn in &result.warnings {
                                 self.session.notifications.warn(warn.clone());
                             }
-                            // Syphon decks that could not resolve at restore time
-                            // (producer not publishing yet) — the render thread
-                            // auto-binds them as their servers appear.
-                            #[cfg(target_os = "macos")]
-                            {
-                                if !result.pending_syphon.is_empty() {
-                                    log::info!(
-                                        "{} Syphon deck(s) deferred to late-bind",
-                                        result.pending_syphon.len()
-                                    );
-                                }
-                                self.sources.io.pending_syphon = result.pending_syphon;
-                            }
-
                             // Start preprocessor analyzers for active decks restored from save.
                             // A deck is "active" when it is not muted and has non-zero opacity.
                             for ch in self.mixer.channels_mut() {
@@ -430,6 +417,11 @@ impl VardaApp {
         // (d) Channels — diff each paired channel
         let current_ch_count = self.mixer.channels().len();
         let target_ch_count = target.channels.len();
+        let labels = self.mixer.channel_labels();
+        let (providers, mut env) = self.sources.env(&self.render.context, rw, rh, &labels);
+        // Sources the diff drops, released through their providers once the
+        // channels are settled.
+        let mut dropped: Vec<crate::deck::Deck> = Vec::new();
 
         // Patch existing channels that have a target counterpart
         let paired_count = current_ch_count.min(target_ch_count);
@@ -452,87 +444,35 @@ impl VardaApp {
                 if crate::persistence::source_configs_match(
                     &ch.decks[d_idx].deck,
                     &deck_config.source,
+                    providers,
                 ) {
                     // Same source — patch properties in place (zero GPU cost)
-                    Self::patch_deck_slot(
-                        &mut ch.decks[d_idx],
-                        deck_config,
-                        &self.render.context,
-                        &self.sources.registry,
-                    );
+                    Self::patch_deck_slot(&mut ch.decks[d_idx], deck_config, env.gpu, env.shaders);
                 } else {
                     // Different source — rebuild just this deck
-                    match crate::persistence::restore_deck(
-                        deck_config,
-                        &self.render.context,
-                        &self.sources.registry,
-                        &mut self.sources.camera_manager,
-                        &mut self.sources.screen_capture_manager,
-                        &mut self.sources.depth_manager,
-                        &mut self.sources.io.ndi_manager,
-                        &mut self.sources.io.stream_manager,
-                        &mut self.sources.io.html_manager,
-                        rw,
-                        rh,
-                    ) {
-                        Ok(deck) => {
-                            let mut slot = crate::channel::DeckSlot::new(deck);
-                            Self::patch_deck_slot(
-                                &mut slot,
-                                deck_config,
-                                &self.render.context,
-                                &self.sources.registry,
-                            );
-                            ch.decks[d_idx] = slot;
-                        }
-                        Err(e) => {
-                            warnings.push(format!(
-                                "Failed to restore deck '{}': {}",
-                                deck_config.name, e
-                            ));
-                        }
-                    }
+                    let (deck, warning) =
+                        crate::persistence::restore_deck(deck_config, providers, &mut env);
+                    warnings.extend(placeholder_warning(deck_config, warning));
+                    let mut slot = crate::channel::DeckSlot::new(deck);
+                    Self::patch_deck_slot(&mut slot, deck_config, env.gpu, env.shaders);
+                    dropped.push(std::mem::replace(&mut ch.decks[d_idx], slot).deck);
                 }
             }
 
             // Remove excess decks
             if current_deck_count > target_deck_count {
-                ch.decks.truncate(target_deck_count);
+                dropped.extend(ch.decks.drain(target_deck_count..).map(|slot| slot.deck));
             }
 
             // Add missing decks
             for d_idx in paired_decks..target_deck_count {
                 let deck_config = &ch_config.decks[d_idx];
-                match crate::persistence::restore_deck(
-                    deck_config,
-                    &self.render.context,
-                    &self.sources.registry,
-                    &mut self.sources.camera_manager,
-                    &mut self.sources.screen_capture_manager,
-                    &mut self.sources.depth_manager,
-                    &mut self.sources.io.ndi_manager,
-                    &mut self.sources.io.stream_manager,
-                    &mut self.sources.io.html_manager,
-                    rw,
-                    rh,
-                ) {
-                    Ok(deck) => {
-                        let mut slot = crate::channel::DeckSlot::new(deck);
-                        Self::patch_deck_slot(
-                            &mut slot,
-                            deck_config,
-                            &self.render.context,
-                            &self.sources.registry,
-                        );
-                        ch.decks.push(slot);
-                    }
-                    Err(e) => {
-                        warnings.push(format!(
-                            "Failed to restore deck '{}': {}",
-                            deck_config.name, e
-                        ));
-                    }
-                }
+                let (deck, warning) =
+                    crate::persistence::restore_deck(deck_config, providers, &mut env);
+                warnings.extend(placeholder_warning(deck_config, warning));
+                let mut slot = crate::channel::DeckSlot::new(deck);
+                Self::patch_deck_slot(&mut slot, deck_config, env.gpu, env.shaders);
+                ch.decks.push(slot);
             }
 
             // Diff channel effects
@@ -547,7 +487,9 @@ impl VardaApp {
 
         // Remove excess channels
         if current_ch_count > target_ch_count {
-            self.mixer.channels_mut().truncate(target_ch_count);
+            for channel in self.mixer.channels_mut().drain(target_ch_count..) {
+                dropped.extend(channel.decks.into_iter().map(|slot| slot.deck));
+            }
         }
 
         // Add missing channels
@@ -559,36 +501,12 @@ impl VardaApp {
                     channel.opacity = ch_config.opacity;
                     channel.blend_mode = ch_config.blend_mode.into();
                     for deck_config in &ch_config.decks {
-                        match crate::persistence::restore_deck(
-                            deck_config,
-                            &self.render.context,
-                            &self.sources.registry,
-                            &mut self.sources.camera_manager,
-                            &mut self.sources.screen_capture_manager,
-                            &mut self.sources.depth_manager,
-                            &mut self.sources.io.ndi_manager,
-                            &mut self.sources.io.stream_manager,
-                            &mut self.sources.io.html_manager,
-                            rw,
-                            rh,
-                        ) {
-                            Ok(deck) => {
-                                let mut slot = crate::channel::DeckSlot::new(deck);
-                                Self::patch_deck_slot(
-                                    &mut slot,
-                                    deck_config,
-                                    &self.render.context,
-                                    &self.sources.registry,
-                                );
-                                channel.add_deck_slot(slot);
-                            }
-                            Err(e) => {
-                                warnings.push(format!(
-                                    "Failed to restore deck '{}': {}",
-                                    deck_config.name, e
-                                ));
-                            }
-                        }
+                        let (deck, warning) =
+                            crate::persistence::restore_deck(deck_config, providers, &mut env);
+                        warnings.extend(placeholder_warning(deck_config, warning));
+                        let mut slot = crate::channel::DeckSlot::new(deck);
+                        Self::patch_deck_slot(&mut slot, deck_config, env.gpu, env.shaders);
+                        channel.add_deck_slot(slot);
                     }
                     for eff_config in &ch_config.effects {
                         match crate::persistence::restore_effect(
@@ -610,6 +528,18 @@ impl VardaApp {
                         ch_config.name, e
                     ));
                 }
+            }
+        }
+
+        // Release what the dropped decks held on devices, so a camera or a
+        // stream a diff replaced does not keep running for nobody.
+        for mut deck in dropped {
+            providers.release(deck.source_mut(), &mut env);
+            if let (Some(sensor), Some(depth)) = (
+                deck.held_depth_prepro_sensor(),
+                env.services.get_mut::<crate::depth::DepthSensorManager>(),
+            ) {
+                depth.release(sensor);
             }
         }
 
@@ -853,8 +783,7 @@ impl VardaApp {
                         {
                             let resolved = self
                                 .sources
-                                .io
-                                .ndi_manager
+                                .service::<crate::ndi::NdiManager>()
                                 .resolve_presentation(cfg.presentation);
                             headless
                                 .set_resolved_presentation(&self.render.context.device, resolved);
@@ -891,14 +820,16 @@ impl VardaApp {
         slot.solo = config.solo;
         slot.z_index = config.z_index;
 
-        // Patch generator params for shader sources
-        if let crate::scene::SourceConfig::Shader { params, .. } = &config.source {
-            slot.deck.generator_params.values.clone_from(params);
-        }
-
-        // Patch solid color
-        if let crate::scene::SourceConfig::SolidColor { color } = &config.source {
-            slot.deck.set_solid_color(*color);
+        // The source takes its own settings; the deck takes the generator
+        // parameter values every ISF-style source stores under `params`.
+        slot.deck.source_mut().patch(&config.source);
+        if let Some(params) = config.source.get("params").and_then(|v| {
+            serde_json::from_value::<std::collections::HashMap<String, crate::params::ParamValue>>(
+                v.clone(),
+            )
+            .ok()
+        }) {
+            slot.deck.generator_params.values = params;
         }
 
         // Patch deck effects
@@ -1039,7 +970,11 @@ mod tests {
         let ch = crate::app::snapshot::build_mixer_snapshot(&app).channels[0]
             .uuid
             .clone();
-        app.add_solid_color_deck(&ch, [1.0, 0.0, 0.0, 1.0]).unwrap();
+        app.add_deck(
+            &ch,
+            &crate::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
+        )
+        .unwrap();
         app.set_crossfader(0.6);
         app.save_workspace().expect("save workspace");
 

@@ -5,7 +5,7 @@
 
 use super::VardaApp;
 use crate::engine::EngineCommand;
-use crate::engine::value::param::{DeckTarget, ParamAddress};
+use crate::engine::value::param::ParamAddress;
 
 /// Undo/redo/save requested by a control surface (MIDI, OSC, or a macro
 /// trigger) and not yet dispatched.
@@ -17,24 +17,12 @@ pub(crate) struct PendingGlobalActions {
 }
 
 /// The command a press on `path` asks for, when its target lives outside the
-/// mixer: a cue, or an HTML deck's reload or interactive window. The
-/// interactive window toggles, so `interactive_deck` is the deck it is open on,
-/// if any. `None` for every path the parameter router handles.
-pub(crate) fn surface_command(path: &str, interactive_deck: Option<&str>) -> Option<EngineCommand> {
+/// mixer: a cue. `None` for every path the parameter router handles, which
+/// includes every deck source's actions (an HTML deck's reload and interactive
+/// window among them).
+pub(crate) fn surface_command(path: &str) -> Option<EngineCommand> {
     match path.parse::<ParamAddress>().ok()? {
         ParamAddress::CueFire { cue } => Some(EngineCommand::TriggerCue { uuid: cue }),
-        ParamAddress::Deck {
-            deck,
-            target: DeckTarget::HtmlReload,
-        } => Some(EngineCommand::ReloadHtmlDeck { deck_uuid: deck }),
-        ParamAddress::Deck {
-            deck,
-            target: DeckTarget::HtmlInteractive,
-        } => Some(if interactive_deck == Some(deck.as_str()) {
-            EngineCommand::CloseHtmlInteractive
-        } else {
-            EngineCommand::OpenHtmlInteractive { deck_uuid: deck }
-        }),
         _ => None,
     }
 }
@@ -65,19 +53,6 @@ impl VardaApp {
         }
     }
 
-    /// The HTML deck the interactive window is open on, if any.
-    pub(crate) fn interactive_deck(&self) -> Option<&str> {
-        #[cfg(feature = "html")]
-        {
-            self.interactive_active_deck()
-        }
-        #[cfg(not(feature = "html"))]
-        {
-            let _ = self;
-            None
-        }
-    }
-
     /// One normalized write from a control surface, whichever surface it came
     /// from.
     ///
@@ -105,7 +80,7 @@ impl VardaApp {
                 "action/record" => self.set_record_armed(!self.show.recorder.armed()),
                 _ => log::debug!("Unknown action path: {path}"),
             }
-        } else if let Some(cmd) = surface_command(path, self.interactive_deck()) {
+        } else if let Some(cmd) = surface_command(path) {
             if value > 0.5 {
                 deferred.push(cmd);
             }
@@ -559,9 +534,9 @@ mod tests {
         let channel = crate::app::snapshot::build_mixer_snapshot(&app).channels[0]
             .uuid
             .clone();
-        let uuid = match app.execute_command(C::AddSolidColorDeck {
+        let uuid = match app.execute_command(C::AddDeck {
             channel_uuid: channel,
-            color: [1.0, 1.0, 1.0, 1.0],
+            source: crate::solid_color::SolidColor::config_for([1.0, 1.0, 1.0, 1.0]),
         }) {
             crate::engine::CommandResult::OkWithId { uuid } => uuid,
             other => panic!("expected a new deck, got {other:?}"),
@@ -1338,32 +1313,9 @@ mod tests {
     #[test]
     fn targets_outside_the_mixer_become_commands() {
         assert!(matches!(
-            surface_command("cue/ab12cd34/fire", None),
+            surface_command("cue/ab12cd34/fire"),
             Some(EngineCommand::TriggerCue { uuid }) if uuid == "ab12cd34"
         ));
-        assert!(matches!(
-            surface_command("deck/d1/html/reload", None),
-            Some(EngineCommand::ReloadHtmlDeck { deck_uuid }) if deck_uuid == "d1"
-        ));
-    }
-
-    #[test]
-    fn the_interactive_target_toggles_the_window() {
-        assert!(matches!(
-            surface_command("deck/d1/html/interactive", None),
-            Some(EngineCommand::OpenHtmlInteractive { deck_uuid }) if deck_uuid == "d1"
-        ));
-        assert!(matches!(
-            surface_command("deck/d1/html/interactive", Some("d1")),
-            Some(EngineCommand::CloseHtmlInteractive)
-        ));
-        assert!(
-            matches!(
-                surface_command("deck/d1/html/interactive", Some("d2")),
-                Some(EngineCommand::OpenHtmlInteractive { deck_uuid }) if deck_uuid == "d1"
-            ),
-            "open on another deck moves the window here"
-        );
     }
 
     #[test]
@@ -1371,11 +1323,12 @@ mod tests {
         for path in [
             "deck/ab12cd34/trigger",
             "deck/ab12cd34/transparent",
+            "deck/ab12cd34/html/reload",
             "cue/ab12cd34",
             "cue//fire",
             "cue/ab12cd34/extra/fire",
         ] {
-            assert!(surface_command(path, None).is_none(), "{path}");
+            assert!(surface_command(path).is_none(), "{path}");
         }
     }
 }

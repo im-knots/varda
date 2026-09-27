@@ -19,12 +19,10 @@ use super::{CameraDetectAction, DomeAction};
 // Per-frame request flags that are independently set and cleared; an enum cannot express them.
 #[allow(clippy::struct_excessive_bools)]
 pub struct UISession {
-    /// Channel UUID to open an image file dialog for (deferred to outside egui
-    /// frame). A UUID rather than an index because the dialog outlives the
-    /// frame that requested it — see [`/spec/api-addressing.md`].
-    pub open_image_dialog_for_channel: Option<String>,
-    /// Channel UUID to open a video file dialog for (deferred to outside egui frame)
-    pub open_video_dialog_for_channel: Option<String>,
+    /// A file picker a source type asked for (deferred to outside the egui
+    /// frame). Holds a channel UUID rather than an index because the dialog
+    /// outlives the frame that requested it — see [`/spec/api-addressing.md`].
+    pub open_file_dialog: Option<crate::app::render::FileDialogRequest>,
     /// Select a deck for detail view in bottom bar (`ch_idx`, `deck_idx`)
     pub select_deck: Option<(usize, usize)>,
     /// Select a channel for detail view in bottom bar (`ch_idx`)
@@ -100,8 +98,7 @@ impl Default for UISession {
 impl UISession {
     pub fn new() -> Self {
         Self {
-            open_image_dialog_for_channel: None,
-            open_video_dialog_for_channel: None,
+            open_file_dialog: None,
             select_deck: None,
             select_channel: None,
             select_master: false,

@@ -414,28 +414,34 @@ fn hls_library_add_remove() {
     let Some(mut app) = headless_app() else {
         return;
     };
+    let entry =
+        varda::source::SourceConfig::new("Hls").with("url", "http://example.com/stream.m3u8");
+    let saved = |app: &mut varda::app::VardaApp| {
+        app.build_engine_state()
+            .sources
+            .iter()
+            .find(|t| t.source_type == "Hls")
+            .map_or(0, |t| t.library.entries.len())
+    };
     let r = send_cmd(
         &mut app,
-        EngineCommand::AddHlsLibraryEntry {
-            url: "http://example.com/stream.m3u8".into(),
+        EngineCommand::AddSourceLibraryEntry {
+            entry: entry.clone(),
         },
     );
     assert!(matches!(r, CommandResult::Ok));
-    // Add duplicate — should be idempotent
+    assert_eq!(saved(&mut app), 1);
+    // Add duplicate: should be idempotent
     send_cmd(
         &mut app,
-        EngineCommand::AddHlsLibraryEntry {
-            url: "http://example.com/stream.m3u8".into(),
+        EngineCommand::AddSourceLibraryEntry {
+            entry: entry.clone(),
         },
     );
-    // Remove
-    let r = send_cmd(
-        &mut app,
-        EngineCommand::RemoveHlsLibraryEntry {
-            url: "http://example.com/stream.m3u8".into(),
-        },
-    );
+    assert_eq!(saved(&mut app), 1);
+    let r = send_cmd(&mut app, EngineCommand::RemoveSourceLibraryEntry { entry });
     assert!(matches!(r, CommandResult::Ok));
+    assert_eq!(saved(&mut app), 0);
 }
 
 // ── DeckSource Kind Verification ────────────────────────────────────
@@ -448,9 +454,9 @@ fn solid_color_deck_source_kind() {
     let ch = channel_uuid(&mut app, 0);
     let deck = new_uuid(send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [1.0, 0.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
         },
     ));
     let state = app.build_engine_state();
@@ -575,9 +581,9 @@ fn deck_preset_save_then_load_roundtrip() {
     let ch = channel_uuid(&mut app, 0);
     let deck = new_uuid(send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch.clone(),
-            color: [1.0, 0.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
         },
     ));
     assert_eq!(app.build_engine_state().mixer.channels[0].decks.len(), 1);
@@ -612,9 +618,9 @@ fn channel_preset_save_then_load_appends_channel() {
     let ch = channel_uuid(&mut app, 0);
     send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch.clone(),
-            color: [0.0, 1.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([0.0, 1.0, 0.0, 1.0]),
         },
     );
     let r = send_cmd(
@@ -650,9 +656,9 @@ fn headless_render_smoke() {
     let ch = channel_uuid(&mut app, 0);
     send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [0.0, 1.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([0.0, 1.0, 0.0, 1.0]),
         },
     );
     for _ in 0..10 {

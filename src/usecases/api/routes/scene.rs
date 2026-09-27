@@ -135,14 +135,3 @@ pub async fn sequences(State(state): State<SharedState>) -> impl IntoResponse {
         Err((status, msg)) => (status, msg).into_response(),
     }
 }
-
-/// Active stream receivers with their URL, mode, and connection status.
-#[utoipa::path(get, path = "/api/scene/streams",
-    responses((status = 200, description = "Active stream receivers"), (status = 503, description = "Engine not yet initialized")),
-    tag = "Scene")]
-pub async fn streams(State(state): State<SharedState>) -> impl IntoResponse {
-    match read_or_error(&state) {
-        Ok(s) => Json(&s.stream_receivers).into_response(),
-        Err((status, msg)) => (status, msg).into_response(),
-    }
-}

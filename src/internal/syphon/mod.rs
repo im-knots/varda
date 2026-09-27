@@ -882,6 +882,45 @@ impl Drop for SyphonManager {
     }
 }
 
+impl crate::source::ShareReceiver for SyphonManager {
+    fn is_available(&self) -> bool {
+        SyphonManager::is_available(self)
+    }
+    fn server_names(&self) -> Vec<String> {
+        self.discovered_sources()
+    }
+    fn discover(&mut self) {
+        SyphonManager::discover(self);
+    }
+    fn start_receive(&mut self, name: &str, device: &wgpu::Device) -> Option<usize> {
+        SyphonManager::start_receive(self, name, device)
+    }
+    fn stop_receive(&mut self, client: usize) {
+        SyphonManager::stop_receive(self, client);
+    }
+    fn update(&mut self, device: &wgpu::Device) {
+        SyphonManager::update(self, device);
+    }
+    fn texture_view(&self, client: usize) -> Option<&wgpu::TextureView> {
+        SyphonManager::texture_view(self, client)
+    }
+    fn client_dimensions(&self, client: usize) -> Option<(u32, u32)> {
+        SyphonManager::client_dimensions(self, client)
+    }
+    fn is_connected(&self, client: usize) -> bool {
+        SyphonManager::is_connected(self, client)
+    }
+}
+
+/// Syphon servers as a deck source (macOS).
+pub fn provider() -> crate::source::ShareProvider<SyphonManager> {
+    crate::source::ShareProvider::new(crate::source::ShareProtocol {
+        id: "Syphon",
+        label: "Syphon Servers",
+        unavailable: "Syphon is not installed",
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

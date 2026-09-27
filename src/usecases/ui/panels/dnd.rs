@@ -233,160 +233,17 @@ pub(super) fn handle_library_dnd(ui: &egui::Ui, data: &UIData, actions: &mut UIA
             };
 
             if let Some(channel_uuid) = target_channel {
-                let gen_key = egui::Id::new("__lib_dnd_gen_name");
-                let shader_name: Option<String> = ctx.memory(|mem| mem.data.get_temp(gen_key));
-                if let Some(shader_name) = shader_name {
+                let source_key = egui::Id::new(super::library::SOURCE_DND_KEY);
+                let source: Option<crate::source::SourceConfig> =
+                    ctx.memory(|mem| mem.data.get_temp(source_key));
+                if let Some(source) = source {
                     log::info!(
-                        "Library drop (deferred): generator {shader_name} -> ch {channel_uuid}"
+                        "Library drop (deferred): {} source -> ch {channel_uuid}",
+                        source.source_type()
                     );
                     actions.commands.push(EngineCommand::AddDeck {
                         channel_uuid: channel_uuid.clone(),
-                        shader_name,
-                    });
-                }
-
-                let cam_key = egui::Id::new("__lib_dnd_cam_id");
-                let cam_id: Option<crate::camera::CameraId> =
-                    ctx.memory(|mem| mem.data.get_temp(cam_key));
-                if let Some(cam_id) = cam_id {
-                    log::info!("Library drop (deferred): camera {cam_id} -> ch {channel_uuid}");
-                    actions.commands.push(EngineCommand::AddCameraDeck {
-                        channel_uuid: channel_uuid.clone(),
-                        camera_id: cam_id,
-                    });
-                }
-
-                let depth_key = egui::Id::new("__lib_dnd_depth_sensor_id");
-                let depth_id: Option<crate::depth::DepthSensorId> =
-                    ctx.memory(|mem| mem.data.get_temp(depth_key));
-                if let Some(depth_id) = depth_id {
-                    log::info!(
-                        "Library drop (deferred): depth sensor {depth_id} -> ch {channel_uuid}"
-                    );
-                    actions.commands.push(EngineCommand::AddDepthSensorDeck {
-                        channel_uuid: channel_uuid.clone(),
-                        depth_sensor_id: depth_id,
-                    });
-                }
-
-                let capture_key = egui::Id::new(super::library::CAPTURE_DND_KEY);
-                let capture_target: Option<crate::scene::CaptureTargetConfig> =
-                    ctx.memory(|mem| mem.data.get_temp(capture_key));
-                if let Some(target) = capture_target {
-                    log::info!(
-                        "Library drop (deferred): capture '{}' -> ch {channel_uuid}",
-                        target.label()
-                    );
-                    actions.commands.push(EngineCommand::AddScreenCaptureDeck {
-                        channel_uuid: channel_uuid.clone(),
-                        target,
-                        rate: None,
-                        crop: None,
-                        show_cursor: None,
-                        // Per-target default resolved engine-side: displays
-                        // exclude Varda, windows do not.
-                        exclude_varda: None,
-                    });
-                }
-
-                let tap_key = egui::Id::new(super::library::TAP_DND_KEY);
-                let tap_source: Option<crate::scene::TapSourceConfig> =
-                    ctx.memory(|mem| mem.data.get_temp(tap_key));
-                if let Some(source) = tap_source {
-                    log::info!("Library drop (deferred): tap -> ch {channel_uuid}");
-                    actions.commands.push(EngineCommand::AddTapDeck {
-                        channel_uuid: channel_uuid.clone(),
                         source,
-                    });
-                }
-
-                let ndi_key = egui::Id::new("__lib_dnd_ndi_name");
-                let ndi_name: Option<String> = ctx.memory(|mem| mem.data.get_temp(ndi_key));
-                if let Some(ndi_name) = ndi_name {
-                    log::info!("Library drop (deferred): NDI '{ndi_name}' -> ch {channel_uuid}");
-                    actions.commands.push(EngineCommand::AddNdiDeck {
-                        channel_uuid: channel_uuid.clone(),
-                        source_name: ndi_name,
-                    });
-                }
-
-                let syph_key = egui::Id::new("__lib_dnd_syph_name");
-                let syph_name: Option<String> = ctx.memory(|mem| mem.data.get_temp(syph_key));
-                if let Some(syph_name) = syph_name {
-                    log::info!(
-                        "Library drop (deferred): Syphon '{syph_name}' -> ch {channel_uuid}"
-                    );
-                    actions.commands.push(EngineCommand::AddSyphonDeck {
-                        channel_uuid: channel_uuid.clone(),
-                        server_name: syph_name,
-                    });
-                }
-
-                let spout_key = egui::Id::new("__lib_dnd_spout_name");
-                let spout_name: Option<String> = ctx.memory(|mem| mem.data.get_temp(spout_key));
-                if let Some(spout_name) = spout_name {
-                    log::info!(
-                        "Library drop (deferred): Spout '{spout_name}' -> ch {channel_uuid}"
-                    );
-                    actions.commands.push(EngineCommand::AddSpoutDeck {
-                        channel_uuid: channel_uuid.clone(),
-                        sender_name: spout_name,
-                    });
-                }
-
-                let srt_key = egui::Id::new("__lib_dnd_srt_config");
-                let srt_config: Option<(String, crate::stream::SrtMode)> =
-                    ctx.memory(|mem| mem.data.get_temp(srt_key));
-                if let Some((url, mode)) = srt_config {
-                    log::info!(
-                        "Library drop (deferred): SRT '{url}' ({mode:?}) -> ch {channel_uuid}"
-                    );
-                    actions.commands.push(EngineCommand::AddSrtDeck {
-                        channel_uuid: channel_uuid.clone(),
-                        url,
-                        mode,
-                    });
-                }
-
-                let hls_key = egui::Id::new("__lib_dnd_hls_url");
-                if let Some(url) = ctx.memory(|mem| mem.data.get_temp::<String>(hls_key)) {
-                    log::info!("Library drop (deferred): HLS '{url}' -> ch {channel_uuid}");
-                    actions.commands.push(EngineCommand::AddHlsDeck {
-                        channel_uuid: channel_uuid.clone(),
-                        url,
-                    });
-                }
-
-                let dash_key = egui::Id::new("__lib_dnd_dash_url");
-                if let Some(url) = ctx.memory(|mem| mem.data.get_temp::<String>(dash_key)) {
-                    log::info!("Library drop (deferred): DASH '{url}' -> ch {channel_uuid}");
-                    actions.commands.push(EngineCommand::AddDashDeck {
-                        channel_uuid: channel_uuid.clone(),
-                        url,
-                    });
-                }
-
-                let rtmp_key = egui::Id::new("__lib_dnd_rtmp_config");
-                if let Some((url, mode)) = ctx.memory(|mem| {
-                    mem.data
-                        .get_temp::<(String, crate::stream::RtmpMode)>(rtmp_key)
-                }) {
-                    log::info!(
-                        "Library drop (deferred): RTMP '{url}' ({mode}) -> ch {channel_uuid}"
-                    );
-                    actions.commands.push(EngineCommand::AddRtmpDeck {
-                        channel_uuid: channel_uuid.clone(),
-                        url,
-                        mode,
-                    });
-                }
-
-                let html_key = egui::Id::new("__lib_dnd_html_url");
-                if let Some(url) = ctx.memory(|mem| mem.data.get_temp::<String>(html_key)) {
-                    log::info!("Library drop (deferred): HTML '{url}' -> ch {channel_uuid}");
-                    actions.commands.push(EngineCommand::AddHtmlDeck {
-                        channel_uuid: channel_uuid.clone(),
-                        url,
                     });
                 }
 
@@ -462,38 +319,10 @@ pub(super) fn handle_library_dnd(ui: &egui::Ui, data: &UIData, actions: &mut UIA
                 mem.data.remove::<Option<FxHover>>(hover_fx_target_id);
                 mem.data.remove::<bool>(on_new_ch_id);
                 mem.data
-                    .remove::<String>(egui::Id::new("__lib_dnd_gen_name"));
+                    .remove::<crate::source::SourceConfig>(egui::Id::new(
+                        super::library::SOURCE_DND_KEY,
+                    ));
                 mem.data.remove::<usize>(egui::Id::new("__lib_dnd_fx_idx"));
-                mem.data
-                    .remove::<crate::camera::CameraId>(egui::Id::new("__lib_dnd_cam_id"));
-                mem.data
-                    .remove::<crate::scene::CaptureTargetConfig>(egui::Id::new(
-                        super::library::CAPTURE_DND_KEY,
-                    ));
-                mem.data
-                    .remove::<crate::scene::TapSourceConfig>(egui::Id::new(
-                        super::library::TAP_DND_KEY,
-                    ));
-                mem.data
-                    .remove::<String>(egui::Id::new("__lib_dnd_ndi_name"));
-                mem.data
-                    .remove::<String>(egui::Id::new("__lib_dnd_syph_name"));
-                mem.data
-                    .remove::<String>(egui::Id::new("__lib_dnd_spout_name"));
-                mem.data
-                    .remove::<(String, crate::stream::SrtMode)>(egui::Id::new(
-                        "__lib_dnd_srt_config",
-                    ));
-                mem.data
-                    .remove::<String>(egui::Id::new("__lib_dnd_hls_url"));
-                mem.data
-                    .remove::<String>(egui::Id::new("__lib_dnd_dash_url"));
-                mem.data
-                    .remove::<(String, crate::stream::RtmpMode)>(egui::Id::new(
-                        "__lib_dnd_rtmp_config",
-                    ));
-                mem.data
-                    .remove::<String>(egui::Id::new("__lib_dnd_html_url"));
                 mem.data
                     .remove::<usize>(egui::Id::new("__lib_dnd_deck_preset_idx"));
                 mem.data

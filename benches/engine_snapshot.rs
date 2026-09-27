@@ -53,9 +53,14 @@ fn scene() -> Option<VardaApp> {
         for i in 0..4 {
             let result = send(
                 &mut app,
-                EngineCommand::AddSolidColorDeck {
+                EngineCommand::AddDeck {
                     channel_uuid: channel_uuid.clone(),
-                    color: [i as f32 / 4.0, 0.5, 0.5, 1.0],
+                    source: varda::solid_color::SolidColor::config_for([
+                        i as f32 / 4.0,
+                        0.5,
+                        0.5,
+                        1.0,
+                    ]),
                 },
             )?;
             if !matches!(result, CommandResult::OkWithId { .. }) {
@@ -77,14 +82,16 @@ fn scene() -> Option<VardaApp> {
     for i in 0..4 {
         send(
             &mut app,
-            EngineCommand::AddHlsLibraryEntry {
-                url: format!("https://example.invalid/{i}.m3u8"),
+            EngineCommand::AddSourceLibraryEntry {
+                entry: varda::source::SourceConfig::new("Hls")
+                    .with("url", format!("https://example.invalid/{i}.m3u8")),
             },
         )?;
         send(
             &mut app,
-            EngineCommand::AddHtmlLibraryEntry {
-                url: format!("https://example.invalid/{i}.html"),
+            EngineCommand::AddSourceLibraryEntry {
+                entry: varda::source::SourceConfig::new("Html")
+                    .with("url", format!("https://example.invalid/{i}.html")),
             },
         )?;
     }

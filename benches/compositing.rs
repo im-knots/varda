@@ -85,8 +85,7 @@ fn setup_mixer_solid_at(context: &GpuContext, n_decks: usize, width: u32, height
     let ch = mixer.channel_mut(0).expect("channel 0");
     for i in 0..n_decks {
         let t = i as f32 / n_decks.max(1) as f32;
-        let deck = Deck::new_solid_color(context, [t, 0.5, 1.0 - t, 1.0], width, height)
-            .expect("solid color deck");
+        let deck = Deck::solid_color(context, [t, 0.5, 1.0 - t, 1.0], width, height);
         ch.add_deck(deck);
     }
     mixer
@@ -101,7 +100,7 @@ fn setup_mixer_shader(context: &GpuContext, n_decks: usize) -> Mixer {
     let ch = mixer.channel_mut(0).expect("channel 0");
     for _ in 0..n_decks {
         let shader = ISFShader::from_string(BARS_SHADER).expect("bars shader");
-        let deck = Deck::new(context, shader, WIDTH, HEIGHT).expect("shader deck");
+        let deck = Deck::from_shader(context, shader, WIDTH, HEIGHT).expect("shader deck");
         ch.add_deck(deck);
     }
     mixer
@@ -353,8 +352,7 @@ fn bench_mixer_crossfade(c: &mut Criterion) {
     let analyzer_values = AnalyzerValues::default();
 
     let mut mixer = setup_mixer_solid(&ctx, 1);
-    let deck =
-        Deck::new_solid_color(&ctx, [0.0, 1.0, 0.5, 1.0], WIDTH, HEIGHT).expect("solid color deck");
+    let deck = Deck::solid_color(&ctx, [0.0, 1.0, 0.5, 1.0], WIDTH, HEIGHT);
     mixer.channel_mut(1).unwrap().add_deck(deck);
     mixer.set_crossfader(0.5);
 
@@ -387,8 +385,7 @@ fn setup_mixer_blend(context: &GpuContext, n_decks: usize, mode: BlendMode) -> M
     let ch = mixer.channel_mut(0).expect("channel 0");
     for i in 0..n_decks {
         let t = i as f32 / n_decks.max(1) as f32;
-        let deck = Deck::new_solid_color(context, [t, 0.5, 1.0 - t, 1.0], WIDTH, HEIGHT)
-            .expect("solid color deck");
+        let deck = Deck::solid_color(context, [t, 0.5, 1.0 - t, 1.0], WIDTH, HEIGHT);
         ch.add_deck(deck);
         // Deck 0 is a plain blit (LoadOp::Clear); only layers above it blend.
         if i > 0 {
@@ -452,7 +449,7 @@ fn setup_mixer_multipass(context: &GpuContext, n_decks: usize, src: &str) -> Mix
     let ch = mixer.channel_mut(0).expect("channel 0");
     for _ in 0..n_decks {
         let shader = ISFShader::from_string(src).expect("multipass shader");
-        let deck = Deck::new(context, shader, WIDTH, HEIGHT).expect("multipass deck");
+        let deck = Deck::from_shader(context, shader, WIDTH, HEIGHT).expect("multipass deck");
         ch.add_deck(deck);
     }
     mixer
@@ -549,7 +546,7 @@ fn report_submits_per_frame(_c: &mut Criterion) {
 
     let mut two_ch = setup_mixer_solid(&ctx, 4);
     for _ in 0..4 {
-        let deck = Deck::new_solid_color(&ctx, [0.0, 1.0, 0.5, 1.0], WIDTH, HEIGHT).expect("deck");
+        let deck = Deck::solid_color(&ctx, [0.0, 1.0, 0.5, 1.0], WIDTH, HEIGHT);
         two_ch.channel_mut(1).unwrap().add_deck(deck);
     }
     two_ch.set_crossfader(0.5);

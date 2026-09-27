@@ -31,15 +31,10 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
             | C::ScanAudioDevices
             | C::RescanAudio
             | C::ToggleAudioSource { .. }
-            // Video transport (temporal, not structural).
-            | C::VideoTogglePlay { .. }
-            | C::VideoSeek { .. }
-            | C::VideoSetSpeed { .. }
-            | C::VideoSetLoopMode { .. }
-            | C::VideoSetInPoint { .. }
-            | C::VideoSetOutPoint { .. }
-            | C::VideoClearInOutPoints { .. }
-            | C::VideoSetTransportSync { .. }
+            // A deck source's momentary actions (reload a page, clear in/out
+            // points). Its controls are decided in `VardaApp::is_undoable`,
+            // which can read the source's schema.
+            | C::TriggerSourceAction { .. }
             // ADSR live triggers.
             | C::TriggerAdsr { .. }
             | C::ReleaseAdsr { .. }
@@ -52,21 +47,13 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
             // Arming is a mode. What a pass records is undoable, in one entry
             // pushed when the first take opens.
             | C::SetRecordArmed { .. }
-            // HTML transient window / reload.
+            // HTML interactive window (transient).
             | C::OpenHtmlInteractive { .. }
             | C::CloseHtmlInteractive
-            | C::ReloadHtmlDeck { .. }
-            // Stream library config (not scene state).
-            | C::AddStreamLibraryEntry { .. }
-            | C::RemoveStreamLibraryEntry { .. }
-            | C::AddHlsLibraryEntry { .. }
-            | C::RemoveHlsLibraryEntry { .. }
-            | C::AddDashLibraryEntry { .. }
-            | C::RemoveDashLibraryEntry { .. }
-            | C::AddRtmpLibraryEntry { .. }
-            | C::RemoveRtmpLibraryEntry { .. }
-            | C::AddHtmlLibraryEntry { .. }
-            | C::RemoveHtmlLibraryEntry { .. }
+            // Source library entries and scans (not scene state).
+            | C::AddSourceLibraryEntry { .. }
+            | C::RemoveSourceLibraryEntry { .. }
+            | C::SourceLibraryAction { .. }
             // Output-window lifecycle / device config (spec: ❌, excluded).
             // Surface→output *assignments* remain undoable (default true).
             | C::CreateOutput
@@ -94,11 +81,6 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
             | C::AddAnalyzerModSource { .. }
             | C::UpdateAnalyzerSmoothing { .. }
             // Device scanning / MIDI mappings (device config, not scene).
-            | C::RescanNdi
-            | C::RescanSyphon
-            | C::RescanCameras
-            | C::RescanCaptureTargets
-            | C::RequestScreenCapturePermission
             | C::RescanMidi
             | C::SetMidiDeviceEnabled { .. }
             | C::ClearMidiMappings
@@ -160,6 +142,31 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
 }
 
 impl VardaApp {
+    /// Whether `cmd` starts an undo step: [`command_is_undoable`], plus the
+    /// one question it cannot answer without the scene. A deck source's
+    /// control is authoring unless its source draws it as part of a clip
+    /// transport, which is live playback like the crossfader.
+    pub(crate) fn is_undoable(&self, cmd: &EngineCommand) -> bool {
+        if !command_is_undoable(cmd) {
+            return false;
+        }
+        let EngineCommand::SetSourceParam {
+            deck_uuid, name, ..
+        } = cmd
+        else {
+            return true;
+        };
+        let Some((ch, dk)) = self.mixer.find_deck_by_uuid(deck_uuid) else {
+            return true;
+        };
+        !self.mixer.channels()[ch].decks[dk]
+            .deck
+            .source()
+            .schema()
+            .iter()
+            .any(|s| s.name == *name && s.widget == Some(crate::source::WidgetHint::Transport))
+    }
+
     /// The parameter a command writes as a live gesture, as the modulation key
     /// and the normalized value it lands on: what the automation recorder
     /// captures and what takes the lane back from the arrangement.
@@ -182,44 +189,27 @@ impl VardaApp {
                 ParamAddress::channel_opacity(channel_uuid).to_string(),
                 *opacity,
             )),
-            // Scaling belongs to any deck with a source texture, not just a
-            // video one, but it is modulatable on the same terms.
-            C::SetDeckScalingMode { deck_uuid, mode } => Some((
-                ParamAddress::deck(deck_uuid, DeckTarget::ScalingMode).to_string(),
-                mode.to_value(),
-            )),
-            // Playback gestures record the normalized value a curve would need
-            // to hold to reproduce them, because that is the space the override
-            // ramp and the recorder both work in.
-            C::VideoTogglePlay { deck_uuid } => {
-                let was_playing = self
-                    .video_playback_snapshot(deck_uuid)
-                    .is_some_and(|s| s.playing);
-                Some((
-                    ParamAddress::deck(deck_uuid, DeckTarget::VideoPlay).to_string(),
-                    f32::from(u8::from(!was_playing)),
-                ))
-            }
-            C::VideoSeek {
+            // A source control is a live write when modulation can drive it:
+            // the key is its router path and the value is already normalized,
+            // the space the override ramp and the recorder both work in.
+            C::SetSourceParam {
                 deck_uuid,
-                position_secs,
+                name,
+                value,
             } => {
-                let duration = self
-                    .video_playback_snapshot(deck_uuid)
-                    .map_or(0.0, |s| s.duration);
+                let (ch, dk) = self.mixer.find_deck_by_uuid(deck_uuid)?;
+                let spec = self.mixer.channels()[ch].decks[dk]
+                    .deck
+                    .source()
+                    .schema()
+                    .iter()
+                    .find(|s| s.name == *name && s.modulatable)?;
+                let route = spec.route.as_deref()?;
                 Some((
-                    ParamAddress::deck(deck_uuid, DeckTarget::VideoPosition).to_string(),
-                    crate::param_router::duration_to_norm(*position_secs, duration),
+                    ParamAddress::deck(deck_uuid, DeckTarget::source(route)).to_string(),
+                    value.as_f32()?,
                 ))
             }
-            C::VideoSetSpeed { deck_uuid, speed } => Some((
-                ParamAddress::deck(deck_uuid, DeckTarget::VideoSpeed).to_string(),
-                crate::param_router::speed_to_norm(*speed),
-            )),
-            C::VideoSetLoopMode { deck_uuid, mode } => Some((
-                ParamAddress::deck(deck_uuid, DeckTarget::VideoLoopMode).to_string(),
-                mode.to_value(),
-            )),
             // A shader parameter is a live write only when it has a range to
             // normalize into.
             C::SetGeneratorParam {
@@ -255,14 +245,8 @@ impl VardaApp {
         | C::AutoCrossfade { .. }
         | C::BeatCrossfade { .. }
         | C::AddDeck { .. }
-        | C::AddImageDeck { .. }
-        | C::AddVideoDeck { .. }
-        | C::AddSolidColorDeck { .. }
-        | C::AddCameraDeck { .. }
-        | C::AddDepthSensorDeck { .. }
-        | C::AddScreenCaptureDeck { .. }
-        | C::AddTapDeck { .. }
-        | C::SetTapSource { .. }
+        | C::ReplaceDeckSource { .. }
+        | C::TriggerSourceAction { .. }
         | C::RemoveDeck { .. }
         | C::MoveDeck { .. }
         | C::ReorderDeck { .. }
@@ -299,11 +283,6 @@ impl VardaApp {
         | C::AssignModulation { .. }
         | C::ClearModulation { .. }
         | C::ClearModulationSource { .. }
-        // Video Playback
-        | C::VideoSetInPoint { .. }
-        | C::VideoSetOutPoint { .. }
-        | C::VideoClearInOutPoints { .. }
-        | C::VideoSetTransportSync { .. }
         // Deck Auto-Transitions
         | C::SetAutoTransitionEnabled { .. }
         | C::SetAutoTransitionTrigger { .. }
@@ -314,16 +293,7 @@ impl VardaApp {
         | C::ToggleAutoTransitionDurationUnit { .. }
         | C::SetAutoTransitionPlayDurationValue { .. }
         | C::SetAutoTransitionDurationValue { .. }
-        // External I/O Deck Sources
-        | C::AddNdiDeck { .. }
-        | C::AddSyphonDeck { .. }
-        | C::AddSpoutDeck { .. }
-        | C::AddSrtDeck { .. }
-        | C::AddHlsDeck { .. }
-        | C::AddDashDeck { .. }
-        | C::AddRtmpDeck { .. }
-        | C::AddHtmlDeck { .. }
-        | C::ReloadHtmlDeck { .. }
+        // HTML interactive window
         | C::OpenHtmlInteractive { .. }
         | C::CloseHtmlInteractive
         // Transition Sequences
@@ -347,17 +317,10 @@ impl VardaApp {
         | C::ToggleStepDurationUnit { .. }
         | C::SetStepDurationValue { .. }
         | C::SetStepTargetAmount { .. }
-        // Stream Library
-        | C::AddStreamLibraryEntry { .. }
-        | C::RemoveStreamLibraryEntry { .. }
-        | C::AddHlsLibraryEntry { .. }
-        | C::RemoveHlsLibraryEntry { .. }
-        | C::AddDashLibraryEntry { .. }
-        | C::RemoveDashLibraryEntry { .. }
-        | C::AddRtmpLibraryEntry { .. }
-        | C::RemoveRtmpLibraryEntry { .. }
-        | C::AddHtmlLibraryEntry { .. }
-        | C::RemoveHtmlLibraryEntry { .. }
+        // Source Library
+        | C::AddSourceLibraryEntry { .. }
+        | C::RemoveSourceLibraryEntry { .. }
+        | C::SourceLibraryAction { .. }
         // Output
         | C::CreateOutput
         | C::CreateHeadlessOutput { .. }
@@ -493,13 +456,6 @@ impl VardaApp {
         | C::AddAnalyzerModSource { .. }
         | C::UpdateAnalyzerSmoothing { .. }
         // Device Scanning
-        | C::RescanNdi
-        | C::RescanSyphon
-        | C::RescanSpout
-        | C::RescanCameras
-        | C::RescanDepthSensors
-        | C::RescanCaptureTargets
-        | C::RequestScreenCapturePermission
         | C::RescanMidi
         | C::RescanAudio
         | C::ToggleAudioSource { .. }
@@ -557,7 +513,7 @@ impl VardaApp {
 mod tests {
     use super::command_is_undoable;
     use crate::engine::EngineCommand as C;
-    use crate::engine::types::{BlendMode, ParamValue, ScalingMode};
+    use crate::engine::types::{BlendMode, ParamValue};
     use crate::engine::value::param::{DeckTarget, ParamAddress};
 
     fn headless_app() -> Option<super::VardaApp> {
@@ -574,8 +530,16 @@ mod tests {
         };
         let channel = app.mixer.channels()[0].uuid().to_string();
         let solid = app
-            .add_solid_color_deck(&channel, [1.0, 0.0, 0.0, 1.0])
+            .add_deck(
+                &channel,
+                &crate::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
+            )
             .expect("solid deck");
+        let icon = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icon.png");
+        let image = app
+            .add_deck(&channel, &crate::still::Image::config_for(icon))
+            .expect("image deck");
+        app.settle_deck_loads();
         let shader = app
             .sources
             .registry
@@ -583,7 +547,8 @@ mod tests {
             .iter()
             .map(|s| (*s).clone())
             .find_map(|shader| {
-                let deck = crate::deck::Deck::new(&app.render.context, shader, 64, 64).ok()?;
+                let deck =
+                    crate::deck::Deck::from_shader(&app.render.context, shader, 64, 64).ok()?;
                 let ranged = deck
                     .generator_params
                     .values
@@ -614,11 +579,12 @@ mod tests {
                 ParamAddress::channel_opacity(&channel).to_string(),
             ),
             (
-                C::SetDeckScalingMode {
-                    deck_uuid: solid.clone(),
-                    mode: ScalingMode::Fit,
+                C::SetSourceParam {
+                    deck_uuid: image.clone(),
+                    name: "scaling_mode".into(),
+                    value: crate::source::SourceValue::Float(0.3),
                 },
-                ParamAddress::deck(&solid, DeckTarget::ScalingMode).to_string(),
+                ParamAddress::deck(&image, DeckTarget::source("scaling_mode")).to_string(),
             ),
             (
                 C::SetGeneratorParam {
@@ -659,7 +625,10 @@ mod tests {
         };
         let channel = app.mixer.channels()[0].uuid().to_string();
         let solid = app
-            .add_solid_color_deck(&channel, [1.0, 0.0, 0.0, 1.0])
+            .add_deck(
+                &channel,
+                &crate::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
+            )
             .expect("solid deck");
         app.set_record_armed(true);
         app.execute_command(C::SetDeckOpacity {
@@ -698,12 +667,13 @@ mod tests {
     #[test]
     fn live_and_transient_commands_are_not_undoable() {
         assert!(!command_is_undoable(&C::SetCrossfader(0.5)));
-        assert!(!command_is_undoable(&C::VideoTogglePlay {
+        assert!(!command_is_undoable(&C::TriggerSourceAction {
             deck_uuid: "dk".into(),
+            action: "clear".into(),
         }));
-        assert!(!command_is_undoable(&C::VideoSetTransportSync {
-            deck_uuid: "dk".into(),
-            sync: crate::video::DeckTransportSync::default(),
+        assert!(!command_is_undoable(&C::SourceLibraryAction {
+            source_type: "Camera".into(),
+            action: "rescan".into(),
         }));
         assert!(!command_is_undoable(&C::PlaySequence {
             sequence_uuid: "sq".into(),

@@ -6,10 +6,7 @@ use axum::extract::State;
 use axum::response::IntoResponse;
 
 use crate::usecases::api::SharedState;
-use crate::usecases::api::projection::{
-    CameraEntry, DepthSensorEntry, MonitorEntry, NdiSourceEntry, ShaderEntry, SyphonSourceEntry,
-    TransitionEntry,
-};
+use crate::usecases::api::projection::{CameraEntry, MonitorEntry, ShaderEntry, TransitionEntry};
 
 /// Generator shaders available in the registry, with their registry indices.
 #[utoipa::path(get, path = "/api/library/generators",
@@ -85,75 +82,6 @@ pub async fn cameras(State(state): State<SharedState>) -> impl IntoResponse {
                     name: name.clone(),
                     id: *id,
                 })
-                .collect::<Vec<_>>(),
-        )
-        .into_response(),
-        Err((status, msg)) => (status, msg).into_response(),
-    }
-}
-
-/// Depth sensors discovered by the last scan, as name and sensor id.
-#[utoipa::path(get, path = "/api/library/depth",
-    responses((status = 200, body = Vec<DepthSensorEntry>), (status = 503, description = "Engine not yet initialized")),
-    tag = "Depth Sensors")]
-pub async fn depth(State(state): State<SharedState>) -> impl IntoResponse {
-    match read_or_error(&state) {
-        Ok(s) => Json(
-            s.depth_sensors
-                .devices
-                .iter()
-                .map(|(name, id)| DepthSensorEntry {
-                    name: name.clone(),
-                    id: *id,
-                })
-                .collect::<Vec<_>>(),
-        )
-        .into_response(),
-        Err((status, msg)) => (status, msg).into_response(),
-    }
-}
-
-/// Displays and windows found by the last capture scan.
-///
-/// The list is only refreshed by `POST /api/devices/screen/scan` — window lists
-/// churn constantly, so it is never polled. See spec/screen-capture.md.
-#[utoipa::path(get, path = "/api/library/screen",
-    responses((status = 200, body = Vec<crate::engine::CaptureTargetSnapshot>), (status = 503, description = "Engine not yet initialized")),
-    tag = "Screen Capture")]
-pub async fn screen_capture(State(state): State<SharedState>) -> impl IntoResponse {
-    match read_or_error(&state) {
-        Ok(s) => Json(s.screen_capture.targets.clone()).into_response(),
-        Err((status, msg)) => (status, msg).into_response(),
-    }
-}
-
-/// Names of the NDI sources discovered by the last scan.
-#[utoipa::path(get, path = "/api/library/ndi",
-    responses((status = 200, body = Vec<NdiSourceEntry>), (status = 503, description = "Engine not yet initialized")),
-    tag = "Library")]
-pub async fn ndi(State(state): State<SharedState>) -> impl IntoResponse {
-    match read_or_error(&state) {
-        Ok(s) => Json(
-            s.ndi_sources
-                .iter()
-                .map(|name| NdiSourceEntry { name: name.clone() })
-                .collect::<Vec<_>>(),
-        )
-        .into_response(),
-        Err((status, msg)) => (status, msg).into_response(),
-    }
-}
-
-/// Names of the Syphon servers discovered by the last scan.
-#[utoipa::path(get, path = "/api/library/syphon",
-    responses((status = 200, body = Vec<SyphonSourceEntry>), (status = 503, description = "Engine not yet initialized")),
-    tag = "Library")]
-pub async fn syphon(State(state): State<SharedState>) -> impl IntoResponse {
-    match read_or_error(&state) {
-        Ok(s) => Json(
-            s.syphon_sources
-                .iter()
-                .map(|name| SyphonSourceEntry { name: name.clone() })
                 .collect::<Vec<_>>(),
         )
         .into_response(),

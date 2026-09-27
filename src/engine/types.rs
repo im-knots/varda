@@ -20,13 +20,13 @@ use serde::{Deserialize, Serialize};
 pub use crate::audio::AudioSourceId;
 pub use crate::camera::CameraId;
 pub use crate::channel::{BlendMode, DeckRenderFps};
-pub use crate::deck::ScalingMode;
 pub use crate::depth::DepthSensorId;
 pub use crate::mixer::CrossfadeEasing;
 pub use crate::modulation::{
     ADSRStage, AudioBandPreset, AudioReactMode, LFOWaveform, StepInterpolation,
 };
 pub use crate::params::ParamValue;
+pub use crate::source::ScalingMode;
 
 // Tier 1 — engine-owned value types (see `crate::engine::value`).
 pub use crate::engine::value::render::OutputSource;
@@ -97,9 +97,13 @@ pub struct EngineState {
     pub outputs: OutputSnapshot,
     pub registry: RegistrySnapshot,
     pub midi: MidiSnapshot,
+    /// Cameras, for the stage editor's surface detection.
     pub cameras: CameraSnapshot,
-    pub depth_sensors: DepthSensorSnapshot,
-    pub screen_capture: ScreenCaptureSnapshot,
+    /// Every registered deck source type: its controls and what its library
+    /// offers. See /spec/deck-source-providers.md.
+    /// Shared with the engine's cached listing, so cloning a snapshot does not
+    /// copy every library.
+    pub sources: std::sync::Arc<Vec<crate::engine::value::source::SourceTypeSnapshot>>,
     pub clock: ClockSnapshot,
     pub transport: TransportSnapshot,
     pub timecode: TimecodeSnapshot,
@@ -109,20 +113,6 @@ pub struct EngineState {
     pub frame_count: u64,
     /// Target FPS (0 = uncapped)
     pub target_fps: u32,
-    /// Discovered NDI sources (names)
-    pub ndi_sources: Vec<String>,
-    /// Whether NDI runtime is available
-    pub ndi_available: bool,
-    /// Discovered Syphon servers (names)
-    pub syphon_sources: Vec<String>,
-    /// Whether Syphon framework is available
-    pub syphon_available: bool,
-    /// Discovered Spout senders (names)
-    pub spout_sources: Vec<String>,
-    /// Whether Spout can run here: Windows, and wgpu on the Dx12 backend
-    pub spout_available: bool,
-    /// Active stream receiver configs (url, mode, connected)
-    pub stream_receivers: Vec<StreamReceiverSnapshot>,
     pub analyzers: Vec<AnalyzerTypeInfo>,
     /// User-defined macro controls (one control → many parameter targets).
     pub macros: Vec<crate::macros::Macro>,
@@ -130,8 +120,6 @@ pub struct EngineState {
     pub can_undo: bool,
     /// Whether the redo timeline has a redoable action (shared UI/API timeline).
     pub can_redo: bool,
-    /// Saved stream and HTML sources the library offers, with their live state.
-    pub libraries: LibrariesSnapshot,
     pub keymap: KeymapSnapshot,
     pub presets: PresetsSnapshot,
     /// Notifications currently shown to the performer.
@@ -140,36 +128,6 @@ pub struct EngineState {
     pub clipboard: Option<ClipboardSummary>,
     pub render: RenderSnapshot,
     pub system: SystemSnapshot,
-}
-
-/// Saved stream and HTML sources. See /spec/ui-engine-boundary.md § WS9.
-#[derive(Clone, Default, Serialize)]
-pub struct LibrariesSnapshot {
-    pub hls: Vec<StreamLibraryEntrySnapshot>,
-    pub dash: Vec<StreamLibraryEntrySnapshot>,
-    pub rtmp: Vec<RtmpLibraryEntrySnapshot>,
-    pub html: Vec<HtmlLibraryEntrySnapshot>,
-}
-
-/// A saved stream URL, and whether a receiver on it is connected now.
-#[derive(Clone, Serialize)]
-pub struct StreamLibraryEntrySnapshot {
-    pub url: String,
-    pub connected: bool,
-}
-
-#[derive(Clone, Serialize)]
-pub struct RtmpLibraryEntrySnapshot {
-    pub url: String,
-    pub mode: crate::stream::RtmpMode,
-    pub connected: bool,
-}
-
-/// A saved HTML page, and whether an HTML deck is showing it now.
-#[derive(Clone, Serialize)]
-pub struct HtmlLibraryEntrySnapshot {
-    pub url: String,
-    pub active: bool,
 }
 
 /// Keyboard shortcuts and keyboard learn.
@@ -236,14 +194,6 @@ pub struct GpuInfoSnapshot {
     pub driver: String,
     pub driver_info: String,
     pub device_type: String,
-}
-
-/// Snapshot of an active stream receiver for UI consumption.
-#[derive(Clone, Serialize)]
-pub struct StreamReceiverSnapshot {
-    pub url: String,
-    pub mode: String,
-    pub connected: bool,
 }
 
 // ── Clock Snapshot ──────────────────────────────────────────────
@@ -490,22 +440,15 @@ pub struct DeckSnapshot {
     pub idx: usize,
     pub uuid: String,
     pub name: String,
-    /// True when this deck's source is an HTML/Servo instance.
-    pub is_html: bool,
+    /// The deck's source: its type, and the state of its controls. The type's
+    /// schema is in `EngineState::sources`.
+    pub source: crate::engine::value::source::DeckSourceSnapshot,
     /// True when the interactive window is currently open for this deck.
-    pub is_html_interactive: bool,
-    /// True when this deck's source is a depth sensor (point-cloud) source.
-    pub is_depth_sensor: bool,
-    /// Point-cloud controls (None = not a depth-sensor source).
-    pub point_cloud_params: Option<PointCloudParamsSnapshot>,
+    pub is_interactive: bool,
     /// True when this deck has a `depth_sensor` shader preprocessor attached.
     pub has_depth_prepro: bool,
     /// Depth-preprocessor controls (None = no preprocessor attached).
     pub depth_prepro_params: Option<DepthPreproParamsSnapshot>,
-    /// Screen-capture controls (None = not a screen-capture source).
-    pub screen_capture: Option<ScreenCaptureDeckSnapshot>,
-    /// Tap controls (None = not a tap source).
-    pub tap: Option<TapDeckSnapshot>,
     pub opacity: f32,
     pub effective_opacity: f32,
     pub blend_mode: BlendMode,
@@ -513,10 +456,8 @@ pub struct DeckSnapshot {
     pub mute: bool,
     /// True when this deck preserves source alpha (transparent compositing).
     pub transparent: bool,
-    pub scaling_mode: Option<ScalingMode>,
     pub generator: ShaderParamsSnapshot,
     pub effects: Vec<EffectSnapshot>,
-    pub video_playback: Option<VideoPlaybackSnapshot>,
     pub auto_transition: Option<AutoTransitionSnapshot>,
     /// Configured render FPS (Auto or fixed value)
     pub render_fps: DeckRenderFps,
@@ -534,24 +475,6 @@ pub struct DeckSnapshot {
     /// than leaving someone to wonder. See /spec/deck-residency.md.
     pub source_asleep: bool,
     pub running_analyzers: Vec<RunningAnalyzerSnapshot>,
-}
-
-/// Router-exposed `deck/<uuid>/depth/*` values, normalized to `0..1` so a
-/// consumer can render faders without reaching into the engine.
-/// See spec/depth-sensors.md.
-#[derive(Clone, Serialize)]
-pub struct PointCloudParamsSnapshot {
-    pub orbit_yaw: f32,
-    pub orbit_pitch: f32,
-    pub zoom: f32,
-    pub point_size: f32,
-    pub depth_min: f32,
-    pub depth_max: f32,
-    pub seed: f32,
-    pub drift: f32,
-    pub disruption: f32,
-    /// 0 = Rgb, 1 = `DepthRamp`, 2 = Solid.
-    pub color_mode: u8,
 }
 
 /// Router-exposed `deck/<uuid>/depth_prepro/*` values, normalized to `0..1` so a
@@ -604,26 +527,6 @@ pub struct ParamSnapshot {
 pub struct ParamChoice {
     pub value: i32,
     pub label: String,
-}
-
-#[derive(Clone, Serialize)]
-pub struct VideoPlaybackSnapshot {
-    pub playing: bool,
-    pub position: f64,
-    pub duration: f64,
-    /// The performer's set point, untouched by modulation.
-    pub speed: f64,
-    /// The rate playback is actually running at, which differs from `speed` only
-    /// while a modulator holds it. See /spec/video-playback-modulation.md.
-    pub effective_speed: f64,
-    /// How far a modulator has carried the playhead from where the clip would
-    /// otherwise be. `position - position_offset` is the point it swings around.
-    pub position_offset: f64,
-    pub loop_mode: LoopMode,
-    pub in_point: f64,
-    pub out_point: f64,
-    pub frame_rate: f64,
-    pub transport_sync: crate::engine::value::video::DeckTransportSync,
 }
 
 // Serialized DTO: each flag pairs with its own value field (beats vs seconds).
@@ -911,111 +814,6 @@ pub struct CameraSnapshot {
     pub devices: Vec<(String, CameraId)>,
 }
 
-// ── Depth Sensor Snapshot ───────────────────────────────────────────
-
-/// Per-sensor runtime state for GUI/API/WS consumers. Plain data — no GPU
-/// types. See spec/depth-sensors.md.
-#[derive(Clone, Serialize)]
-pub struct DepthSensorSnapshot {
-    /// Detected sensors as `(name, id)`, for the Library panel.
-    pub devices: Vec<(String, DepthSensorId)>,
-}
-
-/// Per-deck screen-capture controls, for the deck detail panel and the API.
-// The flags are independent facts about one capture, not a state machine:
-// cursor and Varda-exclusion are user settings, bound and connected are two
-// distinct failure modes a performer needs told apart.
-#[allow(clippy::struct_excessive_bools)]
-#[derive(Clone, Serialize, utoipa::ToSchema)]
-pub struct ScreenCaptureDeckSnapshot {
-    /// The target this deck captures, in its persisted display form.
-    pub target_label: String,
-    /// Display targets get the `exclude_varda` toggle; window targets do not.
-    pub is_display: bool,
-    /// Capture rate as a 0–1 fraction of the 1–120 fps range, matching what
-    /// `deck/<uuid>/capture/rate` accepts.
-    pub rate_norm: f32,
-    /// The same rate in fps, for display.
-    pub rate_fps: f32,
-    /// Normalized crop as `[x, y, w, h]`.
-    pub crop: [f32; 4],
-    pub show_cursor: bool,
-    pub exclude_varda: bool,
-    /// False when a restored scene named a target that is not currently on
-    /// screen. The deck keeps its effects and mappings and renders black.
-    pub bound: bool,
-    /// Whether frames are currently arriving.
-    pub connected: bool,
-}
-
-/// Per-deck tap controls, for the deck detail panel and the API.
-/// See spec/program-tap.md.
-#[derive(Clone, Serialize, utoipa::ToSchema)]
-pub struct TapDeckSnapshot {
-    /// `"master_program"` or `"channel"`.
-    pub kind: String,
-    /// Channel UUID when `kind` is `"channel"`.
-    pub channel_uuid: Option<String>,
-    /// Resolved display name for the tap point.
-    pub label: String,
-    /// False when the tapped channel no longer exists. The deck keeps its
-    /// effects and mappings and renders black.
-    pub bound: bool,
-}
-
-// ── Screen Capture Snapshot ─────────────────────────────────────────
-
-/// One capturable display or window, for the Library panel and the API.
-/// Plain data — no platform handles, since the UI addresses targets by name.
-/// See spec/screen-capture.md.
-#[derive(Clone, Serialize, utoipa::ToSchema)]
-pub struct CaptureTargetSnapshot {
-    /// `"display"` or `"window"`.
-    pub kind: String,
-    /// Human-readable name, e.g. `"Display 1"` or `"Ableton Live — Set 3"`.
-    pub label: String,
-    /// Owning application bundle id or process name. Windows only.
-    pub app: Option<String>,
-    /// Window title at enumeration time. Windows only.
-    pub title: Option<String>,
-    pub width: u32,
-    pub height: u32,
-    /// This target is one of Varda's own windows — capturing it is a deliberate
-    /// self-capture, which the UI marks so it is an informed choice.
-    pub is_varda: bool,
-}
-
-/// Screen-capture subsystem state for GUI/API/WS consumers.
-#[derive(Clone, Serialize, utoipa::ToSchema)]
-pub struct ScreenCaptureSnapshot {
-    /// Targets found by the last scan. Manual — never polled.
-    pub targets: Vec<CaptureTargetSnapshot>,
-    /// `granted` / `denied` / `not_determined` / `not_required`. This is why a
-    /// capture deck can be black, so it is reported rather than inferred.
-    pub permission: String,
-    /// False when built without the `screen-capture` feature or started with
-    /// `--no-screen-capture`.
-    pub available: bool,
-    /// Platform backend in use, e.g. `"ScreenCaptureKit"`.
-    pub backend: String,
-    /// Number of live capture sessions (one per target, shared by N decks).
-    pub active_captures: usize,
-}
-
-impl Default for ScreenCaptureSnapshot {
-    /// The state a build without a capture backend reports: nothing to scan,
-    /// and no permission to ask for.
-    fn default() -> Self {
-        Self {
-            targets: vec![],
-            permission: "not_required".into(),
-            available: false,
-            backend: "none".into(),
-            active_captures: 0,
-        }
-    }
-}
-
 // ── Analyzer Snapshot ──────────────────────────────────────────────
 
 /// Info about an available analyzer type (for UI discovery).
@@ -1144,8 +942,6 @@ mod tests {
                 learn_target: None,
             },
             cameras: CameraSnapshot { devices: vec![] },
-            depth_sensors: DepthSensorSnapshot { devices: vec![] },
-            screen_capture: ScreenCaptureSnapshot::default(),
             transport: TransportSnapshot::default(),
             timecode: TimecodeSnapshot::default(),
             arrangement: None,
@@ -1167,17 +963,10 @@ mod tests {
             fps: 60.0,
             frame_count: 0,
             target_fps: 60,
-            ndi_sources: vec![],
-            ndi_available: false,
-            syphon_sources: vec![],
-            syphon_available: false,
-            spout_available: false,
-            spout_sources: vec![],
-            stream_receivers: vec![],
+            sources: std::sync::Arc::default(),
             analyzers: vec![],
             can_undo: false,
             can_redo: false,
-            libraries: LibrariesSnapshot::default(),
             keymap: KeymapSnapshot::default(),
             presets: PresetsSnapshot::default(),
             notifications: Vec::new(),
@@ -1242,8 +1031,6 @@ mod tests {
                 learn_target: None,
             },
             cameras: CameraSnapshot { devices: vec![] },
-            depth_sensors: DepthSensorSnapshot { devices: vec![] },
-            screen_capture: ScreenCaptureSnapshot::default(),
             transport: TransportSnapshot::default(),
             timecode: TimecodeSnapshot::default(),
             arrangement: None,
@@ -1265,17 +1052,10 @@ mod tests {
             fps: 59.9,
             frame_count: 42,
             target_fps: 60,
-            ndi_sources: vec![],
-            ndi_available: false,
-            syphon_sources: vec![],
-            syphon_available: false,
-            spout_available: false,
-            spout_sources: vec![],
-            stream_receivers: vec![],
+            sources: std::sync::Arc::default(),
             analyzers: vec![],
             can_undo: false,
             can_redo: false,
-            libraries: LibrariesSnapshot::default(),
             keymap: KeymapSnapshot::default(),
             presets: PresetsSnapshot::default(),
             notifications: Vec::new(),
@@ -1303,15 +1083,16 @@ mod tests {
     fn engine_command_add_deck() {
         let cmd = crate::engine::EngineCommand::AddDeck {
             channel_uuid: "ch-0".into(),
-            shader_name: "Color Bars".into(),
+            source: crate::engine::value::source::SourceConfig::new("Shader")
+                .with("name", "Color Bars"),
         };
         match cmd {
             crate::engine::EngineCommand::AddDeck {
                 channel_uuid,
-                shader_name,
+                source,
             } => {
                 assert_eq!(channel_uuid, "ch-0");
-                assert_eq!(shader_name, "Color Bars");
+                assert_eq!(source.str("name"), Some("Color Bars"));
             }
             _ => panic!("Wrong variant"),
         }
@@ -1363,21 +1144,12 @@ mod tests {
             idx: 0,
             uuid: "test0002".into(),
             name: "Sine Wave".into(),
-            is_html: false,
-            is_html_interactive: false,
-            is_depth_sensor: true,
-            point_cloud_params: Some(PointCloudParamsSnapshot {
-                orbit_yaw: 0.5,
-                orbit_pitch: 0.5,
-                zoom: 0.25,
-                point_size: 0.1,
-                depth_min: 0.05,
-                depth_max: 0.5,
-                seed: 0.0,
-                drift: 0.25,
-                disruption: 0.75,
-                color_mode: 1,
-            }),
+            source: crate::engine::value::source::DeckSourceSnapshot {
+                source_type: "DepthSensor".into(),
+                available: true,
+                status: crate::engine::value::source::SourceStatus::default(),
+            },
+            is_interactive: false,
             has_depth_prepro: true,
             depth_prepro_params: Some(DepthPreproParamsSnapshot {
                 sensor_name: "Kinect".into(),
@@ -1389,21 +1161,17 @@ mod tests {
                 motion_gain: 0.4,
                 mirror: true,
             }),
-            screen_capture: None,
-            tap: None,
             opacity: 1.0,
             effective_opacity: 0.5,
             blend_mode: BlendMode::Normal,
             solo: false,
             mute: true,
             transparent: false,
-            scaling_mode: Some(ScalingMode::default()),
             generator: ShaderParamsSnapshot {
                 shader_name: "Sine".into(),
                 params: vec![],
             },
             effects: vec![],
-            video_playback: None,
             auto_transition: None,
             render_fps: DeckRenderFps::Auto,
             effective_render_fps: 0.0,
@@ -1421,8 +1189,6 @@ mod tests {
         assert_eq!(prepro.sensor_name, "Kinect");
         assert!(prepro.mirror);
         assert!((prepro.far - 0.5).abs() < 1e-5);
-        let pc = d.point_cloud_params.expect("point-cloud params present");
-        assert_eq!(pc.color_mode, 1);
-        assert!((pc.disruption - 0.75).abs() < 1e-5);
+        assert_eq!(d.source.source_type, "DepthSensor");
     }
 }

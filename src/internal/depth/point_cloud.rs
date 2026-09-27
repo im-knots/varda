@@ -85,7 +85,7 @@ impl PointCloudParams {
     ///
     /// This is the pure param-scaling half of `Deck::set_depth_param`, split out
     /// so the mapping can be unit-tested without a live depth deck.
-    pub(crate) fn set_normalized_param(&mut self, name: &str, value: f32) -> bool {
+    pub fn set_normalized_param(&mut self, name: &str, value: f32) -> bool {
         let v = value.clamp(0.0, 1.0);
         match name {
             "orbit_yaw" => self.orbit_yaw = (v - 0.5) * std::f32::consts::TAU,
@@ -109,7 +109,7 @@ impl PointCloudParams {
     /// Consumers render faders from this rather than caching their own copy of
     /// the position, so a fader always reflects real engine state after a scene
     /// load, a preset recall, or a MIDI/OSC/modulation write.
-    pub(crate) fn normalized_param(&self, name: &str) -> Option<f32> {
+    pub fn normalized_param(&self, name: &str) -> Option<f32> {
         use std::f32::consts::{PI, TAU};
         Some(match name {
             "orbit_yaw" => self.orbit_yaw / TAU + 0.5,

@@ -11,7 +11,6 @@ mod window;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
-use crate::deck::ExternalSourceKind;
 use crate::engine::{CommandResult, ErrorCode};
 use crate::html::HtmlInputEvent;
 
@@ -43,40 +42,59 @@ impl super::VardaApp {
             Ok(loc) => loc,
             Err(e) => return e.into(),
         };
-        let kind = self
+        let html_idx = self
             .mixer
             .channels()
             .get(channel_idx)
             .and_then(|ch| ch.decks.get(deck_idx))
-            .map(|slot| slot.deck.external_source_kind());
-        match kind {
-            Some(Some(ExternalSourceKind::Html(html_idx))) => {
-                // Already showing this deck → no-op.
-                if let Some(win) = &self.interactive.window
-                    && win.target.deck_uuid == deck_uuid
-                {
-                    return CommandResult::Ok;
-                }
-                let (width, height) = self
-                    .sources
-                    .io
-                    .html_manager
-                    .instance_dimensions(html_idx)
-                    .unwrap_or((1920, 1080));
-                // One at a time: close any existing window, then open the new one.
-                self.interactive.pending_close = true;
-                self.interactive.pending_open = Some(InteractiveTarget {
-                    deck_uuid: deck_uuid.to_string(),
-                    html_idx,
-                    width,
-                    height,
-                });
-                CommandResult::Ok
-            }
-            _ => CommandResult::Err {
+            .and_then(|slot| crate::html::provider::html_instance(slot.deck.source()));
+        let Some(html_idx) = html_idx else {
+            return CommandResult::Err {
                 code: ErrorCode::InvalidInput,
                 message: "Deck is not an HTML source".into(),
-            },
+            };
+        };
+        // Already showing this deck → no-op.
+        if let Some(win) = &self.interactive.window
+            && win.target.deck_uuid == deck_uuid
+        {
+            return CommandResult::Ok;
+        }
+        let (width, height) = self
+            .sources
+            .service::<crate::html::HtmlManager>()
+            .instance_dimensions(html_idx)
+            .unwrap_or((1920, 1080));
+        // One at a time: close any existing window, then open the new one.
+        self.interactive.pending_close = true;
+        self.interactive.pending_open = Some(InteractiveTarget {
+            deck_uuid: deck_uuid.to_string(),
+            html_idx,
+            width,
+            height,
+        });
+        CommandResult::Ok
+    }
+
+    /// Act on interactive-window toggles the HTML decks' `interactive` action
+    /// asked for since the last frame (a MIDI pad, an OSC message, a macro):
+    /// open the window on that deck, or close it if it is already there.
+    pub(crate) fn poll_interactive_requests(&mut self) {
+        let mut requested = Vec::new();
+        for channel in self.mixer.channels_mut() {
+            for slot in &mut channel.decks {
+                if crate::html::provider::take_interactive_request(slot.deck.source_mut()).is_some()
+                {
+                    requested.push(slot.deck.uuid().to_string());
+                }
+            }
+        }
+        for deck_uuid in requested {
+            if self.interactive_active_deck() == Some(deck_uuid.as_str()) {
+                self.cmd_close_html_interactive();
+            } else {
+                self.cmd_open_html_interactive(&deck_uuid);
+            }
         }
     }
 
@@ -107,8 +125,7 @@ impl super::VardaApp {
             self.interactive.pending_close = false;
             if let Some(win) = self.interactive.window.take() {
                 self.sources
-                    .io
-                    .html_manager
+                    .service::<crate::html::HtmlManager>()
                     .send_input(win.target.html_idx, HtmlInputEvent::Focus(false));
                 win.destroy();
             }
@@ -141,8 +158,7 @@ impl super::VardaApp {
             Ok(win) => {
                 window_static.set_ime_allowed(true);
                 self.sources
-                    .io
-                    .html_manager
+                    .service::<crate::html::HtmlManager>()
                     .send_input(html_idx, HtmlInputEvent::Focus(true));
                 log::info!(
                     "Opened interactive HTML window for deck {deck_uuid} ({width}x{height})"
@@ -189,19 +205,20 @@ impl super::VardaApp {
             .unwrap()
             .process_event(event);
         for ev in events {
-            self.sources.io.html_manager.send_input(html_idx, ev);
+            self.sources
+                .service::<crate::html::HtmlManager>()
+                .send_input(html_idx, ev);
         }
         true
     }
 
     /// Blit the current HTML texture into the interactive window (per frame).
-    /// Call after `html_manager.update()` so the texture is fresh.
+    /// Call after the HTML provider's frame tick, so the texture is fresh.
     pub(crate) fn render_interactive(&self) {
         if let Some(win) = &self.interactive.window
             && let Some(view) = self
                 .sources
-                .io
-                .html_manager
+                .service::<crate::html::HtmlManager>()
                 .texture_view(win.target.html_idx)
         {
             win.render(&self.render.context, view);

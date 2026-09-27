@@ -1,12 +1,14 @@
-//! Effect (ISF filter) implementation and `PassBuffer` for multi-pass effects.
+//! Effect (ISF filter) implementation.
 
-use super::source::load_imported_textures;
-use super::{Deck, Effect, PassBuffer};
+use super::Effect;
+use crate::generator::{
+    create_pass_buffers, create_preprocessor_slots, load_imported_textures,
+    preprocessor_filterability,
+};
 use crate::isf::{ISFPass, ISFShader, compile_glsl_to_spirv};
 use crate::params::ShaderParams;
 use crate::renderer::{GpuContext, ISFUniforms, UnifiedPipeline};
 use anyhow::{Context, Result};
-use std::collections::HashMap;
 
 impl Effect {
     /// Create a new effect from an ISF filter shader.
@@ -45,48 +47,8 @@ impl Effect {
             load_imported_textures(&shader.metadata, shader.file_path.as_deref(), context);
 
         // Create preprocessor texture slots from ISF PREPROCESSORS declarations
-        let preprocessor_textures: Vec<crate::deck::PreprocessorSlot> = shader
-            .metadata
-            .preprocessors
-            .iter()
-            .map(|pp| {
-                // Create a 1×1 placeholder texture (will be resized when analyzer provides data).
-                // Data texture (packed analyzer output) — NOT part of the
-                // color path. The declared FORMAT is the encoding contract.
-                let format = crate::deck::preprocessor_texture_format(&pp.format);
-                let texture = context.device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some(&format!("Preprocessor: {}", pp.name)),
-                    size: wgpu::Extent3d {
-                        width: 1,
-                        height: 1,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[],
-                });
-                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-                crate::deck::PreprocessorSlot {
-                    name: pp.name.clone(),
-                    analyzer_type: pp.preprocessor_type.clone(),
-                    options: pp.options.clone(),
-                    param_bindings: pp.param_bindings.clone(),
-                    phase_bindings: pp.phase_bindings.clone(),
-                    texture,
-                    view,
-                    format,
-                    last_uploaded_generation: None,
-                }
-            })
-            .collect();
-
-        let preprocessor_filterable: Vec<bool> = preprocessor_textures
-            .iter()
-            .map(|slot| slot.format != wgpu::TextureFormat::Rgba32Float)
-            .collect();
+        let preprocessor_textures = create_preprocessor_slots(context, &shader.metadata);
+        let preprocessor_filterable = preprocessor_filterability(&preprocessor_textures);
         let pipeline = UnifiedPipeline::new(
             &context.device,
             &spirv,
@@ -98,80 +60,17 @@ impl Effect {
         )
         .context("Failed to create effect pipeline")?;
 
-        // Create pass buffers for multi-pass effects
-        let width = 1920u32; // Internal resolution
-        let height = 1080u32;
-        let mut pass_buffers = HashMap::new();
-
-        for pass in &passes {
-            let target_name = match &pass.target {
-                Some(name) => name.clone(),
-                None => continue,
-            };
-
-            let pass_width = Deck::parse_size_expression(pass.width.as_deref(), width);
-            let pass_height = Deck::parse_size_expression(pass.height.as_deref(), height);
-            let is_persistent = pass.persistent.unwrap_or(false);
-
-            // Pass buffers follow the effect's own target format so a deck,
-            // channel, and master instance of the same shader behave identically.
-            let format = target_format;
-
-            let tex_a = context.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(&format!("Effect Pass Buffer A: {target_name}")),
-                size: wgpu::Extent3d {
-                    width: pass_width,
-                    height: pass_height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-            let view_a = tex_a.create_view(&wgpu::TextureViewDescriptor::default());
-
-            // Double-buffered whether persistent or not — see the note in
-            // source.rs: a single-textured pass target aliases COLOR_TARGET with
-            // RESOURCE in its own pass and wgpu rejects it.
-            let (tex_b, view_b) = {
-                let tex = context.device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some(&format!("Effect Pass Buffer B: {target_name}")),
-                    size: wgpu::Extent3d {
-                        width: pass_width,
-                        height: pass_height,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::TEXTURE_BINDING
-                        | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[],
-                });
-                let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-                (Some(tex), Some(view))
-            };
-
-            pass_buffers.insert(
-                target_name.clone(),
-                PassBuffer {
-                    name: target_name,
-                    texture_a: tex_a,
-                    view_a,
-                    texture_b: tex_b,
-                    view_b,
-                    persistent: is_persistent,
-                    read_idx: 0,
-                },
-            );
-        }
+        // Pass buffers follow the effect's own target format so a deck, channel,
+        // and master instance of the same shader behave identically. Sized at
+        // the internal resolution.
+        let pass_buffers = create_pass_buffers(
+            context,
+            &passes,
+            1920,
+            1080,
+            target_format,
+            "Effect Pass Buffer",
+        );
 
         // Initialize parameters from shader inputs
         let inputs = shader.metadata.inputs.as_deref().unwrap_or(&[]);
@@ -448,37 +347,5 @@ impl Effect {
         }
 
         Ok(())
-    }
-}
-
-impl PassBuffer {
-    /// Get the current read texture view
-    pub fn read_view(&self) -> &wgpu::TextureView {
-        if self.read_idx == 0 {
-            &self.view_a
-        } else {
-            self.view_b.as_ref().unwrap_or(&self.view_a)
-        }
-    }
-
-    /// Get the current write texture view — always the one not being read.
-    pub fn write_view(&self) -> &wgpu::TextureView {
-        if self.read_idx == 0 {
-            self.view_b.as_ref().unwrap_or(&self.view_a)
-        } else {
-            &self.view_a
-        }
-    }
-
-    /// Swap read/write buffers. Call after rendering the pass that targets this
-    /// buffer, so later passes (and the next frame) read what was just written.
-    ///
-    /// Unconditional, including for non-persistent buffers: the read and write
-    /// views must never be the same texture, or the pass that targets it binds
-    /// it as both a colour attachment and a sampled resource. `persistent` now
-    /// governs only whether the contents carry meaning across frames — which is
-    /// what the ISF key actually means — not the buffering strategy.
-    pub fn swap(&mut self) {
-        self.read_idx = 1 - self.read_idx;
     }
 }

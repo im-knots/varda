@@ -20,4 +20,4 @@ pub mod protocol;
 #[cfg(target_os = "windows")]
 pub mod sharedmem;
 
-pub use manager::{SpoutManager, SpoutSource};
+pub use manager::{SpoutManager, SpoutSource, provider};

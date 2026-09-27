@@ -498,9 +498,9 @@ mod tests {
         let channel_uuid = crate::app::snapshot::build_mixer_snapshot(app).channels[0]
             .uuid
             .clone();
-        let result = app.execute_command(C::AddSolidColorDeck {
+        let result = app.execute_command(C::AddDeck {
             channel_uuid,
-            color: [0.0, 0.0, 1.0, 1.0],
+            source: crate::solid_color::SolidColor::config_for([0.0, 0.0, 1.0, 1.0]),
         });
         let CommandResult::OkWithId { uuid } = result else {
             panic!("deck was not created: {result:?}");

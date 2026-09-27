@@ -20,6 +20,7 @@ pub mod publish;
 pub(crate) mod render;
 pub(crate) mod resolve;
 mod snapshot;
+pub(crate) mod sources;
 pub(crate) mod state;
 mod surfaces;
 mod workspace;
@@ -226,38 +227,6 @@ pub(crate) struct Outputs {
     pub deliveries: std::collections::HashMap<String, crate::delivery::Delivery>,
 }
 
-/// External I/O managers: NDI, Syphon, SRT/HLS/DASH/RTMP streams.
-pub(crate) struct ExternalIO {
-    pub ndi_manager: crate::ndi::NdiManager,
-    #[cfg(target_os = "macos")]
-    pub syphon_manager: crate::syphon::SyphonManager,
-    /// Spout, the Windows counterpart. Unlike Syphon this is not `cfg`-gated:
-    /// the manager compiles everywhere and reports unavailable off Windows, so
-    /// the surrounding integration, persistence and UI code needs no gating.
-    /// See /spec/spout-output.md.
-    pub spout_manager: crate::spout::SpoutManager,
-    /// Spout decks restored from the workspace whose sender is not yet
-    /// publishing, late-bound on the render thread.
-    pub pending_spout: Vec<crate::persistence::PendingSpoutDeck>,
-    /// Throttle for periodic Spout re-discovery on the render thread.
-    pub last_spout_scan: std::time::Instant,
-    /// Syphon decks restored from the workspace whose server is not yet
-    /// published. The render thread auto-binds them once the server appears
-    /// (`VardaApp::reconcile_syphon`). See `persistence::PendingSyphonDeck`.
-    #[cfg(target_os = "macos")]
-    pub pending_syphon: Vec<crate::persistence::PendingSyphonDeck>,
-    /// Throttle for periodic Syphon re-discovery on the render thread.
-    #[cfg(target_os = "macos")]
-    pub last_syphon_scan: std::time::Instant,
-    pub stream_manager: crate::stream::StreamManager,
-    pub stream_library: Vec<(String, crate::stream::SrtMode)>,
-    pub hls_library: Vec<String>,
-    pub dash_library: Vec<String>,
-    pub rtmp_library: Vec<(String, crate::stream::RtmpMode)>,
-    pub html_manager: crate::html::HtmlManager,
-    pub html_library: Vec<String>,
-}
-
 /// Frame timing and system monitoring.
 pub(crate) struct FrameStats {
     pub last_frame_instant: std::time::Instant,
@@ -313,23 +282,23 @@ pub(crate) struct Show {
     pub blackout_reported: bool,
 }
 
-/// Where decks come from: the shader and analyzer registries, the devices a
-/// deck can open, the background deck loader, and external video in.
+/// Where decks come from: the shader and analyzer registries, every deck
+/// source type, the device managers they share, and the background loader.
 pub(crate) struct DeckSources {
     pub registry: ShaderRegistry,
     pub analyzer_registry: crate::analyzer::AnalyzerRegistry,
     /// Decks being built off the render thread. See `deck_loads`.
     pub deck_loader: deck_loads::DeckLoader,
-    pub camera_manager: CameraManager,
+    /// Every deck source type. See `sources.rs`.
+    pub providers: crate::source::SourceRegistry,
+    /// Device managers the providers share with the rest of the engine: the
+    /// NDI, Syphon and Spout runtimes also send, so outputs borrow them here.
+    pub services: crate::source::Services,
     /// Camera held open for surface detection, if any. See `AcquireDetectionCamera`.
     pub detection_camera: Option<crate::camera::CameraId>,
-    /// Depth-sensor capture manager (Kinect/LIDAR point-cloud sources).
-    pub depth_manager: DepthSensorManager,
-    /// Screen / window capture manager. See spec/screen-capture.md.
-    pub screen_capture_manager: ScreenCaptureManager,
-    /// NDI, Syphon, Spout, streams, and HTML. The NDI, Syphon, and Spout
-    /// runtimes also send, so outputs borrow them from here.
-    pub io: ExternalIO,
+    /// The last source type listing, reused by snapshots. See
+    /// [`DeckSources::type_snapshots`].
+    pub type_cache: sources::TypeCache,
 }
 
 /// What the mixer renders into: the GPU, the render size, and the frame rate.
@@ -568,54 +537,10 @@ impl VardaApp {
                 registry,
                 analyzer_registry: crate::deck::analyzer_registry(),
                 deck_loader: deck_loads::DeckLoader::new(),
-                camera_manager: CameraManager::new(),
+                providers: sources::source_providers(),
+                services: sources::source_services(config),
                 detection_camera: None,
-                depth_manager: DepthSensorManager::new(),
-                // Constructed disabled rather than merely inert, so `--no-screen-capture`
-                // never triggers the macOS TCC prompt.
-                screen_capture_manager: if config.screen_capture_disabled {
-                    ScreenCaptureManager::new_disabled()
-                } else {
-                    ScreenCaptureManager::new()
-                },
-                io: ExternalIO {
-                    ndi_manager: if config.ndi_disabled {
-                        log::info!("NDI disabled by CLI flag");
-                        crate::ndi::NdiManager::new_disabled()
-                    } else {
-                        crate::ndi::NdiManager::new()
-                    },
-                    #[cfg(target_os = "macos")]
-                    syphon_manager: if config.syphon_disabled {
-                        log::info!("Syphon disabled by CLI flag");
-                        crate::syphon::SyphonManager::new_disabled()
-                    } else {
-                        crate::syphon::SyphonManager::new()
-                    },
-                    #[cfg(target_os = "macos")]
-                    pending_syphon: Vec::new(),
-                    #[cfg(target_os = "macos")]
-                    last_syphon_scan: std::time::Instant::now(),
-                    spout_manager: if config.spout_disabled {
-                        log::info!("Spout disabled by CLI flag");
-                        crate::spout::SpoutManager::new_disabled()
-                    } else {
-                        crate::spout::SpoutManager::new()
-                    },
-                    pending_spout: Vec::new(),
-                    last_spout_scan: std::time::Instant::now(),
-                    stream_manager: crate::stream::StreamManager::new(),
-                    stream_library: Vec::new(),
-                    hls_library: Vec::new(),
-                    dash_library: Vec::new(),
-                    rtmp_library: Vec::new(),
-                    html_manager: if config.html_disabled {
-                        crate::html::HtmlManager::new_disabled()
-                    } else {
-                        crate::html::HtmlManager::new()
-                    },
-                    html_library: Vec::new(),
-                },
+                type_cache: sources::TypeCache::default(),
             },
             output: Outputs {
                 outputs: Vec::new(),
@@ -705,7 +630,7 @@ impl VardaApp {
             // A pass under way has already pushed the one entry it gets, and a
             // performer playing a fader through the API would otherwise fill
             // the stack a frame at a time.
-            if classify::command_is_undoable(&cmd) && !self.is_recording() {
+            if self.is_undoable(&cmd) && !self.is_recording() {
                 let snapshot = self.history_snapshot();
                 self.session.history.push(snapshot);
             }
@@ -736,43 +661,6 @@ impl VardaApp {
             .auto_transition
             .get_or_insert_with(crate::channel::DeckAutoTransition::new));
         CommandResult::Ok
-    }
-
-    /// Resolve `deck_uuid` and apply `f` to the deck. `f` returns false when the
-    /// deck exists but does not support the operation (for example a video
-    /// command on a shader deck) — that is `InvalidInput`, distinct from the
-    /// `NotFound` a stale UUID produces.
-    fn exec_on_deck(
-        &mut self,
-        deck_uuid: &str,
-        f: impl FnOnce(&mut crate::deck::Deck) -> bool,
-    ) -> CommandResult {
-        let (ch_idx, deck_idx) = match self.mixer.resolve_deck(deck_uuid) {
-            Ok(loc) => loc,
-            Err(e) => {
-                return CommandResult::Err {
-                    code: ErrorCode::NotFound,
-                    message: e.to_string(),
-                };
-            }
-        };
-        if f(&mut self.mixer.channels_mut()[ch_idx].decks[deck_idx].deck) {
-            CommandResult::Ok
-        } else {
-            CommandResult::Err {
-                code: ErrorCode::InvalidInput,
-                message: format!("Deck '{deck_uuid}' does not support this operation"),
-            }
-        }
-    }
-
-    /// A deck's playback state, or `None` if the UUID is stale or the deck has
-    /// no video source.
-    fn video_playback_snapshot(&self, deck_uuid: &str) -> Option<crate::video::PlaybackSnapshot> {
-        let (ch_idx, deck_idx) = self.mixer.find_deck_by_uuid(deck_uuid)?;
-        self.mixer.channels()[ch_idx].decks[deck_idx]
-            .deck
-            .playback_snapshot()
     }
 
     /// Helper: update a modulation source by UUID.
@@ -828,7 +716,7 @@ impl VardaApp {
 
     /// Read-only access to the camera manager.
     pub fn camera_manager(&self) -> &CameraManager {
-        &self.sources.camera_manager
+        self.sources.service::<CameraManager>()
     }
 
     /// Open a camera, returning its resolution.
@@ -841,18 +729,23 @@ impl VardaApp {
         id: crate::camera::CameraId,
     ) -> anyhow::Result<(u32, u32)> {
         self.sources
-            .camera_manager
+            .service_mut::<CameraManager>()
             .open_camera(id, &self.render.context.device)
     }
 
     /// Read-only access to the screen-capture manager.
     pub fn screen_capture_manager(&self) -> &ScreenCaptureManager {
-        &self.sources.screen_capture_manager
+        self.sources.service::<ScreenCaptureManager>()
     }
 
     /// Read-only access to the depth-sensor manager.
     pub fn depth_manager(&self) -> &DepthSensorManager {
-        &self.sources.depth_manager
+        self.sources.service::<DepthSensorManager>()
+    }
+
+    /// Every registered deck source type.
+    pub fn source_providers(&self) -> &crate::source::SourceRegistry {
+        &self.sources.providers
     }
 
     /// Read-only access to the outputs.
@@ -1330,9 +1223,9 @@ mod tests {
         let tx = app.command_sender();
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         tx.send((
-            crate::engine::EngineCommand::AddSolidColorDeck {
+            crate::engine::EngineCommand::AddDeck {
                 channel_uuid: ch0,
-                color: [1.0, 0.0, 0.0, 1.0],
+                source: crate::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
             },
             Some(reply_tx),
         ))
@@ -1560,9 +1453,9 @@ mod tests {
         let ch0 = channel_uuid(&app, 0);
         let added = send_cmd(
             &mut app,
-            crate::engine::EngineCommand::AddSolidColorDeck {
+            crate::engine::EngineCommand::AddDeck {
                 channel_uuid: ch0,
-                color: [0.0, 1.0, 0.0, 1.0],
+                source: crate::solid_color::SolidColor::config_for([0.0, 1.0, 0.0, 1.0]),
             },
         );
         let crate::engine::CommandResult::OkWithId { uuid } = added else {
@@ -1731,86 +1624,42 @@ mod tests {
             return;
         };
         let ch0 = channel_uuid(&app, 0);
-        // Bad path — should not panic
+        // Bad path: should not panic
         let _ = send_cmd(
             &mut app,
-            crate::engine::EngineCommand::AddVideoDeck {
+            crate::engine::EngineCommand::AddDeck {
                 channel_uuid: ch0,
-                path: std::path::PathBuf::from("/nonexistent/video.mp4"),
+                source: crate::source::SourceConfig::new("Video")
+                    .with("path", "/nonexistent/video.mp4"),
             },
         );
     }
 
     #[test]
-    fn smoke_video_toggle_play() {
+    fn source_param_a_source_does_not_declare_is_invalid_input() {
         let Some(mut app) = headless_app() else {
             return;
         };
         let ch0 = channel_uuid(&app, 0);
         let added = send_cmd(
             &mut app,
-            crate::engine::EngineCommand::AddSolidColorDeck {
+            crate::engine::EngineCommand::AddDeck {
                 channel_uuid: ch0,
-                color: [1.0, 0.0, 0.0, 1.0],
-            },
-        );
-        let crate::engine::CommandResult::OkWithId { uuid } = added else {
-            panic!("expected OkWithId, got {added:?}");
-        };
-        // Toggle play on a non-video deck — should handle gracefully
-        let _ = send_cmd(
-            &mut app,
-            crate::engine::EngineCommand::VideoTogglePlay { deck_uuid: uuid },
-        );
-    }
-
-    #[test]
-    fn smoke_video_set_speed() {
-        let Some(mut app) = headless_app() else {
-            return;
-        };
-        let ch0 = channel_uuid(&app, 0);
-        let added = send_cmd(
-            &mut app,
-            crate::engine::EngineCommand::AddSolidColorDeck {
-                channel_uuid: ch0,
-                color: [1.0, 0.0, 0.0, 1.0],
-            },
-        );
-        let crate::engine::CommandResult::OkWithId { uuid } = added else {
-            panic!("expected OkWithId, got {added:?}");
-        };
-        let _ = send_cmd(
-            &mut app,
-            crate::engine::EngineCommand::VideoSetSpeed {
-                deck_uuid: uuid,
-                speed: 2.0,
-            },
-        );
-    }
-
-    #[test]
-    fn video_transport_sync_rejects_a_non_video_deck() {
-        let Some(mut app) = headless_app() else {
-            return;
-        };
-        let ch0 = channel_uuid(&app, 0);
-        let added = send_cmd(
-            &mut app,
-            crate::engine::EngineCommand::AddSolidColorDeck {
-                channel_uuid: ch0,
-                color: [1.0, 0.0, 0.0, 1.0],
+                source: crate::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
             },
         );
         let crate::engine::CommandResult::OkWithId { uuid } = added else {
             panic!("expected OkWithId, got {added:?}");
         };
 
+        // A solid color has no transport: a video control on it is refused,
+        // not silently dropped.
         let result = send_cmd(
             &mut app,
-            crate::engine::EngineCommand::VideoSetTransportSync {
-                deck_uuid: uuid,
-                sync: crate::video::DeckTransportSync::default(),
+            crate::engine::EngineCommand::SetSourceParam {
+                deck_uuid: uuid.clone(),
+                name: "speed".into(),
+                value: crate::source::SourceValue::Float(0.75),
             },
         );
         assert!(matches!(
@@ -1820,6 +1669,56 @@ mod tests {
                 ..
             }
         ));
+        let result = send_cmd(
+            &mut app,
+            crate::engine::EngineCommand::TriggerSourceAction {
+                deck_uuid: uuid,
+                action: "clear".into(),
+            },
+        );
+        assert!(matches!(
+            result,
+            crate::engine::CommandResult::Err {
+                code: crate::engine::ErrorCode::InvalidInput,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn source_param_writes_reach_the_source() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        let ch0 = channel_uuid(&app, 0);
+        let added = send_cmd(
+            &mut app,
+            crate::engine::EngineCommand::AddDeck {
+                channel_uuid: ch0,
+                source: crate::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
+            },
+        );
+        let crate::engine::CommandResult::OkWithId { uuid } = added else {
+            panic!("expected OkWithId, got {added:?}");
+        };
+        let green = crate::source::SourceValue::Color([0.0, 1.0, 0.0, 1.0]);
+        let result = send_cmd(
+            &mut app,
+            crate::engine::EngineCommand::SetSourceParam {
+                deck_uuid: uuid.clone(),
+                name: "color".into(),
+                value: green.clone(),
+            },
+        );
+        assert!(matches!(result, crate::engine::CommandResult::Ok));
+        let state = app.build_engine_state();
+        let deck = &state.mixer.channels[0]
+            .decks
+            .iter()
+            .find(|d| d.uuid == uuid)
+            .expect("deck in snapshot");
+        assert_eq!(deck.source.source_type, "SolidColor");
+        assert_eq!(deck.source.status.params.get("color"), Some(&green));
     }
 
     #[test]
@@ -1871,9 +1770,9 @@ mod tests {
         let ch0 = channel_uuid(&app, 0);
         let added = send_cmd(
             &mut app,
-            crate::engine::EngineCommand::AddSolidColorDeck {
+            crate::engine::EngineCommand::AddDeck {
                 channel_uuid: ch0,
-                color: [1.0, 0.0, 0.0, 1.0],
+                source: crate::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
             },
         );
         let crate::engine::CommandResult::OkWithId { uuid: deck } = added else {

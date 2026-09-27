@@ -137,11 +137,7 @@ mod tests {
         DeckConfig {
             uuid: uuid.to_string(),
             name: "waves".to_string(),
-            source: SourceConfig::Shader {
-                path: "shaders/waves.fs".to_string(),
-                params: std::collections::HashMap::new(),
-                depth_prepro: None,
-            },
+            source: SourceConfig::new("Shader").with("path", "shaders/waves.fs"),
             effects: vec![an_effect("fx000001")],
             opacity: 1.0,
             transparent: false,
@@ -323,22 +319,17 @@ mod tests {
     #[test]
     fn a_reference_to_another_entity_is_left_alone() {
         let mut config = a_deck("deck0001");
-        config.source = SourceConfig::Tap {
-            source: crate::scene::TapSourceConfig::Channel {
-                uuid: "chan0001".to_string(),
-            },
-            scaling_mode: crate::deck::ScalingMode::default(),
-        };
+        config.source = SourceConfig::new("Tap").with(
+            "source",
+            serde_json::json!({"kind": "channel", "uuid": "chan0001"}),
+        );
         deck(&mut config, &everything_is_taken);
 
-        let SourceConfig::Tap {
-            source: crate::scene::TapSourceConfig::Channel { uuid },
-            ..
-        } = &config.source
-        else {
-            panic!("still a tap");
-        };
-        assert_eq!(uuid, "chan0001", "the tapped channel is not ours to rename");
+        assert_eq!(
+            config.source.get("source"),
+            Some(&serde_json::json!({"kind": "channel", "uuid": "chan0001"})),
+            "the tapped channel is not ours to rename"
+        );
     }
 
     /// A scene written before UUIDs, or hand-edited, can carry an empty one.

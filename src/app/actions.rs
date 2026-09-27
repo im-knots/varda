@@ -89,22 +89,7 @@ fn gui_success_toast(cmd: &EngineCommand) -> Option<&'static str> {
 
 /// True for the deck-creating commands the GUI drain toasts. Mirrors the deck-add arm list in `execute_command_gui`.
 pub(crate) fn command_is_deck_add(cmd: &EngineCommand) -> bool {
-    matches!(
-        cmd,
-        EngineCommand::AddDeck { .. }
-            | EngineCommand::AddImageDeck { .. }
-            | EngineCommand::AddVideoDeck { .. }
-            | EngineCommand::AddSolidColorDeck { .. }
-            | EngineCommand::AddCameraDeck { .. }
-            | EngineCommand::AddDepthSensorDeck { .. }
-            | EngineCommand::AddNdiDeck { .. }
-            | EngineCommand::AddSyphonDeck { .. }
-            | EngineCommand::AddSrtDeck { .. }
-            | EngineCommand::AddHlsDeck { .. }
-            | EngineCommand::AddDashDeck { .. }
-            | EngineCommand::AddRtmpDeck { .. }
-            | EngineCommand::AddHtmlDeck { .. }
-    )
+    matches!(cmd, EngineCommand::AddDeck { .. })
 }
 
 #[cfg(test)]
@@ -116,69 +101,12 @@ mod tests {
     }
 
     #[test]
-    fn every_deck_add_variant_is_recognized() {
-        // Mirrors the deck-add arm list in execute_command_gui: if a new
-        // Add*Deck variant is introduced but omitted from command_is_deck_add,
-        // the GUI silently skips its toast + preview-texture registration.
-        let deck_adds = [
-            EngineCommand::AddDeck {
+    fn a_deck_add_of_any_source_type_is_recognized() {
+        for source in ["Shader", "Image", "Camera", "FutureThing"] {
+            assert!(command_is_deck_add(&EngineCommand::AddDeck {
                 channel_uuid: ch(),
-                shader_name: "solid".into(),
-            },
-            EngineCommand::AddImageDeck {
-                channel_uuid: ch(),
-                path: "/tmp/x.png".into(),
-            },
-            EngineCommand::AddVideoDeck {
-                channel_uuid: ch(),
-                path: "/tmp/x.mp4".into(),
-            },
-            EngineCommand::AddSolidColorDeck {
-                channel_uuid: ch(),
-                color: [0.0, 0.0, 0.0, 1.0],
-            },
-            EngineCommand::AddCameraDeck {
-                channel_uuid: ch(),
-                camera_id: 0,
-            },
-            EngineCommand::AddDepthSensorDeck {
-                channel_uuid: ch(),
-                depth_sensor_id: 0,
-            },
-            EngineCommand::AddNdiDeck {
-                channel_uuid: ch(),
-                source_name: "src".into(),
-            },
-            EngineCommand::AddSyphonDeck {
-                channel_uuid: ch(),
-                server_name: "srv".into(),
-            },
-            EngineCommand::AddSrtDeck {
-                channel_uuid: ch(),
-                url: "srt://h:9000".into(),
-                mode: crate::stream::SrtMode::Caller,
-            },
-            EngineCommand::AddHlsDeck {
-                channel_uuid: ch(),
-                url: "http://h/live.m3u8".into(),
-            },
-            EngineCommand::AddDashDeck {
-                channel_uuid: ch(),
-                url: "http://h/live.mpd".into(),
-            },
-            EngineCommand::AddRtmpDeck {
-                channel_uuid: ch(),
-                url: "rtmp://h/live".into(),
-                mode: crate::stream::RtmpMode::Pull,
-            },
-            EngineCommand::AddHtmlDeck {
-                channel_uuid: ch(),
-                url: "http://h".into(),
-            },
-        ];
-        assert_eq!(deck_adds.len(), 13, "expected 13 deck-add variants");
-        for cmd in &deck_adds {
-            assert!(command_is_deck_add(cmd), "not recognized: {cmd:?}");
+                source: crate::source::SourceConfig::new(source),
+            }));
         }
     }
 

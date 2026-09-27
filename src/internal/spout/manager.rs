@@ -494,6 +494,46 @@ fn make_publish_texture(
     (texture, view)
 }
 
+impl crate::source::ShareReceiver for SpoutManager {
+    fn is_available(&self) -> bool {
+        SpoutManager::is_available(self)
+    }
+    fn server_names(&self) -> Vec<String> {
+        self.discovered_sources()
+    }
+    fn discover(&mut self) {
+        SpoutManager::discover(self);
+    }
+    fn start_receive(&mut self, name: &str, device: &wgpu::Device) -> Option<usize> {
+        SpoutManager::start_receive(self, name, device)
+    }
+    fn stop_receive(&mut self, client: usize) {
+        SpoutManager::stop_receive(self, client);
+    }
+    fn update(&mut self, device: &wgpu::Device) {
+        SpoutManager::update(self, device);
+    }
+    fn texture_view(&self, client: usize) -> Option<&wgpu::TextureView> {
+        SpoutManager::texture_view(self, client)
+    }
+    fn client_dimensions(&self, client: usize) -> Option<(u32, u32)> {
+        SpoutManager::client_dimensions(self, client)
+    }
+    fn is_connected(&self, client: usize) -> bool {
+        SpoutManager::is_connected(self, client)
+    }
+}
+
+/// Spout senders as a deck source. The Windows counterpart to Syphon; off
+/// Windows the manager reports unavailable and the type is not listed.
+pub fn provider() -> crate::source::ShareProvider<SpoutManager> {
+    crate::source::ShareProvider::new(crate::source::ShareProtocol {
+        id: "Spout",
+        label: "Spout Senders",
+        unavailable: "Spout is available on Windows only",
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -39,35 +39,10 @@ impl UIActions {
 /// Drag payload types for library drag-and-drop
 #[derive(Debug, Clone)]
 pub enum LibraryDrag {
-    /// Generator shader from library (registry index)
-    Generator(usize),
+    /// A library entry of any deck source type: the deck it creates.
+    Source(crate::source::SourceConfig),
     /// Effect/filter shader from library (registry index)
     Effect(usize),
-    /// Camera device from library (`CameraId`)
-    Camera(crate::camera::CameraId),
-    /// Depth sensor from library (`DepthSensorId`)
-    DepthSensor(crate::depth::DepthSensorId),
-    /// Screen or window capture target, addressed by name rather than by
-    /// platform handle so the payload stays valid across a rescan.
-    ScreenCapture(crate::scene::CaptureTargetConfig),
-    /// Varda's own program or a channel composite. See spec/program-tap.md.
-    Tap(crate::scene::TapSourceConfig),
-    /// NDI network source (source name)
-    Ndi(String),
-    /// Syphon server (server name)
-    Syphon(String),
-    /// Spout sender (sender name). The Windows counterpart to `Syphon`.
-    Spout(String),
-    /// SRT network source (url, mode)
-    Srt(String, crate::stream::SrtMode),
-    /// HLS stream source (url)
-    Hls(String),
-    /// DASH stream source (url)
-    Dash(String),
-    /// RTMP stream source (url, mode)
-    Rtmp(String, crate::stream::RtmpMode),
-    /// HTML content source (url)
-    Html(String),
     /// Deck preset from library (index into `preset_library.deck_presets`)
     DeckPreset(usize),
     /// Channel preset from library (index into `preset_library.channel_presets`)

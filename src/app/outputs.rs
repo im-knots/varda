@@ -195,8 +195,7 @@ impl VardaApp {
                 if matches!(&headless.target, OutputTarget::NdiSend { .. }) {
                     let resolved = self
                         .sources
-                        .io
-                        .ndi_manager
+                        .service::<crate::ndi::NdiManager>()
                         .resolve_presentation(config.presentation);
                     headless.set_resolved_presentation(&self.render.context.device, resolved);
                 }

@@ -22,8 +22,12 @@ impl VardaApp {
                 .map(UnifiedOutput::presentation_request)
                 .unwrap_or_default();
             (
-                self.sources.io.ndi_manager.resolve_presentation(request),
-                self.sources.io.ndi_manager.mode_availability(),
+                self.sources
+                    .service::<crate::ndi::NdiManager>()
+                    .resolve_presentation(request),
+                self.sources
+                    .service::<crate::ndi::NdiManager>()
+                    .mode_availability(),
             )
         });
         {
@@ -107,11 +111,13 @@ impl VardaApp {
         if is_ndi {
             let resolved = self
                 .sources
-                .io
-                .ndi_manager
+                .service::<crate::ndi::NdiManager>()
                 .resolve_presentation(headless.presentation_request);
             headless.set_resolved_presentation(&self.render.context.device, resolved);
-            headless.mode_availability = self.sources.io.ndi_manager.mode_availability();
+            headless.mode_availability = self
+                .sources
+                .service::<crate::ndi::NdiManager>()
+                .mode_availability();
         }
         log::info!("Created headless output '{name}'");
         self.output.outputs.push(UnifiedOutput::Headless(headless));
@@ -335,9 +341,9 @@ impl VardaApp {
                     }
                     return CommandResult::Ok;
                 }
-                // Parity with the Syphon receive path (cmd_add_syphon_deck): reject
-                // explicitly on non-macOS so an API client gets clear feedback rather
-                // than a silently inert output.
+                // Parity with the Syphon source type, which is not registered
+                // off macOS: reject explicitly so an API client gets clear
+                // feedback rather than a silently inert output.
                 #[cfg(not(target_os = "macos"))]
                 {
                     return CommandResult::Err {
@@ -499,7 +505,11 @@ impl VardaApp {
             .outputs
             .get(idx)
             .is_some_and(|output| matches!(output.target(), OutputTarget::NdiSend { .. }))
-            .then(|| self.sources.io.ndi_manager.resolve_presentation(request));
+            .then(|| {
+                self.sources
+                    .service::<crate::ndi::NdiManager>()
+                    .resolve_presentation(request)
+            });
         if let Some(output) = self.output.outputs.get_mut(idx) {
             if let Err(error) = output.set_presentation_request(&self.render.context, request) {
                 return CommandResult::Err {

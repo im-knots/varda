@@ -371,25 +371,21 @@ fn deck_automation_rows<'a>(
 /// A display name for a parameter, from its key relative to its owner.
 ///
 /// Shader and effect parameters (`param/<name>`) are named by whoever wrote the
-/// shader, so they are shown as they are. The built-ins Varda defines are
-/// internal paths that happen to be addressable, and showing `video/loop_mode`
-/// next to a control the rest of the UI calls "Loop" makes the two look like
-/// different settings.
-fn reserved_param_label(relative: &str) -> &str {
-    use crate::video::modulation as vm;
+/// shader, so they are shown as they are. A deck source's controls take the
+/// label its type declares, the one the deck's own column shows beside them.
+fn param_label<'a>(
+    data: &'a UIData,
+    deck: Option<&super::super::DeckUIInfo>,
+    relative: &'a str,
+) -> &'a str {
     if let Some(name) = relative.strip_prefix("param/") {
         return name;
     }
-    let name = relative;
-    match name {
-        "opacity" => "Opacity",
-        vm::SPEED => "Speed",
-        vm::POSITION => "Playhead",
-        vm::PLAY => "Play",
-        vm::LOOP_MODE => "Loop mode",
-        vm::SCALING_MODE => "Scaling",
-        other => other,
+    if relative == "opacity" {
+        return "Opacity";
     }
+    deck.and_then(|deck| data.source_param_label(deck, relative))
+        .unwrap_or(relative)
 }
 
 /// The envelopes assigned to any parameter under `sources`, one row each.
@@ -431,7 +427,16 @@ fn automation_rows<'a>(
             let ModSourceUI::Envelope { breakpoints } = &entry.source else {
                 return None;
             };
-            let name = reserved_param_label(relative);
+            // Only the deck's own keys (no owning effect) can name a source
+            // control.
+            let deck = match (owner, owner_label) {
+                (Owner::Deck(ch, dk), None) => data
+                    .channels
+                    .get(ch)
+                    .and_then(|c| c.decks.iter().find(|d| d.deck_idx == dk)),
+                _ => None,
+            };
+            let name = param_label(data, deck, relative);
             Some(AutomationRow {
                 ch_idx,
                 owner,
@@ -2144,12 +2149,28 @@ mod tests {
         );
     }
 
-    /// The built-in paths are internal identifiers. Showing `video/loop_mode`
-    /// beside a control the rest of the UI calls "Loop" makes them look like two
-    /// different settings.
+    /// A source control's route is an internal identifier. Showing
+    /// `video/loop_mode` beside a control the deck's column calls "Loop" makes
+    /// them look like two different settings, so the row takes the label the
+    /// source type declares.
     #[test]
-    fn reserved_parameters_get_the_names_the_rest_of_the_ui_uses() {
+    fn source_controls_get_the_labels_their_type_declares() {
+        use crate::source::DeckSourceProvider;
         let mut data = fixture_with_arrangement();
+        let provider = crate::video::provider::VideoProvider;
+        std::sync::Arc::make_mut(&mut data.sources).push(
+            crate::engine::value::source::SourceTypeSnapshot {
+                source_type: provider.id().into(),
+                label: provider.label().into(),
+                icon: provider.icon().into(),
+                available: true,
+                unavailable_reason: None,
+                listed: true,
+                params: provider.params().to_vec(),
+                library: crate::engine::value::source::LibrarySection::default(),
+            },
+        );
+        data.channels[0].decks[0].source.source_type = provider.id().into();
         let deck = data.channels[0].decks[0].uuid.clone();
         for (i, name) in [
             crate::video::modulation::SPEED,
@@ -2175,14 +2196,19 @@ mod tests {
             })
             .collect();
         labels.sort();
-        assert_eq!(labels, vec!["Loop mode", "Playhead", "Scaling", "Speed"]);
+        assert_eq!(labels, vec!["Loop", "Position", "Scaling", "Speed"]);
     }
 
     /// A shader author's parameter names are theirs, so they are shown verbatim.
     #[test]
     fn shader_parameter_names_are_left_alone() {
-        assert_eq!(reserved_param_label("iridescence"), "iridescence");
-        assert_eq!(reserved_param_label("speed"), "speed");
+        let data = fixture_with_arrangement();
+        let deck = &data.channels[0].decks[0];
+        assert_eq!(
+            param_label(&data, Some(deck), "param/iridescence"),
+            "iridescence"
+        );
+        assert_eq!(param_label(&data, Some(deck), "param/speed"), "speed");
     }
 
     /// An automated parameter gets its own row under the deck it belongs to.

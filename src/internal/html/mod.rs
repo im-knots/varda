@@ -8,6 +8,7 @@
 //! `html` cargo feature (`servo_backend`); when the feature is disabled the
 //! manager still allocates a texture per instance but produces a blank frame.
 
+pub mod provider;
 #[cfg(feature = "html")]
 mod servo_backend;
 

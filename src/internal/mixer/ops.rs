@@ -8,7 +8,6 @@ use anyhow::{Context as _, Result};
 
 use super::{EffectChain, EffectLocation, Mixer};
 use crate::channel::{BlendMode, DeckSlot};
-use crate::deck::{ScalingMode, TapSource};
 use crate::engine::value::entity::{EffectTarget, Resolved};
 
 /// Clamp to 0.0–1.0, with a fallback for NaN or infinity.
@@ -136,15 +135,40 @@ impl Mixer {
         Ok(())
     }
 
+    /// Write one of a deck's source controls: what a GUI widget, the API or a
+    /// typed router write does. Numeric controls take normalized values.
+    ///
     /// # Errors
     ///
-    /// Returns an error if the UUID names no deck.
-    pub fn set_deck_scaling_mode(&mut self, deck_uuid: &str, mode: ScalingMode) -> Resolved<()> {
+    /// Returns an error if the UUID names no deck, or the deck's source has no
+    /// such control or refused the value.
+    pub fn set_source_param(
+        &mut self,
+        deck_uuid: &str,
+        name: &str,
+        value: &crate::source::SourceValue,
+    ) -> Result<()> {
         let (ch, dk) = self.resolve_deck(deck_uuid)?;
         self.channels_mut()[ch].decks[dk]
             .deck
-            .set_scaling_mode(mode);
-        Ok(())
+            .source_mut()
+            .set_param(name, value)
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    /// Fire one of a deck's source actions (reload a page, clear in/out).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the UUID names no deck, or its source has no such
+    /// action.
+    pub fn trigger_source_action(&mut self, deck_uuid: &str, action: &str) -> Result<()> {
+        let (ch, dk) = self.resolve_deck(deck_uuid)?;
+        self.channels_mut()[ch].decks[dk]
+            .deck
+            .source_mut()
+            .trigger(action)
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     /// # Errors
@@ -173,25 +197,6 @@ impl Mixer {
     pub fn set_channel_blend_mode(&mut self, channel_uuid: &str, mode: BlendMode) -> Resolved<()> {
         let ch = self.resolve_channel(channel_uuid)?;
         self.channels_mut()[ch].blend_mode = mode;
-        Ok(())
-    }
-
-    /// Point a tap deck at a different source.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the UUID names no deck or the deck is not a tap.
-    pub fn set_tap_source(&mut self, deck_uuid: &str, source: TapSource) -> Result<()> {
-        let (ch, dk) = self.resolve_deck(deck_uuid)?;
-        let labels = self.channel_labels();
-        let deck = &mut self.channels_mut()[ch].decks[dk].deck;
-        let state = deck
-            .tap
-            .as_mut()
-            .context("Deck is not a tap and has no source to repoint")?;
-        state.source = source;
-        let label = state.source.label(&labels);
-        deck.set_source_name(format!("🔁 {label}"));
         Ok(())
     }
 
@@ -360,8 +365,7 @@ mod tests {
     }
 
     fn add_deck(gpu: &GpuContext, mixer: &mut Mixer, ch: usize) -> String {
-        let deck = crate::deck::Deck::new_solid_color(gpu, [1.0, 0.0, 0.0, 1.0], 64, 64)
-            .expect("solid deck");
+        let deck = crate::deck::Deck::solid_color(gpu, [1.0, 0.0, 0.0, 1.0], 64, 64);
         let uuid = deck.uuid().to_string();
         mixer.channel_mut(ch).expect("channel").add_deck(deck);
         uuid

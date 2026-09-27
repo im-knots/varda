@@ -573,7 +573,7 @@ mod tests {
             return;
         };
         let mut mixer = Mixer::new(&gpu, 64, 64).unwrap();
-        let deck = crate::deck::Deck::new_solid_color(&gpu, [1.0; 4], 64, 64).unwrap();
+        let deck = crate::deck::Deck::solid_color(&gpu, [1.0; 4], 64, 64);
         mixer.channel_mut(0).unwrap().add_deck(deck);
 
         let mut engine = AutoMapEngine::new();

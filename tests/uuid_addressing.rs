@@ -52,9 +52,9 @@ fn add_decks(app: &mut VardaApp, channel_uuid: &str, count: usize) -> Vec<String
             let shade = i as f32 / count as f32;
             new_uuid(send_cmd(
                 app,
-                EngineCommand::AddSolidColorDeck {
+                EngineCommand::AddDeck {
                     channel_uuid: channel_uuid.to_string(),
-                    color: [shade, shade, shade, 1.0],
+                    source: varda::solid_color::SolidColor::config_for([shade, shade, shade, 1.0]),
                 },
             ))
         })
@@ -210,9 +210,9 @@ fn unknown_uuids_report_not_found() {
         EngineCommand::RemoveChannel {
             channel_uuid: missing.clone(),
         },
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: missing.clone(),
-            color: [1.0, 1.0, 1.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 1.0, 1.0, 1.0]),
         },
         EngineCommand::ToggleEffect {
             effect_uuid: missing.clone(),

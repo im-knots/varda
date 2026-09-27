@@ -56,7 +56,7 @@ fn every_shipped_shader_builds_a_pipeline() {
                 let is_gen = shader.metadata.is_generator();
                 let name = shader.name();
                 let built = if is_gen {
-                    varda::deck::Deck::new(&gpu, shader, W, H).map(|_| ())
+                    varda::deck::Deck::from_shader(&gpu, shader, W, H).map(|_| ())
                 } else {
                     varda::deck::Effect::new(&gpu, shader).map(|_| ())
                 };
@@ -92,7 +92,7 @@ fn every_generator_survives_a_rendered_frame() {
             continue;
         }
         let name = shader.name();
-        let Ok(mut deck) = varda::deck::Deck::new(&gpu, shader, W, H) else {
+        let Ok(mut deck) = varda::deck::Deck::from_shader(&gpu, shader, W, H) else {
             continue; // build failures are the other test's business
         };
 

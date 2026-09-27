@@ -7,6 +7,8 @@
 //! SIMD-accelerated yuvutils-rs for NV12 (macOS) and YUYV (macOS/Linux).
 //! MJPEG frames (common on Linux V4L2) use nokhwa's built-in mozjpeg decoder.
 
+pub mod provider;
+
 use anyhow::{Context, Result};
 use nokhwa::Camera;
 use nokhwa::pixel_format::RgbAFormat;

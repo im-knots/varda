@@ -14,7 +14,6 @@
 
 mod arrangement;
 pub(crate) mod clipboard;
-mod io;
 mod outputs;
 mod presets;
 pub(crate) mod recorder;

@@ -78,6 +78,24 @@ Modulation keys are these same paths, so the modulation engine can route LFOs, e
 
 When adding a new entity type or parameter, follow this scheme rather than inventing a new addressing convention. MIDI learn, OSC, modulation routing, and the HTTP API all key off of it.
 
+### Adding a Deck Source
+
+A deck source is what a deck shows: a shader, a clip, a camera, an NDI feed, a web page. Every one of them is a *provider*, and adding a new one touches two places:
+
+1. **A provider module next to its backend** in `src/internal/` (the camera provider lives in `internal/camera/provider.rs`, the solid color one in `internal/solid_color.rs`). It implements two traits from `crate::source`:
+   - `DeckSourceProvider`, once per type: its `id`, `label` and `icon`, the controls every deck of the type has (`params`), what the library panel offers (`library`: discovered devices, saved URLs, a file picker or a form), and how to build a deck from a config (`create`, or `loader` for a slow build that should run off the render thread). Optional hooks cover per-frame device polling (`tick`, `prepare`), releasing a device when a deck goes (`release`), and keeping a saved deck whose device is missing (`restore`).
+   - `DeckSourceInstance`, once per deck: `render` into the deck's target, `config` to save itself, and `param`/`set_param`/`trigger` for its controls. Optional hooks cover modulation and transport (`control`), uploads (`upload`), and resizing.
+2. **One line in `src/app/sources.rs`** registering the provider.
+
+That is the whole change. The library panel section, the deck's control column, `POST /api/channels/{channel_uuid}/decks`, `PUT /api/decks/{deck_uuid}/source/params/{name}`, scene save and restore, undo, MIDI learn and modulation all work from the provider through the traits. `tests/deck_source_guard.rs` fails if a source type id is written anywhere else in `src/`, so a special case cannot creep back in.
+
+A few rules keep it that way:
+
+- **The id is forever.** It is the `type` tag saved in every `scene.json` (`{"type": "Video", "path": ...}`). Pick a CamelCase name and never rename it; an unknown type in a scene is kept as a placeholder deck rather than dropped, so an old build can open a newer scene without losing it.
+- **Controls are declared, not special-cased.** Describe each one with a `SourceParamSpec` (`float`, `toggle`, `choice`, `color`, `text`, `action`, ...). Give it a `routed("my_source/thing")` path to make it addressable as `deck/<uuid>/my_source/thing` from MIDI, OSC and the arrangement, and mark it `modulatable()` if an LFO may drive it. Numeric controls speak normalized `0.0` to `1.0`. If a group of controls needs a richer widget than a list of sliders, tag them with one of the GUI's widget hints (`Transport`, `Orbit`, `CropRect`); adding a new hint is a GUI change.
+- **Shared devices go through `Services`.** A device manager that other features also use (cameras, depth sensors, NDI) is registered once in `source_services` in `app/sources.rs` and reached with `env.services.get_mut::<MyManager>()`. Keep the manager in your module; the provider is the only code that knows how its decks use it.
+- **Test the provider directly.** Build a `SourceEnv` with an empty `Services` and `ShaderRegistry` and call `create`, the same way `tests/render_correctness.rs` builds tap decks. GPU tests use `GpuContext::new_headless()` and return early when no adapter is available.
+
 ## Engineering Practices
 
 These are the practices we hold changes to. They apply whether you're fixing a bug or adding a feature.

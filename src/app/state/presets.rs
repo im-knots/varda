@@ -288,19 +288,16 @@ impl VardaApp {
         at: Option<usize>,
         identity: Identity,
     ) -> anyhow::Result<String> {
+        let labels = self.mixer.channel_labels();
+        let (width, height) = (self.render.width, self.render.height);
+        let (providers, mut env) = self
+            .sources
+            .env(&self.render.context, width, height, &labels);
         Self::restore_deck_into_channel(
             config,
             ch_idx,
-            &self.render.context,
-            &self.sources.registry,
-            &mut self.sources.camera_manager,
-            &mut self.sources.screen_capture_manager,
-            &mut self.sources.depth_manager,
-            &mut self.sources.io.ndi_manager,
-            &mut self.sources.io.stream_manager,
-            &mut self.sources.io.html_manager,
-            self.render.width,
-            self.render.height,
+            providers,
+            &mut env,
             &mut self.mixer,
             at,
             identity,
@@ -311,20 +308,11 @@ impl VardaApp {
     /// deck-preset loading and channel-preset bulk-loading. Pure engine: no egui
     /// texture registration (the GUI drain handles previews via the command
     /// outcome / the per-frame refresh).
-    #[allow(clippy::too_many_arguments)]
     fn restore_deck_into_channel(
         config: &crate::scene::DeckConfig,
         ch_idx: usize,
-        context: &crate::renderer::GpuContext,
-        registry: &crate::registry::ShaderRegistry,
-        camera_manager: &mut crate::camera::CameraManager,
-        screen_capture_manager: &mut crate::screen_capture::ScreenCaptureManager,
-        depth_manager: &mut crate::depth::DepthSensorManager,
-        ndi_manager: &mut crate::ndi::NdiManager,
-        stream_manager: &mut crate::stream::StreamManager,
-        html_manager: &mut crate::html::HtmlManager,
-        render_width: u32,
-        render_height: u32,
+        providers: &mut crate::source::SourceRegistry,
+        env: &mut crate::source::SourceEnv,
         mixer: &mut crate::mixer::Mixer,
         at: Option<usize>,
         identity: Identity,
@@ -339,19 +327,10 @@ impl VardaApp {
         crate::scene::reidentify::deck(&mut config, &|uuid| always || taken.contains(uuid));
         let config = &config;
 
-        let mut deck = crate::persistence::restore_deck(
-            config,
-            context,
-            registry,
-            camera_manager,
-            screen_capture_manager,
-            depth_manager,
-            ndi_manager,
-            stream_manager,
-            html_manager,
-            render_width,
-            render_height,
-        )?;
+        let (mut deck, warning) = crate::persistence::restore_deck(config, providers, env);
+        if let Some(reason) = warning {
+            log::warn!("Deck '{}' kept as a placeholder: {reason}", config.name);
+        }
         // Apply the preset's display name (overrides the generator/source name).
         if !config.name.is_empty() {
             deck.set_source_name(config.name.clone());
@@ -531,9 +510,9 @@ mod tests {
         let channel_uuid = crate::app::snapshot::build_mixer_snapshot(&app).channels[0]
             .uuid
             .clone();
-        let result = app.execute_command(C::AddSolidColorDeck {
+        let result = app.execute_command(C::AddDeck {
             channel_uuid: channel_uuid.clone(),
-            color: [0.0, 0.0, 1.0, 1.0],
+            source: crate::solid_color::SolidColor::config_for([0.0, 0.0, 1.0, 1.0]),
         });
         let CommandResult::OkWithId { uuid: deck } = result else {
             panic!("no deck: {result:?}");

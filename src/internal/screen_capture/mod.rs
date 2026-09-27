@@ -14,6 +14,7 @@
 
 pub mod backend;
 pub mod platform;
+pub mod provider;
 pub mod resample;
 
 use backend::{

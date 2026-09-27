@@ -208,6 +208,25 @@ fn center(pixels: &[[f32; 4]]) -> [f32; 4] {
     pixels[((H / 2) * W + W / 2) as usize]
 }
 
+/// A tap deck built the way the engine builds one: through its provider.
+fn tap_deck(ctx: &GpuContext, point: &varda::tap::TapPoint) -> Deck {
+    use varda::source::DeckSourceProvider;
+    let shaders = varda::registry::ShaderRegistry::new();
+    let mut services = varda::source::Services::new();
+    let mut env = varda::source::SourceEnv {
+        gpu: ctx,
+        width: W,
+        height: H,
+        services: &mut services,
+        shaders: &shaders,
+        channels: &[],
+    };
+    let source = varda::tap::TapProvider
+        .create(&varda::tap::Tap::config_for(point), &mut env)
+        .expect("tap deck");
+    Deck::from_source(ctx, source, W, H)
+}
+
 fn new_mixer(ctx: &GpuContext) -> Mixer {
     let mut mixer = Mixer::new(ctx, W, H).expect("mixer");
     // Bypass tonemap → composite holds raw linear values.
@@ -256,7 +275,7 @@ fn channel_composites_more_decks_than_ring_slots() {
         } else {
             [1.0, 0.0, 0.0, 1.0]
         };
-        let deck = Deck::new_solid_color(&ctx, color, W, H).expect("deck");
+        let deck = Deck::solid_color(&ctx, color, W, H);
         ch.add_deck(deck);
     }
 
@@ -282,7 +301,7 @@ fn full_opacity_solid_deck_renders_its_color() {
         return;
     };
     let mut mixer = new_mixer(&ctx);
-    let deck = Deck::new_solid_color(&ctx, [1.0, 0.0, 0.0, 1.0], W, H).expect("deck");
+    let deck = Deck::solid_color(&ctx, [1.0, 0.0, 0.0, 1.0], W, H);
     mixer.channel_mut(0).unwrap().add_deck(deck);
 
     let px = center(&render_and_read(&ctx, &mut mixer));
@@ -297,7 +316,7 @@ fn zero_opacity_deck_is_culled_from_output() {
         return;
     };
     let mut mixer = new_mixer(&ctx);
-    let deck = Deck::new_solid_color(&ctx, [1.0, 1.0, 1.0, 1.0], W, H).expect("deck");
+    let deck = Deck::solid_color(&ctx, [1.0, 1.0, 1.0, 1.0], W, H);
     let ch = mixer.channel_mut(0).unwrap();
     ch.add_deck(deck);
     ch.set_deck_opacity(0, 0.0);
@@ -320,7 +339,7 @@ fn opacity_is_linear_over_black() {
     };
     let brightness_at = |opacity: f32| {
         let mut mixer = new_mixer(&ctx);
-        let deck = Deck::new_solid_color(&ctx, [1.0, 1.0, 1.0, 1.0], W, H).expect("deck");
+        let deck = Deck::solid_color(&ctx, [1.0, 1.0, 1.0, 1.0], W, H);
         let ch = mixer.channel_mut(0).unwrap();
         ch.add_deck(deck);
         ch.set_deck_opacity(0, opacity);
@@ -343,9 +362,9 @@ fn subsequent_channel_partial_opacity_is_linear() {
     };
     let mut mixer = new_mixer(&ctx);
     // Channel A opaque black so B is the visible partial layer at crossfader=1.
-    let a = Deck::new_solid_color(&ctx, [0.0, 0.0, 0.0, 1.0], W, H).expect("A");
+    let a = Deck::solid_color(&ctx, [0.0, 0.0, 0.0, 1.0], W, H);
     mixer.channel_mut(0).unwrap().add_deck(a);
-    let b = Deck::new_solid_color(&ctx, [1.0, 1.0, 1.0, 1.0], W, H).expect("B");
+    let b = Deck::solid_color(&ctx, [1.0, 1.0, 1.0, 1.0], W, H);
     let ch_b = mixer.channel_mut(1).unwrap();
     ch_b.add_deck(b);
     ch_b.set_deck_opacity(0, 0.5);
@@ -362,8 +381,8 @@ fn subsequent_channel_partial_opacity_is_linear() {
 
 fn crossfade_mixer(ctx: &GpuContext) -> Mixer {
     let mut mixer = new_mixer(ctx);
-    let a = Deck::new_solid_color(ctx, [1.0, 0.0, 0.0, 1.0], W, H).expect("A");
-    let b = Deck::new_solid_color(ctx, [0.0, 0.0, 1.0, 1.0], W, H).expect("B");
+    let a = Deck::solid_color(ctx, [1.0, 0.0, 0.0, 1.0], W, H);
+    let b = Deck::solid_color(ctx, [0.0, 0.0, 1.0, 1.0], W, H);
     mixer.channel_mut(0).unwrap().add_deck(a); // channel A = red
     mixer.channel_mut(1).unwrap().add_deck(b); // channel B = blue
     mixer
@@ -411,8 +430,8 @@ fn crossfader_at_half_blends_both_channels() {
 /// base (red, Normal) with a top deck (green) in the given blend mode.
 fn blend_mixer(ctx: &GpuContext, top_mode: BlendMode) -> Mixer {
     let mut mixer = new_mixer(ctx);
-    let base = Deck::new_solid_color(ctx, [1.0, 0.0, 0.0, 1.0], W, H).expect("base");
-    let top = Deck::new_solid_color(ctx, [0.0, 1.0, 0.0, 1.0], W, H).expect("top");
+    let base = Deck::solid_color(ctx, [1.0, 0.0, 0.0, 1.0], W, H);
+    let top = Deck::solid_color(ctx, [0.0, 1.0, 0.0, 1.0], W, H);
     let ch = mixer.channel_mut(0).unwrap();
     ch.add_deck(base);
     ch.add_deck(top);
@@ -479,8 +498,8 @@ const BLEND_TOL: f32 = 0.005;
 /// so any channel witnesses the result.
 fn grey_blend_mixer(ctx: &GpuContext, mode: BlendMode, src: f32, dst: f32) -> Mixer {
     let mut mixer = new_mixer(ctx);
-    let base = Deck::new_solid_color(ctx, [dst, dst, dst, 1.0], W, H).expect("base");
-    let top = Deck::new_solid_color(ctx, [src, src, src, 1.0], W, H).expect("top");
+    let base = Deck::solid_color(ctx, [dst, dst, dst, 1.0], W, H);
+    let top = Deck::solid_color(ctx, [src, src, src, 1.0], W, H);
     let ch = mixer.channel_mut(0).unwrap();
     ch.add_deck(base);
     ch.add_deck(top);
@@ -595,7 +614,7 @@ fn deck_stage_preserves_shadow_gradation() {
     let mut observed = Vec::new();
     for v in ramp {
         let mut mixer = new_mixer(&ctx);
-        let deck = Deck::new_solid_color(&ctx, [v, v, v, 1.0], W, H).expect("deck");
+        let deck = Deck::solid_color(&ctx, [v, v, v, 1.0], W, H);
         mixer.channel_mut(0).unwrap().add_deck(deck);
         observed.push(center(&render_and_read(&ctx, &mut mixer))[0]);
     }
@@ -639,7 +658,7 @@ fn deck_headroom_above_one_survives_to_the_composite() {
     };
     let mut mixer = new_mixer(&ctx);
     // A generator-style value well above display white.
-    let deck = Deck::new_solid_color(&ctx, [4.0, 2.0, 1.0, 1.0], W, H).expect("deck");
+    let deck = Deck::solid_color(&ctx, [4.0, 2.0, 1.0, 1.0], W, H);
     mixer.channel_mut(0).unwrap().add_deck(deck);
 
     let px = center(&render_and_read(&ctx, &mut mixer));
@@ -795,7 +814,7 @@ fn every_bundled_shader_builds_a_pipeline() {
         } else if is_filter {
             varda::deck::Effect::new(&ctx, shader).map(|_| ())
         } else {
-            Deck::new(&ctx, shader, W, H).map(|_| ())
+            Deck::from_shader(&ctx, shader, W, H).map(|_| ())
         };
         if let Err(e) = built {
             failures.push(format!("{name} ({kind}): {e:#}"));
@@ -844,7 +863,7 @@ fn deck_effect_transforms_pixels() {
 
     let run = |n_effects: usize| -> [f32; 4] {
         let mut mixer = new_mixer(&ctx);
-        let deck = Deck::new_solid_color(&ctx, [0.0, 0.0, 0.0, 1.0], W, H).expect("deck");
+        let deck = Deck::solid_color(&ctx, [0.0, 0.0, 0.0, 1.0], W, H);
         let ch = mixer.channel_mut(0).unwrap();
         ch.add_deck(deck);
         for _ in 0..n_effects {
@@ -911,7 +930,7 @@ fn dull_skull_stays_in_frame_for_the_whole_sway() {
 
     let mut mixer = Mixer::new(&ctx, SW, SH).expect("mixer");
     mixer.set_tonemap_mode(&ctx.queue, TonemapMode::Bypass);
-    let mut deck = Deck::new(&ctx, shader, SW, SH).expect("deck");
+    let mut deck = Deck::from_shader(&ctx, shader, SW, SH).expect("deck");
     deck.generator_params.set_float("speed", 3.0);
     deck.generator_params.set_float("rot_speed", 2.0);
     mixer.channel_mut(0).unwrap().add_deck(deck);
@@ -1027,7 +1046,7 @@ fn liquid_light_agitation_survives_being_automated() {
     let run = |automate: &dyn Fn(usize) -> f32| -> f32 {
         let mut mixer = Mixer::new(&ctx, SW, SH).expect("mixer");
         mixer.set_tonemap_mode(&ctx.queue, TonemapMode::Bypass);
-        let mut deck = Deck::new(&ctx, shader.clone(), SW, SH).expect("deck");
+        let mut deck = Deck::from_shader(&ctx, shader.clone(), SW, SH).expect("deck");
         deck.generator_params.set_float("flow_speed", 0.5);
         deck.generator_params.set_float("agitation", automate(0));
         mixer.channel_mut(0).unwrap().add_deck(deck);
@@ -1153,7 +1172,7 @@ fn liquid_light_dish_rotation_changes_speed_rather_than_position() {
 
     let mut mixer = Mixer::new(&ctx, SW, SH).expect("mixer");
     mixer.set_tonemap_mode(&ctx.queue, TonemapMode::Bypass);
-    let mut deck = Deck::new(&ctx, shader, SW, SH).expect("deck");
+    let mut deck = Deck::from_shader(&ctx, shader, SW, SH).expect("deck");
     deck.generator_params.set_float("flow_speed", 1.0);
     deck.generator_params.set_float("swirl", 0.4);
     mixer.channel_mut(0).unwrap().add_deck(deck);
@@ -1235,7 +1254,7 @@ fn additive_filter_emits_above_display_white() {
     assert!(path.exists(), "shaders/glow_bloom.fs missing");
 
     let mut mixer = new_mixer(&ctx);
-    let deck = Deck::new_solid_color(&ctx, [1.0, 1.0, 1.0, 1.0], W, H).expect("deck");
+    let deck = Deck::solid_color(&ctx, [1.0, 1.0, 1.0, 1.0], W, H);
     let ch = mixer.channel_mut(0).unwrap();
     ch.add_deck(deck);
 
@@ -1380,7 +1399,7 @@ fn chroma_flow_auto_palette_does_not_lurch_on_smooth_input() {
         let src_shader = varda::isf::ISFShader::from_file(&src).expect("parse source");
         let mut mixer = Mixer::new(&ctx, SW, SH).expect("mixer");
         mixer.set_tonemap_mode(&ctx.queue, TonemapMode::Bypass);
-        let deck = Deck::new(&ctx, src_shader, SW, SH).expect("deck");
+        let deck = Deck::from_shader(&ctx, src_shader, SW, SH).expect("deck");
         let ch = mixer.channel_mut(0).unwrap();
         ch.add_deck(deck);
         let mut fx = varda::deck::Effect::new(&ctx, fx_shader.clone()).expect("deck effect");
@@ -1564,7 +1583,7 @@ fn chroma_flow_auto_palette_is_carried_between_frames() {
 
     let mut mixer = Mixer::new(&ctx, W, H).expect("mixer");
     mixer.set_tonemap_mode(&ctx.queue, TonemapMode::Bypass);
-    let deck = Deck::new(&ctx, src_shader, W, H).expect("deck");
+    let deck = Deck::from_shader(&ctx, src_shader, W, H).expect("deck");
     {
         let ch = mixer.channel_mut(0).expect("channel 0");
         ch.add_deck(deck);
@@ -1754,7 +1773,7 @@ fn chroma_flow_palette_hands_over_rather_than_flapping() {
     let build = |graded: bool| -> Mixer {
         let mut mixer = Mixer::new(&ctx, W, H).expect("mixer");
         mixer.set_tonemap_mode(&ctx.queue, TonemapMode::Bypass);
-        let deck = Deck::new(
+        let deck = Deck::from_shader(
             &ctx,
             varda::isf::ISFShader::from_file(&src).expect("parse tie-bait fixture"),
             W,
@@ -1836,7 +1855,7 @@ fn chroma_flow_frames(
 
     let mut mixer = Mixer::new(ctx, w, h).expect("mixer");
     mixer.set_tonemap_mode(&ctx.queue, TonemapMode::Bypass);
-    let deck = Deck::new(ctx, src_shader, w, h).expect("deck");
+    let deck = Deck::from_shader(ctx, src_shader, w, h).expect("deck");
     {
         let ch = mixer.channel_mut(0).expect("channel 0");
         ch.add_deck(deck);
@@ -2350,10 +2369,9 @@ fn tap_shows_the_previous_frame_not_the_current_one() {
     let mut mixer = new_mixer(&ctx);
     let ch0_uuid = mixer.channel(0).unwrap().uuid().to_string();
 
-    let red = Deck::new_solid_color(&ctx, [1.0, 0.0, 0.0, 1.0], W, H).expect("solid deck");
+    let red = Deck::solid_color(&ctx, [1.0, 0.0, 0.0, 1.0], W, H);
     mixer.channel_mut(0).unwrap().add_deck(red);
-    let tap = Deck::new_from_tap(&ctx, varda::deck::TapSource::Channel(ch0_uuid), "tap", W, H)
-        .expect("tap deck");
+    let tap = tap_deck(&ctx, &varda::tap::TapPoint::Channel { uuid: ch0_uuid });
     mixer.channel_mut(1).unwrap().add_deck(tap);
     mixer.set_crossfader(1.0);
 
@@ -2381,10 +2399,9 @@ fn tap_latency_does_not_depend_on_channel_order() {
     let mut mixer = new_mixer(&ctx);
     let ch1_uuid = mixer.channel(1).unwrap().uuid().to_string();
 
-    let tap = Deck::new_from_tap(&ctx, varda::deck::TapSource::Channel(ch1_uuid), "tap", W, H)
-        .expect("tap deck");
+    let tap = tap_deck(&ctx, &varda::tap::TapPoint::Channel { uuid: ch1_uuid });
     mixer.channel_mut(0).unwrap().add_deck(tap);
-    let red = Deck::new_solid_color(&ctx, [1.0, 0.0, 0.0, 1.0], W, H).expect("solid deck");
+    let red = Deck::solid_color(&ctx, [1.0, 0.0, 0.0, 1.0], W, H);
     mixer.channel_mut(1).unwrap().add_deck(red);
     mixer.set_crossfader(0.0);
 
@@ -2415,10 +2432,9 @@ fn master_tap_shows_the_previous_frame() {
     // tap deck still renders every frame. Parking it in the far channel instead
     // would fade that channel out, and a fully faded channel is culled — the
     // deck would never render and this would measure the cull, not the tap.
-    let tap = Deck::new_from_tap(&ctx, varda::deck::TapSource::MasterProgram, "tap", W, H)
-        .expect("tap deck");
+    let tap = tap_deck(&ctx, &varda::tap::TapPoint::MasterProgram);
     mixer.channel_mut(0).unwrap().add_deck(tap);
-    let red = Deck::new_solid_color(&ctx, [1.0, 0.0, 0.0, 1.0], W, H).expect("solid deck");
+    let red = Deck::solid_color(&ctx, [1.0, 0.0, 0.0, 1.0], W, H);
     mixer.channel_mut(0).unwrap().add_deck(red);
     mixer.set_crossfader(0.0);
 
@@ -2450,10 +2466,9 @@ fn self_tapping_deck_converges_rather_than_diverging() {
     let mut mixer = new_mixer(&ctx);
     let ch0_uuid = mixer.channel(0).unwrap().uuid().to_string();
 
-    let red = Deck::new_solid_color(&ctx, [1.0, 0.0, 0.0, 1.0], W, H).expect("solid deck");
+    let red = Deck::solid_color(&ctx, [1.0, 0.0, 0.0, 1.0], W, H);
     mixer.channel_mut(0).unwrap().add_deck(red);
-    let tap = Deck::new_from_tap(&ctx, varda::deck::TapSource::Channel(ch0_uuid), "tap", W, H)
-        .expect("tap deck");
+    let tap = tap_deck(&ctx, &varda::tap::TapPoint::Channel { uuid: ch0_uuid });
     let tap_idx = mixer.channel_mut(0).unwrap().add_deck(tap);
     mixer.channel_mut(0).unwrap().decks[tap_idx].opacity = 0.5;
     mixer.set_crossfader(0.0);
@@ -2478,7 +2493,7 @@ fn a_scene_without_taps_allocates_no_tap_targets() {
         return;
     };
     let mut mixer = new_mixer(&ctx);
-    let red = Deck::new_solid_color(&ctx, [1.0, 0.0, 0.0, 1.0], W, H).expect("solid deck");
+    let red = Deck::solid_color(&ctx, [1.0, 0.0, 0.0, 1.0], W, H);
     mixer.channel_mut(0).unwrap().add_deck(red);
 
     render_frame_with_taps(&ctx, &mut mixer);
@@ -2489,8 +2504,7 @@ fn a_scene_without_taps_allocates_no_tap_targets() {
 
     // ...and adding one, then removing it, gives the memory back.
     let ch0_uuid = mixer.channel(0).unwrap().uuid().to_string();
-    let tap = Deck::new_from_tap(&ctx, varda::deck::TapSource::Channel(ch0_uuid), "tap", W, H)
-        .expect("tap deck");
+    let tap = tap_deck(&ctx, &varda::tap::TapPoint::Channel { uuid: ch0_uuid });
     let idx = mixer.channel_mut(1).unwrap().add_deck(tap);
     render_frame_with_taps(&ctx, &mut mixer);
     assert!(
@@ -2567,7 +2581,7 @@ fn a_later_pass_reads_what_an_earlier_pass_wrote_this_frame() {
     };
     let shader = varda::isf::ISFShader::from_string(PASS_ORDER_SHADER).expect("parse");
     let mut mixer = new_mixer(&ctx);
-    let deck = Deck::new(&ctx, shader, W, H).expect("deck");
+    let deck = Deck::from_shader(&ctx, shader, W, H).expect("deck");
     mixer.channel_mut(0).unwrap().add_deck(deck);
 
     let px = center(&render_and_read(&ctx, &mut mixer));

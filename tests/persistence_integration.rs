@@ -95,9 +95,9 @@ fn save_load_with_decks() {
     let ch = channel_uuid(&mut app, 0);
     send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [1.0, 0.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
         },
     );
     app.save_workspace().expect("save workspace");
@@ -205,9 +205,9 @@ fn save_load_automation_envelope() {
     let ch = channel_uuid(&mut app, 0);
     let deck_uuid = match send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [1.0, 1.0, 1.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 1.0, 1.0, 1.0]),
         },
     ) {
         CommandResult::OkWithId { uuid } => uuid,
@@ -280,9 +280,9 @@ fn save_load_arrangement_edits() {
     let ch = channel_uuid(&mut app, 0);
     let deck_uuid = match send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [1.0, 1.0, 1.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 1.0, 1.0, 1.0]),
         },
     ) {
         CommandResult::OkWithId { uuid } => uuid,
@@ -560,9 +560,9 @@ fn save_load_svg_image_deck() {
     let ch = channel_uuid(&mut app, 0);
     let result = send_cmd(
         &mut app,
-        EngineCommand::AddImageDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            path: art.clone(),
+            source: varda::still::Image::config_for(art.to_str().unwrap()),
         },
     );
     assert!(
@@ -594,9 +594,10 @@ fn load_missing_assets_graceful() {
     let ch = channel_uuid(&mut app, 0);
     let _ = send_cmd(
         &mut app,
-        EngineCommand::AddVideoDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            path: std::path::PathBuf::from("/nonexistent/path/video.mp4"),
+            source: varda::source::SourceConfig::new("Video")
+                .with("path", "/nonexistent/path/video.mp4"),
         },
     );
     app.save_workspace().expect("save workspace");
@@ -645,9 +646,9 @@ fn save_load_deck_fidelity_opacity_transparent_blend() {
     let ch = channel_uuid(&mut app, 0);
     let deck = match send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [0.25, 0.5, 0.75, 1.0],
+            source: varda::solid_color::SolidColor::config_for([0.25, 0.5, 0.75, 1.0]),
         },
     ) {
         CommandResult::OkWithId { uuid } => uuid,
@@ -707,9 +708,9 @@ fn save_load_deck_effect_survives() {
     let ch = channel_uuid(&mut app, 0);
     let deck = match send_cmd(
         &mut app,
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: ch,
-            color: [1.0, 0.0, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
         },
     ) {
         CommandResult::OkWithId { uuid } => uuid,

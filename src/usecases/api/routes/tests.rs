@@ -135,11 +135,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_state_ndi() {
-        let (status, json) = get_json(router_with_state(), "/api/state/ndi").await;
+    async fn test_state_sources() {
+        let (status, json) = get_json(router_with_state(), "/api/state/sources").await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(json["available"], true);
-        assert_eq!(json["sources"][0], "OBS");
+        assert_eq!(json[0]["type"], "Ndi");
+        assert_eq!(json[0]["available"], true);
+        assert_eq!(json[0]["library"]["entries"][0]["label"], "OBS");
     }
 
     #[tokio::test]
@@ -284,21 +285,6 @@ mod tests {
         assert!(json["devices"].is_array());
     }
 
-    #[tokio::test]
-    async fn test_state_syphon() {
-        let (status, json) = get_json(router_with_state(), "/api/state/syphon").await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(json["available"], false);
-        assert!(json["sources"].is_array());
-    }
-
-    #[tokio::test]
-    async fn test_state_streams() {
-        let (status, json) = get_json(router_with_state(), "/api/state/streams").await;
-        assert_eq!(status, StatusCode::OK);
-        assert!(json.is_array());
-    }
-
     // ── Scene routes ────────────────────────────────────────────────
 
     #[tokio::test]
@@ -310,7 +296,6 @@ mod tests {
         assert!(json["master_effects"].is_array());
         assert!(json["modulation"].is_object());
         assert!(json["sequences"].is_array());
-        assert!(json["streams"].is_array());
     }
 
     #[tokio::test]
@@ -384,13 +369,6 @@ mod tests {
     #[tokio::test]
     async fn test_scene_sequences() {
         let (status, json) = get_json(router_with_state(), "/api/scene/sequences").await;
-        assert_eq!(status, StatusCode::OK);
-        assert!(json.is_array());
-    }
-
-    #[tokio::test]
-    async fn test_scene_streams() {
-        let (status, json) = get_json(router_with_state(), "/api/scene/streams").await;
         assert_eq!(status, StatusCode::OK);
         assert!(json.is_array());
     }
@@ -481,7 +459,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_library_ndi() {
+    async fn deprecated_library_ndi_lists_the_ndi_entries() {
         let (status, json) = get_json(router_with_state(), "/api/library/ndi").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json[0]["name"], "OBS");
@@ -2130,13 +2108,24 @@ mod tests {
     #[tokio::test]
     async fn gui_parity_state_routes_serve_their_subtrees() {
         let mut state = make_test_state();
-        state
-            .libraries
-            .hls
-            .push(crate::engine::types::StreamLibraryEntrySnapshot {
-                url: "https://example.invalid/a.m3u8".into(),
-                connected: true,
-            });
+        let mut hls = crate::engine::value::source::SourceTypeSnapshot {
+            source_type: "Hls".into(),
+            label: "HLS".into(),
+            icon: String::new(),
+            available: true,
+            unavailable_reason: None,
+            listed: true,
+            params: vec![],
+            library: crate::engine::value::source::LibrarySection::default(),
+        };
+        let mut entry = crate::engine::value::source::LibraryEntry::new(
+            "a.m3u8",
+            crate::engine::value::source::SourceConfig::new("Hls")
+                .with("url", "https://example.invalid/a.m3u8"),
+        );
+        entry.connected = Some(true);
+        hls.library.entries.push(entry);
+        std::sync::Arc::make_mut(&mut state.sources).push(hls);
         state.presets.deck.push("Warm".into());
         state.render.width = 1280;
         state.system.gpu.name = "Test GPU".into();
@@ -2147,10 +2136,21 @@ mod tests {
             )),
         };
         let router = crate::usecases::api::runner::build_router(shared);
-        let (status, json) = get_json(router.clone(), "/api/state/libraries").await;
+        let (status, json) = get_json(router.clone(), "/api/state/sources").await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(json["hls"][0]["url"], "https://example.invalid/a.m3u8");
-        assert_eq!(json["hls"][0]["connected"], true);
+        let hls = json
+            .as_array()
+            .and_then(|types| types.iter().find(|t| t["type"] == "Hls"))
+            .expect("the HLS source type");
+        let entry = &hls["library"]["entries"][0];
+        assert_eq!(entry["config"]["url"], "https://example.invalid/a.m3u8");
+        assert_eq!(entry["connected"], true);
+        let (status, json) = get_json(router.clone(), "/api/library/sources").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            json.as_array()
+                .is_some_and(|types| types.iter().any(|t| t["type"] == "Hls"))
+        );
         let (_, json) = get_json(router.clone(), "/api/state/presets").await;
         assert_eq!(json["deck"][0], "Warm");
         let (_, json) = get_json(router.clone(), "/api/state/render").await;
@@ -3998,7 +3998,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_video_transport_sync_carries_all_mapping_fields() {
+    async fn deprecated_transport_sync_writes_the_three_chase_controls() {
+        use crate::engine::value::source::SourceValue::Float;
         let (app, seen) = router_capturing_commands();
         let (status, _) = put_json(
             app,
@@ -4011,19 +4012,54 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
+        let writes: Vec<(String, String, crate::engine::value::source::SourceValue)> = seen
+            .lock()
+            .unwrap()
+            .drain(..)
+            .map(|cmd| match cmd {
+                crate::engine::EngineCommand::SetSourceParam {
+                    deck_uuid,
+                    name,
+                    value,
+                } => (deck_uuid, name, value),
+                other => panic!("unexpected command: {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            writes,
+            vec![
+                ("dk-007".into(), "chase".into(), Float(0.5)),
+                ("dk-007".into(), "chase_offset".into(), Float(3600.25)),
+                ("dk-007".into(), "chase_delay".into(), Float(-3.0)),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_deck_creation_carries_parent_channel_uuid() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = post_json(
+            app,
+            "/api/channels/ch-042/decks",
+            serde_json::json!({"type": "Shader", "name": "Sine"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
         match take_command(&seen) {
-            crate::engine::EngineCommand::VideoSetTransportSync { deck_uuid, sync } => {
-                assert_eq!(deck_uuid, "dk-007");
-                assert_eq!(sync.mode, crate::video::TransportSyncMode::Always);
-                assert!((sync.offset - 3600.25).abs() < 1e-9);
-                assert_eq!(sync.delay_frames, -3);
+            crate::engine::EngineCommand::AddDeck {
+                channel_uuid,
+                source,
+            } => {
+                assert_eq!(channel_uuid, "ch-042");
+                assert_eq!(source.source_type(), "Shader");
+                assert_eq!(source.str("name"), Some("Sine"));
             }
             other => panic!("unexpected command: {other:?}"),
         }
     }
 
     #[tokio::test]
-    async fn test_deck_creation_carries_parent_channel_uuid() {
+    async fn deprecated_shader_deck_route_sends_the_generic_command() {
         let (app, seen) = router_capturing_commands();
         let (status, _) = post_json(
             app,
@@ -4035,13 +4071,77 @@ mod tests {
         match take_command(&seen) {
             crate::engine::EngineCommand::AddDeck {
                 channel_uuid,
-                shader_name,
+                source,
             } => {
                 assert_eq!(channel_uuid, "ch-042");
-                assert_eq!(shader_name, "Sine");
+                assert_eq!(source.source_type(), "Shader");
+                assert_eq!(source.str("name"), Some("Sine"));
             }
             other => panic!("unexpected command: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn source_param_route_carries_name_and_value() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = put_json(
+            app,
+            "/api/decks/dk-007/source/params/speed",
+            serde_json::json!({"value": 0.25}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::SetSourceParam {
+                deck_uuid,
+                name,
+                value,
+            } => {
+                assert_eq!(deck_uuid, "dk-007");
+                assert_eq!(name, "speed");
+                assert_eq!(
+                    value,
+                    crate::engine::value::source::SourceValue::Float(0.25)
+                );
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn source_library_entry_takes_its_type_from_the_path() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = post_json(
+            app,
+            "/api/sources/Hls/library",
+            serde_json::json!({"type": "Srt", "url": "https://example.invalid/a.m3u8"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::AddSourceLibraryEntry { entry } => {
+                assert_eq!(entry.source_type(), "Hls");
+                assert_eq!(entry.str("url"), Some("https://example.invalid/a.m3u8"));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn openapi_lists_every_registered_source_type() {
+        let doc = serde_json::to_value(crate::usecases::api::runner::api_doc()).unwrap();
+        let ids = &doc["components"]["schemas"]["SourceConfig"]["properties"]["type"]["enum"];
+        let ids: Vec<&str> = ids
+            .as_array()
+            .expect("SourceConfig.type documents its ids")
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+        for id in ["Shader", "Image", "Video", "SolidColor", "Tap"] {
+            assert!(ids.contains(&id), "{id} missing from {ids:?}");
+        }
+        let alias = &doc["paths"]["/api/channels/{channel_uuid}/decks/shader"]["post"];
+        assert_eq!(alias["deprecated"], true);
     }
 
     #[tokio::test]

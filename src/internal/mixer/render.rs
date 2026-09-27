@@ -25,30 +25,6 @@ impl std::ops::Deref for CompositingOpacities {
         }
     }
 }
-
-/// Resolve one deck-scoped modulation key, or `None` when nothing is assigned.
-///
-/// `scratch` is reused across every deck and every frame, so a pass over a scene
-/// full of video decks allocates nothing in the steady state. The
-/// `has_modulation` check comes first because the overwhelmingly common answer
-/// is "nothing", and answering it should not cost a resolve.
-fn resolve_deck_key(
-    modulation: &crate::modulation::ModulationEngine,
-    scratch: &mut String,
-    deck_uuid: &str,
-    relative: &str,
-) -> Option<crate::modulation::ResolvedModulation> {
-    scratch.clear();
-    scratch.push_str("deck/");
-    scratch.push_str(deck_uuid);
-    scratch.push('/');
-    scratch.push_str(relative);
-    if !modulation.has_modulation(scratch) {
-        return None;
-    }
-    Some(modulation.resolve(scratch, None))
-}
-
 impl Mixer {
     /// Resolve every timebase for this frame.
     ///
@@ -104,116 +80,28 @@ impl Mixer {
         }
     }
 
-    /// Let modulation drive video playback.
+    /// Give every deck's source its per-frame controls: modulation of its own
+    /// parameters, the transport a chasing clip servos against, residency,
+    /// and the rate the renderer presents at.
     ///
-    /// Speed and playhead go to the decode thread as levels, because they are
-    /// continuous and only the newest value matters. Play, loop mode, and
-    /// scaling mode are discrete, so they are written only when the option the
-    /// modulator points at differs from the one in force, which keeps a settled
-    /// modulator from generating any cross-thread traffic at all.
-    ///
-    /// Must run after [`crate::modulation::ModulationEngine::update`] and before
-    /// [`Self::publish_video_chase`], so a chasing clip weighs this frame's
-    /// modulation against this frame's transport rather than the next one's.
-    ///
-    /// See /spec/video-playback-modulation.md.
-    pub fn apply_video_modulation(&mut self, transport_running: bool) {
-        use crate::video::modulation as vm;
-
-        if !self.modulation.has_modulation_for_any() {
-            return;
-        }
+    /// Must run after [`crate::modulation::ModulationEngine::update`] and after
+    /// the arrangement, because whether a clip is chasing decides whether a
+    /// modulator may touch its playhead, and the arrangement is what puts a
+    /// deck to sleep. See /spec/video-playback-modulation.md.
+    pub fn control_sources(
+        &mut self,
+        transport: Option<crate::timebase::TransportSample>,
+        target_fps: u32,
+    ) {
         // Disjoint field borrows: the engine is read while the decks it drives
         // are written.
         let modulation = &self.modulation;
-        let mut key = String::with_capacity(48);
-
+        let mut scratch = String::with_capacity(48);
         for channel in &mut self.channels {
             for slot in &mut channel.decks {
-                // A sleeping clip is frozen rather than played on silently, so
-                // nothing may drive it: the same show position has to look the
-                // same on the second run. See /spec/deck-residency.md.
                 let awake = slot.source_demand.wants_frames();
-                let mut scaling = None;
-
-                {
-                    let deck = &slot.deck;
-                    let deck_uuid = deck.uuid();
-
-                    // Scaling is a property of any deck with a source texture,
-                    // not just a video one.
-                    if let (Some(current), Some(resolved)) = (
-                        deck.scaling_mode(),
-                        resolve_deck_key(modulation, &mut key, deck_uuid, vm::SCALING_MODE),
-                    ) {
-                        let next =
-                            crate::deck::ScalingMode::from_value(vm::discrete_value(&resolved));
-                        if next != current {
-                            scaling = Some(next);
-                        }
-                    }
-
-                    if let Some(snap) = deck.playback_snapshot() {
-                        // The servo owns the timeline while chasing, so neither
-                        // rate nor playhead is a modulator's to hold there. See
-                        // /spec/video-playback-modulation.md § Authority.
-                        let chasing = deck
-                            .video_transport_sync()
-                            .is_some_and(|s| s.mode.is_chasing(transport_running));
-
-                        let speed = if chasing {
-                            None
-                        } else {
-                            resolve_deck_key(modulation, &mut key, deck_uuid, vm::SPEED)
-                                .map(|r| vm::effective_speed(snap.speed, &r))
-                        };
-
-                        let position =
-                            if chasing {
-                                vm::PositionTarget::Free
-                            } else {
-                                resolve_deck_key(modulation, &mut key, deck_uuid, vm::POSITION)
-                                    .map_or(vm::PositionTarget::Free, |r| {
-                                        vm::position_target(
-                                            &r,
-                                            snap.in_point,
-                                            snap.effective_out(),
-                                            snap.duration,
-                                        )
-                                    })
-                            };
-
-                        deck.publish_video_modulation(if awake {
-                            vm::PlaybackModulation { speed, position }
-                        } else {
-                            vm::PlaybackModulation::default()
-                        });
-
-                        if awake {
-                            if let Some(r) =
-                                resolve_deck_key(modulation, &mut key, deck_uuid, vm::PLAY)
-                            {
-                                let want = vm::play_gate(&r, snap.playing);
-                                if want != snap.playing {
-                                    deck.video_set_playing(want);
-                                }
-                            }
-                            if let Some(r) =
-                                resolve_deck_key(modulation, &mut key, deck_uuid, vm::LOOP_MODE)
-                            {
-                                let next =
-                                    crate::video::LoopMode::from_value(vm::discrete_value(&r));
-                                if next != snap.loop_mode {
-                                    deck.video_set_loop_mode(next);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if let Some(mode) = scaling {
-                    slot.deck.set_scaling_mode(mode);
-                }
+                slot.deck
+                    .control_source(modulation, awake, transport, target_fps, &mut scratch);
             }
         }
     }
@@ -524,7 +412,7 @@ impl Mixer {
         self.apply_arrangement(transport, preview_channels);
         // Last, because whether a clip is chasing decides whether a modulator
         // may touch its playhead, and the arrangement is what puts it to sleep.
-        self.apply_video_modulation(transport.is_some_and(|t| t.running));
+        self.control_sources(transport, target_fps);
         let modulation_us = t_modulation.elapsed().as_micros();
 
         // Compute effective opacity per channel (stack-allocated for the common 2-channel case)
@@ -544,31 +432,20 @@ impl Mixer {
             &n_ch_buf
         };
 
-        // Always tick video frames on every channel so players stay in sync
-        // even when a channel is fully faded out by the crossfader.
-        // Uses a dedicated encoder for double-buffered staging uploads
-        // (copy_buffer_to_texture) to avoid per-frame staging allocation stalls.
-        // The finished command buffer is NOT submitted here — it is passed as a
-        // prefix to the first channel's deck submit, eliminating a separate
-        // queue.submit() call that would stall under GPU pressure.
+        // Upload every awake deck's source frames on every channel, so players
+        // stay in sync even when a channel is fully faded out by the crossfader.
+        // One encoder for the double-buffered staging uploads, not submitted
+        // here: it is passed as a prefix to the first channel's deck submit,
+        // which saves a queue.submit() that would stall under GPU pressure.
         let t_video_tick = std::time::Instant::now();
-        let chase = transport.map_or_else(crate::video::VideoChaseBroadcast::default, |t| {
-            crate::video::VideoChaseBroadcast {
-                position: t.position,
-                running: t.running,
-                fps: t.fps,
-            }
-        });
-        let chase_disc = transport.is_some_and(|t| t.discontinuity);
-        self.publish_video_chase(chase, chase_disc);
         let mut video_encoder =
             context
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Video Upload Encoder"),
+                    label: Some("Source Upload Encoder"),
                 });
         for channel in &mut self.channels {
-            channel.tick_video_frames(&mut video_encoder, target_fps);
+            channel.upload_sources(&mut video_encoder);
         }
         let mut prefix_cmds = vec![video_encoder.finish()];
         let video_tick_us = t_video_tick.elapsed().as_micros();
@@ -647,7 +524,7 @@ impl Mixer {
         // included the video upload commands. map_async can complete
         // synchronously on Metal/UMA so must not be called before that submit.
         for channel in &mut self.channels {
-            channel.request_video_remap();
+            channel.after_source_submit();
         }
 
         // GPU profiling: drain remaining channel GPU work (per-channel drains

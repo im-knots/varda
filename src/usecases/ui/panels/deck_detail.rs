@@ -1,23 +1,23 @@
 //! Deck detail: the bottom-bar mode shown when a deck is selected.
 
 use super::super::{
-    DeckUIInfo, DepthPreproUI, EffectDrag, LibraryDrag, ParamUIInfo, PointCloudUI, ScreenCaptureUI,
-    TapUI, UIActions, UIData, widgets,
+    DeckUIInfo, DepthPreproUI, EffectDrag, LibraryDrag, ParamUIInfo, UIActions, UIData, widgets,
 };
 use super::utils::{
     channel_color, format_time, render_collapsed_column, render_effect_drag_ghost,
     render_effect_drag_handle, render_effect_drop_zone,
 };
+use crate::BlendMode;
 use crate::channel::DeckRenderFps;
 use crate::engine::EngineCommand;
 use crate::engine::value::param::{DeckTarget, ParamAddress};
+use crate::engine::value::source::{SourceParamKind, SourceParamSpec, SourceValue, WidgetHint};
 use crate::modulation::DEFAULT_ASSIGNMENT_AMOUNT;
 use crate::params::ParamValue;
-use crate::{BlendMode, ScalingMode};
 
-/// The `〰` dropdown for one of a video deck's playback controls.
+/// The `〰` dropdown for one of a deck source's modulatable controls.
 ///
-/// Playback targets are deck built-ins (`deck/<uuid>/video/speed`, ...) rather
+/// Source controls are deck built-ins (`deck/<uuid>/video/speed`, ...) rather
 /// than `ParamUIInfo` rows, so they are addressed the way a channel fader is.
 /// See /spec/video-playback-modulation.md § Key naming.
 fn playback_mod_menu(
@@ -37,14 +37,13 @@ fn playback_mod_menu(
     );
 }
 
-/// The colour of the first modulator driving `name` on this deck, or `None` when
-/// nothing is assigned to it.
+/// The colour of the first modulator driving the parameter at `key`, or
+/// `None` when nothing is assigned to it.
 ///
 /// The colour has to match the card in the modulation panel, so the index comes
 /// from the unfiltered source list.
-fn playback_mod_color(deck_uuid: &str, target: DeckTarget, data: &UIData) -> Option<egui::Color32> {
-    let key = ParamAddress::deck(deck_uuid, target).to_string();
-    let first = data.modulation_assignments.get(&key)?.first()?;
+fn mod_color_for_key(key: &str, data: &UIData) -> Option<egui::Color32> {
+    let first = data.modulation_assignments.get(key)?.first()?;
     let idx = data
         .modulation_sources
         .iter()
@@ -127,78 +126,6 @@ fn learn_overlay(
     }
 }
 
-/// Render point-cloud controls for a depth-sensor deck. Values are sent
-/// normalized (0.0–1.0) through the generic `deck/<uuid>/depth/<name>` param
-/// path, matching the router in `src/internal/param_router.rs`. See
-/// spec/depth-sensors.md.
-fn render_depth_controls(
-    ui: &mut egui::Ui,
-    deck: &DeckUIInfo,
-    pc: &PointCloudUI,
-    data: &UIData,
-    actions: &mut UIActions,
-) {
-    ui.separator();
-    ui.label(egui::RichText::new("🛰 Point Cloud").strong().size(12.0));
-
-    // (label, param name, current normalized value)
-    let sliders: [(&str, &str, f32); 9] = [
-        ("Yaw", "orbit_yaw", pc.orbit_yaw),
-        ("Pitch", "orbit_pitch", pc.orbit_pitch),
-        ("Zoom", "zoom", pc.zoom),
-        ("Points", "point_size", pc.point_size),
-        ("Near", "depth_min", pc.depth_min),
-        ("Far", "depth_max", pc.depth_max),
-        ("Seed", "seed", pc.seed),
-        ("Drift", "drift", pc.drift),
-        ("Disruption", "disruption", pc.disruption),
-    ];
-    for (label, name, current) in sliders {
-        let mut v = current;
-        ui.horizontal(|ui| {
-            ui.label(label);
-            let resp = ui.add(egui::Slider::new(&mut v, 0.0..=1.0).show_value(false));
-            if resp.changed() {
-                actions.commands.push(EngineCommand::SetParam {
-                    path: ParamAddress::deck(&deck.uuid, DeckTarget::depth(name)).to_string(),
-                    value: ParamValue::Float(v),
-                });
-            }
-            learn_overlay(
-                ui,
-                resp.rect,
-                ParamAddress::deck(&deck.uuid, DeckTarget::depth(name)).to_string(),
-                data,
-                actions,
-            );
-        });
-    }
-
-    // Color mode: 3 buckets mapped into the normalized 0..1 range.
-    ui.horizontal(|ui| {
-        ui.label("Color:");
-        let modes = ["RGB", "Depth", "Solid"];
-        let mut idx = usize::from(pc.color_mode).min(2);
-        let before = idx;
-        egui::ComboBox::from_id_salt("depth_color_combo")
-            .selected_text(modes[idx])
-            .width(70.0)
-            .show_ui(ui, |ui| {
-                for (i, m) in modes.iter().enumerate() {
-                    ui.selectable_value(&mut idx, i, *m);
-                }
-            });
-        if idx != before {
-            // Map bucket index to a normalized value that lands in that bucket.
-            let norm = (idx as f32 + 0.5) / 3.0;
-            actions.commands.push(EngineCommand::SetParam {
-                path: ParamAddress::deck(&deck.uuid, DeckTarget::depth("color_mode")).to_string(),
-                value: ParamValue::Float(norm),
-            });
-        }
-    });
-}
-
 /// Render depth-preprocessor controls for a deck whose shader declared a
 /// `depth_sensor` PREPROCESSOR. Values are sent normalized (0.0–1.0) through the
 /// generic `deck/<uuid>/depth_prepro/<name>` param path, matching the router in
@@ -269,197 +196,572 @@ fn render_depth_prepro_controls(
     });
 }
 
-/// Tap controls for the selected deck: which internal output it re-enters,
-/// plus the two things a performer has to know about feedback.
-/// See spec/program-tap.md.
-fn render_tap_controls(
+/// A source control's router path on this deck, when it has one.
+fn source_path(deck_uuid: &str, spec: &SourceParamSpec) -> Option<String> {
+    spec.route
+        .as_deref()
+        .map(|route| ParamAddress::deck(deck_uuid, DeckTarget::source(route)).to_string())
+}
+
+fn set_source(actions: &mut UIActions, deck_uuid: &str, name: &str, value: SourceValue) {
+    actions.commands.push(EngineCommand::SetSourceParam {
+        deck_uuid: deck_uuid.to_string(),
+        name: name.to_string(),
+        value,
+    });
+}
+
+/// The learn glow and the `〰` modulation menu a routed control gets.
+fn source_affordances(
     ui: &mut egui::Ui,
-    deck: &DeckUIInfo,
-    tap: &TapUI,
+    rect: egui::Rect,
+    deck_uuid: &str,
+    spec: &SourceParamSpec,
     data: &UIData,
     actions: &mut UIActions,
 ) {
-    ui.separator();
-    ui.label(egui::RichText::new("🔁 Tap").strong().size(12.0));
+    let Some(route) = spec.route.as_deref() else {
+        return;
+    };
+    learn_overlay(
+        ui,
+        rect,
+        ParamAddress::deck(deck_uuid, DeckTarget::source(route)).to_string(),
+        data,
+        actions,
+    );
+    if spec.modulatable {
+        playback_mod_menu(ui, deck_uuid, DeckTarget::source(route), data, actions);
+    }
+}
 
-    ui.horizontal(|ui| {
-        ui.label("Source:");
-        let selected = if tap.bound {
-            tap.label.clone()
-        } else {
-            format!("{} (missing)", tap.label)
-        };
-        let mut chosen: Option<crate::scene::TapSourceConfig> = None;
-        egui::ComboBox::from_id_salt("sel_deck_tap_source")
-            .selected_text(selected)
-            .width(160.0)
-            .show_ui(ui, |ui| {
-                if ui
-                    .selectable_label(tap.kind == "master_program", "Master Program")
-                    .clicked()
-                {
-                    chosen = Some(crate::scene::TapSourceConfig::MasterProgram);
+/// The current normalized value of a numeric control.
+fn norm(deck: &DeckUIInfo, name: &str) -> f32 {
+    deck.source
+        .status
+        .params
+        .get(name)
+        .and_then(SourceValue::as_f32)
+        .unwrap_or_default()
+}
+
+/// One source control, drawn from its kind.
+fn source_param(
+    ui: &mut egui::Ui,
+    deck: &DeckUIInfo,
+    spec: &SourceParamSpec,
+    data: &UIData,
+    actions: &mut UIActions,
+) {
+    let uuid = deck.uuid.as_str();
+    let current = deck.source.status.params.get(&spec.name);
+    match &spec.kind {
+        SourceParamKind::Float {
+            display_min,
+            display_max,
+            unit,
+        } => {
+            ui.horizontal(|ui| {
+                ui.label(&spec.label);
+                let mut v = norm(deck, &spec.name);
+                let resp = ui.add(egui::Slider::new(&mut v, 0.0..=1.0).show_value(false));
+                if resp.changed() {
+                    set_source(actions, uuid, &spec.name, SourceValue::Float(v));
                 }
-                for ch in &data.channels {
-                    let is_current = tap.channel_uuid.as_deref() == Some(ch.uuid.as_str());
-                    if ui
-                        .selectable_label(is_current, format!("{} ({})", ch.name, ch.uuid))
-                        .clicked()
-                    {
-                        chosen = Some(crate::scene::TapSourceConfig::Channel {
-                            uuid: ch.uuid.clone(),
-                        });
-                    }
-                }
-            });
-        if let Some(source) = chosen {
-            actions.commands.push(EngineCommand::SetTapSource {
-                deck_uuid: deck.uuid.clone(),
-                source,
+                let shown = deck
+                    .source
+                    .status
+                    .display
+                    .get(&spec.name)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        let value = display_min + v * (display_max - display_min);
+                        match unit {
+                            Some(unit) => format!("{value:.2} {unit}"),
+                            None => format!("{value:.2}"),
+                        }
+                    });
+                ui.label(egui::RichText::new(shown).small().weak());
+                source_affordances(ui, resp.rect, uuid, spec, data, actions);
             });
         }
-    });
+        SourceParamKind::Toggle => {
+            ui.horizontal(|ui| {
+                let mut on = current.and_then(SourceValue::as_f32).unwrap_or_default() > 0.5;
+                let resp = ui.checkbox(&mut on, &spec.label);
+                if resp.changed() {
+                    set_source(actions, uuid, &spec.name, SourceValue::Bool(on));
+                }
+                source_affordances(ui, resp.rect, uuid, spec, data, actions);
+            });
+        }
+        SourceParamKind::Choice { options } => {
+            ui.horizontal(|ui| {
+                ui.label(format!("{}:", spec.label));
+                let n = options.len().max(1);
+                let index = ((norm(deck, &spec.name) * n as f32).floor() as usize).min(n - 1);
+                let mut chosen = index;
+                let combo = egui::ComboBox::from_id_salt(("source_choice", uuid, &spec.name))
+                    .selected_text(options.get(index).cloned().unwrap_or_default())
+                    .width(90.0)
+                    .show_ui(ui, |ui| {
+                        for (i, option) in options.iter().enumerate() {
+                            ui.selectable_value(&mut chosen, i, option);
+                        }
+                    });
+                if chosen != index {
+                    let value = (chosen as f32 + 0.5) / n as f32;
+                    set_source(actions, uuid, &spec.name, SourceValue::Float(value));
+                }
+                source_affordances(ui, combo.response.rect, uuid, spec, data, actions);
+            });
+        }
+        SourceParamKind::Color => {
+            ui.horizontal(|ui| {
+                ui.label(&spec.label);
+                let mut rgba = match current {
+                    Some(SourceValue::Color(c)) => *c,
+                    _ => [0.0, 0.0, 0.0, 1.0],
+                };
+                if ui.color_edit_button_rgba_unmultiplied(&mut rgba).changed() {
+                    set_source(actions, uuid, &spec.name, SourceValue::Color(rgba));
+                }
+            });
+        }
+        SourceParamKind::Text => {
+            ui.horizontal(|ui| {
+                ui.label(format!("{}:", spec.label));
+                let id = ui.id().with(("source_text", uuid, &spec.name));
+                let mut text: String = ui.data(|d| d.get_temp(id)).unwrap_or_else(|| {
+                    current
+                        .and_then(SourceValue::as_str)
+                        .unwrap_or_default()
+                        .to_string()
+                });
+                let resp = ui.text_edit_singleline(&mut text);
+                if resp.lost_focus() {
+                    set_source(actions, uuid, &spec.name, SourceValue::Text(text.clone()));
+                    ui.data_mut(|d| d.remove::<String>(id));
+                } else {
+                    ui.data_mut(|d| d.insert_temp(id, text));
+                }
+            });
+        }
+        SourceParamKind::Number { unit, step } => {
+            ui.horizontal(|ui| {
+                ui.label(format!("{}:", spec.label));
+                let mut v = current.and_then(SourceValue::as_f32).unwrap_or_default();
+                let mut drag = egui::DragValue::new(&mut v).speed(*step);
+                if let Some(unit) = unit {
+                    drag = drag.suffix(format!(" {unit}"));
+                }
+                if ui.add(drag).changed() {
+                    set_source(actions, uuid, &spec.name, SourceValue::Float(v));
+                }
+            });
+        }
+        SourceParamKind::Action => {
+            let label = if spec.name == "interactive" && deck.is_interactive {
+                format!("Exit {}", spec.label)
+            } else {
+                spec.label.clone()
+            };
+            let resp = ui.button(label);
+            if resp.clicked() {
+                actions.commands.push(EngineCommand::TriggerSourceAction {
+                    deck_uuid: uuid.to_string(),
+                    action: spec.name.clone(),
+                });
+            }
+            source_affordances(ui, resp.rect, uuid, spec, data, actions);
+        }
+    }
+}
 
-    if !tap.bound {
-        ui.colored_label(
-            egui::Color32::from_rgb(220, 160, 60),
-            "Tapped channel no longer exists — showing black.",
+/// The crop rectangle a `CropRect` hint groups: a row per edge (the column is
+/// too narrow for four sliders side by side) and a reset to the full frame.
+fn crop_widget(
+    ui: &mut egui::Ui,
+    deck: &DeckUIInfo,
+    specs: &[&SourceParamSpec],
+    data: &UIData,
+    actions: &mut UIActions,
+) {
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Crop").strong());
+        if ui.small_button("Reset").clicked() {
+            for spec in specs {
+                // A crop's size resets to the whole frame, its origin to zero.
+                let full = spec.name.ends_with("_w") || spec.name.ends_with("_h");
+                set_source(
+                    actions,
+                    &deck.uuid,
+                    &spec.name,
+                    SourceValue::Float(if full { 1.0 } else { 0.0 }),
+                );
+            }
+        }
+    });
+    for spec in specs {
+        source_param(ui, deck, spec, data, actions);
+    }
+}
+
+/// A clip transport: play, scrub, speed and loop, the show-transport chase,
+/// and the in/out range. Reads the info keys `WidgetHint::Transport` names.
+fn transport_widget(
+    ui: &mut egui::Ui,
+    deck: &DeckUIInfo,
+    specs: &[&SourceParamSpec],
+    data: &UIData,
+    actions: &mut UIActions,
+) {
+    let info = &deck.source.status.info;
+    let num = |key: &str| {
+        info.get(key)
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or_default()
+    };
+    let spec = |name: &str| specs.iter().copied().find(|s| s.name == name);
+    let uuid = deck.uuid.as_str();
+    let duration = num("duration").max(0.001);
+    let position = num("position");
+    let playing = info
+        .get("playing")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let sync_mode = info
+        .get("transport_sync")
+        .and_then(|s| s.get("mode"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("Auto");
+    let chasing_now = match sync_mode {
+        "Always" => true,
+        "Never" => false,
+        _ => data.transport.running,
+    };
+
+    ui.label(egui::RichText::new("▶ Playback").strong());
+    if let Some(play) = spec("play") {
+        ui.horizontal(|ui| {
+            let resp = ui.button(if playing { "⏸ Pause" } else { "▶ Play" });
+            if resp.clicked() {
+                set_source(actions, uuid, &play.name, SourceValue::Bool(!playing));
+            }
+            source_affordances(ui, resp.rect, uuid, play, data, actions);
+        });
+    }
+
+    // The handle rides the live playhead, so the ghost marks the opposite
+    // thing: the point the modulator is swinging around.
+    if let Some(pos_spec) = spec("position") {
+        let mut pos = position as f32;
+        ui.horizontal(|ui| {
+            ui.label(format_time(position));
+            let resp = ui.add(
+                egui::Slider::new(&mut pos, 0.0..=duration as f32)
+                    .show_value(false)
+                    .trailing_fill(true),
+            );
+            if resp.changed() {
+                set_source(
+                    actions,
+                    uuid,
+                    &pos_spec.name,
+                    SourceValue::Float((f64::from(pos) / duration) as f32),
+                );
+            }
+            if let Some(path) = source_path(uuid, pos_spec)
+                && let Some(color) = mod_color_for_key(&path, data)
+            {
+                let anchor = position - num("position_offset");
+                let track = slider_track(ui, resp.rect, false);
+                draw_slider_ghost(ui, track, anchor as f32, 0.0..=duration as f32, color);
+            }
+            ui.label(format_time(duration));
+            source_affordances(ui, resp.rect, uuid, pos_spec, data, actions);
+        });
+    }
+
+    // The slider stays on the set point, so the ghost is the only thing
+    // showing the live rate.
+    if let Some(speed_spec) = spec("speed")
+        && let SourceParamKind::Float {
+            display_min,
+            display_max,
+            ..
+        } = speed_spec.kind
+    {
+        let mut speed = num("speed") as f32;
+        ui.horizontal(|ui| {
+            ui.label("Speed:");
+            let resp = ui.add(
+                egui::Slider::new(&mut speed, display_min..=display_max)
+                    .step_by(0.05)
+                    .suffix("x"),
+            );
+            if resp.changed() {
+                let v = (speed - display_min) / (display_max - display_min);
+                set_source(actions, uuid, &speed_spec.name, SourceValue::Float(v));
+            }
+            if let Some(path) = source_path(uuid, speed_spec)
+                && let Some(color) = mod_color_for_key(&path, data)
+            {
+                let track = slider_track(ui, resp.rect, true);
+                draw_slider_ghost(
+                    ui,
+                    track,
+                    num("effective_speed") as f32,
+                    display_min..=display_max,
+                    color,
+                );
+            }
+            source_affordances(ui, resp.rect, uuid, speed_spec, data, actions);
+        });
+    }
+
+    if let Some(loop_spec) = spec("loop_mode") {
+        source_param(ui, deck, loop_spec, data, actions);
+    }
+
+    if chasing_now {
+        ui.label(
+            egui::RichText::new("Loop is ignored while chasing the transport")
+                .small()
+                .weak(),
+        );
+        // Two authorities on one value is the seek storm this design avoids,
+        // so say which one wins rather than letting it look broken.
+        let held = [("Playhead", spec("position")), ("Speed", spec("speed"))]
+            .into_iter()
+            .filter(|(_, s)| {
+                s.and_then(|s| source_path(uuid, s))
+                    .is_some_and(|path| mod_color_for_key(&path, data).is_some())
+            })
+            .map(|(label, _)| label)
+            .collect::<Vec<_>>();
+        if !held.is_empty() {
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} modulation is ignored while chasing — set Chase to Never to use it",
+                    held.join(" and ")
+                ))
+                .small()
+                .weak(),
+            );
+        }
+    }
+
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new("⏱ Transport").strong());
+    for name in ["chase", "chase_offset", "chase_delay"] {
+        if let Some(s) = spec(name) {
+            source_param(ui, deck, s, data, actions);
+        }
+    }
+
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new("📐 In/Out Points").strong());
+    let in_point = num("in_point");
+    let out_point = num("out_point");
+    let effective_out = if out_point > 0.0 { out_point } else { duration };
+    let has_range = in_point > 0.0 || out_point > 0.0;
+    for (name, label, secs) in [
+        ("in_point", "In:", in_point),
+        ("out_point", "Out:", effective_out),
+    ] {
+        let Some(point) = spec(name) else { continue };
+        let mut v = secs as f32;
+        ui.horizontal(|ui| {
+            ui.label(label);
+            let resp = ui.add(
+                egui::Slider::new(&mut v, 0.0..=duration as f32)
+                    .show_value(false)
+                    .trailing_fill(true),
+            );
+            if resp.changed() {
+                set_source(
+                    actions,
+                    uuid,
+                    &point.name,
+                    SourceValue::Float((f64::from(v) / duration) as f32),
+                );
+            }
+            source_affordances(ui, resp.rect, uuid, point, data, actions);
+            ui.label(format_time(f64::from(v)));
+        });
+    }
+    ui.horizontal(|ui| {
+        let here = SourceValue::Float((position / duration) as f32);
+        if let Some(point) = spec("in_point")
+            && ui
+                .small_button("[ Set In")
+                .on_hover_text("Set in-point to current position")
+                .clicked()
+        {
+            set_source(actions, uuid, &point.name, here.clone());
+        }
+        if let Some(point) = spec("out_point")
+            && ui
+                .small_button("Set Out ]")
+                .on_hover_text("Set out-point to current position")
+                .clicked()
+        {
+            set_source(actions, uuid, &point.name, here);
+        }
+        // Clear is always shown (disabled when no range) so it stays MIDI/keyboard-mappable.
+        if let Some(clear) = spec("clear") {
+            let resp = ui
+                .add_enabled(has_range, egui::Button::new("x Clear").small())
+                .on_hover_text("Reset to full clip");
+            if resp.clicked() {
+                actions.commands.push(EngineCommand::TriggerSourceAction {
+                    deck_uuid: uuid.to_string(),
+                    action: clear.name.clone(),
+                });
+            }
+            source_affordances(ui, resp.rect, uuid, clear, data, actions);
+        }
+    });
+    if has_range {
+        ui.label(
+            egui::RichText::new(format!(
+                "Range: {} → {} ({})",
+                format_time(in_point),
+                format_time(effective_out),
+                format_time(effective_out - in_point),
+            ))
+            .small()
+            .weak(),
         );
     }
     ui.label(
-        egui::RichText::new(
-            "Shows the previous frame. Feedback above 1.0 opacity on an additive \
-             blend grows without limit — the tonemap rolls it off, it is not clamped.",
-        )
+        egui::RichText::new(format!(
+            "{:.0} fps • {}",
+            num("frame_rate"),
+            format_time(duration)
+        ))
         .small()
         .weak(),
     );
 }
 
-/// Screen-capture controls for the selected deck: rate, crop, cursor, and
-/// (for display targets) Varda-window exclusion. See spec/screen-capture.md.
-fn render_capture_controls(
+/// The deck's source controls: whatever its type declares, grouped by the
+/// widget hints it uses. See /spec/deck-source-providers.md Decision 8.
+fn render_source_column(
     ui: &mut egui::Ui,
     deck: &DeckUIInfo,
-    capture: &ScreenCaptureUI,
     data: &UIData,
     actions: &mut UIActions,
 ) {
-    let send = |actions: &mut UIActions, name: &str, value: f32| {
-        actions.commands.push(EngineCommand::SetParam {
-            path: ParamAddress::deck(&deck.uuid, DeckTarget::capture(name)).to_string(),
-            value: ParamValue::Float(value),
-        });
+    let Some(ty) = data.source_type(&deck.source.source_type) else {
+        return;
     };
-
-    ui.separator();
-    ui.label(
-        egui::RichText::new(format!("🖥 Screen Capture — {}", capture.target_label))
-            .strong()
-            .size(12.0),
-    );
-    if !capture.bound {
-        ui.colored_label(
-            egui::Color32::from_rgb(220, 160, 60),
-            "Target not found — showing black. Reopen the target and rescan.",
-        );
-    } else if !capture.connected {
-        ui.colored_label(egui::Color32::GRAY, "Waiting for frames…");
+    let status = &deck.source.status;
+    // A type with no controls of its own (a shader, whose inputs are in the
+    // params column) and nothing to report gets no column, so the effect
+    // chain stays where it was on a narrow screen.
+    let has_status =
+        !deck.source.available || status.bound == Some(false) || status.connected == Some(false);
+    if ty.params.is_empty() && !has_status {
+        return;
     }
+    egui::Frame::default()
+        .inner_margin(6.0)
+        .corner_radius(4.0)
+        .fill(ui.visuals().faint_bg_color)
+        .show(ui, |ui| {
+            ui.set_min_width(200.0);
+            ui.set_max_width(280.0);
+            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                ui.label(egui::RichText::new(format!("{} {}", ty.icon, ty.label)).strong());
+                if !deck.source.available {
+                    let reason = status
+                        .info
+                        .get("unavailable_reason")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("This source cannot run here");
+                    ui.colored_label(
+                        egui::Color32::from_rgb(220, 160, 60),
+                        format!("{reason} — showing black. Its settings are kept."),
+                    );
+                    return;
+                }
+                if status.bound == Some(false) {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(220, 160, 60),
+                        "Not bound — showing black until what it reads comes back.",
+                    );
+                } else if status.connected == Some(false) {
+                    ui.colored_label(egui::Color32::GRAY, "Waiting for frames…");
+                }
 
-    ui.horizontal(|ui| {
-        ui.label("Rate:");
-        let mut rate = capture.rate;
-        let resp = ui.add(egui::Slider::new(&mut rate, 0.0..=1.0).show_value(false));
-        if resp.changed() {
-            send(actions, "rate", rate);
-        }
-        ui.label(format!("{:.0} fps", capture.rate_fps));
-        learn_overlay(
-            ui,
-            resp.rect,
-            ParamAddress::deck(&deck.uuid, DeckTarget::capture("rate")).to_string(),
-            data,
-            actions,
-        );
-    });
+                // Repoint the deck at another entry of its own type (another
+                // camera, another tap point), keeping its effects and mappings.
+                if ty.library.entries.len() > 1 {
+                    ui.horizontal(|ui| {
+                        ui.label("Source:");
+                        let mut chosen = None;
+                        egui::ComboBox::from_id_salt(("source_repoint", &deck.uuid))
+                            .selected_text(&deck.name)
+                            .width(160.0)
+                            .show_ui(ui, |ui| {
+                                for entry in &ty.library.entries {
+                                    if ui.selectable_label(false, &entry.label).clicked() {
+                                        chosen = Some(entry.config.clone());
+                                    }
+                                }
+                            });
+                        if let Some(source) = chosen {
+                            actions.commands.push(EngineCommand::ReplaceDeckSource {
+                                deck_uuid: deck.uuid.clone(),
+                                source,
+                            });
+                        }
+                    });
+                }
 
-    // Crop is a sub-section of its own: the params column is only 200–280px, too
-    // narrow to hold four sliders side by side, so they get a row each. Labels stay
-    // single-character so every slider starts at the same x.
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("Crop").strong());
-        if ui.small_button("Reset").clicked() {
-            send(actions, "crop_x", 0.0);
-            send(actions, "crop_y", 0.0);
-            send(actions, "crop_w", 1.0);
-            send(actions, "crop_h", 1.0);
-        }
-    });
+                let mut transport = Vec::new();
+                let mut crop = Vec::new();
+                for spec in &ty.params {
+                    match spec.widget {
+                        Some(WidgetHint::Transport) => transport.push(spec),
+                        Some(WidgetHint::CropRect) => crop.push(spec),
+                        Some(WidgetHint::Orbit) | None => {}
+                    }
+                }
+                if !transport.is_empty() {
+                    transport_widget(ui, deck, &transport, data, actions);
+                    ui.add_space(4.0);
+                }
+                for spec in ty.params.iter().filter(|s| {
+                    !matches!(s.widget, Some(WidgetHint::Transport | WidgetHint::CropRect))
+                }) {
+                    source_param(ui, deck, spec, data, actions);
+                }
+                if !crop.is_empty() {
+                    crop_widget(ui, deck, &crop, data, actions);
+                }
 
-    let crop_sliders: [(&str, &str, f32); 4] = [
-        ("X", "crop_x", capture.crop[0]),
-        ("Y", "crop_y", capture.crop[1]),
-        ("W", "crop_w", capture.crop[2]),
-        ("H", "crop_h", capture.crop[3]),
-    ];
-    for (label, name, current) in crop_sliders {
-        let mut v = current;
-        ui.horizontal(|ui| {
-            ui.label(label);
-            let resp = ui.add(
-                egui::Slider::new(&mut v, 0.0..=1.0)
-                    .show_value(false)
-                    .fixed_decimals(2),
-            );
-            if resp.changed() {
-                send(actions, name, v);
-            }
-            learn_overlay(
-                ui,
-                resp.rect,
-                ParamAddress::deck(&deck.uuid, DeckTarget::capture(name)).to_string(),
-                data,
-                actions,
-            );
+                let mut transparent = deck.transparent;
+                let resp = ui.checkbox(&mut transparent, "Transparent BG");
+                if resp.changed() {
+                    actions.commands.push(EngineCommand::SetDeckTransparent {
+                        deck_uuid: deck.uuid.clone(),
+                        transparent,
+                    });
+                }
+                learn_overlay(
+                    ui,
+                    resp.rect,
+                    ParamAddress::deck(&deck.uuid, DeckTarget::Transparent).to_string(),
+                    data,
+                    actions,
+                );
+            });
         });
-    }
-
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        let mut cursor = capture.show_cursor;
-        let resp = ui.checkbox(&mut cursor, "Cursor");
-        if resp.changed() {
-            send(actions, "cursor", f32::from(u8::from(cursor)));
-        }
-        learn_overlay(
-            ui,
-            resp.rect,
-            ParamAddress::deck(&deck.uuid, DeckTarget::capture("cursor")).to_string(),
-            data,
-            actions,
-        );
-
-        // Only displays can contain Varda's own windows; for a window target
-        // the toggle would be a no-op, so it is not offered.
-        if capture.is_display {
-            let mut exclude = capture.exclude_varda;
-            let resp = ui
-                .checkbox(&mut exclude, "Exclude Varda")
-                .on_hover_text("Omit Varda's own windows from this display capture");
-            if resp.changed() {
-                send(actions, "exclude_varda", f32::from(u8::from(exclude)));
-            }
-            learn_overlay(
-                ui,
-                resp.rect,
-                ParamAddress::deck(&deck.uuid, DeckTarget::capture("exclude_varda")).to_string(),
-                data,
-                actions,
-            );
-        }
-    });
+    ui.separator();
 }
 
 /// A seed nobody has to choose.
@@ -681,317 +983,8 @@ pub(super) fn render_selected_deck_detail(
                 ui.separator();
             }
 
-            // Column: HTML source controls (only for HTML decks)
-            if deck.is_html {
-                egui::Frame::default()
-                    .inner_margin(6.0)
-                    .corner_radius(4.0)
-                    .fill(ui.visuals().faint_bg_color)
-                    .show(ui, |ui| {
-                        ui.set_min_width(140.0);
-                        ui.set_max_width(200.0);
-                        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                            ui.label(egui::RichText::new("🌐 HTML").strong());
-                            let reload_resp = ui.button("⟳ Reload");
-                            if reload_resp.clicked() {
-                                actions.commands.push(EngineCommand::ReloadHtmlDeck {
-                                    deck_uuid: deck.uuid.clone(),
-                                });
-                            }
-                            learn_overlay(
-                                ui,
-                                reload_resp.rect,
-                                ParamAddress::deck(&deck.uuid, DeckTarget::HtmlReload).to_string(),
-                                data,
-                                actions,
-                            );
-                            let interactive_label = if deck.is_html_interactive {
-                                "🖱 Exit Interactive"
-                            } else {
-                                "🖱 Interactive"
-                            };
-                            let interactive_resp = ui.button(interactive_label);
-                            if interactive_resp.clicked() {
-                                let cmd = if deck.is_html_interactive {
-                                    EngineCommand::CloseHtmlInteractive
-                                } else {
-                                    EngineCommand::OpenHtmlInteractive {
-                                        deck_uuid: deck.uuid.clone(),
-                                    }
-                                };
-                                actions.commands.push(cmd);
-                            }
-                            learn_overlay(
-                                ui,
-                                interactive_resp.rect,
-                                ParamAddress::deck(&deck.uuid, DeckTarget::HtmlInteractive).to_string(),
-                                data,
-                                actions,
-                            );
-                            let mut transparent = deck.transparent;
-                            let transparent_resp =
-                                ui.checkbox(&mut transparent, "Transparent BG");
-                            if transparent_resp.changed() {
-                                actions.commands.push(EngineCommand::SetDeckTransparent {
-                                    deck_uuid: deck.uuid.clone(),
-                                    transparent,
-                                });
-                            }
-                            learn_overlay(
-                                ui,
-                                transparent_resp.rect,
-                                ParamAddress::deck(&deck.uuid, DeckTarget::Transparent).to_string(),
-                                data,
-                                actions,
-                            );
-                        });
-                    });
-                ui.separator();
-            }
-
-            // Column: Video playback controls (only for video decks)
-            if let Some(ref vp) = deck.video_playback {
-                egui::Frame::default()
-                    .inner_margin(6.0)
-                    .corner_radius(4.0)
-                    .fill(ui.visuals().faint_bg_color)
-                    .show(ui, |ui| {
-                        ui.set_min_width(220.0);
-                        ui.set_max_width(280.0);
-                        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                            ui.label(egui::RichText::new("▶ Playback").strong());
-
-                            let chasing_now = vp.transport_sync.mode.is_chasing(data.transport.running);
-
-                            // Play/Pause button
-                            ui.horizontal(|ui| {
-                                let play_label = if vp.playing { "⏸ Pause" } else { "▶ Play" };
-                                let play_resp = ui.button(play_label);
-                                if play_resp.clicked() {
-                                    actions.commands.push(EngineCommand::VideoTogglePlay { deck_uuid: deck.uuid.clone() });
-                                }
-                                learn_overlay(ui, play_resp.rect, ParamAddress::deck(&deck.uuid, DeckTarget::VideoPlay).to_string(), data, actions);
-                                playback_mod_menu(ui, &deck.uuid, DeckTarget::VideoPlay, data, actions);
-                            });
-
-                            // Position scrub bar. The handle rides the live
-                            // playhead, so the ghost marks the opposite thing:
-                            // the point the modulator is swinging around.
-                            let duration = vp.duration.max(0.001);
-                            let mut pos = vp.position as f32;
-                            ui.horizontal(|ui| {
-                                ui.label(format_time(vp.position));
-                                let slider = egui::Slider::new(&mut pos, 0.0..=duration as f32)
-                                    .show_value(false)
-                                    .trailing_fill(true);
-                                let resp = ui.add(slider);
-                                if resp.changed() {
-                                    actions.commands.push(EngineCommand::VideoSeek { deck_uuid: deck.uuid.clone(), position_secs: f64::from(pos) });
-                                }
-                                if let Some(color) = playback_mod_color(&deck.uuid, DeckTarget::VideoPosition, data) {
-                                    let anchor = vp.position - vp.position_offset;
-                                    let track = slider_track(ui, resp.rect, false);
-                                    draw_slider_ghost(ui, track, anchor as f32, 0.0..=duration as f32, color);
-                                }
-                                learn_overlay(ui, resp.rect, ParamAddress::deck(&deck.uuid, DeckTarget::VideoPosition).to_string(), data, actions);
-                                ui.label(format_time(duration));
-                                playback_mod_menu(ui, &deck.uuid, DeckTarget::VideoPosition, data, actions);
-                            });
-
-                            // Speed control
-                            let mut speed = vp.speed as f32;
-                            ui.horizontal(|ui| {
-                                ui.label("Speed:");
-                                let resp = ui.add(egui::Slider::new(&mut speed, 0.1..=4.0).step_by(0.05).suffix("x"));
-                                if resp.changed() {
-                                    actions.commands.push(EngineCommand::VideoSetSpeed { deck_uuid: deck.uuid.clone(), speed: f64::from(speed) });
-                                }
-                                // The slider stays on the set point, so the
-                                // ghost is the only thing showing the live rate.
-                                if let Some(color) = playback_mod_color(&deck.uuid, DeckTarget::VideoSpeed, data) {
-                                    let track = slider_track(ui, resp.rect, true);
-                                    draw_slider_ghost(ui, track, vp.effective_speed as f32, 0.1..=4.0, color);
-                                }
-                                learn_overlay(ui, resp.rect, ParamAddress::deck(&deck.uuid, DeckTarget::VideoSpeed).to_string(), data, actions);
-                                playback_mod_menu(ui, &deck.uuid, DeckTarget::VideoSpeed, data, actions);
-                            });
-
-                            // Loop mode
-                            let loop_resp = ui.horizontal(|ui| {
-                                ui.label("Loop:");
-                                let modes = [
-                                    ("🔁", crate::video::LoopMode::Loop, "Loop"),
-                                    ("🔄", crate::video::LoopMode::PingPong, "Ping-Pong"),
-                                    ("1️⃣", crate::video::LoopMode::OneShot, "One Shot"),
-                                    ("⏹", crate::video::LoopMode::HoldLast, "Hold Last"),
-                                ];
-                                for (icon, mode, tooltip) in &modes {
-                                    let selected = vp.loop_mode == *mode;
-                                    let btn = egui::Button::new(*icon).selected(selected);
-                                    if ui.add(btn).on_hover_text(*tooltip).clicked() && !selected {
-                                        actions.commands.push(EngineCommand::VideoSetLoopMode { deck_uuid: deck.uuid.clone(), mode: *mode });
-                                    }
-                                }
-                                playback_mod_menu(ui, &deck.uuid, DeckTarget::VideoLoopMode, data, actions);
-                            });
-                            learn_overlay(ui, loop_resp.response.rect, ParamAddress::deck(&deck.uuid, DeckTarget::VideoLoopMode).to_string(), data, actions);
-
-                            if chasing_now {
-                                ui.label(
-                                    egui::RichText::new("Loop is ignored while chasing the transport")
-                                        .small()
-                                        .weak(),
-                                );
-                                // Two authorities on one value is the seek storm
-                                // this design avoids, so say which one wins
-                                // rather than letting it look broken.
-                                let held = [
-                                    ("Playhead", DeckTarget::VideoPosition),
-                                    ("Speed", DeckTarget::VideoSpeed),
-                                ]
-                                .into_iter()
-                                .filter(|(_, target)| playback_mod_color(&deck.uuid, target.clone(), data).is_some())
-                                .map(|(label, _)| label)
-                                .collect::<Vec<_>>();
-                                if !held.is_empty() {
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "{} modulation is ignored while chasing — \
-                                             set Chase to Never to use it",
-                                            held.join(" and ")
-                                        ))
-                                        .small()
-                                        .weak(),
-                                    );
-                                }
-                            }
-
-                            ui.add_space(4.0);
-                            ui.label(egui::RichText::new("⏱ Transport").strong());
-                            let mut sync = vp.transport_sync;
-                            ui.horizontal(|ui| {
-                                ui.label("Chase:");
-                                egui::ComboBox::from_id_salt(format!("deck-chase-{}", deck.uuid))
-                                    .selected_text(sync.mode.label())
-                                    .show_ui(ui, |ui| {
-                                        for mode in [
-                                            crate::video::TransportSyncMode::Auto,
-                                            crate::video::TransportSyncMode::Always,
-                                            crate::video::TransportSyncMode::Never,
-                                        ] {
-                                            if ui
-                                                .selectable_label(sync.mode == mode, mode.label())
-                                                .clicked()
-                                            {
-                                                sync.mode = mode;
-                                                actions.commands.push(
-                                                    EngineCommand::VideoSetTransportSync {
-                                                        deck_uuid: deck.uuid.clone(),
-                                                        sync,
-                                                    },
-                                                );
-                                            }
-                                        }
-                                    });
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label("Offset:");
-                                let resp = ui.add(
-                                    egui::DragValue::new(&mut sync.offset)
-                                        .speed(0.01)
-                                        .suffix(" s"),
-                                );
-                                if resp.changed() {
-                                    actions.commands.push(EngineCommand::VideoSetTransportSync {
-                                        deck_uuid: deck.uuid.clone(),
-                                        sync,
-                                    });
-                                }
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label("Delay:");
-                                let resp = ui.add(
-                                    egui::DragValue::new(&mut sync.delay_frames)
-                                        .speed(1.0)
-                                        .suffix(" f"),
-                                );
-                                if resp.changed() {
-                                    actions.commands.push(EngineCommand::VideoSetTransportSync {
-                                        deck_uuid: deck.uuid.clone(),
-                                        sync,
-                                    });
-                                }
-                            });
-
-                            // In/Out points (bookshelf)
-                            ui.add_space(4.0);
-                            ui.label(egui::RichText::new("📐 In/Out Points").strong());
-                            let effective_out = if vp.out_point > 0.0 { vp.out_point } else { duration };
-                            let has_range = vp.in_point > 0.0 || vp.out_point > 0.0;
-
-                            // In-point
-                            let mut in_pt = vp.in_point as f32;
-                            ui.horizontal(|ui| {
-                                ui.label("In:");
-                                let resp = ui.add(egui::Slider::new(&mut in_pt, 0.0..=duration as f32)
-                                    .show_value(false).trailing_fill(true));
-                                if resp.changed()
-                                {
-                                    actions.commands.push(EngineCommand::VideoSetInPoint { deck_uuid: deck.uuid.clone(), secs: f64::from(in_pt) });
-                                }
-                                learn_overlay(ui, resp.rect, ParamAddress::deck(&deck.uuid, DeckTarget::VideoInPoint).to_string(), data, actions);
-                                ui.label(format_time(f64::from(in_pt)));
-                            });
-
-                            // Out-point
-                            let mut out_pt = effective_out as f32;
-                            ui.horizontal(|ui| {
-                                ui.label("Out:");
-                                let resp = ui.add(egui::Slider::new(&mut out_pt, 0.0..=duration as f32)
-                                    .show_value(false).trailing_fill(true));
-                                if resp.changed()
-                                {
-                                    actions.commands.push(EngineCommand::VideoSetOutPoint { deck_uuid: deck.uuid.clone(), secs: f64::from(out_pt) });
-                                }
-                                learn_overlay(ui, resp.rect, ParamAddress::deck(&deck.uuid, DeckTarget::VideoOutPoint).to_string(), data, actions);
-                                ui.label(format_time(f64::from(out_pt)));
-                            });
-
-                            // Set from current / clear buttons
-                            ui.horizontal(|ui| {
-                                if ui.small_button("[ Set In").on_hover_text("Set in-point to current position").clicked() {
-                                    actions.commands.push(EngineCommand::VideoSetInPoint { deck_uuid: deck.uuid.clone(), secs: vp.position });
-                                }
-                                if ui.small_button("Set Out ]").on_hover_text("Set out-point to current position").clicked() {
-                                    actions.commands.push(EngineCommand::VideoSetOutPoint { deck_uuid: deck.uuid.clone(), secs: vp.position });
-                                }
-                                // Clear is always shown (disabled when no range) so it stays MIDI/keyboard-mappable.
-                                let clear_resp = ui
-                                    .add_enabled(has_range, egui::Button::new("x Clear").small())
-                                    .on_hover_text("Reset to full clip");
-                                if clear_resp.clicked() {
-                                    actions.commands.push(EngineCommand::VideoClearInOutPoints { deck_uuid: deck.uuid.clone() });
-                                }
-                                learn_overlay(ui, clear_resp.rect, ParamAddress::deck(&deck.uuid, DeckTarget::VideoClearInOut).to_string(), data, actions);
-                            });
-
-                            if has_range {
-                                ui.label(egui::RichText::new(format!(
-                                    "Range: {} → {} ({})",
-                                    format_time(vp.in_point),
-                                    format_time(effective_out),
-                                    format_time(effective_out - vp.in_point),
-                                )).small().weak());
-                            }
-
-                            // Info line
-                            ui.label(egui::RichText::new(format!(
-                                "{:.0} fps • {}", vp.frame_rate, format_time(duration)
-                            )).small().weak());
-                        });
-                    });
-                ui.separator();
-            }
+            // Column: the source's own controls, from its type's schema.
+            render_source_column(ui, deck, data, actions);
 
             // Column: Auto-Transition controls (collapsible column, default closed)
             {
@@ -1214,59 +1207,11 @@ pub(super) fn render_selected_deck_detail(
                                     });
                                 }
 
-                                // Scaling mode
-                                if let Some(current_scaling) = deck.scaling_mode {
-                                    let scaling_modes = ["Fill", "Fit", "Stretch", "Center"];
-                                    let current_idx = match current_scaling {
-                                        ScalingMode::Fill => 0, ScalingMode::Fit => 1,
-                                        ScalingMode::Stretch => 2, ScalingMode::Center => 3,
-                                    };
-                                    let mut selected_scaling = current_idx;
-                                    ui.horizontal(|ui| {
-                                        ui.label("Scale:");
-                                        let combo = egui::ComboBox::from_id_salt("sel_deck_scale")
-                                            .selected_text(scaling_modes[selected_scaling])
-                                            .width(60.0)
-                                            .show_ui(ui, |ui| {
-                                                for (i, mode_name) in scaling_modes.iter().enumerate() {
-                                                    ui.selectable_value(&mut selected_scaling, i, *mode_name);
-                                                }
-                                            });
-                                        learn_overlay(ui, combo.response.rect, ParamAddress::deck(&deck.uuid, DeckTarget::ScalingMode).to_string(), data, actions);
-                                        playback_mod_menu(ui, &deck.uuid, DeckTarget::ScalingMode, data, actions);
-                                    });
-                                    if selected_scaling != current_idx {
-                                        let new_scaling = match selected_scaling {
-                                            1 => ScalingMode::Fit, 2 => ScalingMode::Stretch,
-                                            3 => ScalingMode::Center, _ => ScalingMode::Fill,
-                                        };
-                                        actions.commands.push(EngineCommand::SetDeckScalingMode {
-                                            deck_uuid: deck.uuid.clone(),
-                                            mode: new_scaling,
-                                        });
-                                    }
-                                }
-
-                                // Depth-sensor point-cloud controls
-                                if let Some(pc) = &deck.point_cloud {
-                                    render_depth_controls(ui, deck, pc, data, actions);
-                                }
-
                                 // Depth-sensor shader preprocessor controls
                                 if let Some(prepro) = &deck.depth_prepro {
                                     render_depth_prepro_controls(
                                         ui, deck, prepro, data, actions,
                                     );
-                                }
-
-                                // Screen-capture controls
-                                if let Some(capture) = &deck.screen_capture {
-                                    render_capture_controls(ui, deck, capture, data, actions);
-                                }
-
-                                // Tap controls
-                                if let Some(tap) = &deck.tap {
-                                    render_tap_controls(ui, deck, tap, data, actions);
                                 }
 
                                 // Render FPS

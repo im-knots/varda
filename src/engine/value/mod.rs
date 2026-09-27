@@ -18,6 +18,7 @@ pub mod midi;
 pub mod notification;
 pub mod param;
 pub mod render;
+pub mod source;
 pub mod surface;
 pub mod video;
 pub mod warp;

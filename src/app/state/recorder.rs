@@ -323,9 +323,9 @@ mod tests {
         let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
         let mut app = VardaApp::new(gpu, &crate::testing::headless_config()).ok()?;
         let channel = app.mixer_ref().channels()[0].uuid().to_string();
-        let deck = match app.execute_command(EngineCommand::AddSolidColorDeck {
+        let deck = match app.execute_command(EngineCommand::AddDeck {
             channel_uuid: channel,
-            color: [1.0, 1.0, 1.0, 1.0],
+            source: crate::solid_color::SolidColor::config_for([1.0, 1.0, 1.0, 1.0]),
         }) {
             crate::engine::CommandResult::OkWithId { uuid } => uuid,
             other => panic!("expected the new deck's uuid, got {other:?}"),

@@ -16,6 +16,7 @@ pub mod backend;
 pub mod freenect_backend;
 pub mod point_cloud;
 pub mod preprocess;
+pub mod provider;
 
 #[cfg(feature = "depth")]
 use anyhow::Context;

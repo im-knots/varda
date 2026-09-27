@@ -6,11 +6,16 @@ use crate::notifications::NotificationSystem;
 use crate::renderer::context::{OutputSource, SurfaceRenderInfo};
 use crate::surface::ContentMapping;
 
-/// Kind of file dialog to open.
-#[derive(Debug, Clone, Copy)]
-pub enum FileDialogKind {
-    Image,
-    Video,
+/// A file picker a source type asked for (see `LibraryCreate::File`): which
+/// source type the chosen files become, the config field each path fills, and
+/// the extensions to offer.
+#[derive(Debug, Clone)]
+pub struct FileDialogRequest {
+    pub source_type: String,
+    pub field: String,
+    pub label: String,
+    pub extensions: Vec<String>,
+    pub channel_uuid: String,
 }
 
 /// Result from a completed file dialog (sent from background thread).
@@ -21,9 +26,22 @@ pub enum FileDialogKind {
 /// between opening the dialog and picking a file.
 #[derive(Debug)]
 pub struct FileDialogResult {
-    pub kind: FileDialogKind,
-    pub channel_uuid: String,
+    pub request: FileDialogRequest,
     pub paths: Vec<std::path::PathBuf>,
+}
+
+impl FileDialogResult {
+    /// One deck-add per chosen file.
+    pub fn commands(&self) -> Vec<crate::engine::EngineCommand> {
+        self.paths
+            .iter()
+            .map(|path| crate::engine::EngineCommand::AddDeck {
+                channel_uuid: self.request.channel_uuid.clone(),
+                source: crate::source::SourceConfig::new(self.request.source_type.clone())
+                    .with(&self.request.field, path.to_string_lossy()),
+            })
+            .collect()
+    }
 }
 
 /// Mutable external delivery sinks the headless render loop feeds frames and
@@ -87,6 +105,8 @@ impl VardaApp {
     /// reports its frame time by stage.
     pub fn render_frame(&mut self) -> RenderTimes {
         self.update_controller_leds();
+        #[cfg(feature = "html")]
+        self.poll_interactive_requests();
         let mixer = std::time::Instant::now();
         self.render_mixer_frame();
         let mixer = mixer.elapsed();
@@ -156,34 +176,28 @@ impl VardaApp {
     /// This performs all GPU work that doesn't need the surface texture.
     pub fn render_mixer_frame(&mut self) {
         self.resolve_preview_channels();
-        // Surface a one-time notice for any deck whose ping-pong RAM cache was
-        // truncated (hit the memory cap). The supported path for full-length
-        // reverse on heavy/long/high-res clips is to pre-transcode to HAP.
-        let truncated: Vec<(String, String)> = self
+        // Tell the performer once about anything a source flags (a clip whose
+        // reverse cache ran out: the supported path is to transcode to HAP).
+        let warnings: Vec<(String, String, String)> = self
             .mixer
             .channels()
             .iter()
             .flat_map(|ch| ch.decks.iter())
             .filter_map(|slot| {
-                slot.deck
-                    .playback_snapshot()
-                    .filter(|s| s.pingpong_cache_truncated)
-                    .map(|_| {
-                        (
-                            slot.deck.uuid().to_string(),
-                            slot.deck.source_name().to_string(),
-                        )
-                    })
+                slot.deck.source().warning().map(|w| {
+                    (
+                        slot.deck.uuid().to_string(),
+                        slot.deck.source_name().to_string(),
+                        w,
+                    )
+                })
             })
             .collect();
-        for (uuid, name) in truncated {
+        for (uuid, name, warning) in warnings {
             self.session.notifications.notify_once(
-                format!("pingpong_truncated:{uuid}"),
+                format!("source_warning:{uuid}"),
                 crate::notifications::NotificationLevel::Warning,
-                format!(
-                    "Deck '{name}': reverse playback truncated (cache full). \
-                     Transcode to HAP for full-length reverse."
-                ),
+                format!("Deck '{name}': {warning}"),
             );
         }
 
@@ -205,207 +219,64 @@ impl VardaApp {
             &n_ch_buf
         };
 
-        // Collect camera IDs needed by visible channels. Cued (previewed)
-        // channels are included even at zero opacity so their live camera inputs
-        // keep advancing while off-air. See /spec/channel-preview.md.
-        let mut needed_camera_ids = std::collections::HashSet::new();
-        let mut needed_capture_ids = std::collections::HashSet::new();
-        // Counted over every deck, not just the visible ones: this is what the
-        // capture manager reconciles its sessions against, so an off-air deck
-        // must still count as a holder.
-        let mut capture_holders: std::collections::HashMap<crate::screen_capture::CaptureId, u32> =
-            std::collections::HashMap::new();
-        for (ch_idx, channel) in self.mixer.channels().iter().enumerate() {
-            let visible = effective_opacities.get(ch_idx).copied().unwrap_or(0.0) > 0.0;
-            let wanted = visible || self.preview_channels.contains(&ch_idx);
-            for slot in &channel.decks {
-                if let Some(cap_id) = slot.deck.screen_capture_id() {
-                    *capture_holders.entry(cap_id).or_default() += 1;
+        // Service every source for this frame: each provider sees which of its
+        // decks are wanted, updates its devices once, then hands each deck what
+        // it reads. Cued (previewed) channels count as wanted even at zero
+        // opacity so their live inputs keep advancing off-air, and the
+        // arrangement knows more than the opacity does: that a deck is about to
+        // be needed, or will not be for forty minutes. See
+        // /spec/channel-preview.md and /spec/deck-residency.md.
+        {
+            let preview = &self.preview_channels;
+            let mut decks: Vec<(&mut Box<dyn crate::source::DeckSourceInstance>, bool)> =
+                Vec::new();
+            for (ch_idx, channel) in self.mixer.channels_mut().iter_mut().enumerate() {
+                let visible = effective_opacities.get(ch_idx).copied().unwrap_or(0.0) > 0.0;
+                let channel_wanted = visible || preview.contains(&ch_idx);
+                for slot in &mut channel.decks {
+                    let wanted = match slot.source_demand {
+                        crate::arrangement::SourceDemand::Needed => true,
+                        crate::arrangement::SourceDemand::Idle => false,
+                        crate::arrangement::SourceDemand::Unscheduled => channel_wanted,
+                    };
+                    decks.push((slot.deck.source_box_mut(), wanted));
                 }
-                // The arrangement knows more than the current opacity does: it
-                // knows this deck is about to be needed, or that it will not be
-                // for the next forty minutes. See /spec/deck-residency.md.
-                let deck_wanted = match slot.source_demand {
-                    crate::arrangement::SourceDemand::Needed => true,
-                    crate::arrangement::SourceDemand::Idle => false,
-                    crate::arrangement::SourceDemand::Unscheduled => wanted,
-                };
-                if !deck_wanted {
-                    continue;
-                }
-                if let Some(cam_id) = slot.deck.camera_id() {
-                    needed_camera_ids.insert(cam_id);
-                }
-                if let Some(cap_id) = slot.deck.screen_capture_id() {
-                    needed_capture_ids.insert(cap_id);
-                }
+            }
+            let (providers, mut env) = self.sources.env(
+                &self.render.context,
+                self.render.width,
+                self.render.height,
+                &[],
+            );
+            let mut submit = Vec::new();
+            providers.service_frame(&mut decks, &mut env, &mut submit);
+            if !submit.is_empty() {
+                self.render.context.submit(submit);
             }
         }
 
-        // Stop any capture whose last deck is gone. A deck dropped outside
-        // `remove_deck` — scene diff, undo, truncated or removed channel —
-        // never released its session, leaving the capture thread grabbing and
-        // downscaling frames for the rest of the session.
-        self.sources
-            .screen_capture_manager
-            .reconcile_holders(&capture_holders);
-
-        // Update only needed camera frames
-        self.sources
-            .camera_manager
-            .update_selective(&self.render.context.queue, &needed_camera_ids);
-
-        // Upload screen-capture frames for visible/cued decks only. An
-        // invisible capture deck costs nothing, which is what makes a
-        // self-capture deck safe to leave in a scene.
-        self.sources.screen_capture_manager.update_selective(
-            &self.render.context.device,
-            &self.render.context.queue,
-            &needed_capture_ids,
-        );
-
-        // Upload NDI receiver frames, converting UYVY on the GPU.
-        if let Some(conversion) = self
-            .sources
-            .io
-            .ndi_manager
-            .update(&self.render.context.device, &self.render.context.queue)
-        {
-            self.render.context.submit(std::iter::once(conversion));
-        }
-
-        // Periodic Syphon re-discovery + late-bind of deferred decks (~1×/sec).
-        // Removes the start/stop-ordering dependency: a producer that joins or
-        // restarts after Varda is picked up automatically.
-        #[cfg(target_os = "macos")]
-        self.reconcile_syphon();
-
-        // Update Syphon client frames
-        #[cfg(target_os = "macos")]
-        self.sources
-            .io
-            .syphon_manager
-            .update(&self.render.context.device);
-
-        // Spout, the Windows counterpart. Both calls are no-ops off Windows, so
-        // this needs no gate. See /spec/spout-output.md.
-        self.reconcile_spout();
-        self.sources
-            .io
-            .spout_manager
-            .update(&self.render.context.device);
-
-        // Update stream receiver frames
-        self.sources
-            .io
-            .stream_manager
-            .update(&self.render.context.queue);
-
-        // Pump HTML (Servo) instances and upload their frames
-        self.sources
-            .io
-            .html_manager
-            .update(&self.render.context.device, &self.render.context.queue);
-
-        // Upload depth-sensor frames (off-render-thread capture; this only
-        // does the GPU texture upload). See spec/depth-sensors.md.
-        self.sources
-            .depth_manager
-            .update(&self.render.context.queue);
-
+        // Shader decks with a `depth_sensor` preprocessor read the sensor's
+        // shared textures but convert them through their own GPU passes. The
+        // manager lives here, so the views are pushed down once per frame: the
+        // deck layer never reaches up into a device.
+        // See spec/depth-sensor-preprocessor.md.
+        let depth = self.sources.service::<crate::depth::DepthSensorManager>();
         for channel in self.mixer.channels_mut() {
             for slot in &mut channel.decks {
-                if let Some(kind) = slot.deck.external_source_kind() {
-                    use crate::deck::ExternalSourceKind;
-                    slot.deck.external_source_view = match kind {
-                        ExternalSourceKind::Camera(cam_id) => {
-                            self.sources.camera_manager.texture_view(cam_id).cloned()
-                        }
-                        ExternalSourceKind::Ndi(idx) => {
-                            self.sources.io.ndi_manager.texture_view(idx).cloned()
-                        }
-                        #[cfg(target_os = "macos")]
-                        ExternalSourceKind::Syphon(idx) => {
-                            self.sources.io.syphon_manager.texture_view(idx).cloned()
-                        }
-                        #[cfg(not(target_os = "macos"))]
-                        ExternalSourceKind::Syphon(_) => None,
-                        ExternalSourceKind::Spout(idx) => {
-                            self.sources.io.spout_manager.texture_view(idx).cloned()
-                        }
-                        ExternalSourceKind::Srt(idx)
-                        | ExternalSourceKind::Hls(idx)
-                        | ExternalSourceKind::Dash(idx)
-                        | ExternalSourceKind::Rtmp(idx) => {
-                            self.sources.io.stream_manager.texture_view(idx).cloned()
-                        }
-                        ExternalSourceKind::Html(idx) => {
-                            self.sources.io.html_manager.texture_view(idx).cloned()
-                        }
-                        ExternalSourceKind::ScreenCapture(id) => {
-                            // Router/UI edits land on the deck; push them down
-                            // to the capture thread here, once, when they change.
-                            if let Some(state) = &mut slot.deck.screen_capture
-                                && state.config_dirty
-                            {
-                                self.sources
-                                    .screen_capture_manager
-                                    .set_config(id, state.config.clone());
-                                state.config_dirty = false;
-                            }
-                            // A crop or target resize reallocates the shared
-                            // texture, so the deck's source dimensions are
-                            // pushed down each frame rather than fixed at open.
-                            if let Some((w, h)) = self.sources.screen_capture_manager.resolution(id)
-                            {
-                                slot.deck.set_external_source_size(w, h);
-                            }
-                            self.sources
-                                .screen_capture_manager
-                                .texture_view(id)
-                                .cloned()
-                        }
-                        // Taps own no device, so the mixer resolves them all at
-                        // once in `prepare_taps` below.
-                        ExternalSourceKind::Tap => None,
-                        ExternalSourceKind::DepthSensor(id) => {
-                            // Depth decks read the R16Uint depth view + RGB view
-                            // and reproject via the point-cloud pass rather than
-                            // blitting a single RGBA texture.
-                            let depth = self.sources.depth_manager.depth_view(id).cloned();
-                            slot.deck.depth_rgb_view =
-                                self.sources.depth_manager.rgb_view(id).cloned();
-                            slot.deck.depth_intrinsics = self.sources.depth_manager.intrinsics(id);
-                            slot.deck.depth_source_size = self.sources.depth_manager.resolution(id);
-                            depth
-                        }
-                    };
-                }
-
-                // Shader decks with a `depth_sensor` preprocessor read the same
-                // shared sensor textures, but convert them via their own GPU
-                // passes rather than reprojecting a point cloud. The manager
-                // lives here, so the views are pushed down once per frame — the
-                // deck layer never reaches up into a device.
-                // See spec/depth-sensor-preprocessor.md.
                 if let Some(state) = &mut slot.deck.depth_prepro {
                     let id = state.sensor_id;
                     state.input = match (
-                        self.sources.depth_manager.depth_view(id),
-                        self.sources.depth_manager.rgb_view(id),
-                        self.sources.depth_manager.frame_generation(id),
+                        depth.depth_view(id),
+                        depth.rgb_view(id),
+                        depth.frame_generation(id),
                     ) {
-                        (Some(depth), Some(rgb), Some(generation)) => {
+                        (Some(depth_view), Some(rgb), Some(generation)) => {
                             Some(crate::deck::DepthPreprocessInput {
-                                depth_view: depth.clone(),
+                                depth_view: depth_view.clone(),
                                 rgb_view: rgb.clone(),
                                 generation,
-                                frame_dt: self
-                                    .sources
-                                    .depth_manager
-                                    .frame_dt(id)
-                                    .unwrap_or(1.0 / 30.0),
-                                connected: self.sources.depth_manager.is_connected(id),
+                                frame_dt: depth.frame_dt(id).unwrap_or(1.0 / 30.0),
+                                connected: depth.is_connected(id),
                             })
                         }
                         _ => None,
@@ -606,11 +477,29 @@ impl VardaApp {
         }
 
         // Render headless outputs (needs &mut self for subprocess feeding)
+        #[cfg(target_os = "macos")]
+        let (Some(ndi_manager), Some(syphon_manager), Some(spout_manager)) =
+            self.sources.services.get3_mut::<
+                crate::ndi::NdiManager,
+                crate::syphon::SyphonManager,
+                crate::spout::SpoutManager,
+            >()
+        else {
+            return;
+        };
+        #[cfg(not(target_os = "macos"))]
+        let (Some(ndi_manager), Some(spout_manager)) =
+            self.sources
+                .services
+                .get2_mut::<crate::ndi::NdiManager, crate::spout::SpoutManager>()
+        else {
+            return;
+        };
         let sinks = HeadlessDeliverySinks {
-            ndi_manager: &mut self.sources.io.ndi_manager,
+            ndi_manager,
             #[cfg(target_os = "macos")]
-            syphon_manager: &mut self.sources.io.syphon_manager,
-            spout_manager: &mut self.sources.io.spout_manager,
+            syphon_manager,
+            spout_manager,
             audio_manager: &mut self.audio.manager,
             notifications: &mut self.session.notifications,
             deliveries: &mut self.output.deliveries,
@@ -1265,29 +1154,16 @@ impl VardaApp {
     /// for proper focus/activation). Results are sent via channel.
     pub fn open_file_dialog(
         sender: &std::sync::mpsc::Sender<FileDialogResult>,
-        kind: FileDialogKind,
-        channel_uuid: String,
+        request: FileDialogRequest,
     ) {
         let tx = sender.clone();
         std::thread::spawn(move || {
-            let dialog = match kind {
-                FileDialogKind::Image => rfd::FileDialog::new().add_filter(
-                    "Images",
-                    &[
-                        "png", "jpg", "jpeg", "bmp", "tiff", "tga", "webp", "svg", "svgz",
-                    ],
-                ),
-                FileDialogKind::Video => rfd::FileDialog::new()
-                    .add_filter("Video", &["mov", "mp4", "avi", "mkv", "webm", "gif"]),
-            };
+            let extensions: Vec<&str> = request.extensions.iter().map(String::as_str).collect();
+            let dialog = rfd::FileDialog::new().add_filter(&request.label, &extensions);
             if let Some(paths) = dialog.pick_files()
                 && !paths.is_empty()
             {
-                let _ = tx.send(FileDialogResult {
-                    kind,
-                    channel_uuid,
-                    paths,
-                });
+                let _ = tx.send(FileDialogResult { request, paths });
             }
         });
     }

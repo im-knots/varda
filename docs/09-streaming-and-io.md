@@ -301,9 +301,9 @@ Render live web pages such as dashboards, SVG/Canvas/WebGL, lyric and lower-thir
 You can also add one directly over the HTTP API:
 
 ```sh
-curl -X POST http://localhost:8080/api/channels/0/decks/html \
+curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks \
   -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com/overlay.html"}'
+  -d '{"type": "Html", "url": "https://example.com/overlay.html"}'
 ```
 
 HTML decks are persisted in `scene.json` by URL and reload automatically.
@@ -496,25 +496,25 @@ If the target is missing when a scene loads, the deck is **restored unbound** ra
 ### API
 
 ```sh
-# Refresh the target list, then read it
-curl -X POST http://localhost:8080/api/devices/screen/scan
-curl http://localhost:8080/api/library/screen
+# Refresh the target list; the answer lists the targets found
+curl -X POST http://localhost:8080/api/sources/ScreenCapture/actions/rescan
 
 # Capture a whole display
-curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks/screen \
+curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks \
   -H "Content-Type: application/json" \
-  -d '{"target": {"kind": "display", "name": "Built-in Retina Display"}}'
+  -d '{"type": "ScreenCapture", "target": {"kind": "display", "name": "Built-in Retina Display"}}'
 
 # Capture one window, cropped to its top-left quadrant at 24 fps
-curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks/screen \
+curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks \
   -H "Content-Type: application/json" \
-  -d '{"target": {"kind": "window", "app": "Safari", "title": "Dashboard"},
+  -d '{"type": "ScreenCapture",
+       "target": {"kind": "window", "app": "Safari", "title": "Dashboard"},
        "rate": 24,
        "crop": {"x": 0.0, "y": 0.0, "w": 0.5, "h": 0.5},
        "show_cursor": true}'
 ```
 
-`GET /api/state/screen_capture` reports the permission state, the backend in use, whether capture is available at all, and the number of live sessions.
+The `ScreenCapture` entry in `GET /api/library/sources` reports whether capture is available (and why not), the targets found by the last scan, and a notice when Screen Recording access is missing. `POST /api/sources/ScreenCapture/actions/grant_permission` asks the OS for access.
 
 > **Feature flag.** Screen capture requires the `screen-capture` build feature, which is **on by default**. Disable it for a session with `--no-screen-capture`, which skips OS capture entirely so no Screen Recording permission is ever requested, or build without it via `--no-default-features`.
 
@@ -556,19 +556,19 @@ Tapping the master from a deck that is itself part of the master is a deliberate
 
 ```sh
 # Tap the master program
-curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks/tap \
+curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks \
   -H "Content-Type: application/json" \
-  -d '{"source": {"kind": "master_program"}}'
+  -d '{"type": "Tap", "source": {"kind": "master_program"}}'
 
 # Tap another channel
-curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks/tap \
+curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks \
   -H "Content-Type: application/json" \
-  -d '{"source": {"kind": "channel", "uuid": "<other_ch_uuid>"}}'
+  -d '{"type": "Tap", "source": {"kind": "channel", "uuid": "<other_ch_uuid>"}}'
 
-# Repoint an existing tap deck
-curl -X PUT http://localhost:8080/api/decks/<deck_uuid>/tap/source \
+# Repoint an existing tap deck, keeping its effects and modulation
+curl -X PUT http://localhost:8080/api/decks/<deck_uuid>/source \
   -H "Content-Type: application/json" \
-  -d '{"source": {"kind": "master_program"}}'
+  -d '{"type": "Tap", "source": {"kind": "master_program"}}'
 ```
 
 ---

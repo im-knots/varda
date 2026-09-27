@@ -20,10 +20,9 @@ use crate::engine::types::{
 use crate::engine::types::{
     AutoTransitionSnapshot, CameraSnapshot, ChannelSnapshot, ClockSnapshot, DeckSnapshot,
     DepthPreproParamsSnapshot, EffectSnapshot, EngineState, MidiDeviceSnapshot,
-    MidiMappingSnapshot, MidiSnapshot, MixerSnapshot, ParamSnapshot, PointCloudParamsSnapshot,
-    RegistrySnapshot, RunningAnalyzerSnapshot, ScreenCaptureDeckSnapshot, SequenceSnapshot,
-    SequenceStepKindSnapshot, SequenceStepSnapshot, ShaderParamsSnapshot, TapDeckSnapshot,
-    VideoPlaybackSnapshot,
+    MidiMappingSnapshot, MidiSnapshot, MixerSnapshot, ParamSnapshot, RegistrySnapshot,
+    RunningAnalyzerSnapshot, SequenceSnapshot, SequenceStepKindSnapshot, SequenceStepSnapshot,
+    ShaderParamsSnapshot,
 };
 use crate::modulation::ModulationSource;
 
@@ -31,6 +30,11 @@ use crate::modulation::ModulationSource;
 pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
     let mixer = &app.mixer;
     let channel_labels = app.mixer.channel_labels();
+    let query = app.sources.query(&channel_labels);
+    #[cfg(feature = "html")]
+    let interactive_deck = app.interactive_active_deck();
+    #[cfg(not(feature = "html"))]
+    let interactive_deck: Option<&str> = None;
 
     let channels = mixer
         .channels()
@@ -56,26 +60,6 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                         })
                         .collect();
 
-                    let video_playback =
-                        slot.deck
-                            .playback_snapshot()
-                            .map(|ps| VideoPlaybackSnapshot {
-                                playing: ps.playing,
-                                position: ps.position,
-                                duration: ps.duration,
-                                speed: ps.speed,
-                                effective_speed: ps.effective_speed,
-                                position_offset: ps.position_offset,
-                                loop_mode: ps.loop_mode,
-                                in_point: ps.in_point,
-                                out_point: ps.out_point,
-                                frame_rate: ps.frame_rate,
-                                transport_sync: slot
-                                    .deck
-                                    .video_transport_sync()
-                                    .unwrap_or_default(),
-                            });
-
                     let auto_transition =
                         slot.auto_transition
                             .as_ref()
@@ -96,26 +80,6 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                                 phase: at.phase,
                             });
 
-                    let point_cloud_params = matches!(
-                        slot.deck.external_source_kind(),
-                        Some(crate::deck::ExternalSourceKind::DepthSensor(_))
-                    )
-                    .then(|| {
-                        let p = |name: &str| slot.deck.depth_param(name).unwrap_or_default();
-                        PointCloudParamsSnapshot {
-                            orbit_yaw: p("orbit_yaw"),
-                            orbit_pitch: p("orbit_pitch"),
-                            zoom: p("zoom"),
-                            point_size: p("point_size"),
-                            depth_min: p("depth_min"),
-                            depth_max: p("depth_max"),
-                            seed: p("seed"),
-                            drift: p("drift"),
-                            disruption: p("disruption"),
-                            color_mode: slot.deck.point_cloud_params.color_mode.as_u8(),
-                        }
-                    });
-
                     let depth_prepro_params =
                         slot.deck
                             .depth_prepro
@@ -131,55 +95,6 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                                 mirror: s.params.mirror,
                             });
 
-                    let screen_capture = slot.deck.screen_capture.as_ref().map(|s| {
-                        use crate::screen_capture::backend::{MAX_CAPTURE_RATE, MIN_CAPTURE_RATE};
-                        ScreenCaptureDeckSnapshot {
-                            target_label: crate::scene::CaptureTargetConfig::from(&s.identity)
-                                .label(),
-                            is_display: matches!(
-                                s.identity,
-                                crate::screen_capture::backend::TargetIdentity::Display { .. }
-                            ),
-                            // Normalized so the UI slider and the MIDI router
-                            // speak the same units on the same path.
-                            rate_norm: ((s.config.rate - MIN_CAPTURE_RATE)
-                                / (MAX_CAPTURE_RATE - MIN_CAPTURE_RATE))
-                                .clamp(0.0, 1.0),
-                            rate_fps: s.config.rate,
-                            crop: [
-                                s.config.crop.x,
-                                s.config.crop.y,
-                                s.config.crop.w,
-                                s.config.crop.h,
-                            ],
-                            show_cursor: s.config.show_cursor,
-                            exclude_varda: s.config.exclude_varda,
-                            bound: s.capture_id != crate::screen_capture::UNBOUND_CAPTURE_ID,
-                            connected: app.screen_capture_manager().is_connected(s.capture_id),
-                        }
-                    });
-
-                    let tap = slot.deck.tap.as_ref().map(|t| {
-                        use crate::deck::TapSource;
-                        TapDeckSnapshot {
-                            kind: match t.source {
-                                TapSource::MasterProgram => "master_program".into(),
-                                TapSource::Channel(_) => "channel".into(),
-                            },
-                            channel_uuid: match &t.source {
-                                TapSource::MasterProgram => None,
-                                TapSource::Channel(uuid) => Some(uuid.clone()),
-                            },
-                            label: t.source.label(&channel_labels),
-                            bound: match &t.source {
-                                TapSource::MasterProgram => true,
-                                TapSource::Channel(uuid) => {
-                                    channel_labels.iter().any(|(u, _)| u == uuid)
-                                }
-                            },
-                        }
-                    });
-
                     let effective_opacity = match slot.transition_phase() {
                         DeckTransitionPhase::Transitioning { progress } => {
                             slot.opacity * (1.0 - progress as f32)
@@ -191,39 +106,21 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                         idx: deck_idx,
                         uuid: slot.deck.uuid().to_string(),
                         name: slot.deck.source_name().to_string(),
-                        is_html: matches!(
-                            slot.deck.external_source_kind(),
-                            Some(crate::deck::ExternalSourceKind::Html(_))
-                        ),
-                        is_depth_sensor: matches!(
-                            slot.deck.external_source_kind(),
-                            Some(crate::deck::ExternalSourceKind::DepthSensor(_))
-                        ),
-                        point_cloud_params,
+                        source: app
+                            .sources
+                            .providers
+                            .deck_snapshot(slot.deck.source(), &query),
+                        is_interactive: interactive_deck == Some(slot.deck.uuid()),
                         has_depth_prepro: slot.deck.depth_prepro.is_some(),
                         depth_prepro_params,
-                        screen_capture,
-                        tap,
-                        is_html_interactive: {
-                            #[cfg(feature = "html")]
-                            {
-                                app.interactive_active_deck() == Some(slot.deck.uuid())
-                            }
-                            #[cfg(not(feature = "html"))]
-                            {
-                                false
-                            }
-                        },
                         opacity: slot.opacity,
                         effective_opacity,
                         blend_mode: slot.blend_mode,
                         solo: slot.solo,
                         mute: slot.mute,
                         transparent: slot.deck.transparent(),
-                        scaling_mode: slot.deck.scaling_mode(),
                         generator: gen_params,
                         effects,
-                        video_playback,
                         auto_transition,
                         render_fps: slot.render_fps,
                         effective_render_fps: if slot.render_cost_us > 0.0 {
@@ -523,50 +420,11 @@ pub(crate) fn build_midi_snapshot(app: &VardaApp) -> MidiSnapshot {
 pub(crate) fn build_camera_snapshot(app: &VardaApp) -> CameraSnapshot {
     CameraSnapshot {
         devices: app
-            .sources
-            .camera_manager
+            .camera_manager()
             .devices()
             .iter()
             .map(|d| (d.name.clone(), d.id))
             .collect(),
-    }
-}
-
-/// Build a `DepthSensorSnapshot` from the current `VardaApp` state.
-pub(crate) fn build_depth_sensor_snapshot(app: &VardaApp) -> crate::engine::DepthSensorSnapshot {
-    crate::engine::DepthSensorSnapshot {
-        devices: app
-            .depth_manager()
-            .devices()
-            .iter()
-            .map(|d| (d.name.clone(), d.id))
-            .collect(),
-    }
-}
-
-/// Build a `ScreenCaptureSnapshot` from the current `VardaApp` state.
-pub(crate) fn build_screen_capture_snapshot(
-    app: &VardaApp,
-) -> crate::engine::ScreenCaptureSnapshot {
-    let mgr = app.screen_capture_manager();
-    crate::engine::ScreenCaptureSnapshot {
-        targets: mgr
-            .targets()
-            .iter()
-            .map(|t| crate::engine::CaptureTargetSnapshot {
-                kind: t.kind.as_str().to_string(),
-                label: t.label.clone(),
-                app: t.app.clone(),
-                title: t.title.clone(),
-                width: t.width,
-                height: t.height,
-                is_varda: t.is_varda,
-            })
-            .collect(),
-        permission: mgr.permission_state().as_str().to_string(),
-        available: mgr.is_available(),
-        backend: mgr.backend_name().to_string(),
-        active_captures: mgr.active_ids().len(),
     }
 }
 
@@ -1020,8 +878,7 @@ pub(crate) fn build_engine_state(app: &VardaApp) -> EngineState {
         registry: build_registry_snapshot(app),
         midi: build_midi_snapshot(app),
         cameras: build_camera_snapshot(app),
-        depth_sensors: build_depth_sensor_snapshot(app),
-        screen_capture: build_screen_capture_snapshot(app),
+        sources: app.sources.type_snapshots(&app.mixer.channel_labels()),
         clock: build_clock_snapshot(app),
         transport: build_transport_snapshot(app),
         timecode: build_timecode_snapshot(app),
@@ -1029,24 +886,10 @@ pub(crate) fn build_engine_state(app: &VardaApp) -> EngineState {
         fps: app.frame_stats.fps_smoothed,
         frame_count: app.frame_stats.frame_count,
         target_fps: app.render.target_fps,
-        ndi_sources: app.sources.io.ndi_manager.discovered_sources(),
-        ndi_available: app.sources.io.ndi_manager.is_available(),
-        #[cfg(target_os = "macos")]
-        syphon_sources: app.sources.io.syphon_manager.discovered_sources(),
-        #[cfg(target_os = "macos")]
-        syphon_available: app.sources.io.syphon_manager.is_available(),
-        #[cfg(not(target_os = "macos"))]
-        syphon_sources: vec![],
-        #[cfg(not(target_os = "macos"))]
-        syphon_available: false,
-        spout_sources: app.sources.io.spout_manager.discovered_sources(),
-        spout_available: app.sources.io.spout_manager.is_available(),
-        stream_receivers: build_stream_receiver_snapshots(app),
         analyzers: build_analyzer_types(app),
         macros: app.mixer.macros().macros().to_vec(),
         can_undo: app.history_can_undo(),
         can_redo: app.history_can_redo(),
-        libraries: build_libraries_snapshot(app),
         keymap: build_keymap_snapshot(app),
         presets: crate::engine::types::PresetsSnapshot {
             deck: app
@@ -1093,49 +936,6 @@ pub(crate) fn build_engine_state(app: &VardaApp) -> EngineState {
     }
 }
 
-/// Saved stream and HTML sources with their live state.
-fn build_libraries_snapshot(app: &VardaApp) -> crate::engine::types::LibrariesSnapshot {
-    use crate::engine::types::{
-        HtmlLibraryEntrySnapshot, RtmpLibraryEntrySnapshot, StreamLibraryEntrySnapshot,
-    };
-    let io = &app.sources.io;
-    let streams = &io.stream_manager;
-    let connected = |url: &str| {
-        (0..streams.receiver_count())
-            .any(|i| streams.receiver_url(i) == Some(url) && streams.is_connected(i))
-    };
-    let stream_entries = |urls: &[String]| {
-        urls.iter()
-            .map(|url| StreamLibraryEntrySnapshot {
-                url: url.clone(),
-                connected: connected(url),
-            })
-            .collect()
-    };
-    crate::engine::types::LibrariesSnapshot {
-        hls: stream_entries(&io.hls_library),
-        dash: stream_entries(&io.dash_library),
-        rtmp: io
-            .rtmp_library
-            .iter()
-            .map(|(url, mode)| RtmpLibraryEntrySnapshot {
-                url: url.clone(),
-                mode: *mode,
-                connected: connected(url),
-            })
-            .collect(),
-        html: io
-            .html_library
-            .iter()
-            .map(|url| HtmlLibraryEntrySnapshot {
-                url: url.clone(),
-                active: (0..io.html_manager.instance_count())
-                    .any(|i| io.html_manager.instance_url(i) == Some(url.as_str())),
-            })
-            .collect(),
-    }
-}
-
 /// Keyboard shortcuts and keyboard learn.
 fn build_keymap_snapshot(app: &VardaApp) -> crate::engine::types::KeymapSnapshot {
     let keymap = &app.input.keymap;
@@ -1153,43 +953,6 @@ fn build_keymap_snapshot(app: &VardaApp) -> crate::engine::types::KeymapSnapshot
     }
 }
 
-/// Build stream library snapshots: library entries merged with active receiver status.
-fn build_stream_receiver_snapshots(
-    app: &VardaApp,
-) -> Vec<crate::engine::types::StreamReceiverSnapshot> {
-    let mut result: Vec<crate::engine::types::StreamReceiverSnapshot> = Vec::new();
-
-    // Add library entries (configured but possibly not connected)
-    for (url, mode) in &app.sources.io.stream_library {
-        let connected = (0..app.sources.io.stream_manager.receiver_count()).any(|i| {
-            app.sources.io.stream_manager.receiver_url(i) == Some(url.as_str())
-                && app.sources.io.stream_manager.is_connected(i)
-        });
-        result.push(crate::engine::types::StreamReceiverSnapshot {
-            url: url.clone(),
-            mode: format!("{mode}").to_lowercase(),
-            connected,
-        });
-    }
-
-    // Add active receivers not already in the library (e.g. restored from scene)
-    for i in 0..app.sources.io.stream_manager.receiver_count() {
-        if let (Some(url), Some(mode)) = (
-            app.sources.io.stream_manager.receiver_url(i),
-            app.sources.io.stream_manager.receiver_mode(i),
-        ) && !result.iter().any(|r| r.url == url)
-        {
-            result.push(crate::engine::types::StreamReceiverSnapshot {
-                url: url.to_string(),
-                mode: format!("{mode}").to_lowercase(),
-                connected: app.sources.io.stream_manager.is_connected(i),
-            });
-        }
-    }
-
-    result
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1200,7 +963,7 @@ mod tests {
         super::super::VardaApp::new(gpu, &config).ok()
     }
 
-    /// What the GUI reads, the published state carries: libraries with their
+    /// What the GUI reads, the published state carries: source libraries with their
     /// live state, key bindings, presets, render size, and the GPU adapter
     /// (/spec/ui-engine-boundary.md § WS9).
     #[test]
@@ -1208,12 +971,22 @@ mod tests {
         let Some(mut app) = headless_app() else {
             return;
         };
-        app.execute_command(crate::engine::EngineCommand::AddHtmlLibraryEntry {
-            url: "https://example.invalid/page.html".into(),
+        app.execute_command(crate::engine::EngineCommand::AddSourceLibraryEntry {
+            entry: crate::source::SourceConfig::new("Hls")
+                .with("url", "https://example.invalid/a.m3u8"),
         });
         let state = build_engine_state(&app);
-        assert_eq!(state.libraries.html.len(), 1);
-        assert!(!state.libraries.html[0].active, "no deck shows it");
+        let hls = state
+            .sources
+            .iter()
+            .find(|t| t.source_type == "Hls")
+            .expect("every registered type is published");
+        assert_eq!(hls.library.entries.len(), 1);
+        assert_eq!(
+            hls.library.entries[0].connected,
+            Some(false),
+            "no deck receives it"
+        );
         assert!(!state.keymap.bindings.is_empty(), "the default bindings");
         assert_eq!(state.render.width, app.render.width);
         assert!(state.render.max_dimension >= state.render.width);
@@ -1240,7 +1013,12 @@ mod tests {
             return;
         };
         let ch = build_mixer_snapshot(&app).channels[0].uuid.clone();
-        let deck_uuid = app.add_solid_color_deck(&ch, [1.0, 0.0, 0.0, 1.0]).unwrap();
+        let deck_uuid = app
+            .add_deck(
+                &ch,
+                &crate::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
+            )
+            .unwrap();
         app.mixer.set_deck_opacity(&deck_uuid, 0.5).unwrap();
         let snap = build_mixer_snapshot(&app);
         let deck = &snap.channels[0].decks[0];
@@ -1255,7 +1033,12 @@ mod tests {
             return;
         };
         let ch = build_mixer_snapshot(&app).channels[0].uuid.clone();
-        let deck_uuid = app.add_solid_color_deck(&ch, [1.0, 0.0, 0.0, 1.0]).unwrap();
+        let deck_uuid = app
+            .add_deck(
+                &ch,
+                &crate::solid_color::SolidColor::config_for([1.0, 0.0, 0.0, 1.0]),
+            )
+            .unwrap();
         let target = crate::engine::types::EffectTarget::Deck(deck_uuid);
         let effect_uuid = app.add_effect(&target, "invert").unwrap();
 
@@ -1448,23 +1231,5 @@ mod tests {
         );
         assert!(snap.inputs.is_empty(), "nothing has arrived on it yet");
         assert_eq!(snap.resolved, None);
-    }
-
-    #[test]
-    fn build_stream_receiver_dedup() {
-        let Some(app) = headless_app() else {
-            return;
-        };
-        let receivers = build_stream_receiver_snapshots(&app);
-        // All URLs should be unique
-        let urls: Vec<&str> = receivers.iter().map(|r| r.url.as_str()).collect();
-        let mut deduped = urls.clone();
-        deduped.sort_unstable();
-        deduped.dedup();
-        assert_eq!(
-            urls.len(),
-            deduped.len(),
-            "duplicate stream receivers found"
-        );
     }
 }

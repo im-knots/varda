@@ -21,9 +21,9 @@ fn app() -> Option<VardaApp> {
     let channel = app.build_engine_state().mixer.channels[0].uuid.clone();
     let sender = app.command_sender();
     let _ = sender.send((
-        EngineCommand::AddSolidColorDeck {
+        EngineCommand::AddDeck {
             channel_uuid: channel,
-            color: [1.0, 0.5, 0.0, 1.0],
+            source: varda::solid_color::SolidColor::config_for([1.0, 0.5, 0.0, 1.0]),
         },
         None,
     ));

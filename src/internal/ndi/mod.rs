@@ -7,6 +7,7 @@
 mod convert;
 #[allow(non_camel_case_types, non_snake_case, dead_code)]
 pub mod ffi;
+pub mod provider;
 mod receive;
 pub mod sdk;
 

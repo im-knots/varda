@@ -8,6 +8,8 @@
 pub mod chase;
 pub mod hap;
 pub mod modulation;
+pub mod provider;
+pub mod staging;
 
 use anyhow::{Context, Result};
 use std::path::Path;

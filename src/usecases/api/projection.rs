@@ -6,8 +6,7 @@
 use crate::app::publish::{PublishedState, StatePublication};
 use crate::engine::types::{
     CameraId, ChannelSnapshot, DeckSnapshot, EffectSnapshot, EngineState, ModulationSnapshot,
-    MonitorSnapshot, OutputWindowSnapshot, SequenceSnapshot, StreamReceiverSnapshot,
-    SurfaceSnapshot,
+    MonitorSnapshot, OutputWindowSnapshot, SequenceSnapshot, SurfaceSnapshot,
 };
 use serde::Serialize;
 use std::sync::Arc;
@@ -38,20 +37,6 @@ pub struct PerformanceResponse {
     pub target_fps: u32,
 }
 
-// ── NDI / Syphon projections ────────────────────────────────────────
-
-#[derive(Serialize, ToSchema)]
-pub struct NdiResponse {
-    pub available: bool,
-    pub sources: Vec<String>,
-}
-
-#[derive(Serialize, ToSchema)]
-pub struct SyphonResponse {
-    pub available: bool,
-    pub sources: Vec<String>,
-}
-
 // ── Scene projections ───────────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -63,7 +48,6 @@ pub struct SceneResponse {
     pub modulation: ModulationSnapshot,
     pub macros: Vec<crate::macros::Macro>,
     pub sequences: Vec<SequenceSnapshot>,
-    pub streams: Vec<StreamReceiverSnapshot>,
 }
 
 pub fn project_scene(state: &EngineState) -> SceneResponse {
@@ -75,7 +59,6 @@ pub fn project_scene(state: &EngineState) -> SceneResponse {
         modulation: state.modulation.clone(),
         macros: state.macros.clone(),
         sequences: state.mixer.sequences.clone(),
-        streams: state.stream_receivers.clone(),
     }
 }
 
@@ -113,22 +96,6 @@ pub struct TransitionEntry {
 pub struct CameraEntry {
     pub name: String,
     pub id: CameraId,
-}
-
-#[derive(Serialize, ToSchema)]
-pub struct DepthSensorEntry {
-    pub name: String,
-    pub id: crate::depth::DepthSensorId,
-}
-
-#[derive(Serialize, ToSchema)]
-pub struct NdiSourceEntry {
-    pub name: String,
-}
-
-#[derive(Serialize, ToSchema)]
-pub struct SyphonSourceEntry {
-    pub name: String,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -177,30 +144,28 @@ pub(crate) mod tests {
                     opacity: 1.0,
                     blend_mode: BlendMode::Normal,
                     decks: vec![DeckSnapshot {
-                        is_html_interactive: false,
                         idx: 0,
                         uuid: "dk-001".into(),
                         name: "Sine".into(),
-                        is_html: false,
-                        is_depth_sensor: false,
-                        point_cloud_params: None,
+                        source: crate::engine::value::source::DeckSourceSnapshot {
+                            source_type: "Shader".into(),
+                            available: true,
+                            status: crate::engine::value::source::SourceStatus::default(),
+                        },
+                        is_interactive: false,
                         has_depth_prepro: false,
                         depth_prepro_params: None,
-                        screen_capture: None,
-                        tap: None,
                         opacity: 1.0,
                         effective_opacity: 1.0,
                         blend_mode: BlendMode::Normal,
                         solo: false,
                         mute: false,
                         transparent: false,
-                        scaling_mode: None,
                         generator: ShaderParamsSnapshot {
                             shader_name: "Sine".into(),
                             params: vec![],
                         },
                         effects: vec![],
-                        video_playback: None,
                         auto_transition: None,
                         render_fps: DeckRenderFps::Auto,
                         effective_render_fps: 0.0,
@@ -310,8 +275,6 @@ pub(crate) mod tests {
             cameras: CameraSnapshot {
                 devices: vec![("FaceTime".into(), 0u32)],
             },
-            depth_sensors: crate::engine::DepthSensorSnapshot { devices: vec![] },
-            screen_capture: crate::engine::types::ScreenCaptureSnapshot::default(),
             transport: crate::engine::types::TransportSnapshot::default(),
             timecode: crate::engine::types::TimecodeSnapshot::default(),
             arrangement: None,
@@ -333,18 +296,27 @@ pub(crate) mod tests {
             fps: 60.0,
             frame_count: 100,
             target_fps: 60,
-            ndi_sources: vec!["OBS".into()],
-            ndi_available: true,
-            syphon_sources: vec![],
-            syphon_available: false,
-            spout_available: false,
-            spout_sources: vec![],
-            stream_receivers: vec![],
+            sources: std::sync::Arc::new(vec![crate::engine::value::source::SourceTypeSnapshot {
+                source_type: "Ndi".into(),
+                label: "NDI".into(),
+                icon: String::new(),
+                available: true,
+                unavailable_reason: None,
+                listed: true,
+                params: vec![],
+                library: crate::engine::value::source::LibrarySection {
+                    entries: vec![crate::engine::value::source::LibraryEntry::new(
+                        "OBS",
+                        crate::engine::value::source::SourceConfig::new("Ndi").with("name", "OBS"),
+                    )],
+                    rescan: true,
+                    ..Default::default()
+                },
+            }]),
             analyzers: vec![],
             macros: vec![],
             can_undo: false,
             can_redo: false,
-            libraries: crate::engine::types::LibrariesSnapshot::default(),
             keymap: crate::engine::types::KeymapSnapshot::default(),
             presets: crate::engine::types::PresetsSnapshot::default(),
             notifications: Vec::new(),
