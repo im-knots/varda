@@ -636,8 +636,7 @@ mod tests {
     /// Returns `None` with no GPU adapter, the way every other GPU-backed test
     /// in the tree does.
     fn app_with_a_deck() -> Option<(VardaApp, String)> {
-        let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
-        let mut app = VardaApp::new(gpu, &crate::testing::headless_config()).ok()?;
+        let mut app = crate::testing::headless_app()?;
         let channel = crate::app::snapshot::build_mixer_snapshot(&app).channels[0]
             .uuid
             .clone();

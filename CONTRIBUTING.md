@@ -88,7 +88,7 @@ The library panel, the deck controls, the deck API routes, save and restore, und
 - **Never rename the id.** It is the `type` tag in every `scene.json` (`{"type": "Video", "path": ...}`). Use CamelCase. A scene with an unknown type keeps it as a placeholder deck.
 - **Declare controls as `ControlSpec`s** (`float`, `toggle`, `choice`, `color`, `text`, `action`, ...). `routed("my_source/thing")` makes a control addressable as `deck/<uuid>/my_source/thing`; `modulatable()` lets an LFO drive it. Numeric controls take `0.0` to `1.0`. Widget hints (`Transport`, `Orbit`, `CropRect`) group controls into richer widgets; a new hint is a GUI change.
 - **Shared devices go through `Services`.** Register a device manager that other features use (cameras, depth sensors, NDI) in `source_services` in `app/sources.rs`, and reach it with `env.services.get_mut::<MyManager>()`.
-- **Test the provider directly** by building a `SourceEnv` with an empty `Services` and `ShaderRegistry` and calling `create`, as `tests/render_correctness.rs` does.
+- **Test the provider directly** by building a `SourceEnv` with an empty `Services` and `ShaderRegistry` and calling `create`, as `tests/render_correctness.rs` does. Get the GPU from `varda::testing::headless_gpu()` and an engine from `varda::testing::headless_app()`: they skip when there is no adapter, fail under `VARDA_REQUIRE_GPU=1` (as CI runs), and fail when the engine does not build.
 
 ### Adding an Output Type
 

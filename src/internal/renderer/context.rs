@@ -1333,7 +1333,7 @@ mod tests {
         // Headless installations must take the HAP GPU path, so the headless
         // device has to request TEXTURE_COMPRESSION_BC whenever the adapter
         // exposes it. Skips gracefully when no GPU adapter is available.
-        let Ok(gpu) = super::GpuContext::new_headless() else {
+        let Some(gpu) = crate::testing::headless_gpu() else {
             return;
         };
         let adapter_bc = gpu
@@ -1352,7 +1352,7 @@ mod tests {
 
     #[test]
     fn headless_context_enables_rgba16_unorm_when_adapter_supports_it() {
-        let Ok(gpu) = super::GpuContext::new_headless() else {
+        let Some(gpu) = crate::testing::headless_gpu() else {
             return;
         };
         let features = wgpu::Features::TEXTURE_FORMAT_16BIT_NORM

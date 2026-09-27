@@ -588,9 +588,7 @@ mod tests {
     use super::*;
 
     fn headless_app() -> Option<super::super::VardaApp> {
-        let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
-        let config = crate::testing::headless_config();
-        super::super::VardaApp::new(gpu, &config).ok()
+        crate::testing::headless_app()
     }
 
     fn shader(name: &str) -> SourceConfig {

@@ -500,11 +500,7 @@ mod tests {
     /// See /spec/clipboard.md § Bug this fixes.
     #[test]
     fn loading_one_preset_twice_makes_two_decks() {
-        let Some(gpu) = crate::renderer::context::GpuContext::new_headless().ok() else {
-            eprintln!("Skipping: no headless GPU available");
-            return;
-        };
-        let Ok(mut app) = VardaApp::new(gpu, &crate::testing::headless_config()) else {
+        let Some(mut app) = crate::testing::headless_app() else {
             return;
         };
         let channel_uuid = crate::app::snapshot::build_mixer_snapshot(&app).channels[0]

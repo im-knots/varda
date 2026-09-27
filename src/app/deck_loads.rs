@@ -236,8 +236,7 @@ mod tests {
     use crate::engine::{CommandResult, EngineCommand as C, ErrorCode};
 
     fn headless_app() -> Option<super::VardaApp> {
-        let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
-        super::VardaApp::new(gpu, &crate::testing::headless_config()).ok()
+        crate::testing::headless_app()
     }
 
     fn channel_uuid(app: &super::VardaApp, idx: usize) -> String {

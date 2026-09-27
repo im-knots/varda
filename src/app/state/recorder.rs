@@ -320,8 +320,7 @@ mod tests {
     /// Returns `None` where there is no GPU, like every other test that needs
     /// a real engine.
     fn app_with_a_deck() -> Option<(VardaApp, String, String)> {
-        let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
-        let mut app = VardaApp::new(gpu, &crate::testing::headless_config()).ok()?;
+        let mut app = crate::testing::headless_app()?;
         let channel = app.mixer_ref().channels()[0].uuid().to_string();
         let deck = match app.execute_command(EngineCommand::AddDeck {
             channel_uuid: channel,

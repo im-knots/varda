@@ -489,7 +489,7 @@ mod tests {
 
     #[test]
     fn pipeline_builds_on_headless() {
-        let Ok(gpu) = crate::renderer::GpuContext::new_headless() else {
+        let Some(gpu) = crate::testing::headless_gpu() else {
             return;
         };
         let _pipe = PointCloudPipeline::new(&gpu.device, wgpu::TextureFormat::Rgba8Unorm);

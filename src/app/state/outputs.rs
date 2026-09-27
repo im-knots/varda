@@ -66,7 +66,11 @@ impl VardaApp {
 
     /// Take `config` in place when the sink can, otherwise rebuild the sink
     /// from it. A running output is stopped before a rebuild.
-    fn apply_sink_config(&mut self, idx: usize, config: &SinkConfig) -> anyhow::Result<()> {
+    pub(crate) fn apply_sink_config(
+        &mut self,
+        idx: usize,
+        config: &SinkConfig,
+    ) -> anyhow::Result<()> {
         let render = (self.render.width, self.render.height);
         let output = &mut self.output.outputs[idx];
         if output.sink_mut().patch(config, &self.sources.services) {
@@ -736,8 +740,7 @@ mod tests {
     use crate::engine::{CommandResult, EngineCommand as C};
 
     fn headless_app() -> Option<crate::app::VardaApp> {
-        let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
-        crate::app::VardaApp::new(gpu, &crate::testing::headless_config()).ok()
+        crate::testing::headless_app()
     }
 
     fn create(app: &mut crate::app::VardaApp, sink: crate::output::SinkConfig) -> String {

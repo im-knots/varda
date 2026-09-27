@@ -781,7 +781,7 @@ mod tests {
 
     #[test]
     fn disabled_manager_refuses_to_open() {
-        let Ok(gpu) = crate::renderer::GpuContext::new_headless() else {
+        let Some(gpu) = crate::testing::headless_gpu() else {
             return; // No adapter in this environment — skip, per project convention.
         };
         let mut mgr = ScreenCaptureManager::new_disabled();
@@ -794,7 +794,7 @@ mod tests {
 
     #[test]
     fn open_mock_is_refcounted_and_survives_release_of_one_holder() {
-        let Ok(gpu) = crate::renderer::GpuContext::new_headless() else {
+        let Some(gpu) = crate::testing::headless_gpu() else {
             return;
         };
         let mut mgr = ScreenCaptureManager::new_disabled();
@@ -825,7 +825,7 @@ mod tests {
 
     #[test]
     fn open_mock_delivers_frames_and_uploads_to_the_shared_texture() {
-        let Ok(gpu) = crate::renderer::GpuContext::new_headless() else {
+        let Some(gpu) = crate::testing::headless_gpu() else {
             return;
         };
         let mut mgr = ScreenCaptureManager::new_disabled();
@@ -855,7 +855,7 @@ mod tests {
         // a 4:3 window arrived as a 16:9 texture (letterboxed by the OS) and the
         // deck's Scale control did nothing — source and target dimensions were
         // identical, which every mode resolves to identity UVs.
-        let Ok(gpu) = crate::renderer::GpuContext::new_headless() else {
+        let Some(gpu) = crate::testing::headless_gpu() else {
             return;
         };
         let mut mgr = ScreenCaptureManager::new_disabled();
@@ -888,7 +888,7 @@ mod tests {
 
     #[test]
     fn update_selective_skips_captures_not_in_the_needed_set() {
-        let Ok(gpu) = crate::renderer::GpuContext::new_headless() else {
+        let Some(gpu) = crate::testing::headless_gpu() else {
             return;
         };
         let mut mgr = ScreenCaptureManager::new_disabled();
@@ -907,7 +907,7 @@ mod tests {
     /// left its capture thread running for the rest of the session.
     #[test]
     fn reconcile_stops_a_session_no_deck_holds_any_more() {
-        let Ok(gpu) = crate::renderer::GpuContext::new_headless() else {
+        let Some(gpu) = crate::testing::headless_gpu() else {
             return;
         };
         let mut mgr = ScreenCaptureManager::new_disabled();
@@ -930,7 +930,7 @@ mod tests {
 
     #[test]
     fn reconcile_makes_the_deck_count_authoritative_over_the_ref_count() {
-        let Ok(gpu) = crate::renderer::GpuContext::new_headless() else {
+        let Some(gpu) = crate::testing::headless_gpu() else {
             return;
         };
         let mut mgr = ScreenCaptureManager::new_disabled();
@@ -956,7 +956,7 @@ mod tests {
 
     #[test]
     fn set_config_clamps_through_the_live_session() {
-        let Ok(gpu) = crate::renderer::GpuContext::new_headless() else {
+        let Some(gpu) = crate::testing::headless_gpu() else {
             return;
         };
         let mut mgr = ScreenCaptureManager::new_disabled();

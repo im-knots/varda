@@ -479,7 +479,7 @@ mod tests {
     /// Limited range expands to full: luma 16 is black and 235 is white.
     #[test]
     fn limited_range_black_and_white_expand_to_full_range() {
-        let Ok(context) = GpuContext::new_headless() else {
+        let Some(context) = crate::testing::headless_gpu() else {
             return;
         };
         let mut bytes = [128, 16, 128, 235];
@@ -491,7 +491,7 @@ mod tests {
     /// RGBA arrives ready to use: uploaded as-is, row padding skipped.
     #[test]
     fn rgba_frames_upload_unchanged() {
-        let Ok(context) = GpuContext::new_headless() else {
+        let Some(context) = crate::testing::headless_gpu() else {
             return;
         };
         let mut bytes = [
@@ -513,7 +513,7 @@ mod tests {
     /// several sRGB codes.
     #[test]
     fn uyvy_from_the_send_path_round_trips() {
-        let Ok(context) = GpuContext::new_headless() else {
+        let Some(context) = crate::testing::headless_gpu() else {
             return;
         };
         let colors: [[u8; 3]; 7] = [

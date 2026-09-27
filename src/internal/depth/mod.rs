@@ -460,7 +460,7 @@ mod tests {
     use crate::renderer::GpuContext;
 
     fn headless() -> Option<GpuContext> {
-        GpuContext::new_headless().ok()
+        crate::testing::headless_gpu()
     }
 
     #[test]

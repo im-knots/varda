@@ -489,8 +489,7 @@ mod tests {
     use crate::engine::{EffectTarget, EngineCommand as C};
 
     fn headless_app() -> Option<VardaApp> {
-        let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
-        VardaApp::new(gpu, &crate::testing::headless_config()).ok()
+        crate::testing::headless_app()
     }
 
     /// A blue deck in channel 0, returning its UUID.

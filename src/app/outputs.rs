@@ -54,33 +54,102 @@ impl VardaApp {
             };
             self.output.sinks.restore(&config.target, &mut env)
         };
-        let name = if config.name.is_empty() {
-            format!("Output {}", self.output.outputs.len() + 1)
-        } else {
-            config.name.clone()
-        };
+        if config.name.is_empty() {
+            config.name = format!("Output {}", self.output.outputs.len() + 1);
+        }
         if let Some(reason) = reason {
-            let message = format!("Output '{name}' is unavailable here and kept as is: {reason}");
+            let message = format!(
+                "Output '{}' is unavailable here and kept as is: {reason}",
+                config.name
+            );
             log::warn!("{message}");
             self.session.notifications.warn(message);
         }
-        let mut output = Output::new(
+        let output = Output::new(
             &self.render.context,
             &self.sources.services,
             config.uuid.clone(),
-            name.clone(),
+            config.name.clone(),
             sink,
             render,
         )?;
-        output.surface_assignments = config
-            .surface_assignments
+        log::info!(
+            "Created output '{}' ({})",
+            config.name,
+            output.sink().sink_type()
+        );
+        self.output.outputs.push(output);
+        let idx = self.output.outputs.len() - 1;
+        self.apply_output_settings(idx, &config)?;
+        Ok(config.uuid)
+    }
+
+    /// Make the live outputs match a saved stage. Outputs the stage does not
+    /// have are stopped and closed. An output it has is updated in place: one
+    /// whose sink settings match keeps its sink, so a recording or stream in
+    /// progress keeps running through a reload; one whose settings differ is
+    /// stopped and its sink rebuilt. New outputs are created, and the result
+    /// takes the saved order. Returns a message per output that failed.
+    pub(crate) fn reconcile_outputs(
+        &mut self,
+        saved: &[crate::scene::OutputConfig],
+    ) -> Vec<String> {
+        let mut errors = Vec::new();
+        let gone: Vec<String> = self
+            .output
+            .outputs
             .iter()
-            .map(|a| SurfaceAssignment {
-                surface_uuid: a.surface_uuid.clone(),
-                enabled: a.enabled,
-                overlap_zones: SurfaceOverlapZones::default(),
-            })
+            .filter(|live| !saved.iter().any(|config| config.uuid == live.uuid))
+            .map(|live| live.uuid.clone())
             .collect();
+        for uuid in gone {
+            let passthrough = self.output.close_output(&uuid).ok().flatten();
+            self.release_passthrough(passthrough);
+        }
+
+        for config in saved {
+            let mut config = config.clone();
+            config.migrate_legacy();
+            let live = self
+                .output
+                .outputs
+                .iter()
+                .position(|live| !config.uuid.is_empty() && live.uuid == config.uuid);
+            let result = match live {
+                Some(idx) => {
+                    let current = self.output.outputs[idx].sink().config();
+                    let rebuilt = if same_sink(&current, &config.target) {
+                        Ok(())
+                    } else {
+                        self.apply_sink_config(idx, &config.target)
+                    };
+                    rebuilt.and_then(|()| self.apply_output_settings(idx, &config))
+                }
+                None => self.create_output(&config).map(|_| ()),
+            };
+            if let Err(e) = result {
+                log::error!("Failed to restore output '{}': {e:#}", config.name);
+                errors.push(format!("output '{}': {e:#}", config.name));
+            }
+        }
+
+        let position = |uuid: &str| {
+            saved
+                .iter()
+                .position(|config| config.uuid == uuid)
+                .unwrap_or(usize::MAX)
+        };
+        self.output.outputs.sort_by_key(|o| position(&o.uuid));
+        errors
+    }
+
+    /// Apply everything a saved output holds besides its sink: its name,
+    /// surfaces, blending, calibration, rotation and format.
+    fn apply_output_settings(
+        &mut self,
+        idx: usize,
+        config: &crate::scene::OutputConfig,
+    ) -> anyhow::Result<()> {
         // One-time migration: pre-8i.5 files stored warp on the assignment.
         // Move it onto the surface (first assignment wins; an existing surface
         // warp, such as a dome mesh, takes precedence).
@@ -95,6 +164,19 @@ impl VardaApp {
                 surface.warp = Some(warp.clone());
             }
         }
+        let output = &mut self.output.outputs[idx];
+        if !config.name.is_empty() {
+            output.name.clone_from(&config.name);
+        }
+        output.surface_assignments = config
+            .surface_assignments
+            .iter()
+            .map(|a| SurfaceAssignment {
+                surface_uuid: a.surface_uuid.clone(),
+                enabled: a.enabled,
+                overlap_zones: SurfaceOverlapZones::default(),
+            })
+            .collect();
         output.edge_blend_mode = config.edge_blend_mode;
         output.edge_blend = config.edge_blend;
         output.calibration_mode = config.calibration_mode;
@@ -106,13 +188,13 @@ impl VardaApp {
             &self.sources.services,
             config.presentation,
         ) {
-            log::warn!("Output '{name}' presentation request fell back during restore: {error}");
+            log::warn!(
+                "Output '{}' presentation request fell back during restore: {error}",
+                output.name
+            );
         }
-        log::info!("Created output '{name}' ({})", output.sink().sink_type());
-        let uuid = output.uuid.clone();
-        self.output.outputs.push(output);
-        self.refresh_presentation_notification(self.output.outputs.len() - 1);
-        Ok(uuid)
+        self.refresh_presentation_notification(idx);
+        Ok(())
     }
 
     /// The window host: create the OS windows window sinks are waiting for,
@@ -221,6 +303,19 @@ impl VardaApp {
             }
         }
     }
+}
+
+/// Whether a live sink already has every setting a saved one names. The
+/// saved config may leave fields to the type's defaults.
+fn same_sink(
+    live: &crate::engine::value::provider::ProviderConfig,
+    saved: &crate::engine::value::provider::ProviderConfig,
+) -> bool {
+    live.type_id() == saved.type_id()
+        && saved
+            .fields()
+            .iter()
+            .all(|(key, value)| live.get(key) == Some(value))
 }
 
 #[cfg(test)]

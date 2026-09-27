@@ -1088,9 +1088,7 @@ mod tests {
 
     #[test]
     fn deck_resize_zero_dimensions_does_not_panic() {
-        let gpu = crate::renderer::GpuContext::new_headless();
-        let Ok(gpu) = gpu else {
-            eprintln!("Skipping: no headless GPU available");
+        let Some(gpu) = crate::testing::headless_gpu() else {
             return;
         };
         let mut deck = crate::deck::Deck::solid_color(&gpu, [1.0, 0.0, 0.0, 1.0], 64, 64);

@@ -270,7 +270,7 @@ mod tests {
     /// every blend mode and for odd and even layer counts.
     #[test]
     fn ping_pong_matches_copying_the_composite_before_each_blend() {
-        let Ok(context) = GpuContext::new_headless() else {
+        let Some(context) = crate::testing::headless_gpu() else {
             return;
         };
         let blit = BlitPipeline::new(&context.device, context.compositing_format).unwrap();

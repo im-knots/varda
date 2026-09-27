@@ -7,21 +7,24 @@ use crate::engine::{CommandOutcome, CommandResult, EngineCommand};
 impl VardaApp {
     /// Run the GUI's commands for this frame, in order.
     ///
-    /// When `starts_undo_step` is set, the pre-mutation state is recorded as one
-    /// undo step before anything runs. The consumer decides that, because only
-    /// it knows whether a drag is continuing.
+    /// When `starts_undo_step` is set, the state before anything runs becomes
+    /// one undo step, kept only if at least one undoable command succeeds: a
+    /// frame whose edits were all rejected changed nothing, and recording it
+    /// would clear the redo history. The consumer decides when a step starts,
+    /// because only it knows whether a drag is continuing.
     pub fn apply_engine_actions(&mut self, commands: Vec<EngineCommand>, starts_undo_step: bool) {
-        if starts_undo_step {
-            let snapshot = self.history_snapshot();
-            self.session.history.push(snapshot);
-        }
+        let before = starts_undo_step.then(|| self.history_snapshot());
+        let mut edited = false;
         // Ordering within the vec is preserved, so a new-channel library drop
         // enqueues `AddChannel` before its `Add*Deck` and the deck resolves
         // against the freshly created channel.
         for cmd in commands {
             let is_deck_add = command_is_deck_add(&cmd);
             let success_toast = gui_success_toast(&cmd);
+            let undoable = self.is_undoable(&cmd);
             let outcome = self.execute_command_gui(cmd);
+            edited |=
+                undoable && !matches!(outcome, CommandOutcome::Plain(CommandResult::Err { .. }));
             if is_deck_add {
                 self.notify_deck_add_outcome(&outcome);
             }
@@ -30,6 +33,11 @@ impl VardaApp {
             {
                 self.session.notifications.info(toast);
             }
+        }
+        if let Some(snapshot) = before
+            && edited
+        {
+            self.session.history.push(snapshot);
         }
     }
 

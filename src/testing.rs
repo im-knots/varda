@@ -59,6 +59,51 @@ pub fn temp_workspace() -> String {
 /// # Panics
 ///
 /// Panics if the scratch workspace cannot be created.
+/// A headless GPU context, or `None` when this machine has no adapter.
+///
+/// Skipping on `None` makes an absent adapter look like a passing suite, so CI
+/// sets `VARDA_REQUIRE_GPU=1` and a missing adapter fails instead, as in the
+/// integration tests.
+///
+/// # Panics
+///
+/// Panics if no context can be created while `VARDA_REQUIRE_GPU` is set.
+pub fn headless_gpu() -> Option<crate::renderer::context::GpuContext> {
+    match crate::renderer::context::GpuContext::new_headless() {
+        Ok(gpu) => Some(gpu),
+        Err(e) => {
+            assert!(
+                std::env::var_os("VARDA_REQUIRE_GPU").is_none(),
+                "VARDA_REQUIRE_GPU is set but no headless GPU context is available: {e:#}"
+            );
+            eprintln!("no GPU adapter, skipping");
+            None
+        }
+    }
+}
+
+/// An engine built with `config` on a headless GPU, or `None` only when there
+/// is no GPU. An engine that fails to build fails the test: that is the
+/// regression a test exists to catch, not a missing adapter.
+///
+/// # Panics
+///
+/// Panics if the engine cannot be built on an available GPU.
+pub fn headless_app_with(config: &crate::app::AppConfig) -> Option<crate::app::VardaApp> {
+    let gpu = headless_gpu()?;
+    Some(crate::app::VardaApp::new(gpu, config).expect("the engine builds on a headless GPU"))
+}
+
+/// An engine on a headless GPU with a scratch workspace; see
+/// [`headless_app_with`].
+///
+/// # Panics
+///
+/// Panics if the engine cannot be built on an available GPU.
+pub fn headless_app() -> Option<crate::app::VardaApp> {
+    headless_app_with(&headless_config())
+}
+
 pub fn headless_config() -> crate::app::AppConfig {
     use clap::Parser;
     crate::app::AppConfig::parse_from([

@@ -567,9 +567,7 @@ mod tests {
 
     #[test]
     fn writes_go_through_the_router_by_uuid() {
-        use crate::renderer::GpuContext;
-
-        let Ok(gpu) = GpuContext::new_headless() else {
+        let Some(gpu) = crate::testing::headless_gpu() else {
             return;
         };
         let mut mixer = Mixer::new(&gpu, 64, 64).unwrap();

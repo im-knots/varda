@@ -273,8 +273,7 @@ mod tests {
     }
 
     fn headless_app() -> Option<super::super::VardaApp> {
-        let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
-        super::super::VardaApp::new(gpu, &crate::testing::headless_config()).ok()
+        crate::testing::headless_app()
     }
 
     #[test]

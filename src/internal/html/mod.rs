@@ -505,7 +505,7 @@ mod smoke_tests {
     #[test]
     #[ignore = "heavy: starts a real Servo engine; run with --ignored --test-threads=1"]
     fn html_deck_smoke_renders_plain_and_css_js() {
-        let Ok(gpu) = GpuContext::new_headless() else {
+        let Some(gpu) = crate::testing::headless_gpu() else {
             eprintln!("skipping: no GPU adapter available");
             return;
         };
@@ -543,7 +543,7 @@ mod smoke_tests {
     #[test]
     #[ignore = "heavy: starts a real Servo engine; run with --ignored --test-threads=1"]
     fn html_deck_setinterval_idle_repaint() {
-        let Ok(gpu) = GpuContext::new_headless() else {
+        let Some(gpu) = crate::testing::headless_gpu() else {
             eprintln!("skipping: no GPU adapter available");
             return;
         };
@@ -572,7 +572,7 @@ done=true;}},120);</script></body></html>";
     #[test]
     #[ignore = "heavy: starts a real Servo engine; run with --ignored --test-threads=1"]
     fn html_deck_reload_repaints() {
-        let Ok(gpu) = GpuContext::new_headless() else {
+        let Some(gpu) = crate::testing::headless_gpu() else {
             eprintln!("skipping: no GPU adapter available");
             return;
         };
@@ -606,7 +606,7 @@ done=true;}},120);</script></body></html>";
     #[test]
     #[ignore = "heavy: starts a real Servo engine; run with --ignored --test-threads=1"]
     fn html_deck_click_input_repaints() {
-        let Ok(gpu) = GpuContext::new_headless() else {
+        let Some(gpu) = crate::testing::headless_gpu() else {
             eprintln!("skipping: no GPU adapter available");
             return;
         };
@@ -665,7 +665,7 @@ document.body.style.background='rgb(0,0,255)';});</script></body></html>";
     #[test]
     #[ignore = "heavy: starts a real Servo engine; run with --ignored --test-threads=1"]
     fn html_deck_transparent_background_has_alpha() {
-        let Ok(gpu) = GpuContext::new_headless() else {
+        let Some(gpu) = crate::testing::headless_gpu() else {
             eprintln!("skipping: no GPU adapter available");
             return;
         };

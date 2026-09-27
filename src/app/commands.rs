@@ -1917,9 +1917,7 @@ mod tests {
     use crate::engine::{CommandOutcome, CommandResult};
 
     fn headless_app() -> Option<super::VardaApp> {
-        let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
-        let config = crate::testing::headless_config();
-        super::VardaApp::new(gpu, &config).ok()
+        crate::testing::headless_app()
     }
 
     #[test]
@@ -2003,6 +2001,181 @@ mod tests {
             1,
             "redo must restore the deck"
         );
+    }
+
+    fn channel_uuids(app: &super::VardaApp) -> Vec<String> {
+        app.mixer_ref()
+            .channels()
+            .iter()
+            .map(|ch| ch.uuid().to_string())
+            .collect()
+    }
+
+    fn deck_uuids(app: &super::VardaApp, channel: usize) -> Vec<String> {
+        app.mixer_ref().channels()[channel]
+            .decks
+            .iter()
+            .map(|slot| slot.deck.uuid().to_string())
+            .collect()
+    }
+
+    fn solid_deck(app: &mut super::VardaApp, channel_uuid: &str) {
+        drain(
+            app,
+            vec![C::AddDeck {
+                channel_uuid: channel_uuid.to_string(),
+                source: crate::solid_color::SolidColor::config_for([0.0, 0.0, 1.0, 1.0]),
+            }],
+            true,
+        );
+    }
+
+    /// Undo brings a removed channel back as itself, so everything that
+    /// names it (MIDI, modulation, arrangement, surfaces) finds it again.
+    #[test]
+    fn undoing_a_channel_removal_restores_its_identity() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        drain(&mut app, vec![C::AddChannel], true);
+        let first = channel_uuids(&app)[0].clone();
+        solid_deck(&mut app, &first);
+        let channels = channel_uuids(&app);
+        let decks = deck_uuids(&app, 0);
+
+        drain(
+            &mut app,
+            vec![C::RemoveChannel {
+                channel_uuid: first,
+            }],
+            true,
+        );
+        assert_eq!(channel_uuids(&app).len(), channels.len() - 1);
+        drain(&mut app, vec![C::Undo], false);
+
+        assert_eq!(channel_uuids(&app), channels);
+        assert_eq!(deck_uuids(&app, 0), decks);
+    }
+
+    /// Two decks with the same source swap places and swap back: each keeps
+    /// its own identity and settings rather than the settings landing on
+    /// whichever deck now sits in that position.
+    #[test]
+    fn undoing_a_reorder_restores_each_decks_identity_and_settings() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        let channel = channel_uuids(&app)[0].clone();
+        solid_deck(&mut app, &channel);
+        solid_deck(&mut app, &channel);
+        let decks = deck_uuids(&app, 0);
+        drain(
+            &mut app,
+            vec![C::SetDeckOpacity {
+                deck_uuid: decks[0].clone(),
+                opacity: 0.25,
+            }],
+            true,
+        );
+
+        drain(
+            &mut app,
+            vec![C::ReorderDeck {
+                channel_uuid: channel,
+                from_idx: 0,
+                to_idx: 1,
+            }],
+            true,
+        );
+        drain(&mut app, vec![C::Undo], false);
+
+        assert_eq!(deck_uuids(&app, 0), decks);
+        let first = &app.mixer_ref().channels()[0].decks[0];
+        assert!((first.opacity - 0.25).abs() < f32::EPSILON);
+    }
+
+    /// The same holds for effects, whose modulation is keyed on their UUID.
+    #[test]
+    fn undoing_an_effect_removal_restores_effect_identities() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        let add = || C::AddEffect {
+            target: crate::engine::value::entity::EffectTarget::Master,
+            shader_name: "invert".into(),
+        };
+        drain(&mut app, vec![add()], true);
+        drain(&mut app, vec![add()], true);
+        let effects = |app: &super::VardaApp| -> Vec<String> {
+            app.mixer_ref()
+                .master_effects()
+                .iter()
+                .map(|e| e.uuid().to_string())
+                .collect()
+        };
+        let before = effects(&app);
+        assert_eq!(before.len(), 2);
+
+        drain(
+            &mut app,
+            vec![C::RemoveEffect {
+                effect_uuid: before[0].clone(),
+            }],
+            true,
+        );
+        drain(&mut app, vec![C::Undo], false);
+
+        assert_eq!(effects(&app), before);
+    }
+
+    /// Add a deck and undo it, leaving one step to redo.
+    fn app_with_a_redo() -> Option<super::VardaApp> {
+        let mut app = headless_app()?;
+        let channel = app.mixer_ref().channels()[0].uuid().to_string();
+        solid_deck(&mut app, &channel);
+        drain(&mut app, vec![C::Undo], false);
+        assert!(app.history_can_redo());
+        Some(app)
+    }
+
+    fn stale_write() -> C {
+        C::RemoveDeck {
+            deck_uuid: "deadbeef".into(),
+        }
+    }
+
+    /// A rejected write from the API (a stale UUID, say) changes nothing, so
+    /// it must not cost the redo it would have forked away.
+    #[test]
+    fn a_rejected_bus_command_keeps_the_redo_history() {
+        let Some(mut app) = app_with_a_redo() else {
+            return;
+        };
+        let _ = app.command_sender().send((stale_write(), None));
+        app.process_commands();
+        assert!(app.history_can_redo());
+    }
+
+    /// The same for a GUI frame whose commands all fail.
+    #[test]
+    fn a_rejected_gui_frame_keeps_the_redo_history() {
+        let Some(mut app) = app_with_a_redo() else {
+            return;
+        };
+        // The frame's housekeeping succeeds; only the rejected edit counts.
+        drain(
+            &mut app,
+            vec![
+                stale_write(),
+                C::SetPreviewChannels {
+                    channel_uuids: Vec::new(),
+                },
+            ],
+            true,
+        );
+        assert!(app.history_can_redo());
+        drain(&mut app, vec![C::Redo], false);
+        assert_eq!(app.mixer_ref().channels()[0].decks.len(), 1);
     }
 
     /// Only a frame that starts an undo step records one; a held drag's later

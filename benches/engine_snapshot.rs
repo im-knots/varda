@@ -26,13 +26,11 @@ use varda::app::VardaApp;
 use varda::app::publish::StatePublication;
 use varda::engine::{CommandResult, EngineCommand};
 use varda::modulation::LFOWaveform;
-use varda::renderer::context::GpuContext;
 
 /// Four channels of four decks each, and four LFOs: about the size of a
 /// working set.
 fn scene() -> Option<VardaApp> {
-    let gpu = GpuContext::new_headless().ok()?;
-    let mut app = VardaApp::new(gpu, &varda::testing::headless_config()).ok()?;
+    let mut app = varda::testing::headless_app()?;
     let send = |app: &mut VardaApp, cmd: EngineCommand| {
         let (tx, rx) = tokio::sync::oneshot::channel();
         app.command_sender().send((cmd, Some(tx))).ok()?;

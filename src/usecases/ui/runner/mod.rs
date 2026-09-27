@@ -1040,7 +1040,7 @@ mod tests {
     /// has no GPU adapter — matching the skip-without-adapter pattern used by the
     /// other GPU tests.
     fn headless_runner() -> Option<UIRunner> {
-        let gpu = GpuContext::new_headless().ok()?;
+        let gpu = crate::testing::headless_gpu()?;
         // One config for both halves, so the engine and the runner agree on
         // which scratch workspace a shutdown save writes to. The scratch
         // workspace is not optional: `render_headless` saves on shutdown.

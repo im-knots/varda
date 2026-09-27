@@ -317,7 +317,7 @@ mod tests {
 
     #[test]
     fn an_svg_deck_is_drawn_at_the_deck_size_not_the_files_own_size() {
-        let Ok(gpu) = GpuContext::new_headless() else {
+        let Some(gpu) = crate::testing::headless_gpu() else {
             eprintln!("Skipping: no headless GPU available");
             return;
         };
@@ -333,7 +333,7 @@ mod tests {
 
     #[test]
     fn changing_the_master_resolution_redraws_the_svg() {
-        let Ok(gpu) = GpuContext::new_headless() else {
+        let Some(gpu) = crate::testing::headless_gpu() else {
             eprintln!("Skipping: no headless GPU available");
             return;
         };
@@ -356,7 +356,7 @@ mod tests {
     fn a_raster_image_keeps_its_own_pixels_across_a_resize() {
         // The counterpart to the SVG behavior: a PNG has real pixels and there
         // is nothing to redraw, so resizing must leave the source alone.
-        let Ok(gpu) = GpuContext::new_headless() else {
+        let Some(gpu) = crate::testing::headless_gpu() else {
             eprintln!("Skipping: no headless GPU available");
             return;
         };

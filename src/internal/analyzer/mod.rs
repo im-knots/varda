@@ -641,7 +641,7 @@ mod tests {
     /// validation runs.
     #[test]
     fn colour_path_deck_readback_encodes_a_legal_copy() {
-        let Ok(context) = crate::renderer::context::GpuContext::new_headless() else {
+        let Some(context) = crate::testing::headless_gpu() else {
             eprintln!("no GPU adapter; skipping");
             return;
         };

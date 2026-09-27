@@ -1072,7 +1072,7 @@ mod tests {
     /// See /spec/syphon-zero-copy.md § The send path corrupts colour today.
     #[test]
     fn publish_slot_matches_syphons_destination_pixel_format() {
-        let Ok(ctx) = crate::renderer::context::GpuContext::new_headless() else {
+        let Some(ctx) = crate::testing::headless_gpu() else {
             return; // no GPU on this machine
         };
         let Some(mtl_dev) =
@@ -1107,7 +1107,7 @@ mod tests {
         if !mgr.is_available() {
             return; // Syphon.framework not installed on this machine
         }
-        let Ok(ctx) = crate::renderer::context::GpuContext::new_headless() else {
+        let Some(ctx) = crate::testing::headless_gpu() else {
             return;
         };
 
@@ -1238,7 +1238,7 @@ mod tests {
         if !mgr.is_available() {
             return; // Syphon.framework not installed on this machine
         }
-        let Ok(ctx) = crate::renderer::context::GpuContext::new_headless() else {
+        let Some(ctx) = crate::testing::headless_gpu() else {
             return;
         };
         let Some(mtl_dev) = mgr.wgpu_metal_device(&ctx.device) else {
@@ -1414,7 +1414,7 @@ mod tests {
         if !mgr.is_available() {
             return; // Syphon.framework not installed on this machine
         }
-        let Ok(ctx) = crate::renderer::context::GpuContext::new_headless() else {
+        let Some(ctx) = crate::testing::headless_gpu() else {
             return;
         };
 

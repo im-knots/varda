@@ -76,8 +76,7 @@ mod tests {
 
     /// A real snapshot from a headless engine; `None` without a GPU adapter.
     fn state() -> Option<EngineState> {
-        let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
-        let app = crate::app::VardaApp::new(gpu, &crate::testing::headless_config()).ok()?;
+        let app = crate::testing::headless_app()?;
         Some(app.build_engine_state())
     }
 

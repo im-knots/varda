@@ -359,7 +359,7 @@ mod tests {
     use crate::renderer::context::GpuContext;
 
     fn mixer() -> Option<(GpuContext, Mixer)> {
-        let gpu = GpuContext::new_headless().ok()?;
+        let gpu = crate::testing::headless_gpu()?;
         let mixer = Mixer::new(&gpu, 64, 64).ok()?;
         Some((gpu, mixer))
     }

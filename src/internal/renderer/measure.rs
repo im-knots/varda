@@ -414,7 +414,7 @@ mod tests {
 #[cfg(test)]
 mod gpu_tests {
     use super::*;
-    use crate::renderer::{GpuContext, hdr};
+    use crate::renderer::hdr;
 
     /// Encode a frame of known PQ codes and check the reduction recovers the
     /// light levels the metadata will claim.
@@ -423,7 +423,7 @@ mod gpu_tests {
         height: u32,
         fill: impl Fn(u32, u32) -> u32,
     ) -> Option<FrameLightLevels> {
-        let ctx = GpuContext::new_headless().ok()?;
+        let ctx = crate::testing::headless_gpu()?;
         let mut meter = ContentLightMeter::new(&ctx.device).ok()?;
 
         let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {

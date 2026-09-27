@@ -707,14 +707,7 @@ mod tests {
 
     #[test]
     fn fps_smoothing_converges() {
-        let gpu = crate::renderer::context::GpuContext::new_headless();
-        let Ok(gpu) = gpu else {
-            eprintln!("Skipping: no headless GPU available");
-            return;
-        };
-        let config = crate::testing::headless_config();
-        let Ok(mut app) = VardaApp::new(gpu, &config) else {
-            eprintln!("Skipping: VardaApp creation failed");
+        let Some(mut app) = crate::testing::headless_app() else {
             return;
         };
         // Seed with 60 identical FPS values
@@ -729,14 +722,7 @@ mod tests {
 
     #[test]
     fn fps_smoothing_window_cap() {
-        let gpu = crate::renderer::context::GpuContext::new_headless();
-        let Ok(gpu) = gpu else {
-            eprintln!("Skipping: no headless GPU available");
-            return;
-        };
-        let config = crate::testing::headless_config();
-        let Ok(mut app) = VardaApp::new(gpu, &config) else {
-            eprintln!("Skipping: VardaApp creation failed");
+        let Some(mut app) = crate::testing::headless_app() else {
             return;
         };
         // Push more than 60 entries

@@ -1787,7 +1787,7 @@ mod tests {
 
     #[test]
     fn presentation_blit_shader_builds_for_eight_and_ten_bit_targets() {
-        let Ok(ctx) = GpuContext::new_headless() else {
+        let Some(ctx) = crate::testing::headless_gpu() else {
             return;
         };
         for format in [
@@ -1905,7 +1905,7 @@ mod tests {
 
         const WIDTH: u32 = 4;
         const ROW_BYTES: u32 = 256;
-        let Ok(ctx) = GpuContext::new_headless() else {
+        let Some(ctx) = crate::testing::headless_gpu() else {
             return;
         };
         let required_features = wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
@@ -2068,7 +2068,7 @@ mod tests {
         };
 
         const WIDTH: u32 = 1024;
-        let Ok(ctx) = GpuContext::new_headless() else {
+        let Some(ctx) = crate::testing::headless_gpu() else {
             return;
         };
         let Ok(pipeline) = BlitPipeline::new(&ctx.device, wgpu::TextureFormat::Rgb10a2Unorm) else {
@@ -2367,7 +2367,7 @@ mod tests {
     #[test]
     fn rgb10_dither_is_stable_and_changes_codes_versus_off() {
         const WIDTH: u32 = 32;
-        let Ok(ctx) = GpuContext::new_headless() else {
+        let Some(ctx) = crate::testing::headless_gpu() else {
             return;
         };
         let Ok(pipeline) = BlitPipeline::new(&ctx.device, wgpu::TextureFormat::Rgb10a2Unorm) else {
@@ -2538,7 +2538,7 @@ mod tests {
     /// returned offsets must be contiguous and non-overlapping.
     #[test]
     fn prepare_grows_pools_and_packs_vertices() {
-        let Some(ctx) = GpuContext::new_headless().ok() else {
+        let Some(ctx) = crate::testing::headless_gpu() else {
             eprintln!("no GPU adapter — skipping");
             return;
         };
@@ -2586,7 +2586,7 @@ mod tests {
     /// buffer the GPU may still be reading (the cross-frame WAR hazard).
     #[test]
     fn prepare_rotates_frame_pools() {
-        let Some(ctx) = GpuContext::new_headless().ok() else {
+        let Some(ctx) = crate::testing::headless_gpu() else {
             eprintln!("no GPU adapter — skipping");
             return;
         };
@@ -2670,7 +2670,7 @@ mod tests {
         let width = WIDTH;
         assert!(probes.len() as u32 <= WIDTH);
 
-        let Ok(ctx) = GpuContext::new_headless() else {
+        let Some(ctx) = crate::testing::headless_gpu() else {
             return;
         };
         let Ok(pipeline) = BlitPipeline::new(&ctx.device, wgpu::TextureFormat::Rgb10a2Unorm) else {

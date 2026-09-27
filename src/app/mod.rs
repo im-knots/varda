@@ -628,12 +628,17 @@ impl VardaApp {
             // double-record here. See classify::command_is_undoable.
             // A pass under way has already pushed the one entry it gets, and a
             // performer playing a fader through the API would otherwise fill
-            // the stack a frame at a time.
-            if self.is_undoable(&cmd) && !self.is_recording() {
-                let snapshot = self.history_snapshot();
+            // the stack a frame at a time. The step is kept only when the
+            // command succeeds: a rejected one changed nothing, and keeping it
+            // would clear the redo history.
+            let before =
+                (self.is_undoable(&cmd) && !self.is_recording()).then(|| self.history_snapshot());
+            let result = self.execute_command(cmd);
+            if let Some(snapshot) = before
+                && !matches!(result, CommandResult::Err { .. })
+            {
                 self.session.history.push(snapshot);
             }
-            let result = self.execute_command(cmd);
             if let Some(tx) = reply_tx {
                 let _ = tx.send(result);
             }
@@ -1110,9 +1115,7 @@ mod tests {
     // ── Engine smoke tests ──────────────────────────────────────
 
     fn headless_app() -> Option<VardaApp> {
-        let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
-        let config = crate::testing::headless_config();
-        VardaApp::new(gpu, &config).ok()
+        crate::testing::headless_app()
     }
 
     fn channel_uuid(app: &VardaApp, idx: usize) -> String {

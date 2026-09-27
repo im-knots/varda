@@ -607,7 +607,7 @@ mod tests {
     fn a_receiver_remembers_which_sender_it_wants() {
         // Late binding depends on this: a deck bound to a producer that has not
         // started keeps the name so it can be reconciled when it appears.
-        let Ok(context) = crate::renderer::context::GpuContext::new_headless() else {
+        let Some(context) = crate::testing::headless_gpu() else {
             return;
         };
         let mut mgr = SpoutManager::new();

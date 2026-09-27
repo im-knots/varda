@@ -522,8 +522,7 @@ mod tests {
     use crate::engine::value::param::{DeckTarget, ParamAddress};
 
     fn headless_app() -> Option<super::VardaApp> {
-        let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
-        super::VardaApp::new(gpu, &crate::testing::headless_config()).ok()
+        crate::testing::headless_app()
     }
 
     /// Every gesture that writes a parameter reaches the recorder through

@@ -10,7 +10,6 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use varda::app::VardaApp;
 use varda::engine::EngineCommand;
-use varda::renderer::context::GpuContext;
 use varda::source::SourceConfig;
 
 const DECKS: usize = 5;
@@ -21,8 +20,7 @@ fn frame(app: &mut VardaApp) {
 }
 
 fn app() -> Option<VardaApp> {
-    let gpu = GpuContext::new_headless().ok()?;
-    let mut app = VardaApp::new(gpu, &varda::testing::headless_config()).ok()?;
+    let mut app = varda::testing::headless_app()?;
     let channel = app.build_engine_state().mixer.channels[0].uuid.clone();
     let root = env!("CARGO_MANIFEST_DIR");
     let sources = [

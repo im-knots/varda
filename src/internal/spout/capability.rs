@@ -274,7 +274,7 @@ mod tests {
     /// what a reader needs. Run with `--nocapture` to see it.
     #[test]
     fn the_d3d11on12_bridge_works_on_this_machine() {
-        let Ok(context) = crate::renderer::context::GpuContext::new_headless() else {
+        let Some(context) = crate::testing::headless_gpu() else {
             eprintln!("no GPU adapter, skipping Spout capability probe");
             return;
         };

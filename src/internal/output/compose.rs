@@ -856,7 +856,7 @@ mod tests {
     /// final pass. See /spec/output-sink-providers.md Decision 14.
     #[test]
     fn surface_routing_honors_rotation_like_a_whole_picture() {
-        let Ok(gpu) = GpuContext::new_headless() else {
+        let Some(gpu) = crate::testing::headless_gpu() else {
             return;
         };
         let picture = Box::leak(Box::new(quadrants(&gpu)));
@@ -900,7 +900,7 @@ mod tests {
     /// frames nobody asked for.
     #[test]
     fn a_stopped_startable_output_is_not_live() {
-        let Ok(gpu) = GpuContext::new_headless() else {
+        let Some(gpu) = crate::testing::headless_gpu() else {
             return;
         };
         let (mut output, _) = capture_output(&gpu);

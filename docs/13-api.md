@@ -40,7 +40,7 @@ varda --headless --port 8080 --fps 60
 
 In headless mode:
 - No main window is created (output windows and displays for projectors are still opened, from `stage.json` or through the API)
-- The render loop runs at `--fps` rate using sleep-based throttling
+- The render loop runs at the `--fps` rate, waking itself for each frame
 - All outputs defined in `stage.json` auto-start on launch — NDI sends, SRT streams, HLS/DASH outputs, recordings, and display outputs (fullscreen on connected monitors) all activate automatically
 - Graceful shutdown on SIGTERM/SIGINT or `POST /api/shutdown`
 

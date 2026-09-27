@@ -182,12 +182,7 @@ impl VardaApp {
                     // Set before `ensure_domemaster` below, which builds at
                     // whatever this says.
                     self.output.domemaster_resolution = prefs.domemaster_resolution;
-                    for output_config in &prefs.outputs {
-                        if let Err(e) = self.create_output(output_config) {
-                            log::error!("Failed to restore output '{}': {e:#}", output_config.name);
-                            errors.push(format!("output '{}': {e:#}", output_config.name));
-                        }
-                    }
+                    errors.extend(self.reconcile_outputs(&prefs.outputs));
                     log::info!(
                         "Loaded stage with {} surfaces, {} outputs",
                         self.output.surface_manager.surfaces.len(),
@@ -427,122 +422,91 @@ impl VardaApp {
             }
         }
 
-        // (d) Channels — diff each paired channel
-        let current_ch_count = self.mixer.channels().len();
-        let target_ch_count = target.channels.len();
+        // (d) Channels and decks, matched by UUID so each keeps its identity
+        // across undo: whatever names a channel or deck (MIDI, modulation, the
+        // arrangement, surfaces) finds the same one again. Every current
+        // channel and deck is taken out, then the target is rebuilt in order,
+        // reusing an entity whose UUID matches and building the rest with
+        // their saved UUIDs.
         let labels = self.mixer.channel_labels();
         let (providers, mut env) = self.sources.env(&self.render.context, rw, rh, &labels);
         // Sources the diff drops, released through their providers once the
         // channels are settled.
         let mut dropped: Vec<crate::deck::Deck> = Vec::new();
+        let mut spare_channels = std::mem::take(self.mixer.channels_mut());
+        let mut spare_decks: Vec<crate::channel::DeckSlot> = spare_channels
+            .iter_mut()
+            .flat_map(|ch| ch.decks.drain(..))
+            .collect();
+        let mut channels = Vec::with_capacity(target.channels.len());
 
-        // Patch existing channels that have a target counterpart
-        let paired_count = current_ch_count.min(target_ch_count);
-        for ch_idx in 0..paired_count {
-            let ch_config = &target.channels[ch_idx];
-            let ch = &mut self.mixer.channels_mut()[ch_idx];
-
-            // Patch channel properties (zero cost)
-            ch.name.clone_from(&ch_config.name);
-            ch.opacity = ch_config.opacity;
-            ch.blend_mode = ch_config.blend_mode.into();
-
-            // Diff decks within this channel
-            let current_deck_count = ch.decks.len();
-            let target_deck_count = ch_config.decks.len();
-            let paired_decks = current_deck_count.min(target_deck_count);
-
-            for d_idx in 0..paired_decks {
-                let deck_config = &ch_config.decks[d_idx];
-                if crate::persistence::source_configs_match(
-                    &ch.decks[d_idx].deck,
-                    &deck_config.source,
-                    providers,
+        for ch_config in &target.channels {
+            let reused = take_by_uuid(&mut spare_channels, &ch_config.uuid, |ch| ch.uuid());
+            let mut channel = if let Some(channel) = reused {
+                channel
+            } else {
+                match crate::channel::Channel::new(
+                    ch_config.name.clone(),
+                    &self.render.context,
+                    rw,
+                    rh,
                 ) {
-                    // Same source — patch properties in place (zero GPU cost)
-                    Self::patch_deck_slot(&mut ch.decks[d_idx], deck_config, env.gpu, env.shaders);
-                } else {
-                    // Different source — rebuild just this deck
-                    let (deck, warning) =
-                        crate::persistence::restore_deck(deck_config, providers, &mut env);
-                    warnings.extend(placeholder_warning(deck_config, warning));
-                    let mut slot = crate::channel::DeckSlot::new(deck);
-                    Self::patch_deck_slot(&mut slot, deck_config, env.gpu, env.shaders);
-                    dropped.push(std::mem::replace(&mut ch.decks[d_idx], slot).deck);
+                    Ok(mut channel) => {
+                        if !ch_config.uuid.is_empty() {
+                            channel.set_uuid(ch_config.uuid.clone());
+                        }
+                        channel
+                    }
+                    Err(e) => {
+                        warnings.push(format!(
+                            "Failed to create channel '{}': {}",
+                            ch_config.name, e
+                        ));
+                        continue;
+                    }
                 }
-            }
+            };
+            channel.name.clone_from(&ch_config.name);
+            channel.opacity = ch_config.opacity;
+            channel.blend_mode = ch_config.blend_mode.into();
 
-            // Remove excess decks
-            if current_deck_count > target_deck_count {
-                dropped.extend(ch.decks.drain(target_deck_count..).map(|slot| slot.deck));
-            }
-
-            // Add missing decks
-            for d_idx in paired_decks..target_deck_count {
-                let deck_config = &ch_config.decks[d_idx];
-                let (deck, warning) =
-                    crate::persistence::restore_deck(deck_config, providers, &mut env);
-                warnings.extend(placeholder_warning(deck_config, warning));
-                let mut slot = crate::channel::DeckSlot::new(deck);
+            for deck_config in &ch_config.decks {
+                let reused =
+                    take_by_uuid(&mut spare_decks, &deck_config.uuid, |slot| slot.deck.uuid());
+                let mut slot = match reused {
+                    // Same deck, same source: patch in place (no GPU cost).
+                    Some(slot)
+                        if crate::persistence::source_configs_match(
+                            &slot.deck,
+                            &deck_config.source,
+                            providers,
+                        ) =>
+                    {
+                        slot
+                    }
+                    other => {
+                        dropped.extend(other.map(|slot| slot.deck));
+                        let (deck, warning) =
+                            crate::persistence::restore_deck(deck_config, providers, &mut env);
+                        warnings.extend(placeholder_warning(deck_config, warning));
+                        crate::channel::DeckSlot::new(deck)
+                    }
+                };
                 Self::patch_deck_slot(&mut slot, deck_config, env.gpu, env.shaders);
-                ch.decks.push(slot);
+                channel.add_deck_slot(slot);
             }
 
-            // Diff channel effects
             Self::diff_effects(
-                &mut ch.effects,
+                &mut channel.effects,
                 &ch_config.effects,
                 &self.render.context,
                 self.render.context.compositing_format,
                 &mut warnings,
             );
+            channels.push(channel);
         }
-
-        // Remove excess channels
-        if current_ch_count > target_ch_count {
-            for channel in self.mixer.channels_mut().drain(target_ch_count..) {
-                dropped.extend(channel.decks.into_iter().map(|slot| slot.deck));
-            }
-        }
-
-        // Add missing channels
-        for ch_idx in paired_count..target_ch_count {
-            let ch_config = &target.channels[ch_idx];
-            match crate::channel::Channel::new(ch_config.name.clone(), &self.render.context, rw, rh)
-            {
-                Ok(mut channel) => {
-                    channel.opacity = ch_config.opacity;
-                    channel.blend_mode = ch_config.blend_mode.into();
-                    for deck_config in &ch_config.decks {
-                        let (deck, warning) =
-                            crate::persistence::restore_deck(deck_config, providers, &mut env);
-                        warnings.extend(placeholder_warning(deck_config, warning));
-                        let mut slot = crate::channel::DeckSlot::new(deck);
-                        Self::patch_deck_slot(&mut slot, deck_config, env.gpu, env.shaders);
-                        channel.add_deck_slot(slot);
-                    }
-                    for eff_config in &ch_config.effects {
-                        match crate::persistence::restore_effect(
-                            eff_config,
-                            &self.render.context,
-                            self.render.context.texture_format,
-                        ) {
-                            Ok(eff) => channel.add_effect(eff),
-                            Err(e) => {
-                                warnings.push(format!("Failed to restore channel effect: {e}"));
-                            }
-                        }
-                    }
-                    self.mixer.channels_mut().push(channel);
-                }
-                Err(e) => {
-                    warnings.push(format!(
-                        "Failed to create channel '{}': {}",
-                        ch_config.name, e
-                    ));
-                }
-            }
-        }
+        dropped.extend(spare_decks.into_iter().map(|slot| slot.deck));
+        *self.mixer.channels_mut() = channels;
 
         // Release what the dropped decks held on devices, so a camera or a
         // stream a diff replaced does not keep running for nobody.
@@ -883,40 +847,35 @@ impl VardaApp {
         target_format: wgpu::TextureFormat,
         warnings: &mut Vec<String>,
     ) {
-        let current_count = effects.len();
-        let target_count = target.len();
-        let paired = current_count.min(target_count);
-
-        for i in 0..paired {
-            let eff = &mut effects[i];
-            let cfg = &target[i];
-            let current_path = eff.shader.file_path.as_deref().unwrap_or("");
-            if current_path == cfg.path {
-                // Same shader — patch params + enabled (zero cost)
+        // Matched by UUID, like channels and decks, since modulation is keyed
+        // on an effect's UUID. A match running the same shader is patched in
+        // place; anything else is rebuilt with its saved UUID.
+        let mut spare = std::mem::take(effects);
+        for cfg in target {
+            let reused = take_by_uuid(&mut spare, &cfg.uuid, |eff| eff.uuid())
+                .filter(|eff| eff.shader.file_path.as_deref().unwrap_or("") == cfg.path);
+            if let Some(mut eff) = reused {
                 eff.enabled = cfg.enabled;
                 eff.params.values.clone_from(&cfg.params);
-            } else {
-                // Different shader — rebuild this effect
-                match crate::persistence::restore_effect(cfg, context, target_format) {
-                    Ok(new_eff) => effects[i] = new_eff,
-                    Err(e) => {
-                        warnings.push(format!("Failed to restore effect '{}': {}", cfg.path, e));
-                    }
-                }
+                effects.push(eff);
+                continue;
             }
-        }
-
-        // Remove excess effects
-        effects.truncate(target_count);
-
-        // Add missing effects
-        for cfg in target.iter().skip(paired) {
             match crate::persistence::restore_effect(cfg, context, target_format) {
                 Ok(eff) => effects.push(eff),
                 Err(e) => warnings.push(format!("Failed to restore effect '{}': {}", cfg.path, e)),
             }
         }
     }
+}
+
+/// Take the item whose UUID is `uuid` out of `items`. An empty UUID (a file
+/// saved before entities had one) matches nothing.
+fn take_by_uuid<T>(items: &mut Vec<T>, uuid: &str, uuid_of: impl Fn(&T) -> &str) -> Option<T> {
+    if uuid.is_empty() {
+        return None;
+    }
+    let idx = items.iter().position(|item| uuid_of(item) == uuid)?;
+    Some(items.swap_remove(idx))
 }
 
 #[cfg(test)]
@@ -930,7 +889,6 @@ mod tests {
     }
 
     fn headless_app_in(workspace: &std::path::Path) -> Option<super::super::VardaApp> {
-        let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
         let ws = workspace.to_str().unwrap();
         let config = parse_args(&[
             "--headless",
@@ -940,7 +898,7 @@ mod tests {
             "--workspace",
             ws,
         ]);
-        super::super::VardaApp::new(gpu, &config).ok()
+        crate::testing::headless_app_with(&config)
     }
 
     #[test]
@@ -1190,6 +1148,74 @@ mod tests {
             .expect("editor prefs should survive");
         assert!(reloaded.stage_editor_open);
         assert!(reloaded.library_panel_open);
+    }
+
+    fn output_uuids(app: &super::super::VardaApp) -> Vec<String> {
+        app.output.outputs.iter().map(|o| o.uuid.clone()).collect()
+    }
+
+    fn add_recording(app: &mut super::super::VardaApp, path: &str) -> String {
+        let sink =
+            crate::engine::value::provider::ProviderConfig::new("recording").with("path", path);
+        match app.cmd_create_output(sink) {
+            crate::engine::CommandResult::OkWithId { uuid } => uuid,
+            other => panic!("output not created: {other:?}"),
+        }
+    }
+
+    /// Loading the same workspace twice leaves one of each saved output, not
+    /// two with the same UUID, and drops outputs the file does not have.
+    #[test]
+    fn reloading_a_workspace_matches_the_saved_outputs() {
+        let tmp = TempDir::new().unwrap();
+        let Some(mut app) = headless_app_in(tmp.path()) else {
+            return;
+        };
+        let saved = add_recording(&mut app, "a.mp4");
+        app.save_workspace().expect("save workspace");
+        let extra = add_recording(&mut app, "b.mp4");
+        assert_eq!(output_uuids(&app), vec![saved.clone(), extra]);
+
+        let _ = app.load_workspace();
+        assert_eq!(output_uuids(&app), vec![saved.clone()]);
+        let _ = app.load_workspace();
+        assert_eq!(output_uuids(&app), vec![saved]);
+    }
+
+    /// A running output whose saved settings match keeps running through a
+    /// reload, so reloading does not cut a recording or a stream. One whose
+    /// settings changed is stopped before its sink is rebuilt.
+    #[test]
+    fn reloading_keeps_running_outputs_whose_settings_match() {
+        let tmp = TempDir::new().unwrap();
+        let Some(mut app) = headless_app_in(tmp.path()) else {
+            return;
+        };
+        let same = add_recording(&mut app, "same.mp4");
+        let changed = add_recording(&mut app, "before.mp4");
+        app.save_workspace().expect("save workspace");
+        for output in &mut app.output.outputs {
+            output.active = true;
+        }
+        let idx = app.output.resolve_output(&changed).unwrap();
+        app.output.outputs[idx].name = "Renamed".into();
+        let sink = app.output.outputs[idx]
+            .sink()
+            .config()
+            .with("path", "after.mp4");
+        let _ = app.cmd_set_output_target(&changed, &sink);
+        app.output.outputs[idx].active = true;
+
+        let _ = app.load_workspace();
+
+        let find = |uuid: &str| app.output.outputs.iter().find(|o| o.uuid == uuid).unwrap();
+        assert!(find(&same).active, "an unchanged output keeps running");
+        assert!(!find(&changed).active, "a changed output is stopped");
+        assert_eq!(
+            find(&changed).sink().config().str("path"),
+            Some("before.mp4")
+        );
+        assert_ne!(find(&changed).name, "Renamed");
     }
 
     #[test]

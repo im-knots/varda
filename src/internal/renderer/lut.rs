@@ -837,7 +837,6 @@ LUT_3D_SIZE 2
 #[cfg(test)]
 mod scene_referred_tests {
     use super::*;
-    use crate::renderer::GpuContext;
     use crate::renderer::acescct;
 
     /// An identity look LUT must be a no-op through the `ACEScct` shaper.
@@ -848,7 +847,7 @@ mod scene_referred_tests {
     #[test]
     fn an_identity_look_lut_leaves_scene_linear_untouched() {
         const N: usize = 8;
-        let Ok(ctx) = GpuContext::new_headless() else {
+        let Some(ctx) = crate::testing::headless_gpu() else {
             return;
         };
         // Identity in ACEScct space: output equals input at every lattice point.
@@ -886,7 +885,7 @@ mod scene_referred_tests {
 
     #[test]
     fn the_two_slots_are_uploaded_with_different_shaper_intent() {
-        let Ok(ctx) = GpuContext::new_headless() else {
+        let Some(ctx) = crate::testing::headless_gpu() else {
             return;
         };
         let parsed = ParsedLut {
