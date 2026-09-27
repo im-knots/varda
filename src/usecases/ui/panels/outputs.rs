@@ -493,6 +493,16 @@ fn render_output_controls(
         }
     }
 
+    if let Some(note) = output
+        .sink
+        .status
+        .info
+        .get("note")
+        .and_then(serde_json::Value::as_str)
+    {
+        ui.label(egui::RichText::new(note).small().weak());
+    }
+
     if output.sink.startable {
         ui.horizontal(|ui| {
             if output.is_active {

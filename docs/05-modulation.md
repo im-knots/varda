@@ -1,25 +1,23 @@
 # Modulation & Audio Reactivity
 
-Any numeric parameter in Varda can be automated by one or more modulation sources. You **create** sources in the modulation panel (right sidebar) and **assign** them to parameters with the `〰` button next to any slider. Multiple sources targeting the same parameter are summed additively.
+Any numeric parameter in Varda can be automated by one or more modulation sources. You **create** sources in the modulation panel (right sidebar) and **assign** them to parameters with the `〰` button next to any slider. When several sources target the same parameter, their values are added together.
 
 ## Creating Sources
 
-The modulation panel (right sidebar) has a row of buttons that add a new source instantly:
+The modulation panel (right sidebar) has a row of buttons. Each one adds a new source immediately:
 
 - **➕ LFO**
 - **➕ Audio**
 - **➕ ADSR**
 - **➕ StepSeq**
 
-Each new source appears as a card in the list below, named by type and index (e.g. **LFO 1**, **Audio 1**), with a live value readout in the header and an **x** button to delete it. Adjust the source's parameters directly on its card. (The **Analyzer** source is added from a deck's analyzer setup rather than this button row — see [Analyzer](#analyzer).)
+Each new source appears as a card in the list below. The card is named by type and index (e.g. **LFO 1**, **Audio 1**) and has a live value readout in its header and an **x** button that deletes it. Adjust the source's settings on its card. The **Analyzer** source is added from a deck's analyzer setup, not from this button row (see [Analyzer](#analyzer)).
 
-Each source is automatically assigned a **color** from a fixed palette (cyan, magenta, yellow, lime, orange, pink, sky blue, coral). That color identifies the source everywhere it is used.
+Each source gets a **color** from a fixed palette (cyan, magenta, yellow, lime, orange, pink, sky blue, coral). That color identifies the source everywhere it is used.
 
 ## Timebase
 
-LFOs and step sequencers carry a **timebase** — the notion of time they run on. The selector sits in
-the source card's header. Audio, ADSR, and Analyzer sources have no selector: an envelope follower
-tracks the room, not a clock.
+LFOs and step sequencers have a **timebase**, which sets the clock their rate is measured against. The selector is in the source card's header. Audio, ADSR, and Analyzer sources have no selector, because they follow their input instead of a clock.
 
 | Timebase | Rate is read as | Use |
 |----------|-----------------|-----|
@@ -27,27 +25,15 @@ tracks the room, not a clock.
 | **Beat** | cycles per **beat** | Motion locked to tempo |
 | **Show** | cycles per second of show position | Motion that must land the same way every performance |
 
-On the Beat timebase a rate of `1.0` is one cycle per beat, `0.25` is one cycle per bar in 4/4, and
-`4.0` is four cycles per beat. Because rate is measured in beats, a tempo change retunes every
-beat-locked source without you touching a single setting.
+On the Beat timebase, a rate of `1.0` is one cycle per beat, `0.25` is one cycle per bar in 4/4, and `4.0` is four cycles per beat. When the tempo changes, every beat-locked source follows it with no change to its settings.
 
-Beat time comes from the resolved clock (MIDI clock, OSC, or detected audio tempo — see
-[Control Surfaces](06-control-surfaces.md)), and resets to zero on MIDI Start.
+Beat time comes from the resolved clock (MIDI clock, OSC, or detected audio tempo; see [Control Surfaces](06-control-surfaces.md)). It resets to zero on MIDI Start.
 
-**If no clock source is active, a Beat-locked source freezes at its last value** and the card shows a
-⚠ marker. It does not fall back to running freely: a modulator holding its last look is obvious and
-fixable, whereas a silent fallback would look like everything was fine while the show drifted out of
-sync.
+**If no clock source is active, a Beat-locked source freezes at its last value** and the card shows a ⚠ marker. It does not fall back to free-running, so a lost clock shows up as a frozen source instead of a show that silently drifts out of sync.
 
-The **Show** timebase reads the transport, the absolute position described in
-[Control Surfaces](06-control-surfaces.md#transport). Its value is a pure function of that position,
-so a source on the Show timebase produces the same value at 00:04:12 tonight as it did in yesterday's
-rehearsal, no matter how you got there. Rewind and it rewinds with you.
+The **Show** timebase follows the transport position described in [Control Surfaces](06-control-surfaces.md#transport). Its value depends only on that position. A Show source gives the same value at 00:04:12 tonight as it did in yesterday's rehearsal, however you got there. When you rewind the transport, the source rewinds with it.
 
-Like Beat, a Show-locked source **freezes rather than free-running** when the transport is not
-moving, including before it has ever been started. That is what keeps a cold start honest: if the
-transport never runs, nothing on the Show timebase moves, rather than everything quietly drifting
-from a position the show never reached.
+A Show-locked source also **freezes** while the transport is not moving, including before the transport has ever been started. If the transport never runs, nothing on the Show timebase moves.
 
 ## Modulation Sources
 
@@ -63,19 +49,19 @@ A low-frequency oscillator that cycles through a waveform continuously.
 | **Phase** | 0.0–1.0 | Offset in the cycle (0.5 = start halfway through) |
 | **Bipolar** | on/off | Off: output 0–1 (unipolar). On: output -1 to +1 (bipolar) |
 
-**Random** waveform produces sample-and-hold noise (a new random value each quarter-cycle, held constant until the next). **Smooth Random** interpolates between random values for organic, non-repeating motion.
+The **Random** waveform produces sample-and-hold noise: a new random value each quarter-cycle, held until the next. **Smooth Random** interpolates between random values for smooth, non-repeating motion.
 
-**Unipolar vs. bipolar** changes where the sweep sits, not how far it travels. Unipolar sweeps upward from the slider's current position; bipolar sweeps symmetrically around it, half above and half below. At the same amplitude both cover the same distance, so switching polarity re-centres the motion without making it wider or narrower. Park the slider at the bottom for a unipolar sweep, and in the middle for a bipolar one.
+**Unipolar vs. bipolar** changes where the sweep sits. Unipolar sweeps upward from the slider's current position. Bipolar sweeps equally above and below it. At the same amplitude both cover the same distance, so switching polarity re-centers the motion without changing its width. For a unipolar sweep, park the slider at the bottom. For a bipolar sweep, park it in the middle.
 
 ### Audio
 
-Drives a parameter from frequency-band energy in the audio input. Connects visuals directly to the music.
+Drives a parameter from the energy in one frequency band of the audio input.
 
 | Setting | Range | Description |
 |---------|-------|-------------|
 | **Frequency Range** | 20–20,000 Hz | Low and high bounds of the frequency band to analyze |
 | **Gain** | 0.0–10.0 | Boost the signal for quiet sources |
-| **Smoothing** | 0.0–0.99 | Release speed — 0 = instant response, 0.99 = slow decay |
+| **Smoothing** | 0.0–0.99 | Release speed: 0 = instant response, 0.99 = slow decay |
 | **Noise Gate** | 0.0–1.0 | Signals below this threshold are muted (default: 0.1) |
 | **Mode** | Direct, Increase, Decrease | How energy maps to output (see below) |
 
@@ -90,15 +76,15 @@ Drives a parameter from frequency-band energy in the audio input. Connects visua
 
 **Modes:**
 
-- **Direct** — output tracks audio energy in real-time. Instant attack, smoothing controls release.
-- **Increase** — audio energy accumulates the value upward (wraps at 1.0). Creates ratcheting effects.
-- **Decrease** — audio energy accumulates the value downward (wraps at 0.0). Inverse ratchet.
+- **Direct**: output tracks audio energy in real time. Attack is instant; **Smoothing** sets the release.
+- **Increase**: audio energy pushes the value upward, wrapping at 1.0. Use it for ratcheting effects.
+- **Decrease**: audio energy pushes the value downward, wrapping at 0.0. The inverse ratchet.
 
-**Audio Device**: each Audio source has a **device dropdown** to select which audio input to analyze. Different sources can use different devices. for example: one tracking the DJ mixer's bass and another tracking a microphone's treble.
+**Audio Device**: each Audio source has a **device dropdown** that selects which audio input it analyzes. Different sources can use different devices, for example one tracking the DJ mixer's bass and another tracking a microphone's treble.
 
 ### ADSR Envelope
 
-A classic attack/decay/sustain/release envelope, triggered by a gate signal.
+An attack/decay/sustain/release envelope, triggered by a gate signal.
 
 | Stage | Description |
 |-------|-------------|
@@ -107,7 +93,7 @@ A classic attack/decay/sustain/release envelope, triggered by a gate signal.
 | **Sustain** | Level held while gate is on (0.0–1.0) |
 | **Release** | Time to fall from sustain to 0 after gate off (≥0.001s) |
 
-**Gate trigger**: click the gate button in the modulation panel, or map it to a MIDI note/button. Gate on starts Attack; gate off starts Release.
+**Gate trigger**: click the gate button in the modulation panel, or map it to a MIDI note or button. Gate on starts Attack. Gate off starts Release.
 
 ```
 Level
@@ -132,24 +118,24 @@ An N-step pattern that cycles at a configurable rate.
 
 **Interpolation modes:**
 
-- **None** — hard steps, instant value changes
-- **Linear** — straight-line blend between adjacent steps
-- **Smooth** — cubic smoothstep (ease in/out between steps)
+- **None**: hard steps, instant value changes
+- **Linear**: straight-line blend between adjacent steps
+- **Smooth**: cubic smoothstep (ease in and out between steps)
 
 Individual step values are addressable via MIDI at `mod/<idx>/step/<step_idx>`.
 
 ### Analyzer
 
-Drives a parameter from **analysis of a deck's live input frame**. Instead of a synthetic or audio-derived signal, the source value comes from measuring the picture itself (ie. its brightness, contrast, or color balance) turning the visuals into a controller for other parameters.
+Drives a parameter from **measurements of a deck's live input frame**, such as its brightness, contrast, or color balance. Use it to let one deck's picture control other parameters.
 
-An analyzer runs on a background thread at its own cadence (it never blocks the render loop) and publishes normalized scalar outputs (0.0–1.0) that feed the modulation engine like any other source.
+An analyzer runs on a background thread at its own rate and never blocks the render loop. It publishes normalized scalar outputs (0.0–1.0) that feed the modulation engine like any other source.
 
 | Setting | Range | Description |
 |---------|-------|-------------|
 | **Analyzer Type** | see below | Which analyzer to run on the deck |
 | **Output** | analyzer-specific | Which scalar value to read |
 | **Deck** | any deck | The deck whose input frame is analyzed |
-| **Smoothing** | 0.0–0.99 | Damps jitter — 0 = instant, 0.99 = heavy smoothing |
+| **Smoothing** | 0.0–0.99 | Damps jitter: 0 = instant, 0.99 = heavy smoothing |
 
 **Built-in analyzer: `brightness`** (always available, CPU-only, no ML):
 
@@ -159,11 +145,11 @@ An analyzer runs on a background thread at its own cadence (it never blocks the 
 | `contrast` | Standard deviation of luminance |
 | `red` / `green` / `blue` | Average per-channel value |
 
-**Optional analyzer: `face_detect`** is available in builds compiled with the `face-detection` feature. It exposes `face_x`, `face_y`, `face_size`, `face_rotation`, and `face_count`. When the feature isn't compiled in, only `brightness` appears in the picker.
+**Optional analyzer: `face_detect`** is available in builds compiled with the `face-detection` feature. It exposes `face_x`, `face_y`, `face_size`, `face_rotation`, and `face_count`. In builds without the feature, only `brightness` appears in the picker.
 
-Multiple modulation sources can share one running analyzer on a deck (it is reference-counted), so mapping several outputs costs only one analysis pass.
+Several modulation sources can share one running analyzer on a deck (it is reference-counted), so mapping several outputs costs one analysis pass.
 
-> The Analyzer source is one of two ways Varda turns a picture into data — the same engine also feeds depth/face textures to shaders. For the whole subsystem (full output tables, the depth sensor, lifecycle, and the HTTP API) see [Frame Analysis & Preprocessors](14-frame-analysis.md).
+> The same engine also feeds depth and face textures to shaders. For the full subsystem (complete output tables, the depth sensor, lifecycle, and the HTTP API) see [Frame Analysis & Preprocessors](14-frame-analysis.md).
 
 ---
 
@@ -171,114 +157,113 @@ Multiple modulation sources can share one running analyzer on a deck (it is refe
 
 ### Assigning a Source to a Parameter
 
-Every modulatable parameter slider has a small **`〰`** button beside it. To wire up modulation:
+Every modulatable parameter slider has a small **`〰`** button beside it. To assign modulation:
 
-1. Click the **`〰`** button. A **checklist** of every source opens, each labeled by type and index and shown in its own color — for example **LFO 1**, **Audio 20-250Hz**, **ADSR 1**, **StepSeq 1**, **Analyzer brightness 1**.
-2. **Tick** a source (`☐` → `☑`). The assignment is live immediately.
-3. Tick a second one to stack it. The list stays open, so wiring three sources into one parameter is one visit.
+1. Click the **`〰`** button. A **checklist** of every source opens. Each source is labeled by type and index and shown in its own color, for example **LFO 1**, **Audio 20-250Hz**, **ADSR 1**, **StepSeq 1**, **Analyzer brightness 1**.
+2. **Tick** a source (`☐` → `☑`). The assignment takes effect immediately.
+3. Tick another source to stack it. The list stays open, so you can assign several sources in one visit.
 
-The ticks are the only place the **whole set** driving a parameter is visible. The ghost line and the colored label both take the color of the first assignment, so one source and three sources look identical on the slider itself. Hovering the `〰` button names the active ones without opening anything, which is the case that matters on a dark stage.
+The checklist is the only place that shows **every** source driving a parameter. The ghost line and the colored label on the slider use the color of the first assignment, so one source and three sources look the same on the slider. Hover the `〰` button to see the names of the active sources without opening the list.
 
-To **remove** one source, un-tick it (`☑` → `☐`); the others keep driving the parameter. **Clear all** at the bottom detaches everything at once, and only appears when there is something to clear.
+To **remove** one source, un-tick it (`☑` → `☐`). The other sources keep driving the parameter. **Clear all**, at the bottom of the list, removes every source at once. It appears only when at least one source is assigned.
 
-The same dropdown offers **＋ Automation lane**, which draws the parameter as a curve against show position instead — see [Automation Curves](#automation-curves).
+The same dropdown offers **＋ Automation lane**, which draws the parameter as a curve against show position. See [Automation Curves](#automation-curves).
 
 #### Live Ghost Indicator
 
-Once a parameter is modulated, a thin **vertical line in the source's color** is drawn across the slider. It marks the *effective* value (base value + combined modulation offset) and moves in real time as the modulation evolves. With several sources on one parameter, the line shows their combined effect, in the color of the first one. Open the `〰` checklist to see which sources those are.
+When a parameter is modulated, a thin **vertical line in the source's color** is drawn across the slider. It marks the *effective* value (base value + combined modulation offset) and moves in real time. With several sources on one parameter, the line shows their combined effect in the color of the first source. Open the `〰` checklist to see which sources are assigned.
 
-> Behind the scenes, assignments map to the same parameter paths as MIDI/OSC (`deck/<uuid>/param/<name>`, `crossfader`, `ch/<uuid>/opacity`, `fx/<uuid>/param/<name>`, etc. — see [Parameter Paths](06-control-surfaces.md#parameter-paths)). The UI assigns each modulation at a sensible default depth; fine-grained per-assignment **amount** (a signed scale where negative inverts) is exposed through the [HTTP API](13-api.md) rather than the slider dropdown.
+> Assignments use the same parameter paths as MIDI and OSC (`deck/<uuid>/param/<name>`, `crossfader`, `ch/<uuid>/opacity`, `fx/<uuid>/param/<name>`, etc.; see [Parameter Paths](06-control-surfaces.md#parameter-paths)). The UI assigns each modulation at a default depth. The per-assignment **amount** (a signed scale; negative values invert) is set through the [HTTP API](13-api.md). The slider dropdown does not show it.
 
-**Channel faders** carry a `〰` of their own, so a whole channel can be swept by an LFO or ridden by a recorded curve without touching the decks inside it. The crossfader still cannot: it is mappable and macro-drivable but not a modulation target.
+**Channel faders** have their own `〰`, so an LFO or a recorded curve can sweep a whole channel without changing the decks inside it. The crossfader is not a modulation target. You can still map it and drive it from macros.
 
 #### Video Playback
 
-A clip's **speed**, **playhead**, **play state**, and **loop mode**, plus any deck's **source scaling mode**, all carry a `〰` of their own. An LFO can time-warp a clip, an audio band can gate its play state, and a drawn curve can scrub its playhead.
+A clip's **speed**, **playhead**, **play state**, and **loop mode**, and any deck's **source scaling mode**, each have their own `〰`. For example, an LFO can time-warp a clip, an audio band can gate its play state, and a drawn curve can scrub its playhead.
 
-The two continuous ones behave differently enough to be worth knowing about:
+Speed and playhead are the two continuous parameters, and they behave differently:
 
-- **Speed** is a multiplier from 0.1× to 4×, and it is the cheap one. Position is the integral of speed, so a modulator on it produces smooth time-warping with no seeking at all. It never goes negative, so a modulator cannot reverse a clip; reverse belongs to Ping-Pong.
-- **Playhead** modulation is an offset from where the clip would have been, measured against the active loop region. On a four-bar loop an LFO wobbles within those four bars, so the same patch stays musical from clip to clip instead of swinging minutes on a long one. A **drawn curve** is the exception: it states where the playhead is rather than nudging it, so it reads against the whole clip, exactly like the scrub bar and a MIDI-mapped seek. Half-way up the lane is half-way through the clip. While a curve holds the playhead the loop and ping-pong transitions stand down, since the curve is saying where to be.
+- **Speed** is a multiplier from 0.1× to 4×, and it is cheap to modulate. The clip's position advances at the current speed, so modulating speed gives smooth time-warping with no seeking. Speed never goes negative, so a modulator cannot reverse a clip. Use Ping-Pong for reverse playback.
+- **Playhead** modulation is an offset from where the clip would otherwise be, measured against the active loop region. On a four-bar loop, an LFO moves the playhead within those four bars. The same patch therefore behaves the same way on short and long clips.
+- A **drawn curve** on the playhead sets the position directly instead of offsetting it. It reads against the whole clip, like the scrub bar and a MIDI-mapped seek: halfway up the lane is halfway through the clip. While a curve controls the playhead, loop and ping-pong transitions are suspended.
 
-Because the offset is measured from where the clip *would have been*, pausing changes what you get, and both readings are useful:
+The playhead offset is measured from where the clip would otherwise be, so it behaves differently when the clip is paused and when it is playing:
 
-- **Paused**, there is no natural advance underneath the offset, so it is measured from a fixed point. Park the playhead mid-clip, assign a bipolar LFO, and the playhead ping-pongs about that point within the amplitude you dial in. The scrub bar's ghost line marks the centre it is swinging around.
-- **Playing**, the clip marches on under its own loop, ping-pong, or one-shot rules and the modulator offsets from wherever that march has reached. The same LFO becomes a wobble riding forward through the clip rather than a swing about one spot.
+- **Paused**: the clip does not advance, so the offset is measured from a fixed point. Park the playhead mid-clip and assign a bipolar LFO. The playhead swings back and forth around that point by the amplitude you set. The scrub bar's ghost line marks the center of the swing.
+- **Playing**: the clip advances by its own loop, ping-pong, or one-shot rules, and the modulator offsets from the current position. The same LFO produces a wobble that moves forward through the clip.
 
-Speed does nothing while paused, which is arithmetic rather than a rule: speed scales the clip's own advance, and a paused clip has none.
+Speed has no effect while the clip is paused, because speed scales the clip's advance and a paused clip does not advance.
 
-The playhead is the one to be thoughtful with. Video decoders run forward: a forward nudge is just a few extra frames decoded, but a backward one has to flush the decoder and seek. Gentle modulation costs nothing, and a hard square wave costs about what you would expect a hard square wave to cost. All-intra formats (**HAP**, ProRes) shrug this off; long-GOP H.264 is where you will notice it. The cost follows how violently you modulate, not your frame rate.
+Playhead modulation can be expensive. Video decoders run forward. A forward nudge decodes a few extra frames, but a backward one flushes the decoder and seeks. Gentle modulation costs nothing. A hard square wave seeks on every backward jump. All-intra formats (**HAP**, ProRes) handle this well. Long-GOP H.264 is where you will notice it. The cost depends on how hard you modulate, not on your frame rate.
 
-**In and out points** stay off the list, along with **clear**. They define the loop region the playhead offset is measured against, so modulating them would leave position modulation redefining its own reference frame every frame. They remain MIDI-mappable, OSC-addressable, and macro-drivable; they are things you set, not things a modulator rides.
+**In and out points**, and **clear**, cannot be modulated. In and out points define the loop region that the playhead offset is measured against, so modulating them would move that reference every frame. You can still MIDI-map them, address them over OSC, and drive them from macros.
 
-Two more things worth knowing:
+Other rules for playback parameters:
 
-- **Play, loop mode, and scaling mode are taken over, not nudged.** Assign a modulator to one and it decides, rather than adding to what you had. `play` uses a threshold with a deadband around the middle, so a source hovering there holds its state instead of stuttering. The discrete ones step through their options by [fader bucketing](04-performance.md#video-playback), so a continuous source strobes them; pick something musical.
-- **Chase wins over both speed and playhead.** A deck chasing the transport takes its whole timeline from the transport, so speed and playhead assignments are both ignored while it does, and the deck panel names whichever you have assigned. The speed *slider* still works, because a fixed rate is a stable relationship to the show ("this clip runs at twice show rate"); it is a rate that keeps moving that the transport cannot absorb, since the clip's position is computed from show position rather than nudged along. Set **Chase** to **Never** for audio-reactive time-warping. See [Arrangement](15-arrangement.md).
-- **Your hand wins over a curve.** Touching the scrub bar, speed slider, play button, loop buttons, or scaling combo takes that parameter back from whatever curve was driving it, with no confirmation. The automation row shows an amber dot while you hold it; click the dot to hand it back. This is the same behaviour deck and channel faders have, and it works whether the gesture came from the bottom bar, a MIDI controller, or the API. With **⏺** armed and the transport running, the gesture is recorded instead. See [Arrangement](15-arrangement.md).
+- **Play, loop mode, and scaling mode are set directly.** A modulator assigned to one of them sets its value instead of adding to it. `play` uses a threshold with a deadband around the middle, so a source hovering near the middle holds the current state instead of stuttering. Loop mode and scaling mode step through their options by [fader bucketing](04-performance.md#video-playback), so a continuous source switches them rapidly. Choose a source whose timing fits the music.
+- **Chase overrides speed and playhead modulation.** A deck chasing the transport takes its whole timeline from the transport. Its speed and playhead assignments are ignored while it chases, and the deck panel names whichever of them you have assigned. The speed *slider* still works, because a fixed rate keeps a stable relationship to the show ("this clip runs at twice show rate"). A changing rate does not, because the chasing clip's position is computed from show position. Set **Chase** to **Never** for audio-reactive time-warping. See [Arrangement](15-arrangement.md).
+- **Manual control overrides a curve.** Touching the scrub bar, speed slider, play button, loop buttons, or scaling combo takes that parameter back from the curve driving it, with no confirmation. The automation row shows an amber dot while you hold it. Click the dot to give control back to the curve. Deck and channel faders work the same way. This applies whether the gesture comes from the bottom bar, a MIDI controller, or the API. With **⏺** armed and the transport running, the gesture is recorded instead. See [Arrangement](15-arrangement.md).
 
 ### Stacking Multiple Sources
 
-Multiple sources can target the same parameter. Their contributions are summed before being applied:
+Several sources can target the same parameter. Their contributions are summed before being applied:
 
 ```
 effective_offset = source_1_value × amount_1 + source_2_value × amount_2 + ...
 effective_value  = clamp(base_value + effective_offset × param_range, param_min, param_max)
 ```
 
-Example: an LFO plus an audio-bass source on the same brightness parameter produces a pulsing glow that also reacts to the kick drum.
+Example: an LFO plus an audio-bass source on the same brightness parameter gives a pulsing glow that also reacts to the kick drum.
 
 ### Per-Component Modulation
 
-Color parameters (vec4) support per-component modulation — assign a source to just the red, green, blue, or alpha channel independently.
+Color parameters (vec4) support per-component modulation. You can assign a source to only the red, green, blue, or alpha channel.
 
 ---
 
 ## Automation Curves
 
-An LFO says "keep moving." An automation curve says "be *this* at *this* moment." It is a drawn shape that sets a parameter's value as a function of show position, so the same thing happens at 00:04:12 every single run.
+An automation curve is a drawn shape that sets a parameter's value at each point in show position. The same value plays at 00:04:12 in every run.
 
 ### Adding a Lane
 
-Open the **`〰`** dropdown on any modulatable parameter and pick **＋ Automation lane**. That creates the curve, locks it to the **Show** timebase, and assigns it to the parameter in one step. The lane starts empty, and an empty lane does nothing at all, so the parameter keeps behaving normally until you draw the first point on it.
+Open the **`〰`** dropdown on any modulatable parameter and pick **＋ Automation lane**. This creates the curve, locks it to the **Show** timebase, and assigns it to the parameter. The lane starts empty. An empty lane has no effect, so the parameter behaves normally until you draw the first point.
 
-Curves are drawn in Arrangement mode, where each lane sits under the channel it belongs to. They do **not** appear as cards in the modulation panel: a show can easily have hundreds of them, and that panel is built for a handful of live modulators.
+You draw curves in Arrangement mode, where each lane sits under its channel. Curves do **not** appear as cards in the modulation panel, because a show can have hundreds of them.
 
-### Recording One Instead of Drawing It
+### Recording a Curve
 
-A curve can also be played rather than drawn: arm **⏺** in the transport strip or the top bar, move any control while the show runs, and what you played is written into the arrangement as a curve, creating the lane if the parameter had none. See [Recording a pass](15-arrangement.md#recording-a-pass).
+You can also record a curve. Arm **⏺** in the transport strip or the top bar, then move any control while the show runs. Your movement is written into the arrangement as a curve. If the parameter has no lane, one is created. See [Recording a pass](15-arrangement.md#recording-a-pass).
 
 ### One Curve, One Parameter
 
-A curve belongs to the parameter it was drawn for, and the `〰` dropdown never lists existing curves as sources to assign elsewhere. Reuse is copy and paste between lanes instead: right-click the lane you like, **Copy curve**, then **Paste curve** at the point on the other parameter's lane where you want the shape to start. See [Reusing a shape](15-arrangement.md#reusing-a-shape).
+A curve belongs to the parameter it was drawn for. The `〰` dropdown does not list existing curves as sources for other parameters.
 
-Sharing one curve between parameters would read fine in the dropdown and then bite in the room, because editing either lane would rewrite both. Two independent copies cost a little duplication and take away that whole class of surprise.
+To reuse a shape, copy and paste it between lanes. Right-click the lane, choose **Copy curve**, then choose **Paste curve** at the point on the other parameter's lane where the shape should start. Each paste is an independent copy, so editing one lane does not change the other. See [Reusing a shape](15-arrangement.md#reusing-a-shape).
 
-### Curves Set the Value, They Don't Nudge It
+### Curves Replace the Value
 
-This is the one real difference from every other source. LFOs, audio bands, and the rest are **added** to wherever you left the fader. An automation curve **replaces** it.
+LFOs, audio bands, and the other sources are **added** to the fader's current position. An automation curve **replaces** it. A curve drawn to 40% plays back at 40% wherever the fader was left, so the arrangement plays back the same way every time.
 
-That is deliberate. If a curve merely nudged the fader, your arrangement would play back differently depending on where the faders happened to be when you last saved, which defeats the purpose of arranging it. A curve drawn to 40% means 40%.
-
-Breakpoint values are always 0–100% of the parameter's range, so a curve drawn on a parameter that runs from -5 to 5 reaches -1 at 40%, and copying a curve to a different parameter keeps its shape rather than its raw number.
+Breakpoint values are always 0–100% of the parameter's range. On a parameter that runs from -5 to 5, 40% is -1. Copying a curve to a different parameter keeps its shape, not its raw values.
 
 ### Stacking a Curve With Live Modulation
 
-You can still assign an LFO or an audio band to an automated parameter. The curve sets the value and the live sources ride on top of it:
+You can still assign an LFO or an audio band to an automated parameter. The curve sets the value and the live sources are added on top:
 
 ```
 value = curve_value + lfo_offset + audio_offset
 ```
 
-An automated opacity ramp with a bass band stacked on it gives you a shape that is scheduled *and* still breathes with the room. That combination is the point of having both modes.
+For example, an automated opacity ramp with a bass band stacked on it follows the scheduled shape and also reacts to the music.
 
-Two curves on one parameter is meaningless rather than harmful — the last one assigned wins.
+If two curves are assigned to one parameter, the last one assigned wins.
 
 ### Segment Shapes
 
-Each breakpoint chooses the shape of the segment leading to the next one:
+Each breakpoint sets the shape of the segment leading to the next one:
 
-| Shape | Behaviour |
+| Shape | Behavior |
 |---|---|
 | **Step** | Holds this value, then jumps at the next breakpoint. Good for switches and discrete states. |
 | **Linear** | Straight line. A **tension** control bends it: negative eases in (slow start), positive eases out (fast start). |
@@ -286,21 +271,21 @@ Each breakpoint chooses the shape of the segment leading to the next one:
 
 ### Before and After the Curve
 
-Outside the drawn range, a curve **holds** its first and last values rather than falling to zero. A curve that collapsed at its edges would black out every automated parameter before and after the section you arranged, which is almost never what anyone wants.
+Outside the drawn range, a curve **holds** its first and last values. It does not drop to zero, so automated parameters keep their edge values before and after the section you arranged.
 
-### Jumping Around Is Safe
+### Locating and Looping
 
-Because a curve is a pure function of position, locating to a point gives the identical result whether you played there, jumped there, or looped back to it. There is no resync, and no "wrong until it catches up" period after a jump. The same guarantee applies to timecode chases.
+A curve's value depends only on show position. Locating to a point gives the same result whether you played there, jumped there, or looped back to it. There is no resync period after a jump. The same applies to timecode chases.
 
 ---
 
 ## Modulator-on-Modulator
 
-Modulation source parameters are themselves modulatable. This enables complex, evolving behaviors without manual control.
+Modulation source parameters can themselves be modulated. Use this for evolving behavior that needs no manual control.
 
 ### How It Works
 
-Each source type exposes modulatable parameters:
+Each source type has these modulatable parameters:
 
 | Source | Modulatable Parameters |
 |--------|----------------------|
@@ -309,17 +294,17 @@ Each source type exposes modulatable parameters:
 | **ADSR** | attack, decay, sustain, release |
 | **Step Sequencer** | rate |
 
-To wire one source into another, use the **`〰`** button on the target source's parameter (the same gesture as parameter assignment). The checklist is headed **"Modulate [parameter]"** and works the same way: tick a source to attach it, un-tick to detach just that one, or **Clear all** to detach every source at once. A modulator is never listed against its own parameters, since nothing can modulate itself.
+To route one source into another, click the **`〰`** button on the target source's parameter, as you would for any parameter. The checklist is headed **"Modulate [parameter]"** and works the same way: tick a source to attach it, un-tick it to detach only that source, or click **Clear all** to detach every source. A source is not listed against its own parameters, because a source cannot modulate itself.
 
 ### Depth Limit
 
-Mod-on-mod chains are limited to **4 levels deep** to prevent infinite loops. The engine evaluates sources in topological dependency order. Ie. sources with no inputs first, then those that depend on them, and so on. Chains deeper than the limit (or accidental cycles) are evaluated safely on a fallback pass rather than crashing or hanging.
+Mod-on-mod chains are limited to **4 levels deep** to prevent infinite loops. The engine evaluates sources in dependency order: sources with no inputs first, then the sources that depend on them, and so on. Chains deeper than the limit, and accidental cycles, are evaluated on a fallback pass, so they do not crash or hang Varda.
 
 ### Examples
 
-- **LFO frequency ← slow LFO**: A 0.1 Hz LFO modulates a faster LFO's frequency, creating non-repeating patterns
-- **LFO amplitude ← audio bass**: Bass energy controls how wide the LFO sweeps — subtle at low volume, dramatic at high
-- **Step sequencer rate ← audio bass**: The sequence speeds up with the kick drum
+- **LFO frequency ← slow LFO**: a 0.1 Hz LFO modulates a faster LFO's frequency, creating non-repeating patterns
+- **LFO amplitude ← audio bass**: bass energy controls how wide the LFO sweeps, subtle at low volume and large at high volume
+- **Step sequencer rate ← audio bass**: the sequence speeds up with the kick drum
 
 ---
 
@@ -331,17 +316,17 @@ Varda runs a 2048-point FFT on the audio input at 48 kHz, producing 1024 magnitu
 
 ### Beat Detection
 
-Beats are detected via **spectral flux onset detection**:
+Beats are detected with **spectral flux onset detection**:
 
 1. Compute the transient energy increase across all frequency bins each frame
-2. Compare against an adaptive threshold (median of recent flux values)
+2. Compare it against an adaptive threshold (median of recent flux values)
 3. Reject double-triggers within 200ms
 
-BPM is estimated from the last 16 beat intervals, with outlier rejection (>15% deviation from median discarded) and EMA smoothing.
+BPM is estimated from the last 16 beat intervals. Outliers (>15% deviation from the median) are discarded, and the result is smoothed with an EMA.
 
 ### ISF Audio Uniforms
 
-All shaders receive audio data automatically — no setup required:
+All shaders receive audio data automatically, with no setup:
 
 | Uniform | Description |
 |---------|-------------|
@@ -352,7 +337,7 @@ All shaders receive audio data automatically — no setup required:
 | `audio_bpm` | Detected BPM (0.0 if unavailable) |
 | `audio_beat_phase` | Phase within current beat cycle (0.0–1.0, 0.0 = on beat) |
 
-Use these directly in ISF shaders for audio-reactive visuals without needing the modulation engine. See [ISF Authoring](12-isf-authoring.md) for shader writing details.
+Use these in ISF shaders for audio-reactive visuals without the modulation engine. See [ISF Authoring](12-isf-authoring.md) for shader writing details.
 
 ---
 

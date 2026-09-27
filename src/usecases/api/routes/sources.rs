@@ -26,8 +26,10 @@ async fn send(state: &SharedState, cmd: EngineCommand) -> axum::response::Respon
     }
 }
 
-/// Every registered deck source type: its controls, whether this build can
-/// run it, and what its library offers (discovered devices, saved URLs).
+/// Every kind of deck source, with its controls and Library entries.
+///
+/// Also says whether this build can run it, and lists discovered devices and
+/// saved URLs.
 #[utoipa::path(get, path = "/api/library/sources",
     responses((status = 200, body = Vec<ProviderTypeSnapshot>), (status = 503, description = "Engine not yet initialized")),
     tag = "Sources")]
@@ -38,7 +40,9 @@ pub async fn list(State(state): State<SharedState>) -> impl IntoResponse {
     }
 }
 
-/// Add a deck of any source type. The body is the source's config, for
+/// Add a deck of any kind to a channel.
+///
+/// The body names the kind of source in `type` and gives its settings, for
 /// example `{"type": "Image", "path": "/art/logo.svg"}`; a library entry's
 /// `config` is exactly this body. Answers with the new deck's UUID. A source
 /// that builds in the background (a shader, a clip) appears on a later frame;
@@ -132,8 +136,9 @@ pub async fn trigger_action(
     .await
 }
 
-/// Save an entry to a source type's library (a stream URL). The body holds the
-/// entry's fields; its `type` is taken from the path.
+/// Save an entry, such as a stream URL, to a source kind's Library.
+///
+/// The body holds the entry's fields; its `type` is taken from the path.
 #[utoipa::path(post, path = "/api/sources/{source_type}/library",
     params(("source_type" = String, Path, description = "Source type id")),
     request_body = Object,
@@ -153,7 +158,7 @@ pub async fn add_library_entry(
     .await
 }
 
-/// Remove an entry from a source type's library.
+/// Remove an entry from a source kind's Library.
 #[utoipa::path(delete, path = "/api/sources/{source_type}/library",
     params(("source_type" = String, Path, description = "Source type id")),
     request_body = Object,
@@ -173,8 +178,9 @@ pub async fn remove_library_entry(
     .await
 }
 
-/// Run a library action a source type offers: `rescan`, or one a library
-/// notice names. Answers with the type's fresh entries, so a probe that
+/// Run an action a source kind offers, such as `rescan`.
+///
+/// The action is `rescan` or one a Library notice names. Answers with the type's fresh entries, so a probe that
 /// rescans is one call rather than a rescan and a read that may race it.
 #[utoipa::path(post, path = "/api/sources/{source_type}/actions/{action}",
     params(("source_type" = String, Path, description = "Source type id"), ("action" = String, Path, description = "Library action")),

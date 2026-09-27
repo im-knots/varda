@@ -750,6 +750,25 @@ mod tests {
         }
     }
 
+    /// The default RTMP output (`rtmp://`) names no server. Starting it is
+    /// refused with what to fill in, before ffmpeg runs, and it stays stopped.
+    #[test]
+    fn starting_an_rtmp_output_without_a_server_says_so() {
+        let Some(mut app) = crate::testing::headless_app() else {
+            return;
+        };
+        let uuid = create(&mut app, crate::output::SinkConfig::new("rtmp_stream"));
+        let result = app.execute_command(C::StartOutput {
+            output_uuid: uuid.clone(),
+        });
+        let CommandResult::Err { message, .. } = result else {
+            panic!("starting rtmp:// should fail, got {result:?}");
+        };
+        assert!(message.contains("RTMP URL"), "{message}");
+        let idx = app.output.resolve_output(&uuid).unwrap();
+        assert!(!app.output.outputs[idx].active);
+    }
+
     /// A setting written by name lands in the sink's saved config, and a bare
     /// type is filled with the type's defaults.
     #[test]

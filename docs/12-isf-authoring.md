@@ -2,9 +2,9 @@
 
 Varda shaders are **GLSL 450 (Vulkan)** with an [ISF](https://isf.video)-style JSON metadata header that declares parameters, inputs, and passes.
 
-> **Read this first if you have existing ISF shaders.** Varda uses ISF's *metadata format*, not its *shader language*. A shader downloaded from isf.video, VDMX, or the ISF Editor will **not** load as-is. OG ISF is GLSL ES with implicitly injected uniforms, and Varda needs explicit Vulkan declarations. Porting is mechanical and usually takes a few minutes. See [Porting an ISF Shader](#porting-an-isf-shader).
+> **If you have existing ISF shaders, read this first.** Varda uses ISF's metadata format but a different shader language. A shader downloaded from isf.video, VDMX, or the ISF Editor will **not** load as-is. Original ISF is GLSL ES with uniforms injected implicitly; Varda needs explicit Vulkan declarations. Porting is mechanical and usually takes a few minutes. See [Porting an ISF Shader](#porting-an-isf-shader).
 
-In exchange for not being drop-in ISF, the dialect gets you things ISF can't express: [compute shaders](#compute-shaders) with persistent storage buffers, [analyzer preprocessors](#analyzer-preprocessors) that inject ML/sensor data as textures, and [phase accumulators](#phase-accumulators) for jump-free speed changes.
+The dialect also supports features ISF lacks: [compute shaders](#compute-shaders) with persistent storage buffers, [analyzer preprocessors](#analyzer-preprocessors) that inject ML and sensor data as textures, and [phase accumulators](#phase-accumulators) for speed changes without jumps.
 
 ## Shader Types
 
@@ -40,15 +40,15 @@ Every ISF shader starts with a JSON block in a block comment:
 | `long` | `int` | VALUES, LABELS, DEFAULT | Dropdown / enum selector |
 | `color` | `vec4` | DEFAULT [R,G,B,A] | Color picker (0.0–1.0 per channel) |
 | `point2D` | `vec2` | DEFAULT [x,y] | Paired X and Y number drags, bounded by MIN and MAX |
-| `image` | texture2D | — | Input texture (filters and transitions) |
+| `image` | texture2D | (none) | Input texture (filters and transitions) |
 
-Every input also accepts an optional `GROUP`, which sections it in the inspector. See
+Every input also accepts an optional `GROUP`, which puts it in a section of the inspector. See
 [Grouping parameters](#grouping-parameters).
 
-The engine modulates every numeric parameter, including individual color channels and point2D axes,
-and all of them are reachable over OSC and the HTTP API. The inspector's modulation and learn
-affordances are currently attached to `float` sliders only, so assigning a modulator to a point2D
-axis or a color channel has to be done through the API rather than from the deck panel.
+Every numeric parameter can be modulated, including individual color channels and point2D axes, and
+all of them are reachable over OSC and the HTTP API. The inspector shows modulation and learn
+controls on `float` sliders only. To assign a modulator to a point2D axis or a color channel, use the
+API.
 
 ### Example: Float Parameter
 
@@ -62,14 +62,13 @@ axis or a color channel has to be done through the API rather than from the deck
 { "NAME": "mode", "TYPE": "long", "DEFAULT": 0, "VALUES": [0, 1, 2], "LABELS": ["Normal", "Mirror", "Tile"] }
 ```
 
-`VALUES` are what the shader receives, and `LABELS` are what the performer reads. Declaring `LABELS`
-alone is allowed, and the index becomes the value. Declaring neither leaves the input as a plain
-number stepper, since there is nothing to put in a list.
+The shader receives `VALUES`; the performer sees `LABELS`. If you declare only `LABELS`, the index
+becomes the value. If you declare neither, the input is a plain number stepper.
 
 ### Grouping parameters
 
-A shader with more than a dozen parameters becomes hard to work with as one flat column. Give an
-input a `GROUP` and the inspector sections it:
+Give an input a `GROUP` and the inspector puts it in a collapsible section. This helps once a shader
+has more than about a dozen parameters.
 
 ```json
 "INPUTS": [
@@ -80,45 +79,44 @@ input a `GROUP` and the inspector sections it:
 ]
 ```
 
-Three rules, and no other knobs:
+The inspector lays groups out by three rules:
 
-- **Ungrouped inputs come first**, with no header and no way to collapse them. Put the handful of
-  controls you want a performer reaching for mid-set here and they stay in view.
+- **Ungrouped inputs come first**, with no header, and cannot be collapsed. Put the controls a
+  performer needs mid-set here so they stay in view.
 - **Named groups follow in first-appearance order.** A group sits where its first member appears in
-  `INPUTS`, so ordering `INPUTS` is the only thing you have to think about.
-- **The first named group is open, the rest start closed.** Opening a fifty-parameter shader shows a
-  short list of section headers instead of a long scroll.
+  `INPUTS`, so the order of `INPUTS` sets the order of sections.
+- **The first named group starts open; the rest start closed.** A large shader opens as a short list
+  of section headers.
 
 ### Group names in the shipped library
 
-`GROUP` accepts any string, so a shader you write or download can name its sections whatever it
-likes. The shaders Varda ships stick to a fixed vocabulary, because group names also fill the Random
-and Mutate scope selector and a performer should not have to relearn them per shader:
+`GROUP` accepts any string. The shaders Varda ships use a fixed set of names, because group names
+also fill the Random and Mutate scope selector:
 
 `Camera`, `Motion`, `Form`, `Detail`, `Lighting`, `Palette`, `Grade`, `Mask`, `Audio`.
 
-`Form` is the geometry or formula that decides what the thing is, `Detail` is the quality and
-stability knobs (ray steps, iteration caps, epsilon), and `Grade` is the post treatment (brightness,
-contrast, saturation, bloom, vignette). Most shaders use four to six of the nine. Follow the same
-list in your own shaders and they will read like the built-in ones; ignore it and nothing breaks.
+- `Form`: the geometry or formula that defines the subject.
+- `Detail`: quality and stability controls (ray steps, iteration caps, epsilon).
+- `Grade`: post treatment (brightness, contrast, saturation, bloom, vignette).
 
-Three habits go with it, and `tests/shader_param_grouping_guard.rs` holds the shipped library to
-them:
+Most shaders use four to six of the nine. Use the same names in your own shaders to match the
+built-in ones. Other names work too.
+
+`tests/shader_param_grouping_guard.rs` holds the shipped library to three conventions:
 
 - **A shader with fourteen or more parameters declares groups.** Below that, a flat list is fine.
-- **Leave two to five parameters ungrouped.** They render first and cannot be collapsed, so that is
-  your mid-set row. A shader with nothing ungrouped puts every control behind a triangle.
-- **No group with a single member.** A header over one row costs a click and saves nothing.
+- **Two to five parameters stay ungrouped.** They render first and cannot be collapsed, so they form
+  the mid-set row. With nothing ungrouped, every control is behind a collapsed section.
+- **No group has a single member.** A header over one row adds a click.
 
-One rule is not stylistic. If you use the `<prefix>_mode` hide convention, **put the gate bool in the
-same group as the parameters it hides.** Otherwise the performer gets a section that will not open
-and the switch that opens it is somewhere else.
+If you use the `<prefix>_mode` hide convention, **put the gate bool in the same group as the
+parameters it hides.** Otherwise the performer sees a section that will not open, and the switch that
+opens it is in another section.
 
-`GROUP` is presentation only. It does not change parameter names, modulation keys, MIDI or OSC paths,
-or anything that gets persisted, so adding groups to an existing shader is safe and invisible to any
-scene or preset already using it. It is also optional: a shader that declares no groups renders as
-one flat list, which is how every shader behaved before groups existed, and a shader carrying `GROUP`
-still loads in other ISF hosts because they ignore metadata keys they do not recognise.
+`GROUP` affects presentation only. It does not change parameter names, modulation keys, MIDI or OSC
+paths, or anything that is saved, so you can add groups to an existing shader without affecting
+scenes or presets that use it. A shader with no groups renders as one flat list. A shader with
+`GROUP` still loads in other ISF hosts, which ignore metadata keys they do not recognize.
 
 ## Built-in Uniforms
 
@@ -147,7 +145,7 @@ layout(set = 0, binding = 0) uniform ISFUniforms {
 
 ### Phase Accumulators
 
-`PHASE_TIME_0` through `PHASE_TIME_3` are smooth phase accumulators driven by user parameters. Unlike `TIME * speed` (which jumps when speed changes), phase accumulators integrate smoothly: `PHASE_TIME[i] += dt * param_value * scale`.
+`PHASE_TIME_0` through `PHASE_TIME_3` are phase accumulators driven by user parameters. Each frame they add `dt * param_value * scale`. `TIME * speed` jumps when speed changes; an accumulator changes speed smoothly.
 
 Declare them in the metadata:
 
@@ -157,13 +155,13 @@ Declare them in the metadata:
 ]
 ```
 
-Then use in the shader: `float angle = PHASE_TIME_0 * 6.28318;` for smooth rotation that doesn't jump when the user adjusts speed.
+Then use it in the shader, for example `float angle = PHASE_TIME_0 * 6.28318;` for rotation that does not jump when the user adjusts speed.
 
-The value integrated is the parameter's **modulated** value, its the same one the shader reads from the user-parameter buffer. Routing an audio band or LFO at `rotation_speed` therefore changes how fast the phase advances, and because integration is continuous the animation speeds up and slows down without ever jumping. A shader should read `PHASE_TIME_N` rather than the raw parameter for anything that advances over time; reading the raw parameter and multiplying by `TIME` reintroduces the jump.
+The accumulator integrates the parameter's **modulated** value, the same value the shader reads from the user-parameter buffer. If you route an audio band or LFO to `rotation_speed`, the animation speeds up and slows down without jumping. Read `PHASE_TIME_N` for anything that advances over time. Multiplying the raw parameter by `TIME` brings the jump back.
 
 #### Combining two rates
 
-Multiplying an accumulator by a parameter like `PHASE_TIME_0 * rot_speed` reintroduces the same jump, because it scales an ever-growing phase by a live value. When a per-element rate should ride on top of a master speed, fold both into one accumulator with `MULTIPLY_BY`:
+`PHASE_TIME_0 * rot_speed` also jumps, because it scales a growing phase by a live value. To put a per-element rate on top of a master speed, fold both into one accumulator with `MULTIPLY_BY`:
 
 ```json
 "PHASE_INPUTS": [
@@ -172,41 +170,43 @@ Multiplying an accumulator by a parameter like `PHASE_TIME_0 * rot_speed` reintr
 ]
 ```
 
-`PHASE_TIME_1` now accumulates `dt × speed × rot_speed × 0.2`, so the shader writes `float rotAngle = PHASE_TIME_1;` and both parameters stay smooth and modulatable. `MULTIPLY_BY` also takes an array when a rate depends on three parameters: `"MULTIPLY_BY": ["time_scale", "flow_speed"]`.
+`PHASE_TIME_1` now accumulates `dt × speed × rot_speed × 0.2`. The shader writes `float rotAngle = PHASE_TIME_1;`, and both parameters stay smooth and modulatable. For a rate that depends on three parameters, `MULTIPLY_BY` takes an array: `"MULTIPLY_BY": ["time_scale", "flow_speed"]`.
 
-Two rules follow from this. Never multiply `PHASE_TIME_N` by a user parameter, and never apply a parameter that already drives an accumulator a second time in the shader body. Since the phase already contains it, applying it again makes the response quadratic in that parameter.
+Two rules:
 
-The first rule catches you out most often when you never wrote the multiply. Adding phase into a coordinate that something else scales later is the same thing:
+- Never multiply `PHASE_TIME_N` by a user parameter.
+- Never apply a parameter that already drives an accumulator a second time in the shader body. The phase already contains it, so the response becomes quadratic in that parameter.
+
+You can break the first rule without writing the multiply. Adding phase to a coordinate that is scaled later has the same effect:
 
 ```glsl
 coord += PHASE_TIME_0;
 float pattern = fract(coord * line_count);   // = fract(coord*n + PHASE_TIME_0*n)
 ```
 
-`line_count` reads as purely spatial, but it multiplies the scroll phase, so nudging it slides the whole field. Scale the position only and add the phase afterwards, with the count inside the integral:
+`line_count` looks purely spatial, but it multiplies the scroll phase, so changing it slides the whole field. Scale the position only, then add a phase that has the count inside the integral:
 
 ```glsl
 float pattern = fract(coord * line_count + PHASE_TIME_1);   // MULTIPLY_BY: line_count
 ```
 
-The lines then travel at the same screen speed however many of them there are, which is what the original multiply gave you, without the jump. `bars.fs`, `lines.fs` and `scanlines.fs` all shipped the broken form.
+The lines then move at the same screen speed however many there are, without the jump.
 
-`tests/shader_param_contract_guard.rs` fails the build on all of these. It walks the whole multiplicative chain, so a parameter hiding behind a constant (`PHASE_TIME_0 * 0.5 * look_speed`) is caught, and it follows local aliases within a function, so `float t = PHASE_TIME_0;` buys you nothing. It stops at function calls, because `sin(PHASE_TIME_0) * amount` is legitimate. What it cannot see is a phase passed into a function as an argument and scaled in the callee.
+`tests/shader_param_contract_guard.rs` fails the build on all of these patterns. It follows the whole multiplicative chain, so it catches a parameter behind a constant (`PHASE_TIME_0 * 0.5 * look_speed`). It follows local aliases within a function, so `float t = PHASE_TIME_0;` is also caught. It stops at function calls, because `sin(PHASE_TIME_0) * amount` is valid. It cannot see a phase passed into a function as an argument and scaled inside that function.
 
 #### Accumulators are not position-deterministic
 
-Phase accumulators integrate, so their value depends on the path taken to get there rather than on
-where the show currently is. This is exactly what makes them smooth under rate changes, and it is
-also their one limitation: a shader that declares `PHASE_INPUTS` resumes from wherever it had
-accumulated to, it does not recompute its phase for the current position.
+An accumulator's value depends on the path taken to reach it, not on the current show position. A
+shader that declares `PHASE_INPUTS` resumes from its accumulated value after a jump; it does not
+recompute its phase for the new position.
 
-Modulators, automation, and cues are all deterministic from position. Accumulators are the exception.
-For a shader whose look does not depend on accumulated phase this is invisible. For one that does,
-the drift you see after jumping is the expected behaviour, not a bug.
+Modulators, automation, and cues are deterministic from position. Accumulators are the exception. If
+a shader's look depends on accumulated phase, it will look different after a jump. This is expected
+behavior.
 
-#### Rates that are affine, not products
+#### Affine rates
 
-`MULTIPLY_BY` covers `speed × amount`. It does not cover `speed × (1 + k · amount)`, the shape you want when `amount` at zero should still leave the base motion running since the product form would stop the animation dead there.
+`MULTIPLY_BY` covers `speed × amount`. It does not cover `speed × (1 + k · amount)`, which you need when the base motion should keep running at `amount` = 0. The product form stops the animation there.
 
 Integration is linear, so split the term across two accumulators and add them in the shader:
 
@@ -221,35 +221,35 @@ Integration is linear, so split the term across two accumulators and add them in
 float t = PHASE_TIME_0 + PHASE_TIME_1;   // = ∫ flow_speed·(1 + 0.8·agitation) dt
 ```
 
-That is exact, and continuous in both parameters. `big_bang.fs` does this.
+This is exact and continuous in both parameters. `big_bang.fs` uses it.
 
-A factor that varies across the image but not over time such as a per-cell hash stays *outside* the integral, because only the parameter needs to be inside it. `char_cycle.fs` gives every cell its own rate with `PHASE_TIME_0 + h * PHASE_TIME_1`.
+A factor that varies across the image but not over time, such as a per-cell hash, stays outside the integral. Only the parameter needs to be inside it. `char_cycle.fs` gives every cell its own rate with `PHASE_TIME_0 + h * PHASE_TIME_1`.
 
-The cost is one slot per affine term, and there are only four.
+Each affine term uses one slot, and there are four slots.
 
 #### Bounding an accumulator
 
-An accumulator grows without limit, which is correct for anything that should cycle forever such as a hue, a scroll offset, or an angle that wraps. It is wrong for anything that must stay within a range. Feeding an unbounded phase straight into a camera angle is how `dull_skull` used to orbit off behind its own backdrop and render black for a third of every cycle.
+An accumulator grows without limit. That suits values that cycle forever, such as a hue, a scroll offset, or a wrapping angle. It does not suit values that must stay in a range. For example, an unbounded phase fed straight into a camera angle can orbit the camera behind the scene's backdrop and render black.
 
-Wrap the phase in a periodic function and scale *that* by the amplitude parameter:
+Wrap the phase in a periodic function and scale that result by the amplitude parameter:
 
 ```glsl
 float swayAngle = sin(PHASE_TIME_1) * sway_range;
 ```
 
-This is not the forbidden `PHASE_TIME_N * param`: the sine is already bounded, so `sway_range` scales a value in [-1, 1] rather than one that grows forever. `sway_range` is an amplitude, so it stays a plain uniform.
+This is allowed: the sine is bounded, so `sway_range` scales a value in [-1, 1]. `sway_range` is an amplitude, so it stays a plain uniform.
 
-#### Prefer a rate to an amplitude for anything that will be automated
+#### Rates and amplitudes under automation
 
-Passing the guard is not the same as feeling right under an LFO. An amplitude parameter sets *where* something is; automating it moves that thing out and back at the LFO's rate, which reads as sloshing or stutter. A rate parameter can only make motion faster or slower, so no automation of it now matter how fast, or however often reversed, can relocate anything.
+A shader can pass the guard and still look bad under an LFO. An amplitude parameter sets where something is, so automating it moves that thing back and forth at the LFO's rate, which looks like sloshing or stutter. A rate parameter only makes motion faster or slower, so automating it cannot move anything to a new position, however fast or often it changes direction.
 
-`liquid_light.fs`'s Agitation was built both ways. As an amplitude on the domain-warp gain it was continuous and passed every guard, but a 1 Hz triangle LFO drove per-frame change to 13.5× the parked-fader baseline. Rebuilt as a mixing *rate* on accumulator slot 1 — advancing the inner warp stages against the outer one, so the fine structure keeps reorganising — the same LFO measures 0.97×, indistinguishable from leaving the fader alone, while still spanning a 10.5× range in mixing speed.
+`liquid_light.fs`'s Agitation shows the difference. As an amplitude on the domain-warp gain, a 1 Hz triangle LFO raised per-frame change to 13.5× the baseline with the fader parked. As a mixing rate on accumulator slot 1 (advancing the inner warp stages against the outer one), the same LFO measures 0.97× the baseline, while the control still spans a 10.5× range in mixing speed.
 
-So when a control needs more authority, reach for another rate before an amplitude. The question to ask is whether the parameter names a speed or a position; only the first survives being automated.
+When a control needs more range, add another rate before adding an amplitude. Ask whether the parameter names a speed or a position. Only speeds hold up under automation.
 
-#### What does not belong in `PHASE_INPUTS`
+#### Parameters that belong in `PHASE_INPUTS`
 
-Only parameters that express a *rate*. A parameter setting a static angle, scale, threshold, or count must stay a plain uniform; integrating it would ramp it to its limit and hold there. Shaders that step a simulation into a persistent buffer are already continuous by construction and need no accumulator for their step-rate coefficients.
+Only parameters that express a rate. A parameter that sets a static angle, scale, threshold, or count must stay a plain uniform; integrating it would ramp it to its limit and hold it there. Shaders that step a simulation into a persistent buffer are already continuous and need no accumulator for their step-rate coefficients.
 
 ## Binding Layout
 
@@ -260,7 +260,7 @@ Only parameters that express a *rate*. A parameter setting a static angle, scale
 | `set=0, binding=2+` | Textures (inputImage, pass buffers, imported images) |
 | Last binding | UserParams (if shader has parameters) |
 
-Fragment input: `layout(location = 0) in vec2 uv;` — normalized coordinates (0.0–1.0).
+Fragment input: `layout(location = 0) in vec2 uv;`, normalized coordinates (0.0–1.0).
 
 Fragment output: `layout(location = 0) out vec4 fragColor;`
 
@@ -325,7 +325,7 @@ void main() {
 
 ## Porting an ISF Shader
 
-Varda's JSON header is ISF-compatible, so the metadata usually needs no changes at all. The work is in the GLSL body.
+Varda's JSON header is ISF-compatible, so the metadata usually needs no changes. The work is in the GLSL body.
 
 ### What differs
 
@@ -339,51 +339,47 @@ Varda's JSON header is ISF-compatible, so the metadata usually needs no changes 
 | Fragment coords | `isf_FragNormCoord`, **bottom-left** origin | `uv` varying, **top-left** origin |
 | Output | `gl_FragColor` | `layout(location = 0) out vec4 fragColor` |
 | Bindings | Host-managed, invisible | Explicit `layout(set = 0, binding = N)` |
-| Output range | Effectively `[0,1]` — clamped at an 8-bit target | **Unbounded** — linear-light float all the way to the tonemap |
+| Output range | Effectively `[0,1]` (clamped at an 8-bit target) | **Unbounded**: linear-light float all the way to the tonemap |
 
 ### Don't clamp your output
 
-Varda composites in linear-light float from the deck stage onward, so values above
-1.0 are meaningful and survive to the tonemap, which rolls them off (ACES by
-default). A terminal
+Varda composites in linear-light float from the deck stage onward. Values above 1.0 survive to the
+tonemap, which rolls them off (ACES by default). A final clamp throws them away:
 
 ```glsl
 col = clamp(col, 0.0, 1.0);   // ← don't
 ```
 
-throws that away. It flattens emissive highlights in a generator, and in a
-**filter** it is worse: it destroys headroom produced by the deck upstream, so one
-clamping filter anywhere in a chain acts as an HDR limiter for everything before
-it.
+In a generator, the clamp flattens emissive highlights. In a **filter**, it also removes headroom
+produced by the deck upstream, so one clamping filter anywhere in a chain limits HDR for everything
+before it.
 
-If you need to keep negatives out of the blend math — worth doing, since negative
-light is not meaningful and some blend modes will propagate it — floor without
-capping:
+Negative light has no meaning and some blend modes propagate it. To keep negatives out of the blend
+math, floor without a ceiling:
 
 ```glsl
 col = max(col, 0.0);          // ← floor only, no ceiling
 ```
 
-Alpha is the exception: it is coverage, not light, and belongs in `[0, 1]`.
+Alpha is the exception. It is coverage, so keep it in `[0, 1]`.
 
-Two related traps when porting:
+Two related points when porting:
 
-- **Don't apply your own gamma.** `col = sqrt(col)` or `pow(col, 1.0/2.2)` at the
-  end of a Shadertoy port is display encoding, which Varda does at the output
-  boundary. Doing it in the shader double-encodes. A few bundled shaders still do
-  this and are flagged for review.
-- **`IMPORTED` textures are sRGB-tagged**, so sampling them already decodes to
-  linear. If a port does `pow(tex, 1.0/2.2)` on an imported atlas it is
-  compensating for that decode deliberately — leave it alone.
+- **Don't apply your own gamma.** `col = sqrt(col)` or `pow(col, 1.0/2.2)` at the end of a
+  Shadertoy port is display encoding, which Varda applies at the output. Doing it in the shader
+  encodes twice. A few bundled shaders still do this and are flagged for review.
+- **`IMPORTED` textures are sRGB-tagged**, so sampling them already decodes to linear. If a port
+  applies `pow(tex, 1.0/2.2)` to an imported atlas, it is compensating for that decode on purpose.
+  Leave it alone.
 
 ### Steps
 
 1. **Keep the JSON header.** `DESCRIPTION`, `CREDIT`, `CATEGORIES`, `INPUTS`, `PASSES`, `IMPORTED` all parse as-is.
 2. **Add `#version 450`** as the first line after the header, and delete any existing `#version`.
-3. **Add the standard prologue** — `in vec2 uv`, `out vec4 fragColor`, the `ISFUniforms` block, the sampler, your textures, and a `UserParams` block listing every non-image `INPUTS` entry **in declaration order**. Copy the layout from the [Filter example](#filter) above.
-4. **Delete any `varying` declarations.** Not valid in GLSL 450 core.
-5. **Replace `gl_FragColor`** with `fragColor`, and drop any terminal
-   `clamp(col, 0.0, 1.0)` — see [Don't clamp your output](#dont-clamp-your-output).
+3. **Add the standard prologue**: `in vec2 uv`, `out vec4 fragColor`, the `ISFUniforms` block, the sampler, your textures, and a `UserParams` block listing every non-image `INPUTS` entry **in declaration order**. Copy the layout from the [Filter example](#filter) above.
+4. **Delete any `varying` declarations.** They are not valid in GLSL 450 core.
+5. **Replace `gl_FragColor`** with `fragColor`, and remove any final
+   `clamp(col, 0.0, 1.0)`. See [Don't clamp your output](#dont-clamp-your-output).
 6. **Rewrite sampling calls:**
    ```glsl
    texture2D(inputImage, c)      →  texture(sampler2D(inputImage, texSampler), c)
@@ -392,15 +388,15 @@ Two related traps when porting:
    IMG_PIXEL(inputImage, px)     →  texture(sampler2D(inputImage, texSampler), px / RENDERSIZE)
    IMG_SIZE(inputImage)          →  vec2(textureSize(sampler2D(inputImage, texSampler), 0))
    ```
-7. **Fix the vertical orientation** — see below. This is the step people miss.
+7. **Fix the vertical orientation** (see below). This step is the one most often missed.
 
 ### The vertical flip
 
 **ISF's `isf_FragNormCoord` has `(0,0)` at the bottom-left. Varda's `uv` has `(0,0)` at the top-left.** Substituting one for the other renders the shader upside down.
 
-If the shader is vertically symmetric you won't notice — until you use it on something that isn't, like text or a logo. Check with an asymmetric source before you trust it.
+A vertically symmetric shader looks the same either way, so the error shows up only on asymmetric content such as text or a logo. Test with an asymmetric source.
 
-To port ISF coordinate math unchanged, establish a flipped coordinate once at the top of `main` and use it everywhere ISF used `isf_FragNormCoord`:
+To port ISF coordinate math unchanged, compute a flipped coordinate once at the top of `main` and use it everywhere ISF used `isf_FragNormCoord`:
 
 ```glsl
 void main() {
@@ -409,15 +405,15 @@ void main() {
 }
 ```
 
-**Do not use the flipped coordinate for texture sampling.** Varda's textures are stored top-left, so `inputImage` and pass buffers are sampled with raw `uv`. Mixing the two is what produces a shader that generates correctly but samples mirrored, or vice versa.
+**Do not use the flipped coordinate for texture sampling.** Varda stores textures with a top-left origin, so sample `inputImage` and pass buffers with raw `uv`. Mixing the two produces a shader that generates correctly but samples mirrored, or the reverse.
 
-`gl_FragCoord` needs the same treatment — it is upper-left origin in Vulkan and lower-left in OpenGL:
+`gl_FragCoord` needs the same treatment. Its origin is upper-left in Vulkan and lower-left in OpenGL:
 
 ```glsl
 vec2 fc = vec2(gl_FragCoord.x, RENDERSIZE.y - gl_FragCoord.y);
 ```
 
-Around a dozen shaders in `shaders/` are ports that do exactly this — `star_nest.fs`, `apollonian_glow.fs`, `truchet_tube.fs`, and `mandelbrot_deco.fs` are good references.
+About a dozen shaders in `shaders/` are ports that do this. `star_nest.fs`, `apollonian_glow.fs`, `truchet_tube.fs`, and `mandelbrot_deco.fs` are good references.
 
 ### Worked example
 
@@ -462,8 +458,8 @@ void main() {
 | ISF feature | Status |
 |---|---|
 | Vertex shaders (`.vs`, `isf_vertShaderInit()`) | Not supported |
-| Filters with two or more `image` inputs | Not supported — one input image per effect. To blend two sources, use two decks in a channel with a [blend mode](04-performance.md) instead. |
-| `audio` / `audioFFT` image inputs | Not bound. Use the `audio_*` scalars in `ISFUniforms` instead. |
+| Filters with two or more `image` inputs | Not supported. Each effect takes one input image. To blend two sources, use two decks in a channel with a [blend mode](04-performance.md). |
+| `audio` / `audioFFT` image inputs | Not bound. Use the `audio_*` scalars in `ISFUniforms`. |
 | `.frag` / `.glsl` extensions | Only `.fs` and `.comp` are discovered |
 
 ## Multi-Pass Rendering
@@ -477,39 +473,38 @@ For feedback effects, simulations, and post-processing chains, declare multiple 
 ]
 ```
 
-- Passes with a `TARGET` render to a named buffer (accessible as a texture in subsequent passes)
-- **Persistent** buffers survive across frames — essential for feedback loops and simulations (Game of Life, reaction-diffusion)
-- The final pass (empty `{}`) renders to the output
-- Access pass buffers as `texture2D` samplers with the target name
-- Optional `WIDTH`/`HEIGHT` expressions: `"$WIDTH/2"` for half-resolution buffers. Only `$WIDTH`, `$HEIGHT`, `$WIDTH/N` and `$WIDTH*N` with integer `N` are parsed — `$WIDTH/2.0` and arithmetic like `max($WIDTH,$HEIGHT)` are not, and fall back to full resolution. A bare integer literal (`"WIDTH": "32"`) sets a fixed size, which is how you build a reduction pyramid.
+- A pass with a `TARGET` renders to a named buffer, which later passes can read as a texture.
+- **Persistent** buffers keep their contents across frames. Use them for feedback loops and simulations (Game of Life, reaction-diffusion).
+- The final pass (empty `{}`) renders to the output.
+- Read pass buffers as `texture2D` samplers with the target name.
+- Optional `WIDTH`/`HEIGHT` expressions: `"$WIDTH/2"` for half-resolution buffers. Only `$WIDTH`, `$HEIGHT`, `$WIDTH/N` and `$WIDTH*N` with integer `N` are parsed. `$WIDTH/2.0` and arithmetic like `max($WIDTH,$HEIGHT)` are not parsed and fall back to full resolution. A bare integer literal (`"WIDTH": "32"`) sets a fixed size, which you can use to build a reduction pyramid.
+- Optional `FLOAT: true` for 32-bit float buffers (HDR, simulation data).
 
-> **`RENDERSIZE` is the size of the pass you are currently rendering**, not the deck's. In a
+> **`RENDERSIZE` is the size of the pass being rendered**, not the deck's. In a
 > `"WIDTH": "1", "HEIGHT": "1"` pass, `RENDERSIZE` is `(1, 1)`. Anything that needs the deck's
-> dimensions or aspect ratio — a letterbox fit, a screen-space offset — has to be computed in a
-> full-size pass. `eyes_depth.fs` carries its gaze target in sensor space through a 1x1 pass and
-> converts to deck space in the final pass for exactly this reason.
+> dimensions or aspect ratio, such as a letterbox fit or a screen-space offset, must be computed in a
+> full-size pass. For this reason `eyes_depth.fs` carries its gaze target in sensor space through a
+> 1x1 pass and converts it to deck space in the final pass.
 
-**Every pass buffer is double-buffered**, `PERSISTENT` or not. `PERSISTENT` controls whether the
-contents mean anything across frames, not the buffering strategy — a pass reads the last value
-written to its target and writes to the other texture. This exists because the bind group binds
-*all* pass buffers as sampled textures on every pass, so a single-textured target would be a
-colour attachment and a sampled resource at the same time, which wgpu rejects outright. Budget
-two textures per declared pass when sizing large buffers.
+**Every pass buffer is double-buffered**, whether `PERSISTENT` or not. `PERSISTENT` controls whether
+the contents carry meaning across frames. Each pass reads the last value written to its target and
+writes to the other texture. (Every pass binds all pass buffers as sampled textures, and wgpu rejects
+a texture used as both color attachment and sampled resource.) Budget two textures per declared pass
+when sizing large buffers.
 
-**Reductions.** A fragment shader cannot reduce an image to one value in a single pass, and doing
-it inline in the final pass repeats the whole scan for every output pixel. Use fixed-size passes
-as a pyramid instead: `eyes_depth.fs` tallies the sensor image into a 32x32 buffer, reduces that
-to a 1x1 gaze target, and reads one texel in the final pass — about 110k texture fetches per
-frame, versus billions for the naive version.
-- Optional `FLOAT: true` for 32-bit float buffers (HDR, simulation data)
+**Reductions.** A fragment shader cannot reduce an image to one value in a single pass, and doing it
+inline in the final pass repeats the whole scan for every output pixel. Use fixed-size passes as a
+pyramid. `eyes_depth.fs` tallies the sensor image into a 32x32 buffer, reduces that to a 1x1 gaze
+target, and reads one texel in the final pass: about 110k texture fetches per frame, against billions
+for the inline version.
 
-### Two behaviours that will surprise you
+### Persistent pass substeps and pass-buffer filtering
 
-**`PERSISTENT` passes run four times per frame.** Varda substeps persistent passes for numerical stability — 4 iterations at `TIMEDELTA / 4`, with `FRAMEINDEX` advancing once per substep. Time-based simulations integrate correctly (4 × dt/4 == dt), but anything that steps once per invocation regardless of time — cellular automata, fixed-step reaction-diffusion, `FRAMEINDEX`-gated logic — advances **four generations per frame**.
+**`PERSISTENT` passes run four times per frame.** Varda substeps persistent passes for numerical stability: 4 iterations at `TIMEDELTA / 4`, with `FRAMEINDEX` advancing once per substep. Time-based simulations integrate correctly (4 × dt/4 == dt). Anything that steps once per invocation regardless of time (cellular automata, fixed-step reaction-diffusion, `FRAMEINDEX`-gated logic) advances **four generations per frame**.
 
-Design for it: drive state changes from `TIMEDELTA`, or rate-limit against `FRAMEINDEX` explicitly. `game_of_life.fs` does the latter. It also means a persistent multi-pass shader costs roughly 4× its apparent GPU budget, which matters when you are stacking decks.
+Drive state changes from `TIMEDELTA`, or rate-limit against `FRAMEINDEX` explicitly, as `game_of_life.fs` does. A persistent multi-pass shader also costs roughly 4× its apparent GPU budget, which matters when you stack decks.
 
-**Any pass buffer forces nearest-neighbour filtering on every texture in the shader.** Float pass buffers aren't filterable in WebGPU, and the sampler is shared, so declaring even one `PASSES` target downgrades `inputImage` sampling from linear to nearest. If a filter looks unexpectedly blocky after you add a pass, this is why. Sample at texel centres to keep it predictable:
+**Any pass buffer forces nearest-neighbor filtering on every texture in the shader.** Float pass buffers are not filterable in WebGPU, and the sampler is shared, so declaring even one `PASSES` target switches `inputImage` sampling from linear to nearest. If a filter looks blocky after you add a pass, this is the cause. Sample at texel centers to keep results predictable:
 
 ```glsl
 vec2 texel = 1.0 / RENDERSIZE;
@@ -518,8 +513,8 @@ vec2 snapped = (floor(uv * RENDERSIZE) + 0.5) * texel;
 
 ### Beauty pass plus cinematic post
 
-A raymarched generator can carry its own compositing chain instead of relying on downstream
-effect decks, which is what `fractal_explorer.fs` does. Two non-persistent passes:
+A raymarched generator can include its own compositing chain instead of relying on downstream
+effect decks, using two non-persistent passes:
 
 ```json
 "PASSES": [
@@ -528,88 +523,84 @@ effect decks, which is what `fractal_explorer.fs` does. Two non-persistent passe
 ]
 ```
 
-Pass 0 marches the scene and writes **HDR colour in rgb and normalized depth in alpha**. Pass 1
-reads that one buffer and does depth of field, threshold bloom, chromatic aberration, radial blur
-and the grade. Points worth knowing before copying the pattern:
+Pass 0 marches the scene and writes **HDR color in rgb and normalized depth in alpha**. Pass 1 reads
+that buffer and applies depth of field, threshold bloom, chromatic aberration, radial blur and the
+grade. Before copying the pattern:
 
-- **Alpha is free real estate in an intermediate pass.** A generator's *final* alpha is deck
-  coverage and must be 1.0, but a pass buffer's alpha is yours. Packing depth there is what lets a
-  single-buffer post pass do focus and haze work without a second target. Normalize by a constant
-  the shader also uses to convert a world-space focus parameter, so the two agree.
-- **Every pass buffer is `Rgba16Float`** regardless of `FLOAT: true`, because all pass targets use
-  the compositing format. That is enough range for HDR emission and linear depth, and it is why
-  bloom can threshold above 1.0 and still find something there.
-- **Keep the post pass unclamped and linear.** Varda tonemaps the composite downstream, so a grade
-  that clamps to 1.0 throws away exactly the highlight headroom the tonemap wants. Put the
-  saturation and contrast in the shader; leave the display transform alone.
-- **Sampling is nearest**, per the note above, so post taps land where you put them. Offsets in uv
-  need dividing by the aspect ratio or radial effects come out elliptical.
+- **An intermediate pass's alpha is free to use.** A generator's final alpha is deck coverage and
+  must be 1.0, but a pass buffer's alpha can hold anything. Packing depth there lets a single-buffer
+  post pass do focus and haze without a second target. Normalize depth by a constant the shader also
+  uses to convert a world-space focus parameter, so the two agree.
+- **Every pass buffer is `Rgba16Float`**, with or without `FLOAT: true`, because all pass targets
+  use the compositing format. That covers HDR emission and linear depth, so bloom can threshold
+  above 1.0.
+- **Keep the post pass unclamped and linear.** Varda tonemaps the composite downstream, and a grade
+  that clamps to 1.0 removes the highlight headroom the tonemap uses. Put saturation and contrast in
+  the shader; leave the display transform to Varda.
+- **Sampling is nearest** (see above), so post taps land exactly where you put them. Divide uv
+  offsets by the aspect ratio, or radial effects come out elliptical.
 
 
 ### Raymarch and post traps
 
-Every one of these cost real debugging time and none announces itself:
+None of these produce an error:
 
 - **The hit threshold must exceed any level-of-detail floor the map puts under `d`.** If the map
   ends with `d = max(d, g_pix * 0.2)` and the loop tests `d < detail * exp(k * t)`, then once the
-  pixel footprint outgrows `detail` no ray can ever register a hit: it creeps along the surface at
-  the floor value until the step budget runs out and is reported as a *miss*. A fractal estimator
-  hides this by overshooting to a negative distance now and then. An exact analytic surface
-  converges to zero from above and never does, so the symptom only appears when you add designed
-  geometry. Derive the threshold from the same footprint: `max(detail * exp(k * t), g_pix * 0.35)`.
-- **`calcNormal` and `softShadow` re-enter the map and clobber its output globals.** Capture the
-  orbit trap *and* the material id immediately after the march, before taking a normal. Reading them
-  afterwards shades every surface as whatever the last normal probe happened to land on, which looks
-  like flat facets that slide around as the camera moves.
-- **Escape iteration count is nearly constant on the surface you are shading.** It is the obvious
-  palette input and it renders flat: a point on the boundary is by definition one whose orbit does
-  *not* escape, so the count sits at the iteration cap across almost the whole visible surface. What
-  varies point to point is how hard the map magnified the neighbourhood, so key the palette off
-  `log2(dr)` instead. Orbit traps are the other option, but they fail on a stack of conformal folds —
-  dividing the trap minimum by a derivative that grows like scale-to-the-iteration drives it to zero
-  and it stops describing the structure.
+  pixel footprint outgrows `detail` no ray can register a hit. It creeps along the surface at the
+  floor value until the step budget runs out and is reported as a miss. A fractal estimator hides
+  this because it sometimes overshoots to a negative distance. An exact analytic surface converges
+  to zero from above and never does, so the problem appears only when you add designed geometry.
+  Derive the threshold from the same footprint: `max(detail * exp(k * t), g_pix * 0.35)`.
+- **`calcNormal` and `softShadow` re-enter the map and overwrite its output globals.** Capture the
+  orbit trap and the material id immediately after the march, before taking a normal. If you read
+  them afterwards, every surface is shaded with the values from the last normal probe, which shows
+  up as flat facets that slide as the camera moves.
+- **Escape iteration count is nearly constant on the surface you are shading**, so a palette keyed
+  on it renders flat. A point on the boundary is one whose orbit does not escape, so the count sits
+  at the iteration cap across almost the whole visible surface. Key the palette off `log2(dr)`
+  instead, which measures how much the map magnified the neighborhood and varies point to point.
+  Orbit traps are the other option, but they fail on a stack of conformal folds: dividing the trap
+  minimum by a derivative that grows like scale-to-the-iteration drives it to zero.
 - **Normalize the depth channel to the depth range the subject occupies, not to the march limit.**
-  Dividing by a generous `MAX_DIST` crams every surface into the bottom fifth of the channel, and a
-  depth-of-field pass reading it then has almost no dynamic range to separate anything, so it reads
-  as "DoF does nothing" no matter how the aperture is set.
-- **For a moving camera, soften monotonically with depth instead of modelling a focus plane.** A focus
-  plane is bidirectional (everything nearer than it blurs too) and has to be placed, which is a losing
-  fight on a generator whose camera moves: a constant focus distance drifts off the subject within
-  seconds, and autofocusing on frame centre replaces drift with pumping. Sampling more central pixels
-  does not fix that, because the middle of frame cannot know about something close in a corner. Ramp
-  the blur with distance instead — near always crisp, far always soft — and there is no plane to place,
-  none to drift, and nothing to pump, while the aliasing and jitter on fine distant geometry that the
-  pass exists to bury still gets buried. Measured on `fractal_explorer.fs` across one flight, this beat
-  a centre-cluster autofocus on both counts: sharpness variation 1.32x vs 1.33x, and mean frame
-  sharpness 40% higher.
-- **Once blur is monotonic in depth, one comparison keeps a gather honest.** A tap should contribute
-  only if it is at least as far away as the pixel gathering it, otherwise crisp near geometry smears
+  Dividing by a large `MAX_DIST` puts every surface in the bottom fifth of the channel. A
+  depth-of-field pass reading it then has almost no range to separate anything, and DoF appears to
+  do nothing at any aperture setting.
+- **For a moving camera, increase blur steadily with depth instead of modeling a focus plane.** A
+  focus plane blurs in both directions (everything nearer blurs too) and has to be placed. With a
+  moving camera, a constant focus distance drifts off the subject within seconds, and autofocusing on
+  frame center causes pumping. Sampling more central pixels does not help, because the center of
+  frame cannot detect something close in a corner. Ramp the blur with distance (near always crisp,
+  far always soft). There is no plane to place, drift, or pump, and the pass still hides aliasing and
+  jitter on fine distant geometry.
+- **With blur that increases with depth, one comparison guards a gather.** A tap should contribute
+  only if it is at least as far away as the pixel gathering it; otherwise crisp near geometry smears
   outward and halos over what is behind it. With a monotonic ramp, "is behind" and "is at least as
   soft" are the same test, so `step(depth - eps, tapDepth)` is the whole guard.
-- **`pow(col, 1.3)` is not a contrast control, it is a darkener.** It pins 1.0 and drags everything
-  below it down, which can take an authored atmosphere value to a thousandth of itself and put pure
-  black in frame. Apply contrast about a mid-grey pivot: `P * pow(col / P, g)` with `P` around 0.18.
+- **`pow(col, 1.3)` darkens; it is not a contrast control.** It keeps 1.0 fixed and pulls everything
+  below it down, which can reduce an authored atmosphere value to a thousandth of itself and put pure
+  black in frame. Apply contrast around a mid-grey pivot: `P * pow(col / P, g)` with `P` around 0.18.
 
 ### Previewing while you author
 
-`examples/shader_preview.rs` renders a shader headless and writes a PNG, which is the fastest way
-to iterate on a generator without launching the app:
+`examples/shader_preview.rs` renders a shader headless and writes a PNG. It is the fastest way to
+iterate on a generator without launching the app:
 
 ```sh
 LIBRARY_PATH="/opt/homebrew/lib:${LIBRARY_PATH:-}" cargo run --release --example shader_preview -- \
-    shaders/fractal_explorer.fs /tmp/frame.png --size 960x540 --frame 300 --set stack_cap=18
+    shaders/alien_grove.fs /tmp/frame.png --size 960x540 --frame 300
 ```
 
-It steps a fixed 60 fps clock up to `--frame`, so phase accumulators integrate exactly as they
-would live and a frame index is reproducible between runs. `--set NAME=VALUE` overrides any float,
-bool or long input. The frame comes off the mixer composite, so it has been through the real
-compositing and tonemap path rather than a preview approximation.
+It steps a fixed 60 fps clock up to `--frame`, so phase accumulators integrate as they would live
+and a given frame index is reproducible between runs. `--set NAME=VALUE` overrides any float, bool or
+long input. The frame is taken from the mixer composite, so it has gone through the real compositing
+and tonemap path.
 
 ## Compute Shaders
 
-Beyond fragment shaders, Varda supports **GLSL 450 compute shaders** for work that doesn't fit the one-output-pixel-per-invocation model — particle systems, N-body simulations, cellular automata, and other GPU-native generators. Compute shaders use the **same language and compilation pipeline** as fragment shaders, with an ISF-style JSON header for metadata.
+Varda also supports **GLSL 450 compute shaders** for work that does not fit one invocation per output pixel: particle systems, N-body simulations, cellular automata, and other GPU-native generators. Compute shaders use the **same language and compilation pipeline** as fragment shaders, with an ISF-style JSON header for metadata.
 
-Compute shaders are **generators**: each one renders into its own output image that becomes the deck's source. There is no compute *effect* path — a compute shader does not receive an upstream input texture. If you need to process an incoming frame, use a fragment-shader filter (see [Shader Types](#shader-types)).
+Compute shaders are **generators**. Each one renders into its own output image, which becomes the deck's source. A compute shader cannot be an effect and does not receive an upstream input texture. To process an incoming frame, use a fragment-shader filter (see [Shader Types](#shader-types)).
 
 ### Anatomy of a Compute Shader
 
@@ -621,13 +612,13 @@ A compute shader uses the `.comp` extension and requires `"TYPE": "compute"` plu
 
 ### Compute Metadata Fields
 
-Standard ISF fields (`DESCRIPTION`, `CREDIT`, `CATEGORIES`, `INPUTS`, `PHASE_INPUTS`, `IMPORTED`, `PREPROCESSORS`) work identically. Compute adds:
+Standard ISF fields (`DESCRIPTION`, `CREDIT`, `CATEGORIES`, `INPUTS`, `PHASE_INPUTS`, `IMPORTED`, `PREPROCESSORS`) work the same way. Compute adds:
 
 | Field | Required | Description |
 |-------|----------|-------------|
 | `"TYPE": "compute"` | Yes | Distinguishes compute from fragment shaders |
-| `"COMPUTE".WORKGROUP_SIZE` | Yes | `[x, y, z]` — must match the GLSL `layout(local_size_*)` declaration |
-| `"COMPUTE".DISPATCH` | Yes | Only `"resolution"` is implemented (workgroup count derived from the output size). `"custom"` is reserved and currently behaves as a no-op — do not rely on it. |
+| `"COMPUTE".WORKGROUP_SIZE` | Yes | `[x, y, z]`; must match the GLSL `layout(local_size_*)` declaration |
+| `"COMPUTE".DISPATCH` | Yes | Only `"resolution"` is implemented (workgroup count derived from the output size). `"custom"` is reserved and currently does nothing; do not use it. |
 | `"COMPUTE".NUM_PASSES` | No | Number of sequential dispatches per frame (default `1`). See [Multi-Pass Compute](#multi-pass-compute). |
 | `"BUFFERS"` | No | Typed storage buffers (SSBOs). See [Storage Buffers](#storage-buffers). |
 
@@ -639,18 +630,16 @@ Compute bindings are fixed and assigned in this order:
 |---------|----------|-------|
 | `set=0, binding=0` | `ISFUniforms` | Same fields as fragment shaders (`TIME`, `RENDERSIZE`, audio, `PHASE_TIME_*`, etc.) |
 | `set=0, binding=1` | `UserParams` | Your `INPUTS`, packed in declaration order |
-| `set=0, binding=2` | Output image | `rgba16f`, `writeonly` — this is what the deck displays |
+| `set=0, binding=2` | Output image | `rgba16f`, `writeonly`; the deck displays this |
 | `set=0, binding=3 …` | Storage buffers | One per `BUFFERS` entry, in declaration order |
 
-The output format is hard-wired to `rgba16f`; declare it exactly as `rgba16f` in the layout qualifier and write with `imageStore`.
+The output format is fixed at `rgba16f`. Declare it exactly as `rgba16f` in the layout qualifier and write with `imageStore`.
 
-> **Changed in 0.1.12.** The output was previously `rgba8`. The whole color path now
-> composites in linear-light `Rgba16Float` (see the manual's
-> [Core Concepts → Signal Flow](02-concepts.md)), so compute output is float too.
-> **Existing `.comp` shaders need one edit:** change `rgba8` to `rgba16f` in the
-> `binding = 2` layout qualifier. Nothing else changes. The upside is that
-> `imageStore` values above 1.0 are no longer clamped — additive and accumulation
-> sims keep their headroom and roll off through the tonemap instead of clipping.
+> **Changed in 0.1.12.** The output format changed from `rgba8` to `rgba16f`, because the color
+> path composites in linear-light `Rgba16Float` (see
+> [Core Concepts → Signal Flow](02-concepts.md)). **Existing `.comp` shaders need one edit:** change
+> `rgba8` to `rgba16f` in the `binding = 2` layout qualifier. `imageStore` values above 1.0 are not
+> clamped, so additive and accumulation sims keep their headroom and roll off through the tonemap.
 
 ### Dispatch Model
 
@@ -662,9 +651,9 @@ dispatch_y = ceil(height / local_size_y)
 dispatch_z = 1
 ```
 
-Because the count is rounded **up**, the last row/column of workgroups overruns the image. **Every kernel must bounds-check** its invocation against the work it's responsible for and early-out, or it will write out of range. For a per-pixel generator that means guarding against `RENDERSIZE`; for a buffer sim it means guarding against the element count (below).
+The count is rounded **up**, so the last row and column of workgroups extend past the image. **Every kernel must bounds-check** its invocation and return early, or it will write out of range. A per-pixel generator checks against `RENDERSIZE`; a buffer sim checks against the element count (below).
 
-### Worked Example 1 — Per-Pixel Generator
+### Worked Example 1: Per-Pixel Generator
 
 The smallest useful compute generator: one invocation per output pixel, no storage buffers. This is `shaders/compute_gradient.comp` in full.
 
@@ -736,11 +725,11 @@ void main() {
 }
 ```
 
-Copy the `ISFUniforms` block verbatim into every compute shader — the field order is part of the ABI.
+Copy the `ISFUniforms` block exactly into every compute shader. The field order is part of the ABI.
 
 ### Storage Buffers
 
-Storage buffers (SSBOs) give compute shaders something fragment shaders can't have: **mutable memory that persists across frames**. This is what makes simulations possible.
+Storage buffers (SSBOs) give compute shaders **writable memory that persists across frames**, which fragment shaders do not have. Simulations depend on it.
 
 ```json
 "BUFFERS": [
@@ -750,16 +739,16 @@ Storage buffers (SSBOs) give compute shaders something fragment shaders can't ha
 
 | Field | Description |
 |-------|-------------|
-| `NAME` | Label used for the GPU allocation (not referenced from GLSL — see below) |
+| `NAME` | Label used for the GPU allocation (not referenced from GLSL; see below) |
 | `TYPE` | `"storage"` (read-write) or `"read-only-storage"` |
-| `STRUCT` | Documentation only — names the conceptual element type. The engine does **not** parse it. |
+| `STRUCT` | Documentation only; names the conceptual element type. The engine does **not** parse it. |
 | `COUNT` | Number of elements |
 | `STRIDE` | Bytes per element |
 | `PERSISTENT` | `true` keeps contents across frames; `false` is zeroed before pass 0 every frame |
 
-**Sizing.** The engine allocates exactly `COUNT × STRIDE` bytes and zero-fills it once at creation. It does *not* inspect your GLSL struct — `STRUCT` and `STRIDE` are purely for *you* to size the allocation. How you interpret those bytes in GLSL is up to you: declare a struct array or, as the bundled simulations do, a flat `vec4[]`. Just make the total match. The example above reserves `65536 × 32 = 2 MiB`, i.e. two `vec4`s (32 bytes) per particle.
+**Sizing.** The engine allocates exactly `COUNT × STRIDE` bytes and zero-fills it once at creation. It does not inspect your GLSL struct; `STRUCT` and `STRIDE` only size the allocation. In GLSL, declare a struct array or, like the bundled simulations, a flat `vec4[]`, and make the total match. The example above reserves `65536 × 32 = 2 MiB`: two `vec4`s (32 bytes) per particle.
 
-**GLSL declaration.** Always `std430` layout, at the next binding after the output image:
+**GLSL declaration.** Always use `std430` layout, at the next binding after the output image:
 
 ```glsl
 // First BUFFERS entry → binding 3. 32-byte stride = 2 vec4 per particle.
@@ -768,13 +757,13 @@ layout(std430, set = 0, binding = 3) buffer ParticleBuffer {
 };
 ```
 
-Use `std430` (tightly packed) and watch the classic alignment trap: a `vec3` still consumes 16 bytes. Pack as `vec4` to keep `STRIDE` predictable.
+`std430` is tightly packed, but a `vec3` still takes 16 bytes. Pack data as `vec4` to keep `STRIDE` predictable.
 
-**Lifecycle.** A `PERSISTENT: true` buffer accumulates state frame to frame — ideal for particle positions, Game-of-Life grids, or feedback. A `PERSISTENT: false` buffer is cleared to zero before pass 0 each frame — ideal for per-frame scratch space such as a spatial binning grid.
+**Lifecycle.** A `PERSISTENT: true` buffer keeps state from frame to frame. Use it for particle positions, Game-of-Life grids, or feedback. A `PERSISTENT: false` buffer is cleared to zero before pass 0 each frame. Use it for per-frame scratch space such as a spatial binning grid.
 
-### Worked Example 2 — Buffer-Backed Simulation
+### Worked Example 2: Buffer-Backed Simulation
 
-A simulation updates *N* elements, not *W×H* pixels — but dispatch is still resolution-based. The idiom (taken from `shaders/black_hole_sim.comp`) is to **linearize the 2D dispatch grid into a 1D element index** and guard against the element count. Size your render resolution so that `width × height ≥ COUNT`, or some elements never get a thread.
+A simulation updates *N* elements instead of *W×H* pixels, but dispatch is still resolution-based. The pattern, taken from `shaders/black_hole_sim.comp`, is to **convert the 2D dispatch grid into a 1D element index** and check it against the element count. Choose a render resolution where `width × height ≥ COUNT`, or some elements never get a thread.
 
 ```glsl
 #version 450
@@ -816,11 +805,11 @@ void main() {
 }
 ```
 
-The two load-bearing lines are the `idx` computation and the `if (idx >= NUM_PARTICLES) return;` guard — everything else is your simulation. To turn particle state into pixels, add a second pass that reads this buffer and writes `outputImage` (next section).
+The required lines are the `idx` computation and the `if (idx >= NUM_PARTICLES) return;` guard. The rest is your simulation. To turn particle state into pixels, add a second pass that reads this buffer and writes `outputImage` (next section).
 
 ### Multi-Pass Compute
 
-Set `"COMPUTE".NUM_PASSES` to run several dispatches per frame. The engine runs them **sequentially** — each pass completes on the GPU before the next begins — and exposes the current pass via the `PASSINDEX` uniform. Non-persistent buffers are zeroed once, before pass 0; persistent buffers carry through every pass.
+Set `"COMPUTE".NUM_PASSES` to run several dispatches per frame. The engine runs them **in sequence**: each pass completes on the GPU before the next begins. The `PASSINDEX` uniform holds the current pass. Non-persistent buffers are zeroed once, before pass 0; persistent buffers carry through every pass.
 
 ```glsl
 void main() {
@@ -832,30 +821,30 @@ void main() {
 }
 ```
 
-This "simulate, then render" split is exactly how `black_hole_sim.comp` works: pass 0 advances 65536 persistent particles and bins them into a non-persistent screen grid; pass 1 reads both and ray-traces the final image.
+`black_hole_sim.comp` uses this split: pass 0 advances 65536 persistent particles and bins them into a non-persistent screen grid; pass 1 reads both and ray-traces the final image.
 
 ### Limitations
 
-- **Generators only** — no compute-effect (input-texture) path. Use a fragment filter to process upstream frames.
-- **Generators write float** — output is `rgba16f`; values above 1.0 survive to the compositor and the tonemap. No clamping at the deck boundary.
-- **`DISPATCH: "custom"` is not implemented** — only `"resolution"` works.
+- **Generators only.** There is no compute effect (input-texture) path. Use a fragment filter to process upstream frames.
+- **Generators write float.** Output is `rgba16f`; values above 1.0 reach the compositor and the tonemap. There is no clamping at the deck boundary.
+- **`DISPATCH: "custom"` is not implemented.** Only `"resolution"` works.
 
 ### See Also
 
-Two reference compute shaders ship with Varda, each demonstrating a different idiom:
+Two reference compute shaders ship with Varda:
 
-- `shaders/black_hole_sim.comp` — a **stateful N-body** simulation: a `PERSISTENT: true` particle buffer that leapfrog-integrates frame to frame, a non-persistent scratch grid for atomic spatial binning, two-pass simulate/render, `PHASE_INPUTS`, and audio reactivity. It puts every feature in this section to work at once.
-- `shaders/cosmic_web.comp` — a **stateless, analytic** simulation: a scientifically grounded dark-matter cosmic web built from the *Zel'dovich approximation*. Pass 0 synthesises a Gaussian displacement field as plane-wave modes drawn from a CDM (BBKS) power spectrum; pass 1 displaces a grid of Lagrangian particles (`x = q + D·Ψ(q)`) and cloud-in-cell deposits them into a fixed-resolution density buffer; pass 2 tone-maps that field into a void→filament→node colormap. Because positions are recomputed each frame from a deterministic seed (no persistent state), it is fully scrubbable, and the growth factor `D` animates the collapse of structure.
+- `shaders/black_hole_sim.comp`: a **stateful N-body** simulation. It uses a `PERSISTENT: true` particle buffer integrated with leapfrog each frame, a non-persistent scratch grid for atomic spatial binning, a two-pass simulate/render split, `PHASE_INPUTS`, and audio reactivity. It uses every feature in this section.
+- `shaders/cosmic_web.comp`: a **stateless, analytic** simulation of a dark-matter cosmic web based on the *Zel'dovich approximation*. Pass 0 builds a Gaussian displacement field as plane-wave modes drawn from a CDM (BBKS) power spectrum. Pass 1 displaces a grid of Lagrangian particles (`x = q + D·Ψ(q)`) and deposits them into a fixed-resolution density buffer with cloud-in-cell. Pass 2 tone-maps that field into a void→filament→node colormap. Positions are recomputed each frame from a fixed seed with no persistent state, so it can be scrubbed, and the growth factor `D` animates the collapse of structure.
 
-Read `black_hole_sim.comp` for persistence and binning; read `cosmic_web.comp` for the multi-pass "generate → deposit → render" split and how to keep a sim deterministic and scrub-safe.
+Read `black_hole_sim.comp` for persistence and binning. Read `cosmic_web.comp` for the multi-pass "generate → deposit → render" split and for keeping a sim deterministic and safe to scrub.
 
 ## Analyzer Preprocessors
 
-Some effects need **structured data about the input frame** that plain GLSL can't compute — face detection bounding boxes, depth maps, segmentation masks, optical flow fields. A **preprocessor** runs an analyzer and injects its output into your shader as an additional texture binding, which you read with ordinary texture samples.
+Some effects need **structured data about the input frame** that plain GLSL cannot compute: face detection bounding boxes, depth maps, segmentation masks, optical flow fields. A **preprocessor** runs an analyzer and binds its output to your shader as an extra texture, which you read with ordinary texture samples.
 
-> This section covers the **authoring mechanics** — declaring preprocessors and reading their textures in GLSL. For the analyzer engine itself (how it runs, the two output paths, the full type catalogue, the depth-sensor performer controls, and the HTTP API), see [Frame Analysis & Preprocessors](14-frame-analysis.md).
+> This section covers **authoring**: declaring preprocessors and reading their textures in GLSL. For the analyzer engine itself (how it runs, the two output paths, the full type catalog, the depth-sensor performer controls, and the HTTP API), see [Frame Analysis & Preprocessors](14-frame-analysis.md).
 
-This is an advanced feature for shader authors building ML integrations, sensor-driven effects, or rich data processing pipelines.
+This is an advanced feature for shader authors building ML integrations, sensor-driven effects, or data processing pipelines.
 
 ### Declaring Preprocessors
 
@@ -878,36 +867,35 @@ Add a `PREPROCESSORS` array to your ISF JSON header:
 ```
 
 Each preprocessor entry declares:
-- **NAME**: the texture binding name your shader will use
+- **NAME**: the texture binding name your shader uses
 - **TYPE**: which analyzer to run (e.g. `face_detect`, `depth_estimate`, `edge_detect`)
-- **OPTIONS** (optional): JSON object passed to the analyzer for configuration (e.g. `{"resolution": "half"}`)
+- **OPTIONS** (optional): a JSON object passed to the analyzer as configuration (e.g. `{"resolution": "half"}`)
 
 ### How It Works
 
-1. Varda parses `PREPROCESSORS` from your shader's ISF header
-2. The engine starts the requested analyzer(s) on dedicated background threads
-3. Analyzers receive downscaled input frames and produce data textures asynchronously
-4. Data textures are uploaded to the GPU and bound as `texture2D` samplers alongside your other inputs
-5. Your shader reads them with standard `texture()` calls
+1. Varda parses `PREPROCESSORS` from your shader's ISF header.
+2. The engine starts the requested analyzers on dedicated background threads.
+3. Analyzers receive downscaled input frames and produce data textures asynchronously.
+4. Data textures are uploaded to the GPU and bound as `texture2D` samplers alongside your other inputs.
+5. Your shader reads them with standard `texture()` calls.
 
-Preprocessor textures are bound **after** imported textures and **before** user params in the binding layout. They never block the render loop — if analysis is slower than the frame rate, the shader uses the most recent available result.
+Preprocessor textures are bound **after** imported textures and **before** user params. They never block the render loop. If analysis is slower than the frame rate, the shader uses the most recent result.
 
 ### Available Analyzer Types
 
-The two analyzers you can request as preprocessors today:
+You can request two analyzers as preprocessors:
 
 | Type | Outputs | Description |
 |------|---------|-------------|
 | `face_detect` | `landmarks` (wireframe overlay), `face_data` (bbox/scores), `dossier_text` (character indices) | ONNX-based face detection with 478-point mesh landmarks |
-| `depth_sensor` | `depth`, `mask`, `motion`, `rgb` | Live depth camera (Kinect v1). **Required** — see below |
+| `depth_sensor` | `depth`, `mask`, `motion`, `rgb` | Live depth camera (Kinect v1). **Required** (see below) |
 
-Additional analyzer types (`depth_estimate`, `segmentation`, `optical_flow`, `edge_detect`) are planned. See [Frame Analysis & Preprocessors](14-frame-analysis.md#whats-implemented) for the authoritative implemented/planned list and the scalar outputs the same analyzers expose to modulation.
+More analyzer types (`depth_estimate`, `segmentation`, `optical_flow`, `edge_detect`) are planned. See [Frame Analysis & Preprocessors](14-frame-analysis.md#whats-implemented) for the current implemented and planned list, and for the scalar outputs the same analyzers expose to modulation.
 
-### `depth_sensor` — live depth camera
+### `depth_sensor` (live depth camera)
 
-Unlike the analyzers above, `depth_sensor` reads a physical device rather than your deck's own
-frame, and runs entirely on the GPU — the sensor's pixels never touch host memory. Declare one
-entry per output you want:
+`depth_sensor` reads a physical device instead of your deck's own frame. It runs entirely on the
+GPU; the sensor's pixels never pass through host memory. Declare one entry per output you want:
 
 ```json
 "PREPROCESSORS": [
@@ -918,35 +906,34 @@ entry per output you want:
 ]
 ```
 
-All four are at the sensor's native resolution (640×480 on Kinect v1) and are filterable, so
-sample them with normalized UVs:
+All four are at the sensor's native resolution (640×480 on Kinect v1) and are filterable. Sample
+them with normalized UVs:
 
 | `NAME` | Format | Contents |
 |---|---|---|
-| `depth` | `R16Float` | Distance normalized to `0..1` across the deck's near/far range. **`0.0` means invalid** — out of range, or a hole the sensor could not resolve. Hole-filled and temporally smoothed |
+| `depth` | `R16Float` | Distance normalized to `0..1` across the deck's near/far range. **`0.0` means invalid**: out of range, or a hole the sensor could not resolve. Hole-filled and temporally smoothed |
 | `mask` | `R8Unorm` | Feathered silhouette occupancy: `1.0` on a subject, `0.0` on background |
-| `motion` | `RG16Float` | Approximate screen-space velocity of the depth surface, signed, UV units per second. Use this to make things react to *movement* rather than mere presence |
-| `rgb` | colour path | The sensor's colour stream. Only approximately aligned with `depth` — the IR and colour cameras are physically offset |
+| `motion` | `RG16Float` | Approximate screen-space velocity of the depth surface, signed, in UV units per second. Use it to react to movement instead of presence |
+| `rgb` | color path | The sensor's color stream. Only approximately aligned with `depth`, because the IR and color cameras are physically offset |
 
-`OPTIONS: {"device": N}` pins a specific sensor; omit it to take the first one detected.
+`OPTIONS: {"device": N}` selects a specific sensor. Omit it to use the first one detected.
 
-**This preprocessor is required.** Unlike every other preprocessor, a shader declaring
-`depth_sensor` will **refuse to load** if no depth sensor is attached, with an error toast naming
-the shader. A black fallback texture is a sensible answer for "depth estimation is unavailable";
-it is a useless one for a shader whose entire content is a silhouette. Note the `depth` feature
-is compiled out on Windows and macOS Intel, so these shaders never load there.
+**This preprocessor is required.** A shader that declares `depth_sensor` **refuses to load** if no
+depth sensor is attached, and an error toast names the shader. Every other preprocessor falls back
+to a black texture instead. The `depth` feature is compiled out on Windows and macOS Intel, so these
+shaders never load there.
 
-Runtime framing — near/far clip, smoothing, hole fill, mask feather, motion gain, and mirror — is
-set per deck in the bottom bar and is MIDI/OSC-mappable at `deck/<uuid>/depth_prepro/<param>`. See
+Runtime framing (near/far clip, smoothing, hole fill, mask feather, motion gain, and mirror) is set
+per deck in the bottom bar and can be mapped over MIDI/OSC at `deck/<uuid>/depth_prepro/<param>`. See
 [Frame Analysis → Depth Sensor](14-frame-analysis.md#depth-sensor-performers) for the full control
-reference and performer framing guidance.
+reference and guidance on framing performers.
 
-See `shaders/liquid_light_depth.fs` for a worked example: an advected fluid whose flow is driven
-by `mask` gradients and `motion`, rendering performers as flowing dye outlines.
+`shaders/liquid_light_depth.fs` is a worked example: an advected fluid whose flow is driven by
+`mask` gradients and `motion`, rendering performers as flowing dye outlines.
 
 ### Shader Access
 
-Preprocessor textures are accessed like any other texture. Bindings follow the standard layout — preprocessor textures appear after imported textures:
+Read preprocessor textures like any other texture. They appear after imported textures in the standard binding layout:
 
 ```glsl
 layout(set = 0, binding = N) uniform texture2D landmarks;    // wireframe overlay
@@ -966,21 +953,21 @@ void main() {
 
 ### Lifecycle
 
-- Analyzers start automatically when a shader declaring them is loaded onto a deck
-- Multiple shaders requesting the same analyzer type share a single instance (refcounted)
-- When the last shader using an analyzer is removed, the analyzer stops and frees resources
-- If an analyzer fails to initialize (missing model file, unsupported platform), the shader still loads — preprocessor textures fall back to 1×1 black. The exception is `depth_sensor`, which is *required*: if the device cannot be acquired the shader does not load at all
+- Analyzers start automatically when a shader that declares them is loaded onto a deck.
+- Shaders requesting the same analyzer type share one instance (refcounted).
+- When the last shader using an analyzer is removed, the analyzer stops and frees its resources.
+- If an analyzer fails to initialize (missing model file, unsupported platform), the shader still loads and its preprocessor textures fall back to 1×1 black. The exception is `depth_sensor`, which is required: if the device cannot be acquired, the shader does not load.
 
 ## Hot-Reload
 
-Shaders in the `shaders/` directory are watched for changes. Save a `.fs` file and Varda:
+Varda watches shaders in the `shaders/` directory. When you save a `.fs` file, Varda:
 
 1. Detects the file change
 2. Recompiles GLSL → SPIR-V
-3. On success: replaces the running shader, resets parameters to defaults
-4. On error: keeps the old shader running, shows an error notification
+3. On success: replaces the running shader and resets parameters to defaults
+4. On error: keeps the old shader running and shows an error notification
 
-No restart required. Edit shaders in any external editor and see results immediately.
+You do not need to restart. Edit shaders in any external editor and see the result immediately.
 
 ## File Location
 
@@ -992,9 +979,9 @@ Varda loads shaders from a fixed hierarchy, lowest to highest precedence:
 4. The platform user shader dir (`~/.local/share/varda/shaders`, `~/Library/Application Support/Varda/Shaders`, `%APPDATA%\Varda\Shaders`)
 5. Any `--shader-dir <DIR>` flags (repeatable), in the order given
 
-On a name collision the higher-precedence directory wins, so a `--shader-dir` shader overrides a built-in of the same name. The order holds for the whole session: shaders hot-reload as you edit them, and deleting an override restores the shadowed built-in instead of dropping the shader. A `--shader-dir` that doesn't exist is skipped with a warning, not created.
+On a name collision the higher-precedence directory wins, so a `--shader-dir` shader overrides a built-in of the same name. The order holds for the whole session: shaders hot-reload as you edit them, and deleting an override restores the built-in it replaced. A `--shader-dir` that does not exist is skipped with a warning; Varda does not create it.
 
-Shaders are automatically discovered on startup from every directory in the hierarchy and appear in the **Library** panel under Generators, Effects, or Transitions based on their type.
+Varda discovers shaders at startup from every directory in the hierarchy. They appear in the **Library** panel under Generators, Effects, or Transitions based on their type.
 
 ---
 

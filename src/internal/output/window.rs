@@ -194,7 +194,7 @@ impl WindowSink {
             (Some(name), Some(winit::window::Fullscreen::Borderless(None))) => {
                 bound.window.set_fullscreen(None);
                 self.notice = Some(format!(
-                    "Monitor '{name}' not connected — output opened as a window"
+                    "Monitor '{name}' is not connected, so the output opened as a window"
                 ));
             }
             (_, fullscreen) => bound.window.set_fullscreen(fullscreen),
