@@ -1,21 +1,21 @@
 # Arrangement Mode
 
-Performance mode is a mixer: channels stacked vertically, decks inside them, everything played by hand. **Arrangement mode is the same scene turned ninety degrees**, with show time running left to right. A channel becomes a group, a deck becomes a lane, and you lay out when each deck is visible instead of bringing it up on a fader.
+Arrangement mode shows the scene as a timeline, with show time running left to right. Each channel is a group and each deck is a lane. You place regions on a lane to set when that deck is visible, instead of bringing it up on a fader.
 
-Nothing is imported, copied, or converted. There is one scene, and these are two views of it. A change you make in either shows up in the other immediately.
+Performance mode and Arrangement mode are two views of the same scene. Nothing is imported, copied, or converted. A change you make in either view shows up in the other immediately.
 
-Click **▤ Arrange** in the top bar to switch, and **🎛 Perform** to switch back. The arrangement keeps driving decks either way, so switching views mid-show is safe.
+Click **▤ Arrange** in the top bar to switch to Arrangement mode, and **🎛 Perform** to switch back. The arrangement keeps driving decks in both views, so you can switch views mid-show.
 
-## What Changes and What Doesn't
+## Shared Panels
 
-Only the **central mixing area** is replaced. The library on the left, the detail bar along the bottom, and the right panel all stay exactly where they were:
+Arrangement mode replaces only the **central mixing area**. The library on the left, the detail bar along the bottom, and the right panel stay where they are:
 
-- Selecting a lane selects its deck, so the bottom bar edits generator parameters, effect chains, and playback for the deck you clicked in the timeline.
-- Dragging a generator from the library onto a **group row** creates a deck in that channel, and therefore a lane, the same way dropping onto a channel column does.
-- Dragging an **effect** onto a lane, group, Master row, or any automation under them appends to that owner's effect chain and selects the owner (same surfaces as Performance mode; see [Library → Drag-and-Drop](03-library-panel.md#drag-and-drop)).
+- Selecting a lane selects its deck. The bottom bar then edits generator parameters, effect chains, and playback for that deck.
+- Dragging a generator from the library onto a **group row** creates a deck in that channel, and a lane for it, as dropping onto a channel column does.
+- Dragging an **effect** onto a lane, group, Master row, or any automation row under them appends it to that owner's effect chain and selects the owner. These are the same drop targets as in Performance mode; see [Library → Drag-and-Drop](03-library-panel.md#drag-and-drop).
 - Modulators, tonemapping, surfaces, and outputs stay reachable, so you can build an LFO while looking at the timeline.
 
-If you want a wider timeline, collapse the library with **L** and the right panel with **«**.
+For a wider timeline, collapse the library with **L** and the right panel with **«**.
 
 ## Anatomy
 
@@ -24,32 +24,32 @@ If you want a wider timeline, collapse the library with **L** and the right pane
 | **Transport strip** | Play/pause, stop, the cue arrows, record, the position readout, snap, zoom, and the idle picker. |
 | **Focus strip** | The thin band above the ruler. Drag out a range there to mark the stretch you are working on, then loop it. |
 | **Ruler** | Show position in timecode. Click or drag it to locate, double-click to drop a cue. |
-| **Playhead** | The vertical line at the current position, colour-coded by transport status. |
-| **Cue point** | A yellow dot on the ruler with a dashed line down the lanes, marking a moment worth returning to. |
-| **Group row** | One channel. Click it to select the channel, right-click to copy or delete it; it is also the library drop target. |
+| **Playhead** | The vertical line at the current position, color-coded by transport status. |
+| **Cue point** | A yellow dot on the ruler with a dashed line down the lanes, marking a moment you want to return to. |
+| **Group row** | One channel. Click it to select the channel, right-click to copy or delete it. It is also the library drop target. |
 | **Lane** | One deck, with its regions. Click it to select the deck, drag its header to reorder, right-click to copy or delete it. |
 | **Automation row** | One automated parameter, drawn as a curve under whatever owns it. |
 | **Master row** | The mixer, below every channel, holding master effect automation. |
 
-The transport strip duplicates the top bar readout rather than replacing it. Both push the same commands, and both stay visible in both modes. See [Transport](06-control-surfaces.md#transport).
+The transport strip duplicates the top bar readout. Both send the same commands, and both are visible in both modes. See [Transport](06-control-surfaces.md#transport).
 
 ### Navigating
 
 | Gesture | Result |
 |---------|--------|
-| **Scroll** | Move up and down the rows. A scene with more channels than fit on screen gets a scrollbar down the right edge of the tracks, which you can drag instead. |
+| **Scroll** | Move up and down the rows. If the scene has more channels than fit on screen, a scrollbar appears down the right edge of the tracks. You can drag it. |
 | **Shift + scroll**, or a horizontal wheel | Pan along the timeline. |
-| **Pinch**, or **Cmd/Alt + scroll** | Zoom the timescale about the pointer, so whatever you are looking at stays under it. |
+| **Pinch**, or **Cmd/Alt + scroll** | Zoom the timescale around the pointer. The point under the pointer stays put. |
 | **+ / −** | Zoom in and out from the transport strip. |
 | **Click or drag the ruler** | Locate the transport. |
 | **⏮ / ⏭** | Jump to the previous or next cue point. |
 | **⏹** | Stop, holding the position. Press it again to return to the start. |
 
-While the transport is chasing external timecode, position belongs to the master: the ruler and the transport buttons are disabled and say so on hover.
+While the transport is chasing external timecode, the timecode master controls position. The ruler and the transport buttons are disabled, and their tooltips say why.
 
 ### The focus area
 
-Dialling in one sequence means playing the same eight bars over and over. The thin strip above the ruler is where you say which eight bars: drag across it and a blue bar marks that stretch of show.
+Use the focus area to loop a stretch of the show while you work on it. Drag across the thin strip above the ruler, and a blue bar marks that range.
 
 | Gesture | Result |
 |---------|--------|
@@ -58,263 +58,282 @@ Dialling in one sequence means playing the same eight bars over and over. The th
 | **Drag either edge** | Resize it. |
 | **Right-click the bar** | **Loop this range**, **Zoom to range**, or **Clear**. |
 
-**Loop this range** hands the range to the transport, which wraps playback inside it. The bar fills in while it is looping, so a wrap that surprises you has a visible cause. Move or resize the bar while it is looping and the loop follows, which is how you nudge a loop point without stopping.
+**Loop this range** sends the range to the transport, which wraps playback inside it. The bar fills in while it is looping. If you move or resize the bar while it is looping, the loop follows, so you can adjust a loop point without stopping.
 
-The range and the loop are separate things: clearing the range stops the loop with it, but turning the loop off leaves the range marked, so you can keep working on the same stretch without it wrapping. **Zoom to range** fills the view with it. A scene saved with a loop opens with that loop showing as the focus area, so a durable loop is never invisible.
+Clearing the range also stops the loop. Turning the loop off keeps the range marked, so you can keep working on the same stretch without wrapping. **Zoom to range** fills the view with the range. A scene saved with a loop opens with that loop shown as the focus area.
 
 ### Cue points
 
-A **cue point** marks a moment worth returning to: the drop, the encore, the bit that never quite lands in rehearsal. Double-click the ruler to drop one where you clicked, and the arrows either side of stop walk the list.
+A **cue point** marks a moment you want to return to, such as a drop or an encore. Double-click the ruler to drop one where you clicked. The arrows on either side of stop step through the cues.
 
 | Gesture | Result |
 |---------|--------|
-| **Double-click the ruler** | Drop a cue there, named `Cue 1`, `Cue 2`, and so on. The playhead lands on it. |
-| **Drag a cue's dot** | Move it, snapped like every other edit. |
+| **Double-click the ruler** | Drop a cue there, named `Cue 1`, `Cue 2`, and so on. The playhead moves to it. |
+| **Drag a cue's dot** | Move it. The move snaps like every other edit. |
 | **Right-click a cue** | Rename it (Enter commits) or delete it. |
 | **⏮ / ⏭** | Jump backwards or forwards through the cues. |
 
-Back with no earlier cue returns to the start, so there is always a way home. Forward past the last cue stays where it is.
+⏮ with no earlier cue returns to the start. ⏭ past the last cue does nothing.
 
-Pressing an arrow repeatedly walks the list, including while the show is playing: each press steps from where the last one landed rather than from wherever playback has carried the playhead since. Let it play on into the next cue, or move the playhead yourself by scrubbing, locating, or stopping back to the start, and the next press picks up from the playhead again.
+Repeated presses step through the list, including while the show is playing. Each press steps from where the previous press landed, not from where playback has moved the playhead since. The next press starts from the playhead again once playback reaches the next cue, or once you move the playhead yourself by scrubbing, locating, or stopping back to the start.
 
-Cues are saved with the scene, and the arrows are engine commands rather than buttons, so a MIDI foot switch or `POST /api/transport/cue/next` walks a show the same way.
+Cues are saved with the scene. The arrows are engine commands, so a MIDI foot switch or `POST /api/transport/cue/next` steps through cues the same way.
 
 #### Cue pads in Performance mode
 
-Every cue is also a pad in Performance mode, in a bank two buttons wide under the mixer and the macros, in the order the ruler draws them. Pressing one takes the show to that cue and leaves the transport as it was, running or stopped, so a pad is a way to go somewhere rather than a way to start. The bank appears with the first cue and is absent before that.
+Every cue also appears as a pad in Performance mode, in a bank two buttons wide under the mixer and the macros, in ruler order. Pressing a pad moves the show to that cue and leaves the transport running or stopped, as it was. The bank appears when you add the first cue.
 
-The pads are the same cues, not copies of them: rename a cue on the ruler and its pad is renamed, delete it and the pad goes. To map one to a controller, turn on MIDI learn (right-click empty space), click the pad, then move the control you want, exactly as you would map a fader. The mapping is stored against the cue, so moving the cue later keeps it. `POST /api/transport/cue/{uuid}`, `/varda/cue/<uuid>/fire`, and a mapped note all do the same thing.
+The pads are the cues themselves. Rename a cue on the ruler and its pad is renamed; delete it and the pad goes. To map a pad to a controller, turn on MIDI learn (right-click empty space), click the pad, then move the control, as you would map a fader. The mapping is stored against the cue, so it survives moving the cue. `POST /api/transport/cue/{uuid}`, `/varda/cue/<uuid>/fire`, and a mapped note all do the same thing.
 
-While the transport is chasing timecode the pads are greyed out, because the position belongs to the timecode master.
+While the transport is chasing timecode, the pads are greyed out, because the timecode master controls position.
 
 ### Reordering decks
 
-Drag a lane by its header (the name at the left, not the track) to move that deck up or down inside its channel. A line shows where it will land, and the order is the same order the mixer shows, so a deck moved here has moved in Performance mode too, and the other way around. Deck order is composite order within a channel, so this changes what draws on top of what.
+Drag a lane by its header (the name at the left, not the track) to move that deck up or down inside its channel. A line shows where it will land. The order matches the mixer, so a move here also shows in Performance mode, and the other way around. Deck order is composite order within a channel, so reordering changes which deck draws on top.
 
-Dragging a lane onto a different channel's lanes does nothing, and no drop line appears. Moving a deck to another channel is a Performance mode gesture, because there the target is the channel itself rather than a position between two lanes.
+You cannot drag a lane into a different channel; no drop line appears. To move a deck to another channel, drag it onto the channel in Performance mode.
 
-### Copying a deck here copies its placement
+### Copying decks and channels
 
-Right-click a lane header for the same **Copy**, **Duplicate**, and **Paste** the mixer offers, with one difference that matters: a copy made in Arrangement mode carries the deck's regions, so the copy plays at the same times as the original and can be dragged from there. The same deck copied in Performance mode arrives as a bare deck with no lane, because in the mixer a deck is a source and here it is a source and a placement. See [Copy and Paste](02-concepts.md#copy-and-paste).
+Right-click a lane header for **Copy**, **Duplicate**, and **Paste**, as in the mixer. A copy made in Arrangement mode includes the deck's regions, so the copy plays at the same times as the original and you can drag it from there. A deck copied in Performance mode pastes as a bare deck with no lane. See [Copy and Paste](02-concepts.md#copy-and-paste).
 
-Right-clicking a group row offers the channel's copy, duplicate, and paste in the same way.
+Right-click a group row to copy, duplicate, or paste the channel.
 
 ### Deleting from the timeline
 
-The timeline is a view of the scene rather than a document beside it, so the row menus delete the real thing:
+The row menus delete from the scene itself:
 
 | Item | On | What goes |
 |------|----|-----------|
 | **Remove lane** | A lane header | The row and its curves. The deck stays in the mixer, unarranged. |
-| **Delete deck** | A lane header | The deck itself, here and in Performance mode, taking its lane and curves with it. |
+| **Delete deck** | A lane header | The deck itself, here and in Performance mode, with its lane and curves. |
 | **Delete channel** | A group row | The channel, its decks, and all of their lanes and curves. |
 
-Deleting a channel is refused when only two are left, because a mixer keeps A and B; the item is greyed out rather than failing after the fact. Every one of these is a single Cmd+Z away, and deleting a deck from the mixer removes its lane too, so the two views never disagree about what exists.
+**Delete channel** is greyed out when only two channels are left, because the mixer keeps channels A and B. Cmd+Z undoes any of these in one step. Deleting a deck from the mixer also removes its lane.
 
 ## Regions
 
-A **region** is a span during which a deck is visible. It is not a container for content. The deck exists in the scene whether or not a region covers it, and a region only says *when*.
+A **region** is a span of time during which a deck is visible. The deck exists in the scene whether or not a region covers it.
 
-Under the hood a region compiles to breakpoints on that deck's opacity curve: fade in, full, fade out, zero. Two regions overlapping in sibling lanes are therefore a crossfade, using the blend mode already set on those decks. Nothing extra is needed to express one.
+Each region compiles to breakpoints on the deck's opacity curve: fade in, full, fade out, zero. Two regions overlapping in sibling lanes make a crossfade, using the blend mode already set on those decks.
 
 | Gesture | Result |
 |---------|--------|
-| **Drag across empty track** | Author a region between where you pressed and where you released. |
+| **Drag across empty track** | Create a region between where you pressed and where you released. |
 | **Double-click empty track** | Drop a four-second region at that position. |
 | **Drag a region** | Move it, keeping its length. |
 | **Drag either edge** | Resize it. |
 | **Drag a fade handle** (top corners) | Set the fade in or fade out. |
 | **Right-click a region** | Delete region, or clear fades. |
 
-A single click selects the lane's deck rather than creating anything, so the bottom bar follows you around the timeline as you work.
+A single click selects the lane's deck and creates nothing, so the bottom bar follows you around the timeline.
 
-The edges are forgiving: a press a few pixels outside a region still grabs its edge rather than starting a new region on the empty track next to it. The pointer tells you which gesture you are about to get before you commit to it, so watch for the horizontal arrows. Two regions closer together than that split the space between them, so you always resize the edge you are nearest.
+An edge can be grabbed from a few pixels outside the region; pressing there resizes the region instead of starting a new one. The pointer changes to horizontal arrows when you are about to grab an edge. When two regions are closer together than that margin, the gap is split between them, so you grab the nearer edge.
 
 ### Snapping
 
-**Snap** rounds every edit to a whole frame at the show's timecode rate, and is on by default. Turn it off for continuous positions.
+**Snap** rounds every edit to a whole frame at the show's timecode rate. It is on by default. Turn it off for continuous positions.
 
-Snapping applies to the *gesture*, never to what is stored: positions are continuous everywhere in Varda, so changing the show's frame rate re-labels the ruler without moving a single region. See [Frame rates](06-control-surfaces.md#frame-rates-and-drop-frame).
+Snapping applies to the edit gesture only. Varda stores continuous positions, so changing the show's frame rate relabels the ruler without moving any region. See [Frame rates](06-control-surfaces.md#frame-rates-and-drop-frame).
 
 ## Selecting a Slice
 
-Copying a whole deck takes every region on it, and copying a whole curve takes every breakpoint. When you want *just this clip transition* or *just this stretch of the curve*, mark a **selection** and copy the slice instead.
+Copying a whole deck takes every region on it, and copying a whole curve takes every breakpoint. To copy part of a region or curve, mark a **selection** and copy that slice.
 
 | Gesture | Result |
 |---------|--------|
-| **Click a region** | Selects that one region, ready to copy or delete. The bottom bar still follows the deck. |
-| **Shift+drag on the tracks** | Draws a marquee: a time span crossed with the lanes it covers. Everything inside is selected. |
-| **Esc** | Clears the selection. Clicking empty track or a curve clears it too. |
+| **Click a region** | Selects that region, ready to copy or delete. The bottom bar still follows the deck. |
+| **Shift+drag on the tracks** | Draws a marquee: a time span across the lanes it covers. Everything inside is selected. |
+| **Esc** | Clears the selection. Clicking empty track or a curve also clears it. |
 
-A marquee can be one lane tall, or cover several deck and automation lanes at once, and it crosses channels freely: drag down past a channel's rows and it keeps taking the rows it reaches, which is how you grab everything happening between two timecodes. A region counts as inside the marquee if it overlaps the time span at all, but only the part inside the highlighted time range is selected. If the marquee cuts through the middle of a region, Copy takes that cropped middle, Delete leaves the unselected ends behind, and dragging moves the cropped middle while leaving those ends in place. New cut edges are hard edges; original fades stay with whichever fragment keeps the original region edge. An empty marquee (one that covers no regions or points) is fine; the highlight still shows what you marked.
+A marquee can cover one lane or several deck and automation lanes, across channels. Drag down past a channel's rows and it keeps adding the rows it reaches, so you can select everything between two timecodes.
 
-Shift is the disambiguator: a bare drag still authors or edits, and holding Shift turns the same drag into a selection.
+A region is included if it overlaps the marquee's time span at all, but only the part inside the time span is selected. If the marquee cuts through the middle of a region:
 
-Once something is marked:
+- Copy takes the cropped middle.
+- Delete removes the middle and leaves the ends.
+- Dragging moves the cropped middle and leaves the ends in place.
 
-- **Cmd+C** copies the slice. Cropped region pieces and curve pieces travel together, with their times measured from the start of the selection.
-- **Delete** (or Backspace) removes only the selected part of each region, leaving unselected fragments behind, and clears the marked stretch of any curve it covers while keeping the shape either side continuous. The whole delete is one undo entry.
-- **Cmd+V** pastes at the pointer when it is over a lane, or at the playhead onto the selected deck or curve when it is not. A copied automation slice synthesizes edge points so it lands looking exactly as it did under the marquee, and replaces whatever it covers rather than fighting it.
+New cut edges are hard edges. Original fades stay with the fragment that keeps the original region edge. A marquee that covers no regions or points still shows its highlight.
 
-A slice knows what each target can hold: paste onto a deck lane and only the region parts land; paste onto an automation lane and only the curve parts do. The other half stays on the clipboard for a second paste onto a lane that can take it. You can also right-click empty track and pick **Paste slice here** to drop the region parts at that exact spot.
+A bare drag creates or edits. Hold Shift to make the same drag a selection.
+
+With a selection marked:
+
+- **Cmd+C** copies the slice. Cropped region pieces and curve pieces are copied together, with times measured from the start of the selection.
+- **Delete** (or Backspace) removes only the selected part of each region and leaves the unselected fragments. On a curve, it clears the marked stretch and keeps the curve continuous on either side. The whole delete is one undo entry.
+- **Cmd+V** pastes at the pointer when it is over a lane. Otherwise it pastes at the playhead onto the selected deck or curve. A pasted automation slice adds edge points so it keeps the shape it had under the marquee, and it replaces whatever it covers.
+
+A deck lane takes only the region parts of a slice, and an automation lane takes only the curve parts. The other parts stay on the clipboard, so you can paste them onto a lane that takes them. You can also right-click empty track and pick **Paste slice here** to paste the region parts at that spot.
 
 ### Dragging a selection
 
-A marked slice can also be picked up and moved. **Drag from inside the highlight** and everything it holds travels together, keeping its internal spacing: regions, curve pieces, and the gaps between them.
+**Drag from inside the highlight** to move everything in the selection together: regions, curve pieces, and the gaps between them.
 
 | Gesture | Result |
 |---------|--------|
 | **Drag inside the highlight** | Moves the whole selection. |
-| **Alt/Option + drag** | Leaves the original where it was and moves a copy. |
-| **Drag up or down** | Moves regions onto another deck lane, crossing channels if you drag that far. Curves stay on their own parameter row. |
+| **Alt/Option + drag** | Leaves the original in place and moves a copy. |
+| **Drag up or down** | Moves regions onto another deck lane, across channels if you drag that far. Curves stay on their own parameter row. |
 
-While you drag, an outline shows where the slice will land and nothing moves yet; the edit happens on release, as one undo entry. The selection re-arms where it landed, so you can nudge it again straight away. Snap rounds the landing to a whole frame, and the block stops at the start of the show rather than pushing anything to a negative position.
+While you drag, an outline shows where the slice will land. The edit happens on release, as one undo entry. The selection stays active at the new position, so you can move it again. Snap rounds the landing to a whole frame, and the selection stops at the start of the show instead of moving anything to a negative position.
 
-A region's edge and fade handles still work while it is selected, so a single clicked region resizes and fades exactly as it does with nothing marked. On an automation lane the drag belongs to the selection, so press **Esc** first if you want to hand-edit a point inside the marked stretch.
+A selected region's edge and fade handles still work, so you can resize and fade a single clicked region as usual. On an automation lane, a drag inside the selection moves the selection. Press **Esc** first to edit a point inside the marked stretch.
 
 ## Automation Lanes
 
-Curves are created from the parameter, not from the timeline: open the **`〰`** dropdown on any modulatable parameter and pick **＋ Automation lane**. The curve then appears as a row under whatever owns that parameter, so you always know where to look for it:
+To create a curve, open the **`〰`** dropdown on any modulatable parameter and pick **＋ Automation lane**. The curve appears as a row under whatever owns that parameter:
 
 | Automated parameter | Row appears |
 |---------------------|-------------|
-| A deck's own parameters, or one of its effects | Under that deck's lane, folded away until you unfold it |
+| A deck's own parameters, or one of its effects | Under that deck's lane, folded until you unfold it |
 | A channel effect | Under that channel's group header |
 | A master effect | Under the **Master** row at the bottom |
 
-Effect parameters are labelled `effect · parameter`, so two effects sharing a parameter name stay apart. See [Automation Curves](05-modulation.md#automation-curves) for what a curve does to a value.
+Effect parameters are labeled `effect · parameter`, so two effects with the same parameter name stay separate. See [Automation Curves](05-modulation.md#automation-curves) for how a curve sets a value.
 
-A segment between two breakpoints is a shape, not just a straight line. Grab the line itself (the pointer turns into a vertical arrow) and drag it to bend the segment, so a move can start slowly and arrive fast or the other way around. Drag toward the way you want it to bulge, on rising and falling segments alike. Right-clicking the breakpoint the segment leaves and picking **Linear** straightens it again, and **Smooth** or **Hold** replace the bend with those shapes.
+You can bend the segment between two breakpoints. Grab the line itself (the pointer turns into a vertical arrow) and drag toward the side you want it to bulge. A bent segment can start slowly and finish fast, or the reverse, on rising and falling segments alike. To straighten it, right-click the breakpoint at the start of the segment and pick **Linear**. **Smooth** and **Hold** replace the bend with those shapes.
 
-Where the line is flat there is no bend to make, so dragging it raises or lowers it instead. The whole flat run moves together, however many breakpoints sit along it, and that includes the held stretches before the first breakpoint and after the last one. It is how you set a level for a lane you have not shaped yet: drop one breakpoint and drag the line either side of it to the value you want.
+Dragging a flat line raises or lowers it. The whole flat run moves together, including every breakpoint on it and the held stretches before the first breakpoint and after the last. To set a level on an unshaped lane, drop one breakpoint and drag the line on either side of it to the value you want.
 
-The crossfader cannot be automated yet: it is mappable and macro-drivable, but it is not a modulation target, so there is no curve to draw. Author a crossfade as two overlapping regions in sibling lanes instead, which is the form the arrangement prefers anyway.
+The crossfader cannot be automated. It is mappable and can be driven by a macro, but it is not a modulation target. To crossfade in an arrangement, overlap two regions in sibling lanes.
 
 | Gesture | Result |
 |---------|--------|
-| **Drag a breakpoint** | Move it in time and value. It cannot cross its neighbours. |
-| **Drag a sloped line** | Bend that segment. Drag toward the direction you want it to bulge. |
-| **Drag a flat line** | Raise or lower it, along with every breakpoint holding it there. |
+| **Drag a breakpoint** | Move it in time and value. It cannot cross its neighbors. |
+| **Drag a sloped line** | Bend that segment. Drag toward the side you want it to bulge. |
+| **Drag a flat line** | Raise or lower it, along with every breakpoint on it. |
 | **Double-click empty curve** | Add a breakpoint there. |
 | **Double-click a breakpoint** | Remove it. |
 | **Right-click a breakpoint** | Choose Linear, Smooth, or Hold, or delete it. |
 | **Right-click a lane, or its header** | Copy this shape, or paste the copied one onto it. |
 | **Cmd+C / Cmd+V** | The same copy and paste, on the lane you last clicked. |
 | **Right-click the lane header** | Also removes the automation lane entirely. |
-| **▾ caret** on a deck | Fold that deck's curves away, or unfold them. |
+| **▾ caret** on a deck | Fold or unfold that deck's curves. |
 
-The deck's own opacity curve is not offered as an editable row, because it is authored by dragging regions and hand edits to it would be overwritten by the next region edit.
+The deck's own opacity curve has no editable row. Regions write it, and the next region edit would overwrite any hand edits.
 
-Curves do not appear as cards in the right panel's modulation list. A show can have hundreds of them and that list is built for a handful of live modulators.
+Curves do not appear as cards in the right panel's modulation list.
 
 ### Reusing a shape
 
-A curve drives the one parameter it was drawn for, so it is not offered in the `〰` dropdown as a source you can assign somewhere else. To put the same shape on a second parameter, right-click the lane you like and pick **Copy curve**, then right-click the other parameter's lane and pick **Paste curve**. Both items are in the menu wherever you right-click the lane, on a breakpoint or on bare curve. The shape lands where you right-clicked, keeping its own length and replacing whatever it covers. Pasting from the lane header instead, or with the keyboard, lands it at the playhead, since neither of those points at a moment in the show. The keyboard does the same thing: click a lane to select it, then Cmd+C and Cmd+V.
+A curve drives only the parameter it was drawn for, and the `〰` dropdown does not list it as a source for other parameters. To put the same shape on a second parameter:
 
-The two lanes are independent from that moment on. Editing one never moves the other, which is the point: a shared source would mean a tweak for one parameter silently rewriting the other, and you would only find out during the show.
+1. Right-click the lane you want to copy and pick **Copy curve**.
+2. Right-click the other parameter's lane and pick **Paste curve**.
+
+Both items are in the menu wherever you right-click the lane, on a breakpoint or on bare curve. The shape lands where you right-clicked, keeps its own length, and replaces whatever it covers. Pasting from the lane header or with the keyboard lands the shape at the playhead. To use the keyboard, click a lane to select it, then press Cmd+C and Cmd+V.
+
+The two curves are independent after pasting. Editing one does not change the other.
 
 ## Recording a Pass
 
-Drawing a curve with a mouse is not the same as playing one. **⏺** in the transport strip (and in the top bar, so Performance mode has it too) arms automation recording: from then on, anything you touch is written into the arrangement as a curve at the position the show is at.
+**⏺** in the transport strip (and in the top bar, so it is also in Performance mode) arms automation recording. While armed, any control you move is written into the arrangement as a curve at the current show position.
 
-1. Press **⏺**. From a stop it also starts playback, because arming and then reaching for play is two gestures for one intent. While chasing timecode it only arms, and the pass starts when the master rolls.
-2. Play the show: mouse, MIDI, OSC, macros, the API. Every control that can be automated is recording.
+1. Press **⏺**. From a stop, this also starts playback. While chasing timecode it only arms, and the pass starts when the master rolls.
+2. Play the show with the mouse, MIDI, OSC, macros, or the API. Every automatable control records.
 3. Press **⏺** again to end the pass.
 
-The button is grey when idle, dark red when armed, and bright red while it is actually writing something, with the number of parameters in its tooltip.
+The button is grey when idle, dark red when armed, and bright red while it is writing. Its tooltip shows the number of parameters being written.
 
-Anything with a `〰` dropdown records, including deck opacity, deck and effect parameters, and channel faders. A parameter that had no curve gets a lane made for it on the spot, so you never have to prepare the timeline before playing.
+Anything with a `〰` dropdown records, including deck opacity, deck and effect parameters, and channel faders. If a parameter has no curve yet, Varda creates a lane for it.
 
-**A pass replaces only the stretch it covered.** Punch in at bar 9, move a knob, punch out at bar 17, and the curve before bar 9 and after bar 17 is exactly as it was. That is what makes a second pass a fix rather than a rewrite, and it is the same rule pasting a curve follows.
+**A pass replaces only the stretch it covered.** If you punch in at bar 9, move a knob, and punch out at bar 17, the curve before bar 9 and after bar 17 is unchanged. Pasting a curve follows the same rule.
 
-What is written is the gesture, not the frame rate: a hand that was still holds its value rather than ramping across the seconds nobody touched anything, and the points are thinned to the shape you played so a curve stays editable afterwards. A jump in position ends the take, so a loop wrap starts a new one over the same bars instead of folding both into one.
+Recording writes your movements, not a point per frame. A control you held still keeps its value with no ramp, and points are thinned to the shape you played so the curve stays editable. A jump in position ends the take, so a loop wrap starts a new take over the same bars.
 
-While you are holding a control it is overridden in the usual way, and it is handed back to its new curve when the pass ends. **The whole pass is one undo entry**: Cmd+Z means "that take was no good", not one press per breakpoint.
+While you hold a control, it is overridden as usual. When the pass ends, the control follows its new curve. **The whole pass is one undo entry**, so Cmd+Z removes the whole take.
 
-Recording is also `PUT /api/transport/record` and the `action/record` binding, so a foot switch or a show controller can punch in.
+Recording is also available as `PUT /api/transport/record` and the `action/record` binding, so a foot switch or a show controller can punch in.
 
-## Who Is Driving: Authority and Override
+## Authority and Override
 
-The arrangement takes control **per lane**, and only once the transport has actually run. Before you press Play the scene renders exactly as you saved it, so an arrangement you have not started can never black your output.
+The arrangement takes control **per lane**, and only after the transport has run. Before you press Play, the scene renders as you saved it, so an arrangement you have not started cannot black out your output.
 
-A lane with regions or curves is arrangement-controlled. Everything else in the scene stays live, so a show can be half arranged and half performed without choosing between the two.
+A lane with regions or curves is controlled by the arrangement. Everything else in the scene stays live, so a show can be part arranged and part performed.
 
-### Grabbing something back
+### Overriding a parameter
 
-**Touch a control the arrangement is driving and you win, immediately.** A fader drag, a MIDI knob, an OSC message, or an API write all suspend the arrangement's control of *that parameter only*. There is no confirmation, because there is no time for one.
+**Move a control the arrangement is driving and your input takes over immediately.** A fader drag, a MIDI knob, an OSC message, or an API write suspends the arrangement's control of *that parameter only*. There is no confirmation.
 
-An overridden lane shows an amber dot in its header, in both views, so you can see from anywhere that it is no longer following the show.
+An overridden lane shows an amber dot in its header, in both views.
 
-### Handing it back
+### Re-arming
 
-Click the amber dot to re-arm that one parameter, or **↻ Re-arm all** in the transport strip to hand everything back at once. The button only appears while something is held, and carries a count.
+Click the amber dot to re-arm that parameter, or click **↻ Re-arm all** in the transport strip to re-arm everything. The button appears only while something is overridden, and shows a count.
 
-Re-armed parameters **ramp** back to their automated value rather than snapping to it. Jumping to the right value is correct arithmetic and a visible glitch, and this happens in front of an audience.
+Re-armed parameters **ramp** back to their automated value instead of jumping to it, to avoid a visible glitch.
 
-Overrides are session state and are **never saved**. Reloading the scene restores full arrangement control, because a saved override is an invisible trap that breaks the show the next time the file opens.
+Overrides are session state and are **never saved**. Reloading the scene restores full arrangement control.
 
-### Chasing a clip to the show
+### Video chase
 
-A video deck can lock its playhead to the transport, the same clock the arrangement, automation, and cues already follow. It chases the **transport**, not the LTC/MTC cable, so an internally running show and a house clock look the same to the clip.
+A video deck can lock its playhead to the transport, the same clock the arrangement, automation, and cues follow. It chases the **transport**, not the LTC/MTC input directly, so it behaves the same whether the transport runs internally or follows a house clock.
 
-In the deck detail bar, **Chase** is Auto, Always, or Never. Auto (the default) chases while the transport is running and free-runs, with loop modes, when it is not. Always freezes on the mapped frame even while stopped. Never is wall-clock playback as before.
+In the deck detail bar, **Chase** has three settings:
 
-**Offset** is the transport time at which the clip's in-point sits. It is independent of regions: a region still decides when the deck is visible, offset decides which frame is showing. **Delay** is a signed frame offset at the transport's displayed rate, for sound-vs-light latency.
+| Setting | Behavior |
+|---------|----------|
+| **Auto** (default) | Chases while the transport is running. Free-runs, with loop modes, when it is stopped. |
+| **Always** | Chases, and holds the mapped frame while the transport is stopped. |
+| **Never** | Plays on wall-clock time, ignoring the transport. |
 
-While chasing, loop mode is ignored. If the mapped time is before the in-point or after the out-point, the clip holds that bound. The speed fader stays the clip's rate against the transport.
+**Offset** is the transport time at which the clip's in-point sits. It is independent of regions: a region sets when the deck is visible, and offset sets which frame shows. **Delay** is a signed offset in frames at the transport's displayed rate, for correcting sound-to-light latency.
 
-Old scenes default to Auto. They play as they used to until you hit Play on the transport; then video decks lock unless you set Never.
+While chasing, loop mode is ignored. If the mapped time is before the in-point or after the out-point, the clip holds that frame. The speed fader sets the clip's rate relative to the transport.
+
+Older scenes default to Auto. They play as before until you press Play on the transport. From then on, video decks chase unless you set Never.
 
 ### Performance sequencers while the arrangement runs
 
-- **Deck auto-transitions** are per deck, so they partition cleanly. A deck under arrangement control has its auto-transition suspended; a deck without regions keeps it.
-- **Transition sequences** cross channels, so they cannot partition. While the arrangement holds authority, starting a free-running sequence is refused with a reason, and one already running is stopped.
+- **Deck auto-transitions** are per deck. A deck under arrangement control has its auto-transition suspended. A deck without regions keeps it.
+- **Transition sequences** span channels. While the arrangement has control, starting a free-running sequence is refused with a reason, and a running one is stopped.
 
-## Idle Behaviour
+## Idle Behavior
 
-**Idle** in the transport strip decides what renders before the transport reaches the arranged range:
+**Idle** in the transport strip sets what renders before the transport reaches the arranged range:
 
-| Setting | Behaviour |
-|---------|-----------|
-| **Hold performance** | The mixer holds. The arrangement stays inert until the show reaches it. Default. |
+| Setting | Behavior |
+|---------|----------|
+| **Hold performance** | The mixer holds. The arrangement does nothing until the show reaches it. Default. |
 | **Show `<deck>`** | That deck plays until the arranged range starts. |
 
-"Run this loop until the schedule starts" is a normal installation requirement, and a pre-show state that is simply black looks exactly like a broken rig on a dark stage. Pick one deliberately.
+Use **Show `<deck>`** for an installation that runs a loop until the schedule starts. Choose a setting deliberately: a black pre-show can look like a broken rig.
 
-If the arrangement ever drives everything to zero, Varda tells you once rather than leaving you to wonder whether the output died.
+If the arrangement drives everything to zero, Varda shows a one-time notice.
 
 ## What Regions Cannot Do
 
-A lane is a deck, and a deck holds one source. Loading a different video into a deck, recalling a preset, or firing a sequence are **events, not spans**, so they are not regions. Today, put "shader A then shader B" in two lanes and overlap them, which is also how you get a crossfade between the two.
+A lane is a deck, and a deck holds one source. Loading a different video into a deck, recalling a preset, or firing a sequence are **events**, not spans, so they cannot be regions. To play shader A then shader B, put them in two lanes and overlap the regions. The overlap is also a crossfade between them.
 
 ## Undo, Saving, and Load
 
-- Every timeline drag is **one** undo entry. Cmd+Z returns the region or breakpoint to where it was before you started dragging.
-- The arrangement is saved in `scene.json` with everything else, because every lane is a deck in that scene and every curve is a modulation source in it. There is no separate arrangement file to keep in sync.
-- This is **scene version 7**. Older scenes open unchanged, but a scene containing an arrangement will not open on a build older than this one.
-- Decks stay in memory for the whole show, so a long arrangement holds all of them at once. The monitoring cluster at the bottom of the right panel shows the deck count and an estimate of the colour-target memory they hold. See [Performance Monitoring](10-resolution-and-monitoring.md#performance-monitoring).
+- Every timeline drag is **one** undo entry. Cmd+Z returns the region or breakpoint to where it was before the drag.
+- The arrangement is saved in `scene.json` with the rest of the scene. Each lane is a deck and each curve is a modulation source in the scene, so there is no separate arrangement file.
+- This is **scene version 7**. Older scenes open unchanged, but a scene containing an arrangement will not open on an older build.
+- Every deck stays in memory for the whole show. The monitoring cluster at the bottom of the right panel shows the deck count and an estimate of the color-target memory they hold. See [Performance Monitoring](10-resolution-and-monitoring.md#performance-monitoring).
 
 ## Sleeping Clips
 
-A video whose next region is minutes away has nothing to show, so Varda **stops decoding it** and wakes it a second before it is needed. Sixty video decks in a two-hour show would otherwise run sixty decoders all evening to serve clips nobody is looking at.
+When a video deck's next region is minutes away, Varda **stops decoding it** and wakes it one second before the region starts. This saves decoder load in long shows with many video decks.
 
-This changes one thing you can see, and it is worth knowing: **a sleeping clip freezes rather than playing on silently.** When its region arrives it resumes from where it paused, instead of being wherever wall-clock time carried it. That is the behaviour an arrangement wants (the same show position looks the same on the second run), but it will surprise you once if you are used to a clip free-running behind a closed fader. Its transport still reads as playing, because sleep is not pause and re-arming will not restart a clip you paused by hand.
+**A sleeping clip freezes.** When its region arrives, it resumes from where it paused, not from where wall-clock time would have put it. The same show position looks the same on every run. This differs from a clip free-running behind a closed fader in Performance mode. A sleeping clip's transport still reads as playing. Re-arming does not restart a clip you paused by hand.
 
-Nothing sleeps unless the arrangement is confident:
+A deck keeps decoding in these cases:
 
-- Performance mode never sleeps anything, and neither does an arrangement whose transport has not run.
-- A deck with an LFO, an audio band, or any other live modulator on its opacity keeps decoding, since it can come up at any moment.
-- A deck you have grabbed by hand keeps decoding until you re-arm it.
-- A deck in a cued channel, or one feeding a program tap, keeps decoding so its off-air view stays live.
-- Outside the arranged range with **Hold performance**, the arrangement has said nothing, so nothing sleeps.
+- Performance mode, or an arrangement whose transport has not run.
+- An LFO, audio band, or other live modulator is on its opacity.
+- You have overridden it by hand. It keeps decoding until you re-arm it.
+- It is in a cued channel, or feeds a program tap, so its off-air view stays live.
+- The transport is outside the arranged range with **Hold performance** set.
 
-Cameras and screen captures follow the same schedule: their frames come up ahead of the region that needs them. Live network sources (NDI, SRT, Syphon), HTML decks, and depth sensors never sleep, because a dropped connection or a lost page costs more than it saves.
+Cameras and screen captures sleep on the same schedule, and their frames come up ahead of the region that needs them. Live network sources (NDI, SRT, Syphon), HTML decks, and depth sensors never sleep, because reconnecting or reloading costs more than sleeping saves.
 
-Memory is untouched: a sleeping deck still holds its render targets, which is why the VRAM readout does not move when one goes to sleep.
+A sleeping deck keeps its render targets in memory, so the VRAM readout does not change when a deck sleeps.
 
 ## HTTP API
 
-Everything above is reachable without the UI, which is how you build an arrangement from a script or drive one from a show controller:
+Everything above is available over HTTP, so you can build an arrangement from a script or drive one from a show controller:
 
 ```bash
 # Give a deck a lane and a visible span
@@ -332,7 +351,7 @@ curl -X POST http://localhost:8080/api/arrangement/cues \
 curl -X POST http://localhost:8080/api/transport/cue/next
 ```
 
-Transport control (`/api/transport/play`, `/locate`, `/loop`, `/rate`, `/source`) and curve editing (`PUT /api/modulation/<uuid>/breakpoints`) live with their own subsystems. See [HTTP API](13-api.md#route-groups).
+Transport control (`/api/transport/play`, `/locate`, `/loop`, `/rate`, `/source`) and curve editing (`PUT /api/modulation/<uuid>/breakpoints`) are documented with their own subsystems. See [HTTP API](13-api.md#route-reference).
 
 ---
 

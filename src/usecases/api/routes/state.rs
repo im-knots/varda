@@ -80,7 +80,7 @@ state_route!(
 state_route!(
     sources,
     "/api/state/sources",
-    "Every deck source type: its controls, whether this build can run it, and what its library offers.",
+    "Every kind of deck source, with its controls, whether this build can run it, and its Library entries.",
     sources
 );
 state_route!(

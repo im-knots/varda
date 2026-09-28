@@ -102,7 +102,7 @@ fn render_reference() -> String {
     );
     out.push_str(
         "Writes address entities by UUID. Positional integers appear only as reorder\n\
-         ordinals and sequence step indices — see [/spec/api-addressing.md].\n",
+         ordinals and sequence step indices; see [/spec/api-addressing.md].\n",
     );
 
     for (tag, group) in operations_by_tag() {

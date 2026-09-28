@@ -272,6 +272,48 @@ impl Destination {
             Self::Hls { name, .. } | Self::Dash { name, .. } => name.clone(),
         }
     }
+
+    /// Why this destination cannot start yet, such as an RTMP URL with no
+    /// server. Checked before ffmpeg is spawned, so the user is told what to
+    /// fill in instead of seeing ffmpeg fail to connect.
+    fn url_problem(&self) -> Option<String> {
+        match self {
+            Self::Recording { path, .. } if path.trim().is_empty() => {
+                Some("Set the recording's file path first".into())
+            }
+            Self::Hls { name, .. } | Self::Dash { name, .. } if name.trim().is_empty() => {
+                Some("Set the stream name first".into())
+            }
+            Self::Srt { url, .. } => match url_authority(url, "srt") {
+                Some((host, Some(_))) if !host.is_empty() => None,
+                _ => Some(format!(
+                    "Set the SRT URL first: '{url}' needs a host and port, for example srt://0.0.0.0:9001"
+                )),
+            },
+            Self::Rtmp { url, .. } => {
+                match url_authority(url, "rtmp").or_else(|| url_authority(url, "rtmps")) {
+                    Some((host, _)) if !host.is_empty() => None,
+                    _ => Some(format!(
+                        "Set the RTMP URL first: '{url}' has no server, for example rtmp://live.example.com/app/<stream key>"
+                    )),
+                }
+            }
+            _ => None,
+        }
+    }
+}
+
+/// The host and port of `url` when it uses `scheme`. `None` for another
+/// scheme; an empty host when the URL names none (`rtmp://`).
+fn url_authority<'a>(url: &'a str, scheme: &str) -> Option<(&'a str, Option<&'a str>)> {
+    let rest = url.trim().strip_prefix(scheme)?.strip_prefix("://")?;
+    let authority = rest.split(['/', '?']).next().unwrap_or_default();
+    Some(match authority.rsplit_once(':') {
+        Some((host, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => {
+            (host, Some(port))
+        }
+        _ => (authority, None),
+    })
 }
 
 /// A recording or stream provider.
@@ -433,6 +475,9 @@ impl OutputSinkInstance for FfmpegSink {
     }
 
     fn start(&mut self, start: SinkStart) -> Result<Option<ResolvedPresentation>> {
+        if let Some(problem) = self.destination.url_problem() {
+            anyhow::bail!("{problem}");
+        }
         let SinkStart {
             width,
             height,
@@ -513,14 +558,15 @@ impl OutputSinkInstance for FfmpegSink {
         if subprocess.feed_readback_frame(frame) {
             return Delivered::Ok;
         }
+        let reason = subprocess.failure().map_or_else(
+            || "ffmpeg stopped taking frames".to_string(),
+            str::to_string,
+        );
         self.stop();
         if self.kind == FfmpegKind::Srt {
             Delivered::Restart
         } else {
-            Delivered::Failed(format!(
-                "FFmpeg frame contract failed for {}",
-                self.destination.label()
-            ))
+            Delivered::Failed(format!("{}: {reason}", self.destination.label()))
         }
     }
 
@@ -565,6 +611,15 @@ impl OutputSinkInstance for FfmpegSink {
             Destination::Dash { name, .. } => Some((name, "manifest.mpd")),
             _ => None,
         };
+        if let (Destination::Srt { url, .. }, Some(subprocess)) =
+            (&self.destination, &self.subprocess)
+            && subprocess.waiting_for_client()
+        {
+            status.info.insert(
+                "note".into(),
+                serde_json::json!(format!("Waiting for a client on {url}")),
+            );
+        }
         if let Some((name, manifest)) = manifest {
             status.info.insert(
                 "links".into(),
@@ -663,6 +718,55 @@ impl OutputSinkInstance for FfmpegSink {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_stream_without_a_server_is_refused_before_ffmpeg_starts() {
+        let rtmp = |url: &str| Destination::Rtmp {
+            url: url.into(),
+            codec: StreamingCodec::H264,
+            contract: RtmpCodecContract::Legacy,
+        };
+        let srt = |url: &str| Destination::Srt {
+            url: url.into(),
+            codec: SrtCodec::H264,
+        };
+        assert!(
+            rtmp("rtmp://").url_problem().is_some(),
+            "the default has no server"
+        );
+        assert!(rtmp("").url_problem().is_some());
+        assert!(rtmp("rtmp:///app/key").url_problem().is_some());
+        assert!(
+            rtmp("rtmp://live.twitch.tv/app/key")
+                .url_problem()
+                .is_none()
+        );
+        assert!(
+            rtmp("rtmps://a.rtmp.youtube.com:443/live2/key")
+                .url_problem()
+                .is_none()
+        );
+        assert!(
+            srt("srt://0.0.0.0:9001").url_problem().is_none(),
+            "the default is complete"
+        );
+        assert!(srt("srt://h:9000?mode=caller").url_problem().is_none());
+        assert!(
+            srt("srt://0.0.0.0").url_problem().is_some(),
+            "SRT needs a port"
+        );
+        assert!(srt("srt://:9001").url_problem().is_some());
+    }
+
+    /// The default RTMP output cannot start, and says what to fill in.
+    #[test]
+    fn starting_the_default_rtmp_output_names_the_missing_server() {
+        let provider = FfmpegProvider::new(FfmpegKind::Rtmp);
+        let config: Config = crate::source::decode_config(&provider.default_config()).unwrap();
+        let destination = Destination::from_config(FfmpegKind::Rtmp, &config);
+        let problem = destination.url_problem().expect("rtmp:// is refused");
+        assert!(problem.contains("RTMP URL"), "{problem}");
+    }
+
     use super::*;
 
     /// Every ffmpeg target saved before providers must read back unchanged,

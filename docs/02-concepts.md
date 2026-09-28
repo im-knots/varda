@@ -2,7 +2,7 @@
 
 ## The Signal Flow
 
-Varda routes video through a five-layer hierarchy inspired by broadcast video switchers: **Sources → Decks → Channels → Mixer → Surfaces → Outputs**.
+Varda routes video through a hierarchy modeled on broadcast video switchers: **Sources → Decks → Channels → Mixer → Surfaces → Outputs**.
 
 ```
 [Deck] → [Deck FX] ─┐
@@ -14,36 +14,35 @@ Varda routes video through a five-layer hierarchy inspired by broadcast video sw
 [Deck] → [Deck FX] ─┘
 ```
 
-The simplest setup is two channels with a crossfader between them, output going fullscreen to a projector: load sources into decks, crossfade between channels. Add complexity only as your use case needs it.
+The simplest setup is two channels with a crossfader between them and one output fullscreen on a projector. Load sources into decks and crossfade between the channels. Add more only when your show needs it.
 
 ### Deck
 
-A single media source (shader, video, image, solid color, camera, NDI stream, SRT stream, HLS/DASH stream, or RTMP stream) that produces a texture. Each deck has its own opacity, blend mode, effect chain, and auto-transition settings. Decks at zero opacity are culled from the render pass entirely.
+A single media source (shader, video, image, solid color, camera, NDI stream, SRT stream, HLS/DASH stream, or RTMP stream) that produces a texture. Each deck has its own opacity, blend mode, effect chain, and auto-transition settings. Decks at zero opacity are left out of the render pass.
 
 ### Channel
 
-Composites multiple decks into a single layer using per-deck opacity, blend modes, and optional auto-transitions. Each channel has its own effect chain applied after deck compositing. Channels are named numerically: 0, 1, 2, etc.
+Composites several decks into one layer using per-deck opacity, blend modes, and optional auto-transitions. Each channel has its own effect chain, applied after the decks are composited. Channels are numbered 0, 1, 2, and so on.
 
 ### Mixer
 
-Composites channels into the final output. With 2 channels, an A/B crossfader blends between them. With 3+ channels, per-channel opacity and blend modes control the mix. The mixer owns the master effect chain, the show-wide look grade and default tonemap curve, and a state-machine-driven multi-channel transition sequencer (see [Transition Sequences](04-performance.md#transition-sequences)).
+Composites channels into the final output. With 2 channels, an A/B crossfader blends between them. With 3+ channels, per-channel opacity and blend modes control the mix. The mixer holds the master effect chain, the show-wide look grade, the default tonemap curve, and a state-machine-driven multi-channel transition sequencer (see [Transition Sequences](04-performance.md#transition-sequences)).
 
 ### Surface
 
-Surfaces are optional. Each is a named polygon region in the stage editor that pulls content from a configurable source: Master (full mix), a specific Channel, a multi-Channel sub-mix, or the Domemaster output. Surfaces define *what content goes where* spatially. They're how you map content onto physical screens, LED panels, or projection areas. When no surfaces are defined, outputs receive the full main mix directly.
+Surfaces are optional. Each surface is a named polygon region in the stage editor. It takes content from a source you choose: Master (full mix), a specific Channel, a multi-Channel sub-mix, or the Domemaster output. Use surfaces to place content on physical screens, LED panels, or projection areas. When no surfaces are defined, outputs receive the full main mix.
 
 ### Output
 
-Renders assigned surfaces onto a display target such as a monitor/projector window, NDI sender, SRT stream, HLS/DASH stream, or recording file. Each output applies per-surface warp calibration (corner-pin or mesh warp), edge blending, and optional rotation. Surfaces are assigned to outputs to complete the routing chain. See [Outputs](07-outputs.md).
+Renders its assigned surfaces to a target such as a monitor or projector window, NDI sender, SRT stream, HLS/DASH stream, or recording file. Each output applies per-surface warp calibration (corner-pin or mesh warp), edge blending, and optional rotation. Assigning surfaces to outputs completes the routing chain. See [Outputs](07-outputs.md).
 
+### Triggering Decks with Opacity
 
-### Clip Triggering Without Clip Triggering
+Varda has no clip-launch buttons. Instead, load your sources into decks across your channels and switch decks on and off with **opacity**.
 
-Most VJ software uses a clip-launch paradigm: press a button, a clip starts playing; press another, the previous one stops. Varda doesn't have clip triggers, but it doesn't need them, because the broadcast mixer model gives you the same result with more control.
+Map MIDI controller buttons to deck mute or deck opacity. Press a button and a deck's opacity goes from 0 to 1, so it is live. Press another and that deck goes to 0, so it is gone. To the audience, this looks like triggering a clip.
 
-Load your sources into decks across your channels. What makes a deck live is its **opacity**. Map your MIDI controller buttons to deck mute or deck opacity. Press a button, a deck's opacity goes from 0 to 1, it's live. Press another, that deck goes to 0, it's gone. From the audience's perspective, you just triggered a clip. Under the hood, zero-opacity decks are **culled from the render pass entirely**, so they cost nothing. Only decks with non-zero opacity are actually rendered. When you bring a deck's opacity up, its source starts producing frames immediately. You're not "stopping and starting clips," you're mixing a live signal path where the GPU only pays for what's visible.
-
-This is how broadcast video works. A switcher doesn't start and stop cameras. Every camera is always hot, and the director cuts between them by routing signals onto buses. Varda applies the same idea: your decks are always ready, and you perform by controlling which signals are live in the mix. The result is instant transitions (no clip load latency), full MIDI control over the routing, and a mental model that scales.
+Zero-opacity decks are **left out of the render pass**, so they cost nothing. Only decks with non-zero opacity are rendered. When you raise a deck's opacity, its source produces frames immediately, so there is no clip load latency. Every deck stays ready, and you perform by choosing which ones are live in the mix, with full MIDI control over the routing.
 
 ---
 
@@ -54,14 +53,14 @@ This is how broadcast video works. A switcher doesn't start and stop cameras. Ev
 | ISF Shader | GLSL generator with typed parameters, hot-reload on save |
 | Video | ffmpeg decode with loop/ping-pong/one-shot, speed, scrub, in/out points |
 | HAP Video | GPU-native codec (BC1/BC3/BC7/YCoCg), direct GPU upload |
-| Image | Still image — PNG, JPG, BMP, TIFF, TGA, WebP, or SVG vector art |
+| Image | Still image: PNG, JPG, BMP, TIFF, TGA, WebP, or SVG vector art |
 | Camera | Live webcam input, shared across multiple decks |
 | NDI | Network video receive via NDI SDK |
 | SRT | Secure Reliable Transport stream receive |
 | HLS | HTTP Live Streaming input |
 | DASH | MPEG-DASH input |
 | RTMP | RTMP/RTMPS stream receive |
-| Compute Shader | GLSL compute shader (`.comp`) — particle systems, simulations, GPU-native generators |
+| Compute Shader | GLSL compute shader (`.comp`) for particle systems, simulations, and GPU-native generators |
 | Syphon | macOS inter-app texture sharing (receive from other apps) |
 | Spout | Windows inter-app texture sharing (receive from other apps) |
 | Screen Capture | An OS display or a single application window, captured live (macOS) |
@@ -73,7 +72,7 @@ This is how broadcast video works. A switcher doesn't start and stop cameras. Ev
 
 ## Blend Modes
 
-Each deck composites onto its channel using a blend mode (and the same set is available for per-channel mixing with 3+ channels). Varda implements 15 modes:
+Each deck composites onto its channel using a blend mode. The same set is available for per-channel mixing with 3+ channels. There are 15 modes:
 
 | Group | Modes |
 |-------|-------|
@@ -89,41 +88,41 @@ Each deck composites onto its channel using a blend mode (and the same set is av
 
 Effects are ISF filter shaders applied at three levels:
 
-1. **Deck FX** — applied to a single deck's output before channel compositing
-2. **Channel FX** — applied to the composited channel output before mixing
-3. **Master FX** — applied to the final mixer output before routing to surfaces
+1. **Deck FX**: applied to a single deck's output before channel compositing
+2. **Channel FX**: applied to the composited channel output before mixing
+3. **Master FX**: applied to the final mixer output before routing to surfaces
 
-Effects can be reordered via drag-and-drop and toggled on/off individually.
+Drag effects to reorder them. Toggle each one on or off individually.
 
 ---
 
 ## Tonemapping & Color Grading
 
 Varda works in **16-bit float linear light** (`Rgba16Float`) from the moment a source enters
-a deck all the way to each output, where the picture is finally encoded for its destination.
+a deck until each output encodes the picture for its destination.
 
-Three stages shape that picture, and which of them is global matters:
+Three stages shape the picture:
 
-1. **Look LUT** grades the linear program before anything else. Global, so one grade reaches
-   every output.
-2. **Tonemap** maps the program into what one output can show. **Per output**, because a
-   tonemap *is* an output transform: an SDR projector and an HDR10 recording need different
-   ones from the same program.
-3. **Calibration LUT** corrects one display after its tonemap. Bound to the output's resolved
-   contract.
+1. **Look LUT** grades the linear program first. It is global, so one grade reaches every
+   output.
+2. **Tonemap** maps the program into the range one output can show. It is **per output**,
+   because a tonemap is an output transform: an SDR projector and an HDR10 recording need
+   different tonemaps for the same program.
+3. **Calibration LUT** corrects one display after its tonemap. It is bound to the output's
+   resolved contract.
 
-What each output does with the result, and which of 8-bit SDR, 10-bit SDR, HDR10, HLG or EDR
-it delivers, is chosen per output. See [Output Format](07-outputs.md#output-format).
+Each output's format (8-bit SDR, 10-bit SDR, HDR10, HLG, or EDR) is set per output. See
+[Output Format](07-outputs.md#output-format).
 
 ### Tonemap
 
-Maps the linear composite into the range its output can show. For an SDR output that is
-[0, 1]; for an HDR10 output it is the range up to that output's configured peak. Nine
-algorithmic presets are available:
+Maps the linear composite into the range its output can show. For an SDR output that range
+is [0, 1]. For an HDR10 output it runs up to that output's configured peak. There are nine
+presets:
 
 | Preset | Character |
 |--------|-----------|
-| **Bypass** | No compression — values >1.0 clamp at the output boundary |
+| **Bypass** | No compression. Values >1.0 clamp at the output boundary |
 | **ACES Filmic** (default) | Cinematic rolloff with warm highlight shift |
 | **Reinhard** | Gentle curve, never reaches pure white |
 | **Reinhard Extended** | Reinhard with configurable white point |
@@ -133,21 +132,21 @@ algorithmic presets are available:
 | **AgX** | Neutral, minimal hue shift |
 | **PBR Neutral** | Color-accurate, minimal look modification |
 
-Select via the **🎨 Tonemap** section in the right panel, under the main output preview, or `PUT /api/mixer/tonemap`. This sets the show-wide curve that every output and the previews use.
+Select a preset in the **🎨 Tonemap** section of the right panel, under the main output preview, or with `PUT /api/mixer/tonemap`. This sets the show-wide curve used by every output and the previews.
 
-Any output can override this from its own card, so a projector and a master recording can be graded for their own medium. See [Per-output tonemap](07-outputs.md#per-output-tonemap).
+Any output can override it on its own card, for example to grade a projector and a master recording differently. See [Per-output tonemap](07-outputs.md#per-output-tonemap).
 
-Only **Bypass** and **Reinhard Extended** have defined HDR forms. The other curves have shoulders fitted against an SDR target, so an HDR output substitutes Bypass rather than stretching a curve outside the range it was built for. The output card reports the substitution.
+Only **Bypass** and **Reinhard Extended** have defined HDR forms. The other curves have shoulders fitted to an SDR target, so an HDR output uses Bypass in their place. The output card reports the substitution.
 
 ### 3D LUTs: two slots
 
-Both slots take industry-standard `.cube` and `.3dl` files (including 1D shaper LUTs for shadow precision). Drop them in `.varda/luts/` and they appear in the **🎨 Tonemap** panel. Both persist across sessions.
+Both slots take `.cube` and `.3dl` files, including 1D shaper LUTs for shadow precision. Put the files in `.varda/luts/` and they appear in the **🎨 Tonemap** panel. Both slots persist across sessions.
 
-**Look LUT** is your show's grade. It runs on scene-linear light *before* the tonemap, so it reaches every output including HDR ones. Because linear light spends almost all its range on highlights, the lookup is encoded to **ACEScct** first, which is the log curve ACES specifies for look transforms. A `.cube` authored against ACEScct in Resolve or Nuke lands where its author intended.
+**Look LUT** is your show's grade. It runs on scene-linear light *before* the tonemap, so it reaches every output, including HDR ones. The lookup is encoded to **ACEScct** first (the log curve ACES specifies for look transforms), because linear light spends almost all its range on highlights. A `.cube` authored against ACEScct in Resolve or Nuke gives the result its author intended.
 
-**Calibration LUT** corrects a specific display. It runs *after* the tonemap on the display-referred signal, which is what makes it a per-display correction rather than a look. Because it is calibrated against one output transform, applying it after a different one would put its midtones in the wrong place, so it is **not applied to HDR outputs** and the output card names the LUT it skipped.
+**Calibration LUT** corrects a specific display. It runs *after* the tonemap, on the display-referred signal. It is calibrated against one output transform, and after a different transform its midtones would land in the wrong place. For that reason it is **not applied to HDR outputs**, and the output card names the LUT it skipped.
 
-If you only want one, use the Look slot. The Calibration slot is for the case where one projector needs correcting and the rest do not.
+If you only need one LUT, use the Look slot. Use the Calibration slot when one projector needs correcting and the rest do not.
 
 ---
 
@@ -163,7 +162,7 @@ Any numeric parameter in the hierarchy can be automated by modulation sources:
 | **Step Sequencer** | N-step pattern at configurable rate, with interpolation modes |
 | **Analyzer** | Scalar outputs derived from analysis of a deck's input frame (e.g. brightness, contrast) |
 
-Sources are created in the modulation panel and assigned to any parameter with its **〰** button. Multiple sources can target the same parameter (summed). Modulator-on-modulator chaining is supported up to 4 levels deep — for example, an LFO modulating the frequency of another LFO. See [Modulation & Audio Reactivity](05-modulation.md) for the assignment workflow.
+Create sources in the modulation panel and assign them to any parameter with its **〰** button. Several sources can target the same parameter; their values are summed. Modulators can modulate other modulators up to 4 levels deep, for example an LFO modulating the frequency of another LFO. See [Modulation & Audio Reactivity](05-modulation.md) for the assignment workflow.
 
 Parameter paths use the format `deck/<uuid>/param/<name>`, `crossfader`, `ch/<uuid>/opacity`, etc.
 
@@ -173,7 +172,7 @@ Parameter paths use the format `deck/<uuid>/param/<name>`, `crossfader`, `ch/<uu
 
 Right-click a deck, an effect card, or a channel (its header, or the empty space under its decks) for **Copy**, **Duplicate**, and **Paste**. `Cmd+C`, `Cmd+V`, and `Cmd+D` do the same thing to whatever is currently selected.
 
-A copy is rebuilt from scratch rather than shared, so the two objects are independent: renaming, remapping, or deleting one leaves the other alone.
+A copy is independent of the original. Renaming, remapping, or deleting one leaves the other alone.
 
 | What travels | What does not |
 |---|---|
@@ -182,14 +181,17 @@ A copy is rebuilt from scratch rather than shared, so the two objects are indepe
 | Automation curves, cloned so each lane can be edited on its own | |
 | Arrangement regions, but only when the copy is made in Arrangement mode | |
 
-That last row is the one worth remembering: in the mixer a deck is a source, so a copy is a bare deck. On the timeline it is a source *and* a placement, so a copy plays at the same times as the original.
+A deck copied in the mixer has no arrangement regions. A deck copied in Arrangement mode keeps its regions, so it plays at the same times as the original.
 
-A paste lands directly after whatever you right-clicked, or at the end when you use the container's own menu. A channel is pasted as a new channel at the end of the mixer. Copy and paste is the lightweight version of a preset: same result, no naming and no file. Reach for a [preset](04-performance.md#presets) when something should outlive the session.
+A paste lands directly after the item you right-clicked, or at the end when you use the container's own menu. A channel is pasted as a new channel at the end of the mixer.
+
+Copy and paste gives the same result as a preset, without a name or a file. Use a [preset](04-performance.md#presets) when something should outlive the session.
 
 ---
 
 ## The Varda workspace
-Varda treats the current working directory as a workspace. All state lives in a `.varda/` directory created automatically:
+
+Varda uses the current working directory as a workspace. All state lives in a `.varda/` directory, which Varda creates automatically:
 
 ```
 your-show/
@@ -209,9 +211,9 @@ your-show/
     streams/              # HLS/DASH output files
 ```
 
-Run Varda from different directories to maintain separate workspaces per show, venue, or project. Each workspace has its own scene, stage layout, and MIDI mappings.
+Run Varda from different directories to keep separate workspaces per show, venue, or project. Each workspace has its own scene, stage layout, and MIDI mappings.
 
-Save with **Cmd+S** or auto-save on clean exit. Reload everything at a different venue or share your setup with others by copying the entire `.varda/` directory. Note that the scene (your show) is separate from the stage (the venue's physical layout).
+Save with **Cmd+S**. Varda also saves automatically on a clean exit. To load your setup at another venue or share it, copy the entire `.varda/` directory. The scene (your show) is stored separately from the stage (the venue's physical layout).
 
 ---
 

@@ -13,7 +13,7 @@ use crate::engine::{CommandResult, EngineCommand};
 use crate::internal::surface::detect::{DetectedContour, DetectionParams};
 use crate::usecases::api::{SharedState, command_response};
 
-/// Full stage: surfaces, output windows, and connected monitors.
+/// Full stage: surfaces, outputs, and connected monitors.
 #[utoipa::path(get, path = "/api/stage",
     responses((status = 200, description = "Full stage state"), (status = 503, description = "Engine not yet initialized")),
     tag = "Stage")]
@@ -57,7 +57,7 @@ pub async fn surface_by_uuid(
     }
 }
 
-/// Every output window with its target, activity, and surface assignments.
+/// Every output with its kind, settings, activity, and surface assignments.
 #[utoipa::path(get, path = "/api/stage/outputs",
     responses((status = 200, description = "Every output window with its surface assignments"), (status = 503, description = "Engine not yet initialized")),
     tag = "Stage")]
@@ -68,7 +68,7 @@ pub async fn outputs(State(state): State<SharedState>) -> impl IntoResponse {
     }
 }
 
-/// A single output window, addressed by UUID.
+/// A single output, addressed by UUID.
 #[utoipa::path(get, path = "/api/stage/outputs/{uuid}",
     params(("uuid" = String, Path, description = "Output window UUID")),
     responses(
@@ -119,7 +119,7 @@ pub struct ConfirmContoursBody {
     pub contours: Vec<DetectedContour>,
 }
 
-/// POST /api/stage/detect/image — detect contours from a raster image.
+/// Detect contours from a raster image.
 #[utoipa::path(post, path = "/api/stage/detect/image", request_body = DetectImageBody, responses((status = 200, body = CommandResult)), tag = "Stage")]
 pub async fn detect_image(
     State(s): State<SharedState>,
@@ -142,7 +142,7 @@ pub async fn detect_image(
     }
 }
 
-/// POST /api/stage/detect/svg — detect contours from SVG data.
+/// Detect contours from SVG data.
 #[utoipa::path(post, path = "/api/stage/detect/svg", request_body = DetectSvgBody, responses((status = 200, body = CommandResult)), tag = "Stage")]
 pub async fn detect_svg(
     State(s): State<SharedState>,
@@ -159,7 +159,7 @@ pub async fn detect_svg(
     }
 }
 
-/// POST /api/stage/detect/dxf — detect contours from DXF data.
+/// Detect contours from DXF data.
 #[utoipa::path(post, path = "/api/stage/detect/dxf", request_body = DetectDxfBody, responses((status = 200, body = CommandResult)), tag = "Stage")]
 pub async fn detect_dxf(
     State(s): State<SharedState>,
@@ -176,7 +176,7 @@ pub async fn detect_dxf(
     }
 }
 
-/// POST /api/stage/detect/confirm — create surfaces from detected contours.
+/// Create surfaces from detected contours.
 #[utoipa::path(post, path = "/api/stage/detect/confirm", request_body = ConfirmContoursBody, responses((status = 200, body = CommandResult)), tag = "Stage")]
 pub async fn detect_confirm(
     State(s): State<SharedState>,
@@ -202,7 +202,7 @@ pub struct DetectCameraBody {
     pub params: DetectionParams,
 }
 
-/// POST /api/stage/detect/camera — detect contours from a camera snapshot.
+/// Detect contours from a camera snapshot.
 #[utoipa::path(post, path = "/api/stage/detect/camera", request_body = DetectCameraBody, responses((status = 200, body = CommandResult)), tag = "Stage")]
 pub async fn detect_camera(
     State(s): State<SharedState>,

@@ -1,15 +1,15 @@
 # Frame Analysis & Preprocessors
 
-Varda can **look at a picture and turn what it sees into data** — the average brightness of a deck, the position of a performer's face, a live depth silhouette. One subsystem does all of this: the **analyzer engine**. It feeds two very different workflows from a single running analysis:
+Varda can analyze a picture and turn the result into data: the average brightness of a deck, the position of a performer's face, a live depth silhouette. The **analyzer engine** does all of this and feeds two workflows:
 
 | Path | What it produces | Who uses it | Set up in |
 |------|------------------|-------------|-----------|
 | **Analysis → modulation** | normalized **scalars** (`brightness`, `face_x`, …) that drive *any* parameter | **performers** | the deck's analyzer setup → [Modulation](05-modulation.md) |
 | **Preprocessors → shaders** | **data textures** (face landmarks, depth, mask, motion) injected into a shader | **shader authors** | a shader's ISF `PREPROCESSORS` block → [Shader Authoring](12-isf-authoring.md#analyzer-preprocessors) |
 
-The important thing to understand: **the `brightness` modulation source and the `face_detect` preprocessor are the same engine.** An analyzer runs once per deck; whether its output becomes a modulation scalar or a shader texture is just a matter of who asked for it. Because analyzers are **reference-counted per deck**, wiring several outputs — or several shaders — to one analyzer costs a single analysis pass.
+The `brightness` modulation source and the `face_detect` preprocessor use the same engine. An analyzer runs once per deck, and its output can go to modulation, to shaders, or both. Analyzers are **reference-counted per deck**, so connecting several modulation sources or shaders to one analyzer costs one analysis pass.
 
-Analysis always runs **off the render thread**: each analyzer owns a background worker fed a downscaled copy of the deck's frame, and publishes results through a lock-free snapshot. If analysis is slower than the frame rate, consumers simply read the most recent result — the render loop never blocks or stutters.
+Analysis runs **off the render thread**. Each analyzer has a background worker that receives a downscaled copy of the deck's frame and publishes results through a lock-free snapshot. If analysis is slower than the frame rate, consumers read the latest result. The render loop does not wait for it.
 
 ## What's implemented
 
@@ -19,15 +19,15 @@ Analysis always runs **off the render thread**: each analyzer owns a background 
 | **Face detection** | `face_detect` | CPU, ONNX (BlazeFace → 478-point mesh) | Builds with the `face-detection` feature (default; off on macOS Intel / Windows) |
 | **Depth sensor** | `depth_sensor` | GPU, physical device (Kinect v1) | Builds with the `depth` feature (default; off on macOS Intel / Windows) |
 
-Analyzer types the specs describe but that are **not yet implemented** — `depth_estimate`, `segmentation`, `optical_flow`, `edge_detect`, `motion`, `color_dominant`, `hand_gesture` — are **planned**. They do not appear in the pickers and shaders that request them fall back to black (except `depth_sensor`, which is required — see below).
+These analyzer types are **planned** and not yet implemented: `depth_estimate`, `segmentation`, `optical_flow`, `edge_detect`, `motion`, `color_dominant`, `hand_gesture`. They do not appear in the pickers. Shaders that request them get black instead. (`depth_sensor` is different: it is required, see below.)
 
 ---
 
 ## Analysis as Modulation (performers)
 
-Any analyzer scalar can drive any parameter, exactly like an LFO or an audio band. This turns the visuals themselves into a controller: brighten one deck and another deck's blur opens; move your face left and a generator rotates.
+Any analyzer scalar can drive any parameter, like an LFO or an audio band. For example, brighten one deck to open another deck's blur, or move your face left to rotate a generator.
 
-You add an **Analyzer** modulation source from the deck's analyzer setup (not the Modulation panel's `➕` row). It then behaves like every other source — assign it with a slider's `〰` button, stack it, smooth it. See [Modulation → Analyzer](05-modulation.md#analyzer) for the assignment workflow.
+Add an **Analyzer** modulation source from the deck's analyzer setup, not from the Modulation panel's `➕` row. It then works like any other source: assign it with a slider's `〰` button, stack it, smooth it. See [Modulation → Analyzer](05-modulation.md#analyzer) for how to assign it.
 
 ### `brightness` outputs (always available)
 
@@ -39,25 +39,25 @@ You add an **Analyzer** modulation source from the deck's analyzer setup (not th
 
 ### `face_detect` outputs
 
-Available when the build includes the `face-detection` feature. A two-stage pipeline (BlazeFace detection → a 478-point face mesh) exposes the primary face as scalars:
+Available when the build includes the `face-detection` feature. A two-stage pipeline (BlazeFace detection → a 478-point face mesh) outputs the primary face as scalars:
 
 | Output | Meaning | Range |
 |--------|---------|-------|
-| `face_count` | Number of faces detected (normalized — one face reads `0.1`) | 0–1 |
-| `face_x` | Primary face centre, horizontal | 0–1 |
-| `face_y` | Primary face centre, vertical | 0–1 |
+| `face_count` | Number of faces detected (normalized: one face reads `0.1`) | 0–1 |
+| `face_x` | Primary face center, horizontal | 0–1 |
+| `face_y` | Primary face center, vertical | 0–1 |
 | `face_size` | Primary face bounding-box area | 0–1 |
 | `face_rotation` | Primary face tilt (from the eye-line angle) | 0–1 |
 
-Each analyzer source has a **Smoothing** control (0.0–0.99, default `0.3`) that damps jitter — essential for face outputs, which are noisier than `brightness`.
+Each analyzer source has a **Smoothing** control (0.0–0.99, default `0.3`) that reduces jitter. Face outputs are noisier than `brightness`, so they usually need it.
 
 ---
 
 ## Depth Sensor (performers)
 
-`depth_sensor` is different from the other analyzers: it reads a **physical depth camera** (Kinect v1) rather than a deck's own frame, and runs entirely on the GPU — the sensor's pixels never touch host memory. It surfaces four live streams a shader can consume: a normalized **depth** map, a subject **mask**, screen-space **motion**, and the sensor's **rgb** stream.
+`depth_sensor` reads a **physical depth camera** (Kinect v1) instead of a deck's frame. It runs entirely on the GPU; the sensor's pixels never go through host memory. It provides four live streams a shader can use: a normalized **depth** map, a subject **mask**, screen-space **motion**, and the sensor's **rgb** stream.
 
-As a performer you don't write the shader — you pick one built around depth (e.g. a silhouette or depth-fog look) and **frame the room**. Every depth shader shares the same runtime controls in the deck's bottom bar, all MIDI/OSC-mappable at `deck/<uuid>/depth_prepro/<param>`:
+As a performer, you pick a shader built for depth (for example a silhouette or depth-fog look) and set up the sensor for the room. Every depth shader has the same controls in the deck's bottom bar. All are MIDI/OSC-mappable at `deck/<uuid>/depth_prepro/<param>`:
 
 | Control | Path param | Range | Default | What it does |
 |---------|-----------|-------|---------|--------------|
@@ -69,33 +69,33 @@ As a performer you don't write the shader — you pick one built around depth (e
 | Motion gain | `motion_gain` | 0–8 | 3.2 | Amplifies the motion stream |
 | Mirror | `mirror` | on/off | on | Flips horizontally to match a front-facing camera |
 
-> **Set near/far first when you move to a new room.** They define which slice of space becomes the picture; everything else is polish.
+> **Set near and far first in a new room.** They set which slice of space appears in the picture.
 
-**Depth shaders are required-hardware shaders.** A shader that declares `depth_sensor` will **refuse to load** if no sensor is attached (a black fallback is useless for a look whose entire content is a silhouette) — you'll get an error toast naming the shader. The `depth` feature is compiled out on Windows and macOS Intel, so these shaders never load there.
+**Depth shaders require the hardware.** A shader that declares `depth_sensor` **does not load** if no sensor is attached, and an error toast names the shader. (A black fallback would be useless for a look made entirely of a silhouette.) The `depth` feature is not built on Windows or macOS Intel, so these shaders never load there.
 
-The shader-author side of depth (texture formats, GLSL access) lives in [Shader Authoring → Depth Sensor](12-isf-authoring.md#depth_sensor--live-depth-camera).
+For the shader-author side of depth (texture formats, GLSL access), see [Shader Authoring → Depth Sensor](12-isf-authoring.md#depth_sensor-live-depth-camera).
 
 ---
 
 ## Preprocessors (concept)
 
-When an effect needs **structured data the fragment shader can't compute itself** — face landmarks, a depth map, a segmentation mask — the shader declares a **preprocessor** in its ISF header. Varda runs the named analyzer and injects its output as a **texture** bound alongside the shader's other inputs; the shader reads it with ordinary texture samples.
+Some effects need data the fragment shader can't compute itself, such as face landmarks, a depth map or a segmentation mask. The shader declares a **preprocessor** in its ISF header. Varda runs the named analyzer and binds its output as a **texture** next to the shader's other inputs. The shader reads it with ordinary texture samples.
 
-From a performer's seat this is invisible: you drop the effect on a deck and it works, drawing on whatever analysis it needs. The full authoring mechanics — the `PREPROCESSORS` JSON block, binding order, and `texelFetch` access patterns — are in [Shader Authoring → Analyzer Preprocessors](12-isf-authoring.md#analyzer-preprocessors).
+As a performer you don't need to do anything: drop the effect on a deck and it runs the analysis it needs. For the `PREPROCESSORS` JSON block, binding order and `texelFetch` access patterns, see [Shader Authoring → Analyzer Preprocessors](12-isf-authoring.md#analyzer-preprocessors).
 
 ---
 
 ## Analyzer HTTP API
 
-Every analyzer operation is on the [HTTP API](13-api.md) under the **Analyzers** and **Modulation** tags.
+All analyzer operations are in the [HTTP API](13-api.md) under the **Analyzers** and **Modulation** tags.
 
-### Discover what a deck can run
+### List available analyzers
 
 ```sh
 curl http://localhost:8080/api/library/analyzers
 ```
 
-Returns each available analyzer type with its `scalar_outputs` (name, description, range, default smoothing) and `texture_outputs`. Types absent from a build (e.g. `face_detect` on macOS Intel) are omitted.
+Returns each available analyzer type with its `scalar_outputs` (name, description, range, default smoothing) and `texture_outputs`. Types not in the build (for example `face_detect` on macOS Intel) are left out.
 
 ### Attach / detach an analyzer on a deck
 
@@ -122,7 +122,7 @@ curl -X PUT http://localhost:8080/api/modulation/<source_uuid>/analyzer/smoothin
   -H "Content-Type: application/json" -d '{"value": 0.4}'
 ```
 
-Assign the returned source to any parameter with `POST /api/modulation/assign`, exactly like an LFO — see [HTTP API](13-api.md) and [Modulation](05-modulation.md#routing).
+Assign the returned source to any parameter with `POST /api/modulation/assign`, as with an LFO. See [HTTP API](13-api.md) and [Modulation](05-modulation.md#routing).
 
 ---
 

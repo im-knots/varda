@@ -8,61 +8,67 @@ When a deck's source is a video file, the deck detail panel (bottom bar) shows p
 
 | Mode | Behavior |
 |------|----------|
-| **Loop** 🔁 | Restart from in-point when reaching out-point (default) |
-| **Ping-Pong** 🔄 | Play forward, then reverse, repeating indefinitely |
+| **Loop** 🔁 | Restart from the in-point on reaching the out-point (default) |
+| **Ping-Pong** 🔄 | Play forward, then in reverse, repeating |
 | **One Shot** 1️⃣ | Play once and stop at the out-point |
 | **Hold Last** ⏹ | Play once and freeze on the final frame |
 
-Ping-Pong reverse is served from frames cached during the forward pass — see [Ping-Pong & Reverse Cache](#ping-pong--reverse-cache).
+Ping-Pong plays its reverse leg from frames cached during the forward pass. See [Ping-Pong & Reverse Cache](#ping-pong--reverse-cache).
 
 ### Speed Control
 
-The **speed** slider in the deck detail panel runs from **0.1× to 4.0×** (below 1.0 slows down, above speeds up). Reverse playback is **not** exposed on the slider; the playback engine supports negative speeds, but the UI control is positive-only.
+The **speed** slider in the deck detail panel runs from **0.1× to 4.0×**. Below 1.0 slows the clip down; above 1.0 speeds it up. The slider has no reverse (negative) speeds, although the playback engine supports them.
 
 ### Scrub / Seek
 
-The **position slider** in the Playback section shows the current time on the left and the clip duration on the right. **Click or drag** it to scrub. Seeking is also MIDI/OSC/keyboard-mappable via `deck/<uuid>/video/seek`: the normalized 0.0–1.0 value maps to the clip's full duration, so the same mapping works for clips of any length (handy for scrubbing from a fader or an LFO).
+The **position slider** in the Playback section shows the current time on the left and the clip duration on the right. **Click or drag** it to scrub.
+
+You can map seeking to MIDI, OSC or a key with `deck/<uuid>/video/seek`. The 0.0–1.0 value maps to the clip's full duration, so one mapping works for clips of any length, for example to scrub from a fader or an LFO.
 
 ### In/Out Points
 
-Define a sub-range of the clip to play:
+To play only part of a clip:
 
-1. Scrub to the desired start position → set **in-point**
-2. Scrub to the desired end position → set **out-point**
-3. Playback now loops (or plays once, depending on loop mode) within this range
+1. Scrub to the start position and set the **in-point**.
+2. Scrub to the end position and set the **out-point**.
+3. Playback now loops, or plays once, within this range, depending on the loop mode.
 
-Click **Clear In/Out** to reset to the full clip duration.
+Click **Clear In/Out** to go back to the full clip.
 
-Play/pause, speed, seek, loop mode, in/out points, and clear are all MIDI, OSC, and keyboard mappable, and can be driven by a macro. Transport chase (Auto / Always / Never, offset, delay) is authored on the clip instead. Loop mode uses **fader bucketing**: sweeping a fader/knob steps through Loop → Ping-Pong → One Shot → Hold Last. Enter learn mode and click any of these controls in the deck detail panel to bind it. See [Parameter Paths](06-control-surfaces.md#parameter-paths). Video chase is described in [Arrangement Mode](15-arrangement.md#chasing-a-clip-to-the-show).
+Play/pause, speed, seek, loop mode, in/out points and clear can all be mapped to MIDI, OSC and keys, and driven by a macro. To bind one, enter learn mode and click the control in the deck detail panel. See [Parameter Paths](06-control-surfaces.md#parameter-paths).
 
-Play, speed, seek, and loop mode are also **modulation targets**, so an LFO can time-warp a clip and an audio band can gate it. In and out points are not, because they define the region the playhead offset is measured against. See [Video Playback](05-modulation.md#video-playback) for what to expect from each, including the decode cost of modulating the playhead.
+Loop mode uses **fader bucketing**: sweeping a fader or knob steps through Loop → Ping-Pong → One Shot → Hold Last.
 
-A modulated playhead moves a **paused** clip too: pause stops the clip advancing on its own, it does not stop a modulator scrubbing it. That is the case where the effect reads most clearly, since the swing is centred on wherever you parked the playhead. It does mean a paused clip with a playhead assignment is decoding rather than idle, so the same seek costs apply as when it is playing.
+Transport chase (Auto / Always / Never, offset, delay) is set on the clip. See [Arrangement Mode](15-arrangement.md#video-chase).
+
+Play, speed, seek and loop mode are also **modulation targets**. For example, an LFO can time-warp a clip and an audio band can gate it. In and out points are not modulation targets, because the playhead offset is measured against them. See [Video Playback](05-modulation.md#video-playback) for how each target behaves and the decode cost of modulating the playhead.
+
+A modulated playhead also moves a **paused** clip. Pause stops the clip advancing on its own, but a modulator still scrubs it, with the swing centered on where you parked the playhead. A paused clip with a playhead assignment keeps decoding, so it has the same seek cost as a playing clip.
 
 ### HAP Hardware Codecs
 
-HAP clips decode straight to GPU-native compressed textures (no CPU color conversion), making them the most efficient option for high-resolution playback and reliable reverse/scrubbing. All HAP variants are supported on playback:
+HAP clips decode straight to GPU-native compressed textures with no CPU color conversion. They are the most efficient choice for high-resolution playback, reverse and scrubbing. All HAP variants play:
 
 | Variant | Encoding |
 |---------|----------|
 | **HAP** | BC1 (RGB) |
 | **HAP Alpha** | BC3 (RGBA) |
-| **HAP Q** | YCoCg (BC3) — higher quality |
+| **HAP Q** | YCoCg (BC3), higher quality |
 | **HAP Q Alpha** | Dual-plane: YCoCg color + BC4 alpha |
 
 ### Ping-Pong & Reverse Cache
 
-During forward playback, Ping-Pong mode caches decoded frames so it can replay them in reverse. The cache is capped at **2 GB** (roughly 13 s of 1080p at 60 fps). If a clip's forward pass exceeds that, the reverse leg is truncated to what fits, and Varda shows a **one-time** notice:
+In Ping-Pong mode, Varda caches decoded frames during forward playback and replays them in reverse. The cache holds up to **2 GB**, about 13 s of 1080p at 60 fps. If the forward pass is longer, the reverse leg is cut to what fits, and Varda shows this notice **once**:
 
 > Deck '<name>': reverse playback truncated (cache full). Transcode to HAP for full-length reverse.
 
-As the message suggests, transcoding the clip to a **HAP** codec removes the limit as HAP frames decode cheaply enough to play in reverse directly, without relying on the frame cache.
+Transcode the clip to a **HAP** codec to remove the limit. HAP frames decode fast enough to play in reverse directly, without the cache.
 
 ---
 
 ## Deck Auto-Transitions
 
-Auto-transitions let a deck play for a set duration and then transition out, revealing the deck(s) below it in the channel. This enables hands-free visual progression within a single channel.
+An auto-transition plays a deck for a set time and then transitions it out, revealing the deck or decks below it in the channel. Use it to step through visuals in one channel without touching the controls.
 
 ### Configuration
 
@@ -70,10 +76,10 @@ Each deck has an optional auto-transition with these settings:
 
 | Setting | Description |
 |---------|-------------|
-| **Play Duration** | How long the deck plays before transitioning (seconds, minutes, hours, or beats) |
+| **Play Duration** | How long the deck plays before transitioning (seconds, minutes, hours or beats) |
 | **Transition Duration** | How long the transition takes (seconds or beats) |
-| **Trigger** | **Timer** — starts counting when deck becomes topmost. **ClipEnd** — starts when video reaches its out-point/end (falls back to Timer for non-video sources) |
-| **Transition Shader** | Optional ISF transition shader (dissolve, iris, push, etc.). None = simple opacity fade |
+| **Trigger** | **Timer**: starts counting when the deck becomes topmost. **ClipEnd**: starts when the video reaches its out-point or end (non-video sources use Timer). |
+| **Transition Shader** | Optional ISF transition shader (dissolve, iris, push, etc.). None gives a plain opacity fade. |
 
 ### Phase Lifecycle
 
@@ -85,28 +91,28 @@ Inactive → Playing → Transitioning → Done
                               (next deck activates)
 ```
 
-1. **Inactive** — waiting for its turn (not the topmost visible deck)
-2. **Playing** — content is visible, countdown running. The deck detail panel shows elapsed time
-3. **Transitioning** — transition shader (or opacity fade) runs from 0% to 100%, revealing the deck below
-4. **Done** — deck is effectively invisible. When all decks reach Done, the sequence loops
+1. **Inactive**: waiting for its turn (not the topmost visible deck)
+2. **Playing**: content is visible and the countdown runs. The deck detail panel shows elapsed time.
+3. **Transitioning**: the transition shader (or opacity fade) runs from 0% to 100%, revealing the deck below.
+4. **Done**: the deck is invisible. When every deck reaches Done, the sequence loops.
 
 ### Workflow
 
-1. Add multiple decks to a single channel (each with different content)
-2. Enable **auto-transition** on each deck
-3. Set play and transition durations
-4. Optionally select a transition shader per deck
-5. The channel cycles through decks automatically during performance
+1. Add several decks with different content to one channel.
+2. Enable **auto-transition** on each deck.
+3. Set play and transition durations.
+4. Optionally select a transition shader for each deck.
+5. During the show, the channel cycles through the decks on its own.
 
-With **ClipEnd** trigger on video decks, each video plays to completion before transitioning — useful for pre-edited clip sequences.
+With the **ClipEnd** trigger on video decks, each video plays to the end before transitioning. Use it for pre-edited clip sequences.
 
-A deck the arrangement is driving has its auto-transition suspended, since both would be deciding when it plays. See [Arrangement Mode](15-arrangement.md#performance-sequencers-while-the-arrangement-runs).
+While the arrangement drives a deck, that deck's auto-transition is suspended. See [Arrangement Mode](15-arrangement.md#performance-sequencers-while-the-arrangement-runs).
 
 ---
 
 ## Transition Sequences
 
-Transition sequences automate crossfades across channels over time. Unlike deck auto-transitions (which cycle within a channel), sequences drive the mixer's crossfader between channels.
+Transition sequences automate crossfades between channels over time. Deck auto-transitions cycle decks within one channel; sequences drive the mixer's crossfader between channels.
 
 ### Step Types
 
@@ -114,25 +120,25 @@ Transition sequences automate crossfades across channels over time. Unlike deck 
 |------|-------------|
 | **Fade** | Crossfade from one channel to another over a duration. Supports easing curves (Linear, EaseIn, EaseOut, EaseInOut) and an optional transition shader. |
 | **Wait** | Hold the current state for a duration |
-| **GoTo** | Jump to a specific step index (0-based). Enables looping sequences. |
+| **GoTo** | Jump to a step index (0-based). Use it to loop a sequence. |
 
 ### Duration Units
 
-All durations support: **seconds**, **minutes**, **hours**, and **beats** (resolved via the current BPM — see [Clock Synchronization](06-control-surfaces.md#clock-synchronization)).
+Durations can be in **seconds**, **minutes**, **hours** or **beats**. Beats use the current BPM (see [Clock Synchronization](06-control-surfaces.md#clock-synchronization)).
 
 ### Building a Sequence
 
-1. Open the **mixer card** in the center panel
-2. Click **"+ Sequence"** to create a named sequence
-3. Add steps: Fade, Wait, or GoTo
-4. For Fade steps, select source/target channels, duration, easing, and optional transition shader
-5. Click **Play** to start the sequence
+1. Open the **mixer card** in the center panel.
+2. Click **"+ Sequence"** to create a named sequence.
+3. Add steps: Fade, Wait or GoTo.
+4. For Fade steps, select the source and target channels, duration, easing and optional transition shader.
+5. Click **Play** to start the sequence.
 
 ### Simultaneous Sequences
 
-Multiple named sequences can play at the same time. This is essential for multi-surface setups where different channel pairs need independent automation. For example: one sequence cycling the main screen (channels A↔B) while another cycles the side panels (channels C↔D).
+Several named sequences can play at once. Use this in multi-surface setups where different channel pairs need their own automation. For example, one sequence cycles the main screen (channels A↔B) while another cycles the side panels (channels C↔D).
 
-A Fade step targets a pair of channels rather than one deck, so sequences cannot share the mixer with an arrangement. While the arrangement holds authority, starting a free-running sequence is refused and one already running is stopped.
+Sequences cannot run while an arrangement holds the mixer, because a Fade step controls a pair of channels. While the arrangement is in control, Varda refuses to start a free-running sequence and stops any that is running.
 
 ### Easing Curves
 
@@ -147,97 +153,91 @@ A Fade step targets a pair of channels rather than one deck, so sequences cannot
 
 ## Undo / Redo
 
-Varda maintains a 50-level undo history on a single unified timeline covering both your mixer/scene edits and your stage-editor / warp edits. One Cmd+Z reverts the most recent action you took, whichever it was.
+Varda keeps a 50-level undo history. One timeline covers both mixer and scene edits and stage-editor and warp edits, so Cmd+Z undoes your most recent action of either kind.
 
 | Action | Shortcut |
 |--------|----------|
 | **Undo** | Cmd+Z |
 | **Redo** | Cmd+Shift+Z |
 
-Both actions are MIDI and keyboard mappable via the `action/undo` and `action/redo` parameter paths.
+You can map both to MIDI and keys with the `action/undo` and `action/redo` parameter paths.
 
 ### What's Undoable
 
-- Adding/removing channels, decks, and effects
+- Adding and removing channels, decks and effects
 - Parameter changes (opacity, shader params, blend mode)
-- Modulation changes (add/remove sources, assignments)
+- Modulation changes (adding and removing sources and assignments)
 - Effect reordering (drag-and-drop)
-- Deck moves between channels
+- Moving decks between channels
 - Transition shader selection
-- **Surface geometry** — add/remove/duplicate a surface, move vertices/edges, the move/rotate/scale gizmo, flip H/V, bezier edge edits, circle radius/sides
-- **Warp** — corner-pin/mesh point drags, subdivide, convert to bezier, bezier cage edits, bind-to-shape, reset warp
-- **Masking & layers** — make/punch holes, combine surfaces, stacking order (front/back/up/down)
-- **Assignments & dome** — assigning a surface to an output, dome mode/preset/geometry
+- **Surface geometry**: add, remove or duplicate a surface, move vertices or edges, the move/rotate/scale gizmo, flip H/V, bezier edge edits, circle radius and sides
+- **Warp**: corner-pin and mesh point drags, subdivide, convert to bezier, bezier cage edits, bind-to-shape, reset warp
+- **Masking & layers**: make and punch holes, combine surfaces, stacking order (front/back/up/down)
+- **Assignments & dome**: assigning a surface to an output, dome mode, preset and geometry
 
-A continuous drag (dragging a vertex, a warp point, a bezier handle, or the gizmo) counts as **one** undo step — Cmd+Z returns to where the shape was before you started dragging, not one pixel at a time.
+A continuous drag (a vertex, a warp point, a bezier handle or the gizmo) is **one** undo step. Cmd+Z returns the shape to where it was before the drag started.
 
 ### What's NOT Undoable
 
-- **Crossfader position** — continuous live control (too many snapshots)
-- **Video playback** — temporal state (position, play/pause)
-- **MIDI mappings** — device configuration, not show state
-- **Output windows** — creating, removing, moving, or resizing a projector output window is a physical-hardware action; undo won't tear down or recreate an output feed mid-set. (Assigning surfaces *onto* an existing output is undoable.)
+- **Crossfader position**: a continuous live control that would create too many snapshots
+- **Video playback**: position and play/pause
+- **MIDI mappings**: device configuration, not show state
+- **Output windows**: creating, removing, moving or resizing a projector output window. Undo does not tear down or recreate an output feed during a set. Assigning surfaces *onto* an existing output can be undone.
 
-Undo history is cleared on workspace load. A new action after an undo clears the redo stack (fork behavior).
+Loading a workspace clears the undo history. A new action after an undo clears the redo stack.
 
 ---
 
 ## Presets
 
-Save and reuse deck or channel configurations as portable JSON presets.
+Presets save deck or channel setups as portable JSON files you can reuse.
 
 ### Deck Presets
 
-A deck preset captures everything about a single deck:
+A deck preset stores everything about one deck:
 
-- Source (shader path + parameters, video path, camera name, etc.)
+- Source (shader path and parameters, video path, camera name, etc.)
 - Effect chain with all parameter values
 - Opacity, blend mode, mute/solo, z-index
-- Auto-transition configuration
-- Modulation recipes (sources + assignments, using relative parameter keys)
+- Auto-transition settings
+- Modulation recipes (sources and assignments, using relative parameter keys)
 
-**Save**: select a deck → click **"Save Preset"** in the deck detail panel. Name it.
+**Save**: select a deck, click **"Save Preset"** in the deck detail panel, and name it.
 
-**Load**: drag a deck preset from the **Library** panel into a channel. A new deck is created with all settings restored. Modulation sources are deduplicated so if an identical source already exists, it's reused.
+**Load**: drag a deck preset from the **Library** panel into a channel. Varda creates a new deck with all settings restored. If an identical modulation source already exists, the deck reuses it instead of adding a duplicate.
 
 ### Channel Presets
 
-A channel preset captures an entire channel: all decks (with their presets), the channel effect chain, opacity, and blend mode.
+A channel preset stores a whole channel: all its decks (with their presets), the channel effect chain, opacity and blend mode.
 
-**Save/Load**: same workflow as deck presets, via the channel effect panel and Library panel.
+**Save/Load**: the same as deck presets, from the channel effect panel and the Library panel.
 
 ### File Location
 
-Presets are stored in `.varda/presets/decks/` and `.varda/presets/channels/` as JSON files. They appear in the Library panel for drag-and-drop loading.
+Presets are JSON files in `.varda/presets/decks/` and `.varda/presets/channels/`. They appear in the Library panel for drag-and-drop loading.
 
 ---
 
 ## Finding a Look: Random and Mutate
 
-A generative shader with dozens of parameters is rarely designed one slider at a time. It is found by
-perturbing something that already looks like something. The params column of the deck detail panel has
-three buttons for that, under the parameter list:
+Three buttons under the parameter list in the params column of the deck detail panel help you explore a generative shader's parameters:
 
-- **Reset** puts every parameter back to the shader's declared defaults.
-- **Random** draws every parameter afresh from its declared range. Use it to escape a look entirely.
-- **Mutate** nudges every parameter by a fraction of its range, set by the **by** drag beside it
-  (0.10 by default). Use it to take small steps away from something that is nearly right.
+- **Reset** returns every parameter to the shader's declared defaults.
+- **Random** picks a new value for every parameter from its declared range. Use it to jump to a completely different look.
+- **Mutate** nudges every parameter by a fraction of its range, set by the **by** drag beside it (0.10 by default). Use it to make small changes to a look that is nearly right.
 
-Both are single undo steps, so one Ctrl/Cmd+Z restores the previous look no matter how many parameters
-moved. The workflow is: mutate, look, **Save Preset** if it is good, undo if it is not.
+Random and Mutate are each a single undo step, so one Ctrl/Cmd+Z restores the previous look however many parameters changed. A typical loop: mutate, look, **Save Preset** if it is good, undo if it is not.
 
-If the shader [groups its parameters](12-isf-authoring.md), a second row carries a scope selector.
-Leave it on **Everything** to roll the whole image, or pick a section to hunt a formula while a
-lighting setup and grade you already like hold still.
+If the shader [groups its parameters](12-isf-authoring.md), a second row has a scope selector. Leave it on **Everything** to change the whole image, or pick one group to change only that group. For example, change the formula while keeping the lighting and grade.
 
-Two kinds of parameter are deliberately left alone by both buttons: colours, because random colour
-reliably produces mud and a palette is a deliberate choice, and any parameter whose shader declares no
-minimum and maximum, because there is no range to draw from. Enum menus and checkboxes are fair game.
+Random and Mutate do not change:
 
-Both are also available over the HTTP API, at `POST /api/decks/{uuid}/params/randomize` and
-`/params/mutate`. Each call takes an optional `group`, an optional `seed`, and (for mutate) an
-`amount`. A given seed always produces the same values, so a look found this way can be reproduced
-rather than only saved.
+- colors, because random colors usually look muddy
+- parameters whose shader declares no minimum and maximum, because there is no range to pick from
+
+They do change enum menus and checkboxes.
+
+Over HTTP: `POST /api/decks/{uuid}/params/randomize` and `/params/mutate`. Each call takes an optional `group`, an optional `seed` and, for mutate, an `amount`. The same seed always gives the same values, so you can reproduce a look from its seed without saving a preset.
 
 ---
 

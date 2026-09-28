@@ -15,7 +15,9 @@ pub struct AssignSurfaceBody {
     pub surface_uuid: String,
 }
 
-/// Create an output of any sink type. The body is the sink's config, for
+/// Add an output of any kind.
+///
+/// The body names the kind of output in `type` and gives its settings, for
 /// example `{"type": "windowed"}`, `{"type": "recording", "path": "take.mov",
 /// "codec": "ProRes 422"}` or `{"type": "ndi_send", "sender_name": "Varda"}`;
 /// `GET /api/library/outputs` lists the types and their settings. Answers with
@@ -135,8 +137,10 @@ pub async fn set_calibration_mode(
 
 // ── Missing Parity Routes ─────────────────────────────────────────
 
-/// Point an output at another sink, keeping its surfaces, warp, edge blend and
-/// presentation. The body is the new sink's config. A window moving between
+/// Change an output into another kind, keeping its surfaces and blending.
+///
+/// The body is the new kind and its settings, like `POST /api/outputs`. The
+/// output keeps its surfaces, warp, edge blend and presentation. A window moving between
 /// monitors keeps its window; a running recording or stream is stopped first.
 #[utoipa::path(put, path = "/api/outputs/{output_uuid}/target", params(("output_uuid" = String, Path, description = "Output UUID")), request_body = crate::engine::value::provider::ProviderConfig, responses((status = 200, body = CommandResult), (status = 404, description = "Output not found")), tag = "Outputs")]
 pub async fn set_target(
@@ -160,8 +164,9 @@ pub struct SinkValueBody {
     pub value: crate::engine::value::provider::ControlValue,
 }
 
-/// Write one of an output's sink settings, by the name its type declares in
-/// `GET /api/library/outputs`. A setting that changes what an encoder is
+/// Change one of an output's settings by name.
+///
+/// The names are listed in `GET /api/library/outputs`. A setting that changes what an encoder is
 /// opened with stops a running output.
 #[utoipa::path(put, path = "/api/outputs/{output_uuid}/sink/params/{name}", params(("output_uuid" = String, Path, description = "Output UUID"), ("name" = String, Path, description = "Setting name")), request_body = SinkValueBody, responses((status = 200, body = CommandResult), (status = 404, description = "Output not found")), tag = "Outputs")]
 pub async fn set_sink_param(
@@ -207,8 +212,9 @@ pub async fn set_unassigned(
     }
 }
 
-/// Run a library action an output type offers (`rescan`). Answers with the
-/// type's fresh entries.
+/// Run an action an output kind offers, such as `rescan` for monitors.
+///
+/// Answers with that kind's fresh entries.
 #[utoipa::path(post, path = "/api/outputs/types/{sink_type}/actions/{action}", params(("sink_type" = String, Path, description = "Output type id"), ("action" = String, Path, description = "Library action")), responses((status = 200, body = CommandResult), (status = 404, description = "Unknown output type")), tag = "Outputs")]
 pub async fn sink_library_action(
     State(s): State<SharedState>,

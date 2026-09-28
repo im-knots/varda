@@ -164,7 +164,7 @@ cargo bench --bench compositing -- --baseline pre
 1. Fork the repo and create a branch off `main`.
 2. Keep PRs focused to one feature or fix. Its easier to review than a bundle of unrelated changes.
 3. Prefix your PR title with FEAT for features, FIX for fixes, PERF for performance improvements, and DEBT for technical debt cleanup.
-4. Make sure `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` (pedantic included — see [Lints](#lints)), and the test suites above all pass locally; CI re-runs all of them on `src/**`, `tests/**`, `benches/**`, `examples/**`, and `Cargo.toml`/`Cargo.lock` changes.
+4. Make sure `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` (pedantic included, see [Lints](#lints)), and the test suites above all pass locally; CI re-runs all of them on `src/**`, `tests/**`, `benches/**`, `examples/**`, and `Cargo.toml`/`Cargo.lock` changes.
 5. Describe what changed and why, and call out any `.varda/` compatibility impact or benchmark results if applicable.
 6. A maintainer will review and merge.
 

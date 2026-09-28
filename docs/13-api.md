@@ -2,61 +2,56 @@
 
 ## Overview
 
-Varda's GUI and HTTP API are co-equal consumers of the same engine. The GUI reads state snapshots and emits actions; the API reads the same snapshots and sends the same commands. Neither is an afterthought — they share identical engine contracts.
+The GUI and the HTTP API drive the same engine. Both read the same state snapshots and send the same commands, so anything the GUI can do, the API can do.
 
-The API runs on **port 8080** by default (configurable with `--port`).
+The API runs on **port 8080** by default. Change it with `--port`.
 
 ## Security & Network Trust Model
 
-**Varda trusts the network.** The HTTP API has **no authentication** and binds to
-**all interfaces** (`0.0.0.0`), and the OSC input (default port 9000) does the
-same. CORS is intentionally permissive (see [CORS](#cors)). This is a deliberate
-design choice for the live-performance and installation use cases: a dedicated
-front-of-house or show/installation network where controllers, control panels,
-and automation scripts talk to the engine without credential friction.
+The HTTP API has **no authentication** and binds to **all interfaces** (`0.0.0.0`). The OSC input (default port 9000) does the same. CORS is permissive (see [CORS](#cors)). Anyone who can reach the machine can control Varda.
 
-Run Varda only on a network you control. If you need it reachable from a wider or
-untrusted network, put it behind your own boundary. Bind the machine to a private
-interface, use a firewall or VPN, or front it with an authenticating reverse proxy.
+This setup is for a dedicated front-of-house, show or installation network, where controllers, control panels and automation scripts connect without credentials.
 
+Run Varda only on a network you control. To reach it from a wider or untrusted network, put it behind your own boundary: bind the machine to a private interface, use a firewall or VPN, or put an authenticating reverse proxy in front of it.
 
 ## Swagger UI
 
-Browse all routes interactively at:
+Browse all routes at:
 
 ```
 http://localhost:8080/api/docs
 ```
 
-Every parameter, path variable, and request body field is documented with descriptions and examples in the OpenAPI 3.0 spec.
+The OpenAPI 3.0 spec documents every parameter, path variable and request body field, with descriptions and examples.
 
 ## Headless Mode
 
-Run Varda without a UI window — the engine renders on a timer-driven loop, controlled entirely via the API:
+Headless mode runs Varda without a UI window. The engine renders on a timer and you control it through the API:
 
 ```sh
 varda --headless --port 8080 --fps 60
 ```
 
 In headless mode:
-- No main window is created (output windows and displays for projectors are still opened, from `stage.json` or through the API)
-- The render loop runs at the `--fps` rate, waking itself for each frame
-- All outputs defined in `stage.json` auto-start on launch — NDI sends, SRT streams, HLS/DASH outputs, recordings, and display outputs (fullscreen on connected monitors) all activate automatically
-- Graceful shutdown on SIGTERM/SIGINT or `POST /api/shutdown`
 
-This enables the installation use case: configure in windowed mode, save, then deploy headless. All streaming, recording, and network I/O features work identically with or without the UI.
+- No main window opens. Output windows and projector displays still open, from `stage.json` or through the API.
+- The render loop runs at the `--fps` rate.
+- All outputs in `stage.json` start on launch: NDI sends, SRT streams, HLS/DASH outputs, recordings, and display outputs (fullscreen on connected monitors).
+- SIGTERM, SIGINT or `POST /api/shutdown` shuts Varda down cleanly.
+
+For an installation, set up the show in windowed mode, save, then run it headless. Streaming, recording and network I/O work the same with or without the UI.
 
 ## WebSocket
 
-Connect to the WebSocket endpoint for real-time state streaming:
+Connect to the WebSocket endpoint to stream state in real time:
 
 ```
 ws://localhost:8080/api/ws
 ```
 
-**On connect:** Full `EngineState` JSON snapshot.
+**On connect:** a full `EngineState` JSON snapshot.
 
-**Subsequent frames (~30fps):** JSON Patch (RFC 6902) deltas — only changes since the last update:
+**Later frames (~30fps):** JSON Patch (RFC 6902) deltas with only the changes since the last update:
 
 ```json
 [
@@ -65,7 +60,7 @@ ws://localhost:8080/api/ws
 ]
 ```
 
-**Client → Server:** Send `EngineCommand` JSON messages with an optional `"id"` field for response correlation:
+**Client → Server:** send `EngineCommand` JSON messages. Add an optional `"id"` field to match responses to requests:
 
 ```json
 { "id": "req-1", "command": "SetCrossfader", "position": 0.5 }
@@ -95,7 +90,9 @@ curl -X PUT http://localhost:8080/api/mixer/crossfader \
 
 ### Add a deck to a channel
 
-Every kind of deck is added through one route. The body is the source's config: `type` names the source type and the other fields are that type's settings. `GET /api/library/sources` lists every type this build offers, the controls each one has, and its library. A library entry's `config` is a ready-made body for this route.
+One route adds every kind of deck. In the body, `type` names the kind of source and the other fields are its settings.
+
+`GET /api/library/sources` lists the kinds of source this build offers, their controls, and what the Library panel shows for each. Every Library entry has a `config` you can send as the body of this route.
 
 ```sh
 curl http://localhost:8080/api/library/sources
@@ -109,11 +106,15 @@ curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks \
   -d '{"type": "Image", "path": "/art/logo.svg"}'
 ```
 
-Shader, image, and video decks are built in the background so a large shader or file never stalls the output. The request answers straight away with the new deck's UUID (`{"status": "ok", "uuid": "..."}`), and the deck joins its channel a moment later. Until then a write to that UUID returns `404`. Poll `GET /api/state/deck-loads` to watch it: each entry is `Loading` until the deck attaches and disappears, or `Failed` with the reason, kept for a minute. Errors that can be known up front (an unknown channel or shader, a missing file, a shader that needs a depth sensor when none is connected) still fail the request itself.
+Shader, image and video decks load in the background, so a large shader or file does not stall the output. The request returns the new deck's UUID straight away (`{"status": "ok", "uuid": "..."}`). The deck joins its channel a moment later. Until then, a write to that UUID returns `404`.
+
+To follow a load, poll `GET /api/state/deck-loads`. Each entry is `Loading` until the deck attaches, then disappears. A failed load shows `Failed` with the reason and stays listed for a minute.
+
+Errors that are known up front still fail the request itself: an unknown channel or shader, a missing file, or a shader that needs a depth sensor when none is connected.
 
 ### Drive a deck's source controls
 
-Each source type declares its controls (a clip's play and speed, a capture's rate, a solid color's color) in `GET /api/library/sources`. Write one by name, or fire one of its actions. Numeric controls take a normalized `0.0` to `1.0`, the same value a MIDI fader sends; colors take `[r, g, b, a]`.
+Each source type lists its controls in `GET /api/library/sources` (for example a clip's play and speed, a capture's rate, a solid color's color). Write a control by name, or fire one of the source's actions. Numeric controls take a normalized value from `0.0` to `1.0`, the same value a MIDI fader sends. Colors take `[r, g, b, a]`.
 
 ```sh
 curl -X PUT http://localhost:8080/api/decks/<deck_uuid>/source/params/speed \
@@ -123,7 +124,9 @@ curl -X PUT http://localhost:8080/api/decks/<deck_uuid>/source/params/speed \
 curl -X POST http://localhost:8080/api/decks/<deck_uuid>/source/actions/reload
 ```
 
-A deck's current control values are under `source.status` in `GET /api/scene`. To point a deck at a different source while keeping its effects, opacity and modulation, `PUT /api/decks/<deck_uuid>/source` with a new config.
+A deck's current control values are under `source.status` in `GET /api/scene`.
+
+To switch a deck to a different source and keep its effects, opacity and modulation, send a new config with `PUT /api/decks/<deck_uuid>/source`.
 
 ### Add an HTML deck to a channel
 
@@ -135,7 +138,7 @@ curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks \
 
 ### Capture a display or window as a deck
 
-Targets are addressed by name, never by platform handle, and are matched against the last enumeration. Scan first if you are not sure what is available. See [Screen & Window Capture](09-streaming-and-io.md#screen--window-capture).
+Capture targets are addressed by name, never by platform handle. Varda matches the name against the last scan, so rescan first if you are not sure what is available. See [Screen & Window Capture](09-streaming-and-io.md#screen--window-capture).
 
 ```sh
 curl -X POST http://localhost:8080/api/sources/ScreenCapture/actions/rescan
@@ -152,7 +155,7 @@ curl -X PUT http://localhost:8080/api/params \
 
 ### Add an output
 
-Every kind of output is created through one route, from its sink config. `GET /api/library/outputs` lists the types, their settings, and what their libraries offer (monitors for a display). Fields you leave out take the type's defaults.
+One route adds every kind of output. In the body, `type` names the kind of output and the other fields are its settings. `GET /api/library/outputs` lists the kinds of output, their settings, and their choices (for example the monitors a display can use). Settings you leave out take their defaults.
 
 ```sh
 curl http://localhost:8080/api/library/outputs
@@ -161,7 +164,7 @@ curl -X POST http://localhost:8080/api/outputs \
   -H "Content-Type: application/json" \
   -d '{"type": "recording", "path": "/shows/tonight.mov", "codec": "ProRes 422"}'
 
-# Change one setting by name, or point the output at another sink entirely
+# Change one setting by name, or turn the output into another kind
 curl -X PUT http://localhost:8080/api/outputs/<output_uuid>/sink/params/path \
   -H "Content-Type: application/json" \
   -d '{"value": "/shows/encore.mov"}'
@@ -172,7 +175,14 @@ curl -X PUT http://localhost:8080/api/outputs/<output_uuid>/target \
 curl -X POST http://localhost:8080/api/outputs/<output_uuid>/start
 ```
 
-Outputs are addressable like everything else, so a controller can start a recording: `output/<uuid>/start`, `output/<uuid>/stop`, `output/<uuid>/active`, `output/<uuid>/calibration`, `output/<uuid>/rotation`, `output/<uuid>/surface/<surface_uuid>`, and each sink setting at `output/<uuid>/<name>`. A surface's content is `surface/<uuid>/source`, which takes text (`master`, `ch/<uuid>`, `chs/<uuid>,<uuid>`, `deck/<uuid>`, `domemaster`), for example from an OSC message with a string argument.
+Outputs also have parameter paths, so a controller can, for example, start a recording:
+
+- `output/<uuid>/start`, `output/<uuid>/stop`, `output/<uuid>/active`
+- `output/<uuid>/calibration`, `output/<uuid>/rotation`
+- `output/<uuid>/surface/<surface_uuid>`
+- `output/<uuid>/<name>` for each of the output's settings, for example `output/<uuid>/path`
+
+A surface's content is at `surface/<uuid>/source`. It takes text: `master`, `ch/<uuid>`, `chs/<uuid>,<uuid>`, `deck/<uuid>` or `domemaster`. You can set it from an OSC message with a string argument.
 
 ### Feed Varda's own output back in
 
@@ -186,8 +196,7 @@ A tap shows the previous frame. See [Program Tap](09-streaming-and-io.md#program
 
 ### Add an effect, then tweak it
 
-`POST` returns the new effect's UUID in `{"status": "ok", "uuid": "..."}`. Every
-later call uses that UUID, so it keeps working after the chain is reordered.
+`POST` returns the new effect's UUID in `{"status": "ok", "uuid": "..."}`. Use that UUID for every later call. It stays valid when the chain is reordered.
 
 ```sh
 # Append to a deck's chain (also /api/channels/<ch_uuid>/effects, /api/master/effects)
@@ -209,7 +218,15 @@ curl -X DELETE http://localhost:8080/api/effects/<effect_uuid>
 
 ### Modulate a parameter
 
-A modulation target is the same path a control surface uses to set the parameter: `deck/<deck_uuid>/param/<name>` for a shader input, `deck/<deck_uuid>/opacity`, `deck/<deck_uuid>/video/speed`, `ch/<ch_uuid>/opacity`, or `effect/<effect_uuid>/param/<name>` for an effect wherever it sits.
+A modulation target uses the same path a control surface uses to set the parameter:
+
+| Parameter | Path |
+|-----------|------|
+| Shader input | `deck/<deck_uuid>/param/<name>` |
+| Deck opacity | `deck/<deck_uuid>/opacity` |
+| Video speed | `deck/<deck_uuid>/video/speed` |
+| Channel opacity | `ch/<ch_uuid>/opacity` |
+| Effect parameter, wherever the effect sits | `effect/<effect_uuid>/param/<name>` |
 
 ```sh
 curl -X POST http://localhost:8080/api/modulation/assign \
@@ -217,12 +234,11 @@ curl -X POST http://localhost:8080/api/modulation/assign \
   -d '{"target": "deck/<deck_uuid>/param/speed", "source_id": "<lfo_uuid>", "amount": 0.5}'
 ```
 
-Targets written before scene version 8 (`deck_<deck_uuid>:speed`, `fx_<effect_uuid>:amount`) are still accepted and stored in the path form. A target that names nothing modulation can drive is refused with `400`.
+Varda still accepts targets in the format used before scene version 8 (`deck_<deck_uuid>:speed`, `fx_<effect_uuid>:amount`) and stores them in the path form. A target that names nothing modulation can drive returns `400`.
 
 ### Build a transition sequence
 
-Sequences are addressed by UUID; steps are addressed by position *within* their
-sequence, which is how the sequencer itself refers to them.
+Sequences are addressed by UUID. Steps are addressed by their position within the sequence.
 
 ```sh
 # Create an empty sequence (returns its uuid)
@@ -262,9 +278,7 @@ Modes: `Bypass`, `Aces`, `Reinhard`, `ReinhardExtended`, `HableFilmic`, `Uchimur
 
 ### Load a look LUT
 
-The look grade runs before every output transform, so it reaches HDR outputs as well as SDR
-ones. Authored against ACEScct. The separate calibration LUT (`/api/mixer/lut`) runs after the
-tonemap and is SDR-only.
+The look LUT runs before every output transform, so it applies to HDR outputs as well as SDR ones. Author it against ACEScct. The separate calibration LUT (`/api/mixer/lut`) runs after the tonemap and applies to SDR only.
 
 ```bash
 curl -X PUT http://localhost:8080/api/mixer/look-lut \
@@ -274,14 +288,11 @@ curl -X PUT http://localhost:8080/api/mixer/look-lut \
 curl -X DELETE http://localhost:8080/api/mixer/look-lut
 ```
 
-Both slots read from `.varda/luts/`. Which slot a file belongs in is your choice, not a
-property of the file.
+Both slots read from `.varda/luts/`. Any LUT file can go in either slot.
 
 ### Set a per-output tonemap
 
-The tonemap is an output transform, so one output can be graded differently from the rest
-(a projector and a master recording want different curves). Omit `mode`, or send `null`, to
-go back to inheriting the show-wide curve.
+Each output can use its own tonemap curve, for example one for a projector and another for a master recording. Omit `mode`, or send `null`, to use the show-wide curve again.
 
 ```bash
 # Grade this one output with AgX
@@ -295,10 +306,7 @@ curl -X PUT http://localhost:8080/api/outputs/$OUTPUT_UUID/tonemap \
   -d '{"mode": null}'
 ```
 
-An output resolved to HDR only runs curves with a defined HDR form (Bypass and Reinhard
-Extended). Any other curve is substituted with Bypass and reported in the output's state, so
-read `tonemap_override` back from `GET /api/state` to see what was stored and the output
-card or state snapshot to see what is actually running.
+An output that resolves to HDR runs only the curves that have an HDR form: Bypass and Reinhard Extended. Any other curve is replaced with Bypass, and the output's state reports the substitution. To see the stored curve, read `tonemap_override` from `GET /api/state`. To see the curve that is running, check the output card or the state snapshot.
 
 ### Load a 3D LUT
 
@@ -308,7 +316,7 @@ curl -X PUT http://localhost:8080/api/mixer/lut \
   -d '{"filename": "my-look.cube"}'
 ```
 
-Place `.cube` or `.3dl` files in `.varda/luts/`. The filename is relative to that directory.
+Put `.cube` or `.3dl` files in `.varda/luts/`. The filename is relative to that directory.
 
 ### Unload the active LUT
 
@@ -318,7 +326,7 @@ curl -X DELETE http://localhost:8080/api/mixer/lut
 
 ### Create a macro and bind a target
 
-A macro drives many parameters from one control. Create it, add a target, then drive it live (or map `macro/<uuid>/value` to MIDI/OSC). See [Control Surfaces & Macros](06-control-surfaces.md#macros).
+A macro drives many parameters from one control. Create it, add a target, then drive it live, or map `macro/<uuid>/value` to MIDI/OSC. See [Control Surfaces & Macros](06-control-surfaces.md#macros).
 
 ```sh
 # Create a knob macro (returns its uuid)
@@ -351,8 +359,7 @@ curl -X POST http://localhost:8080/api/command \
 curl -X POST http://localhost:8080/api/workspace/save
 ```
 
-Saving from the API preserves the editor layout in `stage.json` — it writes back
-whatever the UI last had, rather than resetting panels and grid to defaults.
+Saving from the API keeps the editor layout in `stage.json`. It writes back the UI's last panel and grid layout instead of resetting them to defaults.
 
 ### Shut down (headless)
 
@@ -362,7 +369,7 @@ curl -X POST http://localhost:8080/api/shutdown
 
 ### Curve a surface edge (Bezier)
 
-Toggle an edge between a straight line and a cubic bezier (`to_cubic: false` straightens it again):
+Switch an edge between a straight line and a cubic bezier. `to_cubic: false` straightens it again.
 
 ```sh
 curl -X PUT http://localhost:8080/api/surfaces/<uuid>/edge/convert \
@@ -380,7 +387,7 @@ curl -X PUT http://localhost:8080/api/surfaces/<uuid>/path/anchor \
 
 ### Move a cubic control handle
 
-`handle` is `C1` or `C2` (the two control points of the cubic segment):
+`handle` is `C1` or `C2`, the two control points of the cubic segment.
 
 ```sh
 curl -X PUT http://localhost:8080/api/surfaces/<uuid>/path/handle \
@@ -390,7 +397,7 @@ curl -X PUT http://localhost:8080/api/surfaces/<uuid>/path/handle \
 
 ### Warp a surface (per-surface)
 
-Warp is a property of the surface, keyed by its UUID. Move a corner-pin corner:
+Each surface has its own warp, addressed by the surface's UUID. Move a corner-pin corner:
 
 ```sh
 curl -X PUT http://localhost:8080/api/surfaces/{uuid}/warp/corner \
@@ -398,7 +405,7 @@ curl -X PUT http://localhost:8080/api/surfaces/{uuid}/warp/corner \
   -d '{"corner_idx": 0, "position": [0.1, 0.1]}'
 ```
 
-Clear a surface's warp (back to native position):
+Reset a surface's warp to its native position:
 
 ```sh
 curl -X POST http://localhost:8080/api/surfaces/{uuid}/warp/reset
@@ -406,8 +413,7 @@ curl -X POST http://localhost:8080/api/surfaces/{uuid}/warp/reset
 
 ### Subdivide a surface's warp into a mesh
 
-Converts the surface's warp to a `cols` × `rows` grid, preserving the current
-deformation (a corner-pin becomes a bilinear grid). Dimensions clamp to `[2, 64]`.
+Converts the surface's warp to a `cols` × `rows` grid and keeps the current deformation (a corner-pin becomes a bilinear grid). Dimensions clamp to `[2, 64]`.
 
 ```sh
 curl -X PUT http://localhost:8080/api/surfaces/{uuid}/warp/subdivisions \
@@ -417,8 +423,7 @@ curl -X PUT http://localhost:8080/api/surfaces/{uuid}/warp/subdivisions \
 
 ### Move a mesh warp point
 
-Moves a single grid point (row-major) of the surface's mesh warp. No-op if the
-surface's warp is not currently a mesh.
+Moves one grid point (row-major) of the surface's mesh warp. Does nothing if the surface's warp is not a mesh.
 
 ```sh
 curl -X PUT http://localhost:8080/api/surfaces/{uuid}/warp/mesh-point \
@@ -428,8 +433,7 @@ curl -X PUT http://localhost:8080/api/surfaces/{uuid}/warp/mesh-point \
 
 ### Bind/unbind the warp to the surface shape (auto-warp)
 
-When `bound` is `true` the warp auto-conforms to the surface outline; setting it
-`false` unbinds and materialises the conforming warp for manual fine-tuning.
+With `bound` set to `true`, the warp follows the surface outline. Set it to `false` to unbind; the current conforming warp is kept so you can fine-tune it by hand.
 
 ```sh
 curl -X POST http://localhost:8080/api/surfaces/{uuid}/warp/bind \
@@ -439,10 +443,7 @@ curl -X POST http://localhost:8080/api/surfaces/{uuid}/warp/bind \
 
 ### Bezier (curved) warp
 
-Convert the surface's warp into a smooth bezier patch grid (seeded from the
-current warp so the shape is preserved), then edit anchors and tangent handles or
-resize the control cage. Bezier editing is meaningful only while the warp is
-unbound.
+Convert the surface's warp into a smooth bezier patch grid. The grid starts from the current warp, so the shape stays the same. Then edit anchors and tangent handles, or resize the control cage. Bezier editing only has an effect while the warp is unbound.
 
 ```sh
 # Convert to a bezier patch grid
@@ -467,8 +468,13 @@ curl -X PUT http://localhost:8080/api/surfaces/{uuid}/warp/cage \
 
 ### Set an output's calibration mode
 
-Switches an output between `Off`, `Projector` (full-frame test card), and
-`Surfaces` (per-surface test cards through each warp).
+Sets an output's calibration mode:
+
+| Mode | Shows |
+|------|-------|
+| `Off` | Normal output |
+| `Projector` | A full-frame test card |
+| `Surfaces` | A test card on each surface, through its warp |
 
 ```sh
 curl -X PUT http://localhost:8080/api/outputs/<output_uuid>/calibration \
@@ -478,38 +484,31 @@ curl -X PUT http://localhost:8080/api/outputs/<output_uuid>/calibration \
 
 ## Addressing
 
-Every write names its target entity by **UUID**, never by position. State snapshots
-carry a `uuid` on each channel, deck, effect, output, surface, and sequence, so a
-client reads the UUID once and uses it for every subsequent write.
+Every write names its target by **UUID**, never by position. State snapshots include a `uuid` on each channel, deck, effect, output, surface and sequence. Read the UUID once and use it for every later write.
 
-This matters for correctness, not just style. A positional address is only valid
-until something ahead of it moves: if a client resolves "deck 3", another client
-removes deck 0, and the first client's write arrives afterwards, a positional write
-lands on a different deck with no error. A UUID either resolves to the entity the
-caller meant or fails with `404 Not Found`.
+A UUID either finds the entity you meant or fails with `404 Not Found`. A position would not be safe: if you resolve "deck 3", another client removes deck 0, and then your write arrives, a positional write would change a different deck with no error.
 
-Integers survive in two roles, both of which are payload rather than address:
+Integers appear in two places, both in the request body rather than the address:
 
-- **Reorder ordinals** — `PUT /api/channels/{channel_uuid}/decks/reorder` takes
-  `from_idx` and `to_idx`, the positions being swapped.
-- **Sequence step indices** — a step's position within its own sequence, which is
-  how the sequencer itself addresses steps.
+- **Reorder ordinals:** `PUT /api/channels/{channel_uuid}/decks/reorder` takes `from_idx` and `to_idx`, the positions being swapped.
+- **Sequence step indices:** a step's position within its own sequence, which is how the sequencer addresses steps.
 
 See [/spec/api-addressing.md] for the full rationale.
 
 ## Per-type deck routes (deprecated)
 
-Earlier releases gave each kind of deck its own routes: `POST /api/channels/{channel_uuid}/decks/shader`, `/decks/video`, `/api/decks/{deck_uuid}/video/speed`, `/api/devices/ndi/scan`, `/api/streams/hls/library`, and so on. They still work for one release and are listed under **Deprecated** below. Each one's description names the generic route that replaces it. They will be removed in the release after the one that deprecated them.
+Each deck type used to have its own routes, such as `POST /api/channels/{channel_uuid}/decks/shader`, `/decks/video`, `/api/decks/{deck_uuid}/video/speed`, `/api/devices/ndi/scan` and `/api/streams/hls/library`. They still work for one release and are listed under **Deprecated** below. Each one's description names the generic route that replaces it. They will be removed in the release after the one that deprecated them.
 
-The engine state changed shape without a transition release. A deck's per-type fields (`video_playback`, `screen_capture`, `tap`, `point_cloud_params`, `scaling_mode`, `is_html`, `is_depth_sensor`) are now under `source` (`source.type`, `source.status.params`, `source.status.info`). The top-level device and library lists (`ndi_sources`, `syphon_sources`, `spout_sources`, `depth_sensors`, `screen_capture`, `stream_receivers`, `libraries`) are now one list, `sources`, with an entry per source type. `GET /api/state/sources` serves it on its own.
+The engine state changed shape with no transition release:
+
+- A deck's per-type fields (`video_playback`, `screen_capture`, `tap`, `point_cloud_params`, `scaling_mode`, `is_html`, `is_depth_sensor`) are now under `source` (`source.type`, `source.status.params`, `source.status.info`).
+- The top-level device and library lists (`ndi_sources`, `syphon_sources`, `spout_sources`, `depth_sensors`, `screen_capture`, `stream_receivers`, `libraries`) are now one list, `sources`, with an entry per source type. `GET /api/state/sources` returns that list on its own.
 
 ## Route Reference
 
 For request and response schemas, see the Swagger UI at `/api/docs`.
 
-Analyzer routes cover frame analysis (brightness, face detection, depth sensor); see
-[Frame Analysis & Preprocessors](14-frame-analysis.md#analyzer-http-api) for request
-bodies and workflow.
+Analyzer routes cover frame analysis (brightness, face detection, depth sensor). For request bodies and workflow, see [Frame Analysis & Preprocessors](14-frame-analysis.md#analyzer-http-api).
 
 <!-- BEGIN GENERATED ROUTES -->
 
@@ -517,7 +516,7 @@ bodies and workflow.
      Regenerate with: UPDATE_API_DOCS=1 cargo test --test api_docs -->
 
 Writes address entities by UUID. Positional integers appear only as reorder
-ordinals and sequence step indices — see [/spec/api-addressing.md].
+ordinals and sequence step indices; see [/spec/api-addressing.md].
 
 ### Analyzers
 
@@ -583,7 +582,7 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/channels/{channel_uuid}/decks` | Add a deck of any source type. The body is the source's config, for |
+| `POST` | `/api/channels/{channel_uuid}/decks` | Add a deck of any kind to a channel. |
 | `PUT` | `/api/channels/{channel_uuid}/decks/reorder` |  |
 | `DELETE` | `/api/decks/{deck_uuid}` |  |
 | `PUT` | `/api/decks/{deck_uuid}/blend-mode` |  |
@@ -762,19 +761,19 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/api/library/outputs` | Every registered output type: its settings, whether this run can drive |
-| `POST` | `/api/outputs` | Create an output of any sink type. The body is the sink's config, for |
-| `POST` | `/api/outputs/types/{sink_type}/actions/{action}` | Run a library action an output type offers (`rescan`). Answers with the |
+| `POST` | `/api/outputs` | Add an output of any kind. |
+| `POST` | `/api/outputs/types/{sink_type}/actions/{action}` | Run an action an output kind offers, such as `rescan` for monitors. |
 | `DELETE` | `/api/outputs/{output_uuid}` |  |
 | `PUT` | `/api/outputs/{output_uuid}/calibration` |  |
 | `PUT` | `/api/outputs/{output_uuid}/edge-blend` |  |
 | `PUT` | `/api/outputs/{output_uuid}/edge-blend-mode` |  |
 | `PUT` | `/api/outputs/{output_uuid}/presentation` |  |
-| `PUT` | `/api/outputs/{output_uuid}/sink/params/{name}` | Write one of an output's sink settings, by the name its type declares in |
+| `PUT` | `/api/outputs/{output_uuid}/sink/params/{name}` | Change one of an output's settings by name. |
 | `POST` | `/api/outputs/{output_uuid}/start` |  |
 | `POST` | `/api/outputs/{output_uuid}/stop` |  |
 | `POST` | `/api/outputs/{output_uuid}/surfaces` |  |
 | `DELETE` | `/api/outputs/{output_uuid}/surfaces/{surface_uuid}` |  |
-| `PUT` | `/api/outputs/{output_uuid}/target` | Point an output at another sink, keeping its surfaces, warp, edge blend and |
+| `PUT` | `/api/outputs/{output_uuid}/target` | Change an output into another kind, keeping its surfaces and blending. |
 | `PUT` | `/api/outputs/{output_uuid}/tonemap` |  |
 | `PUT` | `/api/outputs/{output_uuid}/unassigned` | Choose what an output shows with no surfaces assigned. |
 
@@ -825,23 +824,23 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/library/sources` | Every registered deck source type: its controls, whether this build can |
-| `POST` | `/api/sources/{source_type}/actions/{action}` | Run a library action a source type offers: `rescan`, or one a library |
-| `POST` | `/api/sources/{source_type}/library` | Save an entry to a source type's library (a stream URL). The body holds the |
-| `DELETE` | `/api/sources/{source_type}/library` | Remove an entry from a source type's library. |
+| `GET` | `/api/library/sources` | Every kind of deck source, with its controls and Library entries. |
+| `POST` | `/api/sources/{source_type}/actions/{action}` | Run an action a source kind offers, such as `rescan`. |
+| `POST` | `/api/sources/{source_type}/library` | Save an entry, such as a stream URL, to a source kind's Library. |
+| `DELETE` | `/api/sources/{source_type}/library` | Remove an entry from a source kind's Library. |
 
 ### Stage
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/stage` | Full stage: surfaces, output windows, and connected monitors. |
-| `POST` | `/api/stage/detect/camera` | POST /api/stage/detect/camera — detect contours from a camera snapshot. |
-| `POST` | `/api/stage/detect/confirm` | POST /api/stage/detect/confirm — create surfaces from detected contours. |
-| `POST` | `/api/stage/detect/dxf` | POST /api/stage/detect/dxf — detect contours from DXF data. |
-| `POST` | `/api/stage/detect/image` | POST /api/stage/detect/image — detect contours from a raster image. |
-| `POST` | `/api/stage/detect/svg` | POST /api/stage/detect/svg — detect contours from SVG data. |
-| `GET` | `/api/stage/outputs` | Every output window with its target, activity, and surface assignments. |
-| `GET` | `/api/stage/outputs/{uuid}` | A single output window, addressed by UUID. |
+| `GET` | `/api/stage` | Full stage: surfaces, outputs, and connected monitors. |
+| `POST` | `/api/stage/detect/camera` | Detect contours from a camera snapshot. |
+| `POST` | `/api/stage/detect/confirm` | Create surfaces from detected contours. |
+| `POST` | `/api/stage/detect/dxf` | Detect contours from DXF data. |
+| `POST` | `/api/stage/detect/image` | Detect contours from a raster image. |
+| `POST` | `/api/stage/detect/svg` | Detect contours from SVG data. |
+| `GET` | `/api/stage/outputs` | Every output with its kind, settings, activity, and surface assignments. |
+| `GET` | `/api/stage/outputs/{uuid}` | A single output, addressed by UUID. |
 | `GET` | `/api/stage/surfaces` | Every surface with its geometry, warp, and source assignment. |
 | `GET` | `/api/stage/surfaces/{uuid}` | A single surface, addressed by UUID. |
 
@@ -867,7 +866,7 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `GET` | `/api/state/presets` | Saved deck and channel presets, by name. |
 | `GET` | `/api/state/registry` | Shader registry: generator and filter shader names with their indices. |
 | `GET` | `/api/state/render` | Render resolution, the largest dimension the GPU allows, and the domemaster resolution. |
-| `GET` | `/api/state/sources` | Every deck source type: its controls, whether this build can run it, and what its library offers. |
+| `GET` | `/api/state/sources` | Every kind of deck source, with its controls, whether this build can run it, and its Library entries. |
 | `GET` | `/api/state/surfaces` | Every surface with its geometry, warp, and source assignment. |
 | `GET` | `/api/state/system` | Load on the machine running the engine (CPU, RAM, GPU utilization) and the GPU adapter it runs on. |
 | `GET` | `/api/state/timecode` | Timecode diagnostics: every LTC and MTC input being listened to with its own position and run state, which one is driving the transport, and the current preference and LTC patch. |
@@ -962,7 +961,7 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 
 ## CORS
 
-Permissive CORS is enabled on all routes:
+All routes allow any origin:
 
 ```
 Access-Control-Allow-Origin: *
@@ -970,10 +969,7 @@ Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS
 Access-Control-Allow-Headers: Content-Type, Authorization
 ```
 
-Browser-based control panels work from any origin without configuration. This
-pairs with the [trusted-network model](#security--network-trust-model): there is
-no auth, so origin restrictions would add friction without a security benefit on
-a trusted LAN. Do not expose the port to untrusted networks.
+Browser-based control panels work from any origin with no setup. The API has no authentication (see [Security & Network Trust Model](#security--network-trust-model)), so restricting origins would not add security. Do not expose the port to untrusted networks.
 
 ---
 

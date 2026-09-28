@@ -233,7 +233,7 @@ impl SyphonManager {
         if available {
             log::info!("Syphon.framework found");
         } else {
-            log::info!("Syphon.framework not found — Syphon features disabled");
+            log::info!("Syphon.framework not found; Syphon features disabled");
         }
         Self {
             available,

@@ -31,7 +31,7 @@ If this computer or build cannot drive an output (for example Syphon started wit
 
 A new **Display** output opens nothing until you pick a monitor from its **Monitor** dropdown, which lists connected monitors as `Name (W×H)`. The output then goes fullscreen on that monitor. Switching between **Window** and **Display** keeps the same window.
 
-Monitors are rescanned continuously, so you can plug one in without restarting. If the saved monitor is missing at startup, the output opens as a window and shows `Monitor '<name>' not connected — output opened as a window`. Pick the monitor again once it is connected.
+Monitors are rescanned continuously, so you can plug one in without restarting. If the saved monitor is missing at startup, the output opens as a window and shows `Monitor '<name>' is not connected, so the output opened as a window`. Pick the monitor again once it is connected.
 
 ## Output Format
 
@@ -143,7 +143,7 @@ Recordings and streams can include audio from a capture device, chosen in the ou
 
 ## Saving
 
-Outputs are saved in `stage.json` (the venue layout), separate from the scene: their type and settings, rotation, format, peak, dither, surface assignments and warp. Stages saved before formats existed load as 8-bit SDR with dither on. See [Persistence](02-concepts.md#persistence).
+Outputs are saved in `stage.json` (the venue layout), separate from the scene: their type and settings, rotation, format, peak, dither, surface assignments and warp. Stages saved before formats existed load as 8-bit SDR with dither on. See [The Varda workspace](02-concepts.md#the-varda-workspace).
 
 ---
 

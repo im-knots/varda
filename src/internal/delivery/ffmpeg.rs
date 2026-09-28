@@ -964,6 +964,11 @@ pub struct FfmpegSubprocess {
     graceful_shutdown: bool,
     /// Typed frame contract negotiated before the FFmpeg process starts.
     frame_contract: Option<FrameContract>,
+    /// Why frames stopped being accepted: ffmpeg's last error line, or the
+    /// frame that broke the contract.
+    failure: Option<String>,
+    /// Set for an SRT listener, which takes no frames until a client connects.
+    listener: Option<Listener>,
     /// Resolved precision selected by the recording or streaming adapter.
     presentation: Option<ResolvedPresentation>,
 }
@@ -1032,6 +1037,37 @@ pub(crate) fn try_enqueue_frame(
         }
         Err(mpsc::TrySendError::Disconnected(_)) => false,
     }
+}
+
+/// An SRT listener's progress toward its first client.
+#[derive(Default)]
+struct Listener {
+    /// Frames written when the queue first filled with no client connected.
+    /// The listener is waiting until the count moves past this.
+    stalled_at: Option<u64>,
+    /// Set once frames have flowed to a client.
+    flowing: bool,
+}
+
+/// The last line of ffmpeg's stderr that reports an error, without the
+/// `[component @ 0x...]` prefix, for telling the user why ffmpeg gave up.
+fn last_error_line(stderr: &str) -> Option<String> {
+    stderr
+        .lines()
+        .rfind(|line| {
+            let lower = line.to_ascii_lowercase();
+            lower.contains("error") || lower.contains("failed") || lower.contains("refused")
+        })
+        .map(|line| {
+            let line = line.trim();
+            match line
+                .strip_prefix('[')
+                .and_then(|rest| rest.split_once("] "))
+            {
+                Some((_, message)) => message.trim().to_string(),
+                None => line.to_string(),
+            }
+        })
 }
 
 /// Compute video/buffer bitrate in kbps for RTMP output based on resolution and frame rate.
@@ -1580,6 +1616,8 @@ impl FfmpegSubprocess {
             stopped: false,
             audio,
             graceful_shutdown: true,
+            failure: None,
+            listener: None,
             frame_contract: Some(FrameContract {
                 format: plan.expected_readback,
                 width,
@@ -1687,6 +1725,8 @@ impl FfmpegSubprocess {
             stopped: false,
             audio,
             graceful_shutdown: false,
+            failure: None,
+            listener: Some(Listener::default()),
             frame_contract: Some(FrameContract {
                 format: plan.expected_readback,
                 width,
@@ -1805,6 +1845,8 @@ impl FfmpegSubprocess {
             stopped: false,
             audio,
             graceful_shutdown: false,
+            failure: None,
+            listener: None,
             frame_contract: Some(FrameContract {
                 format: plan.expected_readback,
                 width,
@@ -1909,6 +1951,8 @@ impl FfmpegSubprocess {
             stopped: false,
             audio,
             graceful_shutdown: false,
+            failure: None,
+            listener: None,
             frame_contract: Some(FrameContract {
                 format: plan.expected_readback,
                 width,
@@ -2014,6 +2058,8 @@ impl FfmpegSubprocess {
             stopped: false,
             audio,
             graceful_shutdown: false,
+            failure: None,
+            listener: None,
             frame_contract: Some(FrameContract {
                 format: plan.expected_readback,
                 width,
@@ -2045,9 +2091,8 @@ impl FfmpegSubprocess {
             || frame.width() != contract.width
             || frame.height() != contract.height
         {
-            log::error!(
-                "FFmpeg frame contract mismatch for '{}': expected {} {}x{}, got {} {}x{}",
-                self.label,
+            let message = format!(
+                "frame contract mismatch: expected {} {}x{}, got {} {}x{}",
                 readback_label(contract.format),
                 contract.width,
                 contract.height,
@@ -2055,6 +2100,8 @@ impl FfmpegSubprocess {
                 frame.width(),
                 frame.height()
             );
+            log::error!("FFmpeg {message} for '{}'", self.label);
+            self.failure = Some(message);
             return false;
         }
         let bytes_per_pixel = match contract.format {
@@ -2070,12 +2117,12 @@ impl FfmpegSubprocess {
         };
         let expected_stride = contract.width * bytes_per_pixel;
         if frame.stride() != expected_stride {
-            log::error!(
-                "FFmpeg frame stride mismatch for '{}': expected {}, got {}",
-                self.label,
-                expected_stride,
+            let message = format!(
+                "frame stride mismatch: expected {expected_stride}, got {}",
                 frame.stride()
             );
+            log::error!("FFmpeg {message} for '{}'", self.label);
+            self.failure = Some(message);
             return false;
         }
         self.feed_frame(frame.into_bytes())
@@ -2103,7 +2150,39 @@ impl FfmpegSubprocess {
                     self.label
                 );
             }
+            if self.failure.is_none() {
+                self.failure = Some(format!("ffmpeg exited ({status})"));
+            }
             return false;
+        }
+        let written = self.counters.written.load(Ordering::Relaxed);
+        if let Some(listener) = &mut self.listener
+            && !listener.flowing
+        {
+            // No client yet: ffmpeg reads what it needs to open the listener,
+            // then takes nothing more until a client connects, so a full queue
+            // here is waiting, not falling behind.
+            if listener.stalled_at.is_some_and(|at| written > at) {
+                listener.flowing = true;
+            }
+        }
+        if let Some(listener) = &mut self.listener
+            && !listener.flowing
+        {
+            let Some(tx) = &self.frame_tx else {
+                return false;
+            };
+            return match tx.try_send(frame) {
+                Ok(()) => true,
+                Err(mpsc::TrySendError::Full(_)) => {
+                    listener.stalled_at.get_or_insert(written);
+                    true
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    self.drain_stderr();
+                    false
+                }
+            };
         }
         if let Some(ref tx) = self.frame_tx {
             if try_enqueue_frame(tx, &self.counters.dropped, &self.label, frame) {
@@ -2121,16 +2200,33 @@ impl FfmpegSubprocess {
     /// Each line is classified individually: lines containing error indicators
     /// are logged at ERROR, everything else (version info, codec config) at DEBUG.
     fn drain_stderr(&mut self) {
-        if let Some(mut stderr) = self.child.as_mut().and_then(|c| c.stderr.take()) {
-            Self::drain_stderr_pipe(&mut stderr, &self.label);
+        if let Some(mut stderr) = self.child.as_mut().and_then(|c| c.stderr.take())
+            && let Some(error) = Self::drain_stderr_pipe(&mut stderr, &self.label)
+        {
+            self.failure = Some(error);
         }
     }
 
-    /// Static helper: drain an ffmpeg stderr pipe and log each line.
-    fn drain_stderr_pipe(stderr: &mut std::process::ChildStderr, label: &str) {
+    /// Why this subprocess stopped taking frames, when it has.
+    pub fn failure(&self) -> Option<&str> {
+        self.failure.as_deref()
+    }
+
+    /// An SRT listener whose queue filled before any client connected.
+    pub fn waiting_for_client(&self) -> bool {
+        let written = self.counters.written.load(Ordering::Relaxed);
+        self.listener
+            .as_ref()
+            .is_some_and(|l| !l.flowing && l.stalled_at == Some(written))
+    }
+
+    /// Static helper: drain an ffmpeg stderr pipe and log each line. Returns
+    /// the last error line, the one that says why ffmpeg gave up.
+    fn drain_stderr_pipe(stderr: &mut std::process::ChildStderr, label: &str) -> Option<String> {
         use std::io::Read;
         let mut buf = String::new();
         let _ = stderr.read_to_string(&mut buf);
+        let last_error = last_error_line(&buf);
         if !buf.is_empty() {
             for line in buf.lines().take(30) {
                 let lower = line.to_ascii_lowercase();
@@ -2145,6 +2241,7 @@ impl FfmpegSubprocess {
                 }
             }
         }
+        last_error
     }
 
     /// Stop the subprocess. For recordings (`graceful_shutdown`), the heavy
@@ -2342,6 +2439,103 @@ impl Drop for FfmpegSubprocess {
 
 #[cfg(test)]
 mod tests {
+    /// An SRT listener with no client takes no frames. That is waiting, so
+    /// nothing is counted as dropped; once a client connects, frames flow.
+    /// Runs the real ffmpeg on both ends, and skips when it is not installed.
+    #[test]
+    fn an_srt_listener_waits_for_its_client_without_dropping_frames() {
+        use super::{FfmpegSubprocess, FrameContract};
+        use crate::renderer::ReadbackFrame;
+        use std::time::{Duration, Instant};
+
+        let installed = std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .stdout(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if !installed {
+            eprintln!("ffmpeg not installed, skipping");
+            return;
+        }
+        let port = std::net::UdpSocket::bind("127.0.0.1:0")
+            .and_then(|socket| socket.local_addr())
+            .expect("a free port")
+            .port();
+        let url = format!("srt://127.0.0.1:{port}");
+        let (width, height) = (64, 64);
+        let mut stream = FfmpegSubprocess::spawn_srt(
+            &url,
+            &crate::engine::value::render::SrtCodec::H264,
+            crate::engine::value::render::PresentationRequest::default(),
+            width,
+            height,
+            30,
+            None,
+        )
+        .expect("ffmpeg starts");
+        stream.frame_contract = Some(FrameContract {
+            format: crate::renderer::ReadbackFormat::Rgba8,
+            width,
+            height,
+        });
+        let frame =
+            || ReadbackFrame::rgba8(width, height, vec![128; (width * height * 4) as usize]);
+        let feed_until = |stream: &mut FfmpegSubprocess,
+                          done: &dyn Fn(&FfmpegSubprocess) -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !done(stream) && Instant::now() < deadline {
+                assert!(
+                    stream.feed_readback_frame(frame()),
+                    "{:?}",
+                    stream.failure()
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+
+        feed_until(&mut stream, &|s| s.waiting_for_client());
+        assert!(stream.waiting_for_client());
+        assert_eq!(stream.frames_dropped(), 0, "waiting is not dropping");
+
+        let mut client = std::process::Command::new("ffmpeg")
+            .args(["-loglevel", "error", "-i", &format!("{url}?mode=caller")])
+            .args(["-frames:v", "30", "-f", "null", "-"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("client starts");
+        let stalled_at = stream.frames_written();
+        feed_until(&mut stream, &|s| s.frames_written() > stalled_at + 5);
+        let _ = client.kill();
+        let _ = client.wait();
+        assert!(
+            stream.frames_written() > stalled_at + 5,
+            "frames flow once a client connects"
+        );
+        assert!(!stream.waiting_for_client());
+        stream.stop();
+    }
+
+    #[test]
+    fn the_reason_ffmpeg_gave_up_is_its_last_error_line() {
+        let stderr = "ffmpeg version 7.1\n\
+            [tcp @ 0xb25028000] Connection to tcp://:1935?tcp_nodelay=0 failed: Connection refused\n\
+            [out#0/flv @ 0xb25018180] Error opening output rtmp://: Connection refused\n\
+            Error opening output files: Connection refused\n";
+        assert_eq!(
+            super::last_error_line(stderr).as_deref(),
+            Some("Error opening output files: Connection refused")
+        );
+        assert_eq!(
+            super::last_error_line(
+                "[out#0/flv @ 0x1] Error opening output rtmp://x: Connection refused\n"
+            )
+            .as_deref(),
+            Some("Error opening output rtmp://x: Connection refused")
+        );
+        assert_eq!(super::last_error_line("frame= 10 fps=60\n"), None);
+    }
+
     use super::*;
     use crate::engine::value::render::{PresentationDepth, PresentationRequest};
     use crate::renderer::ReadbackFormat;
