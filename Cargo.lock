@@ -11975,6 +11975,7 @@ dependencies = [
  "egui-winit",
  "egui_kittest",
  "env_logger",
+ "epaint_default_fonts",
  "euclid",
  "ffmpeg-next",
  "freenectrs",

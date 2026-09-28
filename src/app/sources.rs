@@ -76,7 +76,8 @@ pub(crate) fn source_providers() -> SourceRegistry {
         ))
         .register(crate::html::provider::HtmlProvider::new())
         .register(crate::spout::provider())
-        .register(crate::solid_color::SolidColorProvider);
+        .register(crate::solid_color::SolidColorProvider)
+        .register(crate::text::TextProvider);
     #[cfg(target_os = "macos")]
     r.register(crate::syphon::provider());
     r
@@ -238,6 +239,7 @@ mod tests {
             "Html",
             "Spout",
             "SolidColor",
+            "Text",
         ] {
             assert!(ids.contains(&id), "{id} is not registered");
         }

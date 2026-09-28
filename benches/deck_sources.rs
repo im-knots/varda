@@ -5,6 +5,10 @@
 /// See /spec/deck-source-providers.md § Performance.
 ///
 ///   `mixed_frame` — one full headless frame with all five decks visible.
+///   `text_static`, `text_crawl_40`, `text_step_fade`, `text_step_modulated` —
+///   one frame with a single text deck: one line, a 40-line crawl, stepping
+///   with a fade, and stepping with size and weight modulated across raster
+///   buckets. See /spec/text-source.md § Performance.
 ///
 /// Skipped when no GPU adapter is available.
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -65,5 +69,99 @@ fn bench_deck_sources(c: &mut Criterion) {
     g.finish();
 }
 
-criterion_group!(benches, bench_deck_sources);
+/// An app with one text deck built from `config`, plus an LFO on `modulated`
+/// routes of it.
+fn text_app(config: &serde_json::Value, modulated: &[&str]) -> Option<VardaApp> {
+    let mut app = varda::testing::headless_app()?;
+    let channel = app.build_engine_state().mixer.channels[0].uuid.clone();
+    let sender = app.command_sender();
+    let mut source = SourceConfig::new("Text");
+    for (key, value) in config.as_object()? {
+        source = source.with(key, value);
+    }
+    let _ = sender.send((
+        EngineCommand::AddDeck {
+            channel_uuid: channel,
+            source,
+        },
+        None,
+    ));
+    if !modulated.is_empty() {
+        let _ = sender.send((
+            EngineCommand::AddLfo {
+                waveform: varda::modulation::LFOWaveform::Sine,
+                frequency: 0.5,
+            },
+            None,
+        ));
+    }
+    for _ in 0..600 {
+        frame(&mut app);
+        let state = app.build_engine_state();
+        if let Some(deck) = state.mixer.channels[0].decks.first() {
+            if let Some(lfo) = state.modulation.sources.first() {
+                for route in modulated {
+                    let _ = sender.send((
+                        EngineCommand::AssignModulation {
+                            target: format!("deck/{}/{route}", deck.uuid),
+                            source_id: lfo.uuid.clone(),
+                            amount: 1.0,
+                        },
+                        None,
+                    ));
+                }
+            }
+            // Let the first frames rasterize before measuring.
+            for _ in 0..30 {
+                frame(&mut app);
+            }
+            return Some(app);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    eprintln!("deck_sources: text deck did not load, skipping");
+    None
+}
+
+fn bench_text_decks(c: &mut Criterion) {
+    let lyrics: String = (1..=40)
+        .map(|i| format!("line {i} of the lyric sheet goes here"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let cases: [(&str, serde_json::Value, &[&str]); 4] = [
+        (
+            "text_static",
+            serde_json::json!({ "text": "HEADLINE" }),
+            &[],
+        ),
+        (
+            "text_crawl_40",
+            serde_json::json!({ "text": lyrics, "mode": "Crawl", "size": 0.05, "speed": 2.0 }),
+            &[],
+        ),
+        (
+            "text_step_fade",
+            serde_json::json!({ "text": lyrics, "mode": "Step", "speed": 4.0,
+                "transition": "Fade", "transition_time": 0.2 }),
+            &[],
+        ),
+        (
+            "text_step_modulated",
+            serde_json::json!({ "text": "BREATHE", "mode": "Step", "speed": 0.0 }),
+            &["size", "weight"],
+        ),
+    ];
+    let mut g = c.benchmark_group("deck_sources");
+    for (name, config, modulated) in cases {
+        let Some(mut app) = text_app(&config, modulated) else {
+            return;
+        };
+        g.bench_function(name, |b| {
+            b.iter(|| frame(std::hint::black_box(&mut app)));
+        });
+    }
+    g.finish();
+}
+
+criterion_group!(benches, bench_deck_sources, bench_text_decks);
 criterion_main!(benches);

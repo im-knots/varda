@@ -367,6 +367,7 @@ impl VardaApp {
         if !config.modulation.is_empty() {
             let new_prefix = crate::engine::value::param::deck_prefix(&deck_uuid);
             apply_modulation_recipes(&config.modulation, &new_prefix, mixer.modulation_mut());
+            mixer.rekey_legacy_modulation();
         }
         Ok(deck_uuid)
     }
@@ -426,7 +427,7 @@ pub(crate) fn extract_modulation_recipes(
                     crate::scene::ModulationRecipeAssignment {
                         param: relative_param.clone(),
                         amount: m.amount,
-                        component: m.component,
+                        legacy_component: None,
                     },
                 );
             }
@@ -477,11 +478,11 @@ pub(crate) fn apply_modulation_recipes(
             } else {
                 format!("{prefix}{}", assignment.param)
             };
-            engine.assign(
+            engine.assign_saved(
                 &full_key,
                 &source_uuid,
                 assignment.amount,
-                assignment.component,
+                assignment.legacy_component,
             );
         }
     }
@@ -542,11 +543,11 @@ mod tests {
         let mut engine = ModulationEngine::new();
         let src_uuid = engine.add_source(ModulationSource::sine_lfo(2.0));
         // Generator param
-        engine.assign("deck/abc12345/param/brightness", &src_uuid, 0.5, None);
+        engine.assign("deck/abc12345/param/brightness", &src_uuid, 0.5);
         // Effect param, keyed by effect UUID alone
-        engine.assign("effect/effuuid1/param/amount", &src_uuid, 0.3, None);
+        engine.assign("effect/effuuid1/param/amount", &src_uuid, 0.3);
         // Unrelated key from another deck — should NOT be captured
-        engine.assign("deck/def67890/param/brightness", &src_uuid, 1.0, None);
+        engine.assign("deck/def67890/param/brightness", &src_uuid, 1.0);
 
         let effect_uuids = vec!["effuuid1".to_string()];
         let recipes = extract_modulation_recipes(&engine, Some("deck/abc12345/"), &effect_uuids);
@@ -579,12 +580,12 @@ mod tests {
                 ModulationRecipeAssignment {
                     param: "param/brightness".into(),
                     amount: 0.5,
-                    component: None,
+                    legacy_component: None,
                 },
                 ModulationRecipeAssignment {
                     param: "effect/effuuid1/param/amount".into(),
                     amount: 0.3,
-                    component: None,
+                    legacy_component: None,
                 },
             ],
         }];
@@ -607,8 +608,8 @@ mod tests {
         // Simulate save: create engine with assignments, extract recipes
         let mut save_engine = ModulationEngine::new();
         let src_uuid = save_engine.add_source(ModulationSource::sine_lfo(3.0));
-        save_engine.assign("deck/saveuuid/param/contrast", &src_uuid, 0.7, None);
-        save_engine.assign("effect/fxuuid01/param/mix", &src_uuid, 0.4, None);
+        save_engine.assign("deck/saveuuid/param/contrast", &src_uuid, 0.7);
+        save_engine.assign("effect/fxuuid01/param/mix", &src_uuid, 0.4);
 
         let effect_uuids = vec!["fxuuid01".to_string()];
         let recipes =

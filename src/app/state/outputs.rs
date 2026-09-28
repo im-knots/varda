@@ -125,8 +125,34 @@ impl VardaApp {
                 Some(name) => self.cmd_set_sink_param(&output, &name, &ControlValue::Text(value)),
                 None => invalid(format!("output '{output}' has no setting at '{route}'")),
             },
+            Ok(ParamAddress::Deck {
+                deck,
+                target: crate::engine::value::param::DeckTarget::Source(route),
+            }) => match self.source_text_control(&deck, &route) {
+                Some(name) => self.execute_command(crate::engine::EngineCommand::SetSourceParam {
+                    deck_uuid: deck,
+                    name,
+                    value: ControlValue::Text(value),
+                }),
+                None => invalid(format!("deck '{deck}' has no text control at '{route}'")),
+            },
             _ => invalid(format!("'{path}' takes no text")),
         }
+    }
+
+    /// The name of the deck's text control at `route`, if it has one.
+    fn source_text_control(&self, deck_uuid: &str, route: &str) -> Option<String> {
+        let (ch, dk) = self.mixer.find_deck_by_uuid(deck_uuid)?;
+        self.mixer.channels()[ch].decks[dk]
+            .deck
+            .source()
+            .schema()
+            .iter()
+            .find(|s| {
+                s.route.as_deref() == Some(route)
+                    && matches!(s.kind, crate::source::ControlKind::Text { .. })
+            })
+            .map(|s| s.name.clone())
     }
 
     /// Create an output delivering through `sink`. Returns its UUID.

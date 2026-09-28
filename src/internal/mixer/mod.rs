@@ -673,7 +673,7 @@ impl Mixer {
             return channel.opacity;
         }
         let key = crate::arrangement::channel_opacity_param_key(channel.uuid());
-        let resolved = self.modulation.resolve(&key, None);
+        let resolved = self.modulation.resolve(&key);
         (resolved.absolute.unwrap_or(channel.opacity) + resolved.additive).clamp(0.0, 1.0)
     }
 
@@ -973,6 +973,39 @@ impl Mixer {
         self.modulation = engine;
     }
 
+    /// Whether the parameter at modulation key `key` is a color or a point.
+    pub fn component_kind(&self, key: &str) -> Option<crate::engine::value::param::ComponentKind> {
+        use crate::engine::value::param::{DeckTarget, ParamAddress};
+        match key.parse::<ParamAddress>().ok()? {
+            ParamAddress::Deck { deck, target } => {
+                let (ch, dk) = self.find_deck_by_uuid(&deck)?;
+                let deck = &self.channels[ch].decks[dk].deck;
+                match target {
+                    DeckTarget::Param(name) => deck.generator_params.component_kind(&name),
+                    DeckTarget::Source(route) => {
+                        crate::source::route_component_kind(deck.source(), &route)
+                    }
+                    _ => None,
+                }
+            }
+            ParamAddress::EffectParam { effect, param } => self
+                .effect_at(self.find_effect_by_uuid(&effect)?)?
+                .params
+                .component_kind(&param),
+            _ => None,
+        }
+    }
+
+    /// Rewrite modulation saved with a component index (before scene version
+    /// 9) to component paths, now that the targets exist to say whether each
+    /// is a color or a point. Returns how many were rewritten.
+    pub fn rekey_legacy_modulation(&mut self) -> usize {
+        let mut engine = std::mem::take(&mut self.modulation);
+        let rekeyed = engine.rekey_legacy_components(|key| self.component_kind(key));
+        self.modulation = engine;
+        rekeyed
+    }
+
     /// Replace the macro bank (used by persistence restore).
     pub fn set_macros(&mut self, macros: MacroBank) {
         self.macros = macros;
@@ -1043,7 +1076,6 @@ impl Mixer {
             &key,
             &uuid,
             1.0,
-            None,
             crate::modulation::AssignmentMode::Absolute,
         );
         self.arrangement
@@ -1605,7 +1637,7 @@ mod tests {
             .modulation_mut()
             .add_source(ModulationSource::sine_lfo(1.0));
         let key = Macro::value_mod_key(&macro_uuid);
-        mixer.modulation_mut().assign(&key, &src, 1.0, None);
+        mixer.modulation_mut().assign(&key, &src, 1.0);
         mixer.modulation_mut().update_free_running(
             0.25,
             &AudioValues::default(),
@@ -1677,8 +1709,8 @@ mod tests {
         let b = mixer
             .modulation_mut()
             .add_source(ModulationSource::sine_lfo(2.0));
-        mixer.modulation_mut().assign(&key, &a, 1.0, None);
-        mixer.modulation_mut().assign(&key, &b, 1.0, None);
+        mixer.modulation_mut().assign(&key, &a, 1.0);
+        mixer.modulation_mut().assign(&key, &b, 1.0);
         assert!(mixer.modulation().has_modulation(&key));
 
         // Removing one leaves the other intact.

@@ -190,13 +190,20 @@ impl SourceRegistry {
         query: &SourceQuery,
     ) -> DeckSourceSnapshot {
         let placeholder = instance.as_any().is::<UnavailableSource>();
-        let status = match self.get(instance.source_type()) {
+        let mut status = match self.get(instance.source_type()) {
             Some(provider) if !placeholder => provider.status(instance, query),
             _ => instance.status(),
         };
+        status.inactive.extend(
+            instance
+                .inactive()
+                .into_iter()
+                .map(|(name, reason)| (name.to_string(), reason.to_string())),
+        );
         DeckSourceSnapshot {
             source_type: instance.source_type().to_string(),
             available: !placeholder,
+            owns_alpha: instance.owns_alpha(),
             status,
         }
     }

@@ -66,7 +66,7 @@ impl Mixer {
             if !self.modulation.has_modulation(&key) {
                 continue;
             }
-            let resolved = self.modulation.resolve(&key, None);
+            let resolved = self.modulation.resolve(&key);
             // An absolute source replaces the macro's manual set point, so it is
             // expressed as the offset that lands on it. `modulated_fanout` keeps
             // the stored base untouched either way.
@@ -88,11 +88,7 @@ impl Mixer {
     /// the arrangement, because whether a clip is chasing decides whether a
     /// modulator may touch its playhead, and the arrangement is what puts a
     /// deck to sleep. See /spec/video-playback-modulation.md.
-    pub fn control_sources(
-        &mut self,
-        transport: Option<crate::timebase::TransportSample>,
-        target_fps: u32,
-    ) {
+    pub fn control_sources(&mut self, clock: crate::source::SourceClock, target_fps: u32) {
         // Disjoint field borrows: the engine is read while the decks it drives
         // are written.
         let modulation = &self.modulation;
@@ -101,7 +97,7 @@ impl Mixer {
             for slot in &mut channel.decks {
                 let awake = slot.source_demand.wants_frames();
                 slot.deck
-                    .control_source(modulation, awake, transport, target_fps, &mut scratch);
+                    .control_source(modulation, awake, clock, target_fps, &mut scratch);
             }
         }
     }
@@ -175,7 +171,7 @@ impl Mixer {
                     _ => crate::arrangement::SourceDemand::Unscheduled,
                 };
 
-                if let Some(value) = self.modulation.resolve(&key, None).absolute {
+                if let Some(value) = self.modulation.resolve(&key).absolute {
                     let opacity = value.clamp(0.0, 1.0);
                     self.channels[ch].decks[dk].opacity = opacity;
                     driven += 1;
@@ -412,7 +408,13 @@ impl Mixer {
         self.apply_arrangement(transport, preview_channels);
         // Last, because whether a clip is chasing decides whether a modulator
         // may touch its playhead, and the arrangement is what puts it to sleep.
-        self.control_sources(transport, target_fps);
+        let beat = timebases.get(crate::timebase::Timebase::Beat);
+        let clock = crate::source::SourceClock {
+            transport,
+            beat: beat.running.then_some(*beat),
+            dt: timebases.free_run().dt,
+        };
+        self.control_sources(clock, target_fps);
         let modulation_us = t_modulation.elapsed().as_micros();
 
         // Compute effective opacity per channel (stack-allocated for the common 2-channel case)

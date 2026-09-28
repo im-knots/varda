@@ -90,7 +90,15 @@ All parameters use the `/varda/` namespace with the same paths as MIDI:
 /varda/crossfader           0.5       → set crossfader to 0.5
 /varda/deck/abc123/opacity  0.8       → set deck opacity to 0.8
 /varda/deck/abc123/param/speed  0.5   → set shader parameter
+/varda/deck/abc123/color/r  1.0       → set one channel of a color
 /varda/action/undo          1.0       → trigger undo
+```
+
+A string sets a text control, such as a text deck's text:
+
+```
+/varda/deck/abc123/text     "hello"   → replace a text deck's text
+/varda/deck/abc123/line     "world"   → add a line to it
 ```
 
 Get entity UUIDs from the HTTP API (`GET /api/scene`).

@@ -10,6 +10,7 @@ const ORDER: &[&str] = &[
     // 1. Foundations
     "ids",
     "files",
+    "fonts",
     "isf",
     "audio",
     "notifications",
@@ -34,6 +35,7 @@ const ORDER: &[&str] = &[
     "output",
     "solid_color",
     "still",
+    "text",
     "camera",
     "ndi",
     "stream",

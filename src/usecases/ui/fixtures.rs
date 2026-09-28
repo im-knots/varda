@@ -21,6 +21,7 @@ fn shader_source() -> DeckSourceSnapshot {
     DeckSourceSnapshot {
         source_type: "Shader".into(),
         available: true,
+        owns_alpha: false,
         status: ControlStatus::default(),
     }
 }

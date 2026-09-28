@@ -22,6 +22,7 @@ mod popovers;
 mod right_panel;
 mod sequence;
 mod stage;
+mod text_deck;
 mod tonemap;
 pub(crate) mod utils;
 
@@ -497,6 +498,146 @@ mod tests {
             });
             let _ = harness;
         }
+    }
+
+    /// Selecting a text deck shows its controls in the bottom bar.
+    #[test]
+    fn a_selected_text_deck_shows_its_controls() {
+        use crate::source::{DeckSourceInstance, DeckSourceProvider};
+        use egui_kittest::kittest::Queryable;
+        let mut data = UIData::test_fixture();
+        let deck = crate::text::TextDeck::detached("hello");
+        let provider = crate::text::TextProvider;
+        let services = crate::source::Services::new();
+        let shaders = crate::registry::ShaderRegistry::new();
+        let query = crate::source::SourceQuery {
+            services: &services,
+            shaders: &shaders,
+            channels: &[],
+        };
+        let mut types = (*data.sources).clone();
+        types.push(crate::engine::value::provider::ProviderTypeSnapshot {
+            type_id: provider.id().into(),
+            label: provider.label().into(),
+            icon: provider.icon().into(),
+            available: true,
+            unavailable_reason: None,
+            listed: true,
+            params: provider.params().to_vec(),
+            library: provider.library(&query),
+        });
+        data.sources = std::sync::Arc::new(types);
+        let (ch, dk) = data.selected_deck.expect("fixture selects a deck");
+        let slot = data.channels[ch]
+            .decks
+            .iter_mut()
+            .find(|d| d.deck_idx == dk)
+            .expect("selected deck");
+        slot.source.source_type = "Text".into();
+        slot.source.owns_alpha = true;
+        slot.source.status = deck.status();
+        slot.source.status.inactive = deck
+            .inactive()
+            .into_iter()
+            .map(|(n, r)| (n.to_string(), r.to_string()))
+            .collect();
+        let size = egui::vec2(1910.0, 1100.0);
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(size)
+            .build_ui(|ui| {
+                let _ = render_ui(ui, &data);
+            });
+        harness.run();
+        let heading = harness.get_by_label_contains("Selected Deck").rect();
+        assert!(
+            heading.min.y > 0.0 && heading.max.y < size.y,
+            "the bottom bar is on screen: {heading:?}"
+        );
+        let control = harness.get_by_label_contains("Text:").rect();
+        assert!(
+            control.min.y > heading.max.y && control.min.y < size.y,
+            "the text deck's controls are in the bar: {control:?}"
+        );
+        // The dedicated layout: its columns, side by side.
+        let columns = ["Speaker colors", "Vertical", "Transition", "Always"]
+            .map(|control| harness.get_by_label(control).rect());
+        assert!(
+            columns.windows(2).all(|pair| pair[0].min.x < pair[1].min.x),
+            "columns run left to right: {columns:?}"
+        );
+        harness.get_by_label_contains("Load");
+
+        // Collapsing a column hides its controls and leaves its strip.
+        let deck_uuid = data.channels[ch]
+            .decks
+            .iter()
+            .find(|d| d.deck_idx == dk)
+            .map(|d| d.uuid.clone())
+            .expect("selected deck");
+        harness.ctx.memory_mut(|mem| {
+            mem.data.insert_temp(
+                egui::Id::new(("text_col_open", ("style_col", deck_uuid.as_str()))),
+                false,
+            );
+        });
+        harness.run();
+        assert!(harness.query_by_label("Speaker colors").is_none());
+        harness.get_by_label("Transition");
+    }
+
+    /// Switching the selection from a shader deck to a text deck keeps the
+    /// bottom bar open.
+    #[test]
+    fn switching_to_a_text_deck_keeps_the_bottom_bar() {
+        use crate::source::{DeckSourceInstance, DeckSourceProvider};
+        use egui_kittest::kittest::Queryable;
+        let mut data = UIData::test_fixture();
+        let deck = crate::text::TextDeck::detached("TEXT");
+        let provider = crate::text::TextProvider;
+        let services = crate::source::Services::new();
+        let shaders = crate::registry::ShaderRegistry::new();
+        let query = crate::source::SourceQuery {
+            services: &services,
+            shaders: &shaders,
+            channels: &[],
+        };
+        let mut types = (*data.sources).clone();
+        types.push(crate::engine::value::provider::ProviderTypeSnapshot {
+            type_id: provider.id().into(),
+            label: provider.label().into(),
+            icon: provider.icon().into(),
+            available: true,
+            unavailable_reason: None,
+            listed: true,
+            params: provider.params().to_vec(),
+            library: provider.library(&query),
+        });
+        data.sources = std::sync::Arc::new(types);
+        let slot = &mut data.channels[0].decks[1];
+        slot.source.source_type = "Text".into();
+        slot.source.owns_alpha = true;
+        slot.source.status = deck.status();
+        let text_idx = slot.deck_idx;
+        data.selected_deck = Some((0, 0));
+
+        let size = egui::vec2(1910.0, 1100.0);
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(size)
+            .build_ui_state(
+                |ui, data: &mut UIData| {
+                    let _ = render_ui(ui, data);
+                },
+                data,
+            );
+        harness.run();
+        let before = harness.get_by_label_contains("Selected Deck").rect();
+        harness.state_mut().selected_deck = Some((0, text_idx));
+        for _ in 0..10 {
+            harness.step();
+        }
+        let after = harness.get_by_label_contains("Selected Deck").rect();
+        assert_eq!(before, after, "the bar stays where it was");
+        harness.get_by_label_contains("Text:");
     }
 
     /// Smoke test: `render_ui` with empty channels doesn't panic.

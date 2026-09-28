@@ -18,6 +18,7 @@ The panel is a stack of collapsible sections, in this order:
 | **📡 NDI** | Discovered NDI senders, with a **🔄 Rescan** button. |
 | **📺 SRT**, **📡 HLS**, **📡 DASH**, **📺 RTMP** | Saved stream URLs, one section per protocol (see below). |
 | **🌐 HTML Sources** | Web pages (HTML/CSS/JS) rendered by Servo (see below). |
+| **T Text** | A text deck (see below). |
 | **🔗 Syphon** / **🔗 Spout** | Discovered Syphon servers (macOS) or Spout senders (Windows), with a **🔄 Rescan** button. Shown only on the platform that supports them. |
 | **🔮 Effects** | ISF filter shaders for effect chains. |
 | **💾 Deck Presets** | Saved deck presets (shown only when presets exist). |
@@ -110,6 +111,57 @@ The **🔁 Taps** section feeds Varda's own output back in as a deck source. It 
 - Select a tap deck to get a **Source** dropdown in the deck detail panel. Use it to repoint the tap without recreating the deck.
 
 See [Program Tap](09-streaming-and-io.md#program-tap) for frame timing, feedback behavior, and the API.
+
+## Text
+
+A text deck draws words, lyrics or captions in any font installed on the machine.
+
+- Drag **Text** onto a channel to create a deck showing `TEXT`. Type your own text in the deck detail panel. The editor saves when you click away or press **Cmd/Ctrl+Enter**. **Enter** starts a new line.
+- **📁 Load** next to the format in the deck detail panel replaces the deck's text with a file: plain text (`.txt`), lyrics (`.lrc`, including word timing tags), or captions (`.vtt` WebVTT, `.srt` SubRip). The file's contents are copied into the deck; later changes to the file do not show up.
+- The deck detail panel groups the controls into **Text**, **Style**, **Layout**, **Motion** and **Transport** columns. Each column scrolls on its own when the bar is short. Click a column's title to fold it into a narrow strip, and click the strip to open it again.
+- Problems in a timed file (a line without a timestamp, a bad cue timing) are listed under the editor with their line numbers. The rest of the file still loads.
+
+### Modes
+
+| Mode | What it shows |
+|------|---------------|
+| **Static** | All lines as one block. |
+| **Crawl** | All lines, moving up. |
+| **Ticker** | All lines in one row, moving left. |
+| **Step** | One unit at a time. **Unit** picks a line (a whole cue in a caption file) or a single word. |
+
+**Speed** is in units per second with the **Rate** clock, or units per beat with the **Beat** clock (0.25 steps once per bar in 4/4). A negative speed runs backwards. With **Loop** on, the text starts again after the end; with it off, Step holds the last unit and Crawl and Ticker end empty. **Next**, **Previous** and **Restart** step by hand. Map them to MIDI pads to cue lyrics live with speed at 0.
+
+### Transitions
+
+In Step, **Transition** sets how one unit replaces the next: **Cut**, **Fade**, **Roll-up** (a window of 1 to 4 lines, the newest at the bottom, moving up as each line arrives) or **Paint-on** (revealed left to right). **Transition time** is in seconds with the Rate clock and beats with the Beat clock. A caption with an end time leaves the same way. Crawl and Ticker move continuously and ignore the transition.
+
+### Timecode
+
+A text deck follows the show transport like a video deck does (**Chase**: Auto, Always, Never; **Chase offset**; **Chase delay**). Plain text moves at its speed from the offset, so the same show position always shows the same line. LRC, WebVTT and SubRip files cue each line at its timestamp, and each word where the file has word timing. Word timing only lines up with the singer when the transport is locked to the track, from LTC or MTC sent by the playback rig or from an arrangement. See [Arrangement](15-arrangement.md).
+
+### Placement and speakers
+
+A WebVTT file whose cues set `position`, `line` or `align` places every cue itself in Step. The deck's **Position**, **Align** and **Vertical** controls are then grayed out; hover one to see why. `<v Name>` speaker tags color each cue: the first four speakers use **Speaker 1** to **Speaker 4 color**, and a fifth reuses the first.
+
+### Fonts and colors
+
+**Font** lists the fonts installed on this machine. A scene that names a font this machine lacks draws in the default sans-serif and says so under the Font control; it goes back to the named font on a machine that has it. **Weight** runs from 100 (thin) to 900 (black); variable fonts draw every weight in between. **Size** is the height of a line as a fraction of the deck, so text looks the same at any resolution.
+
+The deck draws **Color** text over the **Background** color, white on black by default. Lower the background's alpha in its color picker for a transparent background. For a knockout over lower decks, keep the black background and set the deck's blend mode to **Subtract**.
+
+Size, weight, speed, scroll, transition time, line spacing, position and every color can be modulated, automated and mapped to MIDI. Colors and position are mapped one channel or axis at a time (see [Per-Component Modulation](05-modulation.md#per-component-modulation)).
+
+### Live text over OSC
+
+Send an OSC string to replace the text, or to add a line at the bottom:
+
+```
+/varda/deck/<uuid>/text  "Whole new lyric sheet"
+/varda/deck/<uuid>/line  "next caption line"
+```
+
+`line` works on plain text only. With Step and Roll-up it shows a live caption window driven by another application. The oldest lines are dropped when the deck's text reaches 64 KiB.
 
 ## Presets
 

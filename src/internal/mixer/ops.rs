@@ -478,7 +478,7 @@ mod tests {
             crate::engine::value::param::DeckTarget::Opacity,
         )
         .to_string();
-        mixer.modulation_mut().assign(&key, &source, 1.0, None);
+        mixer.modulation_mut().assign(&key, &source, 1.0);
 
         let slot = mixer.remove_deck(&deck).unwrap();
         assert_eq!(slot.deck.uuid(), deck);

@@ -30,10 +30,11 @@ pub use crate::source::ScalingMode;
 
 // Tier 1 — engine-owned value types (see `crate::engine::value`).
 pub use crate::engine::value::render::OutputSource;
+pub use crate::engine::value::source::{DeckTransportSync, TransportSyncMode};
 pub use crate::engine::value::surface::{
     CircleHint, ContentMapping, CubicHandle, SurfaceOutputType, SurfacePath, SurfaceReorderOp,
 };
-pub use crate::engine::value::video::{DeckTransportSync, LoopMode, TransportSyncMode};
+pub use crate::engine::value::video::LoopMode;
 
 pub use crate::engine::value::entity::EffectTarget;
 
@@ -1170,6 +1171,7 @@ mod tests {
             source: crate::engine::value::source::DeckSourceSnapshot {
                 source_type: "DepthSensor".into(),
                 available: true,
+                owns_alpha: false,
                 status: crate::engine::value::provider::ControlStatus::default(),
             },
             is_interactive: false,

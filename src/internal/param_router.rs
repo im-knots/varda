@@ -193,6 +193,11 @@ fn toggle_transparent(mixer: &mut Mixer, uuid: &str) -> Result<(), ParamRouteErr
 }
 
 fn read_normalized(params: &crate::ShaderParams, name: &str) -> Option<f32> {
+    if let Some((base, component)) = crate::engine::value::param::Component::split(name)
+        && params.component_kind(base) == Some(component.kind())
+    {
+        return params.component(base, component);
+    }
     let value = params.values.get(name)?;
     params
         .normalize(name, value)
@@ -736,6 +741,13 @@ fn apply_mod_param(
 
 /// Apply a normalized 0.0–1.0 value to a float param, scaling to the param's min/max range.
 fn apply_float_param_scaled(params: &mut crate::ShaderParams, name: &str, normalized: f32) {
+    // `tint/r`: one channel of a color or axis of a point.
+    if let Some((base, component)) = crate::engine::value::param::Component::split(name)
+        && params.component_kind(base) == Some(component.kind())
+    {
+        params.set_component(base, component, normalized);
+        return;
+    }
     if let Some(def) = params.definitions.get(name) {
         let min = def.min.unwrap_or(0.0);
         let max = def.max.unwrap_or(1.0);
@@ -1040,6 +1052,41 @@ mod tests {
             }
             other => panic!("expected Color, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_component_path_writes_one_channel_of_a_shader_color() {
+        let mut params = color_params();
+        let tint = |params: &crate::ShaderParams| match params.values.get("tint") {
+            Some(ParamValue::Color(c)) => *c,
+            other => panic!("tint is a color, got {other:?}"),
+        };
+        apply_float_param_scaled(&mut params, "tint/g", 0.6);
+        assert_eq!(tint(&params), [0.0, 0.6, 0.0, 1.0]);
+        assert_eq!(read_normalized(&params, "tint/g"), Some(0.6));
+        assert_eq!(read_normalized(&params, "tint/a"), Some(1.0));
+        // A point suffix on a color, or a suffix on nothing, writes nothing.
+        apply_float_param_scaled(&mut params, "tint/x", 0.9);
+        apply_float_param_scaled(&mut params, "nope/r", 0.9);
+        assert_eq!(tint(&params), [0.0, 0.6, 0.0, 1.0]);
+        assert_eq!(read_normalized(&params, "tint/x"), None);
+    }
+
+    #[test]
+    fn shader_color_modulation_resolves_per_component_path() {
+        use crate::modulation::{AnalyzerValues, AudioValues, ModulationEngine, ModulationSource};
+        let mut params = color_params();
+        let mut engine = ModulationEngine::new();
+        let uuid = engine.add_source(ModulationSource::sine_lfo(1.0));
+        engine.update_free_running(0.25, &AudioValues::default(), &AnalyzerValues::default());
+        engine.assign("deck/d1/param/tint/b", &uuid, 1.0);
+        let Some(ParamValue::Color(c)) =
+            params.get_modulated("tint", &engine, Some("deck/d1/param"))
+        else {
+            panic!("tint is a color");
+        };
+        assert!(c[2] > 0.0, "blue is modulated: {c:?}");
+        assert_eq!([c[0], c[1], c[3]], [0.0, 0.0, 1.0]);
     }
 
     // ── Declared-type coercion for typed param writes ─────────────────

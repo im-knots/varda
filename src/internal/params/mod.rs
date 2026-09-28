@@ -1,5 +1,6 @@
 //! Shader parameter system for ISF user inputs
 
+use crate::engine::value::param::{Component, ComponentKind};
 use crate::isf::ISFInput;
 use crate::modulation::ModulationEngine;
 use serde::{Deserialize, Serialize};
@@ -266,7 +267,7 @@ impl ShaderParams {
         self.mod_key_scratch.push_str(name);
 
         match Self::apply_modulation_to_value_with_key(
-            &self.mod_key_scratch,
+            &mut self.mod_key_scratch,
             base,
             modulation,
             self.definitions.get(name),
@@ -295,7 +296,7 @@ impl ShaderParams {
         }
         self.mod_key_scratch.push_str(name);
         Some(Self::apply_modulation_to_value_with_key(
-            &self.mod_key_scratch,
+            &mut self.mod_key_scratch,
             base,
             modulation,
             self.definitions.get(name),
@@ -500,6 +501,38 @@ impl ShaderParams {
         }
     }
 
+    /// Whether the parameter `name` is a color or a point.
+    pub fn component_kind(&self, name: &str) -> Option<ComponentKind> {
+        match self.values.get(name)? {
+            ParamValue::Color(_) => Some(ComponentKind::Color),
+            ParamValue::Point2D(_) => Some(ComponentKind::Point),
+            _ => None,
+        }
+    }
+
+    /// One component of a color or point, as a fader reads it: a color
+    /// channel as is, a point axis as its raw value (point2D inputs declare
+    /// no scalar range).
+    pub fn component(&self, name: &str, component: Component) -> Option<f32> {
+        match self.values.get(name)? {
+            ParamValue::Color(c) => component.read(c),
+            ParamValue::Point2D(p) => component.read(p),
+            _ => None,
+        }
+    }
+
+    /// Replace one component of a color or point. A color channel is clamped
+    /// to 0.0–1.0. False when `name` is not that kind of parameter.
+    pub fn set_component(&mut self, name: &str, component: Component, value: f32) -> bool {
+        let written = match self.values.get_mut(name) {
+            Some(ParamValue::Color(c)) => component.write(c, value.clamp(0.0, 1.0)),
+            Some(ParamValue::Point2D(p)) => component.write(p, value),
+            _ => false,
+        };
+        self.dirty |= written;
+        written
+    }
+
     /// Reset all parameters to their default values from ISF definitions
     pub fn reset_to_defaults(&mut self) {
         for name in &self.param_order {
@@ -677,7 +710,7 @@ impl ShaderParams {
                 self.mod_key_scratch.push_str(name);
 
                 let modulated = Self::apply_modulation_to_value_with_key(
-                    &self.mod_key_scratch,
+                    &mut self.mod_key_scratch,
                     value,
                     modulation,
                     self.definitions.get(name.as_str()),
@@ -695,15 +728,17 @@ impl ShaderParams {
     }
 
     /// Apply modulation to a parameter value using a pre-built modulation key.
+    /// Color and point components resolve `<key>/r` and the like; `mod_key`
+    /// is extended for each and restored before returning.
     fn apply_modulation_to_value_with_key(
-        mod_key: &str,
+        mod_key: &mut String,
         value: &ParamValue,
         modulation: &ModulationEngine,
         definition: Option<&ISFInput>,
     ) -> ParamValue {
         match value {
             ParamValue::Float(base) => {
-                let resolved = modulation.resolve(mod_key, None);
+                let resolved = modulation.resolve(mod_key);
                 if resolved.additive == 0.0 && resolved.absolute.is_none() {
                     return *value;
                 }
@@ -724,30 +759,38 @@ impl ShaderParams {
             }
             ParamValue::Color(base) => {
                 let mut result = *base;
-                for (i, comp) in result.iter_mut().enumerate() {
-                    let resolved = modulation.resolve(mod_key, Some(i));
-                    if let Some(absolute) = resolved.absolute {
-                        *comp = absolute;
-                    }
-                    if resolved.additive != 0.0 {
-                        *comp += resolved.additive;
-                    }
+                Self::modulate_components(mod_key, ComponentKind::Color, &mut result, modulation);
+                for comp in &mut result {
                     *comp = comp.clamp(0.0, 1.0);
                 }
                 ParamValue::Color(result)
             }
             ParamValue::Point2D(base) => {
                 let mut result = *base;
-                for (i, comp) in result.iter_mut().enumerate() {
-                    let resolved = modulation.resolve(mod_key, Some(i));
-                    if let Some(absolute) = resolved.absolute {
-                        *comp = absolute;
-                    }
-                    *comp += resolved.additive;
-                }
+                Self::modulate_components(mod_key, ComponentKind::Point, &mut result, modulation);
                 ParamValue::Point2D(result)
             }
             _ => *value,
+        }
+    }
+
+    /// Apply each component's modulation, resolved at `<key>/<suffix>`.
+    fn modulate_components(
+        mod_key: &mut String,
+        kind: ComponentKind,
+        values: &mut [f32],
+        modulation: &ModulationEngine,
+    ) {
+        let base_len = mod_key.len();
+        for &component in kind.components() {
+            component.push_suffix(mod_key);
+            let resolved = modulation.resolve(mod_key);
+            mod_key.truncate(base_len);
+            let comp = &mut values[component.index()];
+            if let Some(absolute) = resolved.absolute {
+                *comp = absolute;
+            }
+            *comp += resolved.additive;
         }
     }
 
@@ -1334,7 +1377,7 @@ mod tests {
             &crate::modulation::AudioValues::default(),
             &crate::modulation::AnalyzerValues::default(),
         );
-        engine.assign("brightness", &uuid, 0.5, None);
+        engine.assign("brightness", &uuid, 0.5);
 
         let modulated = params.build_modulated_buffer_data(&engine, None).to_vec();
         let base = params.build_buffer_data().to_vec();
@@ -1348,7 +1391,7 @@ mod tests {
         let mut params = ShaderParams::from_inputs(&inputs);
         let mut engine = ModulationEngine::new();
         let uuid = engine.add_source(pinned_source(1.0));
-        engine.assign("deck0/speed", &uuid, 0.5, None);
+        engine.assign("deck0/speed", &uuid, 0.5);
         engine.update_free_running(
             0.0,
             &crate::modulation::AudioValues::default(),
@@ -1399,7 +1442,7 @@ mod tests {
             let mut params = ShaderParams::from_inputs(&inputs);
             let mut engine = ModulationEngine::new();
             let uuid = engine.add_source(pinned_source(ramp));
-            engine.assign("deck0/speed", &uuid, amount, None);
+            engine.assign("deck0/speed", &uuid, amount);
             engine.update_free_running(
                 0.0,
                 &crate::modulation::AudioValues::default(),
@@ -1448,7 +1491,7 @@ mod tests {
             amplitude: 1.0,
             bipolar,
         });
-        engine.assign("deck0/speed", &uuid, DEFAULT_ASSIGNMENT_AMOUNT, None);
+        engine.assign("deck0/speed", &uuid, DEFAULT_ASSIGNMENT_AMOUNT);
 
         let mut pinned = 0;
         let (mut lo, mut hi) = (f32::MAX, f32::MIN);
@@ -1554,7 +1597,7 @@ mod tests {
                 mode,
                 noise_gate: 0.0,
             });
-            engine.assign("deck0/speed", &uuid, DEFAULT_ASSIGNMENT_AMOUNT, None);
+            engine.assign("deck0/speed", &uuid, DEFAULT_ASSIGNMENT_AMOUNT);
 
             let (mut lo, mut hi) = (f32::MAX, f32::MIN);
             // Long enough for the ramp to cross the full 0..1 span at the
@@ -1617,7 +1660,7 @@ mod tests {
             &crate::modulation::AnalyzerValues::default(),
         );
         // Assign with prefix "deck0/brightness"
-        engine.assign("deck0/brightness", &uuid, 0.5, None);
+        engine.assign("deck0/brightness", &uuid, 0.5);
 
         let modulated = params
             .build_modulated_buffer_data(&engine, Some("deck0"))

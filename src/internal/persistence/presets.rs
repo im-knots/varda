@@ -286,12 +286,12 @@ mod tests {
                 ModulationRecipeAssignment {
                     param: "brightness".into(),
                     amount: 0.5,
-                    component: None,
+                    legacy_component: None,
                 },
                 ModulationRecipeAssignment {
                     param: "fx0:amount".into(),
                     amount: 0.3,
-                    component: None,
+                    legacy_component: None,
                 },
             ],
         }];
@@ -322,15 +322,21 @@ mod tests {
             assignments: vec![ModulationRecipeAssignment {
                 param: "scale".into(),
                 amount: -0.8,
-                component: Some(1),
+                legacy_component: Some(1),
             }],
         }];
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("\"modulation\""));
         assert!(json.contains("\"scale\""));
+        // A component index is read from older files, never written.
+        assert!(!json.contains("\"component\""));
         let deser: DeckConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(deser.modulation.len(), 1);
-        assert_eq!(deser.modulation[0].assignments[0].component, Some(1));
+        assert_eq!(deser.modulation[0].assignments[0].legacy_component, None);
+
+        let old = json.replace("\"amount\":-0.8", "\"amount\":-0.8,\"component\":1");
+        let deser: DeckConfig = serde_json::from_str(&old).unwrap();
+        assert_eq!(deser.modulation[0].assignments[0].legacy_component, Some(1));
     }
 
     #[test]

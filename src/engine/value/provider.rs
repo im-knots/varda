@@ -219,14 +219,35 @@ pub enum ControlKind {
     Toggle,
     /// One of `options`, written as a normalized fader bucketed into
     /// `options.len()` equal steps.
-    Choice {
-        options: Vec<String>,
-    },
+    Choice { options: Vec<String> },
+    /// An RGBA color. Routed, its channels are faders at `<route>/r` to
+    /// `<route>/a`.
     Color,
-    /// Free text, such as a URL.
-    Text,
+    /// A 2D point, written as [`ControlValue::Point`]. Routed, its axes are
+    /// faders at `<route>/x` and `<route>/y`, normalized against
+    /// `display_min`/`display_max`.
+    Point { display_min: f32, display_max: f32 },
+    /// Free text, such as a URL. `multiline` text is edited as a block.
+    Text {
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        multiline: bool,
+    },
+    /// A write-only path to a file with one of `extensions`, written as
+    /// [`ControlValue::Text`]. The source decides what the path means.
+    File { extensions: Vec<String> },
     /// A momentary action: a write above 0.5 fires it.
     Action,
+}
+
+impl ControlKind {
+    /// Whether values of this kind have components, and which.
+    pub fn component_kind(&self) -> Option<super::param::ComponentKind> {
+        match self {
+            Self::Color => Some(super::param::ComponentKind::Color),
+            Self::Point { .. } => Some(super::param::ComponentKind::Point),
+            _ => None,
+        }
+    }
 }
 
 /// A group of parameters a consumer may draw as one richer control.
@@ -250,6 +271,13 @@ pub enum WidgetHint {
     /// An audio input picker over a text parameter holding the device's
     /// name, with none meaning silent.
     AudioDevice,
+    /// Every control of a text deck, drawn as the GUI's dedicated text deck
+    /// layout. See /spec/text-source.md § Deck controls.
+    TextDeck,
+    /// A font family picker over a text parameter holding the family name.
+    /// The families come from the source type's library entry config
+    /// (`font_families`).
+    FontFamily,
 }
 
 /// One control a source type declares.
@@ -325,8 +353,34 @@ impl ControlSpec {
         Self::new(name, label, ControlKind::Color)
     }
 
+    pub fn point(name: &str, label: &str, display_min: f32, display_max: f32) -> Self {
+        Self::new(
+            name,
+            label,
+            ControlKind::Point {
+                display_min,
+                display_max,
+            },
+        )
+    }
+
     pub fn text(name: &str, label: &str) -> Self {
-        Self::new(name, label, ControlKind::Text)
+        Self::new(name, label, ControlKind::Text { multiline: false })
+    }
+
+    /// Text edited as a block of lines.
+    pub fn text_block(name: &str, label: &str) -> Self {
+        Self::new(name, label, ControlKind::Text { multiline: true })
+    }
+
+    pub fn file(name: &str, label: &str, extensions: &[&str]) -> Self {
+        Self::new(
+            name,
+            label,
+            ControlKind::File {
+                extensions: extensions.iter().map(|e| (*e).to_string()).collect(),
+            },
+        )
     }
 
     pub fn action(name: &str, label: &str) -> Self {
@@ -387,6 +441,12 @@ pub struct ControlStatus {
     /// Whether frames are arriving. `None` when that is not meaningful.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connected: Option<bool>,
+    /// Controls that currently have no effect, with the reason, by name.
+    /// Writes to them are still stored. See /spec/deck-source-providers.md
+    /// § Inactive controls.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    #[schema(value_type = Object)]
+    pub inactive: std::collections::BTreeMap<String, String>,
 }
 
 /// One row a library section offers.
@@ -480,6 +540,11 @@ pub struct LibrarySection {
     /// A short note next to the heading, such as `(SDK not found)`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Choices a picker widget offers for a control, by control name, when
+    /// they depend on the host (the installed font families).
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    #[schema(value_type = Object)]
+    pub options: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// A registered source type, published once per snapshot.

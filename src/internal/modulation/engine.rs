@@ -125,7 +125,7 @@ impl ModulationEngine {
     pub fn add_automation_lane(&mut self, target: &str, timebase: Timebase) -> String {
         let uuid = self.add_source(ModulationSource::envelope(Vec::new()));
         self.set_timebase(&uuid, timebase);
-        self.assign_with_mode(target, &uuid, 1.0, None, AssignmentMode::Absolute);
+        self.assign_with_mode(target, &uuid, 1.0, AssignmentMode::Absolute);
         uuid
     }
 
@@ -179,20 +179,30 @@ impl ModulationEngine {
         }
     }
 
-    pub fn assign(
+    /// Re-apply an assignment read from a preset or clipboard, keeping a
+    /// component index saved before scene version 9 for
+    /// [`Self::rekey_legacy_components`].
+    pub fn assign_saved(
         &mut self,
         param_name: &str,
         source_id: &str,
         amount: f32,
-        component: Option<usize>,
+        legacy_component: Option<usize>,
     ) {
-        self.assign_with_mode(
-            param_name,
-            source_id,
-            amount,
-            component,
-            AssignmentMode::default(),
-        );
+        self.assign(param_name, source_id, amount);
+        if legacy_component.is_some()
+            && let Some(last) = self
+                .assignments
+                .get_mut(param_name)
+                .and_then(|mods| mods.last_mut())
+                .filter(|m| m.source_id == source_id)
+        {
+            last.legacy_component = legacy_component;
+        }
+    }
+
+    pub fn assign(&mut self, param_name: &str, source_id: &str, amount: f32) {
+        self.assign_with_mode(param_name, source_id, amount, AssignmentMode::default());
     }
 
     /// Assign with an explicit mode. Envelopes want `Absolute`, so that a curve
@@ -203,7 +213,6 @@ impl ModulationEngine {
         param_name: &str,
         source_id: &str,
         amount: f32,
-        component: Option<usize>,
         mode: AssignmentMode,
     ) {
         if !self.uuid_to_idx.contains_key(source_id) {
@@ -215,14 +224,65 @@ impl ModulationEngine {
         let modulation = ParamModulation {
             source_id: source_id.to_string(),
             amount,
-            component,
             mode,
+            legacy_component: None,
         };
         self.assignments
             .entry(param_name.to_string())
             .or_default()
             .push(modulation);
         self.invalidate_order();
+    }
+
+    /// Rewrite assignments saved with a component index (before scene
+    /// version 9) to their component path, `<key>/r` or `<key>/x`, using
+    /// `kind_of` to tell a color from a point. Assignments whose target is
+    /// neither, or whose index is out of range, are dropped with a warning.
+    /// Returns how many were rewritten.
+    pub fn rekey_legacy_components(
+        &mut self,
+        kind_of: impl Fn(&str) -> Option<crate::engine::value::param::ComponentKind>,
+    ) -> usize {
+        let keys: Vec<String> = self
+            .assignments
+            .iter()
+            .filter(|(_, mods)| mods.iter().any(|m| m.legacy_component.is_some()))
+            .map(|(key, _)| key.clone())
+            .collect();
+        let mut rekeyed = 0;
+        for key in keys {
+            let Some(mods) = self.assignments.get_mut(&key) else {
+                continue;
+            };
+            let (legacy, kept): (Vec<_>, Vec<_>) = std::mem::take(mods)
+                .into_iter()
+                .partition(|m| m.legacy_component.is_some());
+            if kept.is_empty() {
+                self.assignments.remove(&key);
+            } else {
+                *mods = kept;
+            }
+            let kind = kind_of(&key);
+            for mut m in legacy {
+                let index = m.legacy_component.take().unwrap_or_default();
+                let Some(component) = kind.and_then(|k| k.component(index)) else {
+                    log::warn!(
+                        "Dropped modulation on '{key}' component {index}: the target is not a color or point"
+                    );
+                    continue;
+                };
+                self.assignments
+                    .entry(component.path(&key))
+                    .or_default()
+                    .push(m);
+                rekeyed += 1;
+            }
+        }
+        if rekeyed > 0 {
+            log::info!("Rewrote {rekeyed} component modulation assignment(s) to component paths");
+            self.invalidate_order();
+        }
+        rekeyed
     }
 
     pub fn assign_mod_on_mod(
@@ -235,7 +295,7 @@ impl ModulationEngine {
         let key =
             crate::engine::value::param::ParamAddress::modulator_param(target_uuid, param_name)
                 .to_string();
-        self.assign(&key, modulator_uuid, amount, None);
+        self.assign(&key, modulator_uuid, amount);
         // assign() already calls invalidate_order()
     }
 
@@ -607,12 +667,7 @@ impl ModulationEngine {
 
     /// Get the total modulation offset for a scalar parameter
     pub fn get_modulation(&self, param_name: &str) -> f32 {
-        self.get_modulation_for_component(param_name, None)
-    }
-
-    /// Get the total modulation offset for a specific component (color params)
-    pub fn get_modulation_for_component(&self, param_name: &str, component: Option<usize>) -> f32 {
-        self.resolve(param_name, component).additive
+        self.resolve(param_name).additive
     }
 
     /// Resolve every assignment on a parameter in one pass.
@@ -621,7 +676,7 @@ impl ModulationEngine {
     /// assignment list is looked up by string key: splitting this into two
     /// entry points would double the hash lookups on a per-parameter,
     /// per-frame path. See /spec/automation.md § Absolute vs Additive.
-    pub fn resolve(&self, param_name: &str, component: Option<usize>) -> ResolvedModulation {
+    pub fn resolve(&self, param_name: &str) -> ResolvedModulation {
         let mut out = ResolvedModulation::default();
         let Some(mods) = self.assignments.get(param_name) else {
             return out;
@@ -631,7 +686,9 @@ impl ModulationEngine {
         // would stop it too.
         let override_record = self.overrides.get(param_name).copied();
         for m in mods {
-            if m.component != component {
+            // Waiting to be rewritten to its component path; see
+            // `rekey_legacy_components`.
+            if m.legacy_component.is_some() {
                 continue;
             }
             let idx = if let Some(&i) = self.uuid_to_idx.get(&m.source_id) {

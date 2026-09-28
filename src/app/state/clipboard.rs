@@ -348,6 +348,7 @@ impl VardaApp {
         chain_effects.insert(at, effect);
 
         apply_modulation_recipes(&modulation, "", self.mixer.modulation_mut());
+        self.mixer.rekey_legacy_modulation();
         CommandResult::OkWithId { uuid }
     }
 
@@ -421,6 +422,7 @@ impl VardaApp {
         // After the effects exist, since the recipes name them.
         if !config.modulation.is_empty() {
             apply_modulation_recipes(&config.modulation, "", self.mixer.modulation_mut());
+            self.mixer.rekey_legacy_modulation();
         }
         ok
     }
