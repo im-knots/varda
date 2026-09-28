@@ -26,7 +26,8 @@ use ffmpeg::util::frame::video::Video;
 /// Loop mode for video playback. Definition lives in `engine::value::video`
 /// (see /spec/engine-value-types.md); re-exported here so existing
 /// `crate::video::LoopMode` call sites keep working.
-pub use crate::engine::value::video::{DeckTransportSync, LoopMode, TransportSyncMode};
+pub use crate::engine::value::source::{DeckTransportSync, TransportSyncMode};
+pub use crate::engine::value::video::LoopMode;
 pub use chase::{ChaseInbox, VideoChaseBroadcast};
 pub use modulation::{
     PlaybackModulation, PlaybackModulationInbox, PositionTarget as ModulatedPosition,

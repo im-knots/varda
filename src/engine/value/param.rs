@@ -43,6 +43,119 @@ pub fn modulator_prefix(source: &str) -> String {
     format!("mod/{source}/")
 }
 
+/// Whether a value with components is a color or a point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComponentKind {
+    Color,
+    Point,
+}
+
+impl ComponentKind {
+    pub fn components(self) -> &'static [Component] {
+        match self {
+            Self::Color => &[Component::R, Component::G, Component::B, Component::A],
+            Self::Point => &[Component::X, Component::Y],
+        }
+    }
+
+    /// The component at `index`, for keys saved with an index before scene
+    /// version 9.
+    pub fn component(self, index: usize) -> Option<Component> {
+        self.components().get(index).copied()
+    }
+}
+
+/// One channel of a color or one axis of a point, addressed by a path suffix
+/// (`.../color/r`, `.../param/offset/x`). Source controls and shader
+/// parameters use the same suffixes. See /spec/deck-source-providers.md
+/// § One component vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Component {
+    R,
+    G,
+    B,
+    A,
+    X,
+    Y,
+}
+
+impl Component {
+    pub fn kind(self) -> ComponentKind {
+        match self {
+            Self::R | Self::G | Self::B | Self::A => ComponentKind::Color,
+            Self::X | Self::Y => ComponentKind::Point,
+        }
+    }
+
+    /// Position in the value's array: `[r, g, b, a]` or `[x, y]`.
+    pub fn index(self) -> usize {
+        match self {
+            Self::R | Self::X => 0,
+            Self::G | Self::Y => 1,
+            Self::B => 2,
+            Self::A => 3,
+        }
+    }
+
+    pub fn suffix(self) -> &'static str {
+        match self {
+            Self::R => "r",
+            Self::G => "g",
+            Self::B => "b",
+            Self::A => "a",
+            Self::X => "x",
+            Self::Y => "y",
+        }
+    }
+
+    /// Split `base/<suffix>` into the base and the component. `None` when the
+    /// last segment is not a component suffix. The caller decides whether the
+    /// base names a color or point; only then is the suffix a component.
+    pub fn split(path: &str) -> Option<(&str, Self)> {
+        let (base, suffix) = path.rsplit_once(PARAM_KEY_SEPARATOR)?;
+        let component = match suffix {
+            "r" => Self::R,
+            "g" => Self::G,
+            "b" => Self::B,
+            "a" => Self::A,
+            "x" => Self::X,
+            "y" => Self::Y,
+            _ => return None,
+        };
+        (!base.is_empty()).then_some((base, component))
+    }
+
+    /// `base/<suffix>`.
+    pub fn path(self, base: &str) -> String {
+        format!("{base}{PARAM_KEY_SEPARATOR}{}", self.suffix())
+    }
+
+    /// Append `/<suffix>` to `key`, for building keys in a reused buffer.
+    pub fn push_suffix(self, key: &mut String) {
+        key.push(PARAM_KEY_SEPARATOR);
+        key.push_str(self.suffix());
+    }
+
+    /// This component of `values`, when `values` is the kind it belongs to.
+    pub fn read(self, values: &[f32]) -> Option<f32> {
+        self.fits(values).then(|| values[self.index()])
+    }
+
+    /// Replace this component of `values`. False when `values` is the other
+    /// kind of value.
+    pub fn write(self, values: &mut [f32], value: f32) -> bool {
+        if !self.fits(values) {
+            return false;
+        }
+        values[self.index()] = value;
+        true
+    }
+
+    fn fits(self, values: &[f32]) -> bool {
+        values.len() == self.kind().components().len()
+    }
+}
+
 /// The canonical spelling of a router path, or `path` unchanged when it names
 /// no parameter. Older saved bindings (`video/seek`, owner-qualified effect
 /// paths) are rewritten this way as they load.
@@ -438,6 +551,43 @@ impl<'de> serde::Deserialize<'de> for ParamAddress {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn component_suffixes_split_and_rebuild() {
+        for kind in [ComponentKind::Color, ComponentKind::Point] {
+            for (index, &component) in kind.components().iter().enumerate() {
+                assert_eq!(component.kind(), kind);
+                assert_eq!(component.index(), index);
+                assert_eq!(kind.component(index), Some(component));
+                let path = component.path("deck/d1/color");
+                assert_eq!(Component::split(&path), Some(("deck/d1/color", component)));
+            }
+        }
+        assert_eq!(ComponentKind::Point.component(2), None);
+    }
+
+    #[test]
+    fn a_path_without_a_component_suffix_does_not_split() {
+        assert_eq!(Component::split("video/speed"), None);
+        assert_eq!(Component::split("capture/crop_x"), None);
+        assert_eq!(Component::split("r"), None);
+        assert_eq!(Component::split("/r"), None);
+    }
+
+    #[test]
+    fn a_component_reads_and_writes_only_its_own_kind_of_value() {
+        let mut color = [0.1, 0.2, 0.3, 0.4];
+        assert_eq!(Component::B.read(&color), Some(0.3));
+        assert!(Component::G.write(&mut color, 0.9));
+        assert_eq!(color, [0.1, 0.9, 0.3, 0.4]);
+
+        let mut point = [0.5, 0.6];
+        assert_eq!(Component::Y.read(&point), Some(0.6));
+        assert_eq!(Component::R.read(&point), None);
+        assert!(!Component::A.write(&mut point, 1.0));
+        assert!(!Component::X.write(&mut color, 1.0));
+        assert_eq!(point, [0.5, 0.6]);
+    }
 
     /// Outputs and surfaces are addressed like every other entity, by UUID.
     /// See /spec/output-sink-providers.md Decisions 11 and 12.

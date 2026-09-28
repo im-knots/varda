@@ -131,11 +131,13 @@ fn create(
                 if ui.button(format!("📁 Load to {}", ch.name)).clicked() {
                     actions.session.open_file_dialog =
                         Some(crate::app::render::FileDialogRequest {
-                            source_type: source_type.to_string(),
-                            field: field.clone(),
+                            target: crate::app::render::FileDialogTarget::AddDecks {
+                                source_type: source_type.to_string(),
+                                field: field.clone(),
+                                channel_uuid: ch.uuid.clone(),
+                            },
                             label: label.clone(),
                             extensions: extensions.clone(),
-                            channel_uuid: ch.uuid.clone(),
                         });
                 }
             }

@@ -202,9 +202,14 @@ impl AccActions {
         }
 
         // Collapsing header items
-        if let Some(request) = &a.session.open_file_dialog {
-            self.open_file_dialog =
-                Some((request.source_type.clone(), request.channel_uuid.clone()));
+        if let Some(request) = &a.session.open_file_dialog
+            && let varda::app::FileDialogTarget::AddDecks {
+                source_type,
+                channel_uuid,
+                ..
+            } = &request.target
+        {
+            self.open_file_dialog = Some((source_type.clone(), channel_uuid.clone()));
         }
     }
 }

@@ -240,6 +240,12 @@ impl DeckSourceInstance for Image {
             .unwrap_or_else(|| Err(ControlError::Unknown(name.to_string())))
     }
 
+    /// The image is blitted verbatim, so its own alpha reaches the deck
+    /// whatever the transparent flag says.
+    fn owns_alpha(&self) -> bool {
+        true
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }

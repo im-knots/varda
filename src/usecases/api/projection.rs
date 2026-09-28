@@ -150,6 +150,7 @@ pub(crate) mod tests {
                         source: crate::engine::value::source::DeckSourceSnapshot {
                             source_type: "Shader".into(),
                             available: true,
+                            owns_alpha: false,
                             status: crate::engine::value::provider::ControlStatus::default(),
                         },
                         is_interactive: false,

@@ -5,24 +5,33 @@ use crate::mixer::Mixer;
 use crate::renderer::context::{CalibrationMode, OutputSource, SurfaceRenderInfo};
 use crate::surface::ContentMapping;
 
-/// A file picker a source type asked for (see `LibraryCreate::File`): which
-/// source type the chosen files become, the config field each path fills, and
-/// the extensions to offer.
+/// What a picked file becomes.
+#[derive(Debug, Clone)]
+pub enum FileDialogTarget {
+    /// A new deck per file on a channel (see `LibraryCreate::File`): the
+    /// source type the files become and the config field each path fills.
+    AddDecks {
+        source_type: String,
+        field: String,
+        channel_uuid: String,
+    },
+    /// A file control on an existing deck (`ControlKind::File`).
+    SourceParam { deck_uuid: String, name: String },
+}
+
+/// A file picker a source asked for, with the extensions to offer.
 #[derive(Debug, Clone)]
 pub struct FileDialogRequest {
-    pub source_type: String,
-    pub field: String,
+    pub target: FileDialogTarget,
     pub label: String,
     pub extensions: Vec<String>,
-    pub channel_uuid: String,
 }
 
 /// Result from a completed file dialog (sent from background thread).
-/// Supports multi-select: `paths` may contain one or more files.
 ///
-/// The target channel is held by UUID, not index: the dialog runs on a
-/// background thread while the UI stays live, so the channel list can change
-/// between opening the dialog and picking a file.
+/// The target channel or deck is held by UUID, not index: the dialog runs on a
+/// background thread while the UI stays live, so either can move between
+/// opening the dialog and picking a file.
 #[derive(Debug)]
 pub struct FileDialogResult {
     pub request: FileDialogRequest,
@@ -30,16 +39,34 @@ pub struct FileDialogResult {
 }
 
 impl FileDialogResult {
-    /// One deck-add per chosen file.
+    /// One deck-add per chosen file, or one write of the first file to a
+    /// deck's file control.
     pub fn commands(&self) -> Vec<crate::engine::EngineCommand> {
-        self.paths
-            .iter()
-            .map(|path| crate::engine::EngineCommand::AddDeck {
-                channel_uuid: self.request.channel_uuid.clone(),
-                source: crate::source::SourceConfig::new(self.request.source_type.clone())
-                    .with(&self.request.field, path.to_string_lossy()),
-            })
-            .collect()
+        match &self.request.target {
+            FileDialogTarget::AddDecks {
+                source_type,
+                field,
+                channel_uuid,
+            } => self
+                .paths
+                .iter()
+                .map(|path| crate::engine::EngineCommand::AddDeck {
+                    channel_uuid: channel_uuid.clone(),
+                    source: crate::source::SourceConfig::new(source_type.clone())
+                        .with(field, path.to_string_lossy()),
+                })
+                .collect(),
+            FileDialogTarget::SourceParam { deck_uuid, name } => self
+                .paths
+                .first()
+                .map(|path| crate::engine::EngineCommand::SetSourceParam {
+                    deck_uuid: deck_uuid.clone(),
+                    name: name.clone(),
+                    value: crate::source::ControlValue::Text(path.to_string_lossy().into_owned()),
+                })
+                .into_iter()
+                .collect(),
+        }
     }
 }
 
@@ -651,9 +678,13 @@ impl VardaApp {
         std::thread::spawn(move || {
             let extensions: Vec<&str> = request.extensions.iter().map(String::as_str).collect();
             let dialog = rfd::FileDialog::new().add_filter(&request.label, &extensions);
-            if let Some(paths) = dialog.pick_files()
-                && !paths.is_empty()
-            {
+            let multiple = matches!(request.target, FileDialogTarget::AddDecks { .. });
+            let paths = if multiple {
+                dialog.pick_files().unwrap_or_default()
+            } else {
+                dialog.pick_file().into_iter().collect()
+            };
+            if !paths.is_empty() {
                 let _ = tx.send(FileDialogResult { request, paths });
             }
         });

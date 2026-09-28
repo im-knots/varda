@@ -751,7 +751,7 @@ fn sink_param(
                     });
             });
         }
-        (_, ControlKind::Text) => {
+        (_, ControlKind::Text { .. }) => {
             // Edited in a buffer and sent on Enter or when focus leaves, so a
             // path or URL is not applied one keystroke at a time.
             ui.horizontal(|ui| {

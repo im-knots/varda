@@ -31,6 +31,7 @@ const SOURCE_TYPES: &[&str] = &[
     "Dash",
     "Rtmp",
     "Html",
+    "Text",
 ];
 
 /// Every output sink type id, as `app/sources.rs` registers them. See
@@ -65,6 +66,7 @@ const ALLOWED: &[&str] = &[
     "internal/spout",
     "internal/stream",
     "internal/html",
+    "internal/text",
     "internal/output",
     // One-release aliases for the old per-type routes (Decision 6).
     "usecases/api/routes/deprecated_sources.rs",

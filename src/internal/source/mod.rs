@@ -25,6 +25,7 @@ pub use services::Services;
 pub use share::{ShareProtocol, ShareProvider, ShareReceiver};
 pub use unavailable::UnavailableSource;
 
+pub use crate::engine::value::param::{Component, ComponentKind};
 pub use crate::engine::value::provider::{
     ControlKind, ControlSpec, ControlStatus, ControlValue, LibraryCreate, LibraryEntry,
     LibraryNotice, LibrarySection, ProviderTypeSnapshot, WidgetHint,
@@ -136,6 +137,16 @@ pub struct SourceFrame<'a> {
     pub cmd_buffers: &'a mut Vec<wgpu::CommandBuffer>,
 }
 
+/// The clocks a source's controls may follow this frame.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SourceClock {
+    pub transport: Option<crate::timebase::TransportSample>,
+    /// The Beat timebase, when a tempo source is running.
+    pub beat: Option<crate::timebase::TimeContext>,
+    /// Free-running seconds since the previous frame.
+    pub dt: f32,
+}
+
 /// Per-frame context for a source's own controls, handed to
 /// [`DeckSourceInstance::control`] before anything renders.
 pub struct SourceControl<'a> {
@@ -145,6 +156,10 @@ pub struct SourceControl<'a> {
     /// holds its frame and must not be driven. See /spec/deck-residency.md.
     pub awake: bool,
     pub transport: Option<crate::timebase::TransportSample>,
+    /// The Beat timebase, when a tempo source is running.
+    pub beat: Option<crate::timebase::TimeContext>,
+    /// Free-running seconds since the previous frame.
+    pub dt: f32,
     /// The rate the renderer presents at (0 = uncapped).
     pub target_fps: u32,
     /// Reused across every deck in a frame, so resolving a key allocates
@@ -157,7 +172,7 @@ impl<'a> SourceControl<'a> {
         deck_uuid: &'a str,
         modulation: &'a ModulationEngine,
         awake: bool,
-        transport: Option<crate::timebase::TransportSample>,
+        clock: SourceClock,
         target_fps: u32,
         scratch: &'a mut String,
     ) -> Self {
@@ -165,7 +180,9 @@ impl<'a> SourceControl<'a> {
             deck_uuid,
             modulation,
             awake,
-            transport,
+            transport: clock.transport,
+            beat: clock.beat,
+            dt: clock.dt,
             target_fps,
             scratch,
         }
@@ -178,6 +195,14 @@ impl<'a> SourceControl<'a> {
 
     /// The modulation assigned to this deck's control at `route`, if any.
     pub fn resolve(&mut self, route: &str) -> Option<ResolvedModulation> {
+        self.resolve_key(route, None)
+    }
+
+    fn resolve_key(
+        &mut self,
+        route: &str,
+        component: Option<Component>,
+    ) -> Option<ResolvedModulation> {
         if !self.modulation.has_modulation_for_any() {
             return None;
         }
@@ -186,11 +211,56 @@ impl<'a> SourceControl<'a> {
         self.scratch.push_str(self.deck_uuid);
         self.scratch.push('/');
         self.scratch.push_str(route);
+        if let Some(component) = component {
+            component.push_suffix(self.scratch);
+        }
         if !self.modulation.has_modulation(self.scratch) {
             return None;
         }
-        Some(self.modulation.resolve(self.scratch, None))
+        Some(self.modulation.resolve(self.scratch))
     }
+
+    /// A normalized float control at `route` with its modulation applied.
+    pub fn modulated_norm(&mut self, route: &str, base: f32) -> f32 {
+        self.resolve(route)
+            .map_or(base, |resolved| apply_modulation(base, &resolved))
+    }
+
+    /// A color control at `route` with each channel's modulation applied.
+    pub fn modulated_color(&mut self, route: &str, base: [f32; 4]) -> [f32; 4] {
+        let mut out = base;
+        for &component in ComponentKind::Color.components() {
+            if let Some(resolved) = self.resolve_key(route, Some(component)) {
+                let i = component.index();
+                out[i] = apply_modulation(base[i], &resolved);
+            }
+        }
+        out
+    }
+
+    /// A point control at `route`, ranging over `min..=max`, with each axis's
+    /// modulation applied in the control's normalized space.
+    pub fn modulated_point(&mut self, route: &str, base: [f32; 2], min: f32, max: f32) -> [f32; 2] {
+        let span = max - min;
+        if span <= 0.0 {
+            return base;
+        }
+        let mut out = base;
+        for &component in ComponentKind::Point.components() {
+            if let Some(resolved) = self.resolve_key(route, Some(component)) {
+                let i = component.index();
+                let norm = ((base[i] - min) / span).clamp(0.0, 1.0);
+                out[i] = min + apply_modulation(norm, &resolved) * span;
+            }
+        }
+        out
+    }
+}
+
+/// A normalized base value with resolved modulation applied: an absolute
+/// source replaces the base, additive sources add to it.
+pub fn apply_modulation(base: f32, resolved: &ResolvedModulation) -> f32 {
+    (resolved.absolute.unwrap_or(base) + resolved.additive).clamp(0.0, 1.0)
 }
 
 /// A kind of deck source.
@@ -397,6 +467,18 @@ pub trait DeckSourceInstance: Send + 'static {
         status_from_params(self)
     }
 
+    /// Controls that currently have no effect, with the reason shown when
+    /// the performer hovers one. Read when a snapshot is built, not per frame.
+    fn inactive(&self) -> Vec<(&'static str, &'static str)> {
+        Vec::new()
+    }
+
+    /// Whether the source writes its own alpha, so the deck's transparent
+    /// flag has no effect on it and is not offered.
+    fn owns_alpha(&self) -> bool {
+        false
+    }
+
     /// Something the performer should be told once about this deck (a clip
     /// whose reverse cache ran out). Checked every frame; keep it cheap.
     fn warning(&self) -> Option<String> {
@@ -458,8 +540,67 @@ pub fn status_from_params<S: DeckSourceInstance + ?Sized>(source: &S) -> Control
     status
 }
 
+/// The control at router path `route`, and which component of it when the
+/// route is one channel of a color or one axis of a point (`color/r`).
+pub fn route_control<'s>(
+    schema: &'s [ControlSpec],
+    route: &str,
+) -> Option<(&'s ControlSpec, Option<Component>)> {
+    if let Some(spec) = schema.iter().find(|s| s.route.as_deref() == Some(route)) {
+        return Some((spec, None));
+    }
+    let (base, component) = Component::split(route)?;
+    let spec = schema.iter().find(|s| s.route.as_deref() == Some(base))?;
+    (spec.kind.component_kind() == Some(component.kind())).then_some((spec, Some(component)))
+}
+
+/// Whether the control at `route` is a color or a point.
+pub fn route_component_kind(
+    source: &dyn DeckSourceInstance,
+    route: &str,
+) -> Option<crate::engine::value::param::ComponentKind> {
+    match route_control(source.schema(), route)? {
+        (spec, None) => spec.kind.component_kind(),
+        (_, Some(_)) => None,
+    }
+}
+
+/// A point axis's value as a fader position within the control's range.
+fn point_norm(kind: &ControlKind, value: f32) -> f32 {
+    match kind {
+        ControlKind::Point {
+            display_min,
+            display_max,
+        } if display_max > display_min => {
+            ((value - display_min) / (display_max - display_min)).clamp(0.0, 1.0)
+        }
+        _ => value,
+    }
+}
+
+/// A fader position as a point axis's value within the control's range.
+fn point_value(kind: &ControlKind, normalized: f32) -> f32 {
+    match kind {
+        ControlKind::Point {
+            display_min,
+            display_max,
+        } => display_min + normalized * (display_max - display_min),
+        _ => normalized,
+    }
+}
+
+/// One component of a color or point control, normalized.
+fn read_component(spec: &ControlSpec, value: &ControlValue, component: Component) -> Option<f32> {
+    match value {
+        ControlValue::Color(c) => component.read(c),
+        ControlValue::Point(p) => component.read(p).map(|v| point_norm(&spec.kind, v)),
+        _ => None,
+    }
+}
+
 /// Write the control at router path `route` with a normalized value: what a
-/// MIDI fader, an OSC message or a macro does.
+/// MIDI fader, an OSC message or a macro does. A component route replaces one
+/// channel or axis and keeps the rest.
 ///
 /// # Errors
 ///
@@ -469,12 +610,28 @@ pub fn write_route(
     route: &str,
     normalized: f32,
 ) -> Result<(), ControlError> {
-    let spec = source
-        .schema()
-        .iter()
-        .find(|s| s.route.as_deref() == Some(route))
+    let (spec, component) = route_control(source.schema(), route)
         .ok_or_else(|| ControlError::Unknown(route.to_string()))?;
     let name = spec.name.clone();
+    let normalized = normalized.clamp(0.0, 1.0);
+    if let Some(component) = component {
+        let value = match source.param(&name) {
+            Some(ControlValue::Color(mut c)) => {
+                component.write(&mut c, normalized);
+                ControlValue::Color(c)
+            }
+            Some(ControlValue::Point(mut p)) => {
+                component.write(&mut p, point_value(&spec.kind, normalized));
+                ControlValue::Point(p)
+            }
+            _ => {
+                return Err(ControlError::State(format!(
+                    "'{route}' has no value to change"
+                )));
+            }
+        };
+        return source.set_param(&name, &value);
+    }
     match spec.kind {
         ControlKind::Action => {
             if normalized > 0.5 {
@@ -484,31 +641,56 @@ pub fn write_route(
             }
         }
         ControlKind::Float { .. } | ControlKind::Choice { .. } => {
-            source.set_param(&name, &ControlValue::Float(normalized.clamp(0.0, 1.0)))
+            source.set_param(&name, &ControlValue::Float(normalized))
         }
         ControlKind::Toggle => source.set_param(&name, &ControlValue::Bool(normalized > 0.5)),
-        ControlKind::Color | ControlKind::Text | ControlKind::Number { .. } => Err(
-            ControlError::Invalid(format!("'{route}' takes a typed value, not a fader")),
-        ),
+        ControlKind::Color
+        | ControlKind::Point { .. }
+        | ControlKind::Text { .. }
+        | ControlKind::File { .. }
+        | ControlKind::Number { .. } => Err(ControlError::Invalid(format!(
+            "'{route}' takes a typed value, not a fader"
+        ))),
     }
 }
 
 /// The normalized value of the control at router path `route`: what a
 /// controller's LEDs show.
 pub fn read_route(source: &dyn DeckSourceInstance, route: &str) -> Option<f32> {
-    let spec = source
-        .schema()
-        .iter()
-        .find(|s| s.route.as_deref() == Some(route))?;
-    source.param(&spec.name)?.as_f32()
+    let (spec, component) = route_control(source.schema(), route)?;
+    let value = source.param(&spec.name)?;
+    match component {
+        Some(component) => read_component(spec, &value, component),
+        None => value.as_f32(),
+    }
 }
 
-/// Whether the control at `route` may be driven by modulation.
+/// Whether the control at `route` may be driven by modulation. A color or
+/// point is driven through its component routes, not as a whole.
 pub fn route_is_modulatable(source: &dyn DeckSourceInstance, route: &str) -> bool {
-    source
-        .schema()
+    route_control(source.schema(), route).is_some_and(|(spec, component)| {
+        spec.modulatable && (component.is_some() || spec.kind.component_kind().is_none())
+    })
+}
+
+/// The component routes and normalized values a typed write to a color or
+/// point control changes, relative to `before`. Empty for other controls.
+pub fn changed_components(
+    spec: &ControlSpec,
+    before: Option<&ControlValue>,
+    after: &ControlValue,
+) -> Vec<(Component, f32)> {
+    let Some(kind) = spec.kind.component_kind() else {
+        return Vec::new();
+    };
+    kind.components()
         .iter()
-        .any(|s| s.route.as_deref() == Some(route) && s.modulatable)
+        .filter_map(|&component| {
+            let new = read_component(spec, after, component)?;
+            let old = before.and_then(|b| read_component(spec, b, component));
+            (old != Some(new)).then_some((component, new))
+        })
+        .collect()
 }
 
 /// Read a normalized float out of a control write.

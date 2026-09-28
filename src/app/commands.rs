@@ -161,18 +161,18 @@ impl VardaApp {
     /// once, after it succeeds: the recorder captures it and the arrangement
     /// hands that parameter back to the performer.
     pub(crate) fn execute_command(&mut self, cmd: EngineCommand) -> CommandResult {
-        let live = self.live_write(&cmd);
+        let live = self.live_writes(&cmd);
         // A live parameter write (a fader sweep) cannot change what a library
         // lists; anything else might, so the next snapshot lists afresh.
-        if live.is_none() {
+        if live.is_empty() {
             self.sources.type_cache.invalidate();
             self.output.sink_type_cache.invalidate();
         }
         let result = self.dispatch_command(cmd);
-        if let Some((key, value)) = live
-            && !matches!(result, CommandResult::Err { .. })
-        {
-            self.note_live_param_write(&key, value);
+        if !matches!(result, CommandResult::Err { .. }) {
+            for (key, value) in live {
+                self.note_live_param_write(&key, value);
+            }
         }
         result
     }
@@ -432,7 +432,7 @@ impl VardaApp {
                 Ok(target) => {
                     self.mixer
                         .modulation_mut()
-                        .assign(&target, &source_id, amount, None);
+                        .assign(&target, &source_id, amount);
                     CommandResult::Ok
                 }
                 Err(e) => e,

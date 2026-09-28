@@ -798,6 +798,12 @@ impl DeckSourceInstance for Video {
         self.handle.is_suspended()
     }
 
+    /// The clip is blitted verbatim, so its own alpha reaches the deck
+    /// whatever the transparent flag says.
+    fn owns_alpha(&self) -> bool {
+        true
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }

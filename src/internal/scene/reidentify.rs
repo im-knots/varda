@@ -159,7 +159,7 @@ mod tests {
             assignments: vec![ModulationRecipeAssignment {
                 param: param.to_string(),
                 amount: 0.5,
-                component: None,
+                legacy_component: None,
             }],
         }
     }
@@ -176,7 +176,7 @@ mod tests {
             assignments: vec![ModulationRecipeAssignment {
                 param: param.to_string(),
                 amount: 1.0,
-                component: None,
+                legacy_component: None,
             }],
         }
     }

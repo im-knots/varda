@@ -80,7 +80,7 @@ fn engine_with_lfo(param_key: &str) -> ModulationEngine {
         amplitude: 0.5,
         bipolar: false,
     });
-    engine.assign(param_key, &src, 1.0, None);
+    engine.assign(param_key, &src, 1.0);
     engine.update_free_running(
         0.5,
         &AudioValues {

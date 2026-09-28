@@ -11,24 +11,6 @@
 
 use anyhow::{Context, Result};
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
-
-/// System fonts, loaded at most once for the life of the process.
-///
-/// `usvg` turns `<text>` into paths at parse time, so this is only paid by the
-/// first SVG loaded and never again — including on re-rasterization, which
-/// works from the already-resolved tree.
-fn system_fonts() -> Arc<usvg::fontdb::Database> {
-    static FONTS: OnceLock<Arc<usvg::fontdb::Database>> = OnceLock::new();
-    FONTS
-        .get_or_init(|| {
-            let mut db = usvg::fontdb::Database::new();
-            db.load_system_fonts();
-            log::debug!("Loaded {} system font faces for SVG text", db.len());
-            Arc::new(db)
-        })
-        .clone()
-}
 
 /// Whether a path should be treated as vector art rather than handed to the
 /// raster image decoder. `.svgz` is a gzipped `.svg`, which `usvg` unwraps.
@@ -52,7 +34,7 @@ pub fn parse_file(path: &Path) -> Result<usvg::Tree> {
         std::fs::read(path).with_context(|| format!("Failed to read SVG: {}", path.display()))?;
     let options = usvg::Options {
         resources_dir: path.parent().map(std::path::Path::to_path_buf),
-        fontdb: system_fonts(),
+        fontdb: crate::fonts::database(),
         ..Default::default()
     };
     usvg::Tree::from_data(&data, &options)

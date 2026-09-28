@@ -98,6 +98,41 @@ pub(super) fn render_collapsed_column(ui: &mut egui::Ui, label: &str, open_id: e
     }
 }
 
+/// The clickable title row of an open deck detail column, followed by a
+/// separator. Clicking it collapses the column to the strip
+/// [`render_collapsed_column`] draws.
+pub(super) fn render_column_header(ui: &mut egui::Ui, label: &str, open_id: egui::Id) {
+    let header_rect = ui.available_rect_before_wrap();
+    let header_rect =
+        egui::Rect::from_min_size(header_rect.min, egui::vec2(ui.available_width(), 20.0));
+    let header_resp = ui.allocate_rect(header_rect, egui::Sense::click());
+    ui.painter().text(
+        header_rect.left_center(),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(13.0),
+        ui.visuals().strong_text_color(),
+    );
+    if header_resp.clicked() {
+        ui.ctx()
+            .memory_mut(|mem| mem.data.insert_temp(open_id, false));
+    }
+    if header_resp.hovered() {
+        ui.painter().rect_filled(
+            header_rect,
+            2.0,
+            ui.visuals().widgets.hovered.bg_fill.linear_multiply(0.3),
+        );
+    }
+    ui.separator();
+}
+
+/// Whether the deck detail column at `open_id` is open. Columns start open.
+pub(super) fn column_open(ui: &egui::Ui, open_id: egui::Id) -> bool {
+    ui.ctx()
+        .memory(|mem| mem.data.get_temp::<bool>(open_id).unwrap_or(true))
+}
+
 /// Resolve a channel UUID to its ordinal and display name. The ordinal is only
 /// used for palette lookup; callers must treat `None` as "no longer exists"
 /// rather than falling back to a position.

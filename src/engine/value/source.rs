@@ -21,6 +21,10 @@ pub struct DeckSourceSnapshot {
     /// placeholder holding its config. See /spec/deck-source-providers.md
     /// Decision 4.
     pub available: bool,
+    /// The source sets its own alpha, so the deck's transparent flag has no
+    /// effect on it. See /spec/deck-source-providers.md § Source-owned alpha.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub owns_alpha: bool,
     pub status: ControlStatus,
 }
 
@@ -48,6 +52,80 @@ impl ScalingMode {
             Self::Fit => "Fit",
             Self::Stretch => "Stretch",
             Self::Center => "Center",
+        }
+    }
+}
+
+/// Whether a deck that follows a timeline (a clip, timed text) maps it onto
+/// the show transport.
+///
+/// See /spec/timecode.md § Consumer 2 and /spec/text-source.md § Transport chase.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    utoipa::ToSchema,
+)]
+pub enum TransportSyncMode {
+    /// Chase while the transport is running; free-run (with loop modes) when it is not.
+    #[default]
+    Auto,
+    /// Chase even while the transport is stopped: freeze on the mapped frame.
+    Always,
+    /// Never chase.
+    Never,
+}
+
+impl TransportSyncMode {
+    /// Whether this mode chases given the transport's running flag.
+    #[must_use]
+    pub const fn is_chasing(self, transport_running: bool) -> bool {
+        match self {
+            Self::Auto => transport_running,
+            Self::Always => true,
+            Self::Never => false,
+        }
+    }
+
+    /// Short label for the deck-detail combo.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "Auto",
+            Self::Always => "Always",
+            Self::Never => "Never",
+        }
+    }
+}
+
+/// Per-deck mapping of a clip or timed text onto the show transport.
+///
+/// `offset` is independent of arrangement regions. `delay_frames` is in
+/// transport displayed frames, not clip frames.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+pub struct DeckTransportSync {
+    #[serde(default)]
+    pub mode: TransportSyncMode,
+    /// Transport seconds at which the clip's in-point or the text's time zero
+    /// sits.
+    #[serde(default)]
+    pub offset: f64,
+    /// Signed latency in transport displayed frames.
+    #[serde(default)]
+    pub delay_frames: i32,
+}
+
+impl Default for DeckTransportSync {
+    fn default() -> Self {
+        Self {
+            mode: TransportSyncMode::Auto,
+            offset: 0.0,
+            delay_frames: 0,
         }
     }
 }

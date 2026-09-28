@@ -117,12 +117,17 @@ pub struct ParamModulation {
     pub source_id: String,
     /// Modulation depth/amount (-1.0 to 1.0, negative inverts)
     pub amount: f32,
-    /// For color params: which component (0=R, 1=G, 2=B, 3=A), None for scalar
-    pub component: Option<usize>,
     /// Defaults to `Additive`, which is what every assignment did before
     /// automation existed, so older scenes deserialize unchanged.
     #[serde(default)]
     pub mode: AssignmentMode,
+    /// A color or point component index saved before scene version 9, when
+    /// components were not part of the key. Read, never written: the app
+    /// rewrites such assignments to their component path once it can see the
+    /// target's type. See /spec/deck-source-providers.md § One component
+    /// vocabulary.
+    #[serde(default, rename = "component", skip_serializing)]
+    pub legacy_component: Option<usize>,
 }
 
 /// A modulation source paired with a stable UUID identity.
@@ -206,7 +211,7 @@ mod tests {
         let mut engine = ModulationEngine::new();
         let uuid = engine.add_source(ModulationSource::sine_lfo(1.0));
         engine.set_timebase(&uuid, Timebase::Beat);
-        engine.assign("p", &uuid, 1.0, None);
+        engine.assign("p", &uuid, 1.0);
 
         // A sine LFO at frequency 1.0 peaks a quarter of the way through its
         // cycle. On the beat timebase that is beat 0.25, whatever the wall
@@ -239,7 +244,7 @@ mod tests {
     fn free_run_lfo_ignores_the_beat_clock() {
         let mut engine = ModulationEngine::new();
         let uuid = engine.add_source(ModulationSource::sine_lfo(1.0));
-        engine.assign("p", &uuid, 1.0, None);
+        engine.assign("p", &uuid, 1.0);
 
         engine.update(
             &split_timebases(0.25, 0.0),
@@ -256,7 +261,7 @@ mod tests {
         let mut engine = ModulationEngine::new();
         let uuid = engine.add_source(ModulationSource::sine_lfo(1.0));
         engine.set_timebase(&uuid, Timebase::Beat);
-        engine.assign("p", &uuid, 1.0, None);
+        engine.assign("p", &uuid, 1.0);
 
         // Half a second of wall time is one beat at 120 BPM and half a beat at
         // 60 BPM. The LFO must be at a different point in its cycle for each,
@@ -293,7 +298,7 @@ mod tests {
         let mut engine = ModulationEngine::new();
         let uuid = engine.add_source(ModulationSource::sine_lfo(1.0));
         engine.set_timebase(&uuid, Timebase::Beat);
-        engine.assign("p", &uuid, 1.0, None);
+        engine.assign("p", &uuid, 1.0);
 
         let mut resolver = TimebaseResolver::new();
         let mut frame = |secs: f32, beats: Option<f64>| {
@@ -325,7 +330,7 @@ mod tests {
         let mut engine = ModulationEngine::new();
         let uuid = engine.add_source(ModulationSource::sine_lfo(1.0));
         engine.set_timebase(&uuid, Timebase::Transport);
-        engine.assign("p", &uuid, 1.0, None);
+        engine.assign("p", &uuid, 1.0);
 
         let sample_at = |engine: &mut ModulationEngine, wall: f32, show: f32| {
             engine.update(
@@ -347,7 +352,7 @@ mod tests {
         let mut engine = ModulationEngine::new();
         let uuid = engine.add_source(ModulationSource::sine_lfo(1.0));
         engine.set_timebase(&uuid, Timebase::Transport);
-        engine.assign("p", &uuid, 1.0, None);
+        engine.assign("p", &uuid, 1.0);
 
         let mut resolver = TimebaseResolver::new();
         let mut frame = |secs: f32| {
@@ -377,7 +382,7 @@ mod tests {
         let mut engine = ModulationEngine::new();
         let uuid = engine.add_source(ModulationSource::envelope(breakpoints));
         engine.set_timebase(&uuid, Timebase::Transport);
-        engine.assign_with_mode("p", &uuid, 1.0, None, mode);
+        engine.assign_with_mode("p", &uuid, 1.0, mode);
         (engine, uuid)
     }
 
@@ -387,7 +392,7 @@ mod tests {
             &empty_audio(),
             &empty_analyzers(),
         );
-        engine.resolve("p", None)
+        engine.resolve("p")
     }
 
     #[test]
@@ -414,7 +419,7 @@ mod tests {
             AssignmentMode::Absolute,
         );
         let lfo = engine.add_source(ModulationSource::sine_lfo(1.0));
-        engine.assign("p", &lfo, 1.0, None);
+        engine.assign("p", &lfo, 1.0);
 
         let resolved = sample_at(&mut engine, 5.0);
         assert!((resolved.absolute.unwrap() - 0.4).abs() < 1e-5);
@@ -445,7 +450,7 @@ mod tests {
             Breakpoint::new(10.0, 0.8),
         ]));
         engine.set_timebase(&second, Timebase::Transport);
-        engine.assign_with_mode("p", &second, 1.0, None, AssignmentMode::Absolute);
+        engine.assign_with_mode("p", &second, 1.0, AssignmentMode::Absolute);
 
         let resolved = sample_at(&mut engine, 5.0);
         assert!((resolved.absolute.unwrap() - 0.8).abs() < 1e-5);
@@ -490,7 +495,7 @@ mod tests {
                 transport: None,
             });
             engine.update(&set, &empty_audio(), &empty_analyzers());
-            engine.resolve("p", None).absolute.unwrap()
+            engine.resolve("p").absolute.unwrap()
         };
 
         let held = frame(0.0);
@@ -536,7 +541,7 @@ mod tests {
     fn an_override_leaves_live_modulation_running() {
         let mut engine = flat_envelope_engine(0.8);
         let lfo = engine.add_source(ModulationSource::sine_lfo(1.0));
-        engine.assign("p", &lfo, 1.0, None);
+        engine.assign("p", &lfo, 1.0);
 
         engine.override_param("p", 0.2);
         let resolved = sample_at(&mut engine, 5.0);
@@ -558,14 +563,14 @@ mod tests {
             Breakpoint::new(1000.0, 0.3),
         ]));
         engine.set_timebase(&other, Timebase::Transport);
-        engine.assign_with_mode("q", &other, 1.0, None, AssignmentMode::Absolute);
+        engine.assign_with_mode("q", &other, 1.0, AssignmentMode::Absolute);
 
         engine.override_param("p", 0.1);
         sample_at(&mut engine, 5.0);
 
-        assert!(engine.resolve("p", None).absolute.is_none());
+        assert!(engine.resolve("p").absolute.is_none());
         assert!(
-            (engine.resolve("q", None).absolute.unwrap() - 0.3).abs() < 1e-5,
+            (engine.resolve("q").absolute.unwrap() - 0.3).abs() < 1e-5,
             "an untouched lane keeps following the show"
         );
     }
@@ -647,7 +652,7 @@ mod tests {
             Breakpoint::new(1000.0, 0.3),
         ]));
         engine.set_timebase(&other, Timebase::Transport);
-        engine.assign_with_mode("q", &other, 1.0, None, AssignmentMode::Absolute);
+        engine.assign_with_mode("q", &other, 1.0, AssignmentMode::Absolute);
 
         engine.override_param("p", 0.0);
         engine.override_param("q", 0.0);
@@ -659,8 +664,8 @@ mod tests {
         for _ in 0..frames_for(0.2) {
             sample_at(&mut engine, 5.0);
         }
-        assert!((engine.resolve("p", None).absolute.unwrap() - 0.8).abs() < 1e-5);
-        assert!((engine.resolve("q", None).absolute.unwrap() - 0.3).abs() < 1e-5);
+        assert!((engine.resolve("p").absolute.unwrap() - 0.8).abs() < 1e-5);
+        assert!((engine.resolve("q").absolute.unwrap() - 0.3).abs() < 1e-5);
     }
 
     /// Overrides are session state. A saved override would be an invisible trap
@@ -760,7 +765,7 @@ mod tests {
             current_level: 0.0,
         });
         engine.set_timebase(&uuid, Timebase::Beat);
-        engine.assign("p", &uuid, 1.0, None);
+        engine.assign("p", &uuid, 1.0);
         engine.trigger_adsr(&uuid);
 
         // Beat clock frozen, wall clock advancing: the envelope must still open.
@@ -1228,8 +1233,8 @@ mod tests {
         let uuid0 = engine.add_source(ModulationSource::sine_lfo(1.0));
         engine.add_source(ModulationSource::sine_lfo(2.0));
         let uuid2 = engine.add_source(ModulationSource::sine_lfo(3.0));
-        engine.assign("param_a", &uuid0, 1.0, None);
-        engine.assign("param_b", &uuid2, 0.5, None);
+        engine.assign("param_a", &uuid0, 1.0);
+        engine.assign("param_b", &uuid2, 0.5);
         engine.remove_source(&uuid0);
         assert!(!engine.has_modulation("param_a"));
         assert!(engine.has_modulation("param_b"));
@@ -1241,7 +1246,7 @@ mod tests {
         let mut engine = ModulationEngine::new();
         let uuid = engine.add_source(ModulationSource::sine_lfo(1.0));
         engine.update_free_running(0.25, &empty_audio(), &empty_analyzers());
-        engine.assign("brightness", &uuid, 1.0, None);
+        engine.assign("brightness", &uuid, 1.0);
         let _mod_val = engine.get_modulation("brightness");
     }
 
@@ -1249,7 +1254,7 @@ mod tests {
     fn engine_clear_assignments() {
         let mut engine = ModulationEngine::new();
         let uuid = engine.add_source(ModulationSource::sine_lfo(1.0));
-        engine.assign("brightness", &uuid, 1.0, None);
+        engine.assign("brightness", &uuid, 1.0);
         assert!(engine.has_modulation("brightness"));
         engine.clear_assignments("brightness");
         assert!(!engine.has_modulation("brightness"));
@@ -1333,17 +1338,72 @@ mod tests {
         let mut engine = ModulationEngine::new();
         let uuid = engine.add_source(ModulationSource::sine_lfo(1.0));
         engine.update_free_running(0.25, &empty_audio(), &empty_analyzers());
-        engine.assign("color", &uuid, 1.0, Some(0));
-        engine.assign("color", &uuid, 0.5, Some(1));
-        let r_mod = engine.get_modulation_for_component("color", Some(0));
-        let g_mod = engine.get_modulation_for_component("color", Some(1));
-        let no_mod = engine.get_modulation_for_component("color", Some(2));
-        // Unassigned component contributes nothing.
-        assert_eq!(no_mod, 0.0);
-        // Both assigned components are driven by the same source; the r
-        // component (amount 1.0) must be twice the g component (amount 0.5).
+        engine.assign("color/r", &uuid, 1.0);
+        engine.assign("color/g", &uuid, 0.5);
+        let r_mod = engine.get_modulation("color/r");
+        let g_mod = engine.get_modulation("color/g");
+        // Unassigned component and the base key contribute nothing.
+        assert_eq!(engine.get_modulation("color/b"), 0.0);
+        assert_eq!(engine.get_modulation("color"), 0.0);
         assert!(r_mod > 0.0, "r component should be modulated: {r_mod}");
         assert!((r_mod - 2.0 * g_mod).abs() < 1e-6, "r={r_mod}, g={g_mod}");
+    }
+
+    fn legacy(source_id: &str, component: Option<usize>) -> ParamModulation {
+        ParamModulation {
+            source_id: source_id.to_string(),
+            amount: 1.0,
+            mode: AssignmentMode::Additive,
+            legacy_component: component,
+        }
+    }
+
+    #[test]
+    fn a_saved_component_index_is_ignored_until_rekeyed() {
+        let mut engine = ModulationEngine::new();
+        let uuid = engine.add_source(ModulationSource::sine_lfo(1.0));
+        engine.update_free_running(0.25, &empty_audio(), &empty_analyzers());
+        engine
+            .assignments
+            .insert("tint".into(), vec![legacy(&uuid, Some(0))]);
+        assert_eq!(engine.get_modulation("tint"), 0.0);
+
+        let rekeyed = engine.rekey_legacy_components(|key| {
+            (key == "tint").then_some(crate::engine::value::param::ComponentKind::Color)
+        });
+        assert_eq!(rekeyed, 1);
+        assert!(!engine.assignments.contains_key("tint"));
+        assert!(engine.get_modulation("tint/r") > 0.0);
+        assert!(engine.assignments["tint/r"][0].legacy_component.is_none());
+    }
+
+    #[test]
+    fn rekeying_picks_the_suffix_from_the_targets_kind() {
+        use crate::engine::value::param::ComponentKind;
+        let mut engine = ModulationEngine::new();
+        let uuid = engine.add_source(ModulationSource::sine_lfo(1.0));
+        engine.assignments.insert(
+            "offset".into(),
+            vec![legacy(&uuid, Some(1)), legacy(&uuid, None)],
+        );
+        engine
+            .assignments
+            .insert("gone".into(), vec![legacy(&uuid, Some(2))]);
+        engine
+            .assignments
+            .insert("tint".into(), vec![legacy(&uuid, Some(7))]);
+        engine.rekey_legacy_components(|key| match key {
+            "offset" => Some(ComponentKind::Point),
+            "tint" => Some(ComponentKind::Color),
+            _ => None,
+        });
+        // The scalar assignment stays on the base key.
+        assert_eq!(engine.assignments["offset"].len(), 1);
+        assert_eq!(engine.assignments["offset/y"].len(), 1);
+        // Unknown target and out-of-range index are dropped.
+        assert!(!engine.assignments.contains_key("gone"));
+        assert!(!engine.assignments.contains_key("tint"));
+        assert_eq!(engine.assignments.len(), 2);
     }
 
     // ── AudioBandPreset tests ────────────────────────────────────────
@@ -1627,7 +1687,7 @@ mod tests {
     #[test]
     fn assign_nonexistent_source_ignored() {
         let mut engine = ModulationEngine::new();
-        engine.assign("some_param", "bogus_uuid", 1.0, None);
+        engine.assign("some_param", "bogus_uuid", 1.0);
         // No assignment should have been created
         assert!(!engine.has_modulation("some_param"));
     }

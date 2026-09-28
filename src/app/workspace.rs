@@ -567,6 +567,8 @@ impl VardaApp {
             );
         }
 
+        // Last, once every deck and effect a key can name exists.
+        self.mixer.rekey_legacy_modulation();
         warnings
     }
 

@@ -177,6 +177,80 @@ impl VardaApp {
     /// it replaces (a toggle's new play state, a seek's clip length). The match
     /// lists every command so a new one cannot be added without deciding
     /// whether it is a live write. See /spec/vardapp-decomposition.md.
+    /// Every parameter a command writes as a live gesture. A color or point
+    /// write is one entry per channel or axis it changes, keyed by its
+    /// component path (`.../color/r`). See /spec/deck-source-providers.md
+    /// § Per-component Color and Point controls.
+    pub(crate) fn live_writes(&self, cmd: &EngineCommand) -> Vec<(String, f32)> {
+        use EngineCommand as C;
+        let components = match cmd {
+            C::SetSourceParam {
+                deck_uuid,
+                name,
+                value,
+            } => self.source_component_writes(deck_uuid, name, value),
+            C::SetGeneratorParam {
+                deck_uuid,
+                name,
+                value,
+            } => self.mixer.find_deck_by_uuid(deck_uuid).map(|(ch, dk)| {
+                shader_component_writes(
+                    &self.mixer.channels()[ch].decks[dk].deck.generator_params,
+                    &ParamAddress::deck_param(deck_uuid, name).to_string(),
+                    name,
+                    value,
+                )
+            }),
+            C::SetEffectParam {
+                effect_uuid,
+                name,
+                value,
+            } => self
+                .mixer
+                .find_effect_by_uuid(effect_uuid)
+                .and_then(|location| self.mixer.effect_at(location))
+                .map(|effect| {
+                    shader_component_writes(
+                        &effect.params,
+                        &ParamAddress::effect_param(effect_uuid, name).to_string(),
+                        name,
+                        value,
+                    )
+                }),
+            _ => None,
+        };
+        components
+            .filter(|writes| !writes.is_empty())
+            .unwrap_or_else(|| self.live_write(cmd).into_iter().collect())
+    }
+
+    /// The component writes a typed color or point write to a modulatable
+    /// source control makes. `None` for any other control.
+    fn source_component_writes(
+        &self,
+        deck_uuid: &str,
+        name: &str,
+        value: &crate::source::ControlValue,
+    ) -> Option<Vec<(String, f32)>> {
+        let (ch, dk) = self.mixer.find_deck_by_uuid(deck_uuid)?;
+        let source = self.mixer.channels()[ch].decks[dk].deck.source();
+        let spec = source
+            .schema()
+            .iter()
+            .find(|s| s.name == name && s.modulatable)?;
+        let route = spec.route.as_deref()?;
+        let before = source.param(name);
+        Some(
+            crate::source::changed_components(spec, before.as_ref(), value)
+                .into_iter()
+                .map(|(component, v)| {
+                    let target = DeckTarget::source(&component.path(route));
+                    (ParamAddress::deck(deck_uuid, target).to_string(), v)
+                })
+                .collect(),
+        )
+    }
+
     pub(crate) fn live_write(&self, cmd: &EngineCommand) -> Option<(String, f32)> {
         use EngineCommand as C;
         match cmd {
@@ -514,6 +588,32 @@ impl VardaApp {
     }
 }
 
+/// The component writes a typed color or point write to a shader parameter
+/// makes, keyed under `key`. Empty for any other value.
+fn shader_component_writes(
+    params: &crate::ShaderParams,
+    key: &str,
+    name: &str,
+    value: &crate::params::ParamValue,
+) -> Vec<(String, f32)> {
+    use crate::params::ParamValue;
+    let (Some(kind), new) = (params.component_kind(name), value) else {
+        return Vec::new();
+    };
+    let new: &[f32] = match new {
+        ParamValue::Color(c) => c,
+        ParamValue::Point2D(p) => p,
+        _ => return Vec::new(),
+    };
+    kind.components()
+        .iter()
+        .filter_map(|&component| {
+            let v = component.read(new)?;
+            (params.component(name, component) != Some(v)).then(|| (component.path(key), v))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::command_is_undoable;
@@ -713,5 +813,132 @@ mod tests {
             channel_uuid: "ch".into(),
             name: "p".into(),
         }));
+    }
+
+    /// A color picker write records one entry per channel it changed, keyed
+    /// by the component path, so a recorded lane replays one channel.
+    #[test]
+    fn a_color_write_records_per_changed_channel() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        let channel = app.mixer.channels()[0].uuid().to_string();
+        let deck = app
+            .add_deck(
+                &channel,
+                &crate::solid_color::SolidColor::config_for([0.0, 0.0, 0.0, 1.0]),
+            )
+            .expect("solid deck");
+        let writes = app.live_writes(&C::SetSourceParam {
+            deck_uuid: deck.clone(),
+            name: "color".into(),
+            value: crate::source::ControlValue::Color([0.5, 0.0, 0.25, 1.0]),
+        });
+        let red = ParamAddress::deck(&deck, DeckTarget::source("color/r")).to_string();
+        let blue = ParamAddress::deck(&deck, DeckTarget::source("color/b")).to_string();
+        assert_eq!(writes, vec![(red, 0.5), (blue, 0.25)]);
+    }
+
+    /// A string sent to a text control's address, as OSC sends it, sets the
+    /// text; other decks' addresses refuse it.
+    #[test]
+    fn osc_text_reaches_a_text_deck() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        let channel = app.mixer.channels()[0].uuid().to_string();
+        let deck = app
+            .add_deck(&channel, &crate::text::TextDeck::config_for("before"))
+            .expect("text deck");
+        app.settle_deck_loads();
+        let result = app.execute_command(C::SetPathText {
+            path: format!("deck/{deck}/text"),
+            value: "after".into(),
+        });
+        assert!(
+            matches!(result, crate::engine::CommandResult::Ok),
+            "{result:?}"
+        );
+        let result = app.execute_command(C::SetPathText {
+            path: format!("deck/{deck}/line"),
+            value: "appended".into(),
+        });
+        assert!(
+            matches!(result, crate::engine::CommandResult::Ok),
+            "{result:?}"
+        );
+        let (ch, dk) = app.mixer.find_deck_by_uuid(&deck).expect("deck");
+        let text = app.mixer.channels()[ch].decks[dk]
+            .deck
+            .source()
+            .param("text");
+        assert_eq!(
+            text,
+            Some(crate::source::ControlValue::Text("after\nappended".into()))
+        );
+        let refused = app.execute_command(C::SetPathText {
+            path: format!("deck/{deck}/size"),
+            value: "big".into(),
+        });
+        assert!(matches!(refused, crate::engine::CommandResult::Err { .. }));
+    }
+
+    /// Assignments saved with a component index are rewritten to component
+    /// paths once the deck exists to say the target is a color.
+    #[test]
+    fn a_saved_component_index_becomes_a_component_path() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        let channel = app.mixer.channels()[0].uuid().to_string();
+        let deck = app
+            .add_deck(
+                &channel,
+                &crate::solid_color::SolidColor::config_for([0.0, 0.0, 0.0, 1.0]),
+            )
+            .expect("solid deck");
+        let lfo = app
+            .mixer
+            .modulation_mut()
+            .add_source(crate::modulation::ModulationSource::sine_lfo(1.0));
+        let key = ParamAddress::deck(&deck, DeckTarget::source("color")).to_string();
+        app.mixer
+            .modulation_mut()
+            .assign_saved(&key, &lfo, 1.0, Some(1));
+        assert_eq!(
+            app.mixer.component_kind(&key),
+            Some(crate::engine::value::param::ComponentKind::Color)
+        );
+        assert_eq!(app.mixer.rekey_legacy_modulation(), 1);
+        let green = ParamAddress::deck(&deck, DeckTarget::source("color/g")).to_string();
+        assert!(app.mixer.modulation().has_modulation(&green));
+        assert!(!app.mixer.modulation().has_modulation(&key));
+    }
+
+    /// A multi-line crawl and ticker move and lay out in the running engine.
+    #[test]
+    fn crawl_and_ticker_move_in_the_engine() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        let channel = app.mixer.channels()[0].uuid().to_string();
+        for mode in ["Crawl", "Ticker"] {
+            let config = crate::text::TextDeck::config_for("first line\nsecond line\nthird line")
+                .with("mode", mode);
+            let deck = app.add_deck(&channel, &config).expect("text deck");
+            app.settle_deck_loads();
+            for _ in 0..30 {
+                app.begin_frame();
+                app.render_frame();
+            }
+            let (ch, dk) = app.mixer.find_deck_by_uuid(&deck).expect("deck");
+            let text = crate::source::downcast_ref::<crate::text::TextDeck>(
+                app.mixer.channels()[ch].decks[dk].deck.source(),
+            )
+            .expect("a text deck");
+            let (position, quads) = text.probe(1920.0, 1080.0);
+            assert!(position.is_finite(), "{mode}: {position}");
+            assert!(quads > 0, "{mode} lays out something at {position}");
+        }
     }
 }

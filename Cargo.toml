@@ -61,6 +61,9 @@ serde_json = { version = "1.0", features = ["preserve_order"] }
 
 # UI
 egui = "0.36"
+# egui's bundled fonts, already built through egui: the text fallback on a
+# machine with no system fonts. See /spec/text-source.md § Fonts.
+epaint_default_fonts = "0.36"
 egui-wgpu = "0.36"
 egui-winit = { version = "0.36", features = ["accesskit"] }
 

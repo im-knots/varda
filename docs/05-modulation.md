@@ -217,7 +217,9 @@ Example: an LFO plus an audio-bass source on the same brightness parameter gives
 
 ### Per-Component Modulation
 
-Color parameters (vec4) support per-component modulation. You can assign a source to only the red, green, blue, or alpha channel.
+Colors and 2D points are modulated one channel or axis at a time. Next to a color swatch are small **r g b a** labels, and next to a point **x y**. Each label is its own parameter: it has its own `〰` menu and automation lane, and in learn mode you click it to map a MIDI fader or key to that one channel.
+
+The paths add the channel to the parameter's path: `deck/<uuid>/color/r`, `deck/<uuid>/param/tint/g`, `deck/<uuid>/position/x`. This works for shader parameters and deck source controls alike.
 
 ---
 

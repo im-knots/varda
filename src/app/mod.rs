@@ -25,7 +25,7 @@ pub(crate) mod state;
 mod surfaces;
 mod workspace;
 
-pub use render::RenderTimes;
+pub use render::{FileDialogRequest, FileDialogTarget, RenderTimes};
 pub use workspace::WorkspaceLoad;
 
 /// Default render resolution for all decks and stage output (Full HD 1080p)
@@ -367,6 +367,9 @@ impl VardaApp {
     /// allocated, or if a subsystem required by `config` (MIDI, OSC, HTTP API)
     /// fails to start.
     pub fn new(gpu: GpuContext, config: &AppConfig) -> anyhow::Result<Self> {
+        // Text and SVG decks read the system fonts; scanning them is slow, so
+        // it starts now and never on the render thread.
+        crate::fonts::warm();
         log::info!("[STARTUP]   Audio init...");
         let audio_manager = AudioManager::new();
 

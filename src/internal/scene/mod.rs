@@ -98,13 +98,19 @@ fn default_version() -> u32 {
 
 impl SceneConfig {
     /// Version written by this build. Bump when adding a migration below.
-    pub const CURRENT_VERSION: u32 = 8;
+    pub const CURRENT_VERSION: u32 = 9;
 
     /// Bring an older scene up to [`Self::CURRENT_VERSION`] in place.
     ///
     /// Runs on load, before validation. Each step is guarded by the version it
     /// upgrades *from*, so a scene several versions behind walks through them in
     /// order.
+    ///
+    /// v8 → v9 stops writing a component index on modulation assignments; the
+    /// component is part of the key (`.../color/r`). Assignments that carry an
+    /// index are rewritten by the app once their targets exist
+    /// ([`crate::mixer::Mixer::rekey_legacy_modulation`]), since only the
+    /// target can say whether index 0 means `r` or `x`.
     ///
     /// v6 → v7 adds the arrangement and the persisted transport settings. Both
     /// are optional and serde-defaulted, so there is no transformation step:
@@ -376,9 +382,10 @@ pub struct ModulationRecipeAssignment {
     pub param: String,
     /// Modulation amount
     pub amount: f32,
-    /// Component index for multi-component params (e.g., color channels)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub component: Option<usize>,
+    /// A component index saved before scene version 9. Read, never written;
+    /// see [`crate::modulation::ParamModulation::legacy_component`].
+    #[serde(default, rename = "component", skip_serializing)]
+    pub legacy_component: Option<usize>,
 }
 
 // ── Auto-Transition ────────────────────────────────────────────────

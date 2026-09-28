@@ -1,6 +1,6 @@
 //! Video-deck chase servo. See /spec/timecode.md § Consumer 2.
 
-use crate::engine::value::video::DeckTransportSync;
+use crate::engine::value::source::DeckTransportSync;
 
 /// Result of one chase step: the clip position to take, and whether the
 /// decoder must seek rather than walk sequentially.
@@ -235,7 +235,7 @@ fn positive_rate_or_default(rate: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::value::video::TransportSyncMode;
+    use crate::engine::value::source::TransportSyncMode;
 
     fn input(position: f64, transport: f64) -> ChaseInput {
         ChaseInput {

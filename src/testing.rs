@@ -82,6 +82,120 @@ pub fn headless_gpu() -> Option<crate::renderer::context::GpuContext> {
     }
 }
 
+/// Render one frame of `source` into a new `width` by `height` target of the
+/// compositing format and read it back as linear RGBA, row-major.
+///
+/// # Panics
+///
+/// Panics if rendering or the readback fails.
+pub fn render_source_pixels(
+    gpu: &crate::renderer::context::GpuContext,
+    source: &mut dyn crate::source::DeckSourceInstance,
+    width: u32,
+    height: u32,
+) -> Vec<[f32; 4]> {
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("test source target"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba16Float,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    assert_eq!(gpu.compositing_format, wgpu::TextureFormat::Rgba16Float);
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let audio = crate::audio::AudioData::default();
+    let modulation = crate::modulation::ModulationEngine::new();
+    let mut params = crate::params::ShaderParams::from_inputs(&[]);
+    let mut cmd_buffers = Vec::new();
+    let mut frame = crate::source::SourceFrame {
+        gpu,
+        target: &view,
+        target_texture: &texture,
+        width,
+        height,
+        transparent: false,
+        time: 0.0,
+        time_delta: 0.0,
+        frame_index: 0,
+        phase_times: [0.0; 4],
+        audio: &audio,
+        modulation: &modulation,
+        param_prefix: "deck/test/param",
+        params: &mut params,
+        cmd_buffers: &mut cmd_buffers,
+    };
+    source.render(&mut frame).expect("source renders");
+    gpu.queue.submit(cmd_buffers);
+
+    let unpadded = width * 8;
+    let padded =
+        unpadded.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("test source readback"),
+        size: u64::from(padded * height),
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded),
+                rows_per_image: Some(height),
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    gpu.queue.submit(std::iter::once(encoder.finish()));
+    let (tx, rx) = std::sync::mpsc::channel();
+    buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
+    gpu.device
+        .poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        })
+        .ok();
+    rx.recv().expect("map channel").expect("map ok");
+    let data = buffer.slice(..).get_mapped_range().expect("mapped");
+    let channel = |at: usize| half::f16::from_le_bytes([data[at], data[at + 1]]).to_f32();
+    let mut out = Vec::with_capacity((width * height) as usize);
+    for row in 0..height as usize {
+        for col in 0..width as usize {
+            let at = row * padded as usize + col * 8;
+            out.push([
+                channel(at),
+                channel(at + 2),
+                channel(at + 4),
+                channel(at + 6),
+            ]);
+        }
+    }
+    out
+}
+
 /// An engine built with `config` on a headless GPU, or `None` only when there
 /// is no GPU. An engine that fails to build fails the test: that is the
 /// regression a test exists to catch, not a missing adapter.

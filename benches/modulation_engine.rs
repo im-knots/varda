@@ -117,7 +117,7 @@ fn engine_mod_on_mod(n: usize) -> ModulationEngine {
     let uuids: Vec<String> = (0..n).map(|i| engine.add_source(lfo(i))).collect();
     for i in 0..n {
         let driver = &uuids[(i + 1) % n];
-        engine.assign(&format!("mod/{}/frequency", uuids[i]), driver, 0.3, None);
+        engine.assign(&format!("mod/{}/frequency", uuids[i]), driver, 0.3);
     }
     engine
 }
@@ -128,7 +128,7 @@ fn engine_with_assignments(n: usize) -> ModulationEngine {
     let mut engine = ModulationEngine::new();
     let uuids: Vec<String> = (0..n).map(|i| engine.add_source(lfo(i))).collect();
     for (i, uuid) in uuids.iter().enumerate() {
-        engine.assign(&format!("deck_{i:04x}:opacity"), uuid, 1.0, None);
+        engine.assign(&format!("deck_{i:04x}:opacity"), uuid, 1.0);
     }
     engine
 }
@@ -161,7 +161,6 @@ fn engine_envelopes(n: usize) -> ModulationEngine {
             &format!("deck_{i:04x}:opacity"),
             &uuid,
             1.0,
-            None,
             AssignmentMode::Absolute,
         );
     }

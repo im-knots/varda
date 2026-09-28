@@ -167,13 +167,11 @@ impl Deck {
         &mut self,
         modulation: &ModulationEngine,
         awake: bool,
-        transport: Option<crate::timebase::TransportSample>,
+        clock: crate::source::SourceClock,
         target_fps: u32,
         scratch: &mut String,
     ) {
-        let mut ctx = SourceControl::new(
-            &self.uuid, modulation, awake, transport, target_fps, scratch,
-        );
+        let mut ctx = SourceControl::new(&self.uuid, modulation, awake, clock, target_fps, scratch);
         self.source.control(&mut ctx);
     }
 
@@ -659,7 +657,7 @@ mod tests {
             interpolation: StepInterpolation::None,
             bipolar: false,
         });
-        engine.assign(target, &uuid, amount, None);
+        engine.assign(target, &uuid, amount);
         engine.update_free_running(
             0.0,
             &crate::modulation::AudioValues::default(),
