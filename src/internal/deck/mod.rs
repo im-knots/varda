@@ -277,7 +277,10 @@ impl Deck {
     }
 
     /// Restore host-inline preprocessor state saved by [`Self::source_config`].
-    pub fn restore_preprocessor_state(&mut self, states: &serde_json::Map<String, serde_json::Value>) {
+    pub fn restore_preprocessor_state(
+        &mut self,
+        states: &serde_json::Map<String, serde_json::Value>,
+    ) {
         self.host_inline.restore_states(states);
     }
 

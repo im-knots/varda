@@ -5,9 +5,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use super::AnalyzerRegistry;
-use super::traits::{
-    AnalyzerSnapshot, AnalyzerStateSnapshot, HostFrame, HostInlinePreprocessor,
-};
+use super::traits::{AnalyzerSnapshot, AnalyzerStateSnapshot, HostFrame, HostInlinePreprocessor};
 
 /// How long one step may take before it is reported.
 pub(crate) const STEP_BUDGET: Duration = Duration::from_millis(1);
@@ -189,8 +187,7 @@ pub(crate) mod tests {
     pub(crate) const COUNTER: &str = "test_counter";
 
     pub(crate) fn registry() -> AnalyzerRegistry {
-        AnalyzerRegistry::new()
-            .register_host_inline(COUNTER, || Box::new(Counter { count: 0.0 }))
+        AnalyzerRegistry::new().register_host_inline(COUNTER, || Box::new(Counter { count: 0.0 }))
     }
 
     impl HostInlinePreprocessor for Counter {

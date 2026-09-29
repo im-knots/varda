@@ -1189,7 +1189,10 @@ void main() {{ fragColor = vec4(1.0); }}
 
     fn count(deck: &crate::deck::Deck) -> f32 {
         use crate::analyzer::host_inline::tests::COUNTER;
-        deck.host_inline.latest(COUNTER).expect("running").scalar("count")
+        deck.host_inline
+            .latest(COUNTER)
+            .expect("running")
+            .scalar("count")
     }
 
     #[test]

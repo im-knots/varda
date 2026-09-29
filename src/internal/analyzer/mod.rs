@@ -119,8 +119,10 @@ impl AnalyzerRegistry {
         self.schemas.insert(preprocessor_type.to_owned(), schema);
         self.host_inline_factories
             .insert(preprocessor_type.to_owned(), Box::new(factory));
-        self.categories
-            .insert(preprocessor_type.to_owned(), PreprocessorCategory::HostInline);
+        self.categories.insert(
+            preprocessor_type.to_owned(),
+            PreprocessorCategory::HostInline,
+        );
         self
     }
 
