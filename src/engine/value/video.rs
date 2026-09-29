@@ -13,7 +13,7 @@
     utoipa::ToSchema,
 )]
 pub enum LoopMode {
-    /// Standard loop — restart from in-point when reaching out-point.
+    /// Restart from the in-point at the out-point.
     #[default]
     Loop,
     /// Play forward then reverse repeatedly.

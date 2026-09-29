@@ -1,5 +1,5 @@
-//! Representative view-model fixtures for UI tests and the `test-fixtures`
-//! feature, so panel tests and snapshot tests share one source of truth.
+//! View-model fixtures shared by panel tests, snapshot tests and the
+//! `test-fixtures` feature.
 
 use super::{
     AudioUIData, CameraDetectMode, ChannelRenderStats, ChannelUIInfo, DeckUIInfo, ModAssignmentUI,
@@ -27,7 +27,7 @@ fn shader_source() -> DeckSourceSnapshot {
 }
 
 /// The shader source type listing `generators`, then the image, video and
-/// camera types as their providers describe themselves with no devices found.
+/// camera types as their providers describe themselves with no devices.
 #[cfg(any(test, feature = "test-fixtures"))]
 fn fixture_source_types(generators: &[&str]) -> Vec<ProviderTypeSnapshot> {
     let shaders = crate::registry::ShaderRegistry::new();
@@ -56,7 +56,7 @@ fn fixture_sink_types() -> Vec<ProviderTypeSnapshot> {
     })
 }
 
-/// The shader source type, its library listing `generators`.
+/// The shader source type with `generators` in its library.
 #[cfg(any(test, feature = "test-fixtures"))]
 fn fixture_shader_type(generators: &[&str]) -> ProviderTypeSnapshot {
     use crate::source::DeckSourceProvider;
@@ -108,11 +108,11 @@ impl SurfaceUI {
 
 #[cfg(any(test, feature = "test-fixtures"))]
 impl UIData {
-    /// Representative test fixture for UI testing.
+    /// Representative fixture for UI tests.
     ///
-    /// Contains 2 channels with 2 decks each, effects, modulation, crossfader
-    /// at 0.5, library panel open, deck (0,0) selected, and empty but present
-    /// collections for MIDI, audio, surfaces, and sequences.
+    /// 2 channels with 2 decks each, effects, modulation, crossfader at 0.5,
+    /// library panel open, deck (0,0) selected, and empty MIDI, audio, surface and
+    /// sequence collections.
     pub fn test_fixture() -> Self {
         use crate::modulation::LFOWaveform;
 

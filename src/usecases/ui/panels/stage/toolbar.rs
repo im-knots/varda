@@ -13,12 +13,10 @@ pub(super) fn render(
     actions: &mut UIActions,
     state: &mut StageEditorState,
 ) {
-    // Toolbar at top
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("🎨 Stage Editor").strong().size(16.0));
         ui.separator();
 
-        // Tool buttons
         let tools = [
             (
                 DrawingTool::Select,
@@ -51,7 +49,7 @@ pub(super) fn render(
             let btn = ui.selectable_label(selected, *label);
             if btn.on_hover_text(*tooltip).clicked() {
                 state.tool = *tool;
-                // Clear any in-progress drawing
+                // Clear any in-progress drawing.
                 state.rect_start = None;
                 state.polygon_verts.clear();
                 state.circle_center = None;
@@ -89,13 +87,12 @@ pub(super) fn render(
         });
     });
 
-    // Second toolbar row: contextual actions (edit · order · import · detect).
-    // Wraps onto more lines on narrow windows so the controls never bunch up.
+    // Second row: contextual actions (edit, order, import, detect). Wraps on
+    // narrow windows.
     ui.add_space(2.0);
     ui.horizontal_wrapped(|ui| {
-        // "Make Hole" (8i.7): turn the single selected surface into a cut-out in
-        // the surface beneath it, consuming the source. Enabled only when
-        // exactly one surface is selected.
+        // "Make Hole" turns the single selected surface into a cut-out in the
+        // surface beneath it and consumes the source.
         let can_punch = state.selected_surfaces.len() == 1;
         if ui
             .add_enabled(can_punch, egui::Button::new("◌ Make Hole"))
@@ -116,7 +113,6 @@ pub(super) fn render(
 
         ui.separator();
 
-        // Grid controls
         let snap_label = if data.stage_editor_snap {
             "🧲 Snap: ON"
         } else {
@@ -126,7 +122,6 @@ pub(super) fn render(
             actions.session.toggle_snap = true;
         }
 
-        // Grid size selector
         let grid_sizes = [
             (0.1, "10%"),
             (0.05, "5%"),
@@ -142,12 +137,11 @@ pub(super) fn render(
                         .selectable_value(&mut actions.session.set_grid_size, Some(*size), *label)
                         .clicked()
                     {
-                        // handled by set_grid_size
+                        // Handled by set_grid_size.
                     }
                 }
             });
 
-        // Circle sides (only when circle tool selected)
         if state.tool == DrawingTool::Circle {
             ui.separator();
             ui.label("Sides:");
@@ -161,7 +155,7 @@ pub(super) fn render(
             );
         }
 
-        // Circle-specific toolbar: when exactly one circle is selected, show radius/sides/convert
+        // With exactly one circle selected, show radius, sides and convert.
         let selected_circle = if state.selected_surfaces.len() == 1 {
             let sel_uuid = state.selected_surfaces.iter().next().unwrap().clone();
             data.surfaces
@@ -215,7 +209,6 @@ pub(super) fn render(
             }
         }
 
-        // Duplicate & flip (enabled when any surfaces are selected)
         ui.separator();
         let has_sel = !state.selected_surfaces.is_empty();
         ui.add_enabled_ui(has_sel, |ui| {
@@ -264,7 +257,7 @@ pub(super) fn render(
                     .push(EngineCommand::CombineSurfaces { uuids });
                 state.selected_surfaces.clear();
             }
-            // Stacking order (8i.12): bring the selection to the very front/back.
+            // Bring the selection to the front or back of the stacking order.
             if ui
                 .button("⤒ Front")
                 .on_hover_text("Bring selected to front")
@@ -291,7 +284,6 @@ pub(super) fn render(
             }
         });
 
-        // Import from file
         if ui.button("📁 Import").clicked()
             && let Some(path) = rfd::FileDialog::new()
                 .add_filter("Stage Plans", &["png", "jpg", "jpeg", "svg", "dxf"])
@@ -305,7 +297,7 @@ pub(super) fn render(
                 .push(EngineCommand::ImportSurfacesFromFile { path });
         }
 
-        // Camera detect button — 0 cameras: hidden; 1: direct click; N: dropdown
+        // Camera detect: hidden with 0 cameras, a button with 1, a dropdown with more.
         let active_cameras = &data.cameras;
         if active_cameras.len() == 1 {
             if ui

@@ -1,5 +1,5 @@
-//! HAP video codec decoder — demuxes with ffmpeg, parses HAP frames,
-//! Snappy-decompresses `BCn` texture blocks for direct GPU upload.
+//! HAP decoder: demuxes with ffmpeg, parses HAP frames and Snappy-decompresses
+//! the `BCn` blocks for direct GPU upload.
 
 use anyhow::{Context, Result, bail};
 use std::path::Path;
@@ -54,7 +54,7 @@ fn parse_header(data: &[u8]) -> Result<SectionHeader> {
     })
 }
 
-/// BC4/RGTC1 nibble (alpha-only, used in Hap Q Alpha's alpha plane)
+/// BC4/RGTC1, alpha only (Hap Q Alpha's alpha plane).
 const FMT_BC4: u8 = 0x01;
 
 fn tex_fmt(t: u8) -> Result<HapTextureFormat> {
@@ -142,25 +142,24 @@ fn decode_chunked(data: &[u8], output: &mut Vec<u8>) -> Result<()> {
     Ok(())
 }
 
-/// Result of decoding a HAP frame — single plane or dual plane (HAP Q Alpha).
+/// A decoded HAP frame: one plane, or two for HAP Q Alpha.
 pub enum HapFrame {
     /// Single texture plane (Hap, Hap Alpha, Hap Q, Hap R).
     Single { format: HapTextureFormat },
-    /// Dual texture planes (HAP Q Alpha): color (`YCoCg` BC3) + alpha (BC4).
+    /// Two planes (HAP Q Alpha): color (`YCoCg` BC3) and alpha (BC4).
     DualPlane {
         color_format: HapTextureFormat,
         alpha_format: HapTextureFormat,
     },
 }
 
-/// Decode a raw HAP packet into decompressed `BCn` data.
-/// For single-plane: data goes into `out`.
-/// For dual-plane (HAP Q Alpha): color goes into `out`, alpha goes into `alpha_out`.
+/// Decodes a HAP packet into `BCn` data. Single-plane data goes to `out`; for
+/// HAP Q Alpha, color goes to `out` and alpha to `alpha_out`.
 ///
 /// # Errors
 ///
-/// Returns an error if the packet header is malformed, if the section type or
-/// texture format is unknown, or if Snappy/LZ4 decompression fails.
+/// Returns an error if the header is malformed, the section type or texture
+/// format is unknown, or Snappy/LZ4 decompression fails.
 pub fn decode_hap_frame(
     packet_data: &[u8],
     out: &mut Vec<u8>,
@@ -170,7 +169,6 @@ pub fn decode_hap_frame(
     let section_data = &packet_data[h.header_size..h.header_size + h.data_length];
 
     if h.section_type == SECTION_MULTI_IMAGE {
-        // Multi-image: parse all sub-sections
         let mut pos = 0;
         let mut color_fmt = None;
         let mut alpha_fmt = None;
@@ -206,16 +204,14 @@ pub fn decode_hap_frame(
     }
 }
 
-/// Detect the color-plane texture format of a HAP frame from a raw packet,
-/// reading only the section header(s) — no decompression. Mirrors the format
-/// resolution in [`decode_hap_frame`]; used to size the GPU texture and staging
-/// buffers correctly before playback begins (ffmpeg groups all HAP variants
-/// under one codec id, so the format must be read from the frame itself).
+/// Reads the color-plane texture format from a packet's section headers,
+/// without decompressing. ffmpeg uses one codec id for all HAP variants, so
+/// this sizes the texture and staging buffers before playback.
 ///
 /// # Errors
 ///
-/// Returns an error if the packet header is malformed or if no colour-plane
-/// section with a known texture format is present.
+/// Returns an error if the header is malformed or no color-plane section
+/// with a known texture format is present.
 pub fn detect_hap_format(packet_data: &[u8]) -> Result<HapTextureFormat> {
     let h = parse_header(packet_data)?;
     if h.section_type == SECTION_MULTI_IMAGE {
@@ -224,7 +220,7 @@ pub fn detect_hap_format(packet_data: &[u8]) -> Result<HapTextureFormat> {
         let mut color_fmt = None;
         while pos < section_data.len() {
             let sub = parse_header(&section_data[pos..])?;
-            // The non-alpha plane carries the color format (mirrors decode_hap_frame).
+            // The non-alpha plane carries the color format.
             if !matches!(tex_fmt(sub.section_type)?, HapTextureFormat::Bc4) {
                 color_fmt = Some(tex_fmt(sub.section_type)?);
             }
@@ -236,23 +232,21 @@ pub fn detect_hap_format(packet_data: &[u8]) -> Result<HapTextureFormat> {
     }
 }
 
-/// Result of a `HapPlayer::next_frame()` call.
 pub struct HapFrameResult<'a> {
-    /// Color plane data (always present).
     pub color_data: &'a [u8],
-    /// Color plane texture format.
     pub color_format: HapTextureFormat,
-    /// Alpha plane data (only for HAP Q Alpha dual-plane frames).
+    /// Alpha plane data (HAP Q Alpha only).
     pub alpha_data: Option<&'a [u8]>,
-    /// Alpha plane texture format (only for dual-plane).
+    /// Alpha plane texture format (HAP Q Alpha only).
     pub alpha_format: Option<HapTextureFormat>,
 }
 
-/// HAP video player — demuxes container with ffmpeg, decodes HAP frames to `BCn` data.
+/// HAP player: demuxes with ffmpeg and decodes HAP frames to `BCn` data.
 ///
-/// # Safety: Send
-/// Same rationale as `VideoPlayer` — exclusive ownership of C-allocated ffmpeg state.
-/// Transferred between threads but never accessed concurrently.
+/// # Safety
+///
+/// `Send` for the same reason as `VideoPlayer`: it exclusively owns its
+/// ffmpeg state and is never used from two threads at once.
 pub struct HapPlayer {
     ictx: ffmpeg::format::context::Input,
     video_stream_index: usize,
@@ -261,24 +255,23 @@ pub struct HapPlayer {
     texture_format: HapTextureFormat,
     /// Whether this file produces dual-plane frames (HAP Q Alpha).
     pub is_dual_plane: bool,
-    /// Shared playback state (loop mode, speed, in/out points, position).
+    /// Loop mode, speed, in/out points and position.
     pub playback: PlaybackState,
-    /// Color plane buffer.
     frame_data: Vec<u8>,
-    /// Alpha plane buffer (for dual-plane HAP Q Alpha).
+    /// Alpha plane buffer (HAP Q Alpha).
     alpha_data: Vec<u8>,
 }
 
-// SAFETY: See doc comment on HapPlayer. Exclusive ownership of C allocations, no concurrent use.
+// SAFETY: exclusive ownership of the ffmpeg allocations, no concurrent use.
 unsafe impl Send for HapPlayer {}
 
 impl HapPlayer {
-    /// Create a new HAP player from a video file path.
+    /// Opens a HAP video file.
     ///
     /// # Errors
     ///
-    /// Returns an error if FFmpeg cannot be initialised, if the file cannot be
-    /// opened, or if it contains no video stream.
+    /// Returns an error if FFmpeg cannot be initialized, the file cannot be
+    /// opened, or it has no video stream.
     pub fn new<P: AsRef<Path>>(path: P, initial_format: HapTextureFormat) -> Result<Self> {
         ffmpeg::init().context("Failed to initialize FFmpeg")?;
         let ictx = input(&path).context("Failed to open HAP video")?;
@@ -315,24 +308,22 @@ impl HapPlayer {
         })
     }
 
-    /// Get the next frame as compressed `BCn` data.
+    /// Returns the next frame as compressed `BCn` data.
     ///
     /// # Errors
     ///
-    /// Returns an error if a HAP packet fails to decode, or if seeking (for
-    /// reverse playback and loop wrap-around) fails.
+    /// Returns an error if a packet fails to decode or a seek (reverse playback,
+    /// loop wrap) fails.
     pub fn next_frame(&mut self) -> Result<Option<HapFrameResult<'_>>> {
-        // Only suspension is a hard stop. A paused clip still asks
-        // `advance_frame` what to do, because a modulator bound to the playhead
-        // can move it while it is parked; with nothing modulating it the answer
-        // is "no frames, no seek" and we hold on the line below as before.
+        // Only suspension stops here. A paused clip still calls `advance_frame`,
+        // since a modulator on the playhead can move it while paused.
         if self.playback.suspended {
             return Ok(None);
         }
         let result = self.playback.advance_frame();
 
-        // No frames to decode — hold current (HAP doesn't have a "current frame" buffer,
-        // so return None and let the caller keep the existing texture)
+        // Nothing to decode. HAP keeps no current-frame buffer, so return None and
+        // the caller keeps the existing texture.
         if result.frames_to_decode == 0 && !result.needs_seek {
             return Ok(None);
         }
@@ -341,21 +332,17 @@ impl HapPlayer {
             self.seek(self.playback.position)?;
         }
 
-        // Decode frames, skipping intermediate ones for speed > 1
+        // Skip intermediate frames when speed > 1.
         let target_frames = result.frames_to_decode.max(1);
         let mut decoded_count = 0u32;
-        // End-of-stream wraps taken while looking for this one frame. A wrap
-        // that yields no packet means the demuxer is not producing anything,
-        // so wrapping again would spin this thread at 100% CPU forever.
+        // Wraps taken while fetching this frame. A wrap that yields no packet means
+        // the demuxer is stuck; wrapping again would spin at 100% CPU.
         let mut wraps = 0u32;
         loop {
             let Some((stream, packet)) = self.ictx.packets().next() else {
-                // `packets()` reports `None` for a hard read error as well as
-                // for a clean end of stream, and an I/O error latched into the
-                // demuxer makes every later read report it again. Give up on
-                // this tick rather than seek-and-retry forever; the caller
-                // holds the current frame and we try again on the next one, so
-                // a transient fault recovers by itself.
+                // `packets()` returns `None` for read errors as well as end of stream,
+                // and a latched I/O error repeats on every read. Give up for this tick;
+                // the caller holds the frame and the next tick retries.
                 wraps += 1;
                 if wraps > 1 {
                     log::warn!(
@@ -365,7 +352,7 @@ impl HapPlayer {
                     );
                     return Ok(None);
                 }
-                // End of stream — hold while chasing; otherwise honour loop modes
+                // End of stream: hold while chasing, otherwise apply the loop mode.
                 if self.playback.chasing {
                     return Ok(None);
                 }
@@ -375,21 +362,15 @@ impl HapPlayer {
                         self.seek(self.playback.position)?;
                     }
                     LoopMode::PingPong => {
-                        // EOS: flip direction and seek to the opposite boundary.
-                        // advance_frame() may have already flipped `reverse`,
-                        // so we set it explicitly based on which boundary we hit.
-                        // Forward EOS (at end) → go reverse from out-point.
-                        // Reverse EOS (at start) → go forward from in-point.
-                        // Use position to determine which boundary we're near.
+                        // `advance_frame()` may already have flipped `reverse`, so set it
+                        // from which boundary the position is nearer.
                         let out_pt = self.playback.effective_out();
                         let in_pt = self.playback.in_point;
                         let mid = f64::midpoint(in_pt, out_pt);
                         if self.playback.position >= mid {
-                            // Near end → reverse
                             self.playback.reverse = true;
                             self.playback.position = out_pt - (1.0 / self.playback.frame_rate);
                         } else {
-                            // Near start → forward
                             self.playback.reverse = false;
                             self.playback.position = in_pt;
                         }
@@ -413,7 +394,6 @@ impl HapPlayer {
                 continue;
             };
             decoded_count += 1;
-            // Skip intermediate frames for speed > 1
             if decoded_count < target_frames {
                 continue;
             }
@@ -447,17 +427,15 @@ impl HapPlayer {
         }
     }
 
-    /// Seek the demuxer to `time_secs` and update the playback position.
+    /// Seeks the demuxer to `time_secs` and updates the playback position.
     ///
     /// # Errors
     ///
-    /// Returns an error if the underlying FFmpeg seek fails.
+    /// Returns an error if the FFmpeg seek fails.
     pub fn seek(&mut self, time_secs: f64) -> Result<()> {
         let ts = (time_secs * f64::from(ffmpeg::ffi::AV_TIME_BASE)) as i64;
-        // Every seek here means "resume decoding from this point". Without
-        // clearing it, an end-of-file or I/O error latched into the demuxer is
-        // replayed on every subsequent read, so the loop wrap would never
-        // produce another packet.
+        // Clear latched EOF or I/O errors; otherwise every later read repeats
+        // them and the loop wrap never gets another packet.
         self.ictx.clear_eof();
         self.ictx.seek(ts, ..ts)?;
         self.playback.position = time_secs;
@@ -501,7 +479,7 @@ impl HapPlayer {
 mod tests {
     use super::*;
 
-    /// Build a minimal HAP section: 4-byte header + payload.
+    /// Builds a HAP section with a 4-byte header.
     fn make_section(section_type: u8, payload: &[u8]) -> Vec<u8> {
         let len = payload.len();
         assert!(len < 0x00FF_FFFF, "payload too large for 4-byte header");
@@ -515,7 +493,8 @@ mod tests {
         buf
     }
 
-    /// Build a HAP section with 8-byte header (for payloads >= 16 MB or when first 3 bytes are zero).
+    /// Builds a HAP section with an 8-byte header (payloads >= 16 MB, or when the
+    /// first 3 bytes are zero).
     fn make_section_long(section_type: u8, payload: &[u8]) -> Vec<u8> {
         let len = payload.len() as u32;
         let mut buf = vec![0u8, 0, 0, section_type];
@@ -579,7 +558,7 @@ mod tests {
 
     #[test]
     fn test_decode_single_frame_uncompressed() {
-        // BC1 uncompressed: section_type = COMPRESSOR_NONE | FMT_BC1
+        // BC1, uncompressed.
         let section_type = COMPRESSOR_NONE | (FMT_BC1 & 0x0F);
         let payload = vec![0xAA; 32]; // 32 bytes of fake BCn data
         let packet = make_section(section_type, &payload);
@@ -599,7 +578,7 @@ mod tests {
 
     #[test]
     fn test_decode_single_frame_snappy() {
-        // BC3 with Snappy compression
+        // BC3, Snappy.
         let section_type = COMPRESSOR_SNAPPY | (FMT_BC3 & 0x0F);
         let original = vec![0xBB; 64];
         let compressed = snap::raw::Encoder::new().compress_vec(&original).unwrap();
@@ -632,7 +611,7 @@ mod tests {
 
     #[test]
     fn detect_hap_format_multi_image_returns_color_plane() {
-        // HAP Q Alpha: multi-image with YCoCg color plane + BC4 alpha plane.
+        // HAP Q Alpha: YCoCg color plane plus BC4 alpha plane.
         let color = make_section(COMPRESSOR_NONE | (FMT_YCOCG & 0x0F), &[0xCC; 16]);
         let alpha = make_section(COMPRESSOR_NONE | (FMT_BC4 & 0x0F), &[0xDD; 8]);
         let mut payload = color;

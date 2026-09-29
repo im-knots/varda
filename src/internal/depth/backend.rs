@@ -1,15 +1,12 @@
-//! Device-agnostic depth-sensor backend abstraction.
+//! Device-agnostic depth-sensor backend.
 //!
-//! A `DepthBackend` produces depth frames (16-bit mm) and optional aligned RGBA
-//! from a physical sensor. The manager owns one backend per open device and
-//! polls it on a dedicated capture thread (see [`super::DepthSensorManager`]).
+//! A `DepthBackend` produces 16-bit depth frames (mm) and optional aligned
+//! RGBA. [`super::DepthSensorManager`] owns one backend per open device and
+//! polls it on a capture thread.
 //!
-//! The first concrete backend is `FreenectBackend` (Xbox Kinect v1 via
-//! `libfreenect`), gated behind the default-off `depth` cargo feature. A
-//! `MockBackend` is always compiled so the manager, deck integration, API, and
-//! UI can be built and tested without the native library.
-//!
-//! See spec/depth-sensors.md.
+//! `FreenectBackend` (Kinect v1 via `libfreenect`) needs the `depth` cargo
+//! feature. `MockBackend` is always compiled so everything else builds and
+//! tests without the native library.
 
 /// Camera intrinsics used to deproject `(u, v, depth)` into camera-space XYZ.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -22,12 +19,12 @@ pub struct DepthIntrinsics {
     pub cx: f32,
     /// Principal point (y).
     pub cy: f32,
-    /// Multiply raw depth units by this to get metres.
+    /// Multiply raw depth units by this to get meters.
     pub depth_scale_m: f32,
 }
 
 impl DepthIntrinsics {
-    /// Default Kinect v1 intrinsics (VGA depth, values in mm → metres).
+    /// Default Kinect v1 intrinsics (VGA depth, mm to meters).
     pub fn kinect_v1() -> Self {
         Self {
             fx: 594.21,
@@ -39,11 +36,11 @@ impl DepthIntrinsics {
     }
 }
 
-/// A single depth frame plus optional colour, as delivered by a backend.
+/// A depth frame plus optional color.
 pub struct DepthFrame {
     /// Depth in raw sensor units (typically mm), `width * height` values.
     pub depth: Vec<u16>,
-    /// Optional RGBA colour aligned to the depth image, `width * height * 4`.
+    /// Optional RGBA color aligned to the depth image, `width * height * 4`.
     pub rgb: Option<Vec<u8>>,
     pub width: u32,
     pub height: u32,
@@ -58,19 +55,18 @@ pub struct DepthDeviceInfo {
 
 /// Device-agnostic depth sensor. Implementations run on the capture thread.
 pub trait DepthBackend: Send {
-    /// Human-readable device name (for logs / UI / persistence matching).
+    /// Device name, used in logs, UI, and scene matching.
     fn name(&self) -> &str;
     /// Intrinsics for deprojecting this device's depth image.
     fn intrinsics(&self) -> DepthIntrinsics;
     /// Native depth resolution `(width, height)`.
     fn resolution(&self) -> (u32, u32);
-    /// Poll the next frame. Returns `None` if no new frame is ready yet.
+    /// Next frame, or `None` if none is ready.
     fn next_frame(&mut self) -> Option<DepthFrame>;
 }
 
-/// A synthetic depth backend used for tests and for building/running without
-/// the `depth` feature. Emits a moving radial depth gradient so the point-cloud
-/// pass has something to render.
+/// Synthetic backend for tests and builds without the `depth` feature. Emits a
+/// moving radial depth gradient.
 pub struct MockBackend {
     name: String,
     width: u32,
@@ -102,7 +98,7 @@ impl DepthBackend for MockBackend {
         (self.width, self.height)
     }
 
-    // Synthetic image-space math: w/h/x/y/d are the idiomatic names here.
+    // Image-space math reads best with single-letter names.
     #[allow(clippy::many_single_char_names)]
     fn next_frame(&mut self) -> Option<DepthFrame> {
         self.frame = self.frame.wrapping_add(1);
@@ -111,11 +107,8 @@ impl DepthBackend for MockBackend {
         let cy = h as f32 * 0.5;
         let phase = (self.frame as f32) * 0.05;
         let mut depth = vec![0u16; (w * h) as usize];
-        // RGBA8, matching what a real backend delivers. Producing colour here is
-        // what makes `DepthSensorManager::upload_rgb` reachable from tests — it
-        // previously wrote rows at the wrong stride for the texture's format and
-        // aborted on the first real colour frame, invisible to a suite whose only
-        // backend returned `None`.
+        // RGBA8, like a real backend, so tests reach
+        // `DepthSensorManager::upload_rgb`.
         let mut rgb = vec![0u8; (w * h * 4) as usize];
         for y in 0..h {
             for x in 0..w {

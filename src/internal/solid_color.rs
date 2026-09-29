@@ -1,7 +1,6 @@
 //! Solid color: a flat fill, for a base layer or for testing effects.
 //!
-//! The smallest possible provider, and the one to copy when adding a new one.
-//! See /spec/deck-source-providers.md.
+//! The smallest provider; a template for new ones.
 
 use crate::source::{
     ControlError, ControlSpec, ControlValue, DeckSourceInstance, DeckSourceProvider, SourceConfig,
@@ -60,7 +59,7 @@ impl DeckSourceProvider for SolidColorProvider {
     }
 
     fn identity(&self, _config: &SourceConfig) -> serde_json::Value {
-        // Any color is the same source; a new color is a patch, not a rebuild.
+        // Changing the color patches the deck instead of rebuilding it.
         serde_json::Value::Null
     }
 }
@@ -68,7 +67,7 @@ impl DeckSourceProvider for SolidColorProvider {
 /// One solid-color deck.
 pub struct SolidColor {
     color: [f32; 4],
-    /// `color` with this frame's modulation applied: what is drawn.
+    /// `color` with this frame's modulation applied.
     shown: [f32; 4],
 }
 
@@ -185,7 +184,7 @@ mod tests {
             Some(ControlValue::Color([0.1, 0.75, 0.3, 1.0]))
         );
         assert_eq!(crate::source::read_route(&deck, "color/b"), Some(0.3));
-        // The whole color is a typed value, not a fader.
+        // A color is one typed value, not a fader.
         assert!(matches!(
             crate::source::write_route(&mut deck, "color", 0.5),
             Err(ControlError::Invalid(_))

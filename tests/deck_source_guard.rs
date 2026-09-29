@@ -1,15 +1,10 @@
-//! Guard: no code outside a deck source's or output sink's own provider names
-//! its type.
+//! No code outside a deck source's or output sink's provider names its type.
 //!
-//! Adding a deck source means writing a provider next to its backend and one
-//! line in `app/sources.rs`. That only stays true while the engine, the GUI and
-//! the API treat every source through the provider traits, so a source type id
-//! (the `type` tag a scene file saves) written anywhere else is a special case
-//! creeping back in. See /spec/deck-source-providers.md § Guard scope.
+//! Adding a source should take a provider beside its backend and one line in
+//! `app/sources.rs`. A source type id (the `type` tag a scene file saves)
+//! written anywhere else is a special case.
 //!
-//! Test code is exempt: tests build decks of specific types on purpose. So are
-//! the deprecated per-type API aliases, which exist to name types and go away
-//! after one release.
+//! Exempt: test code, and the deprecated per-type API aliases.
 
 use std::path::{Path, PathBuf};
 
@@ -34,8 +29,7 @@ const SOURCE_TYPES: &[&str] = &[
     "Text",
 ];
 
-/// Every output sink type id, as `app/sources.rs` registers them. See
-/// /spec/output-sink-providers.md.
+/// Every output sink type id, as `app/sources.rs` registers them.
 const SINK_TYPES: &[&str] = &[
     "windowed",
     "display",
@@ -68,7 +62,7 @@ const ALLOWED: &[&str] = &[
     "internal/html",
     "internal/text",
     "internal/output",
-    // One-release aliases for the old per-type routes (Decision 6).
+    // Deprecated aliases for the per-type routes.
     "usecases/api/routes/deprecated_sources.rs",
     // Test fixtures: compiled only for tests and the `test-fixtures` feature.
     "usecases/ui/fixtures.rs",
@@ -104,9 +98,9 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// The part of a file that ships: everything before its first `#[cfg(test)]`.
-/// Test modules sit at the end of a file by convention, and a file that is a
-/// test module in its own right (`tests.rs`) is skipped entirely.
+/// The shipped part of a file: everything before its first `#[cfg(test)]`.
+/// Test modules sit at the end of a file by convention; a file that is itself a
+/// test module (`tests.rs`) is skipped.
 fn shipped_code(path: &Path, text: &str) -> Option<String> {
     if path.file_name().is_some_and(|n| n == "tests.rs") {
         return None;

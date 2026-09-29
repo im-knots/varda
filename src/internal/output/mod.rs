@@ -5,8 +5,6 @@
 //! presentation. Where the finished picture goes is its sink, supplied by a
 //! provider: a window, a recording, a stream, an NDI sender, a Syphon server.
 //! Nothing outside a sink's own module names a sink type.
-//!
-//! See /spec/output-sink-providers.md.
 
 pub mod compose;
 pub mod ffmpeg;
@@ -36,9 +34,8 @@ use anyhow::Result;
 /// An output sink as it is saved and sent: a type id plus that type's fields.
 pub type SinkConfig = ProviderConfig;
 
-/// How a sink takes the finished picture. Declared rather than inferred, so the
-/// output loop batches readbacks and never copies a frame a sink publishes
-/// from the GPU. See /spec/output-sink-providers.md § Performance.
+/// How a sink takes the finished picture. Declared so the output loop can batch
+/// readbacks and never reads back a frame a sink publishes from the GPU.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FramePath {
     /// The sink hands the output a surface texture to draw into and presents

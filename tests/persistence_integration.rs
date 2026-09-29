@@ -1,4 +1,4 @@
-//! Persistence integration tests — save/load roundtrips with tempdir workspaces.
+//! Persistence integration tests: save/load roundtrips in tempdir workspaces.
 
 use varda::app::{AppConfig, VardaApp};
 use varda::engine::value::dome::{DomeConfig, DomeGeometry, DomePreset};
@@ -27,7 +27,7 @@ fn headless_app_in(workspace: &std::path::Path) -> Option<VardaApp> {
         "--workspace",
         ws,
     ]);
-    // Once a GPU exists, a construction failure is a bug, not a reason to skip.
+    // With a GPU present, a construction failure is a bug, not a skip.
     Some(VardaApp::new(gpu, &config).expect("VardaApp::new"))
 }
 
@@ -153,8 +153,8 @@ fn save_load_modulation_sources() {
     );
 }
 
-/// A beat-locked modulator must still be beat-locked after a reload, otherwise
-/// a saved show silently reverts to wall time. See /spec/timebase.md.
+/// A beat-locked modulator stays beat-locked after a reload instead of
+/// reverting to wall time.
 #[test]
 fn save_load_modulation_timebase() {
     let tmp = TempDir::new().unwrap();
@@ -190,10 +190,8 @@ fn save_load_modulation_timebase() {
     );
 }
 
-/// An automation curve is only worth drawing if it survives the save. This also
-/// covers `AssignmentMode::Absolute` persisting, since a curve that reloaded as
-/// additive would ride on the fader instead of setting it.
-/// See /spec/automation.md § Persistence.
+/// Automation curves survive a save, including `AssignmentMode::Absolute`; a
+/// curve reloaded as additive would offset the fader instead of setting it.
 #[test]
 fn save_load_automation_envelope() {
     use varda::modulation::{Breakpoint, CurveKind};
@@ -266,9 +264,7 @@ fn save_load_automation_envelope() {
     assert!(assigned.iter().any(|a| a.source_id == uuid));
 }
 
-/// Everything a timeline edit produces has to survive the file, or the show
-/// authored on Friday is not the show that opens on Saturday.
-/// See /spec/arrangement.md § Storage.
+/// Everything a timeline edit produces survives a save and reload.
 #[test]
 fn save_load_arrangement_edits() {
     use varda::arrangement::RegionConfig;
@@ -332,7 +328,7 @@ fn save_load_arrangement_edits() {
     assert!(lane.collapsed, "a folded lane should reload folded");
 
     // The region compiles back to an opacity curve on load, so the deck is
-    // driven without anyone having to touch it again.
+    // driven with no further edits.
     let key = varda::arrangement::opacity_param_key(&deck_uuid);
     assert!(
         state.modulation.assignments.contains_key(&key),
@@ -340,8 +336,7 @@ fn save_load_arrangement_edits() {
     );
 }
 
-/// Cues are how a show is navigated, so they belong to the scene rather than to
-/// the session that dropped them. See /spec/arrangement.md § Cue points.
+/// Cues are saved with the scene, not the session.
 #[test]
 fn save_load_cue_points() {
     let tmp = TempDir::new().unwrap();
@@ -395,8 +390,8 @@ fn save_load_render_resolution() {
     assert_eq!(app2.render_height(), 720);
 }
 
-/// Which signal a rig follows belongs to the venue, so it comes back with the
-/// stage rather than with the show.
+/// The followed timecode signal is venue setup, so it is saved with the stage,
+/// not the show.
 #[test]
 fn save_load_timecode_preference() {
     let tmp = TempDir::new().unwrap();
@@ -422,10 +417,9 @@ fn save_load_timecode_preference() {
     );
 }
 
-/// The patch is written down as the name of a box, never the slot it enumerated
-/// in: ids are handed out at scan time and move whenever the rig changes between
-/// load-ins, so a saved id would point at whatever interface came up in that slot
-/// tonight and the show would chase silence.
+/// The patch is saved as the interface name, not its enumeration slot: ids are
+/// assigned at scan time and change when the rig changes, so a saved id could
+/// point at a different interface.
 #[test]
 fn save_load_ltc_patch_by_interface_name() {
     let tmp = TempDir::new().unwrap();
@@ -472,8 +466,8 @@ fn save_load_ltc_patch_by_interface_name() {
     );
 }
 
-/// A stage naming an interface the rig no longer has must leave the patch unset
-/// rather than reading timecode off whichever cable took its number.
+/// A stage naming a missing interface leaves the patch unset rather than
+/// reading whichever interface took its id.
 #[test]
 fn load_ltc_patch_for_a_missing_interface_leaves_it_unset() {
     let tmp = TempDir::new().unwrap();
@@ -542,9 +536,8 @@ fn save_load_multiple_channels() {
 
 #[test]
 fn save_load_svg_image_deck() {
-    // SVG rides the existing image source config — no new scene.json shape —
-    // so the roundtrip has to prove the restored deck comes back rasterized
-    // rather than failing the way an unknown format would.
+    // SVG uses the image source config, so check the restored deck comes back
+    // rasterized rather than failing as an unknown format would.
     let tmp = TempDir::new().unwrap();
     let art = tmp.path().join("logo.svg");
     std::fs::write(
@@ -601,7 +594,7 @@ fn load_missing_assets_graceful() {
         },
     );
     app.save_workspace().expect("save workspace");
-    // Reload — should not crash
+    // Reload; must not crash.
     let Some(mut app2) = headless_app_in(tmp.path()) else {
         return;
     };
@@ -636,9 +629,8 @@ fn scene_json_valid_format() {
 
 #[test]
 fn save_load_deck_fidelity_opacity_transparent_blend() {
-    // A solid-color deck's opacity, transparent flag, and blend mode must all
-    // survive the real snapshot_scene -> disk -> restore_scene path, not just
-    // the deck's existence.
+    // A solid-color deck's opacity, transparent flag, and blend mode survive
+    // snapshot_scene -> disk -> restore_scene.
     let tmp = TempDir::new().unwrap();
     let Some(mut app) = headless_app_in(tmp.path()) else {
         return;
@@ -698,9 +690,9 @@ fn save_load_deck_fidelity_opacity_transparent_blend() {
 
 #[test]
 fn save_load_deck_effect_survives() {
-    // A deck effect (ISF filter) and its enabled state must survive the
-    // roundtrip. If the effect shader isn't available in this build the add
-    // fails gracefully and the assertion is skipped (mirrors engine tests).
+    // A deck effect (ISF filter) and its enabled state survive the roundtrip.
+    // If the effect shader isn't in this build, the add fails and the check is
+    // skipped.
     let tmp = TempDir::new().unwrap();
     let Some(mut app) = headless_app_in(tmp.path()) else {
         return;
@@ -724,7 +716,7 @@ fn save_load_deck_effect_survives() {
         },
     ) {
         CommandResult::OkWithId { .. } => "invert",
-        // Effect shader unavailable in this build — nothing to assert.
+        // Effect shader unavailable in this build.
         _ => return,
     };
     app.save_workspace().expect("save workspace");
@@ -770,7 +762,7 @@ fn save_load_channel_opacity() {
     assert!((state.mixer.channels[0].opacity - 0.5).abs() < 1e-4);
 }
 
-// ── Dome config and editor prefs (spec/ui-engine-boundary.md WS5, WS6) ──
+// ── Dome config and editor prefs ────────────────────────────────────
 
 fn a_dome() -> DomeConfig {
     DomeConfig {
@@ -811,8 +803,8 @@ fn set_dome(app: &mut VardaApp, dome: DomeConfig) {
     assert!(matches!(geometry, CommandResult::Ok), "{geometry:?}");
 }
 
-/// A headless install has no GUI to hold dome config, so it must be engine
-/// state that the bus sets and a restart restores.
+/// A headless install has no GUI to hold dome config, so it is engine state
+/// that the bus sets and a restart restores.
 #[test]
 fn dome_config_set_over_the_bus_survives_a_restart() {
     let tmp = TempDir::new().unwrap();
@@ -828,8 +820,8 @@ fn dome_config_set_over_the_bus_survives_a_restart() {
     assert_eq!(restored.build_engine_state().dome, a_dome());
 }
 
-/// The engine stores the GUI's editor prefs without interpreting them, so a save
-/// requested over the bus keeps whatever the GUI last sent.
+/// The engine stores the GUI's editor prefs opaquely, so a save requested over
+/// the bus keeps whatever the GUI last sent.
 #[test]
 fn editor_prefs_survive_a_save_from_any_consumer() {
     let tmp = TempDir::new().unwrap();
@@ -851,8 +843,8 @@ fn editor_prefs_survive_a_save_from_any_consumer() {
     assert_eq!(load.editor_prefs, Some(some_editor_prefs()));
 }
 
-/// Existing `.varda/` directories must keep loading: moving these values into
-/// the engine must not rename a single `stage.json` field.
+/// Existing `.varda/` directories keep loading: no `stage.json` field is
+/// renamed.
 #[test]
 fn stage_json_keeps_its_field_names() {
     let tmp = TempDir::new().unwrap();
@@ -885,8 +877,8 @@ fn stage_json_keeps_its_field_names() {
     assert_eq!(stage["dome_geometry"]["content_roll_degrees"], 30.0);
 }
 
-/// Dome config sits in the stage half of the undo snapshot, so undo restores it
-/// the way it restores surfaces.
+/// Dome config is in the stage half of the undo snapshot, so undo restores it
+/// like surfaces.
 #[test]
 fn undo_restores_dome_config() {
     let tmp = TempDir::new().unwrap();
@@ -907,10 +899,9 @@ fn undo_restores_dome_config() {
     assert_eq!(app.build_engine_state().dome, before);
 }
 
-/// A stage saved before surfaces named channels by UUID stored `{"Channel": 1}`,
-/// a position. Loading it must point the surface at the channel that was at
-/// that position when the file was saved, and the next save must write the
-/// UUID. See /spec/output-sink-providers.md Decision 12.
+/// Older stages store a surface's channel as a position (`{"Channel": 1}`).
+/// Loading points the surface at the channel at that position, and the next
+/// save writes its UUID.
 #[test]
 fn an_index_based_surface_source_is_migrated_to_the_channel_uuid() {
     let tmp = TempDir::new().unwrap();

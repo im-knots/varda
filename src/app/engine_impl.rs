@@ -13,16 +13,12 @@ use crate::source::SourceConfig;
 use anyhow::{Context as _, Result};
 
 impl VardaApp {
-    /// Post-construction wiring every new shader deck needs before it joins a
-    /// channel: start its CPU analyzers and acquire any device its
-    /// `PREPROCESSORS` block requires.
-    ///
-    /// Every deck built from a shader passes through here: the background
-    /// loader (`deck_loads`) calls it when a deck attaches. Skipping it leaves a
-    /// `depth_sensor` shader rendering against blank 1x1 textures with no error.
+    /// Start a new shader deck's CPU analyzers and acquire any device its
+    /// `PREPROCESSORS` block requires. `deck_loads` calls it on attach; without
+    /// it a `depth_sensor` shader silently renders blank textures.
     ///
     /// Returns `Err` when a required preprocessor cannot be satisfied; the
-    /// caller must discard the deck and surface the message.
+    /// caller must discard the deck.
     pub(crate) fn finalize_new_deck(&mut self, deck: &mut Deck) -> Result<()> {
         deck.ensure_preprocessor_analyzers(&self.sources.analyzer_registry);
         let Some(metadata) = deck.shader().map(|s| s.metadata.clone()) else {
@@ -43,10 +39,7 @@ impl VardaApp {
     /// Acquire the depth sensor a shader's `PREPROCESSORS` block requires.
     ///
     /// `Ok(None)` when the shader declares no `depth_sensor` preprocessor; `Err`
-    /// when it does but no sensor is available. `depth_sensor` is a *required*
-    /// preprocessor, so callers must propagate the error and abandon the load
-    /// rather than degrade to a deck with nothing to draw.
-    /// See spec/depth-sensor-preprocessor.md § Device Acquisition.
+    /// when it does but no sensor is available. Callers abandon the load on `Err`.
     fn acquire_depth_preprocessor(
         &mut self,
         metadata: &crate::isf::ISFMetadata,
@@ -63,11 +56,8 @@ impl VardaApp {
     }
 
     /// Reject a shader that declares a required preprocessor the engine cannot
-    /// service. Requiredness is a registry property, so this stays correct as
-    /// device-backed types are added.
-    ///
-    /// Unknown and optional types are *not* rejected — they degrade to default
-    /// outputs, per /spec/effect-preprocessing.md Decision #2.
+    /// service. Whether a type is required comes from the registry. Unknown and
+    /// optional types degrade to default outputs.
     fn check_required_preprocessors(
         &self,
         metadata: &crate::isf::ISFMetadata,
@@ -101,17 +91,12 @@ impl VardaApp {
         }
     }
 
-    /// Add a deck whose source `source` describes, returning the UUID it has
-    /// (or will have, for a source that loads in the background).
-    ///
-    /// A provider that builds slowly hands out a loader that runs off the
-    /// render thread; the deck attaches, finalized, on a later frame. Anything
-    /// wrong with the config, the type, or a device is reported here, before
-    /// any deck exists.
+    /// Add a deck for `source`, returning its UUID. Slow sources load off the
+    /// render thread and attach on a later frame. Config, type and device errors
+    /// are reported here, before any deck exists.
     pub(crate) fn add_deck(&mut self, channel_uuid: &str, source: &SourceConfig) -> Result<String> {
         let channel_idx = self.mixer.resolve_channel(channel_uuid)?;
-        // A source a controller re-subscribes to on every reconnect converges
-        // on one deck per channel rather than stacking duplicates.
+        // Controllers re-subscribe on reconnect; keep one such deck per channel.
         if self
             .sources
             .providers
@@ -157,8 +142,8 @@ impl VardaApp {
         Ok(uuid)
     }
 
-    /// Swap a deck's source for another, keeping its identity, effects,
-    /// opacity and modulation. The new source is built on the render thread.
+    /// Swap a deck's source, keeping its UUID, effects, opacity and modulation.
+    /// The new source is built on the render thread.
     pub(crate) fn replace_deck_source(
         &mut self,
         deck_uuid: &str,
@@ -195,9 +180,8 @@ impl VardaApp {
         f(provider)
     }
 
-    /// Run a library action a source type offers, answering with its fresh
-    /// entries so a probe that rescans is one non-racy call rather than a
-    /// rescan and a separate read that may land before discovery finished.
+    /// Run a source type's library action and return its fresh entries, so a
+    /// rescan and its result are one call.
     pub(crate) fn source_library_action(
         &mut self,
         source_type: &str,
@@ -234,8 +218,7 @@ impl VardaApp {
         providers.release(deck.source_mut(), &mut env);
     }
 
-    /// Remove a deck, then release every device it held and its arrangement
-    /// lane.
+    /// Remove a deck and release its devices and arrangement lane.
     pub(crate) fn remove_deck(&mut self, deck_uuid: &str) -> Result<()> {
         let mut slot = self.mixer.remove_deck(deck_uuid)?;
         self.release_source(&mut slot.deck);
@@ -245,8 +228,7 @@ impl VardaApp {
                 .service_mut::<crate::depth::DepthSensorManager>()
                 .release(sensor_id);
         }
-        // A lane is where this deck sits in show time, so it leaves with the
-        // deck. See /spec/arrangement.md § A lane is a deck.
+        // A lane belongs to its deck.
         self.mixer.drop_lane(deck_uuid);
         Ok(())
     }
@@ -260,16 +242,12 @@ impl VardaApp {
 
     pub(crate) fn remove_channel(&mut self, channel_uuid: &str) -> Result<()> {
         let channel_idx = self.mixer.resolve_channel(channel_uuid)?;
-        // Asked before anything is torn down, because a refusal has to leave the
-        // channel exactly as it was rather than empty.
+        // Checked first, so a refusal leaves the channel intact.
         if self.mixer.channels().len() <= 2 {
             anyhow::bail!("Cannot remove channel (minimum 2 required)")
         }
 
-        // Through the deck path rather than dropping the column wholesale, so a
-        // camera, a depth sensor, a stream receiver, and an arrangement lane all
-        // leave with the deck that held them, exactly as they do when the deck is
-        // removed on its own.
+        // Remove each deck via `remove_deck` so its devices and lane are released.
         let channel = &self.mixer.channels()[channel_idx];
         let decks: Vec<String> = channel
             .decks
@@ -291,14 +269,13 @@ impl VardaApp {
                 .modulation_mut()
                 .remove_assignments_with_prefix(&crate::engine::value::param::effect_prefix(&uuid));
         }
-        // The fader's own curves. A key that can never resolve again would be
-        // persisted and reloaded as dead weight.
+        // Drop the channel's own assignments, which can no longer resolve.
         self.mixer.modulation_mut().remove_assignments_with_prefix(
             &crate::engine::value::param::channel_prefix(channel_uuid),
         );
 
         if self.mixer.remove_channel(channel_idx) {
-            // Selection fixup is handled by the UI consumer (UIRunner)
+            // The UI fixes up selection.
             Ok(())
         } else {
             anyhow::bail!("Cannot remove channel (minimum 2 required)")
@@ -321,13 +298,11 @@ impl VardaApp {
                 channel_idx,
                 deck_idx,
             } => {
-                // Clone off the registry borrow so the device manager can be
-                // borrowed mutably for acquisition.
+                // Cloned to release the registry borrow before acquiring the device.
                 let shader = (*shader).clone();
                 let metadata = shader.metadata.clone();
                 drop(filters);
-                // Acquire before mutating the deck so a missing sensor leaves the
-                // effect chain untouched rather than half-added.
+                // Acquire first so a missing sensor leaves the effect chain untouched.
                 let already_attached = self
                     .mixer
                     .channels()
@@ -335,8 +310,7 @@ impl VardaApp {
                     .and_then(|c| c.decks.get(deck_idx))
                     .is_some_and(|s| s.deck.depth_prepro.is_some());
                 let acquired = if already_attached {
-                    // The deck's source shader already holds a session; reuse it
-                    // rather than opening the device a second time.
+                    // The deck's source shader already holds a session; reuse it.
                     None
                 } else {
                     self.acquire_depth_preprocessor(&metadata, shader_name)?
@@ -446,11 +420,8 @@ impl VardaApp {
         Ok(())
     }
 
-    /// Load a scene-referred look LUT from the same `.varda/luts` directory.
-    ///
-    /// Shares the directory with calibration LUTs deliberately: a `.cube` is a
-    /// `.cube`, and which slot it occupies is the user's choice rather than a
-    /// property of the file.
+    /// Load a scene-referred look LUT from `.varda/luts`, the directory
+    /// calibration LUTs also use.
     pub(crate) fn load_look_lut(&mut self, filename: &str) -> Result<()> {
         let lut_dir = self.session.workspace.varda_dir().join("luts");
         let path = lut_dir.join(filename);
@@ -474,7 +445,6 @@ impl VardaApp {
         let feedback_value = crate::param_router::param_value_to_norm_f32(&value);
         match crate::param_router::apply_typed_param_by_path(&mut self.mixer, path, value) {
             Ok(()) => {
-                // Broadcast to OSC feedback targets
                 if let Some(ref sender) = self.input.osc_feedback
                     && sender.has_targets()
                 {
@@ -490,8 +460,8 @@ impl VardaApp {
     }
 }
 
-/// What a background load is reported as before its deck exists: the file or
-/// shader it names, else its type.
+/// Label for a background load before its deck exists: the file or shader
+/// name, else the type.
 fn load_name(source: &SourceConfig) -> String {
     ["path", "name", "url"]
         .iter()
@@ -512,9 +482,7 @@ fn load_name(source: &SourceConfig) -> String {
 
 impl VardaApp {
     pub(crate) fn set_macro_value(&mut self, uuid: &str, value: f32) {
-        // Route through the shared param router so the fan-out (and any global
-        // trigger actions, drained in process_inputs) behave identically to a
-        // MIDI/OSC-driven `macro/<uuid>/value`.
+        // Through the param router, so it behaves like a MIDI/OSC `macro/<uuid>/value`.
         let path = crate::engine::value::param::ParamAddress::macro_value(uuid).to_string();
         if let Err(e) = crate::param_router::apply_param_by_path(&mut self.mixer, &path, value) {
             log::debug!("set_macro_value {uuid}: {e}");
@@ -534,7 +502,7 @@ impl VardaApp {
         camera_id: CameraId,
         params: &crate::surface::detect::DetectionParams,
     ) -> Result<crate::surface::detect::DetectionResult, crate::surface::import::ImportError> {
-        // If camera isn't active yet, open it temporarily for the snapshot.
+        // Open the camera temporarily if it is inactive.
         let was_inactive = !self
             .sources
             .service::<crate::camera::CameraManager>()
@@ -550,8 +518,7 @@ impl VardaApp {
                 })?;
         }
 
-        // Spin-wait for a frame (capture thread needs time to produce one).
-        // Budget: up to 500ms in 10ms increments.
+        // Poll for a frame for up to 500ms.
         let mut frame = None;
         for _ in 0..50 {
             if let Some(f) = self
@@ -565,7 +532,6 @@ impl VardaApp {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
 
-        // Release the camera if we opened it just for this snapshot.
         if was_inactive {
             self.sources
                 .service_mut::<crate::camera::CameraManager>()
@@ -603,10 +569,8 @@ mod tests {
 
     // ── Depth-sensor preprocessor ────────────────────────────────────────────
     //
-    // These need no hardware: without a Kinect attached (and on builds with the
-    // `depth` feature compiled out) the manager enumerates nothing, which is
-    // exactly the failure path being asserted. The release regression uses the
-    // mock backend.
+    // No hardware needed: without a Kinect the manager finds nothing, which is
+    // the failure path under test. The release test uses the mock backend.
 
     #[test]
     fn depth_sensor_shader_fails_to_load_without_a_sensor() {
@@ -626,7 +590,7 @@ mod tests {
             msg.contains("depth sensor") && msg.contains("none detected"),
             "unhelpful message: {msg}"
         );
-        // The load aborted, so no deck was left behind.
+        // No deck left behind.
         assert_eq!(
             crate::app::snapshot::build_mixer_snapshot(&app).channels[0]
                 .decks
@@ -637,9 +601,7 @@ mod tests {
 
     #[test]
     fn finalize_rejects_a_deck_whose_required_sensor_is_missing() {
-        // The background loader finalizes decks built off-thread, after the
-        // pre-flight in `add_deck` has passed. A sensor unplugged in between
-        // must still stop the deck from attaching.
+        // A sensor unplugged between `add_deck` and attach still blocks the deck.
         let Some(mut app) = headless_app() else {
             return;
         };
@@ -668,8 +630,7 @@ mod tests {
             return;
         };
         let ch0 = channel_uuid(&app, 0);
-        // A plain generator with no PREPROCESSORS block must be unaffected by
-        // the new required-preprocessor pre-flight.
+        // A generator with no PREPROCESSORS block is unaffected.
         assert!(app.add_deck(&ch0, &shader("liquid_light")).is_ok());
     }
 
@@ -678,8 +639,8 @@ mod tests {
         let Some(mut app) = headless_app() else {
             return;
         };
-        // Two decks sharing one mock sensor: the session must survive the first
-        // removal and be torn down by the second.
+        // Two decks share one mock sensor: the session survives the first
+        // removal and closes on the second.
         let device = app.render.context.device.clone();
         let depth = app
             .sources
@@ -743,7 +704,7 @@ mod tests {
                 .len(),
             2
         );
-        // Trying to remove should fail (minimum 2)
+        // Minimum is 2 channels.
         let ch0 = channel_uuid(&app, 0);
         let result = app.remove_channel(&ch0);
         assert!(result.is_err());
@@ -760,9 +721,7 @@ mod tests {
         let Some(mut app) = headless_app() else {
             return;
         };
-        // A path that matches no route must surface, not fail silently: the HTTP
-        // API turns this into a 404 rather than reporting a write that never
-        // landed as `{"status": "ok"}`.
+        // An unrouted path is an error; the HTTP API returns 404.
         assert!(matches!(
             app.set_param("ch99/deck99/nonexistent_param", ParamValue::Float(0.5)),
             Err(crate::param_router::ParamRouteError::UnknownPath { .. })

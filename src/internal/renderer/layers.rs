@@ -1,8 +1,6 @@
-//! Compositing a stack of layers into one texture. Two textures take turns as
-//! the composite so far and the next pass's target, so a blend never copies the
-//! composite first. The first write is chosen so the last one lands in the
-//! final texture, which consumers hold views of.
-//! See /spec/performance-hot-paths.md item C.
+//! Compositing a stack of layers into one texture. Two textures ping-pong as
+//! source and target, so a blend never copies the composite. The first target
+//! is chosen so the last write lands in the final texture.
 
 use super::blit::{BlitPipeline, CompositeBlitPipeline};
 use super::context::GpuContext;
@@ -60,8 +58,8 @@ impl<'a> LayerStack<'a> {
     }
 
     /// The composite so far and the target, for a layer drawn by its own
-    /// pipeline, such as a transition shader, which must write every pixel of
-    /// the target. `None`, drawing nothing, when no layer is below yet.
+    /// pipeline (e.g. a transition shader), which must write every pixel.
+    /// `None` when no layer is below yet.
     pub fn pass_over(&mut self) -> Option<(&'a wgpu::TextureView, &'a wgpu::TextureView)> {
         let (below, target) = self.targets_for_next();
         let below = below?;
@@ -265,9 +263,8 @@ mod tests {
             .to_vec()
     }
 
-    /// Ping-pong compositing gives the same picture as copying the composite
-    /// into a scratch texture before every blend, the method it replaced, at
-    /// every blend mode and for odd and even layer counts.
+    /// Ping-pong compositing matches copy-then-blend at every blend mode and
+    /// for odd and even layer counts.
     #[test]
     fn ping_pong_matches_copying_the_composite_before_each_blend() {
         let Some(context) = crate::testing::headless_gpu() else {

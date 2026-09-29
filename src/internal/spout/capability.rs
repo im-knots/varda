@@ -1,18 +1,8 @@
-//! What this machine can actually do with Spout's sharing primitives.
+//! Probes which of Spout's sharing primitives work on this machine.
 //!
-//! Spout shares a DirectX texture between processes, and none of that can be
-//! exercised from the Mac this was developed on. The published answers are also
-//! not trustworthy on their own: Microsoft's `D3D11_RESOURCE_MISC_SHARED`
-//! reference says WARP does not support shared resources and then, two lines
-//! later, that WARP has fully supported them since Windows 8. A CI runner has no
-//! real GPU, so which of those holds decides whether Spout can be tested
-//! automatically at all.
-//!
-//! So this measures rather than assumes, and reports every step rather than
-//! asserting, because the point is to learn what the runner does. Once the
-//! answers are known the steps that should work become assertions.
-//!
-//! See /spec/spout-output.md § Verification.
+//! Microsoft's docs contradict themselves on whether WARP supports shared
+//! resources, and CI runners only have WARP, so each step is measured and
+//! reported.
 
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Graphics::Direct3D11::{
@@ -28,8 +18,7 @@ use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SA
 use windows::Win32::Graphics::Dxgi::IDXGIResource;
 use windows::core::Interface;
 
-/// One measured step. `NotAttempted` is distinct from a failure: it means an
-/// earlier step stopped the probe, which is information in itself.
+/// One measured step. `NotAttempted` means an earlier step stopped the probe.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub enum Step {
     #[default]
@@ -63,9 +52,8 @@ fn failed(e: &windows::core::Error) -> Step {
     Step::Failed(format!("{e:?}"))
 }
 
-/// Run every step, stopping at the first that fails.
-///
-/// Never panics and never returns an error: a failure is a measurement.
+/// Runs every step, stopping at the first failure. Never panics; failures are
+/// recorded in the result.
 #[must_use]
 pub fn probe(context: &crate::renderer::context::GpuContext) -> Report {
     let (device, adapter) = (&context.device, &context.adapter);
@@ -118,7 +106,7 @@ pub fn probe(context: &crate::renderer::context::GpuContext) -> Report {
     };
     r.d3d11on12 = Step::Worked;
 
-    // The question WARP's docs answer ambiguously: a legacy MISC_SHARED texture.
+    // A legacy MISC_SHARED texture; WARP's docs are ambiguous about support.
     let desc = D3D11_TEXTURE2D_DESC {
         Width: 64,
         Height: 64,
@@ -145,8 +133,7 @@ pub fn probe(context: &crate::renderer::context::GpuContext) -> Report {
         r.shared_texture = failed(&e);
         return r;
     }
-    // Reported rather than unwrapped: this is a measurement, and a device that
-    // returns success with no texture is exactly the kind of answer worth having.
+    // Recorded rather than unwrapped: a device can return success with no texture.
     let Some(shared) = shared else {
         r.shared_texture = Step::Failed("CreateTexture2D succeeded with no texture".into());
         return r;
@@ -175,7 +162,7 @@ pub fn probe(context: &crate::renderer::context::GpuContext) -> Report {
         )
     });
 
-    // And the send direction: wrap one of our own D3D12 textures for D3D11.
+    // Send direction: wrap one of our own D3D12 textures for D3D11.
     let on12: ID3D11On12Device = match d3d11.cast() {
         Ok(v) => v,
         Err(e) => {
@@ -248,11 +235,7 @@ mod tests {
 
     /// Every step of the bridge Spout needs, asserted.
     ///
-    /// This began as a report with no assertions, because whether a machine
-    /// without a GPU could do any of it was unknown and a test that fails on an
-    /// unknown teaches nothing. It is known now. Measured on a GitHub Actions
-    /// `windows-latest` runner, whose adapter is `Microsoft Basic Render Driver`,
-    /// which is WARP:
+    /// Result on a GitHub Actions `windows-latest` runner (WARP):
     ///
     /// ```text
     /// adapter        : Microsoft Basic Render Driver (Dx12)
@@ -263,15 +246,7 @@ mod tests {
     /// wrap D3D12     : Worked
     /// ```
     ///
-    /// So the whole bridge works on a software adapter, and Spout's backend can
-    /// be developed against CI rather than blind. That also settles the
-    /// contradiction in Microsoft's own reference for
-    /// `D3D11_RESOURCE_MISC_SHARED`, which says WARP does not support shared
-    /// resources and then that the limitation was lifted in Windows 8: the
-    /// permissive note is the one that holds.
-    ///
-    /// The report is still printed, because when this does fail the numbers are
-    /// what a reader needs. Run with `--nocapture` to see it.
+    /// The report is printed for diagnosing failures; run with `--nocapture`.
     #[test]
     fn the_d3d11on12_bridge_works_on_this_machine() {
         let Some(context) = crate::testing::headless_gpu() else {
@@ -281,11 +256,8 @@ mod tests {
         let report = probe(&context);
         eprintln!("\n=== Spout capability ===\n{report}");
 
-        // Conditional on the backend rather than asserting it. wgpu builds its
-        // instance with `Backends::all()`, so a machine that prefers Vulkan is a
-        // legitimate configuration; Spout simply cannot run there, and the
-        // manager reports unavailable rather than failing. What is asserted is
-        // the implication that matters: given Dx12, the bridge must work.
+        // Only asserted on Dx12. wgpu may pick Vulkan, where Spout reports
+        // unavailable.
         if !report.is_dx12 {
             eprintln!(
                 "backend is {}, not Dx12; Spout cannot run here",

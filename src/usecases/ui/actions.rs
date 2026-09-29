@@ -1,23 +1,19 @@
-//! `UIActions` — everything a frame of UI emits, plus the drag payload types.
-//!
-//! Split into the outbound `EngineCommand` stream and UI-local [`UISession`]
-//! state (/spec/ui-engine-boundary.md WS4).
+//! `UIActions`: everything a frame of UI emits, plus the drag payload types.
 
 use super::{ParamUIInfo, UISession};
 use crate::ShaderParams;
 
-/// All UI output collected during a frame, split into two buckets (WS4):
+/// All UI output collected during a frame.
 ///
-/// - [`commands`](Self::commands): the outbound engine-mutation stream. Panels
-///   push `EngineCommand`s directly (the single mutation vocabulary shared with
-///   the HTTP/CLI consumers); the app-layer drain runs each through the same
-///   dispatch as the command bus.
+/// - [`commands`](Self::commands): outbound `EngineCommand`s, the same mutation
+///   vocabulary the HTTP/CLI consumers use. The app layer runs each through the
+///   command bus dispatch.
 /// - [`session`](Self::session): UI-local ephemeral state (selection, panel
 ///   visibility, learn mode, dialog triggers, undo/redo/save). See [`UISession`].
 pub struct UIActions {
-    /// Outbound engine mutations (see /spec/ui-engine-boundary.md WS2).
+    /// Outbound engine mutations.
     pub commands: Vec<crate::engine::EngineCommand>,
-    /// UI-local session/ephemeral state (see [`UISession`], WS4).
+    /// UI-local ephemeral state.
     pub session: UISession,
 }
 
@@ -36,30 +32,29 @@ impl UIActions {
     }
 }
 
-/// Drag payload types for library drag-and-drop
+/// Library drag-and-drop payload.
 #[derive(Debug, Clone)]
 pub enum LibraryDrag {
-    /// A library entry of any deck source type: the deck it creates.
+    /// A library entry of any deck source type.
     Source(crate::source::SourceConfig),
-    /// Effect/filter shader from library (registry index)
+    /// Effect shader from the library (registry index).
     Effect(usize),
-    /// Deck preset from library (index into `preset_library.deck_presets`)
+    /// Deck preset (index into `preset_library.deck_presets`).
     DeckPreset(usize),
-    /// Channel preset from library (index into `preset_library.channel_presets`)
+    /// Channel preset (index into `preset_library.channel_presets`).
     ChannelPreset(usize),
 }
 
-/// Drag payload for moving a deck to another channel or reordering it within
-/// its own. Named by UUID because the payload is set on drag start and read on
-/// release: the deck's index can shift in between.
+/// Drag payload for moving a deck to another channel or within its own. Uses
+/// the UUID because the deck's index can change between drag start and release.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeckDrag {
     pub deck_uuid: String,
 }
 
-/// Drag payload for effect reordering within a chain. The chain is named by
-/// UUID because the payload outlives the frame it was created in — the drop is
-/// applied after release, by which point an index could name another entity.
+/// Drag payload for reordering effects within a chain. Uses the chain's UUID
+/// because the drop applies after release, when an index could name another
+/// entity.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EffectDrag {
     /// Deck effect: (`deck_uuid`, `effect_idx`)
@@ -70,14 +65,14 @@ pub enum EffectDrag {
     Master(usize),
 }
 
-/// Drag payload for reordering steps within a sequence (bottom bar only)
+/// Drag payload for reordering steps within a sequence (bottom bar only).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SequenceStepDrag {
     pub sequence_uuid: String,
     pub step_idx: usize,
 }
 
-/// Helper to extract params from `ShaderParams` for UI display
+/// Extract params from `ShaderParams` for UI display.
 pub fn collect_params(params: &ShaderParams) -> Vec<ParamUIInfo> {
     params
         .param_order

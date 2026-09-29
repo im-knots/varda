@@ -1,13 +1,10 @@
-//! The system font database, shared by everything that draws text: SVG decks
-//! and text decks.
+//! The system font database, shared by SVG decks and text decks.
 //!
-//! Scanning the installed fonts takes hundreds of milliseconds on a machine
-//! with many of them, so [`warm`] starts it on a background thread at startup
-//! and the render thread only ever asks [`ready`], which never waits. Loader
-//! threads call [`database`], which waits for the scan if it is still running.
+//! Scanning fonts can take hundreds of milliseconds, so [`warm`] starts it on a
+//! background thread. The render thread calls [`ready`], which never waits;
+//! loader threads call [`database`], which does.
 //!
-//! A machine with no fonts at all (a headless Linux container) gets the fonts
-//! egui bundles, so text still draws. See /spec/text-source.md § Fonts.
+//! A machine with no fonts (a headless Linux container) gets egui's bundled fonts.
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, OnceLock};
@@ -91,8 +88,8 @@ pub fn add_bundled(db: &mut Database) {
     db.set_monospace_family("Hack");
 }
 
-/// Every family name in `db`, sorted and deduplicated. A face lists its
-/// family in several languages; the first is the one it is known by.
+/// Every family name in `db`, sorted and deduplicated. Only a face's first
+/// (primary) family name is used.
 pub fn family_names(db: &Database) -> Arc<[String]> {
     db.faces()
         .filter_map(|face| face.families.first().map(|(name, _)| name.clone()))

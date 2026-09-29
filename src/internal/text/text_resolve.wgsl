@@ -1,6 +1,5 @@
 // Composites the premultiplied text layer over the background into the
-// deck's straight-alpha target, for backgrounds that are not opaque. See
-// /spec/text-source.md § Rendering.
+// deck's straight-alpha target, for backgrounds that are not opaque.
 
 @group(0) @binding(0) var layer: texture_2d<f32>;
 @group(0) @binding(1) var<uniform> background: vec4<f32>;

@@ -1,10 +1,7 @@
 //! Live system telemetry: frame rate, GPU load, CPU, and memory.
 //!
-//! Grouped as one health cluster rather than scattered through the top bar,
-//! because these are things you glance at when something feels wrong, not
-//! settings you change. They sit at the bottom of the right panel, and stay
-//! readable as a vertical strip when that panel is collapsed, so a performer
-//! who reclaims the screen space does not lose the frame rate with it.
+//! Shown at the bottom of the right panel, and as a vertical strip when the
+//! panel is collapsed.
 
 use super::super::{UIActions, UIData};
 use super::popovers::{render_fps_popover, render_gpu_popover, status_popover};
@@ -13,7 +10,7 @@ const GOOD: egui::Color32 = egui::Color32::from_rgb(100, 220, 100);
 const WARN: egui::Color32 = egui::Color32::from_rgb(220, 200, 60);
 const BAD: egui::Color32 = egui::Color32::from_rgb(220, 60, 60);
 
-/// Frame rate is the one metric where high is good, so it reads inverted.
+/// Frame rate is the one metric where high is good, so its scale is inverted.
 fn fps_color(fps: f32) -> egui::Color32 {
     if fps > 55.0 {
         GOOD
@@ -24,7 +21,7 @@ fn fps_color(fps: f32) -> egui::Color32 {
     }
 }
 
-/// Shared by GPU, CPU, and RAM, which are all "percent of a budget consumed".
+/// Shared by GPU, CPU, and RAM, each a percent of a budget.
 fn load_color(percent: f32) -> egui::Color32 {
     if percent < 50.0 {
         GOOD
@@ -43,17 +40,13 @@ fn deck_count(data: &UIData) -> usize {
     data.channels.iter().map(|c| c.decks.len()).sum()
 }
 
-/// Colour targets the scene holds resident, in bytes.
+/// Estimated bytes of color targets the scene holds resident.
 ///
-/// Decks and channels each own a *pair* of full-resolution targets, since both
-/// ping-pong through their effect chain (`Deck Texture` / `Deck Texture B`,
-/// `composite_texture` / `effect_ping_texture`), and the mixer owns one more
-/// pair. Deliberately an under-estimate of total VRAM: effect pass buffers,
-/// video source textures, decoder pools, and camera buffers all sit on top of
-/// it. The number exists to answer "is this scene getting heavy" rather than to
-/// account for the card. Until residency windows land, an arrangement holds
-/// every deck for the whole show, so this is the ceiling a long show runs
-/// into. See /spec/arrangement.md § Deferred: Residency Windows.
+/// Decks and channels each own a pair of full-resolution ping-pong targets
+/// (`Deck Texture` / `Deck Texture B`, `composite_texture` /
+/// `effect_ping_texture`), and the mixer owns one more pair. Underestimates
+/// VRAM: effect pass buffers, video textures, decoder pools and camera buffers
+/// are not counted. An arrangement holds every deck for the whole show.
 fn estimated_vram(data: &UIData) -> u64 {
     let bytes_per_pixel = u64::from(
         crate::renderer::context::COLOR_PATH_FORMAT
@@ -73,9 +66,8 @@ fn ram_percent(data: &UIData) -> f32 {
 
 /// The full cluster, for the bottom of the expanded right panel.
 ///
-/// `actions` is unused today but kept in the signature: the popovers this opens
-/// are shared with paths that emit commands, and threading it later would touch
-/// every call site.
+/// `actions` is unused but kept so call sites need no change if the shared
+/// popovers start emitting commands.
 pub(super) fn render_monitoring_section(
     ui: &mut egui::Ui,
     data: &UIData,
@@ -155,10 +147,9 @@ pub(super) fn render_monitoring_section(
     });
 }
 
-/// The same four values stacked for the collapsed rail, which is 36 px wide.
+/// The same four values stacked for the 36 px collapsed rail.
 ///
-/// Values only, no labels: at this width a label costs a whole row, and colour
-/// plus position already say which is which. Hover gives the full text.
+/// Values only; color and position identify each. Hover shows the full text.
 pub(super) fn render_monitoring_strip(ui: &mut egui::Ui, data: &UIData) {
     let gpu = data.gpu_utilization;
     let rows = [
@@ -218,7 +209,7 @@ mod tests {
         assert_eq!(ram_percent(&data), 0.0);
     }
 
-    /// The estimate has to move with the scene, or it is decoration.
+    /// The estimate must grow with the scene.
     #[test]
     fn the_vram_estimate_grows_with_the_scene() {
         let mut data = UIData::test_fixture();
@@ -227,8 +218,7 @@ mod tests {
         let before = estimated_vram(&data);
         assert!(before > 0, "a scene with decks must estimate something");
 
-        // A deck is a pair of 1080p Rgba16Float targets, about 33 MB. Anything
-        // that costs less than that is counting the wrong thing.
+        // A deck is a pair of 1080p Rgba16Float targets, about 33 MB.
         let per_deck = estimated_vram(&data) / (deck_count(&data) + data.channels.len() + 1) as u64;
         assert!(
             (30..40).contains(&(per_deck / (1024 * 1024))),

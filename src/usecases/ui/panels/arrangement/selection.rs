@@ -1,27 +1,24 @@
 //! Arrangement selection and the slice clipboard.
 //!
-//! One active selection at a time: a rectangle in show space scoped to a single
-//! channel, a time span crossed with the deck and automation rows it covers. It
-//! is what Copy and Delete act on when it is present, and it is drawn as a
-//! marquee over the tracks. See /spec/arrangement-selection.md.
+//! One selection at a time: a time span crossed with the deck and automation
+//! rows it covers, within one channel. Copy and Delete act on it, and it is
+//! drawn as a marquee over the tracks.
 //!
-//! Selection geometry lives in egui memory, like the focus range and the
-//! breakpoint clipboard, rather than in `UIData`: it is a view concern the
-//! engine never sees. The mutations it drives (`AddRegion`, `RemoveRegion`,
-//! `SetEnvelopeBreakpoints`) are the same undoable engine commands a hand edit
-//! uses, so a whole Delete or Paste collapses to one history entry because it is
-//! one frame's worth of commands.
+//! Selection geometry lives in egui memory, not `UIData`; the engine never
+//! sees it. Its edits use the same undoable commands as hand edits
+//! (`AddRegion`, `RemoveRegion`, `SetEnvelopeBreakpoints`), and a whole Delete
+//! or Paste is one frame of commands, so one undo entry.
 
 use super::super::super::{ModSourceUI, UIData};
 use crate::arrangement::RegionConfig;
 use crate::engine::EngineCommand;
 use crate::modulation::{Breakpoint, CurveKind, evaluate_envelope};
 
-/// The active arrangement selection: a time × lanes rectangle over the
-/// timeline's whole stack of rows, channel boundaries included.
+/// The active arrangement selection: a time × lanes rectangle over all
+/// timeline rows, across channel boundaries.
 ///
-/// A single clicked region is the same object with one deck lane and the
-/// region's own span, so membership needs no special case for it.
+/// A single clicked region is a selection with one deck lane and the region's
+/// span.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Selection {
     pub start: f64,
@@ -41,14 +38,14 @@ impl Selection {
         self.envelopes.iter().any(|u| u == uuid)
     }
 
-    /// Whether an armed selection owns a press at `at` on this row, so the row's
-    /// own bare drag stands down and the whole selection moves instead.
+    /// Whether an armed selection takes a press at `at` on this row, so the whole
+    /// selection moves instead of the row's own drag.
     fn owns(&self, at: f64, member: bool) -> bool {
         member && at >= self.start && at <= self.end
     }
 
-    /// The same selection after a move: shifted in time, with each member deck
-    /// swapped for the lane it landed on.
+    /// The selection after a move: shifted in time, with each member deck replaced
+    /// by the lane it landed on.
     pub(super) fn moved(&self, delta: f64, lane_map: &[(String, String)]) -> Self {
         Self {
             start: self.start + delta,
@@ -63,25 +60,25 @@ impl Selection {
     }
 }
 
-/// Whether an armed selection owns a press on this deck lane at `at`.
+/// Whether an armed selection takes a press on this deck lane at `at`.
 pub(super) fn owns_deck_press(ctx: &egui::Context, deck_uuid: &str, at: f64) -> bool {
     load(ctx).is_some_and(|s| s.owns(at, s.includes_deck(deck_uuid)))
 }
 
-/// Whether an armed selection owns a press on this automation row at `at`.
+/// Whether an armed selection takes a press on this automation row at `at`.
 pub(super) fn owns_envelope_press(ctx: &egui::Context, envelope_uuid: &str, at: f64) -> bool {
     load(ctx).is_some_and(|s| s.owns(at, s.includes_envelope(envelope_uuid)))
 }
 
 /// A portable arrangement slice: regions and curve pieces rebased so the
-/// selection's start sits at time 0. Paste re-bases them onto its anchor.
+/// selection start is time 0. Paste rebases them onto its anchor.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Slice {
     pub duration: f64,
     /// Regions from every selected deck lane, flattened.
     pub regions: Vec<RegionConfig>,
-    /// Breakpoints from every selected envelope, flattened and sorted. Almost
-    /// always one curve; merging is harmless when it is more.
+    /// Breakpoints from every selected envelope, flattened and sorted. Usually one
+    /// curve; merging several is harmless.
     pub curve: Vec<Breakpoint>,
 }
 
@@ -91,14 +88,12 @@ impl Slice {
     }
 }
 
-/// Where a paste lands: a deck lane takes region parts, an automation lane takes
-/// curve parts. Mixed slices drop the half the target cannot hold.
+/// Where a paste lands: a deck lane takes regions, an automation lane takes
+/// curve points. The part the target cannot hold is dropped.
 pub(super) enum PasteTarget {
     Deck(String),
     Envelope(String),
 }
-
-// ── Memory ───────────────────────────────────────────────────────────
 
 fn selection_id() -> egui::Id {
     egui::Id::new("__arrangement_selection")
@@ -128,9 +123,7 @@ fn store_slice(ctx: &egui::Context, slice: Slice) {
     ctx.memory_mut(|mem| mem.data.insert_temp(slice_id(), slice));
 }
 
-// ── Data lookups ─────────────────────────────────────────────────────
-
-/// The regions on a deck's lane, or an empty slice when the deck has none.
+/// The regions on a deck's lane, or an empty slice.
 fn lane_regions<'a>(data: &'a UIData, deck_uuid: &str) -> &'a [RegionConfig] {
     data.arrangement
         .as_ref()
@@ -149,26 +142,19 @@ fn envelope_breakpoints<'a>(data: &'a UIData, envelope_uuid: &str) -> Option<&'a
         })
 }
 
-// ── Membership ───────────────────────────────────────────────────────
-
-/// Whether a region's body overlaps `[start, end]` at all.
+/// Whether a region's body overlaps `[start, end]`.
 ///
-/// Intersection, not containment: a transition that begins a hair before the
-/// drag is still "this clip transition" and has to count.
+/// Intersection, not containment: a transition starting just before the drag
+/// still counts.
 ///
-/// An empty span overlaps nothing, and saying so here is what keeps a degenerate
-/// selection from reaching the cut. Without the first test a drag that begins and
-/// ends on the same beat reads as containing every region it lands inside, and
-/// `region_slice` then hands back a selected piece whose start equals its end: a
-/// zero-span region, which `RegionConfig::is_valid` rejects and which the cut,
-/// copy and move paths would go on to emit as an `AddRegion`. Splitting a region
-/// at a point is a coherent thing to want, but it is a different operation from
-/// selecting a span, and a zero-width drag is not a request for it.
+/// An empty span overlaps nothing. Otherwise a zero-width drag inside a region
+/// would produce a zero-span piece, which `RegionConfig::is_valid` rejects and
+/// the cut, copy and move paths would emit as an `AddRegion`.
 fn intersects(region: &RegionConfig, start: f64, end: f64) -> bool {
     end > start && region.start < end && region.end > start
 }
 
-/// The index of every region on `regions` that the span touches.
+/// Indices of the regions in `regions` that the span touches.
 fn regions_in_span(regions: &[RegionConfig], start: f64, end: f64) -> Vec<usize> {
     regions
         .iter()
@@ -181,9 +167,8 @@ fn regions_in_span(regions: &[RegionConfig], start: f64, end: f64) -> Vec<usize>
 /// The part of one region inside a selection and the zero, one, or two pieces
 /// outside it.
 ///
-/// A cut boundary is hard: only the fragment that still owns the original start
-/// keeps its fade-in, and only the fragment that still owns the original end
-/// keeps its fade-out. This avoids inventing fades at selection edges.
+/// Only the fragment with the original start keeps the fade-in, and only the
+/// one with the original end keeps the fade-out; cut edges get no fades.
 #[derive(Debug, PartialEq)]
 struct RegionSlice {
     selected: RegionConfig,
@@ -236,8 +221,8 @@ fn region_slice(region: &RegionConfig, start: f64, end: f64) -> Option<RegionSli
     })
 }
 
-/// The curve kind that owns time `t`: the shape leaving the last breakpoint at
-/// or before it, or a plain line before the first point.
+/// The curve kind at time `t`: the shape leaving the last breakpoint at or
+/// before it, or linear before the first point.
 fn kind_at(points: &[Breakpoint], t: f64) -> CurveKind {
     points
         .iter()
@@ -247,8 +232,8 @@ fn kind_at(points: &[Breakpoint], t: f64) -> CurveKind {
 }
 
 /// The audible shape of a curve over `[start, end]`, with synthesized edge
-/// points so the slice matches what sat under the marquee even where no authored
-/// breakpoint fell on a boundary. Positions are absolute.
+/// points so the slice matches the marquee even where no breakpoint falls on a
+/// boundary. Positions are absolute.
 fn curve_slice(points: &[Breakpoint], start: f64, end: f64) -> Vec<Breakpoint> {
     if points.is_empty() || end <= start {
         return Vec::new();
@@ -269,17 +254,15 @@ fn curve_slice(points: &[Breakpoint], start: f64, end: f64) -> Vec<Breakpoint> {
     let end_value = evaluate_envelope(points, end, &mut cursor);
     out.push(Breakpoint {
         position: end,
-        // The edge's own kind governs the segment leaving it, which is outside
-        // the slice, so a plain line is the least surprising default.
+        // The segment leaving this edge is outside the slice, so it defaults to linear.
         value: end_value,
         curve: CurveKind::default(),
     });
     out
 }
 
-/// A curve with `[start, end]` cleared and continuity kept outside it: the
-/// boundary values become lasting breakpoints so the outside shape does not
-/// jump, and the interior is filled by a straight line between them.
+/// A curve with `[start, end]` cleared: the boundary values become breakpoints
+/// so the outside shape doesn't jump, joined by a straight line.
 fn curve_cleared(points: &[Breakpoint], start: f64, end: f64) -> Vec<Breakpoint> {
     if points.is_empty() || end <= start {
         return points.to_vec();
@@ -300,7 +283,7 @@ fn curve_cleared(points: &[Breakpoint], start: f64, end: f64) -> Vec<Breakpoint>
     out.push(Breakpoint {
         position: end,
         value: end_value,
-        // Preserve the shape the curve had leaving `end` into the kept tail.
+        // Keep the shape leaving `end` in the tail.
         curve: kind_at(points, end),
     });
     out.extend(points.iter().filter(|p| p.position > end).copied());
@@ -309,7 +292,7 @@ fn curve_cleared(points: &[Breakpoint], start: f64, end: f64) -> Vec<Breakpoint>
 }
 
 /// Span-replace paste: clear the target's points under the landing span, then
-/// drop the slice in with its relative times rebased onto `anchor`.
+/// insert the slice rebased onto `anchor`.
 fn pasted_curve(
     existing: &[Breakpoint],
     slice: &[Breakpoint],
@@ -330,12 +313,11 @@ fn pasted_curve(
     out
 }
 
-/// A curve with the shape under `[start, end]` picked up and put down `delta`
-/// away: the source span is cleared first (unless this is a duplicate, which
-/// leaves the original behind) and the landing span is replaced by the slice.
+/// A curve with the shape under `[start, end]` moved by `delta`: the source
+/// span is cleared (unless duplicating) and the landing span replaced by the
+/// slice.
 ///
-/// One pass rather than a clear followed by a paste, so a move whose source and
-/// destination overlap cannot clear away what it has just laid down.
+/// Done in one pass so an overlapping move cannot clear what it just placed.
 fn moved_curve(
     points: &[Breakpoint],
     start: f64,
@@ -361,10 +343,7 @@ fn moved_curve(
     pasted_curve(&base, &slice, start + delta, end - start)
 }
 
-// ── Copy / Delete / Paste ────────────────────────────────────────────
-
-/// Build the slice a selection copies: membership rebased so the selection
-/// start is time 0.
+/// The slice a selection copies, rebased so the selection start is time 0.
 fn build_slice(data: &UIData, selection: &Selection) -> Slice {
     let start = selection.start;
     let duration = (selection.end - start).max(0.0);
@@ -404,17 +383,17 @@ fn build_slice(data: &UIData, selection: &Selection) -> Slice {
     }
 }
 
-/// Copy the current selection to the slice clipboard. An empty selection copies
-/// an empty slice, which Paste then treats as nothing to place.
+/// Copy the selection to the slice clipboard. An empty selection copies an
+/// empty slice, which Paste ignores.
 pub(super) fn copy(ctx: &egui::Context, data: &UIData, selection: &Selection) {
     store_slice(ctx, build_slice(data, selection));
 }
 
-/// The commands that delete only the selected part of each member region,
-/// preserving any unselected fragments, and clear each selected curve span.
+/// Commands that delete only the selected part of each member region, keeping
+/// unselected fragments, and clear each selected curve span.
 ///
-/// All removals run before fragment additions so snapshot indices remain valid.
-/// The whole batch lands in one frame, hence one undo entry.
+/// Removals come before additions so snapshot indices stay valid. The batch
+/// lands in one frame, so one undo entry.
 pub(super) fn delete_commands(data: &UIData, selection: &Selection) -> Vec<EngineCommand> {
     let mut edits = Vec::new();
     let mut adds = Vec::new();
@@ -456,10 +435,10 @@ pub(super) fn delete_commands(data: &UIData, selection: &Selection) -> Vec<Engin
     edits
 }
 
-/// The commands that paste the held slice onto a target row at `anchor`.
+/// Commands that paste the held slice onto a target row at `anchor`.
 ///
-/// A deck lane takes the region parts, an automation lane takes the curve parts.
-/// The other half stays on the clipboard rather than being refused.
+/// A deck lane takes the regions, an automation lane the curve. The other part
+/// stays on the clipboard.
 pub(super) fn paste_commands(
     ctx: &egui::Context,
     data: &UIData,
@@ -502,15 +481,13 @@ pub(super) fn paste_commands(
     }
 }
 
-/// Whether anything is on the slice clipboard, for enabling Paste menu items.
+/// Whether the slice clipboard holds anything, for enabling Paste.
 pub(super) fn slice_available(ctx: &egui::Context) -> bool {
     load_slice(ctx).is_some_and(|slice| !slice.is_empty())
 }
 
-// ── Move ─────────────────────────────────────────────────────────────
-
-/// The lane a source deck's regions land on, which is the deck itself unless the
-/// drag carried them to another row.
+/// The lane a source deck's regions land on: the deck itself unless the drag
+/// moved them to another row.
 fn target_lane<'a>(lane_map: &'a [(String, String)], deck_uuid: &'a str) -> &'a str {
     lane_map
         .iter()
@@ -518,19 +495,18 @@ fn target_lane<'a>(lane_map: &'a [(String, String)], deck_uuid: &'a str) -> &'a 
         .map_or(deck_uuid, |(_, target)| target.as_str())
 }
 
-/// How far back a selection may be dragged before its cropped payload would sit
-/// at a negative time.
+/// How far back a selection can be dragged before its cropped payload would
+/// reach negative time.
 pub(super) fn move_floor(_data: &UIData, selection: &Selection) -> f64 {
     selection.start
 }
 
-/// The commands that move a selection's membership by `delta`, with each member
-/// deck's regions landing on the lane `lane_map` sends it to.
+/// Commands that move a selection by `delta`, with each member deck's regions
+/// landing on the lane `lane_map` gives it.
 ///
-/// Every in-place update and removal is emitted before any addition. Indices are
-/// read from this frame's snapshot, and a lane that is both a source and another
-/// lane's target would otherwise have its regions renumbered underneath its own
-/// pending edits.
+/// All in-place updates and removals come before any addition. Indices come
+/// from this frame's snapshot, and a lane that is both a source and a target
+/// would otherwise be renumbered under its own pending edits.
 pub(super) fn move_commands(
     data: &UIData,
     selection: &Selection,
@@ -545,8 +521,8 @@ pub(super) fn move_commands(
         let target = target_lane(lane_map, deck_uuid);
         let regions = lane_regions(data, deck_uuid);
         let mut indices = regions_in_span(regions, selection.start, selection.end);
-        // Descending, so removing one region cannot renumber another that is
-        // still waiting for its own command on the same lane.
+        // Descending, so a removal can't renumber a region still waiting for its own
+        // command on the same lane.
         indices.sort_unstable_by(|a, b| b.cmp(a));
         for index in indices {
             let Some(sliced) = region_slice(&regions[index], selection.start, selection.end) else {
@@ -627,9 +603,8 @@ mod tests {
     }
 
     /// Turn arbitrary generated tuples into a non-empty, sorted envelope with
-    /// unique finite positions. The input stays deliberately untidy: sorting,
-    /// collisions, one-point curves, and every curve kind all occur in the
-    /// generated cases.
+    /// unique finite positions. Generated cases cover unsorted input, collisions,
+    /// one-point curves, and every curve kind.
     fn hostile_curve(raw: &[(u16, u16, u8)]) -> Vec<Breakpoint> {
         let mut points: Vec<Breakpoint> = raw
             .iter()
@@ -678,21 +653,18 @@ mod tests {
             RegionConfig::new(8.0, 12.0),
             RegionConfig::new(20.0, 24.0),
         ];
-        // The span [4, 10] clips the first and the second but not the third.
+        // The span [4, 10] clips the first and second but not the third.
         assert_eq!(regions_in_span(&regions, 4.0, 10.0), vec![0, 1]);
     }
 
-    /// Touching at a boundary is not overlapping: a region ending exactly where
-    /// the selection starts is not inside it.
+    /// A region ending exactly where the selection starts is not inside it.
     #[test]
     fn a_region_touching_the_boundary_is_not_a_member() {
         let regions = vec![RegionConfig::new(0.0, 4.0), RegionConfig::new(4.0, 8.0)];
         assert_eq!(regions_in_span(&regions, 4.0, 8.0), vec![1]);
     }
 
-    /// A drag that begins and ends on the same beat selects nothing, even where
-    /// it lands inside a region. Cutting on it used to produce a piece whose
-    /// start equalled its end.
+    /// A zero-width drag selects nothing, even inside a region.
     #[test]
     fn a_zero_width_selection_touches_nothing() {
         let regions = vec![RegionConfig::new(0.0, 5.0), RegionConfig::new(8.0, 12.0)];
@@ -749,9 +721,8 @@ mod tests {
         assert!(sliced.remainders.is_empty());
     }
 
-    /// The synthesized edges have to read the same value the renderer would draw
-    /// at those instants, or a pasted slice would not match what was under the
-    /// marquee.
+    /// Synthesized edges read the value the renderer draws at those instants, so a
+    /// pasted slice matches the marquee.
     #[test]
     fn curve_slice_edges_match_the_evaluator() {
         let points = ramp();
@@ -798,8 +769,8 @@ mod tests {
         ));
     }
 
-    /// Deleting a span leaves the shape outside it exactly where it was, with no
-    /// jump at the boundaries.
+    /// Deleting a span leaves the shape outside it unchanged, with no jump at the
+    /// boundaries.
     #[test]
     fn clearing_a_span_keeps_the_outside_continuous() {
         let points = ramp();
@@ -808,7 +779,7 @@ mod tests {
         let at_six = evaluate_envelope(&points, 6.0, &mut cursor);
 
         let cleared = curve_cleared(&points, 2.0, 6.0);
-        // The boundary values are pinned so the tails do not move.
+        // Boundary values are pinned so the tails don't move.
         let boundary_start = cleared
             .iter()
             .find(|p| (p.position - 2.0).abs() < 1e-9)
@@ -820,7 +791,7 @@ mod tests {
         assert!((boundary_start.value - at_two).abs() < 1e-6);
         assert!((boundary_end.value - at_six).abs() < 1e-6);
 
-        // Evaluating the cleared curve outside the span matches the original.
+        // Outside the span, the cleared curve evaluates like the original.
         let mut c = 0;
         assert!(
             (evaluate_envelope(&cleared, 0.0, &mut c) - evaluate_envelope(&points, 0.0, &mut c))
@@ -839,8 +810,7 @@ mod tests {
         assert!((out[1].position - 14.0).abs() < 1e-9);
     }
 
-    /// Paste clears the landing span first, so a pasted curve never fights the
-    /// points it landed on.
+    /// Paste clears the landing span first.
     #[test]
     fn paste_replaces_the_span_it_covers() {
         let existing = vec![linear(0.0, 0.0), linear(12.0, 0.5), linear(30.0, 1.0)];
@@ -857,16 +827,15 @@ mod tests {
         assert!(out.windows(2).all(|w| w[0].position <= w[1].position));
     }
 
-    /// A channel whose first lane holds two regions and whose second lane is
-    /// empty, so a move can be watched both for index safety on the source and
-    /// for landing intact on the target.
+    /// A channel whose first lane has two regions and whose second lane is empty,
+    /// to check index safety on the source and intact landing on the target.
     fn fixture_two_lanes() -> (UIData, String, String) {
         let mut data = super::super::tests::fixture_with_automation();
         let source = data.channels[0].decks[0].uuid.clone();
         let target = data.channels[1].decks[0].uuid.clone();
         let arrangement = data.arrangement.as_mut().expect("the fixture arranges");
-        // The fixture's lane already holds 4..12; a second region is what makes
-        // the descending-index rule mean anything.
+        // The lane already holds 4..12; a second region exercises descending-index
+        // ordering.
         arrangement.config.lanes[0]
             .regions
             .push(RegionConfig::new(14.0, 18.0));
@@ -890,9 +859,8 @@ mod tests {
         vec![linear(0.0, 0.0), linear(4.0, 0.5), linear(20.0, 1.0)]
     }
 
-    /// Moving a curve slice takes the shape with it and leaves the source span
-    /// flat, in one pass so an overlapping destination cannot clear away what
-    /// the move has just laid down.
+    /// Moving a curve slice carries the shape and flattens the source span, in one
+    /// pass so an overlapping destination can't clear what was just placed.
     #[test]
     fn moving_a_curve_slice_clears_its_source_and_lands_at_the_destination() {
         let moved = moved_curve(&kinked(), 2.0, 6.0, 10.0, false);
@@ -1005,8 +973,7 @@ mod tests {
         ));
     }
 
-    /// A move within one lane keeps each region's index, so nothing is renumbered
-    /// and the whole gesture is a handful of in-place updates.
+    /// A move within one lane keeps each region's index: only in-place updates.
     #[test]
     fn a_same_lane_move_updates_regions_in_place() {
         let (data, source, _) = fixture_two_lanes();
@@ -1030,9 +997,9 @@ mod tests {
         assert!((updates[1].1.end - 17.0).abs() < 1e-9);
     }
 
-    /// Crossing to another lane is a removal and an addition, and every removal
-    /// has to be emitted first: a lane that is both a source and a target would
-    /// otherwise be renumbered underneath its own pending commands.
+    /// Crossing to another lane is a removal plus an addition, with all removals
+    /// first so a lane that is both source and target isn't renumbered under its
+    /// pending commands.
     #[test]
     fn a_cross_lane_move_removes_before_it_adds() {
         let (data, source, target) = fixture_two_lanes();
@@ -1076,7 +1043,7 @@ mod tests {
     }
 
     /// A partial selection moves the crop, not the region before it, so the crop
-    /// may land at zero even when the intersecting region began earlier.
+    /// can land at zero even when the region started earlier.
     #[test]
     fn the_move_floor_is_the_selection_start() {
         let (data, source, _) = fixture_two_lanes();
@@ -1087,9 +1054,8 @@ mod tests {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(512))]
 
-        /// Arbitrary cuts, including tiny edge slivers and selections extending
-        /// far past either side, must partition a region exactly: no gap, no
-        /// overlap, and no fade migrating onto a newly cut edge.
+        /// Arbitrary cuts, including tiny slivers and selections far past either side,
+        /// partition a region exactly: no gap, no overlap, no fade on a cut edge.
         #[test]
         fn chaos_region_crops_partition_the_original_exactly(
             region_start in 0u16..8_000,
@@ -1146,11 +1112,9 @@ mod tests {
             }
         }
 
-        /// A move is a clear and a paste that must not fight each other, and the
-        /// generated distances deliberately include destinations that overlap
-        /// the source. Whatever the curve and however far it travels, the result
-        /// stays a valid envelope with its landing edges where the move put them,
-        /// and a duplicate destroys nothing outside its landing span.
+        /// Moves, including ones whose destination overlaps the source, keep a valid
+        /// envelope with landing edges where the move put them, and a duplicate
+        /// changes nothing outside its landing span.
         #[test]
         fn chaos_random_curve_moves_land_without_corrupting_the_shape(
             raw in prop::collection::vec((any::<u16>(), any::<u16>(), any::<u8>()), 0..80),
@@ -1162,7 +1126,7 @@ mod tests {
             let points = hostile_curve(&raw);
             let start = f64::from(a) / 16.0;
             let end = start + f64::from(width) / 16.0;
-            // Nothing may be dragged before the start of the show.
+            // Nothing can be dragged before the start of the show.
             let delta = (f64::from(travel) / 16.0).max(-start);
             let moved = moved_curve(&points, start, end, delta, duplicate);
 
@@ -1190,10 +1154,9 @@ mod tests {
             }
         }
 
-        /// The batch is executed in order against the live scene, so index
-        /// safety is the invariant that matters: additions come last, removals
-        /// on a lane run high index first, and nothing invalid reaches the
-        /// engine however hostile the span and the distance.
+        /// The batch runs in order against the live scene, so index safety is the
+        /// invariant: additions last, removals on a lane from high index to low, and
+        /// nothing invalid reaches the engine.
         #[test]
         fn chaos_move_command_batches_stay_index_safe(
             a in 0u16..2_000,
@@ -1259,11 +1222,9 @@ mod tests {
             }
         }
 
-        /// Offensive curve coverage: arbitrary point order, duplicate positions,
-        /// one-point envelopes, every curve kind, and ranges that can start or
-        /// end outside the authored curve. The copied slice must still be a
-        /// finite, ordered shape whose edge values are exactly what the renderer
-        /// evaluates at those instants.
+        /// Arbitrary point order, duplicate positions, one-point envelopes, every
+        /// curve kind, and ranges past the authored curve. The copied slice stays
+        /// finite and ordered, with edge values equal to what the renderer evaluates.
         #[test]
         fn chaos_random_curves_slice_without_corrupting_the_shape(
             raw in prop::collection::vec((any::<u16>(), any::<u16>(), any::<u8>()), 0..80),
@@ -1301,10 +1262,9 @@ mod tests {
             );
         }
 
-        /// Deleting random automation spans must never leak an invalid list to
-        /// the engine. Boundary values are pinned to the audible pre-delete
-        /// values, all points strictly inside are gone, and points strictly
-        /// outside retain their authored identity.
+        /// Deleting random automation spans never produces an invalid list. Boundary
+        /// values match the pre-delete values, interior points are gone, and outside
+        /// points are unchanged.
         #[test]
         fn chaos_random_curve_deletes_remain_ordered_and_continuous(
             raw in prop::collection::vec((any::<u16>(), any::<u16>(), any::<u8>()), 0..80),
@@ -1349,11 +1309,9 @@ mod tests {
             }
         }
 
-        /// Paste is attacked with unrelated target points on both sides and
-        /// throughout the landing span. Whatever the distribution, the covered
-        /// points are removed, outside points survive, the copied edge times
-        /// land exactly at anchor and anchor+duration, and ordering remains
-        /// suitable for the engine.
+        /// Paste over unrelated target points on both sides and inside the landing
+        /// span: covered points are removed, outside points survive, the copied edges
+        /// land exactly at anchor and anchor+duration, and ordering stays valid.
         #[test]
         fn chaos_random_curve_pastes_replace_exactly_one_span(
             existing_raw in prop::collection::vec(
@@ -1423,11 +1381,9 @@ mod tests {
             );
         }
 
-        /// Region membership is attacked with overlapping, nested, reversed,
-        /// zero-width, and out-of-order spans. It must remain exactly equivalent
-        /// to the strict intersection rule and never duplicate an index — where
-        /// that rule includes the requirement that the span have width at all,
-        /// since an empty span overlaps nothing.
+        /// Overlapping, nested, reversed, zero-width, and out-of-order spans: region
+        /// membership matches the strict intersection rule (an empty span overlaps
+        /// nothing) and never repeats an index.
         #[test]
         fn chaos_hostile_region_geometry_has_deterministic_membership(
             raw in prop::collection::vec((any::<u16>(), any::<u16>()), 0..200),
@@ -1455,10 +1411,9 @@ mod tests {
             prop_assert!(members.windows(2).all(|pair| pair[0] < pair[1]));
         }
 
-        /// Selection and clipboard memory are UI-session state, so users can
-        /// thrash Copy, Clear, Delete, and Paste in any order. Stale lane IDs,
-        /// empty selections, and mismatched targets must remain no-ops rather
-        /// than panics or commands aimed at unrelated objects.
+        /// Copy, Clear, Delete, and Paste in any order: stale lane IDs, empty
+        /// selections, and mismatched targets are no-ops, never panics or commands
+        /// aimed at unrelated objects.
         #[test]
         fn chaos_clipboard_operation_storm_stays_coherent(
             ops in prop::collection::vec((0u8..7, 0u16..4_000, 0u16..4_000), 1..300),

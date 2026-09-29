@@ -1,6 +1,5 @@
 //! One output: its picture settings, its sink, and the single path every
-//! output composes through. See /spec/output-sink-providers.md § The output
-//! and its sink.
+//! output composes through.
 
 use super::{Delivered, FramePath, OutputSinkInstance, SinkFrame, SinkQuery, storage_formats};
 use crate::engine::value::render::{
@@ -21,8 +20,7 @@ pub enum Content<'a> {
     /// Surfaces at their canvas positions, each through its warp.
     Surfaces(&'a [SurfaceRenderInfo<'a>]),
     /// One picture over the whole output. `fit_aspect` letterboxes it to that
-    /// width-to-height ratio on a window; other sinks stretch it, as they
-    /// always have.
+    /// width-to-height ratio on a window; other sinks stretch it.
     Picture {
         view: &'a wgpu::TextureView,
         fit_aspect: Option<f32>,
@@ -104,7 +102,6 @@ pub struct Output {
     pub edge_blend: EdgeBlendConfig,
     pub rotation: OutputRotation,
     /// Output transform overriding the mixer's show-wide default when set.
-    /// See /spec/hdr-per-output-encode.md.
     pub tonemap_override: Option<TonemapMode>,
     presentation_request: PresentationRequest,
     resolved_presentation: ResolvedPresentation,
@@ -114,8 +111,8 @@ pub struct Output {
     pub started_at: Option<std::time::Instant>,
     /// The audio passthrough the running session holds.
     pub audio: Option<crate::delivery::AudioPassthrough>,
-    /// Measures an HDR delivery while it runs. Boxed: rarely present, and it
-    /// owns a pipeline and a reduction chain.
+    /// Measures an HDR delivery while it runs. Boxed because it is rarely
+    /// present and large (a pipeline and a reduction chain).
     light_meter: Option<Box<ContentLightMeter>>,
     /// Running `MaxCLL` and `MaxFALL` across the current session.
     pub light_levels: ContentLightLevels,
@@ -302,7 +299,6 @@ impl Output {
     }
 
     /// Every presentation mode, with the reason this output cannot deliver it.
-    /// See /spec/presentation-mode-offering.md.
     pub fn mode_availability(&self) -> &[ModeAvailability] {
         &self.mode_availability
     }
@@ -435,7 +431,7 @@ impl Output {
         };
 
         // A whole-output picture on a non-window sink with nothing to blend is
-        // one pass straight into the delivered texture, as it has always been.
+        // one pass straight into the delivered texture.
         let direct = match &content {
             Content::Picture { view, .. } if path != FramePath::Present && !use_edge_blend => {
                 Some(*view)
@@ -564,8 +560,8 @@ impl Output {
             readback.begin_readback(&mut encoder, &delivered.texture);
         }
 
-        // Measure content light levels while an HDR delivery runs, from the
-        // frame about to be delivered. See /spec/hdr-recording-output.md.
+        // Measure content light levels of the frame about to be delivered while
+        // an HDR delivery runs.
         if self.active && self.resolved_presentation.transfer.is_hdr() {
             if self.light_meter.is_none() {
                 match ContentLightMeter::new(&gpu.device) {
@@ -852,8 +848,7 @@ mod tests {
     }
 
     /// Surfaces and a whole-output picture must come out the same way, rotation
-    /// and encoding included. Surface-routed headless outputs used to skip the
-    /// final pass. See /spec/output-sink-providers.md Decision 14.
+    /// and encoding included.
     #[test]
     fn surface_routing_honors_rotation_like_a_whole_picture() {
         let Some(gpu) = crate::testing::headless_gpu() else {
@@ -896,8 +891,7 @@ mod tests {
         }
     }
 
-    /// A startable sink draws only while it runs; the output does not render
-    /// frames nobody asked for.
+    /// A startable sink draws only while it runs.
     #[test]
     fn a_stopped_startable_output_is_not_live() {
         let Some(gpu) = crate::testing::headless_gpu() else {

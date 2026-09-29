@@ -6,13 +6,11 @@ use super::{
 use crate::renderer::GpuContext;
 use anyhow::Result;
 
-/// What every externally fed source shares: the view its device manager
-/// publishes this frame, and the scaled blit that draws it.
+/// An externally fed source: the view its device manager publishes this
+/// frame, and the scaled blit that draws it.
 ///
-/// A provider hands the instance its view in
-/// [`super::DeckSourceProvider::prepare`]; with none (not yet connected, or
-/// the device went away) the deck shows black, or transparent on a
-/// transparent deck.
+/// The provider passes the view in [`super::DeckSourceProvider::prepare`].
+/// Without one the deck shows black, or transparent on a transparent deck.
 pub struct Feed {
     pub blit: ScaledBlit,
     pub view: Option<wgpu::TextureView>,
@@ -29,9 +27,8 @@ impl Feed {
         })
     }
 
-    /// Take this frame's view and the size of the texture behind it. The size
-    /// is pushed each frame because a stream that reconnects at a new
-    /// resolution, or a capture being cropped, reallocates its texture.
+    /// Take this frame's view and its texture size. The size can change
+    /// between frames when a stream reconnects or a capture is cropped.
     pub fn bind(&mut self, view: Option<wgpu::TextureView>, size: Option<(u32, u32)>) {
         self.view = view;
         if let Some(size) = size {

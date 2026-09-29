@@ -1,11 +1,7 @@
 //! Arrangement mutations on `VardaApp`.
 //!
-//! Lanes and regions are ordinary scene data, so every mutation here goes
-//! through the same command path as the rest of the engine and lands in the
-//! undo stack. The one thing that does *not* is the live override, which is
-//! session state by design.
-//!
-//! See /spec/arrangement.md.
+//! Lanes and regions are scene data and go through the undo stack. The live
+//! override is session state and does not.
 
 use crate::arrangement::Authority;
 use crate::engine::{CommandResult, ErrorCode};
@@ -21,14 +17,10 @@ impl VardaApp {
         )
     }
 
-    /// Take a parameter back from the arrangement.
-    ///
-    /// Called by every live write path rather than by a UI button: the gesture
-    /// *is* the override, so there is nothing to confirm.
+    /// Take a parameter back from the arrangement. Called by every live write path.
     pub fn note_live_param_write(&mut self, param_key: &str, normalized: f32) {
-        // Ahead of the override, and ahead of the authority gate below it: a
-        // scene with only curves in it never engages the arrangement, and
-        // waiting for that would mean its first pass could never be recorded.
+        // Before the authority gate: a scene with only curves never engages the
+        // arrangement, so its first pass must still be recorded.
         self.record_param_write(param_key, normalized);
         if !self.arrangement_authority().is_engaged() {
             return;
@@ -41,11 +33,8 @@ impl VardaApp {
             .override_param(param_key, normalized);
     }
 
-    /// [`Self::note_live_param_write`] for a value that arrived as a router
-    /// path, which is how OSC, MIDI, and the API address parameters.
-    ///
-    /// Route values are already normalized, which is exactly what the re-arm
-    /// ramp needs to start from.
+    /// [`Self::note_live_param_write`] for a router path (OSC, MIDI, API).
+    /// Route values are already normalized.
     pub fn note_live_route_write(&mut self, path: &str, normalized: f32) {
         if let Some(key) = crate::param_router::modulation_key_for_path(path) {
             self.note_live_param_write(&key, normalized);
@@ -54,11 +43,8 @@ impl VardaApp {
 
     // ── Cues ────────────────────────────────────────────────────────
 
-    /// Locate to the neighbouring cue.
-    ///
-    /// Backwards with no earlier cue goes to zero, which is the way home now
-    /// that the return-to-zero arrow walks cues instead. Forwards past the last
-    /// cue stays put rather than running off the end.
+    /// Locate to the neighboring cue. Backwards with no earlier cue goes to
+    /// zero; forwards past the last cue stays put.
     pub(crate) fn cmd_locate_cue(&mut self, forward: bool) -> CommandResult {
         let position = self.show.transport.position();
         let anchor = self.show.cue_anchor;
@@ -86,12 +72,8 @@ impl VardaApp {
         }
     }
 
-    /// Locate to one cue by name, which is what a button in the Performance
-    /// mode cue bank does.
-    ///
-    /// The transport keeps running or staying stopped, because a cue is a place
-    /// rather than a way to start a show. It counts as a step of the walk, so
-    /// the arrows carry on from the cue that was pressed.
+    /// Locate to one cue (a Performance mode cue bank button). The transport's
+    /// run state is unchanged, and the cue arrows continue from this cue.
     pub(crate) fn cmd_trigger_cue(&mut self, uuid: &str) -> CommandResult {
         let Some(at) = self
             .mixer

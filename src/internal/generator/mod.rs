@@ -1,9 +1,8 @@
 //! ISF generators as a deck source: fragment shaders (single and multi-pass)
-//! and GLSL compute shaders. See /spec/deck-sources.md § 1 and § 10.
+//! and GLSL compute shaders.
 //!
-//! The shader's `INPUTS` become the deck's generator parameters, which the
-//! deck owns, so every generator gets MIDI, OSC, modulation, presets and
-//! exploration without this module doing anything for them.
+//! The shader's `INPUTS` become the deck's generator parameters, owned by the
+//! deck, which provides MIDI, OSC, modulation, presets and exploration.
 
 pub mod pass;
 
@@ -52,8 +51,7 @@ impl ShaderProvider {
     /// Refuse a shader whose required preprocessors this engine cannot run,
     /// or whose depth sensor is missing, before anything is built.
     ///
-    /// Unknown and optional types are *not* refused: they degrade to default
-    /// outputs, per /spec/effect-preprocessing.md Decision #2.
+    /// Unknown and optional types are allowed and fall back to default outputs.
     fn preflight(metadata: &ISFMetadata, name: &str, query: &SourceQuery) -> Result<()> {
         let analyzers = crate::depth::preprocess::register(crate::analyzer::default_registry());
         for pp in &metadata.preprocessors {
@@ -177,9 +175,8 @@ impl Shader {
         let spirv = compile_glsl_to_spirv(&shader.fragment_source, &shader.name())
             .context("Failed to compile shader to SPIR-V")?;
         let passes = shader.metadata.passes.clone().unwrap_or_default();
-        // All pass buffers use the unified color-path format. ISF `"FLOAT": true`
-        // is still parsed but no longer selects a format: Rgba16Float is both
-        // filterable and blendable, which Rgba32Float was not.
+        // All pass buffers use the color-path format; ISF `"FLOAT": true` does
+        // not change it.
         let pass_buffers = create_pass_buffers(
             gpu,
             &passes,
@@ -308,10 +305,9 @@ impl Shader {
                 1
             }
         };
-        // One uniform slot per pass iteration, then one for the final pass, so
-        // every pass is written up front. The targeted passes share one command
-        // buffer, submitted now so the GPU starts on the simulation while the
-        // frame is still recording; the final pass joins the frame's batch.
+        // One uniform slot per pass iteration plus one for the final pass. The
+        // targeted passes share one command buffer, submitted now so the GPU
+        // starts early; the final pass joins the frame's batch.
         let slots = passes
             .iter()
             .filter(|p| p.target.is_some())
@@ -447,8 +443,7 @@ impl Shader {
             pass.set_bind_group(0, &bind_group, &[]);
             pass.dispatch_workgroups(dx, dy, dz);
         }
-        // Submitted now rather than with the frame's batch, so the GPU starts
-        // on the simulation while the frame is still recording.
+        // Submitted now, not with the frame's batch, so the GPU starts early.
         frame.gpu.submit(std::iter::once(encoder.finish()));
 
         let mut copy = frame

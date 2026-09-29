@@ -3,33 +3,29 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Double-buffered staging buffers for non-blocking GPU texture uploads.
+/// Double-buffered staging buffers for non-blocking texture uploads.
 ///
-/// Uses a ping-pong pattern: CPU writes to buffer\[current\], GPU copies from
-/// buffer\[1-current\]. By the time we circle back two frames later, the GPU
-/// is done with the buffer and it can be re-mapped without stalling.
-///
-/// This eliminates the per-frame staging buffer allocation that
-/// `queue.write_texture()` performs internally, which can block for 2-9ms
-/// under GPU saturation.
+/// The CPU writes buffer\[current\] while the GPU copies from
+/// buffer\[1-current\], so a buffer is free to re-map two frames later.
+/// Avoids the per-frame allocation inside `queue.write_texture()`, which can
+/// block for 2-9ms under GPU load.
 pub struct VideoStagingBuffers {
     buffers: [wgpu::Buffer; 2],
     current: usize,
     mapped: [Arc<AtomicBool>; 2],
     /// Bytes per row padded to `wgpu::COPY_BYTES_PER_ROW_ALIGNMENT` (256).
     padded_bpr: u32,
-    /// Unpadded bytes per row (actual source data stride).
+    /// Unpadded bytes per row (source stride).
     unpadded_bpr: u32,
-    /// Number of rows (height for RGBA, `blocks_y` for compressed).
+    /// Row count (height for RGBA, `blocks_y` for compressed).
     rows: u32,
-    /// Tracks which buffers need `map_async` after the next `queue.submit()`.
+    /// Buffers that need `map_async` after the next `queue.submit()`.
     needs_remap: [bool; 2],
 }
 
 impl VideoStagingBuffers {
-    /// Create a new double-buffered staging pair.
-    /// Buffers start unmapped — call `request_remap()` after the first
-    /// `queue.submit()` to begin the mapping lifecycle.
+    /// Creates the staging pair. Buffers start unmapped; call `request_remap()`
+    /// after the first `queue.submit()`.
     pub fn new(device: &wgpu::Device, unpadded_bpr: u32, rows: u32, label: &str) -> Self {
         let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let padded_bpr = (unpadded_bpr + align - 1) & !(align - 1);
@@ -58,12 +54,12 @@ impl VideoStagingBuffers {
         }
     }
 
-    /// Write frame data into the current staging buffer and encode a copy
-    /// to the destination texture. Returns true if the upload was performed.
+    /// Writes frame data into the current staging buffer and encodes a copy to
+    /// the texture. Returns true if the upload happened.
     ///
     /// # Panics
     ///
-    /// Panics if a staging slot marked as mapped no longer exposes its mapped range.
+    /// Panics if a slot marked mapped no longer exposes its mapped range.
     pub fn upload(
         &mut self,
         data: &[u8],
@@ -74,8 +70,7 @@ impl VideoStagingBuffers {
     ) -> bool {
         let idx = self.current;
         if !self.mapped[idx].load(Ordering::Acquire) {
-            // Buffer not yet mapped — skip this upload.
-            // The stale texture from last frame will remain on screen.
+            // Not mapped yet; skip. Last frame's texture stays on screen.
             return false;
         }
 
@@ -86,11 +81,10 @@ impl VideoStagingBuffers {
                 .get_mapped_range_mut()
                 .expect("upload staging buffer must remain mapped");
             if self.padded_bpr == self.unpadded_bpr {
-                // Row stride matches — single memcpy
                 let copy_len = (self.unpadded_bpr as usize) * (self.rows as usize);
                 view.slice(..copy_len).copy_from_slice(&data[..copy_len]);
             } else {
-                // Need to copy row-by-row with padding
+                // Pad each row.
                 for row in 0..self.rows as usize {
                     let src_start = row * self.unpadded_bpr as usize;
                     let dst_start = row * self.padded_bpr as usize;
@@ -125,18 +119,16 @@ impl VideoStagingBuffers {
             },
         );
 
-        // Mark for re-mapping after submit
         self.needs_remap[idx] = true;
 
-        // Advance to next buffer
         self.current = 1 - self.current;
         true
     }
 
-    /// Request re-mapping of any buffers that were used since the last call.
-    /// **Must be called AFTER `queue.submit()`** — calling `map_async` before
-    /// submit can complete synchronously on UMA/Metal, leaving the buffer
-    /// mapped during submit (which is a validation error).
+    /// Re-maps buffers used since the last call. Call only after
+    /// `queue.submit()`: on UMA/Metal an earlier `map_async` can complete
+    /// synchronously and leave the buffer mapped during submit, which is a
+    /// validation error.
     pub fn request_remap(&mut self) {
         for i in 0..2 {
             if self.needs_remap[i] {

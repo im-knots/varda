@@ -1,17 +1,11 @@
-//! Giving a restored config a fresh identity.
+//! Giving a restored config fresh UUIDs.
 //!
-//! A UUID names one live entity ([`/spec/entity-identity.md`]): every command,
-//! modulation key, MIDI path, and API route resolves by UUID and takes the first
-//! match. Rebuilding a scene restores the identities it saved, but building a
-//! *second* copy of something that is already on stage has to mint new ones, or
-//! the two share every address they have.
+//! Commands, modulation keys, MIDI paths and API routes resolve by UUID and take
+//! the first match, so a second copy of an entity needs new UUIDs.
 //!
-//! `taken` answers "is this UUID already live", so the same pass serves both
-//! callers: paste always mints (a copy is a second entity), while preset load
-//! mints only on collision, which leaves a preset restored into a scene where
-//! its UUID is free still answering to the mappings that point at it.
-//!
-//! See [`/spec/clipboard.md`] § Paste reidentifies.
+//! `taken` reports whether a UUID is already live. Paste passes one that always
+//! returns true; preset load mints only on collision, so mappings to a restored
+//! preset keep working.
 
 use super::{ChannelConfig, DeckConfig, EffectConfig, ModulationRecipe};
 use crate::ids::generate_short_uuid;
@@ -66,16 +60,11 @@ pub fn effect(
     recipes(modulation, &renames, taken);
 }
 
-/// Point assignments at the renamed effects, and give curves an identity of
-/// their own.
+/// Point assignments at the renamed effects, and give curves new UUIDs.
 ///
-/// Live modulators are deliberately left alone: a recipe naming an LFO that is
-/// already in the scene wires up to that LFO, so a pasted deck rides the same
-/// one as the deck it came from. An envelope is the exception, because a curve
-/// belongs to the one parameter it was drawn for
-/// ([`/spec/automation.md`] § One envelope per parameter), so a copy gets its
-/// own curve with the same shape rather than a shared source that either lane
-/// could rewrite.
+/// Live modulators keep their UUIDs, so a pasted deck follows the same LFO as
+/// the original. A curve belongs to one parameter, so a copy gets its own curve
+/// with the same shape.
 fn recipes(recipes: &mut [ModulationRecipe], renames: &Renames, taken: &dyn Fn(&str) -> bool) {
     for recipe in recipes {
         if recipe.source.is_envelope() {
@@ -90,8 +79,7 @@ fn recipes(recipes: &mut [ModulationRecipe], renames: &Renames, taken: &dyn Fn(&
 }
 
 /// `effect/{old}/param/{name}` becomes `effect/{new}/param/{name}`. Owner-relative
-/// params (`param/speed`) carry no UUID and are re-prefixed by the caller that
-/// knows the new deck, so they are left alone here.
+/// params (`param/speed`) have no UUID; the caller re-prefixes them.
 fn rename_effect_key(param: &str, renames: &Renames) -> Option<String> {
     use crate::engine::value::param::ParamAddress;
     let ParamAddress::EffectParam { effect, param } = param.parse().ok()? else {
@@ -195,8 +183,7 @@ mod tests {
         );
     }
 
-    /// Restoring a deck whose UUID is free is a restore, not a copy, so the
-    /// mappings pointing at it keep working.
+    /// A deck whose UUID is free keeps it, so mappings to it keep working.
     #[test]
     fn a_deck_whose_identity_is_free_keeps_it() {
         let mut config = a_deck("deck0001");
@@ -206,9 +193,8 @@ mod tests {
         assert_eq!(config.effects[0].uuid, "fx000001");
     }
 
-    /// The whole point of the pass: an assignment that named the old effect has
-    /// to name the new one, or the copy's effect param is unmodulated while the
-    /// original's is driven twice.
+    /// An assignment naming the old effect must name the new one, or the
+    /// original's param is driven twice and the copy's not at all.
     #[test]
     fn effect_assignments_follow_the_effect_they_name() {
         let mut config = a_deck("deck0001");
@@ -233,8 +219,7 @@ mod tests {
         assert_eq!(config.modulation[0].assignments[0].param, "speed");
     }
 
-    /// A pasted deck rides the same LFO as the deck it came from. That is what
-    /// a performer means by copying something that is being modulated.
+    /// A pasted deck follows the same LFO as the original.
     #[test]
     fn a_live_modulator_stays_shared() {
         let mut config = a_deck("deck0001");
@@ -244,8 +229,7 @@ mod tests {
         assert_eq!(config.modulation[0].source_uuid, "lfo00001");
     }
 
-    /// A curve belongs to one parameter, so the copy gets its own with the same
-    /// shape rather than a source both lanes would rewrite.
+    /// A curve belongs to one parameter, so the copy gets its own with the same shape.
     #[test]
     fn a_curve_is_cloned_rather_than_shared() {
         let mut config = a_deck("deck0001");
@@ -264,7 +248,7 @@ mod tests {
         );
     }
 
-    /// Loading a curve into a scene that has never seen it is a restore.
+    /// A curve whose UUID is free keeps it.
     #[test]
     fn a_curve_keeps_its_identity_when_it_is_free() {
         let mut config = a_deck("deck0001");
@@ -314,8 +298,7 @@ mod tests {
         );
     }
 
-    /// A tap deck names the channel it is watching. That channel is somebody
-    /// else and must not be renamed by a pass that is copying this deck.
+    /// A tap deck's watched channel UUID is not renamed when the deck is copied.
     #[test]
     fn a_reference_to_another_entity_is_left_alone() {
         let mut config = a_deck("deck0001");
@@ -332,9 +315,8 @@ mod tests {
         );
     }
 
-    /// A scene written before UUIDs, or hand-edited, can carry an empty one.
-    /// Minting there would give it an identity the rest of the file does not
-    /// name, so it is left empty and the caller's own repair path deals with it.
+    /// Scenes from before UUIDs, or hand-edited ones, can hold an empty UUID.
+    /// It is left empty for the caller's repair path.
     #[test]
     fn an_entity_with_no_identity_is_left_without_one() {
         let mut config = a_deck("");
@@ -342,9 +324,7 @@ mod tests {
         assert!(config.uuid.is_empty());
     }
 
-    /// Modulation keys that are not effect params (a generator param, a stray
-    /// string) must survive a copy untouched: renaming what we do not recognise
-    /// would break assignments rather than move them.
+    /// Modulation keys that are not effect params survive a copy unchanged.
     #[test]
     fn a_key_that_names_no_effect_is_carried_across_unchanged() {
         let renames: Renames = [("fx000001".to_string(), "fx000002".to_string())]

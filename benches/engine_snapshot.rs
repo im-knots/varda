@@ -1,11 +1,11 @@
 /// Cost of producing and reading `EngineState`, the snapshot every consumer
-/// reads. See /spec/state-publication.md.
+/// reads.
 ///
 ///   `build`         — `VardaApp::build_engine_state` on a representative scene.
-///   `deep_clone`    — what a REST read and a WebSocket tick pay today.
-///   `arc_clone`     — what they pay once the snapshot is shared.
-///   `to_json`       — serializing the snapshot, once per client per tick today.
-///   `diff_unchanged`— a WebSocket tick that finds nothing new, as it runs today.
+///   `deep_clone`    — a full copy of the snapshot.
+///   `arc_clone`     — a shared-pointer clone of the snapshot.
+///   `to_json`       — serializing the snapshot.
+///   `diff_unchanged`— diffing two identical snapshots.
 ///
 /// With a shared publication (`StatePublication`):
 ///
@@ -13,9 +13,6 @@
 ///   `published_tick_changed`   — a tick with one: a diff of two shared values.
 ///   `published_rest_read`      — a REST read of the cached full-state JSON.
 ///   `publish`                  — handing a built snapshot to the publication.
-///
-/// `build` against `deep_clone` also settles the GUI option in the spec: sharing
-/// one build costs the GUI a clone of what it now moves out of an owned state.
 ///
 ///   `gui_view`      — what the windowed GUI pays each frame for its view: the
 ///                     snapshot, then the UI data derived from it.
@@ -27,8 +24,7 @@ use varda::app::publish::StatePublication;
 use varda::engine::{CommandResult, EngineCommand};
 use varda::modulation::LFOWaveform;
 
-/// Four channels of four decks each, and four LFOs: about the size of a
-/// working set.
+/// Four channels of four decks each, and four LFOs: a typical working set.
 fn scene() -> Option<VardaApp> {
     let mut app = varda::testing::headless_app()?;
     let send = |app: &mut VardaApp, cmd: EngineCommand| {

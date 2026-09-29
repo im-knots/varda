@@ -1,9 +1,6 @@
 //! egui delivery layer.
 //!
-//! Thin orchestrator: declares the view-model modules and re-exports their types
-//! at `usecases::ui::*`, so panels keep importing from one place. The split is by
-//! concern — layout/selection state, the per-frame view model, session state, and
-//! the outbound action bucket. See /spec/ui-engine-boundary.md.
+//! Declares the view-model modules and re-exports their types at `usecases::ui::*`.
 
 mod actions;
 mod data;
@@ -26,5 +23,4 @@ pub use data::*;
 pub use session::*;
 pub use state::*;
 
-// Re-export default render resolution constants from the engine layer
 pub use crate::app::{DEFAULT_RENDER_HEIGHT, DEFAULT_RENDER_WIDTH};

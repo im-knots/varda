@@ -59,7 +59,7 @@ pub enum ModulationSource {
         interpolation: StepInterpolation,
         bipolar: bool,
     },
-    /// Analyzer output — reads scalar values from a running analyzer on a specific deck.
+    /// Analyzer output: reads a scalar from a running analyzer on a deck.
     Analyzer {
         /// UUID of the deck whose analyzer to read from.
         deck_id: String,
@@ -71,13 +71,11 @@ pub enum ModulationSource {
         #[serde(default = "default_analyzer_smoothing")]
         smoothing: f32,
     },
-    /// Automation envelope. A pure function of timebase position.
-    /// See /spec/automation.md.
+    /// Automation envelope: a pure function of timebase position.
     Envelope {
-        /// Sorted by position. The invariant is maintained on edit, not on read.
+        /// Sorted by position; kept sorted on edit.
         breakpoints: Vec<Breakpoint>,
-        /// Cached segment index. An optimization only; a stale value can never
-        /// produce a wrong result.
+        /// Cached segment index. A stale value cannot produce a wrong result.
         #[serde(skip)]
         cursor: usize,
     },
@@ -234,8 +232,8 @@ impl ModulationSource {
         }
     }
 
-    /// An automation envelope. Starts empty, which is inert by design: a lane
-    /// exists before any point has been drawn on it.
+    /// An automation envelope. Starts empty and inert, since a lane exists before any point is
+    /// drawn.
     pub fn envelope(breakpoints: Vec<Breakpoint>) -> Self {
         ModulationSource::Envelope {
             breakpoints,
@@ -243,19 +241,15 @@ impl ModulationSource {
         }
     }
 
-    /// Whether this is an automation curve. Distinct from
-    /// [`Self::provides_absolute_value`], which an empty curve fails: an empty
-    /// lane contributes nothing, but it is still one parameter's lane and is
-    /// never shared with a second. See /spec/automation.md § One envelope per
-    /// parameter.
+    /// Whether this is an automation curve. Unlike [`Self::provides_absolute_value`], true for an
+    /// empty curve: an empty lane contributes nothing but still belongs to one parameter and is
+    /// never shared.
     pub fn is_envelope(&self) -> bool {
         matches!(self, ModulationSource::Envelope { .. })
     }
 
-    /// Whether this source replaces a parameter's base value rather than being
-    /// summed onto it. Only a non-empty envelope does; an empty one contributes
-    /// nothing, so the parameter behaves as unautomated.
-    /// See /spec/automation.md § Evaluation.
+    /// Whether this source replaces a parameter's base value instead of adding to it. Only a
+    /// non-empty envelope does.
     pub fn provides_absolute_value(&self) -> bool {
         matches!(self, ModulationSource::Envelope { breakpoints, .. } if !breakpoints.is_empty())
     }
@@ -299,18 +293,11 @@ impl ModulationSource {
         }
     }
 
-    /// Weight applied to this source's contribution when it is scaled by a
-    /// target parameter's range.
+    /// Weight applied to this source's contribution when scaled by a target parameter's range.
     ///
-    /// Range-scaled modulation treats a source's output as "how much of the
-    /// range to traverse", which assumes a peak-to-peak span of 1.0. Unipolar
-    /// sources span 0..1 and satisfy that directly. Bipolar sources span
-    /// -1..1 — twice the span — so without this they would sweep two range
-    /// widths and spend most of a cycle clamped against both ends.
-    ///
-    /// Only applies where a range is involved. Modulator-on-modulator targets
-    /// add the raw contribution to a value that has no range, so they must not
-    /// use this. See /spec/modulation.md § Range-Scaled Modulation.
+    /// Range scaling assumes a peak-to-peak span of 1.0. Bipolar sources span -1..1, so they are
+    /// halved; otherwise they would sweep two range widths and sit clamped for most of a cycle.
+    /// Modulator-on-modulator targets have no range and must not use this.
     pub fn range_scale(&self) -> f32 {
         match self {
             ModulationSource::LFO { bipolar, .. }
@@ -323,15 +310,11 @@ impl ModulationSource {
         }
     }
 
-    /// Calculate current value of this modulation source.
-    /// Returns value in range [-1, 1] for bipolar or [0, 1] for unipolar.
-    /// Whether this source's output is a pure function of its `time` argument,
-    /// and so can be locked to any timebase without extra state.
+    /// Whether this source's output is a pure function of its `time` argument, so it can be locked
+    /// to any timebase.
     ///
-    /// `ADSR`, `AudioBand`, and `Analyzer` are event- or signal-driven: they
-    /// integrate, follow an envelope, or sample the room. Locking them to a
-    /// show clock would be meaningless, so they always read free-run time and
-    /// the UI hides the selector for them. See /spec/timebase.md § Core Insight.
+    /// `ADSR`, `AudioBand`, and `Analyzer` are event- or signal-driven, so they always read
+    /// free-run time and the UI hides the selector for them.
     pub fn follows_timebase(&self) -> bool {
         matches!(
             self,
@@ -341,6 +324,7 @@ impl ModulationSource {
         )
     }
 
+    /// Current value: [-1, 1] for bipolar sources, [0, 1] for unipolar.
     pub fn calculate(
         &mut self,
         time: f32,

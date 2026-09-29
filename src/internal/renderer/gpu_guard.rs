@@ -1,21 +1,15 @@
-//! GPU error containment — keep a bad shader from taking down the show.
+//! GPU error containment, so a bad shader doesn't crash the app.
 //!
-//! wgpu's default uncaptured-error handler panics, and a panic on the render
-//! thread ends the performance. A validation error is not a lost device though:
-//! the offending command is dropped and everything else keeps working. So the
-//! right response to "this one deck encodes an illegal frame" is to stop
-//! rendering *that deck* and tell the performer — not to exit.
-//!
-//! This installs a handler that records faults instead of panicking, and lets
-//! the renderer attribute a fault to whatever it was drawing at the time. See
-//! spec/error-handling.md § Shader Errors.
+//! wgpu's default uncaptured-error handler panics. A validation error only
+//! drops the offending command, so this handler records faults instead and
+//! attributes each to what the renderer was drawing, letting the renderer stop
+//! just that deck.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-/// Most recent faults kept for reporting. Bounded so a shader failing every
-/// frame cannot grow this without limit.
+/// Most recent faults kept for reporting.
 const MAX_RETAINED: usize = 64;
 
 /// A GPU error captured instead of panicking.
@@ -28,7 +22,7 @@ pub struct GpuFault {
 
 #[derive(Default)]
 struct Inner {
-    /// Bumped on every fault. Cheap enough to read on the hot path.
+    /// Bumped on every fault; cheap to read on the hot path.
     count: AtomicUsize,
     state: Mutex<State>,
 }
@@ -41,8 +35,7 @@ struct State {
 
 /// Installs a non-fatal uncaptured-error handler and records what it catches.
 ///
-/// Cloneable and shared: `GpuContext` is cloned onto background loader threads,
-/// and all clones must observe the same faults.
+/// Clones share state, so loader threads report into the same faults.
 #[derive(Clone, Default)]
 pub struct GpuErrorGuard {
     inner: Arc<Inner>,
@@ -55,8 +48,7 @@ impl GpuErrorGuard {
 
     /// Replace wgpu's panicking handler with one that records.
     ///
-    /// Errors raised inside an explicit `push_error_scope` still go to that
-    /// scope; this only catches what would otherwise abort the process.
+    /// Errors inside an explicit `push_error_scope` still go to that scope.
     pub fn install(&self, device: &wgpu::Device) {
         let inner = Arc::clone(&self.inner);
         device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
@@ -74,8 +66,7 @@ impl GpuErrorGuard {
                     });
                     context
                 }
-                // A poisoned lock must not escalate into the panic this whole
-                // module exists to avoid.
+                // Don't panic on a poisoned lock.
                 Err(_) => None,
             };
             match &context {
@@ -156,9 +147,8 @@ impl Drop for GpuErrorScope<'_> {
 mod tests {
     use super::*;
 
-    /// Drive the recording path directly. The handler wgpu installs is a
-    /// closure over the same state, so exercising the state machine here covers
-    /// everything except wgpu's own dispatch.
+    /// Drive the recording path directly; the installed handler is a closure
+    /// over the same state.
     fn record(guard: &GpuErrorGuard, message: &str) {
         guard.inner.count.fetch_add(1, Ordering::Relaxed);
         let mut state = guard.inner.state.lock().expect("lock");
@@ -239,7 +229,7 @@ mod tests {
             MAX_RETAINED,
             "a shader failing every frame must not grow this without bound"
         );
-        // The newest are the ones kept.
+        // The newest are kept.
         assert_eq!(
             faults.last().map(|f| f.message.as_str()),
             Some(format!("fault {}", MAX_RETAINED * 3 - 1).as_str())

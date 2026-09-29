@@ -1,9 +1,8 @@
-/// Per-frame cost of the macro fan-out: every knob with a modulation source on
-/// its value writes each of its targets through the parameter router, once per
-/// rendered frame, before compositing.
+/// Per-frame cost of macro fan-out: each modulated knob writes its targets
+/// through the parameter router before compositing.
 ///
-/// `macros/N` runs N modulated knobs, each driving four deck opacities, so the
-/// frame writes 4N parameters. Skipped when no GPU adapter is available.
+/// `macros/N` runs N knobs, each driving four deck opacities (4N writes per
+/// frame). Skipped without a GPU adapter.
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use varda::deck::Deck;
 use varda::macros::{Macro, MacroKind, MacroTarget};

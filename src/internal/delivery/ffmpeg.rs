@@ -1,8 +1,8 @@
-//! `FfmpegSubprocess` — shared ffmpeg lifecycle for recording and SRT streaming.
+//! `FfmpegSubprocess`: the ffmpeg lifecycle shared by recordings and streams.
 //!
-//! Spawns an ffmpeg process with a background writer thread that feeds frames
-//! via a bounded channel. The render thread never blocks on pipe writes — if
-//! ffmpeg can't keep up (e.g. SRT listener waiting for client), frames are dropped.
+//! A background writer thread feeds ffmpeg from a bounded channel, so the render
+//! thread never blocks on pipe writes. If ffmpeg falls behind, frames are
+//! dropped.
 
 use std::io::Write;
 use std::net::TcpListener;
@@ -39,15 +39,12 @@ pub(crate) struct RecordingPlan {
 impl RecordingPlan {
     /// Resolve a recording contract without a running subprocess.
     ///
-    /// The output card has to answer "what will this deliver" before anyone
-    /// presses Start, and the honest answer depends on the configured codec.
-    /// Streaming targets have always resolved this way; recording did not, and
-    /// answered eight-bit for every codec, so a correctly configured HEVC output
-    /// reported a fallback it would not actually take.
+    /// The output card shows what a recording will deliver before Start, and
+    /// that depends on the codec.
     ///
-    /// Readback is assumed to be whatever the codec needs, because it is:
+    /// Readback is assumed to match what the codec needs:
     /// `HeadlessOutput::set_resolved_presentation` rebuilds the readback buffer
-    /// from the resolution this returns, so the assumption is self-fulfilling.
+    /// from this result.
     pub(crate) fn resolved_for_codec(
         codec: &RecordingCodec,
         request: PresentationRequest,
@@ -67,8 +64,7 @@ impl RecordingPlan {
         readback: ReadbackFormat,
         encoder_help: Option<&str>,
     ) -> Self {
-        // HDR10 is a ten-bit contract, so an incoherent request is coerced before
-        // anything is resolved against it.
+        // HDR10 requires ten bits, so the request is coerced first.
         let request = request.normalized();
         let encoder = recording_encoder(codec);
         let ten_bit_output = ten_bit_output_format(codec);
@@ -86,9 +82,8 @@ impl RecordingPlan {
             .transfer
             .is_hdr()
             .then(|| {
-                // EDR is display monitoring, not a delivery contract. Checked
-                // before the codec, because no codec makes it deliverable and
-                // "HEVC is required" would be a misleading answer.
+                // No codec carries EDR, so check it before the codec to avoid a
+                // misleading "HEVC is required".
                 (!request.transfer.is_deliverable())
                     .then(|| {
                         "EDR is a display monitoring contract and cannot be recorded".to_string()
@@ -192,10 +187,9 @@ impl RecordingPlan {
             requested_transfer: request.transfer,
             transfer: resolved_transfer,
             peak_nits: use_hdr.then_some(request.peak_nits),
-            // MaxCLL and MaxFALL are seeded from the configured peak and the
-            // encoder clamps the signal to it, so the declaration is true by
-            // construction. It is still not the measured value CTA-861.3 asks
-            // for, which is why the origin is reported.
+            // MaxCLL and MaxFALL come from the configured peak, which the
+            // encoder clamps to. CTA-861.3 asks for measured values, so the
+            // origin is reported.
             hdr_metadata: use_hdr.then_some(HdrMetadataSource::DeclaredFromPeak),
             pixel_format,
             color_profile: if use_hdr {
@@ -313,24 +307,21 @@ fn unpremultiply_filter(input_pixel_format: &str) -> &'static str {
 
 /// Codecs that can carry an HDR10 contract.
 ///
-/// `ProRes` can hold PQ container tags but has no ST 2086 or `MaxCLL` path through
-/// FFmpeg, so it is out of scope for slice 50a rather than half-supported. See
-/// /spec/hdr-recording-output.md.
+/// `ProRes` can hold PQ container tags but FFmpeg has no ST 2086 or `MaxCLL` path
+/// for it, so it is excluded.
 fn codec_supports_hdr10(codec: &RecordingCodec) -> bool {
     matches!(codec, RecordingCodec::H265 | RecordingCodec::AV1)
 }
 
-/// Colour metadata for the encoded stream.
+/// Color metadata for the encoded stream.
 ///
-/// These flags describe the stream. They do **not** decide the matrix the scaler
-/// uses to reach YUV, which is pinned separately in the filter chain and proven
-/// by a decode-and-compare test rather than by reading the arguments.
+/// These flags only tag the stream. The scaler's YUV matrix is set separately in
+/// the filter chain.
 fn color_metadata_args(transfer: PresentationTransfer) -> Vec<String> {
     let (primaries, trc, matrix) = match transfer {
         PresentationTransfer::Hdr10Pq => ("bt2020", "smpte2084", "bt2020nc"),
         PresentationTransfer::Hlg => ("bt2020", "arib-std-b67", "bt2020nc"),
-        // EDR is a display-only monitoring contract and never reaches an
-        // encoder; if one is ever asked for, Rec.709 is the honest answer.
+        // EDR never reaches an encoder; fall back to Rec.709.
         PresentationTransfer::Sdr | PresentationTransfer::EdrLinear => ("bt709", "bt709", "bt709"),
     };
     [
@@ -348,20 +339,15 @@ fn color_metadata_args(transfer: PresentationTransfer) -> Vec<String> {
     .collect()
 }
 
-/// `x265` HDR10 signalling, including ST 2086 mastering display derived from the
+/// `x265` HDR10 signaling, including ST 2086 mastering display derived from the
 /// output's configured peak.
 ///
-/// `colorprim`, `transfer`, and `colormatrix` are stated here as well as in
-/// FFmpeg's `-color_*` output flags, and that duplication is load-bearing rather
-/// than belt-and-braces. FFmpeg does not forward those flags into x265, so
-/// without them the encoder writes no transfer or primaries into the VUI (a file
-/// that `ffprobe` reports as `color_transfer=unknown`) and prints
-/// `Disabling hdr10-opt`. Found by encoding a file and reading it back, not by
-/// inspecting arguments. See /spec/hdr-recording-output.md § External acceptance.
+/// `colorprim`, `transfer` and `colormatrix` repeat FFmpeg's `-color_*` flags
+/// because FFmpeg does not forward those into x265. Without them the VUI has no
+/// transfer or primaries (`color_transfer=unknown`).
 ///
-/// `max-cll` is seeded from the configured peak here and corrected to measured
-/// content values when the recording is finalized (/spec/hdr-recording-output.md
-/// § Mastering and Content Metadata).
+/// `max-cll` starts at the configured peak and is corrected to measured values
+/// when the recording is finalized.
 fn x265_hdr10_params(peak_nits: u16) -> String {
     format!(
         "hdr10=1:hdr10-opt=1:repeat-headers=1:colorprim=bt2020:transfer=smpte2084:\
@@ -371,11 +357,10 @@ fn x265_hdr10_params(peak_nits: u16) -> String {
     .replace(' ', "")
 }
 
-/// `x265` HLG signalling.
+/// `x265` HLG signaling.
 ///
-/// No `master-display` and no `max-cll`: HLG is relative and BT.2100 requires
-/// neither. That absence is the point, not an omission, because it is what
-/// removes the declared-versus-measured problem from live paths.
+/// No `master-display` or `max-cll`: HLG is relative and BT.2100 requires
+/// neither, so live paths declare nothing that needs measuring.
 fn x265_hlg_params() -> String {
     "repeat-headers=1:colorprim=bt2020:transfer=arib-std-b67:colormatrix=bt2020nc".to_string()
 }
@@ -391,27 +376,20 @@ fn x265_hdr_params(transfer: PresentationTransfer, peak_nits: u16) -> Option<Str
 
 /// Low-latency x265 settings for a live stream, in place of `-tune zerolatency`.
 ///
-/// `-tune zerolatency` sets `frame-threads=1`, which costs 2.2x throughput and
-/// cannot be overridden (passing `frame-threads` in `-x265-params` alongside the
-/// tune leaves it at 1). Measured at 1080p on a 12-core machine with varied
-/// content: 41.8 fps with the tune, 73.8 fps with these settings, against a
-/// 60 fps target. The old setting could not sustain 1080p60 ten-bit at all, so a
-/// live stream fell steadily behind and the writer queue shed frames.
+/// `-tune zerolatency` forces `frame-threads=1`, which cannot be overridden and
+/// cuts throughput 2.2x (1080p, 12 cores: 41.8 fps with the tune, 73.8 fps with
+/// these settings), too slow for 1080p60 ten-bit.
 ///
-/// What is kept is the property that matters for a live feed: `bframes=0` means
-/// output order equals input order, so there is no reordering delay. What is
-/// given up is frame-threading pipeline depth, a bounded few frames, which is
-/// far cheaper than dropping three frames in four.
+/// `bframes=0` keeps output order equal to input order, so there is no
+/// reordering delay. Frame threading adds a few frames of pipeline delay.
 ///
-/// Eight-bit H.264 is untouched: libx264 measured 326 fps on the same clip and
-/// its `zerolatency` tune does not disable frame threading the same way.
+/// H.264 keeps `zerolatency`: libx264 does not disable frame threading with it.
 const X265_LIVE_LATENCY_PARAMS: &str = "bframes=0";
 
 /// One combined `-x265-params` value.
 ///
-/// FFmpeg takes `-x265-params` once: passing it twice silently drops the first,
-/// so the latency and HDR settings must be merged rather than appended as
-/// separate arguments.
+/// FFmpeg silently drops all but the last `-x265-params`, so the latency and HDR
+/// settings are merged into one.
 fn x265_streaming_params(transfer: PresentationTransfer, peak_nits: u16) -> String {
     x265_hdr_params(transfer, peak_nits).map_or_else(
         || X265_LIVE_LATENCY_PARAMS.to_string(),
@@ -489,8 +467,8 @@ fn recording_video_args(
 
 /// Cached `-h encoder=` probe for a recording codec.
 ///
-/// Idle resolution runs on every presentation change and every stage load, so
-/// this must not spawn FFmpeg each time. Mirrors `StreamingCapabilities::installed`.
+/// Idle resolution runs on every presentation change and stage load, so FFmpeg
+/// is spawned once. Mirrors `StreamingCapabilities::installed`.
 fn recording_encoder_help(codec: &RecordingCodec) -> Option<String> {
     static CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<String, Option<String>>>> =
         std::sync::OnceLock::new();
@@ -654,9 +632,8 @@ impl StreamingPlan {
             None
         };
         let use_ten_bit = request.depth == PresentationDepth::Sdr10 && unavailable.is_none();
-        // HDR is a ten-bit contract, so whatever blocks ten bits blocks HDR and
-        // the reason above already names the real obstacle. EDR is excluded
-        // separately: it satisfies `is_hdr` but nothing can carry it.
+        // HDR needs ten bits, so the ten-bit reason above applies. EDR satisfies
+        // `is_hdr` but nothing can carry it, so it is excluded separately.
         let use_hdr = request.transfer.is_hdr() && request.transfer.is_deliverable() && use_ten_bit;
         let resolved_transfer = if use_hdr {
             request.transfer
@@ -709,8 +686,7 @@ impl StreamingPlan {
             peak_nits: resolved_transfer
                 .uses_peak_nits()
                 .then_some(request.peak_nits),
-            // HLG carries no mastering metadata at all, so there is nothing to
-            // declare and nothing to report as declared.
+            // HLG carries no mastering metadata.
             hdr_metadata: resolved_transfer
                 .carries_mastering_metadata()
                 .then_some(HdrMetadataSource::DeclaredFromPeak),
@@ -761,8 +737,7 @@ fn streaming_video_args(
                 "high",
             ]
         }
-        // No `-tune zerolatency` here: it pins frame-threads to 1 and cannot
-        // sustain 1080p60 ten-bit. See `X265_LIVE_LATENCY_PARAMS`.
+        // No `-tune zerolatency`; see `X265_LIVE_LATENCY_PARAMS`.
         StreamingCodec::H265 => vec![
             "-c:v",
             "libx265",
@@ -796,14 +771,9 @@ fn streaming_muxer_args(
     ten_bit: bool,
     codec: &StreamingCodec,
 ) -> Vec<String> {
-    // No `VIDEO-RANGE` signalling here, deliberately. That attribute lives in
-    // `EXT-X-STREAM-INF`, and an explicit master playlist was implemented to
-    // carry it, then measured: FFmpeg 8.1.2's HLS muxer never emits
-    // `VIDEO-RANGE` in any configuration tried (HEVC, Main10, PQ, HLG, fMP4).
-    // The master playlist it does write carries BANDWIDTH, RESOLUTION and CODECS
-    // only, so it was removed rather than shipped as signalling it does not
-    // provide. HDR HLS players read the transfer from the bitstream VUI, which is
-    // verified present in the segments. See /spec/hdr-streaming-output.md.
+    // No `VIDEO-RANGE`: FFmpeg 8.1.2's HLS muxer never emits it (tested with
+    // HEVC, Main10, PQ, HLG, fMP4). HDR HLS players read the transfer from the
+    // segments' VUI.
     let args: Vec<&str> = match protocol {
         StreamingProtocol::Srt => vec!["-f", "mpegts"],
         StreamingProtocol::Hls if ten_bit => vec!["-tag:v", codec_tag(codec), "-f", "hls"],
@@ -827,16 +797,9 @@ fn codec_tag(codec: &StreamingCodec) -> &'static str {
 
 /// Keyframe interval for a segmented protocol, in frames.
 ///
-/// A segmented muxer can only cut on a keyframe, so asking for one-second
-/// segments while the encoder emits a keyframe every 250 frames produces
-/// four-second segments and the request is silently ignored. Deriving the GOP
-/// from the segment duration is what makes the duration real.
-///
-/// This was a live bug: LL-HLS asked for 1s and got 4.166667s (x265's default
-/// keyint of 250 at 60fps). The LL-HLS player is configured with a 4 second
-/// buffer, shorter than one such segment, so playback stalled and never
-/// recovered. Vanilla HLS survived only because its player uses a much larger
-/// default buffer.
+/// A segmented muxer cuts only on keyframes, so the GOP must match the segment
+/// duration. With x265's default keyint of 250 at 60 fps, 1s segments come out
+/// 4.17s, longer than the short-segment player's 4s buffer.
 fn segment_gop_args(segment_seconds: u32, fps: u32) -> Vec<String> {
     let gop = (segment_seconds * fps).max(1);
     vec!["-g".to_string(), gop.to_string()]
@@ -877,18 +840,11 @@ fn hls_segment_args(dir: &str, short_segments: bool, use_fmp4: bool, fps: u32) -
 /// Write a self-contained HTML player page into a stream directory.
 /// Uses hls.js for HLS streams and dash.js for DASH streams.
 ///
-/// The reduced-latency HLS mode is short segments, not RFC 8216bis LL-HLS.
-/// FFmpeg's HLS muxer emits no `EXT-X-PART`, no `EXT-X-SERVER-CONTROL` and no
-/// `CAN-BLOCK-RELOAD`, so there are no partial segments for a player to use.
-///
-/// The player config used to set `lowLatencyMode: true` anyway, together with a
-/// four second buffer cap and a two segment live-edge target. That asks hls.js
-/// to run at the live edge using parts that never arrive, with less cushion than
-/// one segment of jitter: the stream froze within seconds and did not recover,
-/// while plain HLS from the same engine played fine on hls.js defaults.
-///
-/// What is kept is the part that genuinely reduces latency: one second segments
-/// instead of two, with a live-edge target and buffer sized against them.
+/// The reduced-latency HLS mode is one-second segments, not RFC 8216bis
+/// LL-HLS: FFmpeg's HLS muxer emits no `EXT-X-PART`, `EXT-X-SERVER-CONTROL` or
+/// `CAN-BLOCK-RELOAD`. So hls.js must not use `lowLatencyMode`, which stalls
+/// waiting for parts; the live-edge target and buffer are sized for the short
+/// segments instead.
 fn write_stream_player(dir: &str, kind: &str, manifest_filename: &str, short_segments: bool) {
     let (lib_url, lib_setup) = match kind {
         "hls" if short_segments => (
@@ -931,9 +887,8 @@ fn write_stream_player(dir: &str, kind: &str, manifest_filename: &str, short_seg
 
 /// Shared ffmpeg subprocess for recording and SRT streaming.
 ///
-/// Frames are sent to a background writer thread via a bounded channel.
-/// This prevents the render thread from blocking when ffmpeg's stdin pipe is full
-/// (e.g. SRT listener waiting for a client connection).
+/// Frames go to a background writer thread through a bounded channel, so the
+/// render thread does not block when ffmpeg's stdin is full.
 pub struct FfmpegSubprocess {
     /// The ffmpeg process. `None` once a recording's `stop()` has handed it to
     /// the finalize thread.
@@ -980,28 +935,25 @@ struct FrameContract {
     height: u32,
 }
 
-/// Bounded channel capacity — 2 frames of buffer allows the writer thread
-/// to stay one frame ahead without accumulating unbounded latency.
+/// Writer channel capacity: lets the writer stay one frame ahead without
+/// building latency.
 const FRAME_CHANNEL_CAPACITY: usize = 2;
 
 /// Ceiling on repeated frames emitted to cover one gap, in
-/// [`FfmpegSubprocess::start_writer_thread`]. Half a second at 60 fps: long
-/// enough to ride out any hitch worth correcting, short enough that a genuine
-/// freeze degrades into a shortened timeline rather than a burst of writes into
-/// a pipe that is already struggling.
+/// [`FfmpegSubprocess::start_writer_thread`]. Half a second at 60 fps; a longer
+/// freeze shortens the timeline instead of flooding the pipe.
 const MAX_PAD_FRAMES_PER_ARRIVAL: u64 = 30;
 
 /// What the writer thread has put down the pipe, split by where it came from.
 ///
-/// `written` counts frames the renderer actually produced and is the health
-/// stat; `padded` counts repeats the writer inserted to cover gaps where it
-/// did not. The two together are the length of the video timeline.
+/// `written` counts frames the renderer produced; `padded` counts repeats the
+/// writer inserted to cover gaps. Together they are the timeline length.
 #[derive(Clone)]
 struct FrameCounters {
     written: Arc<AtomicU64>,
     padded: Arc<AtomicU64>,
     /// Frames the render thread offered while the writer channel was full.
-    /// Distinct from `padded`: a drop never entered the pipe.
+    /// These never entered the pipe.
     dropped: Arc<AtomicU64>,
 }
 
@@ -1017,9 +969,8 @@ impl FrameCounters {
 
 /// Offer one video frame to the writer without blocking.
 ///
-/// `Ok` / `Full` both return true: the subprocess is still alive. `Full`
-/// increments `dropped` so the operator can see backpressure. `Disconnected`
-/// returns false.
+/// Returns false only when the writer has disconnected. A full channel counts
+/// the frame in `dropped`.
 pub(crate) fn try_enqueue_frame(
     tx: &mpsc::SyncSender<Vec<u8>>,
     dropped: &AtomicU64,
@@ -1090,7 +1041,7 @@ const STREAM_SAMPLE_RATE: &str = "48000";
 
 /// Optional second (audio) input for an ffmpeg subprocess: a stream of raw
 /// interleaved `f32` PCM plus the capture device's native format. Built from an
-/// `AudioManager` PCM subscription; `None` keeps the byte-for-byte video-only path.
+/// `AudioManager` PCM subscription; `None` means video only.
 pub struct AudioInput {
     /// Raw interleaved PCM, drained by the audio writer thread into the socket.
     pub rx: crossbeam_channel::Receiver<PcmChunk>,
@@ -1099,14 +1050,13 @@ pub struct AudioInput {
     /// Device native channel count.
     pub channels: u16,
     /// Samples the capture callback discarded because this subscriber's channel
-    /// was full. The writer replaces them with silence so the sample count keeps
-    /// matching elapsed time — see [`AudioPipe::start`].
+    /// was full. The writer replaces them with silence; see [`AudioPipe::start`].
     pub lost_samples: Arc<AtomicU64>,
 }
 
-/// ffmpeg argument vectors + the live listener/receiver, computed before the
-/// `Command` is assembled so audio input args can be interleaved after the video
-/// input and audio output args before the destination.
+/// ffmpeg audio arguments plus the bound listener. Built before the `Command`
+/// so audio input args go after the video input and audio output args before
+/// the destination.
 struct PreparedAudio {
     in_args: Vec<String>,
     out_args: Vec<String>,
@@ -1117,7 +1067,7 @@ struct PreparedAudio {
 
 /// Build the ffmpeg audio input/output args and bind the loopback TCP endpoint
 /// for an optional audio passthrough. `is_stream` selects the sample-rate policy:
-/// native rate for Recording, normalized 48k for streaming targets (Decision 5).
+/// native rate for recordings, 48k for streams.
 fn prepare_audio(
     audio: Option<AudioInput>,
     is_stream: bool,
@@ -1128,19 +1078,10 @@ fn prepare_audio(
     let (listener, audio_url) = create_audio_endpoint()?;
     // Input opts (must precede the audio `-i`); f32le matches the raw PCM tap.
     //
-    // Timestamps come from the sample count, which is ffmpeg's default for a raw
-    // input: sample N sits at N/sample_rate. This used to pass
-    // `-use_wallclock_as_timestamps 1`, stamping each buffer with the moment it
-    // arrived over the socket, and that was the cause of audio breaking up
-    // whenever the renderer hitched. Arrival time is not a clock — it carries
-    // scheduler jitter, and it stalls outright when ffmpeg stops draining the
-    // socket to wait on the video pipe. Every one of those stalls was written
-    // into the file as a timing hole.
-    //
-    // The capture device's sample clock has none of those problems: the hardware
-    // delivers exactly `sample_rate` samples per second no matter what the rest
-    // of the process is doing. It is the most accurate clock available here, so
-    // it is the one the recording is built on. See /spec/av-sync.md.
+    // Timestamps come from the sample count (ffmpeg's default for raw input), so
+    // audio follows the device's sample clock. Do not add
+    // `-use_wallclock_as_timestamps`: arrival time stalls whenever ffmpeg waits
+    // on the video pipe, leaving holes in the audio.
     let in_args = vec![
         "-f".into(),
         "f32le".into(),
@@ -1151,8 +1092,8 @@ fn prepare_audio(
         "-i".into(),
         audio_url,
     ];
-    // Output opts: AAC, stereo downmix (Decision: stereo for v1), async resample
-    // to absorb A/V drift; force 48k on streams, leave native on recordings.
+    // Output opts: AAC, stereo downmix, async resample to absorb A/V drift;
+    // force 48k on streams, keep native on recordings.
     let mut out_args = vec![
         "-c:a".into(),
         "aac".into(),
@@ -1183,8 +1124,7 @@ fn prepare_audio(
 
 /// Bind a loopback TCP listener on an ephemeral port and return it with the
 /// `tcp://127.0.0.1:<port>` URL ffmpeg connects to as the audio input. Loopback
-/// TCP is the cross-platform second-input transport (no `mkfifo`/named pipes and
-/// no new crate, per the audio-passthrough transport decision).
+/// TCP works on every platform without named pipes.
 fn create_audio_endpoint() -> anyhow::Result<(TcpListener, String)> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .map_err(|e| anyhow::anyhow!("Failed to bind audio TCP listener: {e}"))?;
@@ -1232,13 +1172,10 @@ impl AudioPipe {
     /// Start the audio writer thread. It accepts ffmpeg's connection to the
     /// loopback listener, then drains `rx` into the stream as f32le bytes.
     ///
-    /// `lost_samples` counts PCM the capture callback had to discard because
-    /// this pipe was backed up. The writer replaces each lost sample with a
-    /// sample of silence before writing the next real chunk. That matters now
-    /// that timestamps come from the sample count: a gap left unfilled does not
-    /// read as a gap, it pulls every later sample earlier, so a single dropout
-    /// would desynchronise the rest of the recording. Filling it costs a brief
-    /// mute and keeps the timeline exact.
+    /// `lost_samples` counts PCM the capture callback discarded because this
+    /// pipe was backed up. The writer writes that many samples of silence before
+    /// the next chunk: timestamps come from the sample count, so an unfilled gap
+    /// would shift all later audio earlier.
     fn start(
         listener: TcpListener,
         rx: crossbeam_channel::Receiver<PcmChunk>,
@@ -1251,8 +1188,8 @@ impl AudioPipe {
         let sd = shutting_down.clone();
         let fw = frames_written.clone();
         let spliced = silence_spliced.clone();
-        // Non-blocking accept so teardown can interrupt a wait for an ffmpeg that
-        // never connects (e.g. it died at startup) instead of a wedged thread.
+        // Non-blocking accept so teardown can interrupt the wait if ffmpeg never
+        // connects (e.g. it died at startup).
         listener
             .set_nonblocking(true)
             .map_err(|e| anyhow::anyhow!("Failed to set audio listener non-blocking: {e}"))?;
@@ -1286,8 +1223,7 @@ impl AudioPipe {
                 loop {
                     match rx.recv_timeout(std::time::Duration::from_millis(100)) {
                         Ok(chunk) => {
-                            // Restore any time the capture callback had to throw
-                            // away, before the samples that follow it.
+                            // Fill samples the capture callback discarded.
                             let mut lost = lost_samples.swap(0, Ordering::Relaxed);
                             if lost > 0 {
                                 spliced.fetch_add(lost, Ordering::Relaxed);
@@ -1368,23 +1304,12 @@ impl Drop for AudioPipe {
 }
 
 impl FfmpegSubprocess {
-    /// Start the background writer thread that drains the channel into ffmpeg stdin.
-    /// Start the video writer thread.
+    /// Start the video writer thread, which drains the channel into ffmpeg stdin.
     ///
-    /// The raw video input is declared at a constant `fps`, so ffmpeg times each
-    /// frame by its position in the stream: frame N is at N/fps regardless of
-    /// when it was produced. That makes a missing frame invisible in the video
-    /// but *silent* about time — the recorded timeline simply comes out shorter
-    /// than the session was. The audio track is built on the capture device's
-    /// sample clock and stays true to real time, so every skipped frame used to
-    /// pull the two apart a little more, and the drift accumulated for as long
-    /// as the recording ran.
-    ///
-    /// So when the renderer misses its slot, the writer repeats the previous
-    /// frame often enough to cover the gap. Repeating a frame is nearly free to
-    /// encode — it differs from its predecessor in nothing — and it keeps the
-    /// file constant-frame-rate, which is what editors want. See
-    /// /spec/av-sync.md.
+    /// Raw video is timed by position (frame N is at N/fps), so a missing frame
+    /// shortens the video and drifts it from the audio, which follows the
+    /// device clock. When the renderer misses its slot, the writer repeats the
+    /// previous frame to cover the gap, keeping the file constant frame rate.
     fn start_writer_thread(
         mut stdin: std::process::ChildStdin,
         rx: mpsc::Receiver<Vec<u8>>,
@@ -1398,15 +1323,11 @@ impl FfmpegSubprocess {
             .name(format!("ffmpeg-writer-{label}"))
             .spawn(move || {
                 let fps = f64::from(fps.max(1));
-                // Frames emitted so far, padding included. Counted separately
-                // from `frames_written` so the health stat still reports what
-                // the renderer actually produced.
+                // Frames emitted so far, padding included. `frames_written`
+                // counts only rendered frames.
                 let mut emitted: u64 = 0;
-                // Anchored on the *first* frame, not on this thread starting.
-                // ffmpeg takes a moment to come up and the caller may not have
-                // a frame ready the instant it does; timing from spawn would
-                // read that startup as a gap and open every recording with a
-                // frozen still.
+                // Anchored on the first frame, not thread start, so startup
+                // delay is not padded as a gap.
                 let mut started: Option<std::time::Instant> = None;
 
                 for frame in rx {
@@ -1435,7 +1356,7 @@ impl FfmpegSubprocess {
                     emitted += 1;
                     counters.written.fetch_add(1, Ordering::Relaxed);
                 }
-                // Channel closed — normal shutdown, flush stdin
+                // Channel closed: normal shutdown, flush stdin.
                 let _ = stdin.flush();
             })
             .expect("failed to spawn ffmpeg writer thread")
@@ -1443,12 +1364,8 @@ impl FfmpegSubprocess {
 
     /// How many repeated frames to emit before the frame that just arrived.
     ///
-    /// `emitted` is everything written so far, padding included. If real time
-    /// has moved further than that, the difference is the renderer's shortfall
-    /// and repeating the previous frame covers it. Capped at
-    /// [`MAX_PAD_FRAMES_PER_ARRIVAL`]: past that the app was not really
-    /// recording anyway, and a burst of writes into a pipe that is already
-    /// behind would make things worse rather than better.
+    /// `emitted` is everything written so far, padding included. The shortfall
+    /// against elapsed time is padded, capped at [`MAX_PAD_FRAMES_PER_ARRIVAL`].
     fn pad_count(elapsed: std::time::Duration, fps: f64, emitted: u64) -> u64 {
         let due = (elapsed.as_secs_f64() * fps) as u64;
         due.saturating_sub(emitted).min(MAX_PAD_FRAMES_PER_ARRIVAL)
@@ -1477,8 +1394,8 @@ impl FfmpegSubprocess {
     ///
     /// # Panics
     ///
-    /// Panics if ffmpeg's stdin was not piped, or if the writer thread cannot
-    /// be spawned — both indicate the process/thread limits are exhausted.
+    /// Panics if ffmpeg's stdin was not piped or the writer thread cannot be
+    /// spawned.
     #[cfg(test)]
     fn spawn_recording(
         path: &str,
@@ -1553,7 +1470,7 @@ impl FfmpegSubprocess {
             anyhow::anyhow!("FFmpeg encoder '{encoder}' is not installed or cannot be queried")
         })?;
         let plan = RecordingPlan::resolve(codec, request, readback_format, Some(&encoder_help));
-        // Recording keeps the device's native sample rate (Decision 5).
+        // Recording keeps the device's native sample rate.
         let prepared = prepare_audio(audio, false)?;
         let empty: Vec<String> = Vec::new();
         let (a_in, a_out) = match &prepared {
@@ -1628,7 +1545,6 @@ impl FfmpegSubprocess {
     }
 
     /// Spawn an ffmpeg SRT streaming subprocess in listener (server) mode.
-    /// Starts an SRT server on the specified port and broadcasts frames to connected clients.
     ///
     /// # Errors
     ///
@@ -1637,8 +1553,8 @@ impl FfmpegSubprocess {
     ///
     /// # Panics
     ///
-    /// Panics if ffmpeg's stdin was not piped, or if the writer thread cannot
-    /// be spawned — both indicate the process/thread limits are exhausted.
+    /// Panics if ffmpeg's stdin was not piped or the writer thread cannot be
+    /// spawned.
     pub fn spawn_srt(
         url: &str,
         codec: &crate::engine::value::render::SrtCodec,
@@ -1648,14 +1564,14 @@ impl FfmpegSubprocess {
         fps: u32,
         audio: Option<AudioInput>,
     ) -> anyhow::Result<Self> {
-        // Streaming target: normalize audio to 48k (Decision 5).
+        // Streams normalize audio to 48k.
         let prepared = prepare_audio(audio, true)?;
         let empty: Vec<String> = Vec::new();
         let (a_in, a_out) = match &prepared {
             Some(p) => (&p.in_args, &p.out_args),
             None => (&empty, &empty),
         };
-        // Ensure listener mode so ffmpeg acts as an SRT server
+        // Force listener mode so ffmpeg acts as an SRT server.
         let srt_url = if url.contains("mode=") {
             url.to_string()
         } else if url.contains('?') {
@@ -1747,8 +1663,8 @@ impl FfmpegSubprocess {
     ///
     /// # Panics
     ///
-    /// Panics if ffmpeg's stdin was not piped, or if the writer thread cannot
-    /// be spawned — both indicate the process/thread limits are exhausted.
+    /// Panics if ffmpeg's stdin was not piped or the writer thread cannot be
+    /// spawned.
     // Arguments mirror the persisted HLS target plus frame/audio transport.
     #[allow(clippy::too_many_arguments)]
     pub fn spawn_hls(
@@ -1761,7 +1677,7 @@ impl FfmpegSubprocess {
         short_segments: bool,
         audio: Option<AudioInput>,
     ) -> anyhow::Result<Self> {
-        // Streaming target: normalize audio to 48k (Decision 5).
+        // Streams normalize audio to 48k.
         let prepared = prepare_audio(audio, true)?;
         let empty: Vec<String> = Vec::new();
         let (a_in, a_out) = match &prepared {
@@ -1865,8 +1781,8 @@ impl FfmpegSubprocess {
     ///
     /// # Panics
     ///
-    /// Panics if ffmpeg's stdin was not piped, or if the writer thread cannot
-    /// be spawned — both indicate the process/thread limits are exhausted.
+    /// Panics if ffmpeg's stdin was not piped or the writer thread cannot be
+    /// spawned.
     // Arguments mirror the persisted RTMP target plus frame/audio transport.
     #[allow(clippy::too_many_arguments)]
     pub fn spawn_rtmp(
@@ -1879,7 +1795,7 @@ impl FfmpegSubprocess {
         fps: u32,
         audio: Option<AudioInput>,
     ) -> anyhow::Result<Self> {
-        // Streaming target: normalize audio to 48k (Decision 5).
+        // Streams normalize audio to 48k.
         let prepared = prepare_audio(audio, true)?;
         let empty: Vec<String> = Vec::new();
         let (a_in, a_out) = match &prepared {
@@ -1973,8 +1889,8 @@ impl FfmpegSubprocess {
     ///
     /// # Panics
     ///
-    /// Panics if ffmpeg's stdin was not piped, or if the writer thread cannot
-    /// be spawned — both indicate the process/thread limits are exhausted.
+    /// Panics if ffmpeg's stdin was not piped or the writer thread cannot be
+    /// spawned.
     pub fn spawn_dash(
         name: &str,
         codec: &crate::engine::value::render::StreamingCodec,
@@ -1984,7 +1900,7 @@ impl FfmpegSubprocess {
         fps: u32,
         audio: Option<AudioInput>,
     ) -> anyhow::Result<Self> {
-        // Streaming target: normalize audio to 48k (Decision 5).
+        // Streams normalize audio to 48k.
         let prepared = prepare_audio(audio, true)?;
         let empty: Vec<String> = Vec::new();
         let (a_in, a_out) = match &prepared {
@@ -2076,9 +1992,9 @@ impl FfmpegSubprocess {
 
     /// Feed one typed GPU readback frame to an FFmpeg subprocess.
     ///
-    /// The format, dimensions, and stride must match the contract negotiated
-    /// before FFmpeg was spawned. A mismatch stops bytes from entering the raw
-    /// video pipe, where they would otherwise silently desynchronize frames.
+    /// The format, dimensions and stride must match the contract negotiated
+    /// before FFmpeg was spawned; a mismatched frame is rejected, since it would
+    /// desynchronize the raw video pipe.
     pub fn feed_readback_frame(&mut self, frame: ReadbackFrame) -> bool {
         let Some(contract) = self.frame_contract else {
             log::error!(
@@ -2110,8 +2026,7 @@ impl FfmpegSubprocess {
             | ReadbackFormat::Rgb10A2
             | ReadbackFormat::P216 => 4,
             ReadbackFormat::Rgba16Float | ReadbackFormat::Rgba16Unorm => 8,
-            // Never an FFmpeg input format: this is the content light meter's
-            // own readback, which never reaches an encoder.
+            // The content light meter's readback; never sent to an encoder.
             ReadbackFormat::Rgba32Float => 16,
             ReadbackFormat::Uyvy => 2,
         };
@@ -2129,15 +2044,14 @@ impl FfmpegSubprocess {
     }
 
     /// Feed a frame of raw data to a byte-oriented streaming subprocess.
-    /// Never blocks — drops the frame if the writer thread can't keep up.
+    /// Never blocks; drops the frame if the writer thread cannot keep up.
     /// Returns false if the subprocess has failed (write error or process exited).
     pub fn feed_frame(&mut self, frame: Vec<u8>) -> bool {
-        // Check if writer thread reported an error
         if self.write_failed.load(Ordering::SeqCst) {
             self.drain_stderr();
             return false;
         }
-        // Check if ffmpeg already exited (non-blocking)
+        // Non-blocking exit check.
         let Some(child) = self.child.as_mut() else {
             return false;
         };
@@ -2159,9 +2073,8 @@ impl FfmpegSubprocess {
         if let Some(listener) = &mut self.listener
             && !listener.flowing
         {
-            // No client yet: ffmpeg reads what it needs to open the listener,
-            // then takes nothing more until a client connects, so a full queue
-            // here is waiting, not falling behind.
+            // No client yet: ffmpeg takes no frames until one connects, so a
+            // full queue here is not a drop.
             if listener.stalled_at.is_some_and(|at| written > at) {
                 listener.flowing = true;
             }
@@ -2244,11 +2157,11 @@ impl FfmpegSubprocess {
         last_error
     }
 
-    /// Stop the subprocess. For recordings (`graceful_shutdown`), the heavy
-    /// work (joining threads, waiting for ffmpeg to write the moov atom) runs
-    /// on a detached background thread so the caller (UI / main thread) returns
-    /// immediately. For streams, kills ffmpeg inline (fast).
-    /// Idempotent — safe to call multiple times.
+    /// Stop the subprocess. Idempotent.
+    ///
+    /// Recordings (`graceful_shutdown`) finalize on a detached thread (join
+    /// writers, wait for the moov atom) so the caller returns immediately.
+    /// Streams kill ffmpeg inline.
     pub fn stop(&mut self) {
         if self.stopped {
             return;
@@ -2260,12 +2173,12 @@ impl FfmpegSubprocess {
         // 1. Signal shutdown so writer threads know a broken pipe is expected
         self.shutting_down.store(true, Ordering::SeqCst);
 
-        // 2. Drop the sender to close the channel — no more frames queued
+        // 2. Close the frame channel.
         drop(self.frame_tx.take());
 
         if self.graceful_shutdown {
-            // --- Recording path: finalize on a background thread ---
-            // Move all owned resources out of `self` so the thread owns them.
+            // Recording: finalize on a background thread that owns the
+            // resources.
             let mut audio = self.audio.take();
             let writer_thread = self.writer_thread.take();
             let Some(mut child) = self.child.take() else {
@@ -2287,8 +2200,8 @@ impl FfmpegSubprocess {
                         a.stop();
                     }
 
-                    // 3b. Join the video writer thread — drains remaining ≤2
-                    //     frames, flushes & drops stdin → ffmpeg sees video EOF.
+                    // 3b. Join the video writer; it drains queued frames and
+                    //     drops stdin, so ffmpeg sees video EOF.
                     if let Some(handle) = writer_thread {
                         let _ = handle.join();
                     }
@@ -2318,7 +2231,6 @@ impl FfmpegSubprocess {
                         }
                     }
 
-                    // 5. Log completion
                     if let Some(mut pipe) = stderr {
                         Self::drain_stderr_pipe(&mut pipe, &label);
                     }
@@ -2337,30 +2249,26 @@ impl FfmpegSubprocess {
                 log::error!("failed to spawn ffmpeg finalize thread: {e}");
             }
         } else {
-            // --- Streaming path: kill immediately (inline, fast) ---
+            // Streaming: kill inline.
 
-            // 3. Kill ffmpeg BEFORE joining the writer thread. The writer
-            //    thread may be blocked on stdin.write_all() (e.g. SRT listener
-            //    with a full pipe buffer). Killing the child breaks the pipe,
-            //    which unblocks the write and lets the thread exit.
+            // 3. Kill ffmpeg before joining the writer, which may be blocked on
+            //    a full stdin pipe; the broken pipe unblocks it.
             if let Some(child) = self.child.as_mut() {
                 let _ = child.kill();
             }
 
-            // 3b. Tear down the audio side-channel (socket + writer thread).
-            //     Done after the kill so a writer blocked on a full socket sees
-            //     a broken pipe.
+            // 3b. Stop audio after the kill so a writer blocked on a full
+            //     socket sees a broken pipe.
             if let Some(audio) = self.audio.as_mut() {
                 audio.stop();
             }
 
-            // 4. Now safe to join — the writer thread will see a broken pipe
-            //    or a closed channel and exit promptly.
+            // 4. The writer now sees a broken pipe or closed channel and exits.
             if let Some(handle) = self.writer_thread.take() {
                 let _ = handle.join();
             }
 
-            // 5. Reap the child process
+            // 5. Reap the child.
             if let Some(child) = self.child.as_mut() {
                 let _ = child.wait();
             }
@@ -2378,9 +2286,7 @@ impl FfmpegSubprocess {
         }
     }
 
-    /// Completion-log fragment naming repeated frames, empty when there were
-    /// none. Padding is not an error — it is how a hitchy session still comes
-    /// out in sync — but it is worth knowing the renderer struggled.
+    /// Completion-log fragment counting repeated frames; empty when none.
     fn pad_summary(padded: u64) -> String {
         if padded == 0 {
             String::new()
@@ -2405,22 +2311,21 @@ impl FfmpegSubprocess {
         self.audio.as_ref().map(AudioPipe::frames_written)
     }
 
-    /// Repeated frames emitted to cover gaps where the renderer missed its
-    /// slot. Nonzero means the session dropped frames; the recording is still
-    /// in sync, but the visible result is a brief freeze.
+    /// Repeated frames emitted where the renderer missed its slot. Nonzero
+    /// means brief visible freezes; sync is kept.
     pub fn frames_padded(&self) -> u64 {
         self.counters.padded.load(Ordering::Relaxed)
     }
 
-    /// Frames offered while the writer channel was full. The take continued;
-    /// those pixels never reached ffmpeg.
+    /// Frames offered while the writer channel was full; they never reached
+    /// ffmpeg.
     pub fn frames_dropped(&self) -> u64 {
         self.counters.dropped.load(Ordering::Relaxed)
     }
 
     /// Samples of silence spliced into the audio to replace PCM lost to
-    /// backpressure. Nonzero means audio was audibly interrupted, as opposed to
-    /// merely delayed. `None` for a video-only output.
+    /// backpressure. Nonzero means audible dropouts. `None` for a video-only
+    /// output.
     pub fn audio_silence_spliced(&self) -> Option<u64> {
         self.audio.as_ref().map(AudioPipe::silence_spliced)
     }
@@ -2439,9 +2344,8 @@ impl Drop for FfmpegSubprocess {
 
 #[cfg(test)]
 mod tests {
-    /// An SRT listener with no client takes no frames. That is waiting, so
-    /// nothing is counted as dropped; once a client connects, frames flow.
-    /// Runs the real ffmpeg on both ends, and skips when it is not installed.
+    /// An SRT listener with no client counts no drops; frames flow once a
+    /// client connects. Runs real ffmpeg; skips when it is not installed.
     #[test]
     fn an_srt_listener_waits_for_its_client_without_dropping_frames() {
         use super::{FfmpegSubprocess, FrameContract};
@@ -2549,7 +2453,6 @@ mod tests {
 
     #[test]
     fn spawn_srt_url_adds_listener_mode() {
-        // Verify the URL mode injection logic without spawning
         let url = "srt://127.0.0.1:9001";
         let srt_url = if url.contains("mode=") {
             url.to_string()
@@ -2602,7 +2505,6 @@ mod tests {
         assert_eq!(format!("{}", RecordingCodec::HapAlpha), "HAP Alpha");
         assert_eq!(format!("{}", RecordingCodec::HapQ), "HAP Q");
 
-        // SrtCodec display
         assert_eq!(format!("{}", SrtCodec::H264), "H.264");
         assert_eq!(format!("{}", SrtCodec::H265), "H.265 (HEVC)");
     }
@@ -3258,7 +3160,6 @@ mod tests {
         assert_eq!(sub.label(), path_str);
         assert_eq!(sub.frames_written(), 0);
 
-        // Feed a few frames
         let frame = vec![0u8; 64 * 64 * 4]; // black RGBA
         for _ in 0..5 {
             let ok = sub.feed_frame(frame.clone());
@@ -3266,11 +3167,9 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
 
-        // Stop and verify
         sub.stop();
         assert!(sub.duration().as_millis() > 0);
 
-        // Cleanup
         let _ = std::fs::remove_file(path);
     }
 
@@ -3319,7 +3218,6 @@ mod tests {
             eprintln!("Skipping test: ffmpeg not available");
             return;
         }
-        // Use a high port unlikely to conflict
         let url = "srt://127.0.0.1:19876";
         let mut sub = FfmpegSubprocess::spawn_srt(
             url,
@@ -3335,11 +3233,9 @@ mod tests {
         assert_eq!(sub.label(), url);
         assert_eq!(sub.frames_written(), 0);
 
-        // Feed a frame (won't block because of background writer thread)
         let frame = vec![128u8; 64 * 64 * 4];
         let _ = sub.feed_frame(frame);
 
-        // Stop cleanly
         sub.stop();
     }
 
@@ -3392,7 +3288,6 @@ mod tests {
 
     #[test]
     fn frame_channel_capacity_is_bounded() {
-        // Verify the channel capacity constant
         assert_eq!(FRAME_CHANNEL_CAPACITY, 2);
     }
 
@@ -3444,7 +3339,7 @@ mod tests {
         assert_eq!(dropped.load(Ordering::Relaxed), 0);
     }
 
-    // ── Phase 19b: audio passthrough arg construction ──────────────
+    // ── Audio passthrough arg construction ──────────────
 
     fn dummy_audio(sample_rate: u32, channels: u16) -> AudioInput {
         let (_tx, rx) = crossbeam_channel::bounded::<PcmChunk>(4);
@@ -3462,7 +3357,7 @@ mod tests {
 
     #[test]
     fn prepare_audio_none_is_video_only() {
-        // No audio input → no socket, no args: the video-only path is unchanged.
+        // No audio input: no socket, no args.
         let prepared = prepare_audio(None, false).unwrap();
         assert!(prepared.is_none());
     }
@@ -3482,24 +3377,14 @@ mod tests {
         assert!(has_pair(&p.out_args, "-ac", "2"));
         assert!(has_pair(&p.out_args, "-map", "0:v:0"));
         assert!(has_pair(&p.out_args, "-map", "1:a:0"));
-        // Recording must NOT force 48k — native rate is preserved (Decision 5).
+        // Recording keeps the native rate, not 48k.
         assert!(!has_pair(&p.out_args, "-ar", "48000"));
     }
 
-    /// Audio must be timed by its own sample count, never by when it turned up.
-    ///
-    /// This is the whole of the recording's timebase. A raw f32le input with no
-    /// timestamp option gets PTS from the sample count, which is exactly the
-    /// device's clock; adding `-use_wallclock_as_timestamps` replaces that with
-    /// the moment each buffer reached the socket. The two look identical while
-    /// everything is keeping up and diverge the instant anything stalls —
-    /// notably when ffmpeg stops draining the audio socket because it is
-    /// waiting on the video pipe. Every such stall lands in the file as a hole
-    /// in the audio timeline, which is what "the music goes off-beat and drops
-    /// bits when the renderer hitches" sounded like.
-    ///
-    /// Checked on both policies because all five spawners share `prepare_audio`
-    /// and the streaming ones would otherwise regress unnoticed.
+    /// Audio is timed by its sample count, not arrival time:
+    /// `-use_wallclock_as_timestamps` leaves holes whenever ffmpeg stalls on the
+    /// video pipe. Checked for both sample-rate policies, since all spawners
+    /// share `prepare_audio`.
     #[test]
     fn audio_is_timed_by_its_sample_clock_not_by_arrival() {
         for is_stream in [false, true] {
@@ -3510,7 +3395,7 @@ mod tests {
                 !p.in_args
                     .contains(&"-use_wallclock_as_timestamps".to_string()),
                 "audio timestamps must come from the sample count, not arrival time \
-                 (is_stream={is_stream}); see /spec/av-sync.md"
+                 (is_stream={is_stream})"
             );
         }
     }
@@ -3520,7 +3405,7 @@ mod tests {
         let p = prepare_audio(Some(dummy_audio(44100, 2)), true)
             .unwrap()
             .expect("audio prepared");
-        // Stream targets normalize to 48k (Decision 5).
+        // Streams normalize to 48k.
         assert!(has_pair(&p.out_args, "-ar", "48000"));
     }
 
@@ -3536,17 +3421,13 @@ mod tests {
             p.in_args.contains(&expected),
             "audio input should be the bound loopback TCP URL"
         );
-        // Mono device still reported faithfully on the input side.
+        // The input side keeps the device's mono channel count.
         assert!(has_pair(&p.in_args, "-ac", "1"));
     }
 
     // ── A/V sync: holding the video timeline against the audio clock ────
 
-    /// A renderer keeping up must not be padded at all.
-    ///
-    /// Padding is repair work; doing it when nothing is broken would inflate
-    /// every recording with duplicate frames and make the encoder do work for
-    /// nothing.
+    /// A renderer that keeps up gets no padding.
     #[test]
     fn a_renderer_on_time_is_never_padded() {
         let fps = 60.0;
@@ -3562,15 +3443,7 @@ mod tests {
         }
     }
 
-    /// A gap in the renderer is covered by exactly as many frames as it swallowed.
-    ///
-    /// This is what keeps the video timeline honest. Raw video is timed by
-    /// position — frame N is at N/fps whenever it was made — so a frame that is
-    /// never written does not register as a pause, it shortens the recording.
-    /// The audio track is timed by the capture device's sample clock and stays
-    /// true to real time, so every unwritten frame used to slide the two apart,
-    /// permanently and cumulatively. Repeating the last frame across the gap
-    /// costs almost nothing to encode and keeps the two clocks agreeing.
+    /// A renderer gap is padded with exactly as many frames as it missed.
     #[test]
     fn a_renderer_gap_is_covered_frame_for_frame() {
         let fps = 60.0;
@@ -3581,7 +3454,7 @@ mod tests {
         assert_eq!(FfmpegSubprocess::pad_count(elapsed, fps, 10), 6);
     }
 
-    /// A long freeze degrades gracefully instead of flooding the pipe.
+    /// Padding for a long freeze is capped.
     #[test]
     fn a_long_freeze_is_capped_rather_than_burst_written() {
         let fps = 60.0;
@@ -3604,13 +3477,7 @@ mod tests {
     }
 
     /// PCM lost to backpressure is replaced by an equal span of silence.
-    ///
-    /// Now that audio is timed by its sample count, a dropped chunk does not
-    /// leave a hole — it pulls everything after it earlier, so one dropout
-    /// would put the rest of the recording out of sync with the picture.
-    /// Writing silence in its place costs a brief mute and keeps the count
-    /// exact. The assertion is on the byte count for that reason: it is the
-    /// only thing the timeline is made of.
+    /// Asserts on the byte count, since audio is timed by sample count.
     #[test]
     fn lost_audio_is_replaced_by_an_equal_span_of_silence() {
         use std::io::Read as _;
@@ -3653,7 +3520,7 @@ mod tests {
         pipe.stop();
     }
 
-    /// With nothing lost, not a single extra sample is invented.
+    /// With nothing lost, no silence is added.
     #[test]
     fn an_unimpeded_audio_pipe_writes_only_captured_samples() {
         use std::io::Read as _;
@@ -3745,7 +3612,7 @@ mod tests {
         );
         assert!(plan.resolved.fallback_reason.is_none());
 
-        // What `ffprobe` reads back. These four are the acceptance bar for 50a.
+        // What `ffprobe` reads back.
         assert!(has_pair(&plan.video_args, "-color_primaries", "bt2020"));
         assert!(has_pair(&plan.video_args, "-color_trc", "smpte2084"));
         assert!(has_pair(&plan.video_args, "-colorspace", "bt2020nc"));
@@ -3757,8 +3624,7 @@ mod tests {
             .find(|w| w[0] == "-x265-params")
             .map(|w| w[1].clone())
             .expect("HDR10 HEVC must carry x265 HDR signalling");
-        // Not yet measured across the programme, and the status says so rather
-        // than letting a declaration pass as a measurement.
+        // Declared from the peak, not measured, and reported as such.
         assert_eq!(
             plan.resolved.hdr_metadata,
             Some(HdrMetadataSource::DeclaredFromPeak)
@@ -3788,7 +3654,7 @@ mod tests {
 
     #[test]
     fn sdr_recordings_keep_their_rec709_metadata_untouched() {
-        // The regression bar: an SDR recording must be byte-identical to before.
+        // SDR recordings keep plain Rec.709 tags and no x265 params.
         let plan = RecordingPlan::resolve(
             &RecordingCodec::H264,
             PresentationRequest::default(),
@@ -3823,8 +3689,7 @@ mod tests {
 
     #[test]
     fn hdr10_on_prores_falls_back_rather_than_half_supporting_it() {
-        // ProRes can hold PQ container tags but has no ST 2086 or MaxCLL path,
-        // so 50a refuses it instead of shipping partial metadata.
+        // ProRes has no ST 2086 or MaxCLL path, so HDR10 falls back.
         let plan = RecordingPlan::resolve(
             &RecordingCodec::ProRes,
             hdr10_request(1000),
@@ -3869,20 +3734,9 @@ mod tests {
         assert_eq!(plan.resolved.transfer, PresentationTransfer::Hdr10Pq);
     }
 
-    /// The acceptance blocker from /spec/hdr-recording-output.md § FFmpeg Contract.
-    ///
-    /// `-colorspace bt2020nc` only *tags* the stream. This proves the pixels were
-    /// actually converted with BT.2020 coefficients, by encoding a saturated patch
-    /// through the real recording plan and reading luma back out of the decoded
-    /// frame. A neutral patch cannot test this: BT.2020 and Rec.709 luma agree
-    /// exactly on greys, so only a saturated colour separates them.
-    /// The VUI half of level-3 acceptance, held by reading the encoded file back.
-    ///
-    /// Argument-level assertions cannot catch this. FFmpeg's `-color_primaries`
-    /// and `-color_trc` are not forwarded into x265, so a plan whose argv looks
-    /// completely correct produced a file reporting
-    /// `color_transfer=unknown, color_primaries=unknown` and an encoder log
-    /// saying `Disabling hdr10-opt`. Only decoding the result showed it.
+    /// Encodes through the real recording plan and probes the file, since
+    /// FFmpeg's `-color_*` flags are not forwarded into x265 and correct
+    /// arguments can still produce `color_transfer=unknown`.
     #[test]
     fn hdr10_recording_writes_pq_and_bt2020_into_the_bitstream() {
         const W: usize = 64;
@@ -3997,7 +3851,7 @@ mod tests {
                 probe_encoder_help("libx265").as_deref(),
             );
             if plan.resolved.transfer != PresentationTransfer::Hdr10Pq {
-                // No 10-bit libx265 on this machine; nothing to prove here.
+                // No 10-bit libx265 on this machine.
                 return;
             }
 
@@ -4096,11 +3950,8 @@ mod tests {
         }
     }
 
-    /// Bitstream evidence for HLG, the same discipline 50a's PQ path needed.
-    ///
-    /// Argument assertions cannot see whether the encoder wrote the contract into
-    /// the VUI. For PQ that gap hid a real bug (FFmpeg not forwarding `-color_*`
-    /// into x265), so HLG is held to the same bar: encode, probe, compare.
+    /// Encodes HLG and probes the VUI, as for PQ: argument checks cannot see
+    /// what x265 writes.
     #[test]
     fn hlg_streaming_writes_arib_and_bt2020_into_the_bitstream() {
         const W: usize = 64;
@@ -4184,8 +4035,7 @@ mod tests {
                 "the encoded stream does not report {expected}; ffprobe said:\n{report}"
             );
         }
-        // HLG requires no mastering metadata, and writing it anyway would be a
-        // claim about a display that was never involved.
+        // HLG carries no mastering metadata.
         assert!(
             !side.contains("Mastering display metadata"),
             "HLG must not carry ST 2086 mastering metadata"
@@ -4209,7 +4059,7 @@ mod tests {
         assert!(has_pair(&plan.video_args, "-color_primaries", "bt2020"));
         assert!(has_pair(&plan.video_args, "-colorspace", "bt2020nc"));
 
-        // The property that makes HLG the right live default.
+        // HLG declares no peak or metadata, so nothing needs measuring live.
         assert_eq!(plan.resolved.peak_nits, None);
         assert_eq!(plan.resolved.hdr_metadata, None);
         let params = plan
@@ -4243,10 +4093,8 @@ mod tests {
 
     #[test]
     fn hdr_hls_signals_through_the_bitstream_not_the_playlist() {
-        // A master playlist was implemented to carry VIDEO-RANGE and measured to
-        // be useless for it: FFmpeg's HLS muxer never emits that attribute. The
-        // HDR contract reaches players through the segment VUI instead, so the
-        // muxer arguments must stay identical to the SDR shape.
+        // FFmpeg's HLS muxer never emits VIDEO-RANGE; players read HDR from the
+        // segment VUI, so muxer arguments match SDR.
         let hdr = StreamingPlan::resolve(
             StreamingProtocol::Hls,
             StreamingCodec::H265,
@@ -4322,10 +4170,8 @@ mod tests {
 
     #[test]
     fn hevc_streaming_does_not_pin_frame_threads_to_one() {
-        // `-tune zerolatency` sets frame-threads=1 and cannot sustain 1080p60
-        // ten-bit, which showed up in the field as a live stream steadily
-        // shedding frames. Measured 41.8 fps with the tune against a 60 fps
-        // target; 73.8 fps without it.
+        // `-tune zerolatency` sets frame-threads=1: 41.8 fps at 1080p ten-bit,
+        // below a 60 fps target (73.8 fps without it).
         let plan = StreamingPlan::resolve(
             StreamingProtocol::Hls,
             StreamingCodec::H265,
@@ -4344,9 +4190,8 @@ mod tests {
 
     #[test]
     fn hevc_streaming_keeps_output_order_equal_to_input_order() {
-        // The property a live feed actually needs. Frame-threading depth is a
-        // bounded pipeline delay; B-frame reordering is a correctness-shaped
-        // latency that also complicates segment boundaries.
+        // No B-frames: reordering adds latency and complicates segment
+        // boundaries.
         let plan = StreamingPlan::resolve(
             StreamingProtocol::Srt,
             StreamingCodec::H265,
@@ -4364,8 +4209,8 @@ mod tests {
 
     #[test]
     fn latency_and_hdr_params_share_one_x265_params_argument() {
-        // FFmpeg takes `-x265-params` once; passing it twice silently drops the
-        // first. Merging is what keeps both the latency and the colour contract.
+        // FFmpeg keeps only the last `-x265-params`, so latency and color
+        // settings must be merged.
         let plan = StreamingPlan::resolve(
             StreamingProtocol::Hls,
             StreamingCodec::H265,
@@ -4397,8 +4242,7 @@ mod tests {
 
     #[test]
     fn eight_bit_h264_streaming_is_untouched() {
-        // libx264 measured 326 fps on the same clip and its zerolatency tune does
-        // not disable frame threading, so it keeps the tighter setting.
+        // libx264's zerolatency tune keeps frame threading, so H.264 keeps it.
         let plan = StreamingPlan::resolve(
             StreamingProtocol::Srt,
             StreamingCodec::H264,
@@ -4421,9 +4265,8 @@ mod tests {
             .and_then(|w| w[1].parse().ok())
     }
 
-    /// A segmented muxer can only cut on a keyframe, so a segment duration is
-    /// only real if the GOP matches it. LL-HLS asked for 1s and got 4.166667s
-    /// (x265's default keyint of 250 at 60fps), which stalled the player.
+    /// A segmented muxer cuts only on keyframes, so the GOP must match the
+    /// segment duration.
     #[test]
     fn segment_duration_and_keyframe_interval_always_agree() {
         for fps in [24, 25, 30, 50, 60] {
@@ -4454,15 +4297,13 @@ mod tests {
 
     #[test]
     fn a_gop_is_never_zero_however_odd_the_frame_rate() {
-        // Guards the arithmetic rather than any real configuration: a zero GOP
-        // would make FFmpeg emit an all-intra stream or reject the argument.
+        // A zero GOP would make FFmpeg emit all-intra or reject the argument.
         assert_eq!(gop_of(&segment_gop_args(1, 0)), Some(1));
         assert_eq!(gop_of(&segment_gop_args(0, 60)), Some(1));
     }
 
-    /// FFmpeg's HLS muxer emits no partial segments, so the player must not be
-    /// told to run in a mode that depends on them. Doing so froze the stream
-    /// within seconds while plain HLS from the same engine played fine.
+    /// FFmpeg's HLS muxer emits no partial segments, so the player must not use
+    /// low-latency mode, which stalls without them.
     #[test]
     fn the_reduced_latency_player_does_not_claim_ll_hls() {
         let dir = std::env::temp_dir().join(format!(
@@ -4482,8 +4323,8 @@ mod tests {
         );
     }
 
-    /// Whatever the live-edge target, the player needs more cushion than one
-    /// segment of jitter, or a single late segment stalls it permanently.
+    /// The player buffer must exceed one segment, or one late segment stalls
+    /// it.
     #[test]
     fn the_reduced_latency_player_buffers_more_than_one_segment() {
         let dir = std::env::temp_dir().join(format!(

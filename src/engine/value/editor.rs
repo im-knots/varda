@@ -1,7 +1,7 @@
 //! Stage editor preferences the engine persists on the GUI's behalf.
 //!
-//! The engine stores these in `stage.json` and hands them back on load, but
-//! never interprets them. See /spec/ui-engine-boundary.md (WS5).
+//! The engine stores these in `stage.json` and returns them on load without
+//! interpreting them.
 
 /// Cosmetic stage editor state. Field names match `stage.json`.
 // Independent persisted toggles, one per panel or editor mode.

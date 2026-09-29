@@ -1,11 +1,7 @@
 //! A GPU error must not end the performance.
 //!
-//! wgpu reports validation errors through a device-wide callback whose default
-//! implementation panics. On the render thread that kills the app — so a VJ who
-//! saves a typo into a shader mid-set loses the show. Shaders are user-authored
-//! input; a bad one has to be survivable.
-//!
-//! See spec/error-handling.md § Shader Errors.
+//! wgpu's default validation-error callback panics, which on the render thread
+//! kills the app. Shaders are user input, so a bad one must be survivable.
 
 use varda::renderer::GpuContext;
 
@@ -13,8 +9,7 @@ mod common;
 use common::headless_gpu as headless;
 
 /// Provoke a real validation error: a texture row stride smaller than the
-/// texture's actual row. This is the exact class of error that aborted the app
-/// when the depth sensor's colour texture and its upload disagreed on format.
+/// texture's actual row.
 fn provoke_validation_error(gpu: &GpuContext) {
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("containment test target"),
@@ -58,8 +53,7 @@ fn a_validation_error_is_captured_instead_of_aborting() {
         return;
     };
 
-    // Reaching the next line at all is most of the assertion: with wgpu's
-    // default handler this call panics and the process dies.
+    // With wgpu's default handler this call panics and the process dies.
     provoke_validation_error(&gpu);
 
     assert!(
@@ -83,9 +77,8 @@ fn the_device_still_works_after_a_validation_error() {
     provoke_validation_error(&gpu);
     let _ = gpu.errors.take_faults();
 
-    // A validation error drops the offending command; it does not lose the
-    // device. Quarantining one deck and carrying on is only sound if that holds,
-    // so assert it rather than assume it.
+    // Quarantining one deck is only sound if a validation error drops the
+    // command without losing the device.
     let deck = varda::deck::Deck::solid_color(&gpu, [0.2, 0.4, 0.6, 1.0], 32, 32);
     let audio = varda::audio::AudioData::default();
     let modulation = varda::modulation::ModulationEngine::new();
@@ -110,14 +103,14 @@ fn faults_are_attributed_to_the_deck_that_caused_them() {
     let Some(gpu) = headless() else {
         return;
     };
-    // Errors raised outside any deck carry no context ...
+    // Errors raised outside any deck carry no context...
     provoke_validation_error(&gpu);
     let unscoped = gpu.errors.take_faults();
     assert_eq!(unscoped.len(), 1);
     assert_eq!(unscoped[0].context, None);
 
-    // ... and errors raised inside one name it, which is what lets the renderer
-    // disable the right deck instead of guessing.
+    // ...and errors raised inside one name it, so the renderer disables the
+    // right deck.
     {
         let _scope = gpu.errors.scope("deck deadbeef");
         provoke_validation_error(&gpu);

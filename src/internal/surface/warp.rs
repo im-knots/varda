@@ -1,16 +1,14 @@
 //! Warp geometry: perspective correction and UV mesh warping for projection
 //! mapping. Pure CPU math; the renderer draws what it produces.
 //!
-//! Supports two warp modes:
-//! - **`CornerPin`**: 4-point homography (legacy quad warp, DLT solver)
-//! - **Mesh**: Arbitrary XYUV grid warp (generalization of corner-pin)
+//! Warp modes:
+//! - **`CornerPin`**: 4-point homography (DLT solver)
+//! - **Mesh**: arbitrary XYUV grid warp; a 2×2 mesh equals a corner-pin
+//! - **Bezier**: a patch grid tessellated into a mesh
 //!
-//! Corner-pin is a strict subset of mesh warp (equivalent to a 2×2 grid).
-//!
-//! Data-type definitions (`MeshPoint`, `WarpMesh`, `WarpMode`, `BezierWarp`)
-//! live in `engine::value::warp` (see /spec/engine-value-types.md); this
-//! module re-exports them and holds all the mesh/tessellation algorithms as
-//! inherent impls.
+//! The types (`MeshPoint`, `WarpMesh`, `WarpMode`, `BezierWarp`) live in
+//! `engine::value::warp`; this module re-exports them and implements the
+//! algorithms.
 
 pub use crate::engine::value::warp::{BezierWarp, MeshPoint, WarpMesh, WarpMode};
 
@@ -106,9 +104,8 @@ impl WarpMesh {
         }
     }
 
-    /// Resample this mesh onto a new `new_cols` × `new_rows` grid, preserving the
-    /// current deformation via bilinear interpolation. Used to subdivide (or
-    /// coarsen) a warp grid without the image jumping. Dimensions are clamped ≥2.
+    /// Resample this mesh onto a `new_cols` × `new_rows` grid by bilinear
+    /// interpolation, keeping the current deformation. Dimensions clamp to ≥2.
     #[must_use]
     pub fn resampled(&self, new_cols: u32, new_rows: u32) -> WarpMesh {
         let new_cols = new_cols.max(2);
@@ -163,11 +160,10 @@ impl WarpMode {
         }
     }
 
-    /// Convert this warp into a mesh of `cols` × `rows` grid points, preserving
-    /// the current deformation. A corner-pin becomes a bilinear grid over its
-    /// quad (perspective → bilinear is inherent to switching to mesh warp); an
-    /// existing mesh is resampled to the new resolution; a bezier warp is
-    /// tessellated then resampled. Dimensions clamp ≥2.
+    /// Convert this warp into a `cols` × `rows` mesh, keeping the current
+    /// deformation. A corner-pin becomes a bilinear grid over its quad (losing
+    /// perspective); a mesh is resampled; a bezier warp is tessellated then
+    /// resampled. Dimensions clamp to ≥2.
     pub fn to_mesh(&self, cols: u32, rows: u32) -> WarpMesh {
         match self {
             Self::CornerPin { corners } => WarpMesh::from_corners(corners).resampled(cols, rows),
@@ -176,11 +172,9 @@ impl WarpMode {
         }
     }
 
-    /// The `WarpMesh` the GPU pipeline consumes for this warp, if it is a
-    /// mesh-based warp. `CornerPin` returns `None` (rendered via homography);
-    /// `Mesh` returns its grid; `Bezier` tessellates its control cage. This is
-    /// the render-site choke point that keeps `blit`/snapshot geometry unaware
-    /// of the bezier representation.
+    /// The `WarpMesh` the GPU pipeline draws. `CornerPin` returns `None`
+    /// (rendered via homography); `Mesh` returns its grid; `Bezier` tessellates
+    /// its control cage, so render sites never handle bezier directly.
     pub fn render_mesh(&self) -> Option<WarpMesh> {
         match self {
             Self::CornerPin { .. } => None,
@@ -210,14 +204,13 @@ impl WarpMode {
     }
 }
 
-// ── Shape-conforming warp meshes (Approach B, auto-warp binding) ─────
+// ── Shape-conforming warp meshes ─────
 //
-// These build a `WarpMesh` whose grid boundary follows a surface's own
-// outline, so content fills the shape. Pure geometry (no wgpu); consumed by
-// `Surface::conforming_warp`.
+// Meshes whose grid boundary follows a surface's outline, so content fills the
+// shape. Used by `Surface::conforming_warp`.
 
 /// Build an `n`×`n` warp mesh whose grid boundary lands exactly on the ellipse
-/// centred at `center` with radii `(rx, ry)` in output space, via the classic
+/// centered at `center` with radii `(rx, ry)` in output space, via the
 /// elliptical square-to-disc map. Interior points fill the disc; UVs are the
 /// uniform unit-square grid. `n` clamps to `[2, MAX_WARP_SUBDIVISIONS]`;
 /// positions clamp to `[0, 1]` (matching `CircleHint::generate_vertices`).
@@ -331,10 +324,8 @@ fn forward_run(verts: &[[f32; 2]], from: usize, to: usize) -> Vec<[f32; 2]> {
     out
 }
 
-/// Single-point cubic-bezier evaluation at parameter `t` ∈ [0,1]. Kept local to
-/// the warp module: the renderer must not depend on `surface/curve.rs`, and the
-/// shared-flattener rule targets outline *polyline* flattening (a distinct
-/// concern), not this per-point warp evaluation.
+/// Cubic-bezier evaluation at `t` ∈ [0,1]. Kept here rather than in
+/// `surface/curve.rs` so the renderer does not depend on that module.
 // p0/p1/c1/c2/t/u and the a..d Bernstein coefficients are the standard bezier names.
 #[allow(clippy::many_single_char_names)]
 fn cubic_point(p0: [f32; 2], c1: [f32; 2], c2: [f32; 2], p1: [f32; 2], t: f32) -> [f32; 2] {
@@ -349,8 +340,7 @@ fn cubic_point(p0: [f32; 2], c1: [f32; 2], c2: [f32; 2], p1: [f32; 2], t: f32) -
 /// Transfinite (Coons) blend of a patch's four boundary points at parametric
 /// `(s, t)`: `l`/`r` are the left/right boundary points at row-parameter `t`;
 /// `tp`/`bt` the top/bottom boundary points at col-parameter `s`; `c00..c11`
-/// the four patch corners. Shared by `coons_mesh` (polyline sides) and
-/// `BezierWarp::tessellate` (cubic sides) — one Coons code path.
+/// the four patch corners. Used by `coons_mesh` and `BezierWarp::tessellate`.
 #[allow(clippy::too_many_arguments)]
 // l/r/s/t/d/b are the standard Coons-patch boundary and parameter names.
 #[allow(clippy::many_single_char_names)]
@@ -380,7 +370,7 @@ fn coons_blend(
 }
 
 /// Build a `cols`×`rows` Coons-patch mesh whose boundary follows the closed
-/// polygon `verts` (content fills the outline; Approach B). The four sides are
+/// polygon `verts`, so content fills the outline. The four sides are
 /// the vertex runs between the vertices nearest the bbox corners, resampled by
 /// arc length; the interior is transfinite (Coons) interpolation. UVs are the
 /// uniform unit-square grid. Fewer than 3 vertices returns an identity mesh.
@@ -392,12 +382,10 @@ pub fn coons_mesh(verts: &[[f32; 2]], cols: u32, rows: u32) -> WarpMesh {
         return WarpMesh::identity(cols, rows);
     }
     let n = verts.len();
-    // Normalise winding so walking forward visits TL → TR → BR → BL. One
-    // reversal always suffices, so reverse the working copy in place rather than
-    // recursing. When a single vertex is the nearest to both left bbox corners
-    // (`tl == bl` — a right-pointing triangle, or the mandala's skin triangles)
-    // the winding test stays true on the reversed copy too, so a
-    // recompute-and-recurse loops forever and overflows the stack.
+    // Normalize winding so walking forward visits TL → TR → BR → BL. Reverse
+    // once, never recompute and retry: when one vertex is nearest both left
+    // corners (`tl == bl`, e.g. a right-pointing triangle) the winding test
+    // stays true after reversing.
     let reversed: Vec<[f32; 2]>;
     let verts: &[[f32; 2]] = {
         let [tl, tr, _br, bl] = detect_quad_corners(verts);
@@ -439,13 +427,11 @@ pub fn coons_mesh(verts: &[[f32; 2]], cols: u32, rows: u32) -> WarpMesh {
     WarpMesh { cols, rows, points }
 }
 
-// ── Bezier patch-grid warp (8i.6) ───────────────────────────────────
+// ── Bezier patch-grid warp ───────────────────────────────────
 //
-// A full bezier patch grid: an `anchor_cols × anchor_rows` control cage of
-// on-surface anchors, with per-edge cubic tangent handles. Each grid cell is a
-// Coons patch bounded by four cubic beziers; the interior is transfinite
-// (Coons) interpolation. Tessellated into a `WarpMesh` for the GPU. Pure
-// geometry (no wgpu); the editable cage is authoritative and the mesh derived.
+// An `anchor_cols × anchor_rows` cage of anchors with cubic tangent handles on
+// each edge. Each cell is a Coons patch bounded by four cubics. The cage is
+// stored; the `WarpMesh` for the GPU is tessellated from it.
 
 /// Default tessellation steps per patch edge for a new bezier warp.
 pub const DEFAULT_BEZIER_TESS: u32 = 6;
@@ -501,9 +487,8 @@ impl BezierWarp {
         }
     }
 
-    /// Seed a bezier warp from an existing mesh: anchors = mesh points, all
-    /// edges straight. At `tess = 1` this tessellates back to the same mesh
-    /// (lossless), so converting a mesh warp to bezier is visually identical.
+    /// Seed a bezier warp from a mesh: anchors are the mesh points and edges are
+    /// straight. At `tess = 1` it tessellates back to the same mesh.
     pub fn from_mesh(mesh: &WarpMesh, tess: u32) -> Self {
         let anchors = mesh.points.iter().map(|p| p.position).collect();
         Self::from_anchors(mesh.cols, mesh.rows, anchors, tess)
@@ -576,9 +561,8 @@ impl BezierWarp {
         self.tessellate().is_identity()
     }
 
-    /// Move anchor `(row, col)` to `pos`, shifting its incident tangent handles
-    /// by the same delta so local curvature is preserved (mirrors the surface
-    /// bezier-edge `move_anchor`). Out-of-range indices are ignored.
+    /// Move anchor `(row, col)` to `pos`, shifting its tangent handles by the
+    /// same delta to keep local curvature. Out-of-range indices are ignored.
     pub fn move_anchor(&mut self, r: usize, c: usize, pos: [f32; 2]) {
         let (ac, ar) = (self.ac(), self.ar());
         if r >= ar || c >= ac {
@@ -628,11 +612,9 @@ impl BezierWarp {
         }
     }
 
-    /// Rebuild the control cage at a new `cols × rows` anchor resolution,
-    /// resampling anchors onto the current warped surface with straightened
-    /// handles. Adds/removes control points; sub-anchor curvature is not
-    /// preserved across a re-subdivide (flagged limitation). Dims clamp to
-    /// `[2, MAX_WARP_SUBDIVISIONS]`.
+    /// Rebuild the cage at `cols × rows` anchors, resampled onto the current
+    /// warped surface with straight handles. Curvature between anchors is lost.
+    /// Dims clamp to `[2, MAX_WARP_SUBDIVISIONS]`.
     pub fn set_cage_subdivisions(&mut self, cols: u32, rows: u32) {
         let nc = cols.clamp(2, MAX_WARP_SUBDIVISIONS);
         let nr = rows.clamp(2, MAX_WARP_SUBDIVISIONS);
@@ -848,7 +830,7 @@ impl WarpMesh {
             points.push(MeshPoint {
                 position: [vals[0], vals[1]],
                 uv: [vals[2], vals[3]],
-                // vals[4] = intensity (ignored, handled by edge blend system)
+                // vals[4] = intensity, ignored (edge blend handles it)
             });
         }
 
@@ -1091,7 +1073,7 @@ mod tests {
         let center = m.points[4]; // row 1, col 1 in a 3-wide grid
         assert!((center.position[0] - 0.6).abs() < 1e-6);
         assert!((center.position[1] - 0.4).abs() < 1e-6);
-        // UV (source mapping) is untouched — still the identity centre.
+        // UV (source mapping) is untouched — still the identity center.
         assert!((center.uv[0] - 0.5).abs() < 1e-6);
         assert!((center.uv[1] - 0.5).abs() < 1e-6);
         // Out-of-range is a no-op.
@@ -1253,21 +1235,18 @@ mod tests {
         );
     }
 
-    // ── Chaos Tests Round 2: NaN/Inf warp mesh coordinates ──────────────
+    // ── NaN/Inf warp mesh coordinates ──────────────
 
     #[test]
     fn chaos_csv_nan_coordinates_parse_successfully() {
-        // NaN parses as f32 via .parse() — filter_map drops it
         let csv = "2 2\nNaN NaN NaN NaN 1.0\n1.0 0.0 1.0 0.0 1.0\n0.0 1.0 0.0 1.0 1.0\n1.0 1.0 1.0 1.0 1.0\n";
         let result = WarpMesh::from_xyuv_csv(csv);
-        // "NaN" parses as f32::NAN via .parse::<f32>() — filter_map keeps it!
-        // But the mesh point count should still match
+        // "NaN" parses as f32::NAN, so the point is kept.
         if let Ok(mesh) = result {
             assert_eq!(mesh.points.len(), 4);
-            // First point has NaN coords — verify they exist
             assert!(mesh.points[0].position[0].is_nan() || mesh.points[0].position[0] == 0.0);
         } else {
-            // If NaN lines are dropped (vals.len() < 4 after filter_map), count mismatch is OK
+            // A dropped line gives a count mismatch, which is also fine.
         }
     }
 
@@ -1275,7 +1254,7 @@ mod tests {
     fn chaos_csv_infinity_coordinates() {
         let csv = "2 2\ninf inf inf inf 1.0\n1.0 0.0 1.0 0.0 1.0\n0.0 1.0 0.0 1.0 1.0\n1.0 1.0 1.0 1.0 1.0\n";
         let result = WarpMesh::from_xyuv_csv(csv);
-        // count mismatch is acceptable
+        // A count mismatch error is also acceptable.
         if let Ok(mesh) = result {
             assert_eq!(mesh.points.len(), 4);
         }
@@ -1331,7 +1310,7 @@ mod tests {
         }
     }
 
-    // ── Shape-conforming warp (Approach B) ───────────────────────────
+    // ── Shape-conforming warp ───────────────────────────
 
     #[test]
     fn disc_map_mesh_dims_and_uvs() {
@@ -1422,11 +1401,9 @@ mod tests {
 
     #[test]
     fn coons_mesh_left_apex_triangle_terminates() {
-        // The apex vertex is the nearest to BOTH left bbox corners, so
-        // `detect_quad_corners` reports `tl == bl` and the winding test is
-        // permanently true. The old recurse-on-reverse looped forever and
-        // overflowed the stack (the mandala skin-triangle import crash). Guard:
-        // it must terminate and return a valid `cols × rows` mesh.
+        // The apex vertex is nearest both left bbox corners, so `tl == bl` and
+        // the winding test stays true after reversing. Must still terminate
+        // with a valid `cols × rows` mesh.
         let verts = [[0.0, 0.5], [1.0, 0.0], [1.0, 1.0]];
         let m = coons_mesh(&verts, 4, 4);
         assert_eq!(m.points.len(), 16);
@@ -1435,7 +1412,7 @@ mod tests {
         }
     }
 
-    // ── Bezier patch-grid warp (8i.6) ─────────────────────────────────
+    // ── Bezier patch-grid warp ─────────────────────────────────
 
     fn approx2(a: [f32; 2], b: [f32; 2]) -> bool {
         (a[0] - b[0]).abs() < 1e-4 && (a[1] - b[1]).abs() < 1e-4
@@ -1496,7 +1473,7 @@ mod tests {
 
     #[test]
     fn bezier_move_anchor_shifts_incident_handles() {
-        // 3×3 straight cage; move the centre anchor and check an incident handle
+        // 3×3 straight cage; move the center anchor and check an incident handle
         // moved by the same delta (curvature preserved).
         let mut anchors = Vec::new();
         for r in 0..3 {
@@ -1505,7 +1482,7 @@ mod tests {
             }
         }
         let mut b = BezierWarp::from_anchors(3, 3, anchors, 4);
-        // Horizontal edge to the right of centre (row 1, edge 1), near-left
+        // Horizontal edge to the right of center (row 1, edge 1), near-left
         // handle. Index = row*(cols-1) + edge = 1*(3-1) + 1 = 3.
         let hidx = 3;
         let before = b.h_horiz[hidx][0];

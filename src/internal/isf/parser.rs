@@ -2,30 +2,25 @@ use super::metadata::ISFMetadata;
 use anyhow::{Context, Result};
 use std::path::Path;
 
-/// Parsed ISF shader file
+/// Parsed ISF shader file.
 #[derive(Debug, Clone)]
 pub struct ISFShader {
-    /// Parsed metadata from JSON header
     pub metadata: ISFMetadata,
 
-    /// GLSL fragment shader source code
     pub fragment_source: String,
 
-    /// Optional vertex shader source code
     pub vertex_source: Option<String>,
 
-    /// File path (for debugging/hot-reload)
+    /// For debugging and hot-reload.
     pub file_path: Option<String>,
 }
 
 impl ISFShader {
-    /// Parse an ISF shader from a file
+    /// Parses an ISF shader from a file.
     ///
     /// # Errors
     ///
-    /// Returns an error if `path` cannot be read, or if the contents are not a
-    /// valid ISF file (missing or unterminated `/*{ ... }*/` header, or JSON
-    /// metadata that fails to deserialize).
+    /// Returns an error if `path` cannot be read or is not a valid ISF file.
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
         let content = std::fs::read_to_string(path)
@@ -36,16 +31,14 @@ impl ISFShader {
         Ok(shader)
     }
 
-    /// Parse an ISF shader from a string
+    /// Parses an ISF shader from a string.
     ///
     /// # Errors
     ///
-    /// Returns an error if `content` has no leading `/*{` JSON header, if the
-    /// header is not closed with `}*/`, or if the JSON metadata fails to
-    /// deserialize into [`ISFMetadata`].
+    /// Returns an error if the `/*{ ... }*/` JSON header is missing or
+    /// unterminated, or its JSON does not deserialize into [`ISFMetadata`].
     pub fn from_string(content: &str) -> Result<Self> {
-        // ISF files have a JSON comment block at the top
-        // Format: /*{ ... }*/
+        // ISF files start with a `/*{ ... }*/` JSON header.
         let (metadata, fragment_source) = extract_json_and_glsl(content)?;
 
         Ok(ISFShader {
@@ -56,7 +49,7 @@ impl ISFShader {
         })
     }
 
-    /// Get shader name from metadata or filename
+    /// Shader name from metadata, else the filename.
     pub fn name(&self) -> String {
         if let Some(path) = &self.file_path {
             Path::new(path)
@@ -69,7 +62,6 @@ impl ISFShader {
         }
     }
 
-    /// Get shader description
     pub fn description(&self) -> String {
         self.metadata
             .description
@@ -77,12 +69,11 @@ impl ISFShader {
             .unwrap_or_else(|| "No description".to_string())
     }
 
-    /// Get the shader source (GLSL for both fragment and compute shaders)
+    /// GLSL source, for both fragment and compute shaders.
     pub fn source(&self) -> &str {
         &self.fragment_source
     }
 
-    /// Get shader author/credit
     pub fn credit(&self) -> String {
         self.metadata
             .credit
@@ -91,9 +82,8 @@ impl ISFShader {
     }
 }
 
-/// Extract JSON metadata and GLSL code from ISF file content
+/// Splits ISF content into JSON metadata and GLSL code.
 fn extract_json_and_glsl(content: &str) -> Result<(ISFMetadata, String)> {
-    // Find the JSON comment block: /*{ ... }*/
     let json_start = content
         .find("/*{")
         .context("ISF file must start with JSON comment block /*{ ... }*/")?;
@@ -102,14 +92,11 @@ fn extract_json_and_glsl(content: &str) -> Result<(ISFMetadata, String)> {
         .find("}*/")
         .context("ISF JSON comment block not properly closed with }*/")?;
 
-    // Extract JSON (including the braces)
     let json_str = &content[(json_start + 2)..=(json_start + json_end)]; // Skip "/*" and include "}"
 
-    // Parse JSON metadata
     let metadata: ISFMetadata =
         serde_json::from_str(json_str).context("Failed to parse ISF JSON metadata")?;
 
-    // Extract GLSL code (everything after the JSON block)
     let glsl_start = json_start + json_end + 3; // Skip "}*/"
     let fragment_source = content[glsl_start..].trim().to_string();
 

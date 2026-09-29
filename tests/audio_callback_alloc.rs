@@ -1,10 +1,8 @@
 //! The audio capture callback runs on the device's real-time thread, where an
-//! allocation can stall long enough to drop audio. With no passthrough
-//! subscribed it must allocate nothing. See /spec/performance-hot-paths.md
-//! item H.
+//! allocation can drop audio. With no passthrough subscribed it must not
+//! allocate.
 //!
-//! Servo installs its own global allocator, so this runs in builds without
-//! `html`, such as the Windows test job.
+//! Servo installs its own global allocator, so this runs only without `html`.
 #![cfg(not(feature = "html"))]
 
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -20,8 +18,8 @@ thread_local! {
     static WATCHING: Cell<bool> = const { Cell::new(false) };
 }
 
-// SAFETY: every method defers to the system allocator; counting touches only
-// an atomic and a const-initialized thread local, neither of which allocates.
+// SAFETY: every method defers to the system allocator; counting uses only an
+// atomic and a const-initialized thread local, neither of which allocates.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         if WATCHING.with(Cell::get) {
@@ -47,7 +45,7 @@ static ALLOCATOR: Counting = Counting;
 
 #[test]
 fn the_capture_callback_allocates_nothing() {
-    // The counter itself works: one allocation, watched, is one counted.
+    // Sanity check: one watched allocation counts as one.
     WATCHING.with(|w| w.set(true));
     drop(std::hint::black_box(Vec::<u8>::with_capacity(8)));
     WATCHING.with(|w| w.set(false));

@@ -1,22 +1,19 @@
 /// UUID → index resolution cost on the command path.
 ///
-/// Every write command names its target by UUID and resolves it to a transient
-/// index immediately before use (see `/spec/api-addressing.md`). Resolution is a
-/// linear scan with string comparison, so its cost grows with scene size. These
-/// benchmarks answer whether that scan needs a UUID→index map behind it.
+/// Write commands resolve their target UUID to an index right before use, by a
+/// linear scan with string comparison, so cost grows with scene size.
 ///
 ///   `resolve_channel` — scan over channels.
 ///   `resolve_deck`    — nested scan over channels × decks.
 ///   `resolve_effect`  — scan over every chain: master, then each channel's chain,
-///                     then each deck's chain. The widest scan of the three.
+///                     then each deck's chain. The widest scan.
 ///
-/// Each group measures the **worst case**: the target is the last entity the
-/// scan reaches, and a `_miss` variant scans everything and finds nothing (what
-/// a stale client UUID costs). Sizes bracket a realistic show (2–8 channels) and
-/// a pathological one (32).
+/// Each group measures the worst case: the target is the last entity scanned,
+/// and a `_miss` variant scans everything and finds nothing (a stale client
+/// UUID). Sizes cover a typical show (2–8 channels) and an extreme one (32).
 ///
-/// The per-frame `tick_sequence` fade resolution is the same channel scan, so
-/// `resolve_channel` bounds it: multiply by 2 (from + to) per playing sequence.
+/// The per-frame `tick_sequence` fade resolution is the same channel scan: it
+/// costs 2 × `resolve_channel` (from + to) per playing sequence.
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use varda::{
     deck::{Deck, Effect},
@@ -28,9 +25,8 @@ use varda::{
 const WIDTH: u32 = 640;
 const HEIGHT: u32 = 360;
 
-/// A single resolution must stay under this to be irrelevant at frame scale:
-/// 1µs is 0.006% of the 16.67ms 60fps budget. Disable with
-/// `VARDA_BENCH_SKIP_SLO=1`.
+/// Worst-case budget for one resolution: 1µs is 0.006% of a 60fps frame.
+/// Disable with `VARDA_BENCH_SKIP_SLO=1`.
 const RESOLVE_BUDGET_NS: u128 = 1_000;
 
 const INVERT_SHADER: &str = include_str!("../shaders/invert.fs");
@@ -68,7 +64,7 @@ fn setup_mixer(ctx: &GpuContext, n_channels: usize, decks_per_channel: usize) ->
     mixer
 }
 
-/// UUID of the last channel — the far end of the scan.
+/// UUID of the last channel, the far end of the scan.
 fn last_channel_uuid(mixer: &Mixer) -> String {
     mixer
         .channels()
@@ -78,7 +74,7 @@ fn last_channel_uuid(mixer: &Mixer) -> String {
         .to_string()
 }
 
-/// UUID of the last deck in the last channel — the far end of the nested scan.
+/// UUID of the last deck in the last channel, the far end of the nested scan.
 fn last_deck_uuid(mixer: &Mixer) -> String {
     mixer
         .channels()
@@ -109,8 +105,7 @@ fn last_effect_uuid(mixer: &Mixer) -> String {
         .to_owned()
 }
 
-/// Preflight: assert worst-case resolution in a pathological scene is still
-/// negligible against the frame budget.
+/// Preflight: assert worst-case resolution in an extreme scene fits the budget.
 fn preflight_slo(ctx: &GpuContext) {
     if std::env::var_os("VARDA_BENCH_SKIP_SLO").is_some() {
         return;

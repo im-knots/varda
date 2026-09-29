@@ -1,24 +1,19 @@
-/// Edge blend post-process pipeline — applies smoothstep alpha ramps
-/// on output edges for seamless multi-projector overlap blending.
+/// Edge blend post-process: smoothstep alpha ramps on output edges for
+/// multi-projector overlap.
 use anyhow::Result;
 use wgpu::util::DeviceExt;
 
-// The user-facing blend config value types (`EdgeBlendMode`, `EdgeBlendEdge`,
-// `EdgeBlendConfig`) are framework-free; defined in `config` and re-exported
-// here so `crate::renderer::edge_blend::…` paths still resolve. The GPU
-// pipeline and auto-detection logic below stay in this file.
+// Re-exported so `crate::renderer::edge_blend::…` paths resolve.
 pub use super::config::{EdgeBlendConfig, EdgeBlendEdge, EdgeBlendMode};
 
 // ── Per-surface overlap zone blending (Auto mode) ────────────────────
 
-/// Maximum number of overlap zones per surface.
-/// Each zone adds 8 floats (32 bytes) to the GPU uniform.
+/// Maximum overlap zones per surface. Each adds 32 bytes to the GPU uniform.
 pub const MAX_OVERLAP_ZONES: usize = 4;
 
 pub use crate::engine::value::render::{OverlapZone, SurfaceOverlapZones};
 
 impl SurfaceOverlapZones {
-    /// Returns true if any overlap zones are present.
     pub fn any_enabled(&self) -> bool {
         !self.zones.is_empty()
     }
@@ -44,16 +39,13 @@ impl SurfaceOverlapZones {
 pub struct AutoBlendResult {
     /// Index of the output this surface belongs to.
     pub output_idx: usize,
-    /// UUID of the surface.
     pub surface_uuid: String,
-    /// Computed overlap zones for this surface.
     pub overlap_zones: SurfaceOverlapZones,
 }
 
 // ── Auto edge-blend detection ────────────────────────────────────────
 
-/// A mapped region on the canvas belonging to a specific output.
-/// Used as input to `compute_auto_edge_blend`.
+/// A mapped canvas region belonging to one output; input to `compute_auto_edge_blend`.
 #[derive(Debug, Clone)]
 pub struct MappedRegion {
     /// Stringified `OutputSource` key (e.g. "Master", "Channel(0)").
@@ -62,12 +54,12 @@ pub struct MappedRegion {
     pub bbox: [f32; 4],
     /// UUID of the surface this region belongs to.
     pub surface_uuid: String,
-    /// Primary contour vertices in canvas coords (for precise polygon intersection).
+    /// Primary contour vertices in canvas coords.
     pub vertices: Vec<[f32; 2]>,
     /// Additional contours for combined surfaces.
     pub extra_contours: Vec<Vec<[f32; 2]>>,
-    /// Subtractive hole contours in canvas coords (8i.7), attached to the
-    /// primary polygon as interior rings so overlap zones exclude them.
+    /// Hole contours in canvas coords, subtracted from the primary polygon so
+    /// overlap zones exclude them.
     pub holes: Vec<Vec<[f32; 2]>>,
 }
 
@@ -76,17 +68,16 @@ pub struct MappedRegion {
 pub struct OutputSurfaceInfo {
     /// Index into the outputs array.
     pub output_idx: usize,
-    /// Current edge blend mode for this output.
     pub edge_blend_mode: EdgeBlendMode,
-    /// Default gamma to apply when auto-computing blend edges.
+    /// Gamma for auto-computed blend edges.
     pub default_gamma: f32,
-    /// All Mapped regions assigned to this output.
+    /// All mapped regions assigned to this output.
     pub regions: Vec<MappedRegion>,
 }
 
-/// Compute precise polygon intersection and return its AABB.
-/// Falls back to AABB intersection when polygon data is unavailable or degenerate.
-// x/y/w/h and a/b/p/r are the idiomatic names for this 2D bounding-box math.
+/// AABB of the polygon intersection. Falls back to AABB intersection when
+/// polygon data is missing or degenerate.
+// x/y/w/h and a/b/p/r are the usual names for 2D bounding-box math.
 #[allow(clippy::many_single_char_names)]
 fn polygon_intersect_aabb(a: &MappedRegion, b: &MappedRegion) -> Option<[f32; 4]> {
     use crate::surface::{verts_to_geo, verts_to_geo_with_holes};
@@ -132,11 +123,10 @@ fn polygon_intersect_aabb(a: &MappedRegion, b: &MappedRegion) -> Option<[f32; 4]
         return None;
     }
 
-    // Fallback: AABB intersection when vertices are missing.
     aabb_intersect(a.bbox, b.bbox)
 }
 
-/// Compute AABB intersection. Returns `Some([x, y, w, h])` if boxes overlap, `None` otherwise.
+/// AABB intersection as `[x, y, w, h]`, or `None` if the boxes don't overlap.
 fn aabb_intersect(a: [f32; 4], b: [f32; 4]) -> Option<[f32; 4]> {
     let ax2 = a[0] + a[2];
     let ay2 = a[1] + a[3];
@@ -155,30 +145,24 @@ fn aabb_intersect(a: [f32; 4], b: [f32; 4]) -> Option<[f32; 4]> {
     }
 }
 
-/// Compute ramp direction for surface A's overlap zone toward surface B.
-/// Returns (`ramp_x`, `ramp_y`) based on relative center positions.
+/// Ramp direction (`ramp_x`, `ramp_y`) of A's overlap zone toward B, from
+/// their centers.
 fn compute_ramp_direction(bbox_a: &[f32; 4], bbox_b: &[f32; 4]) -> (f32, f32) {
     let center_a = [bbox_a[0] + bbox_a[2] * 0.5, bbox_a[1] + bbox_a[3] * 0.5];
     let center_b = [bbox_b[0] + bbox_b[2] * 0.5, bbox_b[1] + bbox_b[3] * 0.5];
     let dx = center_b[0] - center_a[0];
     let dy = center_b[1] - center_a[1];
-    // Ramp toward the other surface: +1 if B is to the right/below, -1 if left/above.
-    // Use a threshold to avoid tiny ramps from nearly-aligned centers.
+    // +1 if B is right/below, -1 if left/above; 0 for nearly aligned centers.
     let ramp_x = if dx.abs() > 1e-4 { dx.signum() } else { 0.0 };
     let ramp_y = if dy.abs() > 1e-4 { dy.signum() } else { 0.0 };
     (ramp_x, ramp_y)
 }
 
-/// Derive per-surface overlap zones for each Auto-mode output from surface topology.
+/// Per-surface overlap zones for each Auto-mode output, one result per surface.
 ///
-/// Algorithm:
-/// 1. For each Auto-mode output, iterate its regions (surfaces).
-/// 2. For each region, compare against regions on every other output with the same `source_key`.
-/// 3. Compute AABB intersection in stage space → convert to surface-local UV rect.
-/// 4. Compute ramp direction from relative surface positions.
-/// 5. Collect zones, keep top `MAX_OVERLAP_ZONES` by area.
-///
-/// Returns `Vec<AutoBlendResult>` — one entry per surface on Auto-mode outputs.
+/// Each region is intersected with regions on other outputs sharing its
+/// `source_key`; overlaps become surface-local UV rects with a ramp toward the
+/// other surface, keeping the largest `MAX_OVERLAP_ZONES`.
 pub fn compute_auto_edge_blend(infos: &[OutputSurfaceInfo]) -> Vec<AutoBlendResult> {
     let mut results: Vec<AutoBlendResult> = Vec::new();
 
@@ -300,10 +284,8 @@ impl EdgeBlendPipeline {
     ///
     /// # Errors
     ///
-    /// Never returns `Err` today: every wgpu resource here is created
-    /// infallibly (device validation failures surface on the device's error
-    /// scope instead). The `Result` keeps the constructor signature uniform
-    /// with the other pipelines so callers can `?` it.
+    /// Never returns `Err`; validation failures surface on the device's error
+    /// scope. The `Result` matches the other pipeline constructors.
     pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Result<Self> {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Edge Blend BGL"),
@@ -474,8 +456,7 @@ impl EdgeBlendPipeline {
     }
 }
 
-/// Compute the smoothstep blend alpha for a given normalized position.
-/// Exported for unit testing.
+/// Smoothstep blend alpha at a normalized position.
 pub fn blend_alpha(t_normalized: f32, gamma: f32) -> f32 {
     let t = t_normalized.clamp(0.0, 1.0);
     let s = t * t * (3.0 - 2.0 * t);
@@ -973,8 +954,7 @@ mod tests {
 
     #[test]
     fn auto_blend_corner_overlap_creates_zone() {
-        // Corner overlap — previously would trigger spurious full-edge blends.
-        // Now it creates a small overlap zone in the corner.
+        // A corner overlap gives a small corner zone, not a full-edge blend.
         let infos = vec![
             make_info(
                 0,

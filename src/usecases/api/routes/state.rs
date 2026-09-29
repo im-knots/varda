@@ -10,9 +10,8 @@ use crate::usecases::api::SharedState;
 
 /// Defines a route that serializes one subtree of `EngineState`.
 ///
-/// The subtree snapshot types are `Serialize` only, so the operation documents
-/// its payload in prose rather than referencing a schema — same treatment as
-/// `GET /api/state`.
+/// The subtree types are `Serialize` only, so the payload is described in
+/// prose, as for `GET /api/state`.
 macro_rules! state_route {
     ($name:ident, $path:literal, $summary:literal, $($field:ident).+) => {
         #[doc = $summary]

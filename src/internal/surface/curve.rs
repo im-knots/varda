@@ -1,16 +1,11 @@
-//! Curve authoring + flattening for 2D surfaces.
+//! Curve authoring and flattening for surfaces.
 //!
-//! A [`SurfacePath`] is an optional authoring layer on a `Surface`: an ordered
-//! list of line / cubic-bezier segments. It is flattened to the polygon in
-//! `Surface::vertices` (the single source of truth every downstream consumer
-//! reads) whenever the path is edited — mirroring the `CircleHint` pattern.
-//!
-//! This is the one shared bezier flattener: SVG import and on-canvas bezier
-//! editing both go through here, so there is a single sampling convention and
-//! no parallel curve math elsewhere in the codebase.
+//! A [`SurfacePath`] is an optional list of line and cubic-bezier segments on a
+//! `Surface`. Each edit flattens it into `Surface::vertices`, which everything
+//! downstream reads. SVG import and on-canvas editing both flatten here.
 
-/// Default subdivision counts for bezier sampling, matched to the historical
-/// SVG import behavior so detection output stays stable.
+/// Default subdivision counts for bezier sampling. Changing them changes SVG
+/// import output.
 pub const QUAD_STEPS: usize = 8;
 pub const CUBIC_STEPS: usize = 12;
 
@@ -29,13 +24,12 @@ impl SurfacePath {
     /// Flatten this path to a polygon vertex list for `Surface::vertices`.
     ///
     /// The `start` point is emitted first, followed by the sampled points of
-    /// each segment. The closing point is not duplicated — surfaces close
-    /// implicitly at render time.
+    /// each segment. The closing point is not duplicated; surfaces close
+    /// implicitly.
     ///
     /// # Panics
     ///
-    /// Panics if the output buffer is empty when the closing point is checked —
-    /// unreachable, since `start` is always pushed first.
+    /// Never: `start` is always pushed first.
     pub fn flatten(&self) -> Vec<[f32; 2]> {
         let mut out: Vec<[f32; 2]> = Vec::with_capacity(1 + self.segments.len());
         out.push(self.start);
@@ -62,9 +56,8 @@ impl SurfacePath {
 
     /// Build a closed path of straight-line segments from a polygon's vertices.
     ///
-    /// Every edge — including the closing edge back to the first vertex — becomes
-    /// an explicit segment, so each edge is individually addressable for bezier
-    /// editing. `flatten` drops the duplicated closing point.
+    /// Every edge, including the closing edge, becomes a segment so each can be
+    /// edited. `flatten` drops the duplicated closing point.
     pub fn from_polygon(verts: &[[f32; 2]], closed: bool) -> Self {
         let start = verts.first().copied().unwrap_or([0.0, 0.0]);
         let mut segments = Vec::with_capacity(verts.len());
@@ -81,16 +74,15 @@ impl SurfacePath {
         }
     }
 
-    /// Returns `true` if any segment is a cubic bezier (rather than a straight
-    /// line) — i.e. the path carries curvature worth preserving.
+    /// Whether any segment is a cubic bezier.
     pub fn has_cubic(&self) -> bool {
         self.segments
             .iter()
             .any(|s| matches!(s, PathSegment::Cubic { .. }))
     }
 
-    /// Apply `f` to every point of the path — `start` plus each segment's control
-    /// points and endpoint. Used for normalization and affine transforms.
+    /// Apply `f` to every point: `start` plus each segment's control points and
+    /// endpoint.
     pub fn apply_map(&mut self, f: impl Fn([f32; 2]) -> [f32; 2]) {
         self.start = f(self.start);
         for seg in &mut self.segments {
@@ -149,8 +141,8 @@ impl SurfacePath {
         matches!(self.segments.get(idx), Some(PathSegment::Cubic { .. }))
     }
 
-    /// Convert edge `idx` from a line to a cubic, seeding the control points at
-    /// the 1/3 and 2/3 points so the initial curve is visually identical.
+    /// Convert edge `idx` from a line to a cubic with controls at 1/3 and 2/3,
+    /// so the shape does not change.
     pub fn convert_edge_to_cubic(&mut self, idx: usize) {
         if idx >= self.segments.len() {
             return;
@@ -253,8 +245,8 @@ pub fn flatten_quad(p0: [f32; 2], ctrl: [f32; 2], p1: [f32; 2], steps: usize) ->
 }
 
 /// Exactly convert a quadratic bezier's control point into the two control
-/// points of an equivalent cubic bezier. Lets quads captured from SVG import be
-/// stored as [`PathSegment::Cubic`] (the only curved segment kind) losslessly.
+/// points of an equivalent cubic, so SVG quads are stored losslessly as
+/// [`PathSegment::Cubic`].
 pub fn quad_to_cubic(p0: [f32; 2], ctrl: [f32; 2], p1: [f32; 2]) -> ([f32; 2], [f32; 2]) {
     let c1 = [
         p0[0] + 2.0 / 3.0 * (ctrl[0] - p0[0]),
@@ -366,7 +358,7 @@ mod tests {
 
     #[test]
     fn closed_defaults_true_on_deserialize() {
-        // Old-style payload without `closed` → defaults to true.
+        // A payload without `closed` defaults to true.
         let json = r#"{"start":[0.0,0.0],"segments":[]}"#;
         let path: SurfacePath = serde_json::from_str(json).unwrap();
         assert!(path.closed);

@@ -1,5 +1,5 @@
-/// Per-frame CPU cost of `ModulationEngine::update`, the hot loop that
-/// evaluates every modulation source once per rendered frame.
+/// Per-frame CPU cost of `ModulationEngine::update`, which evaluates every
+/// modulation source once per rendered frame.
 ///
 /// Four variants per source count:
 ///   `lfo_only`   — the common case. Pure functions of time, no clone path.
@@ -9,10 +9,8 @@
 ///   `assignments`— sources plus parameter assignments, so `recompute_order`
 ///                  has a real dependency graph to walk.
 ///
-/// Source counts run to 256 deliberately. Performance-mode scenes use a
-/// handful of modulators, but an arrangement produces one automation envelope
-/// per automated parameter, so the engine has to stay flat at that scale
-/// (/spec/modulation-engine-perf.md, /spec/automation.md § Performance).
+/// Source counts run to 256: an arrangement has one automation envelope per
+/// automated parameter.
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::collections::HashMap;
 use varda::audio::AudioSourceId;
@@ -24,8 +22,8 @@ use varda::modulation::{
 const SOURCE_COUNTS: [usize; 4] = [8, 32, 128, 256];
 
 fn audio_values() -> AudioValues {
-    // 1024 bins of pink-ish noise: enough structure that `energy_in_range`
-    // does real work rather than bailing on the silence check.
+    // 1024 bins of pink-ish noise, so `energy_in_range` doesn't exit early on
+    // the silence check.
     let fft: Vec<f32> = (0..1024).map(|i| 0.5 / ((i as f32) + 1.0).sqrt()).collect();
     let mut sources = HashMap::default();
     sources.insert(
@@ -122,8 +120,7 @@ fn engine_mod_on_mod(n: usize) -> ModulationEngine {
     engine
 }
 
-/// Sources plus ordinary parameter assignments, which is what a loaded scene
-/// actually looks like.
+/// Sources plus ordinary parameter assignments, as in a loaded scene.
 fn engine_with_assignments(n: usize) -> ModulationEngine {
     let mut engine = ModulationEngine::new();
     let uuids: Vec<String> = (0..n).map(|i| engine.add_source(lfo(i))).collect();
@@ -133,8 +130,8 @@ fn engine_with_assignments(n: usize) -> ModulationEngine {
     engine
 }
 
-/// A 32-breakpoint automation curve with a mix of segment shapes, which is a
-/// generous count for one parameter over one show.
+/// A 32-breakpoint automation curve with mixed segment shapes, a generous count
+/// for one parameter over one show.
 fn envelope(i: usize) -> ModulationSource {
     let breakpoints = (0..32)
         .map(|k| {
@@ -149,10 +146,8 @@ fn envelope(i: usize) -> ModulationSource {
     ModulationSource::envelope(breakpoints)
 }
 
-/// An arrangement: one absolute-mode envelope per automated parameter. This is
-/// the density /spec/automation.md § Performance has to hold at, and the group
-/// that would catch a regression in the segment cache or in absolute
-/// resolution.
+/// An arrangement: one absolute-mode envelope per automated parameter. Covers
+/// the segment cache and absolute resolution.
 fn engine_envelopes(n: usize) -> ModulationEngine {
     let mut engine = ModulationEngine::new();
     for i in 0..n {
@@ -182,8 +177,8 @@ fn bench_update(c: &mut Criterion) {
             ("assignments", engine_with_assignments(n)),
             ("envelopes", engine_envelopes(n)),
         ] {
-            // Warm the cached evaluation order so the benchmark measures steady
-            // state rather than the one-off `recompute_order`.
+            // Warm the cached evaluation order to measure steady state, not
+            // the one-off `recompute_order`.
             engine.update_free_running(0.0, &audio, &analyzers);
 
             g.bench_with_input(BenchmarkId::new(name, n), &n, |b, _| {
@@ -202,9 +197,7 @@ fn bench_update(c: &mut Criterion) {
 
 /// Per-frame cost of the residency predicate, which `Mixer::apply_arrangement`
 /// runs once per lane to decide whether that deck's source can stop pulling
-/// frames. The win it buys is decode threads rather than frame time, so what
-/// this group has to prove is that the check itself stays free.
-/// See /spec/deck-residency.md.
+/// frames. The check must stay near free.
 fn bench_residency(c: &mut Criterion) {
     use varda::arrangement::residency;
 

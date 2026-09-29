@@ -32,7 +32,7 @@ src/
 ```
 
 - **`engine/`** defines what every consumer speaks: the `EngineCommand` vocabulary, the `EngineState` snapshots, and plain value types in `engine::value`. It uses no wgpu, egui or framework types.
-- **`internal/`** holds domain modules, one concern each (audio analysis, video decoding, ISF compilation, NDI, the modulation engine). Each is tested on its own. The modules are ordered in tiers, and a module may only use modules below it. `tests/domain_dependency_guard.rs` holds the order. If a lower module needs something from a higher one, move the shared type down (often into `engine::value`) or pass the behavior in. Do not route it through `EngineCommand`, which is for consumers, not for domains. See `/spec/domain-dependencies.md`.
+- **`internal/`** holds domain modules, one concern each (audio analysis, video decoding, ISF compilation, NDI, the modulation engine). Each is tested on its own. The modules are ordered in tiers, and a module may only use modules below it. `tests/domain_dependency_guard.rs` holds the order. If a lower module needs something from a higher one, move the shared type down (often into `engine::value`) or pass the behavior in. Do not route it through `EngineCommand`, which is for consumers, not for domains.
 - **`app/`** is the engine. `VardaApp` owns every subsystem, dispatches every `EngineCommand`, and runs the frame (`begin_frame`, `render_frame`). Work on one domain goes on that domain (`Mixer`, `SurfaceManager`, `MacroBank`); `app/` holds work that spans several. It runs without a window.
 - **`usecases/`** is the only layer that uses egui or HTTP routing. It reads snapshots and sends commands, and never mutates engine state. Two places in `app/` use `winit` directly: output windows (`app/outputs.rs`) and the HTML interactive window (`app/interactive/`). `tests/egui_layer_boundary_guard.rs` rejects egui types in `internal/` and `app/`.
 
@@ -128,7 +128,7 @@ Five pedantic lints are allowed crate-wide, each with a comment in `Cargo.toml`:
 |---|---|
 | `cast_precision_loss`, `cast_possible_truncation`, `cast_sign_loss` | Pixel, sample and vertex math converts between integers and floats everywhere, and `try_from` would add error handling to the render loop. |
 | `must_use_candidate` | Fires on hundreds of snapshot accessors and catches no bugs. |
-| `too_many_lines` | About 130 functions are over 100 lines. Splitting them is tracked in [`/spec/roadmap.md`](spec/roadmap.md) § DEBT: Function Decomposition. |
+| `too_many_lines` | About 130 functions are over 100 lines; they are split as they are worked on. |
 
 Add to this list only when a lint is wrong for the whole codebase. `clippy::float_cmp` is also allowed in tests (see `src/lib.rs`), where assertions compare against literals the test just set.
 

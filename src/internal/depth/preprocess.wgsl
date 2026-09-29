@@ -1,13 +1,12 @@
-// Depth-sensor shader preprocessor — converts a raw R16Uint depth stream into
-// render-ready fields for ISF shaders. See spec/depth-sensor-preprocessor.md.
+// Depth-sensor shader preprocessor: turns a raw R16Uint depth stream into
+// fields for ISF shaders.
 //
 // Three fullscreen passes at sensor resolution:
-//   fs_normalize — clip, hole-fill, normalize, temporally smooth; emit depth + motion
-//   fs_mask      — silhouette occupancy with a feathered edge
-//   fs_color     — mirrored passthrough of the sensor's colour stream
+//   fs_normalize: clip, hole-fill, normalize, temporally smooth; emit depth + motion
+//   fs_mask:      silhouette occupancy with a feathered edge
+//   fs_color:     mirrored passthrough of the sensor's color stream
 //
-// `0.0` is the invalid sentinel for normalized depth: out of range, or a texel the
-// sensor could not resolve.
+// Normalized depth `0.0` means invalid: out of range or unresolved.
 
 struct Params {
     // near_mm, far_mm, 1/(far-near) mm, smoothing (EMA factor 0..1)
@@ -23,14 +22,10 @@ struct Params {
 const INVALID: f32 = 0.0;
 const MAX_RADIUS: i32 = 8;
 
-// Deadband on the frame-to-frame depth delta, in normalized units.
-//
-// The history texture is `R16Float`, whose ULP near 1.0 is ~1e-3. Differencing a
-// freshly computed f32 against its own f16-rounded self therefore yields a
-// nonzero residual even when nothing moved — and `motion` divides by `dt`, so at
-// 30 Hz that residual is amplified 30x into a visible field. Left uncorrected a
-// perfectly still room slowly drives the fluid. Sits comfortably above the
-// quantization floor and below any real movement.
+// Deadband on the frame-to-frame depth delta, in normalized units. History is
+// R16Float (ULP ~1e-3 near 1.0), so a still scene leaves a rounding residual
+// that the divide by `dt` amplifies into visible motion. Set above that floor
+// and below real movement.
 const MOTION_DEADBAND: f32 = 4.0e-3;
 
 // Fullscreen triangle. No vertex buffer.
@@ -60,13 +55,13 @@ fn src_coord(frag: vec2<f32>) -> vec2<i32> {
 @group(0) @binding(1) var depth_src: texture_2d<u32>;
 @group(0) @binding(2) var prev_depth: texture_2d<f32>;
 
-// Normalize a raw millimetre reading to 0..1 across [near, far].
+// Normalizes a raw millimeter reading to 0..1 across [near, far].
 // Returns INVALID for zero (unresolved) and out-of-range samples.
 fn normalize_mm(mm: f32) -> f32 {
     if (mm <= 0.0 || mm < P.range.x || mm > P.range.y) {
         return INVALID;
     }
-    // Guard the degenerate near==far case so the output stays finite.
+    // Clamp keeps the output finite when near == far.
     return clamp((mm - P.range.x) * P.range.z, 1.0e-4, 1.0);
 }
 
@@ -76,12 +71,9 @@ fn load_norm(c: vec2<i32>) -> f32 {
     return normalize_mm(f32(textureLoad(depth_src, cc, 0).r));
 }
 
-// Fill an unresolved texel from the nearest valid sample within `radius`.
-//
-// Nearest-valid rather than a median or a mean: Kinect v1 holes are IR shadows
-// cast beside limbs, so the correct value is the surface immediately adjacent.
-// A mean would blend the subject with the background across the hole and soften
-// exactly the silhouette edge this preprocessor exists to produce.
+// Fills an unresolved texel from the nearest valid sample within `radius`.
+// Kinect v1 holes are IR shadows beside limbs, so the adjacent surface is the
+// right value; a mean would blur the silhouette edge into the background.
 fn hole_fill(c: vec2<i32>, radius: i32) -> f32 {
     var best = INVALID;
     var best_d2 = 1.0e9;
@@ -102,12 +94,9 @@ fn hole_fill(c: vec2<i32>, radius: i32) -> f32 {
 }
 
 struct NormalizeOut {
-    // The shader-visible `depth` output.
     @location(0) depth: f32,
-    // The same value, written to the ping-pong history so the next frame can
-    // difference against it. Free: one extra ROP write, no extra pass.
+    // Same value, kept as history for next frame's motion.
     @location(1) history: f32,
-    // The shader-visible `motion` output.
     @location(2) motion: vec2<f32>,
 };
 
@@ -126,8 +115,8 @@ fn fs_normalize(@builtin(position) pos: vec4<f32>) -> NormalizeOut {
     let prev = textureLoad(prev_depth, hc, 0).r;
 
     var smoothed = d;
-    // Only blend when both samples are valid — otherwise a subject entering the
-    // frame would fade in from the background instead of appearing.
+    // Blend only when both samples are valid, so a subject entering the frame
+    // appears at once instead of fading in from the background.
     if (d > INVALID && prev > INVALID) {
         smoothed = mix(d, prev, clamp(P.range.w, 0.0, 0.99));
     }
@@ -161,13 +150,13 @@ fn fs_normalize(@builtin(position) pos: vec4<f32>) -> NormalizeOut {
 
 struct MaskOut {
     @location(0) mask: f32,
-    // Ping-pong history so the next frame can decay against this one.
+    // Kept as history so the next frame can decay against it.
     @location(1) history: f32,
 };
 
 @fragment
 fn fs_mask(@builtin(position) pos: vec4<f32>) -> MaskOut {
-    // `depth` is already in output space and already mirrored by pass A.
+    // `depth` is already in output space and mirrored by pass A.
     let c = vec2<i32>(i32(pos.x), i32(pos.y));
     let d = dims_i();
     let radius = i32(round(P.dims.w));
@@ -195,16 +184,12 @@ fn fs_mask(@builtin(position) pos: vec4<f32>) -> MaskOut {
     return finish_mask(c, sum / max(count, 1.0));
 }
 
-// Temporal hysteresis on the silhouette.
-//
-// Kinect depth validity flickers texel-to-texel along a body's edge — a texel
-// resolves this frame, drops out the next — so a mask taken straight from
-// per-frame validity crawls with speckle no amount of spatial feathering fixes.
-// Rising edges are instant (a subject appearing must not lag) while falling
-// edges decay, so a texel that merely blinked out stays filled.
+// Temporal hysteresis on the silhouette. Kinect depth validity flickers along
+// body edges, which spatial feathering can't hide. Rising edges are instant;
+// falling edges decay, so a texel that blinks out stays filled.
 fn finish_mask(c: vec2<i32>, occupancy: f32) -> MaskOut {
     let prev = textureLoad(prev_mask, c, 0).r;
-    // `smoothing` also governs how long a dropped texel is held.
+    // `smoothing` also sets how long a dropped texel is held.
     let decay = mix(0.35, 0.02, clamp(P.range.w, 0.0, 0.99));
     let held = max(occupancy, prev - decay);
 
@@ -214,7 +199,7 @@ fn finish_mask(c: vec2<i32>, occupancy: f32) -> MaskOut {
     return out;
 }
 
-// ── Pass C: colour passthrough ───────────────────────────────────────────────
+// ── Pass C: color passthrough ────────────────────────────────────────────────
 
 @group(0) @binding(4) var rgb_src: texture_2d<f32>;
 

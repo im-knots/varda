@@ -1,11 +1,8 @@
-//! The interactive HTML window: a lightweight winit/wgpu window that blits a
-//! deck's live HTML texture and carries the input state needed to forward
-//! mouse/keyboard/scroll/IME into the offscreen Servo `WebView`.
+//! The interactive HTML window: blits a deck's live HTML texture and forwards
+//! mouse/keyboard/scroll/IME to the offscreen Servo `WebView`.
 //!
-//! It is fixed 1:1 to the deck's `WebView` size and non-resizable (see
-//! `/spec/html-source.md` §4), so the surface and the `WebView` share a device
-//! pixel grid and cursor mapping is the identity (plus clamping). Modeled on
-//! `OutputWindow` but display-only — it never joins `output.outputs`.
+//! The window is fixed to the `WebView` size and not resizable, so cursor
+//! mapping is the identity plus clamping. It is never added to `output.outputs`.
 
 use anyhow::{Context, Result};
 use winit::event::WindowEvent;
@@ -23,11 +20,9 @@ pub(crate) struct InteractiveWindow {
     surface: wgpu::Surface<'static>,
     surface_config: wgpu::SurfaceConfiguration,
     blit_pipeline: BlitPipeline,
-    /// Deck/instance this window drives.
     pub(crate) target: InteractiveTarget,
     /// Last known cursor position in physical (== `WebView` device) pixels.
     pub(crate) cursor: (f64, f64),
-    /// Currently-held modifier keys.
     pub(crate) modifiers: ModifiersState,
     /// True while an IME composition session is in progress.
     pub(crate) composing: bool,
@@ -77,7 +72,6 @@ impl InteractiveWindow {
         })
     }
 
-    /// This window's winit id, for event routing.
     pub(crate) fn id(&self) -> winit::window::WindowId {
         self.window.id()
     }
@@ -87,10 +81,8 @@ impl InteractiveWindow {
         (self.target.width, self.target.height)
     }
 
-    /// Translate a winit window event into input events for the `WebView`,
-    /// updating tracked cursor/modifier/composition state. Returns the events to
-    /// forward to the servo thread (usually 0 or 1). `CloseRequested` is handled
-    /// by the caller; unhandled events return empty.
+    /// Translate a winit event into `WebView` input events (usually 0 or 1),
+    /// updating cursor/modifier/composition state. The caller handles `CloseRequested`.
     pub(crate) fn process_event(&mut self, event: &WindowEvent) -> Vec<HtmlInputEvent> {
         match event {
             WindowEvent::CursorMoved { position, .. } => {
@@ -119,7 +111,7 @@ impl InteractiveWindow {
         }
     }
 
-    /// IME → composition events, tracking the start/update/end session lifecycle.
+    /// IME to composition events, tracking start/update/end.
     fn process_ime(&mut self, ime: &winit::event::Ime) -> Vec<HtmlInputEvent> {
         use winit::event::Ime;
         match ime {
@@ -200,8 +192,7 @@ impl InteractiveWindow {
         self.window.request_redraw();
     }
 
-    /// Close the OS window and reclaim the leaked `Box<Window>` (mirrors
-    /// `OutputWindow::destroy`). Sole owner after removal from app state.
+    /// Close the OS window and reclaim the leaked `Box<Window>`.
     pub(crate) fn destroy(self) {
         let window_ptr = std::ptr::from_ref::<Window>(self.window).cast_mut();
         drop(self.surface);

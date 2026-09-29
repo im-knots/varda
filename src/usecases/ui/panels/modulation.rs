@@ -6,12 +6,10 @@ use crate::engine::value::param::ParamAddress;
 use crate::modulation::{LFOWaveform, StepInterpolation};
 use crate::timebase::Timebase;
 
-/// Which notion of time a source follows.
+/// Which clock a source follows.
 ///
-/// Only offered for sources whose output is a pure function of time. An
-/// envelope follower or an ADSR tracks the room or a gate, so there is nothing
-/// for a show clock to mean; those cards show no selector rather than a control
-/// that does nothing. See /spec/timebase.md § Core Insight.
+/// Only shown for sources whose output is a pure function of time. Envelope
+/// followers and ADSRs track audio or a gate, so their cards have no selector.
 fn timebase_selector(
     ui: &mut egui::Ui,
     idx: usize,
@@ -41,8 +39,7 @@ fn timebase_selector(
              Beat: musical time, so rate is in cycles per beat and follows the tempo.",
         );
 
-    // A beat-locked source with no clock holds its last value. Say so, rather
-    // than leaving the performer to wonder why a modulator stopped moving.
+    // A beat-locked source with no clock holds its last value; tell the performer.
     if current == Timebase::Beat && !clock_active {
         ui.label(
             egui::RichText::new("⚠")
@@ -92,12 +89,9 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
             .id_salt("mod_sources_vscroll")
             .show(ui, |ui| {
                 for (idx, entry) in data.modulation_sources.iter().enumerate() {
-                    // Envelopes are edited in their arrangement lane, not as a
-                    // card here: this panel is a row of full parameter cards,
-                    // which suits a handful of LFOs and would be unusable at the
-                    // hundreds of curves an arrangement produces.
-                    // See /spec/automation.md § UI. `idx` still counts them, so
-                    // modulator colours stay stable as envelopes come and go.
+                    // Envelopes are edited in their arrangement lane, not as cards here; this
+                    // panel suits a handful of LFOs, not hundreds of curves. `idx` still counts
+                    // them so modulator colors stay stable as envelopes come and go.
                     if matches!(entry.source, ModSourceUI::Envelope { .. }) {
                         continue;
                     }
@@ -128,7 +122,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                         }
                         ModSourceUI::Envelope { .. } => format!("Automation {}", idx + 1),
                     };
-                    // Show current value in header if available
+                    // Current value in the header, if available.
                     let value_text = data
                         .modulation_current_values
                         .get(sid)
@@ -312,7 +306,6 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                             bipolar: bp,
                                         });
                                     }
-                                    // LFO waveform visualization
                                     let (response, painter) = ui.allocate_painter(
                                         egui::vec2(ui.available_width().min(180.0), 30.0),
                                         egui::Sense::hover(),
@@ -356,7 +349,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                         points,
                                         egui::Stroke::new(1.5_f32, mod_color),
                                     ));
-                                    // Current value indicator
+                                    // Current value indicator.
                                     if let Some(&cur_val) = data.modulation_current_values.get(sid)
                                     {
                                         let y = rect.center().y - cur_val * rect.height() * 0.4;
@@ -376,7 +369,6 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     mode,
                                     noise_gate,
                                 } => {
-                                    // Mode selector (Direct/Increase/Decrease)
                                     use crate::modulation::AudioReactMode;
                                     let mode_label = match mode {
                                         AudioReactMode::Direct => "Direct",
@@ -408,7 +400,6 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                                 }
                                             });
                                     });
-                                    // Preset selector (Low/Mid/High/Full/Custom)
                                     let preset_label = if (*freq_low - 20.0).abs() < 1.0
                                         && (*freq_high - 250.0).abs() < 1.0
                                     {
@@ -458,7 +449,6 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                                 }
                                             });
                                     });
-                                    // Frequency range sliders (bookshelf)
                                     let mut fl = *freq_low;
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("Lo:").small());
@@ -503,7 +493,6 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                             );
                                         }
                                     });
-                                    // Gain slider
                                     let mut gain_val = *gain;
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("Gain:").small());
@@ -525,7 +514,6 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                         }
                                         render_mod_on_mod_dropdown(ui, data, actions, sid, "gain");
                                     });
-                                    // Smoothing slider
                                     let mut sm = *smoothing;
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("Smooth:").small());
@@ -555,7 +543,6 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                             "smoothing",
                                         );
                                     });
-                                    // Noise gate slider
                                     let mut ng = *noise_gate;
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("Gate:").small());
@@ -574,7 +561,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                             );
                                         }
                                     });
-                                    // Source selector (if multiple audio devices)
+                                    // Source selector, shown with more than one audio device.
                                     if data.audio.devices.len() > 1 {
                                         let src_label = source_id
                                             .and_then(|sid| {
@@ -625,7 +612,6 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                             );
                                         });
                                     }
-                                    // Audio level bar
                                     if let Some(&cur_val) = data.modulation_current_values.get(sid)
                                     {
                                         ui.add(
@@ -642,7 +628,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     release,
                                     stage: _,
                                 } => {
-                                    // Combined gate button: press → trigger, release → gate off
+                                    // Gate button: press triggers, release ends the gate.
                                     let gate_path =
                                         ParamAddress::modulator_param(sid, "gate").to_string();
                                     let any_learn =
@@ -665,7 +651,6 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                         egui::vec2(80.0, 18.0),
                                         egui::Sense::click_and_drag(),
                                     );
-                                    // Draw button-like appearance
                                     let visuals = if was_held {
                                         ui.visuals().widgets.active
                                     } else if gate_resp.hovered() {
@@ -687,7 +672,6 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                         egui::FontId::proportional(11.0),
                                         btn_color,
                                     );
-                                    // Detect pointer press and release on this widget
                                     if !any_learn {
                                         let pressed_now = gate_resp.is_pointer_button_down_on();
                                         if pressed_now && !was_held {
@@ -702,7 +686,6 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                             });
                                         }
                                     }
-                                    // MIDI learn overlay
                                     if data.midi_learn_active {
                                         let is_target = data.midi_learn_target.as_deref()
                                             == Some(gate_path.as_str());
@@ -721,7 +704,6 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                             });
                                         }
                                     }
-                                    // Keyboard learn overlay
                                     if data.keyboard_learn_active {
                                         let is_target = data.keyboard_learn_target.as_deref()
                                             == Some(gate_path.as_str());
@@ -840,14 +822,13 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                             ui, data, actions, sid, "release",
                                         );
                                     });
-                                    // ADSR envelope visualization
                                     let (response, painter) = ui.allocate_painter(
                                         egui::vec2(ui.available_width().min(180.0), 30.0),
                                         egui::Sense::hover(),
                                     );
                                     let rect = response.rect;
                                     painter.rect_filled(rect, 2.0, egui::Color32::from_gray(20));
-                                    // sustain shown as ~0.3 segment
+                                    // Sustain is drawn as a 0.3 segment.
                                     let total_time = attack_val + decay_val + 0.3 + release_val;
                                     let ax = rect.left() + (attack_val / total_time) * rect.width();
                                     let dx = ax + (decay_val / total_time) * rect.width();
@@ -867,7 +848,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                         points,
                                         egui::Stroke::new(1.5_f32, mod_color),
                                     ));
-                                    // Current value indicator
+                                    // Current value indicator.
                                     if let Some(&cur_val) = data.modulation_current_values.get(sid)
                                     {
                                         let y = bot - cur_val * (bot - top);
@@ -908,8 +889,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     ui.label(format!("Output: {output_name}"));
                                     ui.label(format!("Smoothing: {smoothing:.2}"));
                                 }
-                                // Filtered out above; an envelope's editor is
-                                // its arrangement lane, not a card.
+                                // Filtered out above; envelopes are edited in their lane.
                                 ModSourceUI::Envelope { .. } => {}
                             }
                         });
@@ -919,7 +899,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
     }
 }
 
-/// Render step sequencer controls: rate, interpolation, bipolar, step count, and painted bar grid.
+/// Step sequencer controls: rate, interpolation, bipolar, step count, and the painted bar grid.
 // UI render fn taking many independent egui state/handle args; no shared invariant to bundle.
 #[allow(clippy::too_many_arguments)]
 fn render_step_sequencer_controls(
@@ -934,7 +914,7 @@ fn render_step_sequencer_controls(
     data: &UIData,
     actions: &mut UIActions,
 ) {
-    // Controls row: Rate + Interp + Bipolar + Step count
+    // Controls row: Rate, Interp, Bipolar, step count.
     let mut r = rate;
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Rate:").small());
@@ -999,7 +979,6 @@ fn render_step_sequencer_controls(
             });
         }
     });
-    // Step count controls
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(format!("Steps: {}", steps.len())).small());
         if ui.small_button("−").clicked() && steps.len() > 2 {
@@ -1034,7 +1013,6 @@ fn render_step_sequencer_controls(
         }
     });
 
-    // Painted step grid
     let grid_width = ui.available_width().clamp(120.0, 260.0);
     let grid_height = 80.0_f32;
     let (response, painter) = ui.allocate_painter(
@@ -1043,7 +1021,6 @@ fn render_step_sequencer_controls(
     );
     let rect = response.rect;
 
-    // Background
     painter.rect_filled(rect, 3.0, egui::Color32::from_gray(18));
     painter.rect_stroke(
         rect,
@@ -1059,7 +1036,7 @@ fn render_step_sequencer_controls(
     let step_w = rect.width() / num_steps as f32;
     let bar_pad = 1.0_f32;
 
-    // Grid lines (horizontal at 25%, 50%, 75%)
+    // Horizontal grid lines at 25%, 50%, 75%.
     for frac in &[0.25_f32, 0.5, 0.75] {
         let y = rect.top() + rect.height() * (1.0 - frac);
         painter.line_segment(
@@ -1067,7 +1044,6 @@ fn render_step_sequencer_controls(
             egui::Stroke::new(0.5_f32, egui::Color32::from_gray(35)),
         );
     }
-    // Vertical step dividers
     for i in 1..num_steps {
         let x = rect.left() + i as f32 * step_w;
         painter.line_segment(
@@ -1076,7 +1052,6 @@ fn render_step_sequencer_controls(
         );
     }
 
-    // Draw bars
     let bar_color = mod_color.linear_multiply(0.7);
     let bar_hover_color = mod_color;
     let hover_step = if response.hovered() || response.dragged() {
@@ -1108,7 +1083,7 @@ fn render_step_sequencer_controls(
         painter.rect_filled(bar_rect, 1.0, color);
     }
 
-    // Current value indicator line
+    // Current value line.
     if let Some(&cur_val) = data.modulation_current_values.get(sid) {
         let display_val = if bipolar {
             f32::midpoint(cur_val, 1.0)
@@ -1122,7 +1097,7 @@ fn render_step_sequencer_controls(
         );
     }
 
-    // Click/drag to set step values
+    // Click or drag to set step values.
     let any_learn = data.midi_learn_active || data.keyboard_learn_active;
     if !any_learn
         && (response.clicked() || response.dragged())
@@ -1141,7 +1116,7 @@ fn render_step_sequencer_controls(
         });
     }
 
-    // MIDI/keyboard learn overlays on step bars
+    // MIDI and keyboard learn overlays on step bars.
     if any_learn {
         for (step_idx, _) in steps.iter().enumerate() {
             let x0 = rect.left() + step_idx as f32 * step_w;
@@ -1188,8 +1163,8 @@ fn render_step_sequencer_controls(
     }
 }
 
-/// Render a modulation source slider with MIDI/keyboard learn support.
-/// Returns true if the slider value changed (only in non-learn mode).
+/// Modulation source slider with MIDI/keyboard learn support. Returns true if
+/// the value changed (never in learn mode).
 pub(super) fn render_mod_learn_slider(
     ui: &mut egui::Ui,
     value: &mut f32,
@@ -1246,13 +1221,13 @@ pub(super) fn render_mod_learn_slider(
     changed
 }
 
-/// Render a mod-on-mod assignment dropdown for a modulator's parameter.
-/// `target_uuid` is the modulator whose parameter is being targeted.
-/// `param_name` is the parameter name (e.g., "frequency", "amplitude", "phase").
+/// Mod-on-mod assignment dropdown for a modulator's parameter. `target_uuid` is
+/// the modulator being targeted; `param_name` is its parameter (e.g.
+/// "frequency", "amplitude", "phase").
 ///
-/// A checklist for the same reason the parameter menus are one: the button's
-/// colour comes from the first assignment only, so several sources stacked on an
-/// LFO's frequency look exactly like one. See `widgets::modulation_dropdown`.
+/// A checklist, like the parameter menus: the button color shows only the first
+/// assignment, so stacked sources would look like one. See
+/// `widgets::modulation_dropdown`.
 pub(super) fn render_mod_on_mod_dropdown(
     ui: &mut egui::Ui,
     data: &UIData,
@@ -1265,8 +1240,8 @@ pub(super) fn render_mod_on_mod_dropdown(
         .modulation_assignments
         .get(&key)
         .map_or(&[][..], Vec::as_slice);
-    // A modulator cannot modulate itself, and the index has to survive that skip
-    // because it picks the colour and number shown on the source's own card.
+    // A modulator cannot modulate itself. The index is kept across that skip
+    // because it picks the color and number on the source's own card.
     let rows: Vec<(usize, &crate::usecases::ui::ModSourceUIEntry, bool)> = data
         .modulation_sources
         .iter()
@@ -1282,8 +1257,8 @@ pub(super) fn render_mod_on_mod_dropdown(
         .filter(|(_, _, assigned)| *assigned)
         .map(|(idx, entry, _)| entry.label(*idx))
         .collect();
-    // The first *assignment*, not the first assigned source in list order, so
-    // this agrees with the ghost lines and coloured labels elsewhere.
+    // The first assignment, not the first assigned source in list order, to match
+    // the ghost lines and colored labels elsewhere.
     let btn_color = assignments.first().map_or(egui::Color32::GRAY, |a| {
         let idx = data
             .modulation_sources
@@ -1311,8 +1286,7 @@ pub(super) fn render_mod_on_mod_dropdown(
                 );
                 if ui.selectable_label(*assigned, text.small()).clicked() {
                     actions.commands.push(if *assigned {
-                        // Per-source, so un-ticking one of two stacked
-                        // modulators leaves the other driving the parameter.
+                        // Per source, so unticking one of two stacked modulators leaves the other.
                         EngineCommand::ClearModulationSource {
                             target: key.clone(),
                             source_id: entry.uuid.clone(),

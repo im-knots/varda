@@ -1,9 +1,7 @@
-//! Stage editor input handling, one module per drawing tool.
+//! Stage editor input handling, one module per `DrawingTool` variant.
 //!
-//! Split to mirror the `DrawingTool` variants exactly, so a gesture bug has one
-//! obvious home. Every handler takes the frame's [`CanvasGeometry`] rather than
-//! recomputing the screen ↔ normalized mapping, and mutates only
-//! [`StageEditorState`] plus the outgoing [`UIActions`].
+//! Handlers take the frame's [`CanvasGeometry`] for the screen/normalized
+//! mapping and mutate only [`StageEditorState`] and the outgoing [`UIActions`].
 
 mod bezier;
 mod draw;
@@ -16,8 +14,8 @@ use super::state::{DrawingTool, StageEditorState};
 
 /// Dispatch one frame of canvas input to the active tool.
 ///
-/// The `match` stays exhaustive over `DrawingTool`, so adding a tool fails to
-/// compile until it is handled here.
+/// The `match` is exhaustive over `DrawingTool`, so a new tool fails to compile
+/// until it is handled here.
 pub(super) fn handle_canvas(
     ui: &egui::Ui,
     painter: &egui::Painter,

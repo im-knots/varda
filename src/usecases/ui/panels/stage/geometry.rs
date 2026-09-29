@@ -1,10 +1,7 @@
 //! Polygon triangulation utilities for the stage editor.
 
-// ── Polygon triangulation (ear-clipping) ────────────────────────────
-
-/// Build an `egui::Shape` for an arbitrary (possibly concave) polygon using
-/// ear-clipping triangulation. Falls back to `convex_polygon` for ≤4 vertices
-/// where convexity is likely.
+/// `egui::Shape` for a possibly concave polygon, via ear-clipping. Uses
+/// `convex_polygon` for 4 or fewer vertices.
 pub(super) fn polygon_shape(
     verts: &[egui::Pos2],
     fill: egui::Color32,
@@ -14,14 +11,12 @@ pub(super) fn polygon_shape(
         return egui::Shape::Noop;
     }
 
-    // Triangulate
     let indices = triangulate_polygon(verts);
     if indices.is_empty() {
-        // Fallback if triangulation fails
         return egui::Shape::convex_polygon(verts.to_vec(), fill, stroke);
     }
 
-    // Build mesh for the filled area (default texture_id targets the font atlas)
+    // Filled mesh; the default texture_id targets the font atlas.
     let mut mesh = egui::Mesh::default();
     for &p in verts {
         mesh.vertices.push(egui::epaint::Vertex {
@@ -34,7 +29,6 @@ pub(super) fn polygon_shape(
 
     let mut shapes = vec![egui::Shape::mesh(mesh)];
 
-    // Draw outline on top
     if stroke.width > 0.0 {
         let mut outline = verts.to_vec();
         outline.push(verts[0]); // close the loop
@@ -44,19 +38,18 @@ pub(super) fn polygon_shape(
     egui::Shape::Vec(shapes)
 }
 
-/// Ear-clipping triangulation for a simple polygon.
-/// Returns triangle indices into the vertex array.
+/// Ear-clipping triangulation of a simple polygon. Returns triangle indices
+/// into `verts`.
 fn triangulate_polygon(verts: &[egui::Pos2]) -> Vec<u32> {
     let n = verts.len();
     if n < 3 {
         return Vec::new();
     }
 
-    // Work with a mutable index list
     let mut idx: Vec<usize> = (0..n).collect();
     let mut result = Vec::with_capacity((n - 2) * 3);
 
-    // Determine winding: positive = CCW
+    // Winding: positive = CCW.
     let signed_area: f32 = idx
         .windows(2)
         .map(|w| {
@@ -122,7 +115,7 @@ fn is_ear(
         return false;
     }
 
-    // Check no other vertex is inside this triangle
+    // No other vertex may lie inside the triangle.
     for &vi in idx {
         if vi == prev || vi == curr || vi == next {
             continue;
@@ -193,8 +186,7 @@ mod tests {
 
     #[test]
     fn triangulate_concave_polygon_is_fully_triangulated() {
-        // Concave L-shape (one reflex vertex). Ear-clipping must still fully
-        // triangulate it into n-2 triangles with valid indices.
+        // Concave L-shape with one reflex vertex still yields n-2 valid triangles.
         let l_shape = [
             p(0.0, 0.0),
             p(2.0, 0.0),

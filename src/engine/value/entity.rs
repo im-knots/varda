@@ -1,15 +1,13 @@
-//! Addressing entities by UUID: which effect chain a command means, and the
-//! error for a UUID that names nothing. Every write command addresses its
-//! target by UUID (see /spec/api-addressing.md); a domain that cannot resolve
-//! one reports [`UnknownEntity`], which the command layer turns into "not found".
+//! UUID addressing. Write commands address their target by UUID; a domain that
+//! cannot resolve one returns [`UnknownEntity`], which the command layer maps
+//! to "not found".
 
 use serde::{Deserialize, Serialize};
 
 /// Identifies which effect chain to operate on.
 ///
-/// Used for chain-scoped operations (append an effect, reorder within a chain).
-/// Operations on an *existing* effect address it by its own UUID instead — see
-/// [`/spec/api-addressing.md`].
+/// Used for chain-scoped operations (append, reorder). Operations on an
+/// existing effect address it by its own UUID.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum EffectTarget {
     /// A deck's pre-composite chain, by deck UUID.

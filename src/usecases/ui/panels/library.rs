@@ -1,8 +1,8 @@
 //! Library panel.
 //!
-//! Every deck source type draws the same way: its entries, its notices, and
-//! how to create a deck no entry lists, all from the section it publishes. The
-//! panel names no source type. See /spec/deck-source-providers.md.
+//! Every deck source type is drawn from the section it publishes: entries,
+//! notices, and how to create a deck no entry lists. The panel names no source
+//! type.
 
 use super::super::{LibraryDrag, UIActions, UIData};
 use crate::engine::EngineCommand;
@@ -17,9 +17,8 @@ pub(crate) const SOURCE_DND_KEY: &str = "__lib_dnd_source";
 
 /// One draggable library row.
 ///
-/// The remove button is reserved on the right (via a right-to-left layout) and
-/// the label truncates to the remaining width, so a long URL can never force
-/// the library panel wider than its resized/default size. Double-clicking adds
+/// The remove button sits on the right and the label truncates to the
+/// remaining width, so a long URL cannot widen the panel. Double-click adds
 /// the deck to the first channel.
 fn entry_row(
     ui: &mut egui::Ui,
@@ -53,8 +52,7 @@ fn entry_row(
                         }
                         let mut text = egui::RichText::new(format!("  {}", entry.label)).size(12.0);
                         if entry.highlight {
-                            // Marking Varda's own windows is what turns an
-                            // accidental feedback loop into a deliberate one.
+                            // Varda's own windows are highlighted so feedback loops are deliberate.
                             text = text.color(egui::Color32::from_rgb(200, 170, 240));
                         }
                         ui.add(egui::Label::new(text).truncate())
@@ -350,7 +348,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                         ui.dnd_drag_source(item_id, LibraryDrag::Effect(*filter_idx), |ui| {
                             ui.label(egui::RichText::new(format!("  ◇ {name}")).size(12.0));
                         });
-                        // Store effect filter index in temp memory for deferred drop handler
+                        // Store the effect filter index for the deferred drop handler.
                         if ui.ctx().is_being_dragged(item_id) {
                             ui.ctx().memory_mut(|mem| {
                                 mem.data

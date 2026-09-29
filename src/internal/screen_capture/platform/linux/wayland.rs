@@ -1,44 +1,30 @@
-//! Wayland screen/window capture via the XDG Desktop Portal and `PipeWire`.
+//! Wayland screen and window capture via the XDG Desktop Portal and `PipeWire`.
 //!
-//! A Wayland compositor never lets a client read pixels it does not own, so
-//! capture goes through `org.freedesktop.portal.ScreenCast`: the portal raises
-//! the compositor's own picker, the user chooses a monitor or a window, and we
-//! are handed a `PipeWire` node id plus a file descriptor onto the `PipeWire`
-//! daemon. Consumption is push-based like `ScreenCaptureKit` and Windows
-//! Graphics Capture — a `process` callback repacks each buffer into a
-//! tightly-packed frame and drops it into a shared slot, and
-//! [`WaylandBackend::next_frame`] takes whatever is there. The capture thread
-//! never blocks on the compositor, and a stalled cast simply yields `None`.
+//! Wayland clients cannot read pixels they do not own, so capture goes through
+//! `org.freedesktop.portal.ScreenCast`: the compositor's picker opens, the user
+//! chooses a monitor or window, and the portal returns a `PipeWire` node id and
+//! a daemon file descriptor. A `process` callback repacks each buffer into a
+//! tightly packed frame in a shared slot, and [`WaylandBackend::next_frame`]
+//! takes it. The capture thread never blocks on the compositor, and a stalled
+//! cast yields `None`.
 //!
-//! **[`enumerate`] reports exactly one synthetic target.** This is the answer to
-//! spec/screen-capture.md § Open Questions "Wayland target selection", and it
-//! takes the "single Pick a window… entry" option rather than the
-//! looks-like-the-other-platforms option. The reasoning: the compositor will not
-//! tell us what displays and windows exist, and the portal's picker is the only
-//! authority on what actually gets cast. A list of invented entries would be a
-//! lie the user then has to re-pick anyway — they would drag "Display 2" onto a
-//! deck, get a dialog, choose something else, and end up with a deck whose label
-//! names a target it is not showing. One honest entry, whose label says the
-//! choice happens in the dialog, costs a click and tells the truth.
+//! [`enumerate`] reports one synthetic target. The compositor does not list
+//! displays or windows, and the portal picker decides what is cast, so listed
+//! entries would not match what the user then picks.
 //!
-//! Three things differ from the macOS and Windows backends and shape the code:
+//! Differences from macOS and Windows:
 //!
-//! - **The portal has no source rectangle and no output size.** Crop and
-//!   `scale_to` are therefore paid for on the CPU, through the shared
-//!   [`Geometry`] / [`downscale`] path, exactly like the Windows backend.
-//! - **`CaptureConfig.rate` is not enforceable at the source.** The negotiated
-//!   `VideoFramerate` is an upper bound the compositor is free to ignore, and
-//!   most compositors deliver on damage instead. The rate is therefore gated in
-//!   the `process` callback, before the repack, so a 30 fps capture of a 144 Hz
-//!   output genuinely costs 30 copies a second.
-//! - **Nothing in `PipeWire` is `Send`.** The `MainLoop`, `Context`, `Core`, and
-//!   `Stream` are all constructed on, and confined to, one dedicated thread that
-//!   [`open`] spawns; only the `Arc<CastState>` crosses the boundary.
+//! - The portal has no source rectangle or output size, so crop and `scale_to`
+//!   run on the CPU through [`Geometry`] / [`downscale`], as on Windows.
+//! - The negotiated `VideoFramerate` is only an upper bound and most
+//!   compositors deliver on damage, so `CaptureConfig.rate` is gated in the
+//!   `process` callback before the repack.
+//! - No `PipeWire` type is `Send`. `MainLoop`, `Context`, `Core` and `Stream`
+//!   live on one thread spawned by [`open`]; only `Arc<CastState>` is shared.
 //!
 //! Only CPU-mapped buffers are accepted. A DMA-BUF frame is dropped with one
-//! warning: importing it needs Vulkan external-memory interop that `wgpu` does
-//! not expose, which spec/screen-capture.md § Decision: CPU readback first
-//! explicitly does not promise.
+//! warning, because importing it needs Vulkan external-memory interop that
+//! `wgpu` does not expose.
 
 use std::os::fd::OwnedFd;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -63,29 +49,23 @@ use crate::screen_capture::resample::{Geometry, downscale};
 /// Reported by the Linux dispatcher when the session is Wayland.
 pub const BACKEND_NAME: &str = "PipeWire";
 
-/// How long to wait for the `PipeWire` side of the cast to come up, measured
-/// from *after* the portal dialog has been answered. This bounds a machine, not
-/// a person: the node id is already granted by this point, so anything slower
-/// than this is a wedged daemon rather than a user still reading the dialog.
+/// Timeout for the `PipeWire` side of the cast, counted from after the portal
+/// dialog is answered. Exceeding it means a wedged daemon.
 const PIPEWIRE_START_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Size preference offered in the `EnumFormat` when the caller asks for no
-/// particular scale. It sits inside a 1×1..8192×8192 range and is a hint, not a
-/// demand — the compositor produces whatever its output actually is.
+/// Size hint in the `EnumFormat` when no scale is requested. It sits inside a
+/// 1×1..8192×8192 range; the compositor delivers its actual output size.
 const PREFERRED_SIZE: (u32, u32) = (1920, 1080);
 
-/// Enumerate the one target the library panel can honestly offer.
+/// Enumerates the single portal target.
 ///
-/// See the module documentation for why this is a single synthetic entry rather
-/// than a target list. `width` and `height` are zero because nothing is known
-/// until the user has picked: the manager clamps the placeholder to 1×1 and
-/// reallocates on the first delivered frame, so admitting ignorance here costs
-/// one discarded texture.
+/// `width` and `height` are zero because nothing is known until the user
+/// picks. The manager clamps the placeholder to 1×1 and reallocates on the
+/// first frame.
 ///
 /// # Errors
 ///
-/// Never fails. The signature matches the other platform providers, and the
-/// dispatcher in `platform/linux.rs` documents that this branch cannot error.
+/// Never fails; the signature matches the other platform providers.
 pub fn enumerate() -> Result<Vec<CaptureTargetInfo>, CaptureError> {
     Ok(vec![portal_target()])
 }
@@ -99,25 +79,23 @@ fn portal_target() -> CaptureTargetInfo {
         title: None,
         width: 0,
         height: 0,
-        // The picker may well land on one of Varda's own windows, but only the
-        // user knows that and only after the dialog. Claiming it here would make
-        // `exclude_varda` look meaningful when the portal has no equivalent.
+        // The picker may choose a Varda window, but that is unknown until after
+        // the dialog, and the portal cannot exclude windows anyway.
         is_varda: false,
     }
 }
 
-/// Open a screen cast, raising the portal picker.
+/// Opens a screen cast, raising the portal picker.
 ///
-/// `target` is ignored beyond having come from [`enumerate`]: the portal owns
-/// the selection, and the label the deck ends up with comes back from the
-/// portal rather than from the library entry that was dragged.
+/// `target` is otherwise ignored: the portal makes the selection, and the
+/// deck's label comes from the portal's reply.
 ///
 /// # Errors
 ///
 /// Returns [`CaptureError::PermissionDenied`] if the user dismisses the picker,
-/// [`CaptureError::TargetNotFound`] if the portal grants a session but hands
-/// back no stream, and [`CaptureError::Backend`] for any D-Bus, portal, or
-/// `PipeWire` failure.
+/// [`CaptureError::TargetNotFound`] if the portal grants a session with no
+/// stream, and [`CaptureError::Backend`] for any D-Bus, portal or `PipeWire`
+/// failure.
 pub fn open(
     _target: &CaptureTargetInfo,
     config: &CaptureConfig,
@@ -127,18 +105,14 @@ pub fn open(
 
 // ── Portal handshake ────────────────────────────────────────────────
 
-/// The runtime the portal handshake runs on.
+/// Single-worker runtime for the portal handshake.
 ///
-/// Varda already has a tokio runtime for the HTTP API, and the portal must not
-/// be scheduled on it: `Start` does not return until a human has answered the
-/// compositor's dialog, so a capture being chosen slowly would stall every API
-/// response behind it. This runtime is dedicated to capture and has one worker.
+/// Separate from the HTTP API's tokio runtime because `Start` waits for the
+/// user to answer the dialog, which would stall API responses.
 ///
-/// It is process-wide and deliberately never dropped. `ashpd` caches its
-/// session `zbus::Connection` in a `static`, and that connection's socket task
-/// belongs to whichever runtime first created it; tearing the runtime down after
-/// the handshake would leave the cached connection undriven for every later
-/// capture, and the second `open` of a session would hang instead of failing.
+/// Never dropped: `ashpd` caches its `zbus::Connection` in a `static`, and the
+/// connection's socket task runs on the runtime that created it. Dropping the
+/// runtime would make the next `open` hang.
 fn portal_runtime() -> Result<&'static tokio::runtime::Runtime, CaptureError> {
     static RUNTIME: OnceLock<Result<tokio::runtime::Runtime, String>> = OnceLock::new();
     RUNTIME
@@ -154,30 +128,26 @@ fn portal_runtime() -> Result<&'static tokio::runtime::Runtime, CaptureError> {
         .map_err(|e| CaptureError::Backend(format!("screen cast portal runtime unavailable: {e}")))
 }
 
-/// What the portal granted: the D-Bus objects that keep the cast alive, plus
-/// the `PipeWire` endpoint to consume.
+/// What the portal granted: the D-Bus objects that keep the cast alive and
+/// the `PipeWire` endpoint.
 struct PortalCast {
-    /// The proxy and the session are held for the whole life of the cast on
-    /// purpose — the compositor tears the cast down when the session goes away,
-    /// so dropping either early kills the stream.
+    /// Held for the life of the cast: the compositor ends the cast when the
+    /// session is dropped.
     proxy: Screencast,
     session: Session<Screencast>,
     node_id: u32,
-    /// Compositor coordinates, which are *not* pixels on a scaled output. Used
-    /// only as a first guess; `param_changed` replaces it with the real size.
+    /// Compositor coordinates, which differ from pixels on a scaled output. An
+    /// initial guess until `param_changed` sets the real size.
     size: Option<(i32, i32)>,
     label: String,
     fd: OwnedFd,
 }
 
-/// Name the cast for the deck it lands on.
+/// Builds the deck label for the cast from the portal's reply.
 ///
-/// The user picked the target in a dialog Varda never saw, so the caption has to
-/// be reconstructed from what the portal reports back. The source type is always
-/// meaningful; the stream `id` is documented as opaque and some portals fill it
-/// with a small integer, so it is only appended when it reads as a name — which
-/// is where the portals that do put a connector name ("DP-1") or a window title
-/// in there get honoured.
+/// The source type is always used. The stream `id` is opaque and some portals
+/// use a small integer, so it is appended only when it looks like a name
+/// (a connector such as "DP-1" or a window title).
 fn cast_label(source: Option<SourceType>, id: Option<&str>) -> String {
     let kind = match source {
         Some(SourceType::Monitor) => "Display cast",
@@ -208,14 +178,11 @@ async fn portal_handshake(config: &CaptureConfig) -> Result<PortalCast, CaptureE
             &session,
             SelectSourcesOptions::default()
                 .set_cursor_mode(cursor_mode)
-                // Both kinds are offered because the picker, not Varda, decides
-                // which one the user wants; the library entry does not narrow it.
+                // Offer both kinds; the user chooses in the picker.
                 .set_sources(SourceType::Monitor | SourceType::Window)
                 .set_multiple(false)
-                // A restore token would let a reloaded scene skip the dialog, but
-                // it only pays off once it is persisted per target, which belongs
-                // with the scene format. See spec/screen-capture.md § Open
-                // Questions "Portal session persistence".
+                // No restore token: skipping the dialog on reload needs the token saved
+                // per target in the scene format.
                 .set_persist_mode(PersistMode::DoNot),
         )
         .await
@@ -254,11 +221,11 @@ async fn portal_handshake(config: &CaptureConfig) -> Result<PortalCast, CaptureE
     })
 }
 
-/// Classify a portal failure.
+/// Classifies a portal failure.
 ///
-/// A dismissed picker is reported as a permission refusal rather than a backend
-/// error: it is the one failure the user caused deliberately, and the manager
-/// already knows how to render that state without shouting about it.
+/// A dismissed picker is reported as a permission refusal, not a backend
+/// error, since the user chose it and the manager already shows that state
+/// quietly.
 fn portal_error(err: &ashpd::Error) -> CaptureError {
     match err {
         ashpd::Error::Response(ResponseError::Cancelled) => CaptureError::PermissionDenied,
@@ -286,27 +253,25 @@ fn format_from_code(code: u8) -> CapturePixelFormat {
     }
 }
 
-/// Everything the `PipeWire` loop thread and the capture thread both touch.
+/// State shared by the `PipeWire` loop thread and the capture thread.
 struct CastState {
-    /// Latest-wins frame slot.
     slot: Mutex<Option<CaptureFrame>>,
-    /// Live geometry: source rectangle plus delivered size. Swapped wholesale so
-    /// the `process` callback never sees a half-applied change and copies a
-    /// region that does not match the size it reports.
+    /// Live geometry: source rectangle and delivered size. Replaced as a whole so
+    /// the `process` callback never copies a region that disagrees with the size
+    /// it reports.
     geometry: Mutex<Geometry>,
-    /// Negotiated pixel size, learned in `param_changed`. Kept so a later
-    /// `set_config` can re-resolve the geometry without waiting for the
-    /// compositor to renegotiate.
+    /// Negotiated pixel size from `param_changed`, so `set_config` can re-resolve
+    /// geometry without a renegotiation.
     native: Mutex<(u32, u32)>,
-    /// Latest config, so `param_changed` can re-resolve the geometry when the
-    /// compositor changes the frame size mid-cast.
+    /// Latest config, so `param_changed` can re-resolve geometry when the frame
+    /// size changes mid-cast.
     config: Mutex<CaptureConfig>,
-    /// Rate gate. Held separately from the config so a discarded frame does not
-    /// take the config lock.
+    /// Rate gate. Kept separate from the config so a discarded frame skips the
+    /// config lock.
     min_interval: Mutex<Duration>,
     last_delivered: Mutex<Option<Instant>>,
-    /// Negotiated pixel layout, written by `param_changed` and read by
-    /// [`WaylandBackend::pixel_format`] from another thread.
+    /// Negotiated pixel layout. Written by `param_changed`, read by
+    /// [`WaylandBackend::pixel_format`] on another thread.
     format: AtomicU8,
 }
 
@@ -323,8 +288,8 @@ impl CastState {
         }
     }
 
-    /// Record the format the compositor settled on and re-resolve the geometry
-    /// against the real pixel size.
+    /// Stores the negotiated format and re-resolves geometry against the real
+    /// pixel size.
     fn renegotiated(&self, width: u32, height: u32, format: CapturePixelFormat) {
         self.format.store(format_code(format), Ordering::Relaxed);
         if let Ok(mut native) = self.native.lock() {
@@ -338,8 +303,8 @@ impl CastState {
         }
     }
 
-    /// Apply a live config change. Nothing here renegotiates the stream — crop,
-    /// scale, and rate are all enforced on our side of the buffer.
+    /// Applies a live config change. No renegotiation: crop, scale and rate are
+    /// all applied on the consumer side.
     fn reconfigure(&self, config: &CaptureConfig) {
         if let Ok(mut current) = self.config.lock() {
             *current = config.clone();
@@ -361,10 +326,9 @@ impl CastState {
         format_from_code(self.format.load(Ordering::Relaxed))
     }
 
-    /// Whether enough time has passed to accept another frame, recording the
-    /// delivery if so. Checked before the repack, which is the whole point:
-    /// `PipeWire` pushes on the compositor's clock and a discarded frame must
-    /// cost only the dequeue.
+    /// Whether enough time has passed to accept another frame; records the
+    /// delivery if so. Checked before the repack so a discarded frame costs only
+    /// the dequeue.
     fn accept_frame(&self) -> bool {
         let Ok(min_interval) = self.min_interval.lock() else {
             return false;
@@ -385,12 +349,10 @@ impl CastState {
 
 // ── Pixel handling ──────────────────────────────────────────────────
 
-/// Map a negotiated SPA video format onto the texture layout the manager should
-/// allocate.
+/// Maps a negotiated SPA video format to the texture layout to allocate.
 ///
-/// `None` for anything the offer did not ask for. The compositor is not supposed
-/// to pick outside the `EnumFormat`, and guessing a layout for a format we do
-/// not understand produces wrong colours rather than an obvious failure.
+/// `None` for formats outside the offer. Guessing a layout would give wrong
+/// colors instead of an obvious failure.
 fn spa_format_to_capture_format(
     format: spa::param::video::VideoFormat,
 ) -> Option<CapturePixelFormat> {
@@ -404,27 +366,24 @@ fn spa_format_to_capture_format(
     }
 }
 
-/// Whether the negotiated format actually carries an alpha channel.
+/// Whether the negotiated format has an alpha channel.
 ///
-/// The `x` layouts leave the fourth byte undefined. Uploading it into an
-/// `…8UnormSrgb` texture makes the deck randomly transparent, so those bytes are
-/// overwritten during the repack.
+/// The `x` layouts leave the fourth byte undefined, which would make the deck
+/// randomly transparent, so the repack overwrites it.
 fn format_has_alpha(format: spa::param::video::VideoFormat) -> bool {
     use spa::param::video::VideoFormat;
     format == VideoFormat::BGRA || format == VideoFormat::RGBA
 }
 
-/// Copy the source rectangle of `geometry` out of a strided 4-bytes-per-pixel
-/// buffer into a tightly-packed `src_w * 4` frame.
+/// Copies `geometry`'s source rectangle out of a strided 4-bytes-per-pixel
+/// buffer into a tightly packed `src_w * 4` frame.
 ///
-/// `stride` is `chunk.stride`, which the producer pads to suit its own
-/// allocator; the manager uploads at `width * 4` and nothing else. Cropping
-/// happens in the same pass rather than after a full repack, so a crop really
-/// does shrink the work instead of only shrinking the upload.
+/// `stride` is `chunk.stride`, padded by the producer; the manager uploads at
+/// `width * 4`. Cropping happens in the same pass, so a crop reduces the copy
+/// as well as the upload.
 ///
-/// Returns `None` when the buffer is too short for the rectangle, which is the
-/// shape a frame arrives in when a renegotiation is in flight and the geometry
-/// still describes the previous size.
+/// Returns `None` when the buffer is too short for the rectangle, which
+/// happens while a renegotiation is in flight.
 fn repack_rows(src: &[u8], stride: usize, geometry: Geometry, opaque: bool) -> Option<Vec<u8>> {
     let (width, height) = (geometry.src_w as usize, geometry.src_h as usize);
     if width == 0 || height == 0 {
@@ -455,14 +414,12 @@ fn repack_rows(src: &[u8], stride: usize, geometry: Geometry, opaque: bool) -> O
     Some(out)
 }
 
-/// Build the `EnumFormat` offered at connect time.
+/// Builds the `EnumFormat` offered at connect time.
 ///
-/// Only the four 32-bit packed layouts are offered, so a frame maps straight
-/// onto a `Bgra8UnormSrgb` or `Rgba8UnormSrgb` texture with no CPU swizzle;
-/// `BGRx` leads because that is what every compositor tested produces. Size and
-/// framerate are ranges rather than fixed values because the compositor decides
-/// what it can actually produce, and a fixed request it cannot meet fails
-/// negotiation outright — a black deck instead of a slightly wrong one.
+/// Only the four 32-bit packed layouts are offered, so frames map directly to
+/// `Bgra8UnormSrgb` or `Rgba8UnormSrgb` with no CPU swizzle. `BGRx` comes first
+/// because every tested compositor produces it. Size and framerate are ranges
+/// because a fixed request the compositor cannot meet fails negotiation.
 ///
 /// # Errors
 ///
@@ -542,34 +499,32 @@ fn format_pod(config: &CaptureConfig) -> Result<Vec<u8>, CaptureError> {
 
 /// Wakes the `PipeWire` loop so it can quit.
 ///
-/// `MainLoop::quit` is not safe to call from another thread, so the stop travels
-/// over `pipewire::channel`, which writes a byte to a pipe the loop already
-/// polls. A message sent before `run()` starts is still queued, so a stop that
-/// races startup is not lost.
+/// `MainLoop::quit` is not thread-safe, so the stop goes over
+/// `pipewire::channel`, which writes to a pipe the loop polls. A message sent
+/// before `run()` stays queued, so a stop during startup is not lost.
 struct Terminate;
 
-/// State the `PipeWire` callbacks share. They all run on the loop thread, so
-/// nothing here needs locking between themselves; the locks inside
-/// [`CastState`] are for the capture thread.
+/// State shared by the `PipeWire` callbacks. They all run on the loop thread;
+/// the locks inside [`CastState`] are for the capture thread.
 struct Consumer {
     format: spa::param::video::VideoInfoRaw,
     state: Arc<CastState>,
     warned_dmabuf: bool,
 }
 
-/// The `PipeWire` objects backing a live cast. Declared in teardown order: the
-/// listener must be unhooked before the stream it points at is destroyed.
+/// The `PipeWire` objects behind a live cast, in teardown order: the listener
+/// is unhooked before its stream is destroyed.
 struct Cast {
     _listener: pw::stream::StreamListener<Consumer>,
     stream: pw::stream::StreamRc,
     main_loop: pw::main_loop::MainLoopRc,
 }
 
-/// Body of the dedicated cast thread.
+/// Body of the cast thread.
 ///
-/// Reports the outcome of setup over `ready` so [`WaylandBackend::new`] can fail
-/// with a real message instead of returning a backend that will never deliver,
-/// then blocks in the loop until [`Terminate`] arrives.
+/// Reports setup success or failure over `ready` so [`WaylandBackend::new`]
+/// can fail with a real message, then runs the loop until [`Terminate`]
+/// arrives.
 fn run_cast(
     node_id: u32,
     fd: OwnedFd,
@@ -658,11 +613,10 @@ fn pipewire_error(err: &pw::Error) -> CaptureError {
     CaptureError::Backend(format!("PipeWire: {err}"))
 }
 
-/// Record the format the compositor settled on.
+/// Stores the negotiated format.
 ///
-/// The size in here, not the size the portal advertised, is the pixel size of
-/// the buffers: the portal reports compositor coordinates, which differ from
-/// pixels on any fractionally scaled output.
+/// This size, not the portal's, is the buffer pixel size: the portal reports
+/// compositor coordinates, which differ on fractionally scaled outputs.
 fn on_param_changed(
     _stream: &pw::stream::Stream,
     consumer: &mut Consumer,
@@ -704,10 +658,10 @@ fn on_param_changed(
         .renegotiated(size.width.max(1), size.height.max(1), pixel_format);
 }
 
-/// Repack one buffer into the latest-wins slot.
+/// Repacks one buffer into the latest-wins slot.
 fn on_process(stream: &pw::stream::Stream, consumer: &mut Consumer) {
-    // Dequeue first and unconditionally: `Buffer`'s Drop is what returns the
-    // buffer to the stream, and a graph that never gets its buffers back stalls.
+    // Always dequeue first: dropping `Buffer` returns it to the stream, and a
+    // graph that never gets its buffers back stalls.
     let Some(mut buffer) = stream.dequeue_buffer() else {
         return;
     };
@@ -734,8 +688,8 @@ fn on_process(stream: &pw::stream::Stream, consumer: &mut Consumer) {
         return;
     }
 
-    // `chunk()` borrows the data immutably and `data()` borrows it mutably, so
-    // the layout has to be copied out before the mapping is taken.
+    // `chunk()` borrows immutably and `data()` mutably, so copy the layout out
+    // before taking the mapping.
     let (offset, length, stride) = {
         let chunk = data.chunk();
         (
@@ -774,8 +728,8 @@ fn on_process(stream: &pw::stream::Stream, consumer: &mut Consumer) {
         )
     };
 
-    // Latest-wins, and never blocking: the capture thread may be mid-take, and
-    // dropping this frame is cheaper than stalling the compositor's graph.
+    // Latest wins, without blocking: dropping this frame is cheaper than
+    // stalling the compositor's graph.
     if let Ok(mut slot) = consumer.state.slot.try_lock() {
         *slot = Some(CaptureFrame {
             data: pixels,
@@ -794,8 +748,8 @@ pub struct WaylandBackend {
     state: Arc<CastState>,
     quit: pw::channel::Sender<Terminate>,
     thread: Option<JoinHandle<()>>,
-    /// Held for the life of the backend: the compositor ends the cast when the
-    /// portal session goes away.
+    /// Held for the backend's lifetime: the compositor ends the cast when the
+    /// portal session is dropped.
     portal: PortalHandles,
     width: u32,
     height: u32,
@@ -811,9 +765,9 @@ impl WaylandBackend {
     fn new(config: &CaptureConfig) -> Result<Self, CaptureError> {
         let config = config.clone().sanitized();
 
-        // `Runtime::block_on` panics inside another runtime, and this is called
-        // from the engine thread by design. Failing with a message beats taking
-        // the process down if a future caller ever moves it onto the API runtime.
+        // `Runtime::block_on` panics inside another runtime. This runs on the
+        // engine thread; fail with a message if a caller ever moves it onto the
+        // API runtime.
         if tokio::runtime::Handle::try_current().is_ok() {
             return Err(CaptureError::Backend(
                 "screen capture must be opened from the engine thread, not from inside a tokio runtime"
@@ -821,8 +775,7 @@ impl WaylandBackend {
             ));
         }
 
-        // Synchronous on purpose: the portal picker is a modal choice, and there
-        // is nothing sensible for the deck to show until it has been made.
+        // Blocking: the deck has nothing to show until the user picks.
         let PortalCast {
             proxy,
             session,
@@ -832,9 +785,9 @@ impl WaylandBackend {
             fd,
         } = portal_runtime()?.block_on(portal_handshake(&config))?;
 
-        // A missing or nonsensical size is not fatal: `param_changed` replaces it
-        // with the real one before the first frame, and the geometry resolved here
-        // only has to be non-degenerate until then.
+        // A missing or invalid size is not fatal: `param_changed` sets the real
+        // one before the first frame, and until then the geometry only has to be
+        // non-degenerate.
         let (native_w, native_h) = size.map_or((1, 1), |(w, h)| {
             (
                 u32::try_from(w).unwrap_or(1).max(1),
@@ -892,12 +845,11 @@ impl WaylandBackend {
         })
     }
 
-    /// End the portal session, if it is safe to block here.
+    /// Ends the portal session if blocking is safe here.
     ///
-    /// Best effort by design. `block_on` panics inside a runtime and a panic in
-    /// `drop` aborts the process, so a teardown that somehow happens on the API
-    /// thread skips this instead: the compositor ends the cast when the D-Bus
-    /// session goes away regardless, and only the promptness is lost.
+    /// Best effort. `block_on` panics inside a runtime and a panic in `drop`
+    /// aborts, so on the API thread this is skipped; the compositor still ends
+    /// the cast when the D-Bus session closes.
     fn close_portal(&self) {
         if tokio::runtime::Handle::try_current().is_ok() {
             return;
@@ -922,8 +874,7 @@ impl ScreenCaptureBackend for WaylandBackend {
 
     fn next_frame(&mut self) -> Option<CaptureFrame> {
         let frame = self.state.slot.try_lock().ok()?.take()?;
-        // A renegotiation lands asynchronously, so trust the frame over our own
-        // bookkeeping.
+        // A renegotiation applies asynchronously, so trust the frame size.
         self.width = frame.width;
         self.height = frame.height;
         Some(frame)
@@ -934,9 +885,8 @@ impl ScreenCaptureBackend for WaylandBackend {
     }
 
     fn is_self_paced(&self) -> bool {
-        // The `process` callback enforces `rate`, so the manager's capture thread
-        // must oversample rather than run a second clock at the same nominal
-        // frequency. See `ScreenCaptureBackend::is_self_paced`.
+        // The `process` callback enforces `rate`, so the capture thread must
+        // oversample. See `ScreenCaptureBackend::is_self_paced`.
         true
     }
 
@@ -947,26 +897,24 @@ impl ScreenCaptureBackend for WaylandBackend {
         }
 
         if config.show_cursor != self.config.show_cursor {
-            // `CursorMode` is fixed by `SelectSources`, which the portal allows
-            // exactly once per session. Changing it means a new picker dialog,
-            // which is not something a fader move should raise.
+            // `CursorMode` is set by `SelectSources`, allowed once per session.
+            // Changing it would need a new picker dialog.
             log::debug!(
                 "Screen capture '{}': cursor change takes effect on the next open",
                 self.label
             );
         }
         if config.exclude_varda != self.config.exclude_varda {
-            // The portal exposes no window-exclusion set, so a display cast that
-            // contains Varda will mirror. The UI note next to the toggle is the
-            // only mitigation available on this platform.
+            // The portal cannot exclude windows, so a display cast containing Varda
+            // mirrors. The UI shows a note next to the toggle.
             log::debug!(
                 "Screen capture '{}': exclude_varda has no portal equivalent and is ignored",
                 self.label
             );
         }
 
-        // Rate, crop, and scale are all enforced on our side of the buffer, so
-        // they apply live without touching the portal session.
+        // Rate, crop and scale apply on the consumer side, without touching the
+        // portal session.
         self.state.reconfigure(&config);
         self.config = config;
         Ok(())
@@ -977,8 +925,8 @@ impl Drop for WaylandBackend {
     fn drop(&mut self) {
         let _ = self.quit.send(Terminate);
         if let Some(thread) = self.thread.take() {
-            // The loop wakes on the pipe write, so this join is bounded by one
-            // loop iteration rather than by the compositor.
+            // The loop wakes on the pipe write, so this join takes at most one loop
+            // iteration.
             let _ = thread.join();
         }
         self.close_portal();
@@ -991,9 +939,9 @@ mod tests {
     use super::*;
     use crate::screen_capture::backend::CropRect;
 
-    /// A `width × height` BGRA image padded to `stride`, with each texel tagged
-    /// by its coordinates so a crop can be located in the output. The padding is
-    /// `0xEE` so a repack that leaves it in is visible.
+    /// A `width × height` BGRA image padded to `stride`, each texel tagged with
+    /// its coordinates so a crop can be located. Padding is `0xEE` so a repack
+    /// that keeps it is visible.
     fn padded_frame(width: u32, height: u32, stride: usize) -> Vec<u8> {
         let mut buf = vec![0xEEu8; stride * height as usize];
         for y in 0..height as usize {
@@ -1036,8 +984,8 @@ mod tests {
         assert_eq!((target.width, target.height), (0, 0));
         assert!(target.app.is_none() && target.title.is_none());
         assert!(!target.is_varda);
-        // The label has to read as an action, not as a target name, or the deck
-        // ends up captioned with something the user never picked.
+        // The label must read as an action, not a target name the user never
+        // picked.
         assert!(
             target.label.starts_with("Pick "),
             "label must not impersonate a real target: {}",
@@ -1062,8 +1010,8 @@ mod tests {
 
     #[test]
     fn an_opaque_numeric_stream_id_is_not_shown_to_the_user() {
-        // The portal documents `id` as opaque and several implementations use a
-        // counter. "Display cast (0)" is a worse caption than "Display cast".
+        // `id` is opaque and several portals use a counter. "Display cast (0)" is
+        // a worse label than "Display cast".
         assert_eq!(
             cast_label(Some(SourceType::Monitor), Some("0")),
             "Display cast"
@@ -1075,8 +1023,8 @@ mod tests {
     #[test]
     fn offered_formats_all_map_to_a_texture_layout() {
         use spa::param::video::VideoFormat;
-        // Every format in the `EnumFormat` must have a mapping, or the
-        // compositor can legally pick one we then refuse every frame from.
+        // Every offered format needs a mapping, or the compositor can pick one
+        // whose frames are all refused.
         assert_eq!(
             spa_format_to_capture_format(VideoFormat::BGRx),
             Some(CapturePixelFormat::Bgra8UnormSrgb)
@@ -1138,7 +1086,7 @@ mod tests {
         let src = padded_frame(4, 4, 32);
         let out = repack_rows(&src, 32, rect(1, 2, 2, 2), false).expect("repack");
         assert_eq!(out.len(), 2 * 2 * 4);
-        // The first output texel must be the source texel at (1, 2)…
+        // The first output texel is the source texel at (1, 2)…
         assert_eq!(&out[0..3], &[1, 2, 0x10]);
         // …and the last must be (2, 3).
         assert_eq!(&out[12..15], &[2, 3, 0x10]);
@@ -1163,8 +1111,8 @@ mod tests {
 
     #[test]
     fn repack_rejects_a_buffer_shorter_than_the_region() {
-        // A renegotiation in flight delivers exactly this, and reading past the
-        // mapping would be a crash rather than a dropped frame.
+        // A renegotiation in flight delivers this; reading past the mapping would
+        // crash instead of dropping a frame.
         let src = padded_frame(4, 2, 16);
         assert!(repack_rows(&src, 16, rect(0, 0, 4, 4), false).is_none());
     }
@@ -1237,9 +1185,9 @@ mod tests {
 
     #[test]
     fn renegotiation_re_resolves_the_geometry_against_real_pixels() {
-        // The portal reports compositor coordinates; a 2× scaled output delivers
-        // twice as many pixels, and a crop resolved against the wrong size reads
-        // the wrong half of the screen.
+        // The portal reports compositor coordinates. A 2× scaled output delivers
+        // twice as many pixels, and a crop against the wrong size reads the wrong
+        // region.
         let config = CaptureConfig {
             crop: CropRect {
                 x: 0.5,
@@ -1276,8 +1224,8 @@ mod tests {
 
     #[test]
     fn declared_pixel_format_defaults_to_the_preferred_layout() {
-        // `BGRx` leads the offer, so the shared texture is allocated BGRA before
-        // the first `param_changed` lands.
+        // `BGRx` leads the offer, so the shared texture starts as BGRA before the
+        // first `param_changed`.
         let state = CastState::new(&CaptureConfig::default(), (16, 16));
         assert_eq!(state.pixel_format(), CapturePixelFormat::Bgra8UnormSrgb);
         assert_eq!(

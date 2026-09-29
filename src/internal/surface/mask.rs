@@ -1,10 +1,8 @@
-//! Subtractive hole mask baking (8i.7).
+//! Hole mask baking.
 //!
-//! Turns a surface's flattened hole contours (in the surface's **uv space**,
-//! `[0..1]²`) into an `R8Unorm` coverage bitmap: `255` = content (keep), `0` =
-//! hole (cut). This is a pure CPU scanline fill with no `wgpu` dependency, so it
-//! lives in the domain layer and is unit-testable headless. The renderer uploads
-//! the returned bytes to a per-surface mask texture sampled by `polygon.wgsl`.
+//! Turns a surface's flattened hole contours (in its uv space, `[0..1]²`) into
+//! an `R8Unorm` coverage bitmap: `255` = content, `0` = hole. CPU only, no
+//! `wgpu`. The renderer uploads it as a mask texture sampled by `polygon.wgsl`.
 
 /// Default square resolution of a baked hole mask.
 pub const DEFAULT_MASK_RES: u32 = 512;

@@ -1,9 +1,5 @@
-//! Interactive mode for HTML decks (feature `html`).
-//!
-//! A separate Varda-owned window displays a selected HTML deck's live page and
-//! forwards mouse/keyboard/scroll/IME input into the offscreen Servo `WebView`.
-//! See `/spec/html-source.md` §4. Only one interactive window exists at a time;
-//! it is fixed 1:1 to the deck's WebView size (non-resizable).
+//! Interactive mode for HTML decks (feature `html`): a window showing one HTML
+//! deck's live page and forwarding input to its `WebView`. At most one exists.
 
 pub(crate) mod input;
 mod window;
@@ -30,7 +26,6 @@ pub(crate) struct InteractiveHtmlState {
     pending_open: Option<InteractiveTarget>,
     /// Request to close the current window (set by command or `CloseRequested`).
     pending_close: bool,
-    /// The live interactive window, if any.
     window: Option<window::InteractiveWindow>,
 }
 
@@ -54,7 +49,7 @@ impl super::VardaApp {
                 message: "Deck is not an HTML source".into(),
             };
         };
-        // Already showing this deck → no-op.
+        // Already showing this deck.
         if let Some(win) = &self.interactive.window
             && win.target.deck_uuid == deck_uuid
         {
@@ -65,7 +60,7 @@ impl super::VardaApp {
             .service::<crate::html::HtmlManager>()
             .instance_dimensions(html_idx)
             .unwrap_or((1920, 1080));
-        // One at a time: close any existing window, then open the new one.
+        // Close any existing window first.
         self.interactive.pending_close = true;
         self.interactive.pending_open = Some(InteractiveTarget {
             deck_uuid: deck_uuid.to_string(),
@@ -76,9 +71,8 @@ impl super::VardaApp {
         CommandResult::Ok
     }
 
-    /// Act on interactive-window toggles the HTML decks' `interactive` action
-    /// asked for since the last frame (a MIDI pad, an OSC message, a macro):
-    /// open the window on that deck, or close it if it is already there.
+    /// Apply `interactive` action toggles from HTML decks since the last frame:
+    /// open the window on that deck, or close it if already open there.
     pub(crate) fn poll_interactive_requests(&mut self) {
         let mut requested = Vec::new();
         for channel in self.mixer.channels_mut() {
@@ -98,15 +92,14 @@ impl super::VardaApp {
         }
     }
 
-    /// Close the interactive window (if any). Deferred to the render loop.
+    /// Close the interactive window, deferred to the render loop.
     pub(crate) fn cmd_close_html_interactive(&mut self) -> CommandResult {
         self.interactive.pending_open = None;
         self.interactive.pending_close = true;
         CommandResult::Ok
     }
 
-    /// UUID of the deck the interactive window is bound to, if one is open. Used
-    /// to reflect the toggle state in snapshots.
+    /// UUID of the deck the interactive window shows, if open.
     pub(crate) fn interactive_active_deck(&self) -> Option<&str> {
         self.interactive
             .window
@@ -114,9 +107,8 @@ impl super::VardaApp {
             .map(|w| w.target.deck_uuid.as_str())
     }
 
-    /// Apply pending interactive open/close requests. Runs in the render loop so
-    /// it has the `ActiveEventLoop` needed to create a window. Mirrors
-    /// `create_pending_outputs` (`Box::leak` for `'static`; `destroy()` reclaims).
+    /// Apply pending open/close requests. Runs in the render loop, which has the
+    /// `ActiveEventLoop`. The window is `Box::leak`ed; `destroy()` reclaims it.
     pub(crate) fn create_pending_interactive(
         &mut self,
         event_loop: &winit::event_loop::ActiveEventLoop,
@@ -176,10 +168,8 @@ impl super::VardaApp {
         }
     }
 
-    /// Route a winit window event to the interactive window. Returns `true` if
-    /// the event targeted the interactive window (and was consumed), so the
-    /// caller skips main/output handling. Mouse/keyboard/scroll/IME are
-    /// translated and forwarded to the servo thread; `CloseRequested` closes.
+    /// Route a winit event to the interactive window. Returns `true` if the
+    /// event was for that window and was consumed.
     pub(crate) fn handle_interactive_event(
         &mut self,
         window_id: winit::window::WindowId,
@@ -212,8 +202,8 @@ impl super::VardaApp {
         true
     }
 
-    /// Blit the current HTML texture into the interactive window (per frame).
-    /// Call after the HTML provider's frame tick, so the texture is fresh.
+    /// Blit the HTML texture into the interactive window. Call after the HTML
+    /// provider's frame tick.
     pub(crate) fn render_interactive(&self) {
         if let Some(win) = &self.interactive.window
             && let Some(view) = self

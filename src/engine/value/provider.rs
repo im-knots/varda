@@ -1,12 +1,7 @@
-//! The vocabulary every provider speaks: deck source providers and output
-//! sink providers alike. A provider's persisted description
-//! ([`ProviderConfig`]), the values its controls take ([`ControlValue`]), the
-//! controls it declares ([`ControlSpec`]), their live state
-//! ([`ControlStatus`]), and what its library offers ([`LibrarySection`]).
-//! Nothing here names a provider type.
-//!
-//! See /spec/deck-source-providers.md and /spec/output-sink-providers.md
-//! Decision 7.
+//! Types shared by deck source and output sink providers: saved config
+//! ([`ProviderConfig`]), control values ([`ControlValue`]), declared controls
+//! ([`ControlSpec`]), live state ([`ControlStatus`]), and library entries
+//! ([`LibrarySection`]). Nothing here names a provider type.
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -15,9 +10,8 @@ use serde_json::{Map, Value};
 /// A provider's config as it is saved and sent: a type id plus that type's
 /// fields. Decks name it `SourceConfig`, outputs `SinkConfig`.
 ///
-/// Serializes flat, as `{"type": "<id>", ...fields}`, which is the shape every
-/// scene written before providers existed already has. A provider decodes the
-/// fields into its own private struct with [`ProviderConfig::decode`].
+/// Serializes flat, as `{"type": "<id>", ...fields}`. A provider decodes the
+/// fields into its own struct with [`ProviderConfig::decode`].
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ProviderConfig {
     type_id: String,
@@ -127,9 +121,8 @@ impl<'de> Deserialize<'de> for ProviderConfig {
 
 /// `value` as JSON, with each `f32` at its shortest round-tripping spelling.
 ///
-/// `serde_json::to_value` widens an `f32` to `f64` first, so a saved `0.6`
-/// would come back as `0.6000000238418579`. Going through text keeps
-/// `scene.json` exactly as the typed structs used to write it.
+/// `serde_json::to_value` widens `f32` to `f64`, so `0.6` would be saved as
+/// `0.6000000238418579`. Going through text avoids that.
 fn to_json<T: Serialize + ?Sized>(value: &T) -> Result<Value, serde_json::Error> {
     serde_json::from_str(&serde_json::to_string(value)?)
 }
@@ -162,9 +155,8 @@ impl utoipa::ToSchema for ProviderConfig {
 
 /// A value a source control takes.
 ///
-/// Numeric controls (`Float`, `Choice`, `Toggle` kinds) speak the router's
-/// normalized `0..1`, so a MIDI fader, the API and the GUI all write the same
-/// number to the same path. The provider maps it onto its own range.
+/// Numeric controls (`Float`, `Choice`, `Toggle`) take the router's normalized
+/// `0..1`; the provider maps it onto its own range.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(untagged)]
 pub enum ControlValue {
@@ -194,8 +186,8 @@ impl ControlValue {
     }
 }
 
-/// What kind of control a source parameter is, which decides how every
-/// consumer draws and writes it.
+/// What kind of control a source parameter is; decides how consumers draw
+/// and write it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ControlKind {
@@ -252,9 +244,7 @@ impl ControlKind {
 
 /// A group of parameters a consumer may draw as one richer control.
 ///
-/// The set is closed and each hint is owned by the consumer that draws it; a
-/// consumer that does not know a hint falls back to the plain parameters.
-/// See /spec/deck-source-providers.md Decision 8.
+/// A consumer that does not know a hint draws the plain parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WidgetHint {
@@ -271,8 +261,7 @@ pub enum WidgetHint {
     /// An audio input picker over a text parameter holding the device's
     /// name, with none meaning silent.
     AudioDevice,
-    /// Every control of a text deck, drawn as the GUI's dedicated text deck
-    /// layout. See /spec/text-source.md § Deck controls.
+    /// Every control of a text deck, drawn as the GUI's text deck layout.
     TextDeck,
     /// A font family picker over a text parameter holding the family name.
     /// The families come from the source type's library entry config
@@ -442,8 +431,7 @@ pub struct ControlStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connected: Option<bool>,
     /// Controls that currently have no effect, with the reason, by name.
-    /// Writes to them are still stored. See /spec/deck-source-providers.md
-    /// § Inactive controls.
+    /// Writes to them are still stored.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     #[schema(value_type = Object)]
     pub inactive: std::collections::BTreeMap<String, String>,

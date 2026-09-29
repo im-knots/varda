@@ -1,8 +1,6 @@
-//! `ApiRunner` — HTTP/WS delivery layer for the Varda engine.
-//!
-//! Owns the axum server and tokio runtime. Runs on a background thread.
-//! For windowed operation this runs alongside `UIRunner`.
-//! For headless operation this is the primary consumer.
+//! `ApiRunner`: the HTTP and WebSocket server, with its own tokio runtime on a
+//! background thread. Runs beside `UIRunner` when windowed, alone when
+//! headless.
 
 use crate::engine::CommandEnvelope;
 use crate::usecases::api::SharedState;
@@ -225,10 +223,8 @@ use utoipa_swagger_ui::SwaggerUi;
 pub struct ApiDoc;
 
 /// The served `OpenAPI` document: [`ApiDoc`], the deprecated per-source-type
-/// aliases, and the deck source and output sink type ids this build
-/// registers, so a `ProviderConfig` body documents which `type` values exist.
-/// `GET /api/library/sources` and `GET /api/library/outputs` say which apply
-/// where.
+/// aliases, and the registered source and sink type ids, which document the
+/// allowed `type` values of a `ProviderConfig` body.
 pub fn api_doc() -> utoipa::openapi::OpenApi {
     let mut doc = ApiDoc::openapi();
     doc.merge(routes::deprecated_sources::DeprecatedApi::openapi());
@@ -668,8 +664,7 @@ pub fn build_router(shared: SharedState) -> Router {
             "/api/transport/cue/next",
             axum::routing::post(routes::transport::next_cue),
         )
-        // Registered after prev and next, which are literal segments and win
-        // over this one in axum's matcher regardless.
+        // Literal `prev` and `next` segments win over this one in axum.
         .route(
             "/api/transport/cue/{uuid}",
             axum::routing::post(routes::transport::trigger_cue),
@@ -1217,7 +1212,7 @@ pub fn build_router(shared: SharedState) -> Router {
             "/api/command",
             axum::routing::post(routes::decks::generic_command),
         )
-        // ── Deprecated per-source-type aliases (one release) ───
+        // ── Deprecated per-source-type aliases ───
         .merge(routes::deprecated_sources::router())
         // ── WebSocket ──────────────────────────────────────────
         .route("/api/ws", get(super::ws::ws_upgrade))
@@ -1256,9 +1251,8 @@ impl ApiServerHandle {
 ///
 /// # Panics
 ///
-/// The spawned server thread panics if the bound listener's local address cannot
-/// be queried. The panic is caught by `catch_unwind` and logged, so it does not
-/// propagate to the caller.
+/// The server thread panics if the listener's local address cannot be read.
+/// `catch_unwind` catches and logs it; the caller never sees it.
 pub fn start(
     port: u16,
     command_tx: mpsc::UnboundedSender<CommandEnvelope>,
@@ -1270,13 +1264,12 @@ pub fn start(
     };
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    // Pre-check: try to bind synchronously to fail fast with a clear message
+    // Bind synchronously first to fail fast with a clear message.
     let test_bind = std::net::TcpListener::bind(std::net::SocketAddr::from(([0, 0, 0, 0], port)));
     if let Err(e) = test_bind {
         log::warn!("Cannot bind API server on port {port}: {e} — API disabled");
         return None;
     }
-    // Drop the sync listener so the async one can bind
     drop(test_bind);
 
     let thread_handle = std::thread::spawn(move || {
@@ -1339,7 +1332,6 @@ mod tests {
             command_tx: mpsc::unbounded_channel().0,
             engine_state: Arc::default(),
         };
-        // Should not panic
         let _router = build_router(shared);
     }
 
@@ -1373,7 +1365,7 @@ mod tests {
         assert!(resp.headers().contains_key("access-control-allow-origin"));
     }
 
-    // ── Offensive: catch_unwind wrapping thread panics ────────────────
+    // ── catch_unwind wrapping thread panics ────────────────
 
     #[test]
     fn api_thread_catch_unwind_pattern_works() {
@@ -1385,7 +1377,6 @@ mod tests {
                 log::error!("API server thread panicked");
             }
         });
-        // Thread must complete without propagating the panic
         handle
             .join()
             .expect("thread should join cleanly after catch_unwind");

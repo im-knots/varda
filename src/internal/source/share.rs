@@ -1,10 +1,8 @@
 //! Inter-application texture sharing (Syphon, Spout) as a deck source.
 //!
-//! Both protocols look the same from here: a directory of named servers, a
-//! client per server, and a texture that follows whatever the server publishes.
-//! A server may start after the deck that wants it (a restored scene opening
-//! before the producer), so a deck binds by name whenever the server appears
-//! and shows black until then.
+//! Both protocols expose named servers, a client per server, and a texture
+//! that follows the server. A deck binds by name when its server appears and
+//! shows black until then.
 
 use super::{
     ControlError, ControlSpec, ControlStatus, ControlValue, DeckSourceInstance, DeckSourceProvider,
@@ -18,8 +16,8 @@ use std::time::{Duration, Instant};
 
 static PARAMS: LazyLock<Vec<ControlSpec>> = LazyLock::new(|| vec![scaling_mode_spec()]);
 
-/// How often the server directory is re-read, so a producer that starts or
-/// restarts after Varda is found without anyone pressing rescan.
+/// How often the server list is re-read, so late-starting producers are found
+/// without a manual rescan.
 const SCAN_INTERVAL: Duration = Duration::from_secs(1);
 
 /// What a texture-sharing manager offers a deck.
@@ -56,8 +54,7 @@ struct Config {
 pub struct ShareProvider<M: ShareReceiver> {
     protocol: ShareProtocol,
     last_scan: Instant,
-    /// Servers seen at the last scan, so a deck waiting for one binds on the
-    /// frame it appears.
+    /// Servers seen at the last scan.
     servers: Vec<String>,
     _manager: std::marker::PhantomData<fn() -> M>,
 }

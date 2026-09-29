@@ -1,17 +1,16 @@
-//! Engine layer — domain contracts: the `EngineCommand` vocabulary, the
-//! `EngineState` snapshot types, and the plain value types in [`value`].
+//! Engine contract: `EngineCommand`, the `EngineState` snapshot types, and
+//! the value types in [`value`].
 //!
-//! NO implementation, NO GPU types. Consumers (UI, HTTP API, CLI) send
-//! commands and read snapshots; the concrete implementation lives in
-//! `src/app/`.
+//! No implementation and no GPU types. Consumers (UI, HTTP API, CLI) send
+//! commands and read snapshots; the implementation lives in `src/app/`.
 
 pub mod types;
 pub mod value;
 
 pub use types::*;
 
-/// Result of processing an `EngineCommand`. Sent back to the caller
-/// via the optional `oneshot::Sender` in the command envelope.
+/// Result of an `EngineCommand`, sent back on the envelope's optional
+/// `oneshot::Sender`.
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub enum CommandResult {
     /// Command succeeded with no additional data.
@@ -26,17 +25,13 @@ pub enum CommandResult {
 
 /// Typed, in-process result of executing a command through the GUI drain.
 ///
-/// Distinct from [`CommandResult`] (the serializable HTTP/WS wire type): the
-/// windowed consumer needs same-frame, strongly-typed data to complete a
-/// mutation (register a preview texture by UUID, refresh state after undo).
-/// The bus consumers never see this — they get `CommandResult` over the
-/// oneshot reply. See [`/spec/ui-engine-boundary.md`] Decision #9.
+/// The GUI needs same-frame typed data to finish a mutation (register a
+/// preview texture by UUID). Bus consumers get [`CommandResult`] instead.
 #[derive(Debug, Clone)]
 pub enum CommandOutcome {
-    /// No GUI side-channel data; carries the wire result verbatim.
+    /// The wire result, with no extra GUI data.
     Plain(CommandResult),
-    /// One or more decks were created. The GUI registers a preview texture for
-    /// each UUID. Mirrors `OkWithId` for the single-deck case.
+    /// Decks were created; the GUI registers a preview texture for each UUID.
     DecksCreated { uuids: Vec<String> },
 }
 
@@ -51,8 +46,8 @@ pub enum ErrorCode {
     Unavailable,
 }
 
-/// A command envelope: the command itself plus an optional reply channel.
-/// UI consumers send `None` (fire-and-forget). HTTP API sends `Some(tx)`.
+/// A command plus an optional reply channel. The UI sends `None`; the HTTP API
+/// sends `Some(tx)`.
 pub type CommandEnvelope = (
     EngineCommand,
     Option<tokio::sync::oneshot::Sender<CommandResult>>,
@@ -60,9 +55,8 @@ pub type CommandEnvelope = (
 
 /// Cross-thread command envelope for message-passing consumers.
 ///
-/// Each variant mirrors a trait method 1:1. Cross-thread consumers
-/// (HTTP API, CLI) send these via `mpsc::Sender<EngineCommand>`.
-/// The engine processes them once per frame.
+/// Each variant mirrors a trait method. The HTTP API and CLI send these over
+/// `mpsc::Sender<EngineCommand>`; the engine drains them once per frame.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub enum EngineCommand {
     // ── Mixer ──────────────────────────────────────────────────
@@ -72,11 +66,9 @@ pub enum EngineCommand {
         filename: String,
     },
     UnloadLut,
-    /// Load a scene-referred look LUT, applied to the linear program before any
-    /// output transform so one grade reaches every output including HDR ones.
-    ///
-    /// Distinct from [`EngineCommand::LoadLut`], which loads the display-referred
-    /// calibration LUT. See /spec/hdr-color-management.md.
+    /// Load a scene-referred look LUT, applied to the linear program before
+    /// any output transform so it reaches every output. [`EngineCommand::LoadLut`]
+    /// loads the display-referred calibration LUT.
     LoadLookLut {
         filename: String,
     },
@@ -91,9 +83,8 @@ pub enum EngineCommand {
         beats: f32,
     },
     /// Add a deck whose source `source` describes: `{"type": "<id>", ...}`,
-    /// where the type is one of `EngineState::sources`. Answers with the new
-    /// deck's UUID. A source that loads in the background (a shader, a clip)
-    /// appears once built; `EngineState::deck_loads` reports progress.
+    /// where the type is one of `EngineState::sources`. Returns the new deck's
+    /// UUID. Background loads report progress in `EngineState::deck_loads`.
     AddDeck {
         channel_uuid: String,
         source: crate::engine::value::source::SourceConfig,
@@ -123,8 +114,7 @@ pub enum EngineCommand {
         deck_uuid: String,
         dst_channel_uuid: String,
     },
-    /// Reposition a deck within its channel. `from_idx`/`to_idx` are ordinals,
-    /// not addresses — the position is the payload. See `/spec/api-addressing.md`.
+    /// Reposition a deck within its channel. `from_idx`/`to_idx` are positions.
     ReorderDeck {
         channel_uuid: String,
         from_idx: usize,
@@ -176,27 +166,24 @@ pub enum EngineCommand {
     ToggleEffect {
         effect_uuid: String,
     },
-    /// Reposition an effect within its chain. `target` scopes the ordinals; the
-    /// indices are positions, not addresses.
+    /// Reposition an effect within the chain `target` names.
     MoveEffect {
         target: EffectTarget,
         from_idx: usize,
         to_idx: usize,
     },
 
-    // ── Clipboard (see /spec/clipboard.md) ───────────────────
-    /// Capture an object's config onto the clipboard. Mutates nothing on stage,
-    /// so it is not undoable.
+    // ── Clipboard ───────────────────
+    /// Copy an object's config to the clipboard. Not undoable.
     ///
-    /// `include_arrangement` carries a deck's regions, which the UI sets when
-    /// the copy was made on the timeline: in the mixer a deck is a source, and
-    /// in Arrangement mode it is a source and a placement.
+    /// `include_arrangement` also copies a deck's regions; the UI sets it when
+    /// copying on the timeline.
     Copy {
         source: ClipboardSource,
         #[serde(default)]
         include_arrangement: bool,
     },
-    /// Rebuild what the clipboard holds, with a fresh identity throughout.
+    /// Paste the clipboard with fresh UUIDs throughout.
     Paste {
         target: PasteTarget,
     },
@@ -211,9 +198,8 @@ pub enum EngineCommand {
         path: String,
         value: ParamValue,
     },
-    /// Toggle a parameter between its two extremes by path (keyboard-shortcut
-    /// affordance): crossfader 0↔1, opacity 0↔1, mute/solo flip, etc. The
-    /// two-value logic lives in `param_router::toggle_param_by_path`.
+    /// Toggle a parameter between its extremes by path (crossfader 0↔1,
+    /// mute/solo). See `param_router::toggle_param_by_path`.
     ToggleParam {
         path: String,
     },
@@ -247,16 +233,14 @@ pub enum EngineCommand {
         rate: f32,
     },
     /// Create an automation envelope and assign it to `target` in `Absolute`
-    /// mode, which is the "Add automation lane" gesture.
-    /// See /spec/automation.md.
+    /// mode ("Add automation lane").
     AddAutomationLane {
         target: String,
         /// Timebase the curve is drawn against. Arrangement-authored lanes use
         /// `Transport`.
         timebase: crate::timebase::Timebase,
     },
-    /// Replace an envelope's breakpoints wholesale. The engine sorts them, so
-    /// callers do not have to maintain the ordering invariant.
+    /// Replace an envelope's breakpoints. The engine sorts them.
     SetEnvelopeBreakpoints {
         uuid: String,
         breakpoints: Vec<crate::modulation::Breakpoint>,
@@ -337,8 +321,7 @@ pub enum EngineCommand {
     ToggleSequence {
         sequence_uuid: String,
     },
-    // Steps are positional within their sequence: `step_idx` is an ordinal, not
-    // an address. See `/spec/api-addressing.md`.
+    // `step_idx` is a position within the sequence.
     AddFadeStep {
         sequence_uuid: String,
         from_channel_uuid: String,
@@ -430,7 +413,7 @@ pub enum EngineCommand {
     // ── Output ─────────────────────────────────────────────────
     /// Create an output delivering through `sink`: `{"type": "windowed"}`,
     /// `{"type": "recording", "path": ...}`, any registered sink type.
-    /// Answers with the new output's UUID. See /spec/output-sink-providers.md.
+    /// Returns the new output's UUID.
     CreateOutput {
         sink: crate::engine::value::provider::ProviderConfig,
     },
@@ -449,14 +432,14 @@ pub enum EngineCommand {
         name: String,
         value: crate::engine::value::provider::ControlValue,
     },
-    /// Run a library action an output type offers (`rescan`). Answers with
-    /// the type's fresh entries.
+    /// Run a library action an output type offers (`rescan`). Returns the
+    /// type's entries.
     SinkLibraryAction {
         sink_type: String,
         action: String,
     },
-    /// Show or hide one surface on an output, assigning it when shown for the
-    /// first time: the `output/<uuid>/surface/<surface_uuid>` control.
+    /// Show or hide a surface on an output, assigning it on first show
+    /// (`output/<uuid>/surface/<surface_uuid>`).
     SetSurfaceAssignmentEnabled {
         output_uuid: String,
         surface_uuid: String,
@@ -491,12 +474,12 @@ pub enum EngineCommand {
         corner_idx: usize,
         position: [f32; 2],
     },
-    /// Clear a surface's warp (back to no-warp / native position).
+    /// Clear a surface's warp.
     ResetWarp {
         surface_uuid: String,
     },
     /// Set the warp grid resolution for a surface, converting its warp to a
-    /// `cols` × `rows` mesh (preserving the current deformation). Dimensions ≥2.
+    /// `cols` × `rows` mesh, keeping the current deformation. Dimensions ≥2.
     SetWarpSubdivisions {
         surface_uuid: String,
         cols: u32,
@@ -510,15 +493,14 @@ pub enum EngineCommand {
         col: usize,
         position: [f32; 2],
     },
-    /// Bind or unbind a surface's warp from its shape (auto-warp). Binding
-    /// re-derives the warp from the outline; unbinding materialises it for
-    /// manual fine-tuning.
+    /// Bind or unbind a surface's warp from its shape. Binding re-derives the
+    /// warp from the outline; unbinding keeps it for manual editing.
     SetWarpBound {
         surface_uuid: String,
         bound: bool,
     },
-    /// Convert a surface's warp into a smooth bezier patch grid (8i.6), seeding
-    /// the control cage from the current warp so the shape is preserved.
+    /// Convert a surface's warp into a bezier patch grid, seeded from the
+    /// current warp.
     ConvertWarpToBezier {
         surface_uuid: String,
     },
@@ -561,12 +543,8 @@ pub enum EngineCommand {
         output_uuid: String,
         request: crate::engine::value::render::PresentationRequest,
     },
-    /// Override the show-wide tonemap curve for one output, or clear the
-    /// override so it inherits again.
-    ///
-    /// The tonemap is an output transform, so a projector and a master file can
-    /// be graded for their own medium. `None` inherits the mixer's curve, which
-    /// is what every output does until someone deliberately differs.
+    /// Override the tonemap curve for one output. `None` inherits the mixer's
+    /// curve.
     SetOutputTonemap {
         output_uuid: String,
         tonemap: Option<crate::engine::value::render::TonemapMode>,
@@ -593,7 +571,7 @@ pub enum EngineCommand {
     RemoveSurface {
         uuid: String,
     },
-    /// Change a surface's global stacking order (8i.12).
+    /// Change a surface's stacking order.
     ReorderSurface {
         uuid: String,
         op: SurfaceReorderOp,
@@ -690,7 +668,7 @@ pub enum EngineCommand {
         handle: CubicHandle,
         pos: [f32; 2],
     },
-    /// Add a subtractive cut-out hole (8i.7) to a surface from a closed path.
+    /// Add a cut-out hole to a surface from a closed path.
     AddSurfaceHole {
         uuid: String,
         hole: SurfacePath,
@@ -700,9 +678,8 @@ pub enum EngineCommand {
         uuid: String,
         hole_index: usize,
     },
-    /// "Make Hole" (8i.7): convert an existing surface into a cut-out hole in the
-    /// topmost other surface under its centroid, then remove the source surface.
-    /// Atomic (single command — no half-punched state).
+    /// Turn a surface into a hole in the topmost other surface under its
+    /// centroid, then remove it. One command, so it applies atomically.
     PunchSurfaceHole {
         source_uuid: String,
     },
@@ -733,8 +710,8 @@ pub enum EngineCommand {
     ConfirmDetectedContours {
         contours: Vec<crate::engine::value::detect::DetectedContour>,
     },
-    /// Import surfaces from a stage-plan file (image/SVG/DXF): detect contours
-    /// and create surfaces. Composite of detect + confirm.
+    /// Detect contours in a stage-plan file (image, SVG, DXF) and create
+    /// surfaces from them.
     ImportSurfacesFromFile {
         path: std::path::PathBuf,
     },
@@ -750,11 +727,10 @@ pub enum EngineCommand {
     },
 
     // ── Transport ──────────────────────────────────────────────
-    // Absolute show position. See /spec/transport.md.
+    // Absolute show position.
     /// Start the show position advancing. Rejected while chasing timecode.
     TransportPlay,
-    /// Hold the show position. Anything reading it freezes rather than
-    /// releasing, so a stop keeps the current look.
+    /// Hold the show position. Readers freeze, so the current look stays.
     TransportStop,
     /// Jump to an absolute position in seconds. Rejected while chasing timecode.
     TransportLocate {
@@ -768,12 +744,11 @@ pub enum EngineCommand {
     SetTransportLoop {
         region: Option<crate::transport::LoopRegion>,
     },
-    /// Frame rate positions are displayed and quantised at.
+    /// Frame rate positions are displayed and quantized at.
     SetTimecodeRate {
         rate: crate::transport::TimecodeRate,
     },
-    /// Which incoming timecode signal the transport should follow.
-    /// See /spec/timecode.md § Preference and Priority.
+    /// Which incoming timecode signal the transport follows.
     SetTimecodePreference {
         preference: crate::timecode::TimecodePreference,
     },
@@ -782,8 +757,7 @@ pub enum EngineCommand {
         input: Option<crate::timecode::LtcInput>,
     },
     /// Keep live parameter writes as automation curves while the transport
-    /// runs. Arming from a stop also rolls the transport. See
-    /// /spec/automation-recording.md.
+    /// runs. Arming from a stop also starts the transport.
     SetRecordArmed {
         armed: bool,
     },
@@ -792,14 +766,14 @@ pub enum EngineCommand {
     /// Locate to the cue after the playhead, or stay put when there is none.
     TransportNextCue,
     /// Locate to one named cue, leaving the transport running or stopped as it
-    /// was. What the Performance-mode cue bank's buttons send.
+    /// was. Sent by the Performance-mode cue bank.
     TriggerCue {
         uuid: String,
     },
 
     // ── Arrangement ────────────────────────────────────────────
-    // Deck activity positioned against transport time. See /spec/arrangement.md.
-    /// Give a deck a row in the arrangement. Idempotent: a lane *is* the deck.
+    // Deck activity positioned against transport time.
+    /// Give a deck a row in the arrangement. Idempotent: one lane per deck.
     AddLane {
         deck_uuid: String,
     },
@@ -823,8 +797,7 @@ pub enum EngineCommand {
         deck_uuid: String,
         index: usize,
     },
-    /// Fold a lane's automation rows away. View state, but it belongs to the
-    /// scene: which curves a show wants open is a property of the show.
+    /// Fold a lane's automation rows. Saved with the scene.
     SetLaneCollapsed {
         deck_uuid: String,
         collapsed: bool,
@@ -833,14 +806,14 @@ pub enum EngineCommand {
     SetIdleBehaviour {
         idle: crate::arrangement::IdleBehaviour,
     },
-    /// Hand one overridden parameter back to the arrangement, ramping over
-    /// `seconds` rather than snapping.
+    /// Return one overridden parameter to the arrangement, ramping over
+    /// `seconds`.
     RearmParam {
         param_key: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         seconds: Option<f64>,
     },
-    /// Hand every overridden parameter back at once.
+    /// Return every overridden parameter at once.
     RearmAll {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         seconds: Option<f64>,
@@ -848,7 +821,7 @@ pub enum EngineCommand {
     /// Mark an instant worth returning to. Returns the cue's UUID.
     AddCue {
         at: f64,
-        /// Left empty to be named by how many cues exist.
+        /// Empty names the cue by the cue count.
         #[serde(default)]
         name: String,
     },
@@ -865,8 +838,7 @@ pub enum EngineCommand {
     },
 
     // ── Modulation Updates ─────────────────────────────────────
-    /// Choose which notion of time a modulation source follows.
-    /// See /spec/timebase.md.
+    /// Choose which timebase a modulation source follows.
     UpdateModulationTimebase {
         uuid: String,
         timebase: crate::timebase::Timebase,
@@ -1001,7 +973,7 @@ pub enum EngineCommand {
         uuid: String,
         kind: crate::macros::MacroKind,
     },
-    /// Live macro turn — fans out to all targets. Not undoable.
+    /// Live macro turn, fanned out to all targets. Not undoable.
     SetMacroValue {
         uuid: String,
         value: f32,
@@ -1094,15 +1066,13 @@ pub enum EngineCommand {
         deck_uuid: String,
     },
     /// Draw the deck's generator params afresh from their declared ranges.
-    /// `group` scopes to one inspector section, `None` covers all of them.
-    /// See /spec/parameter-exploration.md.
+    /// `group` scopes to one inspector section; `None` covers all.
     RandomizeGeneratorParams {
         deck_uuid: String,
         group: Option<String>,
         seed: u64,
     },
     /// Nudge the deck's generator params by `amount` of their declared ranges.
-    /// See /spec/parameter-exploration.md.
     MutateGeneratorParams {
         deck_uuid: String,
         group: Option<String>,
@@ -1116,9 +1086,8 @@ pub enum EngineCommand {
         height: u32,
     },
 
-    /// Set the domemaster output size. Separate from the render resolution
-    /// because a domemaster image is square by definition — it is sized by the
-    /// dome's projector, not by the master canvas it samples from.
+    /// Set the domemaster output size. Square, and independent of the render
+    /// resolution.
     SetDomemasterResolution {
         resolution: crate::engine::value::dome::DomemasterResolution,
     },
@@ -1131,7 +1100,7 @@ pub enum EngineCommand {
         geometry: crate::engine::value::dome::DomeGeometry,
     },
     /// Replace the stage editor preferences the engine persists for the GUI.
-    /// Not undoable: they are view state, not authored content.
+    /// Not undoable.
     SetEditorPrefs {
         prefs: crate::engine::value::editor::EditorPrefs,
     },
@@ -1142,17 +1111,15 @@ pub enum EngineCommand {
     },
 
     // ── Performance profiling ──────────────────────────────────
-    /// Start GPU performance profiling for the next N frames.
-    /// Inserts device.poll(Wait) between GPU stages to measure actual
-    /// GPU execution time per category. Logs every frame.
+    /// Profile the GPU for the next N frames. Inserts `device.poll(Wait)`
+    /// between stages to time each category, and logs every frame.
     StartPerfProfile {
         frames: u32,
     },
 
     // ── Presets ────────────────────────────────────────────────
-    /// Load a named deck preset as a new deck appended to a channel. Presets are
-    /// addressed by name: the library is rescanned from disk, so its ordering is
-    /// not stable across scans.
+    /// Load a named deck preset as a new deck on a channel. Presets are
+    /// addressed by name because rescans reorder the library.
     LoadDeckPreset {
         channel_uuid: String,
         preset_name: String,
@@ -1201,8 +1168,8 @@ pub enum EngineCommand {
     },
 
     // ── Consumer views ──────────────────────────────────────────
-    /// Force-render these channels for off-air preview even when their opacity
-    /// culls them. Replaces the previous set; not persisted.
+    /// Force-render these channels for off-air preview even at zero opacity.
+    /// Replaces the current set; not persisted.
     SetPreviewChannels {
         channel_uuids: Vec<String>,
     },

@@ -1,13 +1,10 @@
 //! Deck source providers.
 //!
-//! A deck's source is whatever draws its base image before the effect chain:
-//! a shader, a clip, a camera, a stream. Each kind is a *provider*: one type
-//! implementing [`DeckSourceProvider`], registered once, which builds a
-//! [`DeckSourceInstance`] per deck. Everything that used to be wired by hand
-//! for each kind (the library panel, deck controls, the API, persistence, the
-//! router) reads the registry and the traits instead.
-//!
-//! See /spec/deck-source-providers.md.
+//! A deck's source draws its base image before the effect chain: a shader, a
+//! clip, a camera, a stream. Each kind is a provider implementing
+//! [`DeckSourceProvider`], registered once, which builds a
+//! [`DeckSourceInstance`] per deck. The library panel, deck controls, API,
+//! persistence and router all work through these traits.
 
 mod blit;
 mod feed;
@@ -64,7 +61,7 @@ impl std::fmt::Display for ControlError {
 
 impl std::error::Error for ControlError {}
 
-/// What a source re-enters from Varda's own output. See spec/program-tap.md.
+/// What a source re-enters from Varda's own output.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FeedbackSource {
     /// The master program, before tonemap and LUT.
@@ -121,12 +118,12 @@ pub struct SourceFrame<'a> {
     pub target_texture: &'a wgpu::Texture,
     pub width: u32,
     pub height: u32,
-    /// Whether the deck keeps its source's alpha. See /spec/html-source.md §2.
+    /// Whether the deck keeps its source's alpha.
     pub transparent: bool,
     pub time: f32,
     pub time_delta: f32,
     pub frame_index: u32,
-    /// The deck's phase accumulators. See /spec/phase-accumulators.md.
+    /// The deck's phase accumulators.
     pub phase_times: [f32; 4],
     pub audio: &'a AudioData,
     pub modulation: &'a ModulationEngine,
@@ -153,7 +150,7 @@ pub struct SourceControl<'a> {
     pub deck_uuid: &'a str,
     pub modulation: &'a ModulationEngine,
     /// False while the arrangement has this deck asleep. A sleeping source
-    /// holds its frame and must not be driven. See /spec/deck-residency.md.
+    /// holds its frame and must not be driven.
     pub awake: bool,
     pub transport: Option<crate::timebase::TransportSample>,
     /// The Beat timebase, when a tempo source is running.
@@ -269,8 +266,8 @@ pub fn apply_modulation(base: f32, resolved: &ResolvedModulation) -> f32 {
 /// [`DeckSourceInstance`] per deck, and services the device managers its
 /// instances read from once per frame.
 pub trait DeckSourceProvider: 'static {
-    /// Stable id: the `type` tag in scene files and the API, in the CamelCase
-    /// every scene has used (`Video`, `SolidColor`). Never renamed.
+    /// Stable id: the `type` tag in scene files and the API, in CamelCase
+    /// (`Video`, `SolidColor`). Never rename it.
     fn id(&self) -> &'static str;
     fn label(&self) -> &'static str;
     /// A short glyph shown next to the label.
@@ -344,17 +341,15 @@ pub trait DeckSourceProvider: 'static {
         env: &mut SourceEnv,
     ) -> Result<Box<dyn DeckSourceInstance>>;
 
-    /// Whether adding a deck that is the same source (see [`Self::identity`])
-    /// as one already on the channel returns that deck instead of a second
-    /// one. For sources an external controller re-subscribes to on every
-    /// reconnect, which must converge on a single deck.
+    /// Whether adding the same source (see [`Self::identity`]) as a deck
+    /// already on the channel returns that deck instead of a second one. For
+    /// sources an external controller re-subscribes to on every reconnect.
     fn one_per_channel(&self) -> bool {
         false
     }
 
-    /// Rebuild a saved deck. Defaults to [`Self::create`]; a provider that can
-    /// hold a deck whose device is missing (a closed window, an unpublished
-    /// server) overrides it to keep the deck, where an explicit add would fail.
+    /// Rebuild a saved deck. Defaults to [`Self::create`]. Override to keep a
+    /// deck whose device is missing (a closed window, an unpublished server).
     ///
     /// # Errors
     ///
@@ -368,9 +363,9 @@ pub trait DeckSourceProvider: 'static {
         self.create(config, env)
     }
 
-    /// What makes two configs the same source, as opposed to the same source
-    /// with different settings. A scene diff patches a deck in place when this
-    /// matches and rebuilds it when it does not. Defaults to the whole config.
+    /// The part of a config that identifies the source, excluding settings. A
+    /// scene diff patches a deck in place when this matches and rebuilds it
+    /// otherwise. Defaults to the whole config.
     fn identity(&self, config: &SourceConfig) -> serde_json::Value {
         serde_json::Value::Object(config.fields().clone())
     }
@@ -761,7 +756,7 @@ pub fn choice_index(normalized: f32, n: usize) -> usize {
     crate::params::bucket_index(normalized, n)
 }
 
-/// The normalized value at the centre of choice `index` of `n`.
+/// The normalized value at the center of choice `index` of `n`.
 pub fn choice_value(index: usize, n: usize) -> f32 {
     crate::params::bucket_center(index, n)
 }

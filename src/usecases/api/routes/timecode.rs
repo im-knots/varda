@@ -1,8 +1,7 @@
 //! Timecode receiver configuration.
 //!
-//! What the incoming position *does* is on `/api/transport/*`; these routes only
-//! say which signal to listen to. Reading the resolved state is
-//! `GET /api/state/timecode`. See `/spec/timecode.md`.
+//! These routes choose which signal to listen to. The transport side is on
+//! `/api/transport/*`; resolved state is `GET /api/state/timecode`.
 
 use axum::Json;
 use axum::extract::State;
@@ -22,8 +21,8 @@ pub struct PreferenceBody {
 
 #[derive(Deserialize, ToSchema)]
 pub struct LtcInputBody {
-    /// Audio input carrying LTC, and the channel of it. `null` stops listening,
-    /// which also releases the device.
+    /// Audio input and channel carrying LTC. `null` stops listening and
+    /// releases the device.
     pub input: Option<crate::timecode::LtcInput>,
 }
 
@@ -46,10 +45,8 @@ pub async fn set_preference(
 
 /// Name the audio input carrying LTC, or stop listening for it.
 ///
-/// `rate` is optional and normally left unset: the decoder infers the rate from
-/// the signal's cadence. Naming it matters only for 29.97 non-drop, which is
-/// indistinguishable from 30 in the signal and 3.6 seconds an hour away from it
-/// in position.
+/// `rate` is usually omitted; the decoder infers it. Set it only for 29.97
+/// non-drop, which the signal cannot distinguish from 30.
 #[utoipa::path(put, path = "/api/timecode/ltc-input", request_body = LtcInputBody, responses((status = 200, body = CommandResult)), tag = "Timecode")]
 pub async fn set_ltc_input(
     State(s): State<SharedState>,

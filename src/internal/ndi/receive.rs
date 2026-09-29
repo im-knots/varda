@@ -1,7 +1,6 @@
 //! The receive side's frame handoff and GPU conversion. The receive thread
 //! copies what the SDK captured into a buffer reused across frames; the render
 //! thread uploads it and, for UYVY, expands it to RGB on the GPU.
-//! See /spec/performance-hot-paths.md item B.
 
 use std::sync::Mutex;
 

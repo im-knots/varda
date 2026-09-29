@@ -1,23 +1,14 @@
-//! Undo/redo history manager — snapshot-based, unified scene + stage timeline.
-//!
-//! Stores combined `HistorySnapshot` values (mixer/scene + stage/venue) before
-//! undoable mutations, so a single timeline covers both subsystems.
-//! Undo pops the undo stack and pushes current state onto redo.
-//! Redo pops the redo stack and pushes current state onto undo.
-//! New undoable actions clear the redo stack (fork).
+//! Snapshot-based undo/redo over one timeline covering scene and stage state.
+//! A new undoable action clears the redo stack.
 
 use crate::persistence::StagePrefs;
 use crate::scene::SceneConfig;
 
-/// Maximum number of undo snapshots retained.
+/// Undo snapshots retained.
 const MAX_HISTORY_DEPTH: usize = 50;
 
-/// One entry on the unified undo/redo timeline: a snapshot of both authored
-/// subsystems captured *before* an undoable action.
-///
-/// Both halves are always captured together so a single entry fully describes
-/// "the world before this action", regardless of which subsystem it touched.
-/// `StagePrefs` is plain data (no GPU resources), so the extra half is cheap.
+/// Scene and stage state captured before an undoable action. Both halves are
+/// always captured; `StagePrefs` is plain data, so this is cheap.
 #[derive(Debug, Clone)]
 pub struct HistorySnapshot {
     /// Mixer/scene state (channels, decks, effects, modulation, ...).
@@ -40,8 +31,7 @@ impl HistoryManager {
         }
     }
 
-    /// Record current state before an undoable mutation.
-    /// Clears the redo stack (new action branch).
+    /// Record the state before an undoable mutation. Clears the redo stack.
     pub fn push(&mut self, snapshot: HistorySnapshot) {
         if self.undo_stack.len() >= MAX_HISTORY_DEPTH {
             self.undo_stack.remove(0);
@@ -50,14 +40,12 @@ impl HistoryManager {
         self.redo_stack.clear();
     }
 
-    /// Undo: push `current` onto redo, pop and return top of undo stack.
     pub fn undo(&mut self, current: HistorySnapshot) -> Option<HistorySnapshot> {
         let snapshot = self.undo_stack.pop()?;
         self.redo_stack.push(current);
         Some(snapshot)
     }
 
-    /// Redo: push `current` onto undo, pop and return top of redo stack.
     pub fn redo(&mut self, current: HistorySnapshot) -> Option<HistorySnapshot> {
         let snapshot = self.redo_stack.pop()?;
         self.undo_stack.push(current);
@@ -103,8 +91,7 @@ mod tests {
         }
     }
 
-    /// Build a snapshot tagged by `crossfader` (scene) and `grid_size` (stage)
-    /// so tests can assert both halves round-trip through the timeline.
+    /// Snapshot tagged by `crossfader` (scene) and `grid_size` (stage).
     fn make_snapshot(crossfader: f32, grid_size: f32) -> HistorySnapshot {
         HistorySnapshot {
             scene: make_scene(crossfader),
@@ -125,7 +112,6 @@ mod tests {
 
         let restored = h.undo(make_snapshot(0.5, 0.02)).unwrap();
         assert!((restored.scene.crossfader - 0.0).abs() < 1e-5);
-        // Stage half round-trips too.
         assert!((restored.stage.grid_size - 0.01).abs() < 1e-5);
         assert!(!h.can_undo());
         assert!(h.can_redo());
@@ -165,7 +151,7 @@ mod tests {
             h.push(make_snapshot(i as f32, 0.01));
         }
         assert_eq!(h.undo_stack.len(), 50);
-        // Oldest should have been evicted; first entry is 10.0
+        // Oldest evicted.
         assert!((h.undo_stack[0].scene.crossfader - 10.0).abs() < 1e-5);
     }
 

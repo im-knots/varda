@@ -1,22 +1,17 @@
-//! Depth-sensor shader preprocessor GPU cost (spec/depth-sensor-preprocessor.md).
+//! GPU cost of the depth-sensor shader preprocessor.
 //!
 //! Three fullscreen passes at the sensor's native resolution convert the shared
 //! `R16Uint` depth stream into the `depth`/`mask`/`motion`/`rgb` fields an ISF
-//! shader consumes. This is new per-frame GPU work on every deck that declares
-//! the preprocessor, so it needs a number rather than an assurance.
+//! shader reads.
 //!
-//! Two groups:
-//!   `depth_preprocess_passes` — one full conversion at VGA and at QVGA, drained
-//!                             each iteration. This is the per-sensor-frame cost.
-//!   `depth_preprocess_decks`  — N decks each running their own conversion, since
-//!                             the spec chose per-deck pipelines (so each deck
-//!                             gets its own near/far framing) over one shared
-//!                             conversion per device. This group is what would
-//!                             justify revisiting that call.
+//!   `depth_preprocess_passes` — one full conversion at VGA and QVGA, drained
+//!                             each iteration: the per-sensor-frame cost.
+//!   `depth_preprocess_decks`  — N decks each running their own conversion,
+//!                             since each deck has its own pipeline for its own
+//!                             near/far framing.
 //!
-//! Note the real per-*render*-frame cost is lower than these numbers suggest:
-//! the passes are gated on the sensor's upload counter, so a 30 Hz Kinect
-//! driving a 60 Hz deck runs them on half the frames.
+//! The per-render-frame cost is lower: passes run only when the sensor uploads,
+//! so a 30 Hz Kinect on a 60 Hz deck runs them every other frame.
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use varda::depth::preprocess::{DepthPreprocessParams, DepthPreprocessPipeline};
@@ -34,8 +29,7 @@ fn make_context() -> Option<GpuContext> {
 }
 
 /// A depth texture shaped like the one `DepthSensorManager` owns, filled with a
-/// ramp so hole-fill and gradient work are exercised rather than short-circuited
-/// on a uniform image.
+/// ramp so hole-fill and gradient work aren't short-circuited.
 fn make_depth_source(gpu: &GpuContext, width: u32, height: u32) -> wgpu::TextureView {
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("bench depth src"),
@@ -51,8 +45,8 @@ fn make_depth_source(gpu: &GpuContext, width: u32, height: u32) -> wgpu::Texture
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
-    // Ramp with a scatter of unresolved texels, matching real Kinect output:
-    // roughly one in eight samples is a hole the fill pass must search around.
+    // Ramp with scattered holes like real Kinect output: about one sample in
+    // eight is a hole the fill pass searches around.
     let data: Vec<u16> = (0..width * height)
         .map(|i| {
             if i % 8 == 0 {

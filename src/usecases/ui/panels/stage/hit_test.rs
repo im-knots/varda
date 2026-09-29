@@ -1,15 +1,14 @@
-//! Pure canvas geometry and hit-testing for the stage editor.
+//! Canvas geometry and hit-testing for the stage editor.
 //!
-//! No `egui` painting and no state mutation — just the screen ↔ normalized
-//! coordinate mapping and point-in-surface queries the interaction handlers need.
-//! Kept free of side effects so it can be unit-tested directly.
+//! No painting or state mutation: the screen/normalized coordinate mapping and
+//! point-in-surface queries, unit-tested directly.
 
 use super::super::super::SurfaceUI;
 
 /// The stage canvas's placement and snapping configuration for one frame.
 ///
-/// Normalized coordinates are `[0, 1]` across the canvas, which is what every
-/// surface vertex and warp point is stored in.
+/// Normalized coordinates span `[0, 1]` across the canvas; surface vertices
+/// and warp points are stored in them.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct CanvasGeometry {
     pub(super) rect: egui::Rect,
@@ -31,7 +30,7 @@ impl CanvasGeometry {
         }
     }
 
-    /// Quantize one normalized axis value to the grid, when snapping is on.
+    /// Snap one normalized axis value to the grid when snapping is on.
     pub(super) fn snap(self, v: f32) -> f32 {
         if self.snap_enabled && self.grid_size > 0.001 {
             (v / self.grid_size).round() * self.grid_size
@@ -46,10 +45,10 @@ impl CanvasGeometry {
         [self.snap(nx), self.snap(ny)]
     }
 
-    /// Screen position → un-snapped normalized position, clamped to the canvas.
+    /// Screen position → unsnapped normalized position, clamped to the canvas.
     ///
-    /// Bezier anchor/handle editing needs sub-grid precision: hit-testing against
-    /// off-grid control points and dragging them must not snap-jump to the grid.
+    /// Bezier editing needs sub-grid precision for hit-testing and dragging
+    /// off-grid control points.
     pub(super) fn to_norm_raw(self, pos: egui::Pos2) -> [f32; 2] {
         [
             ((pos.x - self.rect.left()) / self.width).clamp(0.0, 1.0),
@@ -68,8 +67,7 @@ impl CanvasGeometry {
 
 /// UUID of the topmost surface containing the normalized point, if any.
 ///
-/// Surfaces are tested back-to-front (last drawn wins) with an even-odd crossing
-/// test, matching the stacking order the canvas paints in.
+/// Tests back-to-front (last drawn wins) with an even-odd crossing test.
 pub(super) fn point_in_any_surface(surfaces: &[SurfaceUI], nx: f32, ny: f32) -> Option<String> {
     for surface in surfaces.iter().rev() {
         let verts = &surface.vertices;
@@ -139,7 +137,7 @@ mod tests {
         assert!((g.snap(0.31) - 0.31).abs() < 1e-6);
     }
 
-    /// A grid at or below 0.001 disables snapping, guarding a divide-by-tiny.
+    /// A grid at or below 0.001 disables snapping, avoiding division by a tiny value.
     #[test]
     fn snap_is_identity_for_degenerate_grid() {
         let g = geom(0.0, true);
@@ -175,8 +173,6 @@ mod tests {
         assert!((back[1] - p[1]).abs() < 1e-5, "{back:?}");
     }
 
-    // ── point_in_any_surface ────────────────────────────────────────
-
     #[test]
     fn point_inside_a_quad_is_detected() {
         let surfaces = vec![SurfaceUI::test_quad("a", 0.2, 0.2, 0.6, 0.6)];
@@ -192,8 +188,8 @@ mod tests {
         assert_eq!(point_in_any_surface(&surfaces, 0.9, 0.9), None);
     }
 
-    /// Overlapping surfaces resolve to the last one in the list, matching the
-    /// canvas's back-to-front paint order.
+    /// Overlapping surfaces resolve to the last one in the list, matching paint
+    /// order.
     #[test]
     fn topmost_surface_wins_when_overlapping() {
         let surfaces = vec![
@@ -204,7 +200,7 @@ mod tests {
             point_in_any_surface(&surfaces, 0.5, 0.5),
             Some("over".to_string())
         );
-        // Outside the top surface, the one beneath still answers.
+        // Outside the top surface, the one beneath is hit.
         assert_eq!(
             point_in_any_surface(&surfaces, 0.05, 0.05),
             Some("under".to_string())
@@ -222,8 +218,8 @@ mod tests {
         assert_eq!(point_in_any_surface(&[empty], 0.5, 0.5), None);
     }
 
-    /// Concave outlines must use the crossing test, not a bounding box: the notch
-    /// of an L-shape is inside the bbox but outside the polygon.
+    /// Concave outlines use the crossing test: the notch of an L-shape is inside
+    /// the bbox but outside the polygon.
     #[test]
     fn concave_outline_excludes_its_notch() {
         let mut l_shape = SurfaceUI::test_quad("l", 0.0, 0.0, 1.0, 1.0);

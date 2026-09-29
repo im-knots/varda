@@ -1,8 +1,8 @@
 //! Right-panel surface editor: the surface list with inline reorder, source and
 //! mapping controls.
 //!
-//! Distinct from the full-screen stage editor in `super` — this is the compact
-//! editor hosted by `panels::right_panel`.
+//! This is the compact editor in `panels::right_panel`, separate from the
+//! full-screen stage editor in `super`.
 
 use super::super::super::{UIActions, UIData};
 use super::geometry::polygon_shape;
@@ -10,7 +10,7 @@ use crate::engine::EngineCommand;
 use crate::renderer::context::OutputSource;
 use crate::surface::{ContentMapping, SurfaceOutputType, SurfaceReorderOp};
 
-/// Drag state for the surface canvas editor
+/// Drag state for the surface canvas editor.
 #[derive(Debug, Clone, Default)]
 enum SurfaceDragState {
     #[default]
@@ -29,7 +29,6 @@ enum SurfaceDragState {
 // dx_px/dy_px style x/y pairs are the clearest names for this canvas geometry.
 #[allow(clippy::similar_names)]
 pub(crate) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
-    // Open/Close Editor button
     ui.horizontal(|ui| {
         let editor_label = if data.stage_editor_open {
             "✏ Close Editor"
@@ -43,9 +42,8 @@ pub(crate) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
 
     ui.add_space(4.0);
 
-    // 2D Canvas — draw surfaces as rectangles. Surfaces are stored in
-    // normalised output coordinates, so the canvas has to carry the render
-    // aspect or a square surface is drawn as a wide one.
+    // Surfaces are stored in normalized output coordinates, so the canvas uses the
+    // render aspect or a square surface would be drawn wide.
     let width = ui.available_width() - 4.0;
     let canvas = crate::usecases::ui::panels::utils::preview_size(
         egui::vec2(width, width),
@@ -59,7 +57,6 @@ pub(crate) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
 
     let painter = ui.painter_at(canvas_rect);
 
-    // Canvas background (dark stage)
     painter.rect_filled(canvas_rect, 4.0, egui::Color32::from_rgb(15, 15, 25));
     painter.rect_stroke(
         canvas_rect,
@@ -68,7 +65,6 @@ pub(crate) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
         egui::StrokeKind::Outside,
     );
 
-    // Grid lines
     for i in 1..4 {
         let x = canvas_rect.left() + canvas_width * (i as f32 / 4.0);
         painter.line_segment(
@@ -90,7 +86,6 @@ pub(crate) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
         );
     }
 
-    // Draw each surface
     let surface_colors = [
         egui::Color32::from_rgb(80, 140, 220),
         egui::Color32::from_rgb(220, 120, 80),
@@ -109,7 +104,6 @@ pub(crate) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
             160,
         );
 
-        // Convert normalized vertices to canvas pixel positions
         let pixel_verts: Vec<egui::Pos2> = surface
             .vertices
             .iter()
@@ -133,7 +127,7 @@ pub(crate) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                 egui::Stroke::new(1.5_f32, color),
             );
         }
-        // Draw extra contours (combined non-overlapping surfaces)
+        // Extra contours of combined non-overlapping surfaces.
         for ec in &surface.extra_contours {
             let ec_verts: Vec<egui::Pos2> = ec
                 .iter()
@@ -153,7 +147,6 @@ pub(crate) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
             }
         }
 
-        // Surface label at center
         let n = surface.vertices.len().max(1) as f32;
         let center = surface
             .vertices
@@ -178,7 +171,6 @@ pub(crate) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
             egui::Color32::WHITE,
         );
 
-        // Output type + mapping mode indicators
         let type_label = match surface.output_type {
             SurfaceOutputType::Projection => "📽",
             SurfaceOutputType::LEDDirect => "💡",
@@ -187,7 +179,6 @@ pub(crate) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
             ContentMapping::Fill => "▣",
             ContentMapping::Mapped => "▥",
         };
-        // Place indicator near first vertex
         if let Some(v0) = pixel_verts.first() {
             painter.text(
                 egui::pos2(v0.x + 4.0, v0.y + 4.0),
@@ -198,7 +189,6 @@ pub(crate) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
             );
         }
 
-        // Vertex handles
         let handle_size = 5.0;
         for v in &pixel_verts {
             let handle_rect =
@@ -207,7 +197,6 @@ pub(crate) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
         }
     }
 
-    // Handle drag interactions on the canvas
     let drag_id = ui.id().with("surface_drag");
     let _drag_state = ui.memory(|mem| mem.data.get_temp::<SurfaceDragState>(drag_id));
 
@@ -217,8 +206,8 @@ pub(crate) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
         let nx = (pos.x - canvas_rect.left()) / canvas_width;
         let ny = (pos.y - canvas_rect.top()) / canvas_height;
 
-        // Check if near a vertex (drag vertex) or inside a surface (move whole shape)
-        // Use pixel-space distance for correct hit detection on non-square canvas
+        // Near a vertex drags the vertex; inside a surface moves the shape. Distances
+        // are in pixels so hits are correct on a non-square canvas.
         let vertex_threshold_px = 14.0;
         let mut found_vertex = None;
         let mut found_surface = None;
@@ -240,7 +229,6 @@ pub(crate) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                 found_vertex = Some((i, vert_idx));
                 break;
             }
-            // Point-in-polygon test for move
             if found_surface.is_none() {
                 let verts = &surface.vertices;
                 let n = verts.len();
@@ -343,7 +331,6 @@ pub(crate) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
 
     ui.add_space(4.0);
 
-    // Surface list with properties
     for (i, surface) in data.surfaces.iter().enumerate() {
         let color = surface_colors[i % surface_colors.len()];
         egui::Frame::default()
@@ -352,7 +339,6 @@ pub(crate) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
             .stroke(egui::Stroke::new(1.0_f32, color.linear_multiply(0.5)))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    // Color swatch
                     let (swatch_rect, _) =
                         ui.allocate_exact_size(egui::vec2(8.0, 16.0), egui::Sense::hover());
                     ui.painter().rect_filled(swatch_rect, 2.0, color);
@@ -365,8 +351,7 @@ pub(crate) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                                 uuid: surface.uuid.clone(),
                             });
                         }
-                        // Stacking order (8i.12): list is bottom→top (index 0 =
-                        // bottom/drawn-first). Up moves toward the front (top).
+                        // The list is bottom to top (index 0 drawn first). Up moves to the front.
                         let last = data.surfaces.len().saturating_sub(1);
                         ui.add_enabled_ui(i < last, |ui| {
                             if ui
@@ -406,7 +391,6 @@ pub(crate) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                         .close_behavior(egui::PopupCloseBehavior::CloseOnClick)
                         .show(|ui| {
                             ui.set_min_width(150.0);
-                            // Master option
                             if ui
                                 .selectable_label(surface.source == OutputSource::Master, "Master")
                                 .clicked()
@@ -427,8 +411,7 @@ pub(crate) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                             for ch in &data.channels {
                                 let mut checked = selected.contains(&ch.uuid);
                                 if ui.checkbox(&mut checked, &ch.name).changed() {
-                                    // Kept in mixer order, so the same set of
-                                    // channels always reads the same way.
+                                    // Kept in mixer order so a set always reads the same way.
                                     let chosen: Vec<String> = data
                                         .channels
                                         .iter()
@@ -527,8 +510,8 @@ pub(crate) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                         });
                 });
 
-                // Precision transform: bounds of the primary contour (X/Y = position,
-                // W/H = size). Editing emits Move/Scale so it stays in sync with the gizmo.
+                // Precision transform on the primary contour's bounds (X/Y position, W/H size).
+                // Edits emit Move/Scale so they match the gizmo.
                 {
                     let (mut min_x, mut min_y) = (f32::MAX, f32::MAX);
                     let (mut max_x, mut max_y) = (f32::MIN, f32::MIN);

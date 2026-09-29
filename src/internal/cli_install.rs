@@ -1,11 +1,9 @@
-//! First-launch CLI installation.
+//! First-launch CLI install: when running from a .app bundle or `AppImage`,
+//! puts a `varda` command on the user's PATH.
 //!
-//! Detects when varda is running from an installed location (.app bundle or
-//! `AppImage`) and ensures a `varda` command is available in the user's PATH.
-//!
-//! - **macOS**: creates a wrapper script in `/usr/local/bin/varda` that sets
-//!   `DYLD_FALLBACK_LIBRARY_PATH` and execs the binary inside the .app.
-//!   Uses `osascript` for the admin prompt.
+//! - **macOS**: writes a wrapper script at `/usr/local/bin/varda` that sets
+//!   `DYLD_FALLBACK_LIBRARY_PATH` and execs the binary inside the .app. The
+//!   admin prompt comes from `osascript`.
 //! - **Linux**: symlinks the `AppImage` to `~/.local/bin/varda`.
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -13,8 +11,7 @@ use std::path::Path;
 #[cfg(target_os = "linux")]
 use std::path::PathBuf;
 
-/// Run the first-launch CLI install check.
-/// This is intentionally silent on success and non-fatal on failure.
+/// Runs the first-launch CLI install. Silent on success, non-fatal on failure.
 pub fn ensure_cli_installed() {
     if let Err(e) = try_install() {
         log::debug!("CLI install check skipped: {e}");
@@ -47,7 +44,6 @@ fn try_install() -> Result<(), String> {
 
 #[cfg(target_os = "macos")]
 fn install_macos(exe: &Path) -> Result<(), String> {
-    // Only act when running from a .app bundle
     let macos_dir = exe.parent().ok_or("no parent")?;
     if macos_dir.file_name().and_then(|n| n.to_str()) != Some("MacOS") {
         return Err("not running from .app bundle".into());
@@ -60,13 +56,12 @@ fn install_macos(exe: &Path) -> Result<(), String> {
 
     let wrapper = Path::new("/usr/local/bin/varda");
     if wrapper.exists() {
-        // Check if existing wrapper points to this .app
         if let Ok(contents) = std::fs::read_to_string(wrapper)
             && contents.contains(&exe.to_string_lossy().to_string())
         {
             return Ok(()); // already installed for this .app
         }
-        // Different install or not our wrapper — leave it alone
+        // Not our wrapper; leave it alone.
         return Err("existing /usr/local/bin/varda not managed by this install".into());
     }
 
@@ -86,7 +81,7 @@ fn install_macos(exe: &Path) -> Result<(), String> {
 
 #[cfg(target_os = "macos")]
 fn install_macos_with_admin(wrapper_content: &str) -> Result<(), String> {
-    // Use osascript to get admin privileges via GUI prompt
+    // osascript shows the GUI admin prompt.
     let escaped = wrapper_content.replace('\\', "\\\\").replace('"', "\\\"");
     let script = format!(
         "do shell script \
@@ -123,13 +118,12 @@ fn install_macos_with_admin(wrapper_content: &str) -> Result<(), String> {
 
 #[cfg(target_os = "linux")]
 fn install_linux(exe: &Path) -> Result<(), String> {
-    // Only act when running from an AppImage
     let appimage_var = std::env::var("APPIMAGE").ok();
     let appimage_path = appimage_var
         .as_deref()
         .map_or_else(|| exe.to_path_buf(), PathBuf::from);
 
-    // Heuristic: AppImage sets $APPIMAGE env var
+    // AppImage sets $APPIMAGE.
     if appimage_var.is_none() {
         return Err("not running from AppImage".into());
     }
@@ -139,7 +133,6 @@ fn install_linux(exe: &Path) -> Result<(), String> {
     let link_path = bin_dir.join("varda");
 
     if link_path.exists() {
-        // Check if symlink already points to this AppImage
         if let Ok(target) = std::fs::read_link(&link_path)
             && target == appimage_path
         {
@@ -166,13 +159,12 @@ mod tests {
 
     #[test]
     fn ensure_cli_installed_does_not_panic() {
-        // Running from cargo test, not from .app or AppImage — should silently skip
+        // Under cargo test this is neither a .app nor an AppImage, so it skips.
         ensure_cli_installed();
     }
 
     #[test]
     fn try_install_skips_when_not_bundled() {
-        // Not running from .app or AppImage, should return Err (skipped)
         let result = try_install();
         assert!(result.is_err());
     }
@@ -193,9 +185,8 @@ mod tests {
     #[test]
     #[cfg(target_os = "linux")]
     fn linux_rejects_non_appimage() {
-        // Ensure APPIMAGE is not set.
-        // SAFETY: no other test reads or writes APPIMAGE, so this cannot race
-        // another thread in the harness pool.
+        // SAFETY: no other test touches APPIMAGE, so this cannot race another
+        // test thread.
         unsafe {
             std::env::remove_var("APPIMAGE");
         }

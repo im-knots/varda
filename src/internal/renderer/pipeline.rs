@@ -1,8 +1,7 @@
 use anyhow::Result;
 use wgpu::util::DeviceExt;
 
-/// ISF shader uniforms (automatic variables)
-/// Layout is 16-byte aligned for GPU compatibility
+/// ISF automatic uniforms. 16-byte aligned for the GPU.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ISFUniforms {
@@ -11,7 +10,6 @@ pub struct ISFUniforms {
     pub frame_index: u32,
     pub pass_index: i32, // PASSINDEX for multi-pass rendering
     pub render_size: [f32; 2],
-    // Audio uniforms
     pub audio_level: f32,      // Overall audio level (0.0 to 1.0)
     pub audio_bass: f32,       // Low frequency level
     pub audio_mid: f32,        // Mid frequency level
@@ -19,7 +17,7 @@ pub struct ISFUniforms {
     pub audio_bpm: f32,        // Detected BPM (0.0 if not detected)
     pub audio_beat_phase: f32, // Phase within beat cycle (0.0 to 1.0)
     pub date: [f32; 4],
-    /// Engine-side phase accumulators (accumulated dt * param * scale per frame)
+    /// Engine-side phase accumulators (sum of dt * param * scale per frame).
     pub phase_times: [f32; 4],
 }
 
@@ -43,37 +41,31 @@ impl Default for ISFUniforms {
     }
 }
 
-/// Unified shader pipeline — handles generators, filters, single-pass, and multi-pass shaders.
+/// Shader pipeline for generators, filters, single-pass and multi-pass shaders.
 ///
-/// Binding layout adapts to shader needs:
+/// Binding layout by shader kind:
 ///   Simple generator:   [0: Uniforms, 1: `UserParams`]
 ///   Simple filter:      [0: Uniforms, 1: Sampler, 2: inputImage, 3: `UserParams`]
 ///   Multi-pass gen:     [0: Uniforms, 1: Sampler, 2..N: passBuffers, N+1..M: imported, M+1..P: preprocessor, P+1: `UserParams`]
 ///   Multi-pass filter:  [0: Uniforms, 1: Sampler, 2: inputImage, 3..N: passBuffers, N+1..M: imported, M+1..P: preprocessor, P+1: `UserParams`]
 ///   With imported:      [0: Uniforms, 1: Sampler, ..., N+1..M: imported, M+1..P: preprocessor, P+1: `UserParams`]
 pub struct UnifiedPipeline {
-    /// Pipeline for the color-path format. Every render target this pipeline
-    /// draws into — final target and pass buffers alike — is
-    /// `COLOR_PATH_FORMAT`, so one pipeline covers all of them.
+    /// Every target (final and pass buffers) is `COLOR_PATH_FORMAT`, so one
+    /// pipeline covers all of them.
     pub pipeline: wgpu::RenderPipeline,
     pub bind_group_layout: wgpu::BindGroupLayout,
     /// Uniforms, one slot per pass.
     uniforms: super::pass_uniforms::PassUniforms,
-    /// Sampler — present when shader has textures (input image, pass buffers, or imported)
+    /// Present when the shader has textures (input image, pass buffers, or imported).
     pub sampler: Option<wgpu::Sampler>,
-    /// Whether this shader has an input image binding (i.e. it's a filter)
+    /// Whether this shader has an input image binding (a filter).
     pub has_input_image: bool,
-    /// Number of pass buffer texture bindings
     pub num_pass_buffers: usize,
-    /// Number of imported texture bindings
     pub num_imported_textures: usize,
-    /// Number of preprocessor texture bindings
     pub num_preprocessor_textures: usize,
-    /// Default user params buffer (256 bytes of zeros)
+    /// 256 bytes of zeros.
     pub default_user_params_buffer: wgpu::Buffer,
-    /// The binding index where user params live
     pub user_params_binding: u32,
-    /// The primary format this pipeline was created for
     pub surface_format: wgpu::TextureFormat,
 }
 
@@ -83,16 +75,15 @@ impl UnifiedPipeline {
     /// - `has_input_image`: true for filters (binding for inputImage texture)
     /// - `num_pass_buffers`: number of persistent/pass buffer textures
     /// - `num_imported_textures`: number of ISF IMPORTED image textures
-    /// - `preprocessor_filterable`: one entry per preprocessor texture binding,
-    ///   false for raw-float data payloads the shader reads with `texelFetch`
-    ///   only (`FORMAT: "rgba32float"`), which are not filterable formats
-    /// - `surface_format`: target texture format — always `COLOR_PATH_FORMAT`
+    /// - `preprocessor_filterable`: one entry per preprocessor texture binding;
+    ///   false for `texelFetch`-only float data (`FORMAT: "rgba32float"`)
+    /// - `surface_format`: always `COLOR_PATH_FORMAT`
     ///
     /// # Errors
     ///
     /// Returns an error if the SPIR-V fails to parse, fails naga validation, or
     /// cannot be transpiled to WGSL.
-    // Pipeline construction takes many distinct GPU descriptors; no shared invariant to bundle.
+    // Takes many distinct GPU descriptors with nothing in common to bundle.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         device: &wgpu::Device,
@@ -104,7 +95,7 @@ impl UnifiedPipeline {
         preprocessor_filterable: &[bool],
     ) -> Result<Self> {
         let num_preprocessor_textures = preprocessor_filterable.len();
-        // Convert SPIR-V to WGSL using naga
+        // SPIR-V to WGSL via naga.
         let spirv_bytes: Vec<u8> = spirv.iter().flat_map(|word| word.to_le_bytes()).collect();
 
         let module =
@@ -130,7 +121,6 @@ impl UnifiedPipeline {
             || num_imported_textures > 0
             || num_preprocessor_textures > 0;
 
-        // Build bind group layout entries dynamically
         let mut layout_entries = vec![];
         let mut next_binding: u32 = 0;
 
@@ -149,11 +139,8 @@ impl UnifiedPipeline {
         });
         next_binding += 1;
 
-        // Sampler (only if shader uses textures).
-        //
-        // Always filtering: Rgba16Float is a filterable format, so pass buffers no
-        // longer force NonFiltering/Nearest on every input the way Rgba32Float did.
-        // Multipass shaders keep bilinear filtering. See spec/unified-color-pipeline.md.
+        // Sampler, only if the shader uses textures. Always filtering: every
+        // sampled texture is Rgba16Float, which is filterable.
         let sampler = if has_textures {
             let sampler_type = wgpu::SamplerBindingType::Filtering;
             layout_entries.push(wgpu::BindGroupLayoutEntry {
@@ -179,13 +166,8 @@ impl UnifiedPipeline {
             None
         };
 
-        // Input image texture (for filters).
-        //
-        // Filterable unconditionally: every texture this pipeline samples — input
-        // image, pass buffers, imported images — is now COLOR_PATH_FORMAT
-        // (Rgba16Float), which is a filterable format. This must stay in agreement
-        // with the sampler above; wgpu rejects a filtering sampler paired with a
-        // non-filterable texture at pipeline creation.
+        // Input image texture (for filters). Filterable, to match the sampler:
+        // wgpu rejects a filtering sampler paired with a non-filterable texture.
         if has_input_image {
             layout_entries.push(wgpu::BindGroupLayoutEntry {
                 binding: next_binding,
@@ -230,13 +212,10 @@ impl UnifiedPipeline {
             next_binding += 1;
         }
 
-        // Preprocessor texture bindings (after imported, before user params).
-        //
-        // A non-filterable entry is legal next to the filtering sampler above
-        // as long as the shader never pairs the two: naga lowers `texelFetch`
-        // to a sampler-free image load, so a data payload declared
-        // `FORMAT: "rgba32float"` and read only with `texelFetch` never forms
-        // the pairing wgpu would reject.
+        // Preprocessor textures (after imported, before user params). A
+        // non-filterable entry is valid next to the filtering sampler as long as
+        // the shader reads it only with `texelFetch`, which naga lowers to a
+        // sampler-free load.
         for filterable in preprocessor_filterable {
             layout_entries.push(wgpu::BindGroupLayoutEntry {
                 binding: next_binding,
@@ -271,7 +250,6 @@ impl UnifiedPipeline {
             entries: &layout_entries,
         });
 
-        // Default user params buffer
         let default_user_params = [0u8; 256];
         let default_user_params_buffer =
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -280,7 +258,6 @@ impl UnifiedPipeline {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             });
 
-        // Pipeline layout
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("ISF Unified Pipeline Layout"),
             bind_group_layouts: &[Some(&bind_group_layout)],
@@ -292,10 +269,7 @@ impl UnifiedPipeline {
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/fullscreen.wgsl").into()),
         });
 
-        // Helper to create a render pipeline for a specific format
         let create_pipeline = |format: wgpu::TextureFormat, label: &str| {
-            // Rgba16Float is blendable, so there is no longer a format for which
-            // blending must be disabled.
             let blend_state = Some(wgpu::BlendState::REPLACE);
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
@@ -497,7 +471,7 @@ impl UnifiedPipeline {
         })
     }
 
-    /// Convenience: create bind group for simple generator (no input, no passes, no imports)
+    /// Bind group for a simple generator (no input, passes, or imports).
     pub fn create_bind_group_with_params(
         &self,
         device: &wgpu::Device,

@@ -1,7 +1,5 @@
-//! Keyboard mapping value types: what a key combination is and what it can be
-//! bound to. The binding store and learn logic stay in `internal::keymap`.
-//!
-//! See /spec/ui-engine-boundary.md (WS7).
+//! Keyboard mapping value types. The binding store and learn logic live in
+//! `internal::keymap`.
 
 use serde::{Deserialize, Serialize};
 
@@ -43,8 +41,8 @@ pub enum ActionId {
     CombineSurfaces,
     ToggleMidiLearn,
     ToggleKeyboardLearn,
-    /// Copy, paste, and duplicate the current selection: the deck, channel, or
-    /// effect the bottom bar is already following. See /spec/clipboard.md.
+    /// Copy, paste, and duplicate act on the deck, channel, or effect the
+    /// bottom bar is following.
     Copy,
     Paste,
     Duplicate,

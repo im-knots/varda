@@ -10,13 +10,11 @@ type MakeModAssign<'a> = &'a dyn Fn(&str, &str) -> EngineCommand;
 /// Callback that builds a command from a `param_path` alone.
 type MakeParamCommand<'a> = &'a dyn Fn(&str) -> EngineCommand;
 
-/// The commands the 〰 dropdown can emit. Bundled because only the caller knows
-/// how to build a parameter's full target path, and they always travel together.
+/// The commands the 〰 dropdown can emit. Bundled because only the caller can
+/// build a parameter's full target path.
 struct ModMenu<'a> {
     assign: MakeModAssign<'a>,
-    /// Detach one source, leaving any others on the parameter alone. Without it
-    /// the checklist could only ever be ticked, and un-ticking would have to go
-    /// through "Clear all" and lose the other sources with it.
+    /// Detach one source and leave any others on the parameter.
     unassign: MakeModAssign<'a>,
     remove: MakeParamCommand<'a>,
     automate: Option<MakeParamCommand<'a>>,
@@ -24,30 +22,24 @@ struct ModMenu<'a> {
 
 /// One line of the 〰 checklist.
 struct ModRow<'a> {
-    /// Index in the *unfiltered* source list, which picks the modulator's colour
-    /// and number. Those have to match the modulation panel's cards.
+    /// Index in the unfiltered source list, which picks the modulator's color and
+    /// number to match the modulation panel's cards.
     idx: usize,
     entry: &'a ModSourceUIEntry,
     assigned: bool,
 }
 
-/// One entry of a 〰 checklist, in the modulator's own colour.
-///
-/// Shared with the mod-on-mod menu in the modulation panel so the two cannot
-/// disagree about what a tick looks like.
+/// One entry of a 〰 checklist, in the modulator's color. Shared with the
+/// mod-on-mod menu in the modulation panel.
 pub fn mod_tick_label(assigned: bool, label: &str, color: egui::Color32) -> egui::RichText {
     egui::RichText::new(format!("{} {label}", if assigned { "☑" } else { "☐" })).color(color)
 }
 
-/// Which sources the checklist lists, and which of them are ticked.
+/// Which sources the checklist lists, and which are ticked.
 ///
-/// An automation curve belongs to the one parameter it was drawn for, so an
-/// unassigned one is not on offer: sharing a shape between parameters is copy
-/// and paste between lanes, which leaves each parameter its own curve to edit.
-/// See /spec/automation.md § One envelope per parameter. An *assigned* one is
-/// still listed, because a parameter driven by a lane would otherwise show an
-/// empty checklist under a coloured ghost, which is the confusion this list
-/// exists to remove.
+/// An unassigned automation curve is not offered, since a curve belongs to the
+/// one parameter it was drawn for. An assigned one is listed, or a parameter
+/// driven by a lane would show an empty checklist under a colored ghost.
 fn mod_rows<'a>(
     modulation_sources: &'a [ModSourceUIEntry],
     assignments: &[ModAssignmentUI],
@@ -67,16 +59,13 @@ fn mod_rows<'a>(
         .collect()
 }
 
-/// The 〰 dropdown on a modulatable parameter: a checklist of every source, with
-/// the ones driving this parameter ticked, plus an automation lane and a clear.
+/// The 〰 dropdown on a modulatable parameter: a checklist of every source with
+/// those driving this parameter ticked, plus an automation lane and a clear.
 ///
-/// A checklist rather than a list of assign actions because a parameter can have
-/// several sources stacked on it, and the affordances that hint at that only
-/// carry one: the ghost line and the coloured label both take the colour of the
-/// *first* assignment, so two sources and one source look identical. Ticks are
-/// the only place the whole set is visible.
+/// A checklist because several sources can be stacked on one parameter, while
+/// the ghost line and colored label only show the first assignment's color.
 ///
-/// Shared by the deck and effect param renderers so the two cannot drift.
+/// Shared by the deck and effect param renderers.
 fn modulation_dropdown(
     ui: &mut egui::Ui,
     id_salt: String,
@@ -93,8 +82,7 @@ fn modulation_dropdown(
         automate: automate_fn,
     } = *menu;
     let rows = mod_rows(modulation_sources, assignments);
-    // Automation needs no existing source, so the menu is worth showing even
-    // when nothing has been created yet.
+    // Automation needs no existing source, so the menu shows even with none.
     if rows.is_empty() && automate_fn.is_none() {
         return;
     }
@@ -108,8 +96,7 @@ fn modulation_dropdown(
     let response = egui::ComboBox::from_id_salt(id_salt)
         .selected_text("〰")
         .width(30.0)
-        // Ticking one source should not dismiss the list. Stacking two sources
-        // is one decision, and closing after each would make it two visits.
+        // Ticking a source keeps the list open so several can be stacked.
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show_ui(ui, |ui| {
             if !rows.is_empty() {
@@ -142,8 +129,8 @@ fn modulation_dropdown(
             {
                 commands.push(automate(param_name));
             }
-            // Only worth offering once there is something to clear, and it says
-            // "all" because a checklist makes single removal the obvious gesture.
+            // Shown only when there is something to clear. "All" because unticking is
+            // the single-removal gesture.
             if !active.is_empty() {
                 ui.separator();
                 if ui.button("Clear all").clicked() {
@@ -153,8 +140,7 @@ fn modulation_dropdown(
         })
         .response;
 
-    // Readable without opening anything, which is the case that matters on a
-    // dark stage. The colours cannot say how many; the names can.
+    // Hover text names the active sources; colors alone can't show how many.
     response.on_hover_text(if active.is_empty() {
         "No modulation assigned".to_string()
     } else {
@@ -162,11 +148,9 @@ fn modulation_dropdown(
     });
 }
 
-/// The 〰 dropdown for a parameter that is a control of its own rather than one
-/// row of a param list, addressed by its full modulation key.
-///
-/// The fader panels have no `ParamUIInfo` to hang a menu off, so they name the
-/// key directly. See /spec/modulation.md § Parameter Addressing.
+/// The 〰 dropdown for a standalone control rather than a param-list row,
+/// addressed by its full modulation key. Used by the fader panels, which have
+/// no `ParamUIInfo`.
 pub fn modulation_menu_for_key<S: std::hash::BuildHasher>(
     ui: &mut egui::Ui,
     id_salt: String,
@@ -207,9 +191,8 @@ pub fn modulation_menu_for_key<S: std::hash::BuildHasher>(
     );
 }
 
-/// Build a set of prefixes whose params should be hidden.
-/// Convention: a bool param named `<prefix>_mode` controls visibility of params
-/// whose name starts with `<prefix>_`. When the bool is false, those params are hidden.
+/// Prefixes whose params are hidden. A bool param named `<prefix>_mode` hides
+/// params starting with `<prefix>_` while it is false.
 fn hidden_prefixes(params: &[ParamUIInfo]) -> Vec<String> {
     let mut prefixes = Vec::new();
     for p in params {
@@ -222,19 +205,17 @@ fn hidden_prefixes(params: &[ParamUIInfo]) -> Vec<String> {
     prefixes
 }
 
-/// Check if a param name should be hidden based on `_mode` toggle conventions.
+/// Whether a param is hidden by a `_mode` toggle.
 fn is_hidden(name: &str, hidden: &[String]) -> bool {
-    // Don't hide the _mode toggle itself
+    // The _mode toggle itself is never hidden.
     if name.ends_with("_mode") {
         return false;
     }
     hidden.iter().any(|prefix| name.starts_with(prefix))
 }
 
-/// The named groups of a parameter list, in the order their first member appears.
-///
-/// First appearance is the only ordering rule, so an author controls section order
-/// by ordering `INPUTS` and there is no second mechanism to disagree with it.
+/// Named groups of a parameter list, in order of first member. Authors set
+/// section order by ordering `INPUTS`.
 fn named_group_order<'a>(params: &[&'a ParamUIInfo]) -> Vec<&'a str> {
     let mut groups: Vec<&str> = Vec::new();
     for name in params.iter().filter_map(|p| p.group.as_deref()) {
@@ -245,9 +226,8 @@ fn named_group_order<'a>(params: &[&'a ParamUIInfo]) -> Vec<&'a str> {
     groups
 }
 
-/// The section headers a parameter list will render, for callers that need to name
-/// a group rather than draw it — the exploration controls scope a randomize or a
-/// mutate to one of these. See /spec/parameter-exploration.md.
+/// The section headers a parameter list renders, for callers that name a group
+/// instead of drawing it, such as exploration scoped to one group.
 pub fn param_groups(params: &[ParamUIInfo]) -> Vec<&str> {
     let hidden = hidden_prefixes(params);
     let visible: Vec<&ParamUIInfo> = params
@@ -260,12 +240,10 @@ pub fn param_groups(params: &[ParamUIInfo]) -> Vec<&str> {
 /// Section a parameter list by the shader's `GROUP` keys, calling `row` for each
 /// visible parameter.
 ///
-/// Ungrouped parameters come first with no header and no collapse, so a shader can
-/// keep its performance controls permanently in view. Named groups follow in
-/// first-appearance order, the first open and the rest closed, which is what keeps
-/// a fifty-parameter shader scannable. A shader declaring no groups renders as one
-/// flat list, exactly as every shader did before groups existed.
-/// See /spec/parameter-inspector.md.
+/// Ungrouped parameters come first, with no header or collapse, so a shader can
+/// keep performance controls in view. Named groups follow in first-appearance
+/// order, the first open and the rest closed. A shader with no groups renders
+/// as one flat list.
 fn render_grouped(
     ui: &mut egui::Ui,
     params: &[ParamUIInfo],
@@ -295,10 +273,8 @@ fn render_grouped(
     }
 }
 
-/// A `long` (enum) parameter: a combo over its declared `LABELS`, or a stepper when
-/// the shader declares no options. Without this the input is invisible in the
-/// inspector even though its value reaches the GPU.
-/// See /spec/parameter-inspector.md.
+/// A `long` (enum) parameter: a combo over its declared `LABELS`, or a stepper
+/// when the shader declares no options.
 fn render_long_row(
     ui: &mut egui::Ui,
     param: &ParamUIInfo,
@@ -342,9 +318,8 @@ fn render_long_row(
     });
 }
 
-/// A `point2D` parameter as paired numeric drags. ISF declares one `MIN` and `MAX`
-/// for the input rather than one per axis, so both axes share an extent and this is
-/// deliberately not an XY pad. See /spec/parameter-inspector.md.
+/// A `point2D` parameter as paired numeric drags, not an XY pad: ISF declares
+/// one `MIN` and `MAX` for both axes.
 fn render_point2d_row(
     ui: &mut egui::Ui,
     param: &ParamUIInfo,
@@ -371,8 +346,8 @@ fn render_point2d_row(
     });
 }
 
-/// What a color or point shader parameter needs to offer a learn target and
-/// a modulation menu per channel or axis.
+/// What a color or point shader parameter needs for a learn target and a
+/// modulation menu per channel or axis.
 struct ComponentMenus<'a, S> {
     id_prefix: &'a str,
     midi_learn_path_prefix: Option<&'a str>,
@@ -386,10 +361,8 @@ struct ComponentMenus<'a, S> {
     menu: Option<ModMenu<'a>>,
 }
 
-/// Small `r g b a` or `x y` labels after a color or point parameter. Each is
-/// a learn target and has its own 〰 menu, at the parameter's component path
-/// (`.../param/tint/r`). See /spec/deck-source-providers.md § One component
-/// vocabulary.
+/// Small `r g b a` or `x y` labels after a color or point parameter. Each is a
+/// learn target with its own 〰 menu at the component path (`.../param/tint/r`).
 fn component_menus<S: std::hash::BuildHasher>(
     ui: &mut egui::Ui,
     param_name: &str,
@@ -451,8 +424,8 @@ fn component_menus<S: std::hash::BuildHasher>(
     }
 }
 
-/// Render parameter controls (sliders, checkboxes, color pickers) for a list of params.
-/// Returns any param updates generated by user interaction.
+/// Parameter controls (sliders, checkboxes, color pickers) for a list of params.
+/// Returns any param updates from user interaction.
 // UI render fn taking many independent egui state/handle args; no shared invariant to bundle.
 #[allow(clippy::too_many_arguments)]
 pub fn render_params<S: std::hash::BuildHasher>(
@@ -498,11 +471,10 @@ pub fn render_params<S: std::hash::BuildHasher>(
     };
     render_grouped(ui, params, id_prefix, &mut |ui, param| {
         let label = param.label.as_ref().unwrap_or(&param.name);
-        // Check if this param is modulated and get color info
         let mod_key = format!("{mod_param_prefix}/{}", param.name);
         let assignments = mod_assignments.get(&mod_key);
         let is_modulated = assignments.is_some_and(|a| !a.is_empty());
-        // Pick the primary modulator color (first assignment)
+        // Primary modulator color: the first assignment.
         let mod_label_color = assignments.and_then(|a| a.first()).map(|a| {
             let color_idx = modulation_sources
                 .iter()
@@ -515,13 +487,12 @@ pub fn render_params<S: std::hash::BuildHasher>(
                 let min = param.min.unwrap_or(0.0);
                 let max = param.max.unwrap_or(1.0);
                 ui.horizontal(|ui| {
-                    // Color-code label if modulated
                     if let Some(color) = mod_label_color {
                         ui.label(egui::RichText::new(label).small().color(color));
                     } else {
                         ui.label(egui::RichText::new(label).small());
                     }
-                    // Render slider — in learn mode, disable mouse interaction via a scope
+                    // In learn mode, disable slider interaction via a scope.
                     let any_learn_active = midi_learn_active || keyboard_learn_active;
                     let slider_rect = if any_learn_active {
                         let inner = ui.scope(|ui| {
@@ -532,8 +503,8 @@ pub fn render_params<S: std::hash::BuildHasher>(
                     } else {
                         let slider_response =
                             ui.add(egui::Slider::new(&mut v, min..=max).show_value(false));
-                        // A held slider drag is a single undo gesture (collapsed
-                        // by the runner's `gesture_active` edge).
+                        // A held slider drag is one undo gesture, collapsed by the runner's
+                        // `gesture_active` edge.
                         if slider_response.dragged() {
                             *gesture_active = true;
                         }
@@ -542,7 +513,7 @@ pub fn render_params<S: std::hash::BuildHasher>(
                         }
                         slider_response.rect
                     };
-                    // MIDI learn mode: glow + click overlay on the (now-enabled) outer ui
+                    // MIDI learn: glow and click overlay on the enabled outer ui.
                     if midi_learn_active && let Some(prefix) = midi_learn_path_prefix {
                         let path = format!("{}/param/{}", prefix, param.name);
                         let is_target = midi_learn_target.is_some_and(|t| t == path);
@@ -557,7 +528,7 @@ pub fn render_params<S: std::hash::BuildHasher>(
                             commands.push(EngineCommand::MidiLearnSelect { path });
                         }
                     }
-                    // Keyboard learn mode: orange glow + click overlay
+                    // Keyboard learn: orange glow and click overlay.
                     if keyboard_learn_active && let Some(prefix) = midi_learn_path_prefix {
                         let path = format!("{}/param/{}", prefix, param.name);
                         let is_target = keyboard_learn_target.is_some_and(|t| t == path);
@@ -574,7 +545,7 @@ pub fn render_params<S: std::hash::BuildHasher>(
                             });
                         }
                     }
-                    // Draw modulation ghost indicator on top of slider
+                    // Modulation ghost indicator over the slider.
                     if is_modulated && let Some(assigns) = assignments {
                         let mut total_offset = 0.0f32;
                         for a in assigns {
@@ -582,14 +553,13 @@ pub fn render_params<S: std::hash::BuildHasher>(
                                 mod_current_values.get(&a.source_id).copied().unwrap_or(0.0)
                                     * a.amount;
                         }
-                        // Scale by param range to match GPU-side modulation
+                        // Scale by the param range to match GPU-side modulation.
                         let range = max - min;
                         let modulated_val = (v + total_offset * range).clamp(min, max);
                         let frac = (modulated_val - min) / (max - min);
                         let x = slider_rect.left() + frac * slider_rect.width();
                         let color = mod_label_color.unwrap_or(egui::Color32::YELLOW);
                         let painter = ui.painter();
-                        // Vertical line at modulated value position
                         painter.line_segment(
                             [
                                 egui::pos2(x, slider_rect.top()),
@@ -674,7 +644,7 @@ pub fn render_params<S: std::hash::BuildHasher>(
     });
 }
 
-/// Render effect parameter controls with optional modulation assignment
+/// Effect parameter controls with optional modulation assignment.
 // UI render fn taking many independent egui state/handle args; no shared invariant to bundle.
 #[allow(clippy::too_many_arguments)]
 pub fn render_effect_params<S: std::hash::BuildHasher>(
@@ -740,7 +710,7 @@ pub fn render_effect_params<S: std::hash::BuildHasher>(
                     } else {
                         ui.label(egui::RichText::new(label).small().weak());
                     }
-                    // Render slider — in learn mode, disable mouse interaction via a scope
+                    // In learn mode, disable slider interaction via a scope.
                     let any_learn_active = midi_learn_active || keyboard_learn_active;
                     let slider_rect = if any_learn_active {
                         let inner = ui.scope(|ui| {
@@ -751,8 +721,8 @@ pub fn render_effect_params<S: std::hash::BuildHasher>(
                     } else {
                         let slider_resp =
                             ui.add(egui::Slider::new(&mut v, min..=max).show_value(false));
-                        // A held slider drag is a single undo gesture (collapsed
-                        // by the runner's `gesture_active` edge).
+                        // A held slider drag is one undo gesture, collapsed by the runner's
+                        // `gesture_active` edge.
                         if slider_resp.dragged() {
                             *gesture_active = true;
                         }
@@ -761,7 +731,7 @@ pub fn render_effect_params<S: std::hash::BuildHasher>(
                         }
                         slider_resp.rect
                     };
-                    // MIDI learn mode: glow + click overlay
+                    // MIDI learn: glow and click overlay.
                     if midi_learn_active && let Some(prefix) = midi_learn_path_prefix {
                         let path = format!("{}/param/{}", prefix, param.name);
                         let is_target = midi_learn_target.is_some_and(|t| t == path);
@@ -776,7 +746,7 @@ pub fn render_effect_params<S: std::hash::BuildHasher>(
                             commands.push(EngineCommand::MidiLearnSelect { path });
                         }
                     }
-                    // Keyboard learn mode: orange glow + click overlay
+                    // Keyboard learn: orange glow and click overlay.
                     if keyboard_learn_active && let Some(prefix) = midi_learn_path_prefix {
                         let path = format!("{}/param/{}", prefix, param.name);
                         let is_target = keyboard_learn_target.is_some_and(|t| t == path);
@@ -793,7 +763,7 @@ pub fn render_effect_params<S: std::hash::BuildHasher>(
                             });
                         }
                     }
-                    // Draw modulation ghost indicator
+                    // Modulation ghost indicator.
                     if is_modulated && let Some(assigns) = assignments {
                         let mut total_offset = 0.0f32;
                         for a in assigns {
@@ -801,7 +771,7 @@ pub fn render_effect_params<S: std::hash::BuildHasher>(
                                 mod_current_values.get(&a.source_id).copied().unwrap_or(0.0)
                                     * a.amount;
                         }
-                        // Scale by param range to match GPU-side modulation
+                        // Scale by the param range to match GPU-side modulation.
                         let range = max - min;
                         let modulated_val = (v + total_offset * range).clamp(min, max);
                         let frac = (modulated_val - min) / (max - min);
@@ -892,7 +862,7 @@ pub fn render_effect_params<S: std::hash::BuildHasher>(
     });
 }
 
-/// Render audio level bars
+/// Audio level bars.
 pub fn render_audio_levels(ui: &mut egui::Ui, audio: &AudioUIData) {
     if audio.enabled {
         ui.horizontal(|ui| {
@@ -938,7 +908,7 @@ pub fn render_audio_levels(ui: &mut egui::Ui, audio: &AudioUIData) {
     }
 }
 
-/// Draw a pulsing purple glow around a rect to indicate it's a MIDI-learnable target.
+/// Pulsing purple glow marking a MIDI-learnable target.
 pub fn draw_midi_learn_glow(ui: &egui::Ui, rect: egui::Rect) {
     let painter = ui.painter();
     let glow_color = egui::Color32::from_rgba_unmultiplied(180, 80, 220, 80);
@@ -951,7 +921,7 @@ pub fn draw_midi_learn_glow(ui: &egui::Ui, rect: egui::Rect) {
     );
 }
 
-/// Draw a brighter glow for the currently selected MIDI learn target.
+/// Brighter glow for the selected MIDI learn target.
 pub fn draw_midi_learn_selected(ui: &egui::Ui, rect: egui::Rect) {
     let painter = ui.painter();
     let glow_color = egui::Color32::from_rgba_unmultiplied(255, 100, 50, 120);
@@ -964,7 +934,7 @@ pub fn draw_midi_learn_selected(ui: &egui::Ui, rect: egui::Rect) {
     );
 }
 
-/// Draw an orange glow around a rect for keyboard-learnable target.
+/// Orange glow marking a keyboard-learnable target.
 pub fn draw_keyboard_learn_glow(ui: &egui::Ui, rect: egui::Rect) {
     let painter = ui.painter();
     let glow_color = egui::Color32::from_rgba_unmultiplied(255, 165, 0, 80);
@@ -977,7 +947,7 @@ pub fn draw_keyboard_learn_glow(ui: &egui::Ui, rect: egui::Rect) {
     );
 }
 
-/// Draw a brighter orange glow for the currently selected keyboard learn target.
+/// Brighter orange glow for the selected keyboard learn target.
 pub fn draw_keyboard_learn_selected(ui: &egui::Ui, rect: egui::Rect) {
     let painter = ui.painter();
     let glow_color = egui::Color32::from_rgba_unmultiplied(255, 120, 0, 120);
@@ -990,10 +960,9 @@ pub fn draw_keyboard_learn_selected(ui: &egui::Ui, rect: egui::Rect) {
     );
 }
 
-/// A rotary knob for a normalized `0.0..=1.0` value. Vertical drag adjusts it
-/// (drag **up** = increase, down = decrease); the arc and pointer fill in the
-/// `accent` color. Returns the response with `.changed()` set on movement, so
-/// callers can emit a live value action and attach a MIDI-learn overlay.
+/// Rotary knob for a normalized `0.0..=1.0` value. Dragging up increases it;
+/// the arc and pointer use `accent`. The response has `.changed()` set on
+/// movement.
 pub fn render_knob(
     ui: &mut egui::Ui,
     value: &mut f32,
@@ -1009,15 +978,15 @@ pub fn render_knob(
     if response.dragged() {
         let dy = response.drag_delta().y;
         if dy != 0.0 {
-            // 200px of vertical travel spans the full range — precise but reachable.
+            // 200px of vertical travel spans the full range.
             *value = (*value - dy / 200.0).clamp(0.0, 1.0);
             response.mark_changed();
         }
     }
 
     if ui.is_rect_visible(rect) {
-        // The knob sweeps 270° clockwise from lower-left (min) to lower-right (max),
-        // passing through the top. Screen space is y-down, so angles grow clockwise.
+        // Sweeps 270° clockwise from lower-left (min) through the top to lower-right
+        // (max). Screen space is y-down, so angles grow clockwise.
         const START_DEG: f32 = 135.0;
         const SWEEP_DEG: f32 = 270.0;
 
@@ -1025,7 +994,6 @@ pub fn render_knob(
         let center = rect.center();
         let radius = diameter * 0.5 - 2.0;
 
-        // Body
         painter.circle_filled(center, radius, egui::Color32::from_rgb(28, 28, 38));
         painter.circle_stroke(
             center,
@@ -1038,7 +1006,7 @@ pub fn render_knob(
         let end = (START_DEG + SWEEP_DEG * v).to_radians();
         let on_arc = |a: f32, r: f32| center + egui::vec2(a.cos(), a.sin()) * r;
 
-        // Full track (faint) then the filled value arc on top.
+        // Faint full track, then the value arc on top.
         let arc_r = radius - 2.0;
         let track_end = (START_DEG + SWEEP_DEG).to_radians();
         let track: Vec<egui::Pos2> = (0..=48)
@@ -1059,9 +1027,8 @@ pub fn render_knob(
             .collect();
         painter.add(egui::Shape::line(fill, egui::Stroke::new(2.5_f32, accent)));
 
-        // Modulation ghost: a marker at the effective (base + offset) value in
-        // the modulator's color, so a modulated knob visibly tracks the source
-        // (mirrors the ghost line on modulated param sliders).
+        // Modulation ghost: a marker at the effective (base + offset) value in the
+        // modulator's color, like the ghost line on param sliders.
         if let Some((gv, gcolor)) = ghost {
             let gend = (START_DEG + SWEEP_DEG * gv.clamp(0.0, 1.0)).to_radians();
             painter.line_segment(
@@ -1159,9 +1126,8 @@ mod tests {
 
     #[test]
     fn group_order_ignores_hidden_params() {
-        // Grouping filters by the `_mode` convention before ordering, so a group
-        // whose only members are hidden must not leave an empty header behind —
-        // nor a scope in the exploration controls that addresses nothing.
+        // Groups are filtered by the `_mode` convention before ordering, so a group
+        // whose members are all hidden leaves no empty header and no exploration scope.
         let mut toggle = param_in("detail_mode", None);
         toggle.value = ParamValue::Bool(false);
         let params = [
@@ -1172,8 +1138,8 @@ mod tests {
         assert_eq!(param_groups(&params), vec!["Look"]);
     }
 
-    /// Render `params` through `render_grouped`, each row a bare label so a query
-    /// for a parameter's name answers "is this control in view".
+    /// Render `params` through `render_grouped` with each row a bare label, so a
+    /// query by name tells whether the control is in view.
     fn grouped_harness(params: Vec<ParamUIInfo>) -> egui_kittest::Harness<'static> {
         let mut harness = egui_kittest::Harness::builder()
             .with_size(egui::vec2(300.0, 600.0))
@@ -1310,8 +1276,8 @@ mod tests {
         );
     }
 
-    /// Automation needs no existing source, so the menu has to be reachable on a
-    /// scene that has never created a modulator.
+    /// Automation needs no existing source, so the menu is reachable in a scene
+    /// with no modulators.
     #[test]
     fn the_menu_opens_with_no_modulation_sources_at_all() {
         let commands = click_in_dropdown(&[], &[], true, "＋ Automation lane");
@@ -1332,8 +1298,7 @@ mod tests {
         )));
     }
 
-    /// The point of the checklist: a source already on the parameter reads as
-    /// ticked, so the set driving it is legible without opening anything else.
+    /// A source already on the parameter shows as ticked.
     #[test]
     fn an_assigned_source_reads_as_ticked() {
         in_dropdown(
@@ -1353,8 +1318,7 @@ mod tests {
         );
     }
 
-    /// Un-ticking detaches only that source. Two stacked modulators, and
-    /// removing one has to leave the other driving the parameter.
+    /// Unticking one of two stacked modulators detaches only that one.
     #[test]
     fn unticking_a_source_detaches_only_that_one() {
         let commands = click_in_dropdown(
@@ -1393,8 +1357,7 @@ mod tests {
         )));
     }
 
-    /// Nothing to clear, so the entry stays out of the way rather than sitting
-    /// there as a no-op under a list of empty boxes.
+    /// With nothing assigned, the clear entry is hidden.
     #[test]
     fn an_unmodulated_parameter_offers_no_clear() {
         in_dropdown(&[lfo_entry("lfo1")], &[], true, &|harness| {
@@ -1402,16 +1365,15 @@ mod tests {
         });
     }
 
-    /// Envelopes are still named for the lanes and cards that list them, even
-    /// though this menu does not offer them.
+    /// Envelopes are still named for the lanes and cards that list them, though
+    /// this menu does not offer them.
     #[test]
     fn an_envelope_is_labelled_as_automation() {
         assert_eq!(envelope_entry("e1").label(2), "Automation 3");
     }
 
-    /// A curve drives the one parameter it was drawn for. Offering it here would
-    /// let two parameters share a source, and then editing either lane would
-    /// silently rewrite the other.
+    /// An unassigned curve is not offered; sharing it would make editing one lane
+    /// rewrite another parameter.
     #[test]
     fn an_automation_curve_is_not_offered_as_a_source() {
         in_dropdown(
@@ -1431,9 +1393,8 @@ mod tests {
         );
     }
 
-    /// A lane already drives this parameter, so it is listed even though an
-    /// unassigned one would not be. Leaving it out would show an empty checklist
-    /// under the coloured ghost the lane is drawing.
+    /// A lane already driving this parameter is listed, or the checklist would be
+    /// empty under the lane's colored ghost.
     #[test]
     fn an_assigned_curve_is_listed_so_the_ghost_has_an_owner() {
         in_dropdown(
@@ -1446,8 +1407,8 @@ mod tests {
         );
     }
 
-    /// The menu still opens for a parameter in a scene whose only sources are
-    /// curves, because drawing a new one has to stay reachable.
+    /// The menu still opens when the scene's only sources are curves, so drawing a
+    /// new one stays reachable.
     #[test]
     fn a_scene_of_only_curves_still_offers_a_new_lane() {
         let commands =

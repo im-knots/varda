@@ -1,10 +1,7 @@
-//! The cue bank: the marks from the arrangement's ruler, as pads at the desk.
+//! Cue bank: the arrangement's cue points as pads in Performance mode.
 //!
-//! A cue is marked against the timeline but wanted under the lights, and nobody
-//! performs from Arrangement mode. The bank is drawn from the cue list every
-//! frame rather than owning buttons of its own, so a rename, a move, or a delete
-//! needs no reconciliation. See /spec/arrangement.md § The cue bank in
-//! Performance mode.
+//! Drawn from the cue list every frame, so renames, moves and deletes need no
+//! reconciliation.
 
 use super::super::{UIActions, UIData, widgets};
 use crate::arrangement::Cue;
@@ -12,14 +9,14 @@ use crate::engine::EngineCommand;
 use crate::engine::value::param::ParamAddress;
 use crate::transport::TransportSource;
 
-/// The ruler's cue colour, so a pad and its mark read as the same thing.
+/// Same color as the ruler's cue marks.
 const COLOR: egui::Color32 = super::arrangement::CUE_COLOR;
 
 const COLUMNS: usize = 2;
 const BUTTON_HEIGHT: f32 = 24.0;
 const GAP: f32 = 4.0;
 
-/// Two buttons a row, in the order the ruler draws them.
+/// Two buttons per row, in ruler order.
 pub(super) fn render_cue_bank(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     let cues: &[Cue] = data
         .arrangement
@@ -44,8 +41,7 @@ pub(super) fn render_cue_bank(ui: &mut egui::Ui, data: &UIData, actions: &mut UI
         );
     });
 
-    // The position belongs to the timecode master while chasing, so the pads
-    // are shown refusing rather than failing under the hand.
+    // While chasing timecode the master owns the position, so pads show disabled.
     let live = data.transport.source == TransportSource::Internal;
     let width = ((ui.available_width() - GAP * (COLUMNS as f32 - 1.0)) / COLUMNS as f32).max(24.0);
 
@@ -102,8 +98,7 @@ fn render_pad(
     learn_overlay(ui, response.rect, cue, data, actions);
 }
 
-/// The same glow every other mappable control wears, over the path a control
-/// surface reaches this cue by.
+/// MIDI-learn highlight for this cue's control-surface address.
 fn learn_overlay(
     ui: &egui::Ui,
     rect: egui::Rect,

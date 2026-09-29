@@ -1,9 +1,6 @@
-//! Tier 3 render-math invariants — see /spec/render-testing.md.
-//!
-//! Property-based tests for the pure warp math that feeds the GPU vertex
-//! shader. These run everywhere (no GPU needed). The input space is the unit
-//! square perturbed by bounded per-corner offsets — the real-world shape of a
-//! corner-pin warp — which keeps the DLT solve non-degenerate.
+//! Property tests for the warp math that feeds the vertex shader. No GPU
+//! needed. Inputs are the unit square with bounded per-corner offsets, the
+//! shape of a real corner-pin warp, which keeps the DLT solve non-degenerate.
 
 use proptest::prelude::*;
 use varda::surface::warp::compute_forward_homography;
@@ -12,7 +9,7 @@ const UNIT_SQUARE: [[f32; 2]; 4] = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.
 
 /// Apply a packed forward homography (12 floats, row-major with per-row padding)
 /// to a 2D point in homogeneous space.
-// h/p/x/y/w are the standard symbols for homogeneous-coordinate math.
+// Standard symbols for homogeneous-coordinate math.
 #[allow(clippy::many_single_char_names)]
 fn apply(h: &[f32; 12], p: [f32; 2]) -> [f32; 2] {
     let (x, y) = (p[0], p[1]);
@@ -34,8 +31,8 @@ fn perturbed_quad(offs: [f32; 8]) -> [[f32; 2]; 4] {
 }
 
 proptest! {
-    /// The forward homography must map the source corners exactly onto the
-    /// destination corners (this is the defining property of the DLT solve).
+    /// The forward homography maps the source corners onto the destination
+    /// corners.
     #[test]
     fn homography_maps_src_corners_to_dst(
         offs in proptest::array::uniform8(-0.25f32..0.25f32)
@@ -51,8 +48,8 @@ proptest! {
         }
     }
 
-    /// forward(src→dst) followed by forward(dst→src) returns the corners to
-    /// their originals — the warp is invertible.
+    /// forward(src→dst) then forward(dst→src) returns the corners to their
+    /// originals.
     #[test]
     fn homography_forward_then_inverse_is_identity(
         offs in proptest::array::uniform8(-0.25f32..0.25f32)

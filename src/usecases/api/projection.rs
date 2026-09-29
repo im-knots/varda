@@ -1,7 +1,5 @@
-//! Projection layer — transforms `EngineState` into API response DTOs.
-//!
-//! Pure functions, no HTTP/axum dependency. This is the API consumer's
-//! equivalent of `usecases::ui::build_ui_data()` in the UI consumer.
+//! Turns `EngineState` into API response DTOs. No HTTP or axum dependency;
+//! the API's counterpart of `usecases::ui::build_ui_data()`.
 
 use crate::app::publish::{PublishedState, StatePublication};
 use crate::engine::types::{
@@ -395,9 +393,8 @@ pub(crate) mod tests {
         assert!(find_output(&state, "nonexistent").is_none());
     }
 
-    /// Co-equal consumer parity: the serialized output snapshot must expose the
-    /// selected audio device (via `target`) and live passthrough health so an
-    /// API client can read back what the GUI shows.
+    /// The output snapshot exposes the audio device (via `target`) and
+    /// passthrough health, as the GUI shows.
     #[test]
     fn test_output_snapshot_exposes_audio_passthrough() {
         let snap = OutputWindowSnapshot {

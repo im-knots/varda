@@ -2,7 +2,7 @@
 use anyhow::Result;
 use wgpu::util::DeviceExt;
 
-/// Uniform buffer for HAP convert shader — 32 bytes (8 x f32).
+/// Uniform buffer for the HAP convert shader: 32 bytes (8 x f32).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct HapConvertParams {
@@ -22,26 +22,22 @@ pub struct HapConvertPipeline {
 }
 
 impl HapConvertPipeline {
-    /// Create the HAP colour-conversion pipeline for the given target format.
+    /// Create the HAP color-conversion pipeline for the given target format.
     ///
     /// # Errors
     ///
-    /// Never returns `Err` today: every wgpu resource here is created
-    /// infallibly (device validation failures surface on the device's error
-    /// scope instead). The `Result` keeps the constructor signature uniform
-    /// with the other pipelines so callers can `?` it.
+    /// Never returns `Err`; validation failures surface on the device's error
+    /// scope. The `Result` matches the other pipeline constructors.
     pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Result<Self> {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("HAP Convert Bind Group Layout"),
             entries: &[
-                // Sampler
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
-                // Color texture
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -52,7 +48,6 @@ impl HapConvertPipeline {
                     },
                     count: None,
                 },
-                // Params uniform
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -63,7 +58,7 @@ impl HapConvertPipeline {
                     },
                     count: None,
                 },
-                // Alpha texture (always bound, even if unused — use a dummy 1x1)
+                // Alpha texture: always bound, a dummy 1x1 when unused.
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,

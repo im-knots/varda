@@ -11,11 +11,10 @@ use crate::params::ParamValue;
 
 /// Copy, duplicate, paste, and remove, on any effect card in any chain.
 ///
-/// `card` must be the response of a *scope* wrapping the card rather than the
-/// card's own `Frame` response. A `Ui` registers itself before its contents, so
-/// its rect loses hit-test ties to the checkboxes and sliders inside it; a
-/// `Frame` registers after, so making that one sense clicks would swallow every
-/// click meant for a parameter.
+/// `card` must be the response of a scope wrapping the card, not the card's
+/// `Frame`. A `Ui` registers before its contents, so it loses hit-test ties to
+/// the widgets inside; a `Frame` registers after, so sensing clicks on it would
+/// swallow clicks meant for parameters.
 pub(super) fn effect_context_menu(
     card: &egui::Response,
     data: &UIData,
@@ -68,9 +67,7 @@ pub(super) fn render_master_effect_detail(
                         let eff_uuid_master_automate = eff_uuid.clone();
                         render_effect_drop_zone(ui, "master", eff_idx);
 
-                        // A scope, not the Frame, because a `Ui` registers itself
-                        // before its contents and so loses hit-test ties to the
-                        // parameter widgets inside the card.
+                        // A scope, not the Frame: see `effect_context_menu`.
                         let card = egui::UiBuilder::new().sense(egui::Sense::click());
                         let card_scope = ui.scope_builder(card, |ui| {
                             egui::Frame::default()
@@ -92,7 +89,6 @@ pub(super) fn render_master_effect_detail(
                                         })
                                         .show(ui, |ui| {
                                             ui.horizontal(|ui| {
-                                                // Drag handle
                                                 render_effect_drag_handle(
                                                     ui,
                                                     EffectDrag::Master(eff_idx),
@@ -212,13 +208,13 @@ pub(super) fn render_master_effect_detail(
                         ui.separator();
                     }
 
-                    // Drop zone after last effect (for reordering)
+                    // Drop zone after the last effect, for reordering.
                     if !data.master_effect_info.is_empty() {
                         let num_effects = data.master_effect_info.len();
                         render_effect_drop_zone(ui, "master", num_effects);
                     }
 
-                    // Remaining space: always present drop target
+                    // Drop target over the remaining space.
                     let has_fx_drag = egui::DragAndDrop::payload::<LibraryDrag>(ui.ctx())
                         .is_some_and(|p| matches!(&*p, LibraryDrag::Effect(_)));
                     let remaining_w = ui.available_width().max(80.0);
@@ -246,7 +242,7 @@ pub(super) fn render_master_effect_detail(
                         });
                 }
 
-                // Master effect chain takes deferred library drops
+                // The master chain accepts deferred library drops.
                 let chain_rect = ui.min_rect();
                 super::dnd::publish_master_surface_fx(ui.ctx(), chain_rect);
                 ui.ctx().memory_mut(|mem| {
@@ -259,7 +255,7 @@ pub(super) fn render_master_effect_detail(
         });
 }
 
-/// Render channel effect chain detail in the bottom bar
+/// Channel effect chain detail in the bottom bar.
 pub(super) fn render_channel_effect_detail(
     ui: &mut egui::Ui,
     ch_idx: usize,
@@ -275,7 +271,7 @@ pub(super) fn render_channel_effect_detail(
     ui.horizontal(|ui| {
         ui.heading(egui::RichText::new(format!("🔮 {} Effects", ch.name)).color(accent));
 
-        // Save channel as preset — inline name prompt
+        // Save channel as preset, with an inline name prompt.
         let prompt_id = egui::Id::new("ch_preset_name_prompt");
         let name_id = egui::Id::new("ch_preset_name_input");
         let is_prompting: bool = ui.data(|d| d.get_temp(prompt_id)).unwrap_or(false);
@@ -315,7 +311,7 @@ pub(super) fn render_channel_effect_detail(
         .id_salt("channel_fx_hscroll")
         .show(ui, |ui| {
             ui.horizontal_top(|ui| {
-                // Channel composite preview (first column before effect cards)
+                // Channel composite preview, the first column before the effect cards.
                 if let Some(&tex_id) = data.channel_preview_textures.get(&ch_idx) {
                     let available_height = ui.available_height() - 12.0;
                     let preview = super::utils::preview_size(
@@ -353,9 +349,7 @@ pub(super) fn render_channel_effect_detail(
                         let eff_uuid_ch_automate = eff_uuid.clone();
                         render_effect_drop_zone(ui, &ch_chain_key, eff_idx);
 
-                        // A scope, not the Frame, because a `Ui` registers itself
-                        // before its contents and so loses hit-test ties to the
-                        // parameter widgets inside the card.
+                        // A scope, not the Frame: see `effect_context_menu`.
                         let card = egui::UiBuilder::new().sense(egui::Sense::click());
                         let card_scope = ui.scope_builder(card, |ui| {
                             egui::Frame::default()
@@ -501,13 +495,13 @@ pub(super) fn render_channel_effect_detail(
                         ui.separator();
                     }
 
-                    // Drop zone after last effect (for reordering)
+                    // Drop zone after the last effect, for reordering.
                     if !ch.effects.is_empty() {
                         let num_effects = ch.effects.len();
                         render_effect_drop_zone(ui, &ch_chain_key, num_effects);
                     }
 
-                    // Remaining space: always present drop target
+                    // Drop target over the remaining space.
                     let has_fx_drag = egui::DragAndDrop::payload::<LibraryDrag>(ui.ctx())
                         .is_some_and(|p| matches!(&*p, LibraryDrag::Effect(_)));
                     let remaining_w = ui.available_width().max(80.0);
@@ -535,7 +529,7 @@ pub(super) fn render_channel_effect_detail(
                         });
                 }
 
-                // Channel effect chain takes deferred library drops
+                // The channel chain accepts deferred library drops.
                 let chain_rect = ui.min_rect();
                 super::dnd::publish_channel_surface_fx(ui.ctx(), &ch.uuid, ch_idx, chain_rect);
                 ui.ctx().memory_mut(|mem| {

@@ -1,5 +1,5 @@
-//! Transition sequence builder: compact read-only timeline strip for mixer area,
-//! full interactive editor for the bottom bar.
+//! Transition sequence builder: a compact read-only timeline strip for the
+//! mixer area and a full editor for the bottom bar.
 
 use super::super::{ChannelUIInfo, SequenceStepKindUI, SequenceUIData, UIActions, UIData};
 use super::utils::{channel_color, resolve_channel};
@@ -15,8 +15,8 @@ fn duration_drag_max(unit: DurationUnit) -> f64 {
     }
 }
 
-/// Get step duration in seconds, converting from the step's native unit.
-/// Uses the provided BPM for beat-based durations (falls back to 120 BPM if None).
+/// Step duration in seconds. Beat-based durations use `bpm`, or 120 BPM if
+/// `None`.
 fn step_duration_secs(kind: &SequenceStepKindUI, bpm: Option<f32>) -> f64 {
     match kind {
         SequenceStepKindUI::Fade {
@@ -43,8 +43,8 @@ fn step_duration_secs(kind: &SequenceStepKindUI, bpm: Option<f32>) -> f64 {
     }
 }
 
-/// Render compact, read-only timeline strips for all sequences in the mixer area.
-/// Clicking a sequence card selects it and opens the bottom bar editor.
+/// Compact read-only timeline strips for all sequences in the mixer area.
+/// Clicking a card selects the sequence and opens the bottom-bar editor.
 pub(super) fn render_sequence_builder(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     use crate::engine::EngineCommand;
 
@@ -70,11 +70,10 @@ pub(super) fn render_sequence_builder(ui: &mut egui::Ui, data: &UIData, actions:
                 .stroke(egui::Stroke::new(border_width, border_color))
                 .show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
-                    // Header: name (clickable to select) | On/Off | Play/Stop | Delete
+                    // Header: name (click to select) | On/Off | Play/Stop | Delete
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
 
-                        // Name label doubles as click-to-select target
                         let name_resp = ui.add(
                             egui::Label::new(egui::RichText::new(&seq.name).strong().size(11.0))
                                 .sense(egui::Sense::click()),
@@ -131,7 +130,7 @@ pub(super) fn render_sequence_builder(ui: &mut egui::Ui, data: &UIData, actions:
                         }
                     });
 
-                    // Read-only timeline strip (click to select)
+                    // Read-only timeline strip; click to select.
                     if seq.steps.is_empty() {
                         let empty_resp = ui.add(
                             egui::Label::new(
@@ -157,7 +156,7 @@ pub(super) fn render_sequence_builder(ui: &mut egui::Ui, data: &UIData, actions:
                     }
                 });
 
-            // Animate playhead during playback
+            // Animate the playhead during playback.
             if seq.playing {
                 ui.ctx().request_repaint();
             }
@@ -169,17 +168,16 @@ pub(super) fn render_sequence_builder(ui: &mut egui::Ui, data: &UIData, actions:
 
 /// Constant width for `GoTo` blocks in the timeline strip.
 const GOTO_BLOCK_WIDTH: f32 = 24.0;
-/// Minimum width for timed blocks so labels remain visible.
+/// Minimum width for timed blocks so labels stay visible.
 const MIN_BLOCK_WIDTH: f32 = 30.0;
 
-/// Paint a horizontal timeline strip showing sequence steps as colored blocks.
+/// Paint a timeline strip of sequence steps as colored blocks.
 ///
-/// * `interactive` — if true, blocks are clickable and return the clicked step index.
-/// * `selected_step` — optional step index to highlight in the interactive version.
+/// * `interactive`: blocks are clickable.
+/// * `selected_step`: step to highlight in interactive mode.
 ///
-/// Returns `(clicked_step, strip_clicked)`:
-/// - `clicked_step`: index of the clicked step (interactive mode only)
-/// - `strip_clicked`: true if the strip itself was clicked (any mode)
+/// Returns `(clicked_step, strip_clicked)`: the clicked step (interactive mode
+/// only), and whether the strip itself was clicked.
 fn render_timeline_strip(
     ui: &mut egui::Ui,
     seq: &SequenceUIData,
@@ -191,7 +189,7 @@ fn render_timeline_strip(
     let strip_height = if interactive { 28.0 } else { 20.0 };
     let available_width = ui.available_width().max(60.0);
 
-    // Compute total duration for proportional widths (proper unit conversion)
+    // Total duration in seconds, for proportional widths.
     let total_duration: f64 = seq
         .steps
         .iter()
@@ -228,14 +226,13 @@ fn render_timeline_strip(
             egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(block_w, strip_height))
                 .intersect(rect);
 
-        // Block color
         let (fill, label) = match &step.kind {
             SequenceStepKindUI::Fade { from_ch, to_ch, .. } => {
                 let from = resolve_channel(channels, from_ch);
                 let to = resolve_channel(channels, to_ch);
                 let from_color = darken(channel_color(from.as_ref().map_or(0, |(i, _)| *i)), 0.5);
                 let to_color = darken(channel_color(to.as_ref().map_or(0, |(i, _)| *i)), 0.5);
-                // Diagonal split: from_color top-left triangle, to_color bottom-right
+                // Diagonal split: from_color in the top-left triangle, to_color bottom-right.
                 let tl = block_rect.left_top();
                 let tr = block_rect.right_top();
                 let bl = block_rect.left_bottom();
@@ -278,7 +275,6 @@ fn render_timeline_strip(
             }
         };
 
-        // Selection highlight
         if interactive && selected_step == Some(i) {
             painter.rect_stroke(
                 block_rect,
@@ -288,7 +284,7 @@ fn render_timeline_strip(
             );
         }
 
-        // Current step indicator (playback)
+        // Current playback step indicator.
         let is_current = seq.playing && i == seq.current_step;
         if is_current && !interactive {
             painter.rect_stroke(
@@ -315,7 +311,6 @@ fn render_timeline_strip(
             egui::StrokeKind::Outside,
         );
 
-        // Click to select step
         if interactive
             && response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
@@ -327,7 +322,7 @@ fn render_timeline_strip(
         x += block_w;
     }
 
-    // Playhead: thin vertical line at the current playback position
+    // Playhead: a thin vertical line at the playback position.
     if seq.playing && !seq.steps.is_empty() {
         let playhead_x = compute_playhead_x(seq, rect.left(), available_width, bpm);
         let playhead_rect = egui::Rect::from_min_size(
@@ -341,7 +336,7 @@ fn render_timeline_strip(
     (clicked_step, strip_clicked)
 }
 
-/// Compute the x position of the playhead based on sequence progress.
+/// X position of the playhead from sequence progress.
 fn compute_playhead_x(
     seq: &SequenceUIData,
     strip_left: f32,
@@ -357,7 +352,7 @@ fn compute_playhead_x(
         return strip_left;
     }
 
-    // Sum durations of completed steps + elapsed in current step
+    // Completed step durations plus time elapsed in the current step.
     let mut elapsed = 0.0_f64;
     for (i, step) in seq.steps.iter().enumerate() {
         if i < seq.current_step {
@@ -374,7 +369,7 @@ fn compute_playhead_x(
     strip_left + frac * strip_width
 }
 
-/// Darken a color by multiplying RGB by a factor.
+/// Darken a color by scaling RGB by `factor`.
 fn darken(c: egui::Color32, factor: f32) -> egui::Color32 {
     egui::Color32::from_rgb(
         (f32::from(c.r()) * factor) as u8,
@@ -383,7 +378,7 @@ fn darken(c: egui::Color32, factor: f32) -> egui::Color32 {
     )
 }
 
-/// Render duration value + unit selector (s | m | h | b as side-by-side buttons).
+/// Duration value plus a unit selector (s | m | h | b buttons).
 fn render_duration_editor(
     ui: &mut egui::Ui,
     sequence_uuid: &str,
@@ -406,7 +401,6 @@ fn render_duration_editor(
             value: dur,
         });
     }
-    // Slider for duration (visual scrub)
     let slider = egui::Slider::new(&mut dur, 0.1..=max_val)
         .max_decimals(1)
         .show_value(false);
@@ -417,7 +411,6 @@ fn render_duration_editor(
             value: dur,
         });
     }
-    // Unit selector: side-by-side buttons
     let units = [
         (DurationUnit::Seconds, "s"),
         (DurationUnit::Minutes, "m"),
@@ -444,7 +437,7 @@ fn render_duration_editor(
     }
 }
 
-/// Render the full inline step editor for the bottom bar.
+/// Full inline step editor for the bottom bar.
 fn render_sequence_step_editor(
     ui: &mut egui::Ui,
     seq: &SequenceUIData,
@@ -553,7 +546,7 @@ fn render_sequence_step_editor(
                         }
                     });
                 ui.separator();
-                // Target amount slider (0–100%)
+                // Target amount slider (0-100%).
                 ui.label(egui::RichText::new("Target:").small());
                 let mut amt = *target_amount;
                 let slider = egui::Slider::new(&mut amt, 0.0..=1.0)
@@ -608,7 +601,7 @@ fn render_sequence_step_editor(
     }
 }
 
-/// Bottom bar: full sequence editor when a sequence is selected.
+/// Bottom bar: full editor for the selected sequence.
 pub(super) fn render_sequence_detail(
     ui: &mut egui::Ui,
     seq_idx: usize,
@@ -623,7 +616,6 @@ pub(super) fn render_sequence_detail(
         return;
     };
 
-    // Header: name, enable, play/stop, delete
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
         ui.label(
@@ -678,7 +670,7 @@ pub(super) fn render_sequence_detail(
 
     ui.add_space(4.0);
 
-    // Interactive timeline strip (larger, clickable)
+    // Interactive timeline strip, larger and clickable.
     let selected_step_idx = data
         .selected_sequence_step
         .filter(|(si, _)| *si == seq_idx)
@@ -704,15 +696,15 @@ pub(super) fn render_sequence_detail(
     ui.separator();
     ui.add_space(2.0);
 
-    // Two-column layout: step list (left) | step editor (right)
+    // Two columns: step list (left) | step editor (right).
     let target_id = egui::Id::new("__seq_step_dnd_target");
     ui.horizontal_top(|ui| {
-        // ── Left column: stacked step list + add buttons ──
+        // Left column: step list and add buttons.
         let list_width = 280.0;
         ui.vertical(|ui| {
             ui.set_width(list_width);
 
-            // Scrollable step list with visual-gap drag-and-drop
+            // Scrollable step list with gap-insertion drag-and-drop.
             egui::ScrollArea::vertical()
                 .id_salt("seq_step_list")
                 .max_height(ui.available_height() - 30.0)
@@ -727,8 +719,8 @@ pub(super) fn render_sequence_detail(
                     };
                     let dragged_idx = drag_src.map(|d| d.step_idx);
 
-                    // Compute drop target from pointer position BEFORE rendering,
-                    // using fixed row heights to avoid oscillation from gap insertion.
+                    // Compute the drop target before rendering, from fixed row heights, so the
+                    // inserted gap doesn't make it oscillate.
                     let row_height = 22.0;
                     let gap_height = row_height;
                     let step_count = seq.steps.len();
@@ -737,15 +729,12 @@ pub(super) fn render_sequence_detail(
                     let drop_target: Option<usize> = match (is_dragging, dragged_idx) {
                         (true, Some(src)) => {
                             if let Some(pos) = ui.ctx().input(|inp| inp.pointer.hover_pos()) {
-                                // Compute pointer offset from list top, in terms of
-                                // the *logical* list (source item removed).
+                                // Pointer offset from the list top, with the source item removed.
                                 let rel_y = pos.y - list_top;
                                 if rel_y >= 0.0 {
-                                    // Visible items = all except the dragged one
                                     let visible_count = step_count - 1;
-                                    // Which slot the pointer is over (0-based)
                                     let slot = ((rel_y / row_height) as usize).min(visible_count);
-                                    // Map slot back to original index, re-inserting the gap for the source
+                                    // Map the slot back to an original index, skipping the source.
                                     let target = if slot < src { slot } else { slot + 1 };
                                     Some(target.min(step_count))
                                 } else {
@@ -758,7 +747,7 @@ pub(super) fn render_sequence_detail(
                         _ => None,
                     };
 
-                    // Store the computed target in memory for the deferred handler
+                    // Store the target for the deferred handler.
                     if let Some(t) = drop_target {
                         ui.ctx().memory_mut(|mem| {
                             mem.data.insert_temp::<usize>(target_id, t);
@@ -766,12 +755,12 @@ pub(super) fn render_sequence_detail(
                     }
 
                     for (i, step) in seq.steps.iter().enumerate() {
-                        // Hide the step being dragged from its original position
+                        // Hide the dragged step at its original position.
                         if dragged_idx == Some(i) {
                             continue;
                         }
 
-                        // Insert gap BEFORE this item if it's the drop target
+                        // Gap before this item if it is the drop target.
                         if drop_target == Some(i) {
                             let (gap_rect, _) = ui.allocate_exact_size(
                                 egui::vec2(ui.available_width(), gap_height),
@@ -828,7 +817,6 @@ pub(super) fn render_sequence_detail(
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 4.0;
 
-                            // Drag handle (grip dots)
                             let handle_size = egui::vec2(12.0, 16.0);
                             let (handle_rect, handle_resp) =
                                 ui.allocate_exact_size(handle_size, egui::Sense::drag());
@@ -864,7 +852,6 @@ pub(super) fn render_sequence_detail(
                                 ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                             }
 
-                            // Clickable label
                             let label_text =
                                 format!("{} {}. {} {}", icon, i + 1, step.label, summary);
                             let text = if is_current {
@@ -882,7 +869,7 @@ pub(super) fn render_sequence_detail(
                         });
                     }
 
-                    // Gap at the end of the list (drop after last item)
+                    // Gap after the last item.
                     if drop_target == Some(step_count) {
                         let (gap_rect, _) = ui.allocate_exact_size(
                             egui::vec2(ui.available_width(), gap_height),
@@ -902,12 +889,10 @@ pub(super) fn render_sequence_detail(
                     }
                 });
 
-            // Add step buttons at bottom of list
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
-                // A fade needs two channels to name; with one channel it fades
-                // onto itself, which is what the previous index clamp did too.
+                // A fade names two channels; with one channel it fades onto itself.
                 let from_uuid = data.channels.first().map(|c| c.uuid.clone());
                 let to_uuid = data
                     .channels
@@ -939,7 +924,7 @@ pub(super) fn render_sequence_detail(
 
         ui.separator();
 
-        // ── Right column: selected step editor ──
+        // Right column: selected step editor.
         ui.vertical(|ui| {
             ui.set_min_width(ui.available_width());
             if let Some(step_idx) = selected_step_idx {
@@ -973,7 +958,6 @@ pub(super) fn render_sequence_detail(
         });
     });
 
-    // Animate playhead
     if seq.playing {
         ui.ctx().request_repaint();
     }

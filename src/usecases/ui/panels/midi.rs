@@ -11,7 +11,6 @@ pub(super) fn render_midi_section(ui: &mut egui::Ui, data: &UIData, actions: &mu
         }
     });
 
-    // Device list
     if !data.midi_devices.is_empty() {
         ui.collapsing(format!("Devices ({})", data.midi_devices.len()), |ui| {
             for dev in &data.midi_devices {
@@ -45,7 +44,6 @@ pub(super) fn render_midi_section(ui: &mut egui::Ui, data: &UIData, actions: &mu
         });
     }
 
-    // Mappings list
     if data.midi_mappings.is_empty() {
         ui.label(
             egui::RichText::new("No mappings. Right-click anywhere → Enter MIDI Learn.")

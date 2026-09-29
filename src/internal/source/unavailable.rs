@@ -5,9 +5,8 @@ use anyhow::Result;
 
 /// A deck whose source type this build cannot run, or that failed to open.
 ///
-/// It renders black and saves its config back unchanged, so a scene moved
-/// between machines keeps every deck it had. See
-/// /spec/deck-source-providers.md Decision 4.
+/// Renders black and saves its config back unchanged, so a scene moved
+/// between machines keeps every deck.
 pub struct UnavailableSource {
     config: SourceConfig,
     reason: String,

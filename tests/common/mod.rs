@@ -1,12 +1,9 @@
-//! Helpers shared by the GPU-backed integration test binaries.
-//!
-//! Included with `mod common;` — Cargo does not treat `tests/common/` as a test
-//! target of its own, so this compiles into each including binary.
+//! Helpers shared by the GPU integration test binaries, included with
+//! `mod common;`.
 
 use varda::renderer::context::GpuContext;
 
-/// Open a headless GPU context, or `None` when this machine has no usable
-/// adapter. Fails instead under `VARDA_REQUIRE_GPU`; see
+/// Open a headless GPU context, or `None` without a usable adapter. See
 /// [`varda::testing::headless_gpu`].
 ///
 /// # Panics

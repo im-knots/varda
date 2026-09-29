@@ -1,9 +1,8 @@
-//! OSC (Open Sound Control) support for Varda.
+//! OSC (Open Sound Control) input and feedback.
 //!
-//! All incoming messages use the `/varda/` namespace prefix.
-//! Addresses map 1:1 to the shared parameter path system in [`crate::param_router`].
-//! Clock messages (`/varda/clock/bpm`, `/varda/clock/beat`) bypass the param router
-//! and route directly to [`crate::clock::ClockManager`].
+//! Incoming addresses are `/varda/<path>`, where `<path>` is a
+//! [`crate::param_router`] path. Clock messages (`/varda/clock/bpm`,
+//! `/varda/clock/beat`) go to [`crate::clock::ClockManager`] instead.
 
 use anyhow::{Context, Result};
 use rosc::{OscMessage, OscPacket, OscType};
@@ -66,8 +65,7 @@ impl OscConfig {
     ///
     /// # Errors
     ///
-    /// Returns an error if the config cannot be serialized to JSON or if the
-    /// atomic write to `path` fails (missing directory, permissions, disk full).
+    /// Returns an error if serialization or the atomic write to `path` fails.
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let content =
             serde_json::to_string_pretty(self).context("Failed to serialize OSC config")?;
@@ -95,8 +93,7 @@ pub enum OscInput {
     Unknown(String),
 }
 
-/// Extract a float value from the first OSC argument.
-/// Accepts Float, Int (cast to float), and Bool (1.0 / 0.0).
+/// Read the first OSC argument as a float. Accepts Float, Int, and Bool.
 fn extract_float(args: &[OscType]) -> Option<f32> {
     match args.first()? {
         OscType::Float(f) => Some(*f),
@@ -108,16 +105,15 @@ fn extract_float(args: &[OscType]) -> Option<f32> {
 
 /// Parse an OSC address + args into an [`OscInput`].
 ///
-/// Strips the `/varda/` prefix, then routes clock messages specially
-/// and everything else as a generic `Param` message.
+/// Strips the `/varda/` prefix; clock addresses become clock messages and
+/// everything else a `Param`.
 pub fn parse_osc_message(addr: &str, args: &[OscType]) -> OscInput {
-    // Only the `/varda/` namespace is ours: bare `/varda` and `/varda` followed by
-    // a non-`/` (e.g. `/vardacrossfader`) are both Unknown.
+    // Bare `/varda` and `/varda` without a following `/` (`/vardacrossfader`)
+    // are Unknown.
     let Some(path) = addr.strip_prefix(OSC_PREFIX) else {
         return OscInput::Unknown(addr.to_string());
     };
 
-    // Strip any trailing slash
     let path = path.trim_end_matches('/');
     if path.is_empty() {
         return OscInput::Unknown(addr.to_string());
@@ -158,7 +154,7 @@ pub fn parse_osc_message(addr: &str, args: &[OscType]) -> OscInput {
 
 // ── OscReceiver ────────────────────────────────────────────────────
 
-/// OSC receiver — background thread listening on a UDP port.
+/// OSC receiver: a background thread listening on a UDP port.
 pub struct OscReceiver {
     receiver: Receiver<OscInput>,
     _thread: thread::JoinHandle<()>,
@@ -169,9 +165,8 @@ impl OscReceiver {
     ///
     /// # Errors
     ///
-    /// Returns an error if `0.0.0.0:{port}` is not a valid socket address, if the
-    /// UDP socket cannot be bound (port already in use, insufficient privileges),
-    /// or if the read timeout cannot be set on it.
+    /// Returns an error if the address is invalid, the UDP socket cannot be
+    /// bound, or its read timeout cannot be set.
     pub fn new(port: u16) -> Result<Self> {
         let addr = SocketAddrV4::from_str(&format!("0.0.0.0:{port}")).context("Invalid address")?;
         let socket = UdpSocket::bind(addr).context(format!("Failed to bind to port {port}"))?;
@@ -189,9 +184,8 @@ impl OscReceiver {
         })
     }
 
-    /// A receiver with no socket behind it, for tests that need to drive the
-    /// input path without opening a port. The returned sender stands in for the
-    /// network: whatever it sends arrives at [`try_recv`](Self::try_recv).
+    /// A receiver with no socket, for tests. Whatever the returned sender sends
+    /// arrives at [`try_recv`](Self::try_recv).
     #[cfg(test)]
     pub(crate) fn detached() -> (Self, Sender<OscInput>) {
         let (sender, receiver) = channel();
@@ -246,8 +240,8 @@ impl OscReceiver {
 
 // ── OscFeedbackSender ──────────────────────────────────────────────
 
-/// Sends OSC feedback to one or more UDP targets (`TouchOSC`, Lemur, etc.).
-/// Echoes parameter changes back so external controllers stay in sync.
+/// Echoes parameter changes to UDP targets (`TouchOSC`, Lemur) so controllers
+/// stay in sync.
 pub struct OscFeedbackSender {
     socket: UdpSocket,
     targets: Vec<SocketAddrV4>,
@@ -299,12 +293,8 @@ impl OscFeedbackSender {
         }
     }
 
-    /// Republish the show position, so other software can follow Varda.
-    ///
-    /// Sent as both seconds and `HH:MM:SS:FF`: the float is what a receiver
-    /// does arithmetic with, and the string is what an operator reads without
-    /// having to reimplement drop-frame. Not a parameter path, because nothing
-    /// may write it back. See /spec/timecode.md § Control Surfaces.
+    /// Publish the show position as seconds and as `HH:MM:SS:FF`. Not a
+    /// parameter path, so it cannot be written back.
     pub fn send_timecode(&self, position: f64, label: &str) {
         for (suffix, arg) in [
             ("timecode/position", OscType::Float(position as f32)),
@@ -512,13 +502,9 @@ mod tests {
     fn feedback_sender_no_targets() {
         let sender = OscFeedbackSender::new().unwrap();
         assert!(!sender.has_targets());
-        // send_param should be a no-op without targets
         sender.send_param("crossfader", 0.5);
     }
 
-    /// Other software following Varda gets the position twice: the float is
-    /// what a receiver does arithmetic with, and the string is what an operator
-    /// reads without having to reimplement drop-frame.
     #[test]
     fn timecode_goes_on_the_wire_as_both_seconds_and_a_label() {
         let socket = UdpSocket::bind("127.0.0.1:0").expect("a free loopback port");
@@ -628,17 +614,16 @@ mod tests {
         let mut sender = OscFeedbackSender::new().unwrap();
         sender.add_target("127.0.0.1:9001").unwrap();
         assert!(sender.has_targets());
-        // Adding same target again is a no-op
+        // Adding the same target again is a no-op.
         sender.add_target("127.0.0.1:9001").unwrap();
         assert_eq!(sender.targets.len(), 1);
     }
 
-    // ── Offensive: handle_packet with dropped receiver must not panic ─
+    // ── handle_packet with a dropped receiver must not panic ─
 
     #[test]
     fn handle_packet_dropped_receiver_does_not_panic() {
         let (tx, rx) = std::sync::mpsc::channel::<OscInput>();
-        // Drop the receiver so send() will fail
         drop(rx);
 
         let packet = OscPacket::Message(rosc::OscMessage {
@@ -646,7 +631,7 @@ mod tests {
             args: vec![OscType::Float(0.5)],
         });
 
-        // Must not panic — the error is logged, not unwrapped
+        // The send error is logged.
         OscReceiver::handle_packet(packet, &tx);
     }
 

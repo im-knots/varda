@@ -84,7 +84,7 @@ pub async fn beat_crossfade(
 
 #[derive(Deserialize, ToSchema)]
 pub struct TonemapModeBody {
-    /// Tonemapping mode: "bypass" or "aces".
+    /// Tonemapping curve.
     pub mode: crate::renderer::tonemap::TonemapMode,
 }
 
@@ -104,7 +104,7 @@ pub async fn set_tonemap_mode(
 
 #[derive(Deserialize, ToSchema)]
 pub struct LoadLutBody {
-    /// LUT filename (relative to `.varda/luts/`)
+    /// LUT filename, relative to `.varda/luts/`.
     pub filename: String,
 }
 

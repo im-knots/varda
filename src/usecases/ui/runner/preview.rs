@@ -1,9 +1,6 @@
-//! Preview texture pipeline: gamma-encoding engine textures into egui-ready
-//! targets, and keeping egui's registrations in step with the live deck, channel
+//! Preview texture pipeline: gamma-encodes engine textures into egui-ready
+//! targets and keeps egui's registrations in step with the live deck, channel
 //! and output set.
-//!
-//! Split out of the runner because it is a self-contained concern: given the
-//! engine's current textures, produce the `TextureId`s the UI needs this frame.
 
 use super::UIRunner;
 
@@ -27,27 +24,20 @@ impl PreviewSlot {
     }
 }
 
-/// Gamma-encodes linear engine textures so egui previews match the real output.
+/// Gamma-encodes linear engine textures so egui previews match the output.
 ///
-/// egui assumes every texture handed to it is already gamma-encoded ("We expect
-/// 'normal' textures that are NOT sRGB-aware" — egui-wgpu's `egui.wgsl`), and
-/// compensates by applying the inverse transfer function before writing to its
-/// sRGB framebuffer. Handing it a linear texture therefore round-trips to raw
-/// linear light on screen, which reads as far too dark: linear 0.2 displays as
-/// 0.2 where the output window correctly shows 0.48.
+/// egui expects gamma-encoded, non-sRGB-aware textures and decodes them before
+/// writing to its sRGB framebuffer, so a linear texture displays too dark
+/// (linear 0.2 shows as 0.2 instead of 0.48).
 ///
-/// Fix: blit each preview source through an explicit linear→sRGB encode into a
-/// plain (non-sRGB) `Rgba8Unorm` texture, and register *that* with egui. The
-/// target must not be `*UnormSrgb` or the hardware would decode on sample and
-/// cancel the encode out.
+/// Each preview source is blitted through a linear→sRGB encode into a plain
+/// `Rgba8Unorm` texture, which is registered with egui. The target must not be
+/// `*UnormSrgb`, or sampling would decode it and cancel the encode. Linear float
+/// sources are sampled as-is and sRGB output previews are decoded to linear on
+/// sample, so the shader always receives linear.
 ///
-/// One mechanism covers both kinds of source: linear float color-path textures
-/// are sampled as-is, and already-sRGB output previews are hardware-decoded to
-/// linear on sample. Either way the shader receives linear and emits gamma.
-///
-/// Targets are cached per key and recreated only when the source size changes.
-/// They are capped to `MAX_DIM` on the long edge — previews are thumbnails, so
-/// this also makes egui sample far less than the full render resolution.
+/// Targets are cached per key, recreated only when the source size changes,
+/// and capped to `MAX_DIM` on the long edge.
 pub(super) struct PreviewEncoder {
     pipeline: crate::renderer::BlitPipeline,
     targets: std::collections::HashMap<String, (wgpu::Texture, wgpu::TextureView)>,
@@ -59,7 +49,7 @@ impl PreviewEncoder {
 
     fn new(device: &wgpu::Device) -> anyhow::Result<Self> {
         Ok(Self {
-            // Non-sRGB target on purpose — see the type-level comment.
+            // Non-sRGB target; see the type-level comment.
             pipeline: crate::renderer::BlitPipeline::new(device, wgpu::TextureFormat::Rgba8Unorm)?,
             targets: std::collections::HashMap::new(),
         })
@@ -78,9 +68,9 @@ impl PreviewEncoder {
         )
     }
 
-    /// Create or resize the target for `key`. Returns true when the target was
-    /// (re)created, meaning the caller must re-register it with egui — a
-    /// `TextureId` is bound to a specific texture, so a resize invalidates it.
+    /// Create or resize the target for `key`. Returns true when it was
+    /// (re)created, in which case the caller must re-register it with egui: a
+    /// `TextureId` is bound to one texture.
     fn ensure_target(
         &mut self,
         context: &crate::renderer::GpuContext,
@@ -119,17 +109,14 @@ impl PreviewEncoder {
         self.targets.get(key).map(|(_, v)| v)
     }
 
-    /// Encode all `sources` into their cached targets in a single command buffer.
+    /// Encode all `sources` into their cached targets in one command buffer.
     ///
-    /// Must run every frame *after* the engine has rendered, and after output
-    /// windows have drawn (window previews source their intermediate texture).
-    /// Registration is separate: `TextureId`s must already exist when the UI is
-    /// built earlier in the frame.
+    /// Runs every frame after the engine renders and after output windows draw
+    /// (window previews read their intermediate texture). `TextureId`s are
+    /// registered separately, earlier in the frame, before the UI is built.
     ///
-    /// One encoder and one submit for every preview — a submit per thumbnail
-    /// would add a dozen per frame, which is exactly the cost the compositing
-    /// path batches away for weaker GPUs. All previews share the same blit
-    /// params, so those are written once up front.
+    /// One submit for all previews avoids a dozen submits per frame on weak GPUs.
+    /// All previews share the same blit params, written once up front.
     fn encode_all(
         &self,
         context: &crate::renderer::GpuContext,
@@ -171,14 +158,14 @@ impl PreviewEncoder {
         context.submit(std::iter::once(encoder.finish()));
     }
 
-    /// Drop cached targets whose key is no longer live (removed decks/outputs).
+    /// Drop cached targets whose key is no longer live.
     fn retain_keys(&mut self, live: &std::collections::HashSet<String>) {
         self.targets.retain(|k, _| live.contains(k));
     }
 }
 
 impl UIRunner {
-    /// Register GPU textures with egui for deck/channel/output previews and main output.
+    /// Register deck, channel, output and main output preview textures with egui.
     pub(super) fn register_preview_textures(&mut self) {
         self.sync_preview_registrations();
 
@@ -188,7 +175,6 @@ impl UIRunner {
         };
         let context = varda.gpu_context();
 
-        // Dome preview renderer + texture
         if self.dome_preview_renderer.is_none() {
             match crate::renderer::dome_preview::DomePreviewRenderer::new(
                 &context.device,
@@ -208,12 +194,12 @@ impl UIRunner {
         }
     }
 
-    /// Resolve an output preview's source view together with its dimensions, so
-    /// the preview encoder can size its target to the right aspect ratio.
+    /// An output preview's source view and its dimensions, so the encoder can size
+    /// the target to the right aspect.
     ///
-    /// Windowed outputs preview their own intermediate texture (which carries
-    /// surface geometry and warp, and is the window's size); every headless
-    /// source is a render-resolution composite, deck, or sub-mix.
+    /// Windowed outputs preview their intermediate texture (surface geometry and
+    /// warp, at the window's size); headless sources are render-resolution
+    /// composites, decks, or sub-mixes.
     fn output_preview_source<'a>(
         output: &'a crate::output::Output,
         mixer: &'a crate::mixer::Mixer,
@@ -228,9 +214,8 @@ impl UIRunner {
         (view, w, h)
     }
 
-    /// Resolve the texture view to use for an output preview: the output's
-    /// composed picture (surface geometry and warp) when its last frame made
-    /// one, otherwise the program it shows.
+    /// Texture view for an output preview: the output's composed picture (surface
+    /// geometry and warp) when its last frame produced one, otherwise its program.
     pub(super) fn output_preview_view<'a>(
         output: &'a crate::output::Output,
         mixer: &'a crate::mixer::Mixer,
@@ -240,11 +225,9 @@ impl UIRunner {
         })
     }
 
-    /// Re-register GPU textures when deck/channel/output layout changes.
-    /// Enumerate every live preview source: its slot, source view, and source size.
+    /// Every live preview source: its slot, source view, and source size.
     ///
-    /// Single source of truth shared by registration and encoding so the two
-    /// passes cannot drift out of step.
+    /// Shared by registration and encoding so the two stay in step.
     fn preview_sources(
         varda: &crate::app::VardaApp,
     ) -> Vec<(PreviewSlot, &wgpu::TextureView, u32, u32)> {
@@ -280,11 +263,10 @@ impl UIRunner {
         out
     }
 
-    /// Create/resize preview encode targets and keep egui registrations in sync.
+    /// Create or resize preview targets and keep egui registrations in sync.
     ///
-    /// Runs early in the frame because the UI is built (and needs `TextureId`s)
-    /// before any GPU work is submitted. Pixel content is filled in later by
-    /// `encode_previews`.
+    /// Runs early in the frame because the UI needs `TextureId`s before any GPU
+    /// work is submitted. `encode_previews` fills in the pixels later.
     fn sync_preview_registrations(&mut self) {
         let Some(varda) = &self.varda else { return };
         let context = varda.gpu_context();
@@ -330,8 +312,8 @@ impl UIRunner {
                 view,
                 wgpu::FilterMode::Linear,
             );
-            // Retire the previous registration for this slot, if any — a resized
-            // target leaves the old TextureId dangling.
+            // Retire the slot's previous registration; a resized target leaves the old
+            // TextureId dangling.
             let stale = match slot {
                 PreviewSlot::Deck(uuid) => self.deck_preview_textures.insert(uuid.clone(), tid),
                 PreviewSlot::Channel(idx) => self.channel_preview_textures.insert(*idx, tid),
@@ -343,9 +325,8 @@ impl UIRunner {
             }
         }
 
-        // Retire registrations and targets for decks/outputs that are gone. This
-        // is the only place they are retired, so skipping it leaks one texture
-        // per removed entity.
+        // Retire registrations and targets for removed decks and outputs. This is the
+        // only place they are retired; skipping it leaks a texture per removed entity.
         let live_decks: std::collections::HashSet<String> = sources
             .iter()
             .filter_map(|(s, ..)| match s {
@@ -387,8 +368,8 @@ impl UIRunner {
 
     /// Gamma-encode every preview for this frame.
     ///
-    /// Must run after the mixer render *and* after output windows have drawn, but
-    /// before egui paints. See the frame sequence in `render_frame`.
+    /// Runs after the mixer render and output windows draw, before egui paints.
+    /// See the frame sequence in `render_frame`.
     pub(super) fn encode_previews(&mut self) {
         let Some(varda) = &self.varda else { return };
         let Some(encoder) = &self.preview_encoder else {
@@ -398,9 +379,8 @@ impl UIRunner {
         encoder.encode_all(context, &Self::preview_sources(varda));
     }
 
-    /// Per-frame egui texture sync. Previews are gamma-encoded into dedicated
-    /// targets, so this only keeps targets and registrations in step; the pixels
-    /// are written later by `encode_previews`.
+    /// Per-frame egui texture sync: keeps targets and registrations in step.
+    /// `encode_previews` writes the pixels later.
     pub(super) fn refresh_textures(&mut self) {
         self.sync_preview_registrations();
     }
@@ -410,10 +390,8 @@ impl UIRunner {
 mod tests {
     use super::*;
 
-    // ── PreviewSlot keys ────────────────────────────────────────────
-
-    /// Encoder targets are cached by this key, so two slots must never collide —
-    /// a collision would show one preview's pixels in another's panel.
+    /// Targets are cached by this key, so a collision would show one preview's
+    /// pixels in another's panel.
     #[test]
     fn preview_slot_keys_are_distinct_across_variants() {
         let keys = [

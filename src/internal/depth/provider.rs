@@ -1,5 +1,5 @@
-//! Depth sensors as a deck source: the point cloud, reprojected into the
-//! deck's 2D texture. See spec/depth-sensors.md.
+//! Depth sensors as a deck source: the point cloud reprojected into the
+//! deck's 2D texture.
 
 use super::point_cloud::{ColorMode, PointCloudParams, PointCloudPipeline};
 use super::{DepthSensorId, DepthSensorManager, backend::DepthIntrinsics};
@@ -42,7 +42,7 @@ static PARAMS: LazyLock<Vec<ControlSpec>> = LazyLock::new(|| {
 });
 
 /// Point-cloud view params in physical units, as scenes store them. Every
-/// field defaults so scenes written before a field existed still load.
+/// field has a default so scenes missing a field still load.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 struct ParamsConfig {
     #[serde(default)]
@@ -110,12 +110,11 @@ impl From<&ParamsConfig> for PointCloudParams {
 struct Config {
     /// Matched by device name, which survives replugging; ids do not.
     name: String,
-    /// `None` on scenes written before the params were saved.
+    /// `None` on scenes saved without params.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     params: Option<ParamsConfig>,
 }
 
-/// Depth sensors.
 pub struct DepthSensorProvider;
 
 impl DeckSourceProvider for DepthSensorProvider {
@@ -205,9 +204,8 @@ impl DeckSourceProvider for DepthSensorProvider {
         config.get("name").cloned().unwrap_or_default()
     }
 
-    /// Uploads every open sensor's frames. The manager is shared with shader
-    /// decks' `depth_sensor` preprocessors, which read the same textures, so
-    /// this runs whether or not any point-cloud deck exists.
+    /// Uploads every open sensor's frames. Runs even with no point-cloud deck,
+    /// because shader decks' `depth_sensor` preprocessors read the same textures.
     fn tick(&mut self, env: &mut SourceEnv, _submit: &mut Vec<wgpu::CommandBuffer>) {
         if let Some(depth) = env.services.get_mut::<DepthSensorManager>() {
             depth.update(&env.gpu.queue);
@@ -258,7 +256,6 @@ impl DeckSourceProvider for DepthSensorProvider {
     }
 }
 
-/// What the sensor published this frame.
 struct SensorFrame {
     /// Shared `R16Uint` depth texture.
     depth_view: wgpu::TextureView,
@@ -267,7 +264,6 @@ struct SensorFrame {
     size: (u32, u32),
 }
 
-/// One point-cloud deck.
 pub struct DepthSensor {
     name: String,
     id: DepthSensorId,
@@ -288,8 +284,8 @@ impl DepthSensor {
         )
     }
 
-    /// A deck for sensor `id`, which the caller has already opened and whose
-    /// reference this deck now holds (released when the deck is removed).
+    /// A deck for sensor `id`. The caller has already opened the sensor; this
+    /// deck holds that reference and releases it when removed.
     pub fn for_open_sensor(id: DepthSensorId, name: &str) -> Self {
         Self {
             name: name.to_string(),
@@ -300,7 +296,6 @@ impl DepthSensor {
         }
     }
 
-    /// The sensor this deck holds a reference to.
     pub fn sensor(&self) -> DepthSensorId {
         self.id
     }
@@ -325,9 +320,8 @@ impl DeckSourceInstance for DepthSensor {
         )
     }
 
-    /// Deproject the depth texels to camera-space points and splat them into
-    /// the deck: a contained reprojection, not a 3D engine. Black until the
-    /// first frame and intrinsics arrive.
+    /// Deprojects depth texels to camera-space points and splats them into the
+    /// deck. Black until the first frame and intrinsics arrive.
     fn render(&mut self, frame: &mut SourceFrame) -> Result<()> {
         let Some(sensor) = &self.frame else {
             clear_target(frame, wgpu::Color::BLACK, "Point Cloud (no frame)");
@@ -376,8 +370,8 @@ impl DeckSourceInstance for DepthSensor {
         self.params.normalized_param(name).map(ControlValue::Float)
     }
 
-    /// Continuous params map linearly onto their range; `color_mode` buckets
-    /// into three modes.
+    /// Continuous params map linearly onto their range; `color_mode` is
+    /// bucketed into three modes.
     fn set_param(&mut self, name: &str, value: &ControlValue) -> Result<(), ControlError> {
         let v = expect_norm(name, value)?;
         if self.params.set_normalized_param(name, v) {

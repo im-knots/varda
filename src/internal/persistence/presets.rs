@@ -1,31 +1,29 @@
-//! Preset persistence — save/load deck and channel presets from `.varda/presets/`.
+//! Deck and channel presets in `.varda/presets/`.
 
 use super::Workspace;
 use crate::scene::{ChannelConfig, DeckConfig};
 use anyhow::{Context, Result};
 
-/// A loaded deck preset with its name and config.
 #[derive(Debug, Clone)]
 pub struct DeckPreset {
     pub name: String,
     pub config: DeckConfig,
 }
 
-/// A loaded channel preset with its name and config.
 #[derive(Debug, Clone)]
 pub struct ChannelPreset {
     pub name: String,
     pub config: ChannelConfig,
 }
 
-/// In-memory collection of loaded presets from disk.
+/// Presets loaded from disk.
 pub struct PresetLibrary {
     pub deck_presets: Vec<DeckPreset>,
     pub channel_presets: Vec<ChannelPreset>,
 }
 
 impl PresetLibrary {
-    /// Scan preset directories and load all valid JSON files.
+    /// Load every valid JSON file in the preset directories.
     pub fn load(workspace: &Workspace) -> Self {
         let mut lib = Self {
             deck_presets: Vec::new(),
@@ -40,8 +38,8 @@ impl PresetLibrary {
     ///
     /// # Errors
     ///
-    /// Returns an error if the `presets/decks/` directory cannot be created, if
-    /// `config` cannot be serialized to JSON, or if the atomic write fails.
+    /// Returns an error if `presets/decks/` cannot be created, `config` cannot
+    /// be serialized, or the write fails.
     pub fn save_deck_preset(workspace: &Workspace, name: &str, config: &DeckConfig) -> Result<()> {
         let errors = config.validate("deck_preset");
         for e in &errors {
@@ -61,8 +59,8 @@ impl PresetLibrary {
     ///
     /// # Errors
     ///
-    /// Returns an error if the `presets/channels/` directory cannot be created,
-    /// if `config` cannot be serialized to JSON, or if the atomic write fails.
+    /// Returns an error if `presets/channels/` cannot be created, `config`
+    /// cannot be serialized, or the write fails.
     pub fn save_channel_preset(
         workspace: &Workspace,
         name: &str,
@@ -82,7 +80,7 @@ impl PresetLibrary {
         Ok(())
     }
 
-    /// Rescan directories to pick up new/removed presets.
+    /// Rescan the preset directories.
     pub fn refresh(&mut self, workspace: &Workspace) {
         self.deck_presets.clear();
         self.channel_presets.clear();
@@ -91,7 +89,6 @@ impl PresetLibrary {
     }
 
     fn scan_dir(&mut self, dir: &std::path::Path, is_deck: bool) {
-        // Directory doesn't exist yet
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
         };
@@ -142,7 +139,6 @@ impl PresetLibrary {
                 }
             }
         }
-        // Sort by name for stable ordering
         if is_deck {
             self.deck_presets.sort_by(|a, b| a.name.cmp(&b.name));
         } else {
@@ -243,14 +239,12 @@ mod tests {
         let ws = Workspace::new(dir.path().to_path_buf());
         ws.ensure_preset_dirs().unwrap();
 
-        // Write a valid preset
         let config = sample_deck_config();
         PresetLibrary::save_deck_preset(&ws, "good", &config).unwrap();
 
-        // Write an invalid JSON file
         std::fs::write(ws.deck_presets_dir().join("bad.json"), "not json").unwrap();
 
-        // Write a non-json file (should be skipped entirely)
+        // Non-JSON files are skipped.
         std::fs::write(ws.deck_presets_dir().join("readme.txt"), "ignore me").unwrap();
 
         let lib = PresetLibrary::load(&ws);
@@ -264,7 +258,6 @@ mod tests {
         assert_eq!(sanitize_filename("hello-world_v2"), "hello-world_v2.json");
         assert_eq!(sanitize_filename(""), "preset.json");
         assert_eq!(sanitize_filename("a/b\\c:d"), "a_b_c_d.json");
-        // Long name gets truncated
         let long = "a".repeat(100);
         let result = sanitize_filename(&long);
         assert!(result.len() <= 69); // 64 + ".json"
@@ -341,7 +334,7 @@ mod tests {
 
     #[test]
     fn test_deck_config_without_modulation_deserializes() {
-        // Old presets without modulation field should deserialize fine
+        // Older presets have no modulation field.
         let json = r#"{"name":"old","source":{"type":"SolidColor","color":[1,0,0,1]},"opacity":1.0,"blend_mode":"normal"}"#;
         let config: DeckConfig = serde_json::from_str(json).unwrap();
         assert!(config.modulation.is_empty());
@@ -351,11 +344,10 @@ mod tests {
     fn test_preset_validation_on_save() {
         let dir = tempfile::tempdir().unwrap();
         let ws = Workspace::new(dir.path().to_path_buf());
-        // Deck with invalid opacity — should still save (logs error but doesn't block)
+        // Invalid opacity still saves; validation only logs.
         let mut config = sample_deck_config();
         config.opacity = 5.0;
         assert!(PresetLibrary::save_deck_preset(&ws, "bad_opacity", &config).is_ok());
-        // Verify it's loadable despite validation warnings
         let lib = PresetLibrary::load(&ws);
         assert_eq!(lib.deck_presets.len(), 1);
     }

@@ -1,11 +1,11 @@
-//! Stage editor state: the drawing tool, selection, and in-progress drag state
-//! persisted in egui memory across frames, plus the hit-test result aliases.
+//! Stage editor state kept in egui memory across frames (tool, selection,
+//! drags), plus the hit-test result aliases.
 
 use super::gizmo::{RotateDrag, ScaleDrag};
 use crate::surface::CubicHandle;
 
-/// Drag state for edge dragging:
-/// (`surface_uuid`, `contour_idx`, `edge_start_idx`, `original_v0`, `original_v1`, `grab_point_on_edge`)
+/// Edge drag: (`surface_uuid`, `contour_idx`, `edge_start_idx`, `original_v0`,
+/// `original_v1`, `grab_point_on_edge`).
 pub(super) type DraggingEdge = (String, usize, usize, [f32; 2], [f32; 2], [f32; 2]);
 
 /// Hit-test result for a vertex: (`surface_uuid`, `contour_idx`, `vertex_idx`)
@@ -25,7 +25,7 @@ pub(super) enum StageEditorMode {
     Dome3D,
 }
 
-/// Drawing tool for the stage editor
+/// Stage editor drawing tool.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(super) enum DrawingTool {
     #[default]
@@ -36,30 +36,29 @@ pub(super) enum DrawingTool {
     Bezier,
 }
 
-/// State for active drawing operations in the stage editor
+/// In-progress drawing and drag state.
 #[derive(Debug, Clone, Default)]
 pub(super) struct StageEditorState {
     pub(super) tool: DrawingTool,
-    /// For rectangle tool: start position of drag
+    /// Rectangle tool: drag start.
     pub(super) rect_start: Option<[f32; 2]>,
-    /// For polygon tool: accumulated vertices
+    /// Polygon tool: vertices placed so far.
     pub(super) polygon_verts: Vec<[f32; 2]>,
-    /// For circle tool: center position
+    /// Circle tool: center.
     pub(super) circle_center: Option<[f32; 2]>,
-    /// Number of sides for circle/N-gon approximation
+    /// Sides of the circle's N-gon approximation.
     pub(super) circle_sides: u32,
-    /// Currently selected surface UUIDs (supports multi-select)
+    /// Selected surface UUIDs.
     pub(super) selected_surfaces: std::collections::BTreeSet<String>,
-    /// Drag state for vertex editing in select mode
+    /// Vertex drag in select mode.
     pub(super) dragging_vertex: Option<(String, usize, usize)>, // (surface_uuid, contour_idx, vertex_idx)
-    /// Drag state for moving whole surface in select mode
+    /// Whole-surface move in select mode.
     pub(super) moving_surface: Option<(String, f32, f32)>, // (surface_uuid, last_x, last_y)
-    /// Marquee selection: start position of drag rectangle in normalized coords
+    /// Marquee selection start, in normalized coordinates.
     pub(super) selection_rect_start: Option<[f32; 2]>,
-    /// Drag state for radius handle on circle surfaces
+    /// Radius handle drag on a circle surface.
     pub(super) dragging_radius: Option<String>, // surface_uuid
-    /// Drag state for edge dragging: (`surface_uuid`, `contour_idx`, `edge_start_idx`,
-    /// `original_v0`, `original_v1`, `grab_point_on_edge`)
+    /// Edge drag.
     pub(super) dragging_edge: Option<DraggingEdge>,
     /// Drag state for the transform gizmo's scale handles.
     pub(super) dragging_scale: Option<ScaleDrag>,

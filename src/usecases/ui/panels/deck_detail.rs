@@ -19,9 +19,8 @@ use crate::params::ParamValue;
 
 /// The `〰` dropdown for one of a deck source's modulatable controls.
 ///
-/// Source controls are deck built-ins (`deck/<uuid>/video/speed`, ...) rather
-/// than `ParamUIInfo` rows, so they are addressed the way a channel fader is.
-/// See /spec/video-playback-modulation.md § Key naming.
+/// Source controls are deck built-ins (`deck/<uuid>/video/speed`, ...), not
+/// `ParamUIInfo` rows, so they are addressed like a channel fader.
 fn playback_mod_menu(
     ui: &mut egui::Ui,
     deck_uuid: &str,
@@ -39,11 +38,10 @@ fn playback_mod_menu(
     );
 }
 
-/// The colour of the first modulator driving the parameter at `key`, or
-/// `None` when nothing is assigned to it.
+/// Color of the first modulator driving the parameter at `key`, or `None`.
 ///
-/// The colour has to match the card in the modulation panel, so the index comes
-/// from the unfiltered source list.
+/// The index comes from the unfiltered source list so the color matches the
+/// card in the modulation panel.
 pub(super) fn mod_color_for_key(key: &str, data: &UIData) -> Option<egui::Color32> {
     let first = data.modulation_assignments.get(key)?.first()?;
     let idx = data
@@ -55,9 +53,8 @@ pub(super) fn mod_color_for_key(key: &str, data: &UIData) -> Option<egui::Color3
 
 /// The track of a slider, excluding any value box drawn beside it.
 ///
-/// egui returns one rect for the whole widget, so measuring a ghost against it
-/// stretches the scale across the number as well and pushes every reading
-/// right. A slider built with `show_value(false)` is already all track.
+/// egui returns one rect for the whole widget; measuring a ghost against it
+/// would shift every reading right. A `show_value(false)` slider is all track.
 fn slider_track(ui: &egui::Ui, rect: egui::Rect, shows_value: bool) -> egui::Rect {
     if !shows_value {
         return rect;
@@ -68,10 +65,8 @@ fn slider_track(ui: &egui::Ui, rect: egui::Rect, shows_value: bool) -> egui::Rec
 
 /// Draw a ghost line at `value` on a slider whose track spans `range`.
 ///
-/// Which of the two positions the ghost carries depends on the control: where
-/// the handle shows the performer's set point the ghost shows the live value,
-/// and where the handle already rides the live value it shows the set point the
-/// modulator is working from. Either way the pair is set point and actual.
+/// Where the handle shows the set point, the ghost shows the live value; where
+/// the handle follows the live value, the ghost shows the set point.
 fn draw_slider_ghost(
     ui: &egui::Ui,
     rect: egui::Rect,
@@ -91,9 +86,9 @@ fn draw_slider_ghost(
     );
 }
 
-/// Apply MIDI + keyboard learn affordances (glow + click-to-select) to a just-drawn
-/// control. `path` is the parameter-router path the control binds to. The two learn
-/// modes are mutually exclusive, so at most one overlay is active at a time.
+/// Add MIDI and keyboard learn overlays (glow and click-to-select) to a
+/// just-drawn control. `path` is the control's parameter-router path. The two
+/// learn modes are mutually exclusive.
 pub(super) fn learn_overlay(
     ui: &egui::Ui,
     rect: egui::Rect,
@@ -128,10 +123,9 @@ pub(super) fn learn_overlay(
     }
 }
 
-/// Render depth-preprocessor controls for a deck whose shader declared a
-/// `depth_sensor` PREPROCESSOR. Values are sent normalized (0.0–1.0) through the
-/// generic `deck/<uuid>/depth_prepro/<name>` param path, matching the router in
-/// `src/internal/param_router.rs`. See spec/depth-sensor-preprocessor.md.
+/// Depth-preprocessor controls for a deck whose shader declares a
+/// `depth_sensor` PREPROCESSOR. Values are sent normalized (0.0–1.0) through
+/// `deck/<uuid>/depth_prepro/<name>`, matching `src/internal/param_router.rs`.
 fn render_depth_prepro_controls(
     ui: &mut egui::Ui,
     deck: &DeckUIInfo,
@@ -177,7 +171,7 @@ fn render_depth_prepro_controls(
         });
     }
 
-    // Mirror is a fader-bucketed bool on the router; send the bucket centre.
+    // Mirror is a fader-bucketed bool on the router; send the bucket center.
     ui.horizontal(|ui| {
         let mut mirror = prepro.mirror;
         let resp = ui.checkbox(&mut mirror, "Mirror");
@@ -218,7 +212,7 @@ pub(super) fn set_source(
     });
 }
 
-/// The learn glow and the `〰` modulation menu a routed control gets.
+/// The learn glow and `〰` modulation menu for a routed control.
 pub(super) fn source_affordances(
     ui: &mut egui::Ui,
     rect: egui::Rect,
@@ -242,7 +236,7 @@ pub(super) fn source_affordances(
     }
 }
 
-/// The current normalized value of a numeric control.
+/// Current normalized value of a numeric control.
 pub(super) fn norm(deck: &DeckUIInfo, name: &str) -> f32 {
     deck.source
         .status
@@ -252,8 +246,8 @@ pub(super) fn norm(deck: &DeckUIInfo, name: &str) -> f32 {
         .unwrap_or_default()
 }
 
-/// One source control, drawn from its kind. A control the source reports
-/// as inactive is grayed out, with the reason on hover; see [`inactive_scope`].
+/// One source control, drawn by its kind. Inactive controls are grayed out
+/// with the reason on hover; see [`inactive_scope`].
 pub(super) fn source_param(
     ui: &mut egui::Ui,
     deck: &DeckUIInfo,
@@ -268,8 +262,7 @@ pub(super) fn source_param(
 }
 
 /// Draw `add` grayed out, with the reason on hover, when the source reports
-/// the control `name` as inactive. It stays live while a learn mode is on, so
-/// the control can still be mapped.
+/// control `name` inactive. It stays live in learn mode so it can be mapped.
 pub(super) fn inactive_scope(
     ui: &mut egui::Ui,
     deck: &DeckUIInfo,
@@ -289,8 +282,8 @@ pub(super) fn inactive_scope(
     }
 }
 
-/// The learn glow and modulation menu for each channel of a color or axis of
-/// a point, as small labels after the control.
+/// Learn glow and modulation menu for each channel of a color or axis of a
+/// point, as small labels after the control.
 pub(super) fn component_affordances(
     ui: &mut egui::Ui,
     deck_uuid: &str,
@@ -316,8 +309,8 @@ pub(super) fn component_affordances(
     }
 }
 
-/// A text control edited in a buffer and sent when focus leaves (or on
-/// Cmd/Ctrl+Enter for a block), so it is not applied one keystroke at a time.
+/// A text control edited in a buffer and sent on focus loss (or Cmd/Ctrl+Enter
+/// for a block), not per keystroke.
 pub(super) fn text_control(
     ui: &mut egui::Ui,
     deck_uuid: &str,
@@ -529,8 +522,7 @@ fn source_control(
             } else {
                 text_control(ui, uuid, spec, current, *multiline, actions);
             }
-            // What the source says about the value: parse problems, a
-            // missing font.
+            // Source notes on the value, such as parse problems or a missing font.
             if let Some(note) = deck.source.status.display.get(&spec.name) {
                 ui.label(egui::RichText::new(note).small().weak());
             }
@@ -579,7 +571,7 @@ fn source_control(
 }
 
 /// The crop rectangle a `CropRect` hint groups: a row per edge (the column is
-/// too narrow for four sliders side by side) and a reset to the full frame.
+/// too narrow for four sliders across) and a reset to the full frame.
 fn crop_widget(
     ui: &mut egui::Ui,
     deck: &DeckUIInfo,
@@ -609,8 +601,8 @@ fn crop_widget(
     }
 }
 
-/// A clip transport: play, scrub, speed and loop, the show-transport chase,
-/// and the in/out range. Reads the info keys `WidgetHint::Transport` names.
+/// Clip transport: play, scrub, speed and loop, show-transport chase, and the
+/// in/out range. Reads the info keys `WidgetHint::Transport` names.
 fn transport_widget(
     ui: &mut egui::Ui,
     deck: &DeckUIInfo,
@@ -655,8 +647,8 @@ fn transport_widget(
         });
     }
 
-    // The handle rides the live playhead, so the ghost marks the opposite
-    // thing: the point the modulator is swinging around.
+    // The handle follows the live playhead, so the ghost marks the modulator's
+    // center point.
     if let Some(pos_spec) = spec("position") {
         let mut pos = position as f32;
         ui.horizontal(|ui| {
@@ -686,8 +678,7 @@ fn transport_widget(
         });
     }
 
-    // The slider stays on the set point, so the ghost is the only thing
-    // showing the live rate.
+    // The slider stays on the set point, so the ghost shows the live rate.
     if let Some(speed_spec) = spec("speed")
         && let ControlKind::Float {
             display_min,
@@ -733,8 +724,7 @@ fn transport_widget(
                 .small()
                 .weak(),
         );
-        // Two authorities on one value is the seek storm this design avoids,
-        // so say which one wins rather than letting it look broken.
+        // Say which of the two controls wins, so a held value doesn't look broken.
         let held = [("Playhead", spec("position")), ("Speed", spec("speed"))]
             .into_iter()
             .filter(|(_, s)| {
@@ -812,7 +802,7 @@ fn transport_widget(
         {
             set_source(actions, uuid, &point.name, here);
         }
-        // Clear is always shown (disabled when no range) so it stays MIDI/keyboard-mappable.
+        // Clear is always shown (disabled without a range) so it stays mappable.
         if let Some(clear) = spec("clear") {
             let resp = ui
                 .add_enabled(has_range, egui::Button::new("x Clear").small())
@@ -849,8 +839,8 @@ fn transport_widget(
     );
 }
 
-/// The deck's source controls: whatever its type declares, grouped by the
-/// widget hints it uses. See /spec/deck-source-providers.md Decision 8.
+/// The deck's source controls as its type declares them, grouped by widget
+/// hint.
 fn render_source_column(
     ui: &mut egui::Ui,
     deck: &DeckUIInfo,
@@ -870,9 +860,9 @@ fn render_source_column(
         return;
     }
     let status = &deck.source.status;
-    // A type with no controls of its own (a shader, whose inputs are in the
-    // params column) and nothing to report gets no column, so the effect
-    // chain stays where it was on a narrow screen.
+    // A type with no controls of its own (a shader, whose inputs are in the params
+    // column) and no status gets no column, keeping the effect chain in place on
+    // narrow screens.
     let has_status =
         !deck.source.available || status.bound == Some(false) || status.connected == Some(false);
     if ty.params.is_empty() && !has_status {
@@ -894,9 +884,8 @@ fn render_source_column(
             ui.set_max_width(280.0);
             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                 render_column_header(ui, &title, open_id);
-                // Scrolls within the bar's height like the params column: a
-                // source with many controls (a text deck) must not grow the
-                // column past the bar, which collapses the bottom panel.
+                // Scrolls within the bar's height like the params column; a tall column would
+                // collapse the bottom panel.
                 let max_h = (ui.available_height() - 8.0).max(100.0);
                 egui::ScrollArea::vertical()
                     .id_salt(("deck_source_scroll", &deck.uuid))
@@ -923,8 +912,8 @@ fn render_source_column(
                             ui.colored_label(egui::Color32::GRAY, "Waiting for frames…");
                         }
 
-                        // Repoint the deck at another entry of its own type (another
-                        // camera, another tap point), keeping its effects and mappings.
+                        // Switch the deck to another entry of its type (another camera, another tap
+                        // point), keeping its effects and mappings.
                         if ty.library.entries.len() > 1 {
                             ui.horizontal(|ui| {
                                 ui.label("Source:");
@@ -954,8 +943,8 @@ fn render_source_column(
                             match spec.widget {
                                 Some(WidgetHint::Transport) => transport.push(spec),
                                 Some(WidgetHint::CropRect) => crop.push(spec),
-                                // Orbit is drawn as its plain parameters; the output
-                                // hints never appear on a deck source.
+                                // Orbit is drawn as plain parameters; output hints never appear on
+                                // a deck source.
                                 Some(
                                     WidgetHint::Orbit
                                     | WidgetHint::Monitor
@@ -1002,7 +991,7 @@ fn render_source_column(
     ui.separator();
 }
 
-/// A seed nobody has to choose.
+/// A random seed.
 fn fresh_seed() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1011,9 +1000,7 @@ fn fresh_seed() -> u64 {
 
 /// Reset, randomize, and mutate for a deck's generator parameters.
 ///
-/// Randomize and mutate only produce candidates. Deck presets are what name and
-/// keep one, so the loop is: mutate, look, save a preset if it is good, undo if it
-/// is not. See spec/parameter-exploration.md.
+/// These only produce candidates; save a deck preset to keep one, or undo.
 fn render_exploration_controls(
     ui: &mut egui::Ui,
     deck_uuid: &str,
@@ -1024,8 +1011,8 @@ fn render_exploration_controls(
     let scope_id = ui.id().with(("explore_scope", deck_uuid));
     let mut amount = ui.data_mut(|d| d.get_temp::<f32>(amount_id)).unwrap_or(0.1);
 
-    // A group that has since gone (a different shader, or a `_mode` toggle that
-    // hid its section) must not leave a scope selected that no longer exists.
+    // Clear a selected scope whose group no longer exists (a different shader, or
+    // a `_mode` toggle hid its section).
     let groups = widgets::param_groups(params);
     let mut scope = ui
         .data_mut(|d| d.get_temp::<String>(scope_id))
@@ -1075,8 +1062,8 @@ fn render_exploration_controls(
         {
             ui.data_mut(|d| d.insert_temp(amount_id, amount));
         }
-        // Scoping is what makes exploration usable on a shader with fifty
-        // parameters: hunt a formula without disturbing a grade that already works.
+        // Scoping limits exploration to one group, so a shader with many parameters
+        // can be varied without disturbing the rest.
         if !groups.is_empty() {
             let before = scope.clone();
             egui::ComboBox::from_id_salt(("explore_scope_combo", deck_uuid))
@@ -1114,7 +1101,7 @@ fn render_exploration_controls(
     });
 }
 
-/// Render the selected deck's full details (params, effects, blend, scaling) in the bottom bar
+/// The selected deck's full details (params, effects, blend, scaling) in the bottom bar.
 pub(super) fn render_selected_deck_detail(
     ui: &mut egui::Ui,
     data: &UIData,
@@ -1131,7 +1118,6 @@ pub(super) fn render_selected_deck_detail(
         return;
     };
 
-    // Find the deck data
     let Some(ch) = data.channels.get(ch_idx) else {
         ui.label(egui::RichText::new("Channel not found").weak());
         return;
@@ -1154,7 +1140,7 @@ pub(super) fn render_selected_deck_detail(
             .color(accent),
         );
 
-        // Save as preset — inline name prompt
+        // Save as preset, with an inline name prompt.
         let prompt_id = egui::Id::new("deck_preset_name_prompt");
         let name_id = egui::Id::new("deck_preset_name_input");
         let is_prompting: bool = ui.data(|d| d.get_temp(prompt_id)).unwrap_or(false);
@@ -1190,14 +1176,13 @@ pub(super) fn render_selected_deck_detail(
         }
     });
 
-    // Horizontal columns: Preview | Generator | Effect 1 | Effect 2 | ... | Add Effect
+    // Columns: Preview | Generator | Effect 1 | Effect 2 | ... | Add Effect
     egui::ScrollArea::horizontal().id_salt("selected_deck_hscroll").show(ui, |ui| {
         ui.horizontal_top(|ui| {
-            // Column 0: Deck preview — scales with bottom bar height
+            // Column 0: deck preview, scaled to the bottom bar height.
             if let Some(tex_id) = data.deck_preview_textures.get(&deck.uuid) {
-                // Height-driven from the bottom bar, with the visible panel
-                // width as the other bound so an ultra-wide project cannot
-                // produce a column wider than the bar it sits in.
+                // Height comes from the bottom bar; the visible panel width caps it so an
+                // ultra-wide project can't make the column wider than the bar.
                 let available_height = ui.available_height() - 12.0; // margin
                 let preview = super::utils::preview_size(
                     egui::vec2(ui.available_width(), available_height.max(60.0)),
@@ -1221,10 +1206,10 @@ pub(super) fn render_selected_deck_detail(
                 ui.separator();
             }
 
-            // Column: the source's own controls, from its type's schema.
+            // Column: the source's controls, from its type's schema.
             render_source_column(ui, deck, data, actions);
 
-            // Column: Auto-Transition controls (collapsible column, default closed)
+            // Column: auto-transition controls, collapsible, closed by default.
             {
                 let at_open_id = egui::Id::new("at_col_open").with((ch_idx, deck_idx));
                 let at_open = ui.ctx().memory(|mem| mem.data.get_temp::<bool>(at_open_id).unwrap_or(false));
@@ -1238,7 +1223,6 @@ pub(super) fn render_selected_deck_detail(
                             ui.set_max_width(260.0);
                             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                                 render_column_header(ui, "Auto Transition", at_open_id);
-                                // Enable toggle
                                 ui.horizontal(|ui| {
                                     let enabled = deck.auto_transition.as_ref().is_some_and(|at| at.enabled);
                                     let mut en = enabled;
@@ -1378,13 +1362,13 @@ pub(super) fn render_selected_deck_detail(
                             });
                         });
                 } else {
-                    // Collapsed: narrow vertical strip with vertical text
+                    // Collapsed: narrow strip with vertical text.
                     render_collapsed_column(ui, "Auto Transition", at_open_id);
                 }
                 ui.separator();
             }
 
-            // Column: Generator parameters + blend/scale (collapsible column, default open)
+            // Column: generator parameters and blend/scale, collapsible, open by default.
             {
                 let params_open_id = egui::Id::new("params_col_open").with((ch_idx, deck_idx));
                 let params_open = ui.ctx().memory(|mem| mem.data.get_temp::<bool>(params_open_id).unwrap_or(true));
@@ -1400,7 +1384,6 @@ pub(super) fn render_selected_deck_detail(
                                 render_column_header(ui, &format!("Params: {}", deck.generator.shader_name), params_open_id);
                             let max_h = (ui.available_height() - 8.0).max(100.0);
                             egui::ScrollArea::vertical().id_salt("deck_gen_scroll").max_height(max_h).show(ui, |ui| {
-                                // Blend mode
                                 let all_modes = BlendMode::all();
                                 let current_blend = all_modes.iter().position(|m| *m == deck.blend_mode).unwrap_or(0);
                                 let mut selected = current_blend;
@@ -1422,14 +1405,13 @@ pub(super) fn render_selected_deck_detail(
                                     });
                                 }
 
-                                // Depth-sensor shader preprocessor controls
+                                // Depth-sensor preprocessor controls.
                                 if let Some(prepro) = &deck.depth_prepro {
                                     render_depth_prepro_controls(
                                         ui, deck, prepro, data, actions,
                                     );
                                 }
 
-                                // Render FPS
                                 ui.horizontal(|ui| {
                                     ui.label("Render:");
                                     let options = ["Auto", "60", "30", "15"];
@@ -1437,7 +1419,7 @@ pub(super) fn render_selected_deck_detail(
                                         DeckRenderFps::Fixed(60) => 1,
                                         DeckRenderFps::Fixed(30) => 2,
                                         DeckRenderFps::Fixed(15) => 3,
-                                        // Auto and any other fixed rate fall back to "Auto"
+                                        // Auto and any other fixed rate show as "Auto".
                                         DeckRenderFps::Auto | DeckRenderFps::Fixed(_) => 0,
                                     };
                                     let mut selected = current_idx;
@@ -1461,7 +1443,6 @@ pub(super) fn render_selected_deck_detail(
                                             render_fps: new_fps,
                                         });
                                     }
-                                    // Show render cost
                                     if deck.gpu_render_cost_us > 0.0 {
                                         let ms = deck.gpu_render_cost_us / 1000.0;
                                         ui.label(egui::RichText::new(format!("⚡{ms:.1}ms GPU")).small().weak());
@@ -1471,7 +1452,6 @@ pub(super) fn render_selected_deck_detail(
                                     }
                                 });
 
-                                // Generator parameters
                                 let gen_params = &deck.generator;
                                 if !gen_params.params.is_empty() {
                                     ui.add_space(4.0);
@@ -1519,23 +1499,21 @@ pub(super) fn render_selected_deck_detail(
                             });
                         });
                 } else {
-                    // Collapsed: narrow vertical strip with vertical text
+                    // Collapsed: narrow strip with vertical text.
                     render_collapsed_column(ui, &format!("Params: {}", deck.generator.shader_name), params_open_id);
                 }
             }
 
             ui.separator();
 
-            // Effect chain: drag-and-drop reordering + library drops
+            // Effect chain: drag-and-drop reordering and library drops.
             {
                 for (eff_idx, (eff_uuid, eff_name, eff_enabled, eff_params)) in deck.effects.iter().enumerate() {
-                    // Drop zone before this effect (for reordering)
+                    // Drop zone before this effect, for reordering.
                     render_effect_drop_zone(ui, &format!("deck_{}", deck.uuid), eff_idx);
 
-                    // Effect card with drag handle in header only
-                    // A scope, not the Frame, because a `Ui` registers itself
-                    // before its contents and so loses hit-test ties to the
-                    // parameter widgets inside the card.
+                    // Effect card, dragged by its header handle. A scope, not the Frame: see
+                    // `effect_context_menu`.
                     let card = egui::UiBuilder::new().sense(egui::Sense::click());
                     let card_scope = ui.scope_builder(card, |ui| {
                         egui::Frame::default()
@@ -1610,7 +1588,7 @@ pub(super) fn render_selected_deck_detail(
                         eff_uuid,
                         eff_name,
                     );
-                    // X button overlay at top-right of card
+                    // X button over the card's top-right corner.
                     {
                         let card_rect = card_resp.response.rect;
                         let btn_size = egui::vec2(16.0, 16.0);
@@ -1634,13 +1612,13 @@ pub(super) fn render_selected_deck_detail(
                     ui.separator();
                 }
 
-                // Drop zone after last effect (for reordering to end)
+                // Drop zone after the last effect.
                 if !deck.effects.is_empty() {
                     let num_effects = deck.effects.len();
                     render_effect_drop_zone(ui, &format!("deck_{}", deck.uuid), num_effects);
                 }
 
-                // Remaining space: always present drop target that fills remaining width
+                // Drop target over the remaining width.
                 let has_fx_drag = egui::DragAndDrop::payload::<LibraryDrag>(ui.ctx())
                     .is_some_and(|p| matches!(&*p, LibraryDrag::Effect(_)));
                 let remaining_w = ui.available_width().max(80.0);
@@ -1660,7 +1638,7 @@ pub(super) fn render_selected_deck_detail(
                     });
             }
 
-            // The entire horizontal_top area takes deferred library effect drops
+            // The whole horizontal_top area accepts deferred library effect drops.
             let chain_rect = ui.min_rect();
             super::dnd::publish_deck_surface_fx(ui.ctx(), &deck.uuid, ch_idx, deck_idx, chain_rect);
             let deck_chain_key = format!("deck_{}", deck.uuid);

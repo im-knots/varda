@@ -1,11 +1,8 @@
-//! Offensive tests for the video-deck transport chase servo.
+//! Fuzz tests for the video-deck transport chase servo.
 //!
-//! Chase configuration can come from a hand-edited scene, the HTTP API, or an
-//! in-process command, while the transport is fed by external timecode. None of
-//! those values may panic the decode thread, produce a non-finite clip position,
-//! or escape the clip's playable range.
-//!
-//! See /spec/timecode.md § Consumer 2.
+//! Chase settings from scenes, the HTTP API, or commands, fed by external
+//! timecode, must never panic the decode thread, yield a non-finite clip
+//! position, or leave the clip's playable range.
 
 use proptest::prelude::*;
 use varda::video::DeckTransportSync;
@@ -32,9 +29,8 @@ fn assert_sane_step(input: ChaseInput) -> Result<(), TestCaseError> {
 }
 
 proptest! {
-    /// Every input is deliberately unconstrained. This includes NaN,
-    /// infinities, subnormals, inverted ranges, extreme delays, and values
-    /// large enough to overflow intermediate multiplication.
+    /// Inputs are unconstrained: NaN, infinities, subnormals, inverted ranges,
+    /// extreme delays, and values that overflow intermediate products.
     #[test]
     fn arbitrary_sync_state_cannot_poison_the_decoder(
         position in any::<f64>(),

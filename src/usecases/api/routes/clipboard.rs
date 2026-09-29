@@ -1,9 +1,7 @@
 //! Copy, paste, and duplicate of scene objects.
 //!
-//! The clipboard is engine state rather than a UI convenience, so a show
-//! control system can build a rig the same way a performer does: copy a channel
-//! that is already dialled in, paste it, then address the copy by the UUID that
-//! comes back. See `/spec/clipboard.md`.
+//! The clipboard is engine state, so API clients can copy, paste, and then
+//! address the copy by the returned UUID.
 
 use axum::Json;
 use axum::extract::State;

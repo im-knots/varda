@@ -493,8 +493,6 @@ Integers appear in two places, both in the request body rather than the address:
 - **Reorder ordinals:** `PUT /api/channels/{channel_uuid}/decks/reorder` takes `from_idx` and `to_idx`, the positions being swapped.
 - **Sequence step indices:** a step's position within its own sequence, which is how the sequencer addresses steps.
 
-See [/spec/api-addressing.md] for the full rationale.
-
 ## Per-type deck routes (deprecated)
 
 Each deck type used to have its own routes, such as `POST /api/channels/{channel_uuid}/decks/shader`, `/decks/video`, `/api/decks/{deck_uuid}/video/speed`, `/api/devices/ndi/scan` and `/api/streams/hls/library`. They still work for one release and are listed under **Deprecated** below. Each one's description names the generic route that replaces it. They will be removed in the release after the one that deprecated them.
@@ -516,7 +514,7 @@ Analyzer routes cover frame analysis (brightness, face detection, depth sensor).
      Regenerate with: UPDATE_API_DOCS=1 cargo test --test api_docs -->
 
 Writes address entities by UUID. Positional integers appear only as reorder
-ordinals and sequence step indices; see [/spec/api-addressing.md].
+ordinals and sequence step indices.
 
 ### Analyzers
 
@@ -591,7 +589,7 @@ ordinals and sequence step indices; see [/spec/api-addressing.md].
 | `PUT` | `/api/decks/{deck_uuid}/opacity` |  |
 | `PUT` | `/api/decks/{deck_uuid}/render-fps` |  |
 | `PUT` | `/api/decks/{deck_uuid}/solo` |  |
-| `PUT` | `/api/decks/{deck_uuid}/source` | Swap a deck's source for another, keeping the deck's identity, effects, |
+| `PUT` | `/api/decks/{deck_uuid}/source` | Swap a deck's source, keeping the deck's identity, effects, opacity and |
 | `POST` | `/api/decks/{deck_uuid}/source/actions/{name}` | Fire one of a deck's source actions (reload a page, clear in/out points). |
 | `PUT` | `/api/decks/{deck_uuid}/source/params/{name}` | Write one of a deck's source controls, by the name its type declares in |
 | `PUT` | `/api/decks/{deck_uuid}/transparent` |  |
@@ -690,9 +688,9 @@ ordinals and sequence step indices; see [/spec/api-addressing.md].
 | `PUT` | `/api/macros/{uuid}/button/behavior` |  |
 | `PUT` | `/api/macros/{uuid}/button/triggers` |  |
 | `PUT` | `/api/macros/{uuid}/kind` |  |
-| `PUT` | `/api/macros/{uuid}/modulation` | Drive a Knob/Fader macro's value from a modulation source. The source adds a |
+| `PUT` | `/api/macros/{uuid}/modulation` | Drive a knob or fader macro from a modulation source, which adds a signed |
 | `DELETE` | `/api/macros/{uuid}/modulation` | Remove all modulation driving this macro's value. |
-| `DELETE` | `/api/macros/{uuid}/modulation/{source_id}` | Remove only one modulation source from this macro's value, leaving any other |
+| `DELETE` | `/api/macros/{uuid}/modulation/{source_id}` | Remove one modulation source from this macro's value, keeping the others. |
 | `PUT` | `/api/macros/{uuid}/name` |  |
 | `POST` | `/api/macros/{uuid}/targets` |  |
 | `PUT` | `/api/macros/{uuid}/targets/{target_idx}` |  |
@@ -781,8 +779,8 @@ ordinals and sequence step indices; see [/spec/api-addressing.md].
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/decks/{deck_uuid}/params/mutate` | Nudge a deck's generator parameters by `amount` as a fraction of each declared range, keeping the |
-| `POST` | `/api/decks/{deck_uuid}/params/randomize` | Draw a deck's generator parameters afresh from their declared ranges. A given seed always |
+| `POST` | `/api/decks/{deck_uuid}/params/mutate` | Nudge a deck's generator parameters by `amount`, a fraction of each |
+| `POST` | `/api/decks/{deck_uuid}/params/randomize` | Draw a deck's generator parameters afresh from their declared ranges. The |
 | `POST` | `/api/decks/{deck_uuid}/params/reset` |  |
 | `PUT` | `/api/params` |  |
 
@@ -897,8 +895,8 @@ ordinals and sequence step indices; see [/spec/api-addressing.md].
 | `PUT` | `/api/surfaces/{uuid}/output-type` |  |
 | `PUT` | `/api/surfaces/{uuid}/path/anchor` |  |
 | `PUT` | `/api/surfaces/{uuid}/path/handle` |  |
-| `POST` | `/api/surfaces/{uuid}/punch` | "Make Hole" (8i.7): convert the surface identified by `uuid` into a cut-out |
-| `POST` | `/api/surfaces/{uuid}/reorder` | Change a surface's global stacking order (8i.12): move it front/back/up/down |
+| `POST` | `/api/surfaces/{uuid}/punch` | Turn surface `uuid` into a hole in the topmost other surface under its |
+| `POST` | `/api/surfaces/{uuid}/reorder` | Change a surface's stacking order: to front, to back, up, or down. |
 | `PUT` | `/api/surfaces/{uuid}/rotate` |  |
 | `PUT` | `/api/surfaces/{uuid}/scale` |  |
 | `PUT` | `/api/surfaces/{uuid}/source` |  |
@@ -953,7 +951,7 @@ ordinals and sequence step indices; see [/spec/api-addressing.md].
 | `PUT` | `/api/transport/loop` |  |
 | `POST` | `/api/transport/play` |  |
 | `PUT` | `/api/transport/rate` |  |
-| `PUT` | `/api/transport/record` | Arm or disarm automation recording. Arming from a stop also rolls the show, |
+| `PUT` | `/api/transport/record` | Arm or disarm automation recording. Arming from a stop also starts the |
 | `PUT` | `/api/transport/source` |  |
 | `POST` | `/api/transport/stop` |  |
 

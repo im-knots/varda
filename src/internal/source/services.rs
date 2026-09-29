@@ -3,11 +3,7 @@
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 
-/// A map of shared device managers, keyed by type.
-///
-/// A provider owns whatever only it uses. A manager another part of the
-/// engine also needs (a camera the stage editor snapshots, an NDI manager that
-/// also sends) is registered here once, and every user looks it up by type.
+/// Device managers used by more than one part of the engine, keyed by type.
 #[derive(Default)]
 pub struct Services {
     map: HashMap<TypeId, Box<dyn Any>>,

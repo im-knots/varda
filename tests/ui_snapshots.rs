@@ -1,18 +1,12 @@
-//! E2E snapshot tests for visual regression.
+//! Snapshot tests for visual regression.
 //!
-//! Render the UI (or specific panels) and compare against reference images.
-//! Reference images are stored in `tests/snapshots/` and tracked in git.
-//! `.diff.png`, `.new.png` and `.old.png` files are git-ignored.
+//! Render the UI or single panels and compare against reference images in
+//! `tests/snapshots/` (tracked in git; `.diff.png`, `.new.png` and `.old.png`
+//! are ignored). Skipped without a GPU or software renderer.
 //!
-//! These require wgpu — they will be skipped if no GPU/software renderer is available.
-//!
-//! **These do not run in CI.** The reference PNGs are generated on a developer's
-//! GPU (Metal), while CI renders on lavapipe, and the two disagree by a couple of
-//! 8-bit steps on a handful of pixels. Reconciling that needs either a per-pixel
-//! tolerance wide enough to hide real regressions, or lavapipe-generated goldens
-//! that can no longer be regenerated locally. Neither is worth it, so CI sets
-//! `VARDA_SKIP_GOLDEN_SNAPSHOTS` and these stay a local-only check. Every other
-//! GPU suite does run in CI on lavapipe.
+//! Not run in CI: references are rendered on Metal, CI renders on lavapipe, and
+//! a few pixels differ by a couple of 8-bit steps. CI sets
+//! `VARDA_SKIP_GOLDEN_SNAPSHOTS`. Other GPU suites do run in CI.
 
 use std::rc::Rc;
 
@@ -22,19 +16,14 @@ use varda::usecases::ui::panels::render_ui;
 use varda::usecases::ui::{UIActions, UIData};
 
 /// Logical-point size of the simulated window. `pixels_per_point` is 1.0, so
-/// this is both the point size and the PNG's pixel size.
+/// this is also the PNG's pixel size.
 ///
-/// 1920×1080 rather than a smaller box because the panels are sized in points:
-/// at 1280×720 the top bar overlapped its own tonemap label, the bottom panel
-/// clipped, and "Drag effects here" wrapped to one letter per line. None of that
-/// reproduces at a realistic maximized-window size, so the smaller box was
-/// pinning layout defects that no user would ever see.
+/// Panels are sized in points, and smaller windows produce layout defects (top
+/// bar overlap, clipped bottom panel) that a maximized window never shows.
 const SIZE: egui::Vec2 = egui::vec2(1920.0, 1080.0);
 
-/// Build a sized harness, or `None` when golden comparison is disabled.
-///
-/// The opt-out lives here rather than in each test so a snapshot test cannot be
-/// added that bypasses it — they all have to come through this constructor.
+/// Build a sized harness, or `None` when golden comparison is disabled. Every
+/// snapshot test goes through here so none can bypass the opt-out.
 fn snapshot_harness(data: UIData) -> Option<Harness<'static, UIActions>> {
     if std::env::var_os("VARDA_SKIP_GOLDEN_SNAPSHOTS").is_some() {
         eprintln!("VARDA_SKIP_GOLDEN_SNAPSHOTS set — skipping golden comparison");
@@ -71,9 +60,7 @@ fn snapshot_full_ui_library_closed() {
     harness.snapshot("full_ui_library_closed");
 }
 
-/// Collapsing the right panel must not take the telemetry with it: the frame
-/// rate matters most to someone who has just reclaimed screen space to chase
-/// performance. See /spec/transport.md.
+/// Collapsing the right panel keeps the telemetry visible.
 #[test]
 fn snapshot_full_ui_right_panel_closed() {
     let mut data = UIData::test_fixture();
@@ -84,10 +71,8 @@ fn snapshot_full_ui_right_panel_closed() {
     harness.snapshot("full_ui_right_panel_closed");
 }
 
-/// Arrangement mode swaps the central area and nothing else: the library,
-/// bottom bar, and right panel must survive the mode switch intact. That is the
-/// whole claim of /spec/arrangement.md § UI, and a picture is the only way to
-/// check it.
+/// Arrangement mode swaps only the central area: the library, bottom bar, and
+/// right panel stay unchanged.
 #[test]
 fn snapshot_full_ui_arrangement_mode() {
     let mut data = UIData::test_fixture();
@@ -101,8 +86,8 @@ fn snapshot_full_ui_arrangement_mode() {
     });
     let config = varda::arrangement::ArrangementConfig {
         lanes: vec![lane],
-        // A cue in the picture, because "yellow dot on the ruler, dashed line
-        // down the lanes" is a claim only a picture can check.
+        // A cue, so the snapshot shows the ruler dot and the dashed line down
+        // the lanes.
         cues: vec![varda::arrangement::Cue {
             uuid: "cue00001".to_string(),
             name: "Drop".to_string(),
@@ -126,8 +111,8 @@ fn snapshot_full_ui_arrangement_mode() {
     harness.snapshot("full_ui_arrangement_mode");
 }
 
-/// The same show back at the desk. "Two buttons wide, under the mixer and the
-/// macros, without crowding either" is a claim only a picture can check.
+/// The same show in performance mode: the arrangement buttons sit under the
+/// mixer and macros without crowding either.
 #[test]
 fn snapshot_full_ui_cue_bank() {
     let mut data = UIData::test_fixture();
@@ -179,11 +164,10 @@ fn snapshot_bottom_bar_deck_detail() {
 }
 
 /// The video playback column, with a modulator on the speed slider and another
-/// carrying the playhead away from its anchor.
+/// moving the playhead away from its anchor.
 ///
-/// The shared fixture has no video deck, so without this the whole playback
-/// column (and every `〰` dropdown and ghost on it) would render in no snapshot
-/// at all. See /spec/video-playback-modulation.md § UI.
+/// The shared fixture has no video deck, so no other snapshot covers this
+/// column or its `〰` dropdowns and ghosts.
 #[test]
 fn snapshot_bottom_bar_video_playback() {
     use varda::source::DeckSourceProvider;
@@ -211,12 +195,10 @@ fn snapshot_bottom_bar_video_playback() {
     info.insert("playing".into(), true.into());
     info.insert("position".into(), 4.25.into());
     info.insert("duration".into(), 30.0.into());
-    // Set point and live rate differ, which is the whole point of the ghost:
-    // a golden with them equal would not show whether it is drawn.
+    // Set point and live rate differ so the ghost is visible.
     info.insert("speed".into(), 1.0.into());
     info.insert("effective_speed".into(), 2.4.into());
-    // Non-zero so the scrub bar's ghost sits away from the handle, where a
-    // golden can tell the two apart.
+    // Non-zero so the scrub bar's ghost sits apart from the handle.
     info.insert("position_offset".into(), (-3.0).into());
     info.insert("in_point".into(), 0.0.into());
     info.insert("out_point".into(), 0.0.into());
@@ -251,11 +233,8 @@ fn snapshot_bottom_bar_video_playback() {
 
 /// Drag the bottom panel to its maximum height.
 ///
-/// It defaults to 180 points, which fits the shared fixture's single parameter
-/// and nothing else: a grouped list renders below the fold and both goldens
-/// come out identical. Seeding the stored panel state is the only way to reach
-/// the size from a headless harness, since the alternative is synthesising a
-/// drag on the resize separator.
+/// At the default 180 points a grouped list renders below the fold. Seeding the
+/// stored panel state avoids synthesizing a drag on the resize separator.
 fn expand_bottom_panel(harness: &mut Harness<'static, UIActions>) {
     const PANEL_MAX: f32 = 400.0;
     harness.ctx.data_mut(|d| {
@@ -274,11 +253,9 @@ fn expand_bottom_panel(harness: &mut Harness<'static, UIActions>) {
 
 /// A grouped shader in the params column, with `long` and `point2D` rows.
 ///
-/// The shared fixture's deck declares one ungrouped float, so without this no
-/// golden covers a section header, the first-group-open rule, or the two widget
-/// types that `render_params` only learned to draw when groups landed. Shaped
-/// after `shaders/fractal_mandelbulb.fs`, which is what the rule actually meets
-/// in the shipped library. See /spec/parameter-inspector.md.
+/// The shared fixture has one ungrouped float, so this covers section headers,
+/// the first-group-open rule, and the `long`/`point2D` widgets. Modeled on
+/// `shaders/fractal_mandelbulb.fs`.
 fn grouped_param_fixture() -> UIData {
     use varda::params::ParamValue;
     use varda::usecases::ui::{ParamChoiceUI, ParamUIInfo};
@@ -357,8 +334,7 @@ fn snapshot_bottom_bar_param_groups() {
     harness.snapshot("bottom_bar_param_groups");
 }
 
-/// Every section closed, which is what a fifty-parameter shader is supposed to
-/// be able to look like. Reached by closing Form, the one group that opens by
+/// Every section closed, reached by closing Form, the one group open by
 /// default.
 #[test]
 fn snapshot_bottom_bar_param_groups_collapsed() {

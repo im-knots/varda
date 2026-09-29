@@ -1,9 +1,8 @@
 //! The deck source types this build offers, and the device managers they share
 //! with the rest of the engine.
 //!
-//! Adding a deck source means writing a provider (see `crate::source`) and one
-//! line in [`source_providers`]. Nothing else in the engine, the GUI or the API
-//! names a source type. See /spec/deck-source-providers.md.
+//! To add a deck source, write a provider (see `crate::source`) and add one
+//! line to [`source_providers`]. Nothing else names a source type.
 
 use super::{AppConfig, DeckSources};
 use crate::engine::value::provider::ProviderTypeSnapshot;
@@ -12,14 +11,12 @@ use crate::source::{Services, SourceEnv, SourceRegistry};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// How long a source type listing is reused before it is rebuilt. Covers the
-/// library changes no command announces: a stream connecting, a sender
-/// appearing on the network, a shader file saved.
+/// How long a source type listing is reused. Bounds staleness for library
+/// changes no command announces (a stream connecting, a shader file saved).
 const TYPE_LISTING_TTL: Duration = Duration::from_millis(250);
 
 /// The last listing of every source type and when it was built. Listing walks
-/// every library (the whole shader library among them), so snapshots reuse it
-/// rather than rebuilding it every frame.
+/// every library, so snapshots reuse it.
 #[derive(Default)]
 pub(crate) struct TypeCache(Mutex<Option<(Instant, Arc<Vec<ProviderTypeSnapshot>>)>>);
 
@@ -101,17 +98,14 @@ pub(crate) fn output_sinks() -> crate::output::SinkRegistry {
     r
 }
 
-/// The device managers that providers and other features share: cameras (the
-/// stage editor snapshots them), depth sensors (shader preprocessors read
-/// them), and the NDI, Syphon and Spout runtimes (outputs send through them).
-/// The `--no-*` flags build a manager disabled rather than leaving it out, so
-/// its source type reports why it is unavailable.
+/// The device managers shared by providers and other features: cameras, depth
+/// sensors, and the NDI, Syphon and Spout runtimes. `--no-*` flags build a
+/// manager disabled so its source type can report why it is unavailable.
 pub(crate) fn source_services(config: &AppConfig) -> Services {
     let services = Services::new()
         .with(crate::camera::CameraManager::new())
         .with(crate::depth::DepthSensorManager::new())
-        // Constructed disabled rather than merely inert, so
-        // `--no-screen-capture` never triggers the macOS TCC prompt.
+        // Built disabled so `--no-screen-capture` never triggers the macOS TCC prompt.
         .with(if config.screen_capture_disabled {
             crate::screen_capture::ScreenCaptureManager::new_disabled()
         } else {
@@ -152,8 +146,8 @@ impl DeckSources {
     ///
     /// # Panics
     ///
-    /// Panics if `T` was never registered, which [`source_services`] rules out
-    /// for every manager the engine reaches for.
+    /// Panics if `T` was never registered. [`source_services`] registers every
+    /// manager the engine uses.
     pub(crate) fn service<T: std::any::Any>(&self) -> &T {
         self.services
             .get::<T>()
@@ -167,8 +161,7 @@ impl DeckSources {
             .expect("device manager registered at startup")
     }
 
-    /// The registry and an environment over this group's services, split so a
-    /// provider can be called with both.
+    /// The registry and an environment over these services, borrowed separately.
     pub(crate) fn env<'a>(
         &'a mut self,
         gpu: &'a GpuContext,
@@ -189,8 +182,8 @@ impl DeckSources {
         )
     }
 
-    /// Every source type, as snapshots list them: rebuilt after a command or
-    /// once [`TYPE_LISTING_TTL`] has passed, otherwise shared.
+    /// Every source type for snapshots. Rebuilt after a command or once
+    /// [`TYPE_LISTING_TTL`] has passed.
     pub(crate) fn type_snapshots(
         &self,
         channels: &[(String, String)],
@@ -298,7 +291,7 @@ mod tests {
         });
         assert!(Arc::ptr_eq(&first, &app.build_engine_state().sources));
 
-        // Saving a URL does, and the very next snapshot lists it.
+        // Saving a URL does, and the next snapshot lists it.
         let entry =
             crate::source::SourceConfig::new("Hls").with("url", "https://example.invalid/a.m3u8");
         app.execute_command(crate::engine::EngineCommand::AddSourceLibraryEntry {

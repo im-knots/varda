@@ -1,9 +1,7 @@
-//! Background deck loading. Slow source constructions (a shader compile, a
-//! media decode) run off the render thread through the loader their provider
-//! hands out; finished decks attach at the start of a later frame, where they
-//! are finalized. This is the only path that builds such a deck, whichever
-//! consumer asked. See /spec/ui-engine-boundary.md (Decision #15) and
-//! /spec/deck-source-providers.md.
+//! Background deck loading. Slow source builds (shader compile, media decode)
+//! run off the render thread through the provider's loader; finished decks are
+//! finalized and attached at the start of a later frame. Every consumer uses
+//! this path for such decks.
 
 use super::VardaApp;
 use crate::deck::Deck;
@@ -55,8 +53,7 @@ impl DeckLoader {
         }
     }
 
-    /// Start building a deck for `channel_uuid` and return the UUID it will
-    /// have once attached.
+    /// Start building a deck for `channel_uuid`. Returns the deck's future UUID.
     fn spawn(
         &mut self,
         context: &GpuContext,
@@ -82,7 +79,7 @@ impl DeckLoader {
                     deck.set_uuid(deck_uuid.clone());
                     deck
                 });
-                // The engine may have shut down; nothing is waiting then.
+                // Fails only if the engine has shut down.
                 let _ = tx.send(Finished {
                     uuid: deck_uuid,
                     deck,
@@ -143,7 +140,6 @@ impl DeckLoader {
         loading.chain(failed).collect()
     }
 
-    /// Number of loads still in flight.
     #[cfg(test)]
     pub(crate) fn in_flight(&self) -> usize {
         self.in_flight.len()
@@ -151,9 +147,8 @@ impl DeckLoader {
 }
 
 impl VardaApp {
-    /// Start a background load into `channel_uuid` at the current render size,
-    /// returning the UUID the deck will have. `name` is what the load is
-    /// reported as until the deck exists.
+    /// Start a background load into `channel_uuid` at the current render size.
+    /// Returns the deck's future UUID. `name` labels the load until then.
     pub(crate) fn spawn_deck_load(
         &mut self,
         channel_uuid: &str,
@@ -170,8 +165,7 @@ impl VardaApp {
         )
     }
 
-    /// Attach every deck whose load finished since the last frame, and report
-    /// the ones that could not be attached.
+    /// Attach every deck whose load finished since the last frame, reporting failures.
     pub(crate) fn attach_finished_deck_loads(&mut self) {
         for (load, deck) in self.sources.deck_loader.take_finished() {
             match self.attach_loaded_deck(&load, deck) {
@@ -218,8 +212,7 @@ impl VardaApp {
 
 #[cfg(test)]
 impl VardaApp {
-    /// Run frames until no deck load is in flight. Shader, image, and video
-    /// decks attach on a later frame than the command that asked for them.
+    /// Run frames until no deck load is in flight.
     pub(crate) fn settle_deck_loads(&mut self) {
         let deadline = Instant::now() + Duration::from_secs(20);
         while self.sources.deck_loader.in_flight() > 0 {

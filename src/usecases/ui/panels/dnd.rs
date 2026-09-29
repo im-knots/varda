@@ -1,16 +1,16 @@
 //! Deferred drag-and-drop handlers.
 //!
-//! egui's drag-and-drop payload is only readable while the drag is live, so each
-//! handler tracks the hovered drop target every frame and applies the action on
-//! the frame the payload disappears (mouse released).
+//! egui's drag payload is only readable while the drag is live, so each handler
+//! tracks the hovered drop target every frame and applies the action on the
+//! frame the payload disappears.
 
 use super::super::{EffectDrag, LibraryDrag, SequenceStepDrag, UIActions, UIData};
 use crate::engine::{EffectTarget, EngineCommand};
 
 /// Where a library effect will land if released now.
 ///
-/// Hit order is deck, then master, then channel, so a deck card inside a channel
-/// column claims the drop. See /spec/effect-drop-targets.md.
+/// Hit order is deck, then master, then channel, so a deck card inside a
+/// channel column takes the drop.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum FxHover {
     Deck {
@@ -32,13 +32,11 @@ fn fx_surfaces_id() -> egui::Id {
     egui::Id::new("__fx_drop_surfaces")
 }
 
-/// Drop the surfaces published last frame, before the panels republish.
+/// Clear the surfaces published last frame, before the panels republish.
 ///
-/// The registry has to be rebuilt from scratch every frame rather than
-/// accumulated: a surface that is no longer drawn (a deselected deck's
-/// bottom-bar chain, an arrangement lane after leaving arrangement mode, a card
-/// that has since moved) would otherwise keep claiming drops at the place it
-/// used to occupy. See /spec/effect-drop-targets.md.
+/// Rebuilt every frame so a surface that is no longer drawn (a deselected
+/// deck's chain, a lane after leaving arrangement mode, a moved card) cannot
+/// take drops at its old position.
 pub(super) fn begin_fx_surface_frame(ctx: &egui::Context) {
     ctx.memory_mut(|mem| mem.data.remove::<FxSurfaces>(fx_surfaces_id()));
 }
@@ -72,7 +70,7 @@ pub(super) fn publish_deck_surface_fx(
     );
 }
 
-/// Channel columns (deck cards inside them win by hit priority), the channel's
+/// Channel columns (deck cards inside win by hit priority), the channel's
 /// bottom-bar chain, arrangement group rows, and channel automation.
 pub(super) fn publish_channel_surface_fx(
     ctx: &egui::Context,
@@ -96,11 +94,11 @@ pub(super) fn publish_master_surface_fx(ctx: &egui::Context, rect: egui::Rect) {
     publish_fx_surface(ctx, FxHover::Master, rect);
 }
 
-/// Pure hit test used by the deferred handler and by unit tests.
+/// Hit test for the deferred handler.
 ///
 /// Deck surfaces are tried before master and master before channel, so a deck
-/// card claims a drop over the channel column it sits in. Within one kind the
-/// first surface drawn wins.
+/// card takes a drop over its channel column. Within one kind the first surface
+/// drawn wins.
 fn resolve_fx_from_surfaces(
     pos: egui::Pos2,
     surfaces: &[(FxHover, egui::Rect)],
@@ -129,11 +127,8 @@ enum FxSelect {
     Master,
 }
 
-/// Deferred library drag-and-drop handler.
-/// Each frame while a `LibraryDrag` payload is active, find which drop target the pointer is over.
-/// When the payload disappears (mouse released), apply the drop action.
-/// Resolve a filter registry index (as stashed by the library drag source) to
-/// its shader name, so the panel can push a canonical `AddEffect` command.
+/// Resolve a filter registry index, as stored by the library drag source, to
+/// its shader name for an `AddEffect` command.
 pub(super) fn resolve_filter_name(data: &UIData, filter_idx: usize) -> Option<String> {
     data.filters
         .iter()
@@ -163,7 +158,7 @@ pub(super) fn handle_library_dnd(ui: &egui::Ui, data: &UIData, actions: &mut UIA
                 }
             }
 
-            // Check if hovering over either new-channel drop zone (left=0, right=1)
+            // Hovering either new-channel drop zone (left=0, right=1).
             let mut on_new_ch = false;
             if found_ch.is_none() {
                 for side in 0..2 {
@@ -197,15 +192,13 @@ pub(super) fn handle_library_dnd(ui: &egui::Ui, data: &UIData, actions: &mut UIA
             let on_new_ch_zone: bool =
                 ctx.memory(|mem| mem.data.get_temp(on_new_ch_id).unwrap_or(false));
 
-            // Channel preset: if dropped on a channel, fill into it; otherwise create new
+            // Channel preset: fills the channel it is dropped on, otherwise creates one.
             let ch_preset_key = egui::Id::new("__lib_dnd_ch_preset_idx");
             let ch_preset_idx: Option<usize> = ctx.memory(|mem| mem.data.get_temp(ch_preset_key));
 
-            // Resolve the drop target to a channel UUID. A drop on empty space
-            // has to create the channel first, and no UUID for it exists until
-            // the engine has applied `AddChannel` — so that case parks the
-            // payload and resolves on the next frame instead of guessing an
-            // index. See `/spec/api-addressing.md`.
+            // Resolve the drop target to a channel UUID. A drop on empty space creates
+            // the channel first, which has no UUID until the engine applies `AddChannel`,
+            // so the payload is parked and resolved next frame.
             let awaiting_len: Option<usize> =
                 ctx.memory(|mem| mem.data.get_temp(awaiting_new_ch_id));
             let mut parked = false;
@@ -307,8 +300,8 @@ pub(super) fn handle_library_dnd(ui: &egui::Ui, data: &UIData, actions: &mut UIA
                 }
             }
 
-            // A parked payload keeps its keys so the next frame can re-enter and
-            // resolve the channel that `AddChannel` created.
+            // A parked payload keeps its keys so the next frame can resolve the channel
+            // `AddChannel` created.
             if parked {
                 return;
             }
@@ -332,9 +325,8 @@ pub(super) fn handle_library_dnd(ui: &egui::Ui, data: &UIData, actions: &mut UIA
     }
 }
 
-/// Deferred effect reorder drag-and-drop handler.
-/// Same pattern as library drops — tracks which drop zone the pointer is over,
-/// then applies the move when the payload disappears.
+/// Deferred effect-reorder handler. Tracks the hovered drop zone and applies
+/// the move when the payload disappears.
 pub(super) fn handle_effect_dnd(ui: &egui::Ui, data: &UIData, actions: &mut UIActions) {
     let ctx = ui.ctx();
     let had_eff_id = egui::Id::new("__eff_dnd_had_payload");
@@ -467,9 +459,9 @@ pub(super) fn handle_effect_dnd(ui: &egui::Ui, data: &UIData, actions: &mut UIAc
     }
 }
 
-/// Deferred `DnD` handler for reordering steps within a sequence.
-/// Follows the same pattern as effect `DnD`: source is stored in egui memory
-/// during drag (since `DragAndDrop::payload()` is None after mouse release).
+/// Deferred handler for reordering steps within a sequence. The source is
+/// stored in egui memory because `DragAndDrop::payload()` is `None` after
+/// release.
 pub(super) fn handle_sequence_step_dnd(ui: &egui::Ui, _data: &UIData, actions: &mut UIActions) {
     let ctx = ui.ctx();
     let had_id = egui::Id::new("__seq_step_dnd_had");
@@ -484,13 +476,13 @@ pub(super) fn handle_sequence_step_dnd(ui: &egui::Ui, _data: &UIData, actions: &
     } else {
         let had: bool = ctx.memory(|mem| mem.data.get_temp(had_id).unwrap_or(false));
         if had {
-            // Payload was just released — read source from memory (not DragAndDrop)
+            // Payload just released: read the source from memory.
             let src: Option<SequenceStepDrag> = ctx.memory(|mem| mem.data.get_temp(src_id));
             let target: Option<usize> = ctx.memory(|mem| mem.data.get_temp(target_id));
 
             if let (Some(payload), Some(to)) = (src, target) {
-                // `to` is the gap position in the original list.
-                // After remove(from), indices shift: adjust for insert.
+                // `to` is the gap position in the original list; removing `from` shifts later
+                // indices down by one.
                 let insert_idx = if to > payload.step_idx { to - 1 } else { to };
                 if insert_idx != payload.step_idx {
                     actions
@@ -559,8 +551,8 @@ mod tests {
         );
     }
 
-    /// The card under the pointer takes the drop, not the deck whose chain
-    /// happens to be open in the bottom bar.
+    /// The card under the pointer takes the drop, not the deck whose chain is open
+    /// in the bottom bar.
     #[test]
     fn a_drop_lands_on_the_hovered_deck_not_the_selected_one() {
         let surfaces = vec![
@@ -574,8 +566,8 @@ mod tests {
         );
     }
 
-    /// Only the selected deck draws a bottom-bar chain, so the frame's surfaces
-    /// name it and no deck that was selected earlier can still claim the area.
+    /// Only the selected deck draws a bottom-bar chain, so a previously selected
+    /// deck cannot still take drops in that area.
     #[test]
     fn the_bottom_bar_chain_belongs_to_whichever_deck_drew_it() {
         let chain = rect(0.0, 400.0, 800.0, 500.0);

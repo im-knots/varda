@@ -1,7 +1,6 @@
 //! Where each piece of text goes on the deck this frame, for every mode and
-//! transition. Pure: no GPU and no fonts. The caller supplies each string's
-//! measured extent and draws the quads. See /spec/text-source.md § Modes and
-//! § Transitions.
+//! transition. No GPU or fonts: the caller supplies each string's measured
+//! extent and draws the quads.
 
 use super::cue::{Cue, CueAlign, LineAlign, LineValue, Placement, PositionAlign};
 
@@ -538,7 +537,7 @@ fn lay_lines<'a>(
     }
 }
 
-/// A WebVTT-placed cue. See /spec/text-source.md § WebVTT cue placement.
+/// A WebVTT-placed cue.
 #[allow(clippy::too_many_arguments)]
 fn lay_placed<'a>(
     cues: &'a [Cue],

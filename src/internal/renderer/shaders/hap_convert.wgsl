@@ -1,4 +1,4 @@
-// HAP YCoCg→RGB conversion + dual-plane alpha compositing shader.
+// HAP YCoCg-to-RGB conversion with dual-plane alpha.
 // Used for HAP Q (YCoCg DXT5) and HAP Q Alpha (YCoCg DXT5 + BC4 alpha).
 
 struct HapConvertParams {
@@ -24,7 +24,7 @@ var<uniform> params: HapConvertParams;
 @group(0) @binding(3)
 var alpha_texture: texture_2d<f32>;
 
-/// Scaled YCoCg → RGB conversion (matches HAP Q spec).
+/// Scaled YCoCg to RGB, per the HAP Q format.
 /// Input: BC3/DXT5 texture where RGB stores YCoCg and A stores scale.
 fn ycocg_to_rgb(color: vec4<f32>) -> vec3<f32> {
     let scale = (color.b * (255.0 / 8.0)) + 1.0;
@@ -52,7 +52,7 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
 
     var alpha: f32;
     if (params.has_alpha_plane > 0.5) {
-        // Dual-plane: alpha comes from separate BC4 texture (red channel)
+        // Dual-plane: alpha from the BC4 texture's red channel.
         let alpha_sample = textureSample(alpha_texture, tex_sampler, scaled_uv);
         alpha = alpha_sample.r;
     } else {

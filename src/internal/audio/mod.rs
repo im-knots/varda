@@ -1,4 +1,4 @@
-//! Audio input and analysis for audio-reactive shaders
+//! Audio input and analysis for audio-reactive shaders.
 
 pub(crate) mod analysis;
 
@@ -13,34 +13,34 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Opaque audio source identifier.
 pub type AudioSourceId = u32;
 
-/// Opaque token identifying a single PCM passthrough subscription.
+/// Identifies one PCM passthrough subscription.
 pub type PcmToken = u64;
 
-/// Bounded capacity (in chunks) of a passthrough PCM channel. One chunk is
-/// produced per cpal callback (~10ms), so 32 ≈ 320ms of slack before drops.
+/// Capacity in chunks of a passthrough PCM channel. One chunk per cpal callback
+/// (~10 ms), so 32 is ~320 ms of slack before drops.
 const PCM_CHANNEL_CAPACITY: usize = 32;
 
-/// Monotonic source of unique [`PcmToken`]s.
+/// Source of unique [`PcmToken`]s.
 static NEXT_PCM_TOKEN: AtomicU64 = AtomicU64::new(1);
 
-/// Native PCM layout of a capture device, reported to passthrough subscribers
-/// so they can build matching ffmpeg input args.
+/// Native PCM layout of a capture device, so passthrough subscribers can build
+/// matching ffmpeg input args.
 #[derive(Debug, Clone, Copy)]
 pub struct AudioFormat {
     pub sample_rate: u32,
     pub channels: u16,
 }
 
-/// A chunk of raw interleaved PCM (native channel count, native sample rate),
-/// tee'd from the cpal capture callback for output passthrough. Distinct from
-/// [`AudioData`], which is mono-downmixed and FFT-processed for analysis.
+/// Raw interleaved PCM at the device's native channel count and rate, teed from
+/// the capture callback for output passthrough. [`AudioData`] is the mono,
+/// FFT-processed form used for analysis.
 pub struct PcmChunk {
     /// Interleaved `f32` samples in the device's native channel count.
     pub samples: Vec<f32>,
 }
 
-/// A registered passthrough consumer. The cpal callback fans raw PCM out to
-/// every subscriber on a source (a "tee").
+/// A passthrough consumer. The capture callback sends raw PCM to every
+/// subscriber on a source.
 #[derive(Clone)]
 pub(crate) struct PcmSubscriber {
     token: PcmToken,
@@ -49,33 +49,26 @@ pub(crate) struct PcmSubscriber {
     lost_samples: Arc<AtomicU64>,
 }
 
-/// Handle returned by [`AudioManager::subscribe_pcm`]. The receiver yields raw
-/// PCM; `format` describes its layout; `token` identifies the subscription for
-/// [`AudioManager::unsubscribe_pcm`]; `dropped` counts backpressure drops.
+/// Returned by [`AudioManager::subscribe_pcm`]. `format` is the PCM layout,
+/// `token` identifies the subscription for [`AudioManager::unsubscribe_pcm`],
+/// and `dropped` counts backpressure drops.
 pub struct PcmSubscription {
     pub receiver: Receiver<PcmChunk>,
     pub format: AudioFormat,
     pub token: PcmToken,
     pub dropped: Arc<AtomicU64>,
-    /// Total samples lost to those drops. The consumer owes the stream this
-    /// much silence; see `AudioPipe::start` in the ffmpeg subprocess.
+    /// Samples lost to drops. The consumer must insert this much silence; see
+    /// `AudioPipe::start` in the ffmpeg subprocess.
     pub lost_samples: Arc<AtomicU64>,
 }
 
-/// Fan a chunk of raw interleaved PCM out to every passthrough subscriber.
+/// Sends a chunk of raw interleaved PCM to every passthrough subscriber.
 ///
-/// Never blocks — this runs on the real-time capture callback, where waiting on
-/// a consumer would stall the device and corrupt every listener. So on a full
-/// channel the chunk is dropped and counted.
-///
-/// The *duration* of the drop is counted too, and that is the part that matters
-/// downstream. Video can drop a frame and lose nothing but a moment of motion,
-/// because each surviving frame still says when it belongs. A PCM stream has no
-/// such labels: it is timed purely by how many samples have gone past, so
-/// silently dropping some does not leave a hole, it drags everything after it
-/// earlier. Consumers replace `lost_samples` with silence to keep the count
-/// honest. Disconnected subscribers (the output stopped without unsubscribing)
-/// are silently skipped.
+/// Never blocks, since this runs on the real-time capture callback. On a full
+/// channel the chunk is dropped and its sample count added to `lost_samples`.
+/// PCM is timed only by sample count, so consumers must replace lost samples
+/// with silence or everything after the drop plays early. Disconnected
+/// subscribers are skipped.
 fn fan_out_pcm(subs: &[PcmSubscriber], samples: &[f32]) {
     for sub in subs {
         match sub.sender.try_send(PcmChunk {
@@ -91,49 +84,49 @@ fn fan_out_pcm(subs: &[PcmSubscriber], samples: &[f32]) {
     }
 }
 
-/// Audio buffer size (samples per channel) — 256 @ 48kHz ≈ 5.3ms latency
+/// Samples per channel per buffer: 256 at 48 kHz ≈ 5.3 ms latency.
 pub const AUDIO_BUFFER_SIZE: usize = 256;
-/// FFT size — 2048 @ 48kHz = 23Hz/bin resolution for clean bass separation
+/// FFT size: 2048 at 48 kHz gives 23 Hz bins, enough to separate bass.
 pub const FFT_SIZE: usize = 2048;
-/// Hop size for overlapping analysis frames
+/// Hop between overlapping analysis frames.
 const FFT_HOP: usize = AUDIO_BUFFER_SIZE;
-/// Number of beat intervals to keep for BPM calculation
+/// Beat intervals kept for BPM estimation.
 const BPM_HISTORY_SIZE: usize = 16;
-/// Minimum time between beats (in seconds) to avoid double-triggering
+/// Minimum seconds between beats, to avoid double triggers.
 const MIN_BEAT_INTERVAL: f32 = 0.2; // Max ~300 BPM
-/// Maximum time between beats before we reset BPM tracking
+/// Seconds without a beat before BPM tracking resets.
 const MAX_BEAT_INTERVAL: f32 = 2.0; // Min ~30 BPM
-/// Window size for adaptive onset threshold (median of recent spectral flux)
+/// Window for the adaptive onset threshold (median of recent spectral flux).
 const ONSET_MEDIAN_WINDOW: usize = 8;
-/// Spectral flux must exceed median * this multiplier + offset to trigger onset
+/// Onset fires when spectral flux exceeds median * this + offset.
 const ONSET_THRESHOLD_MULTIPLIER: f32 = 1.5;
-/// Minimum spectral flux to trigger onset (prevents triggers in silence)
+/// Minimum spectral flux for an onset, so silence doesn't trigger.
 const ONSET_THRESHOLD_OFFSET: f32 = 0.01;
-/// Reject beat intervals that deviate >15% from median
+/// Beat intervals more than 15% from the median are rejected.
 const TEMPO_TOLERANCE: f32 = 0.15;
 
-/// Information about a detected audio input device.
+/// A detected audio input device.
 #[derive(Debug, Clone)]
 pub struct AudioDeviceInfo {
     pub id: AudioSourceId,
     pub name: String,
 }
 
-/// Audio analysis data sent to the rendering thread. The sample arrays are
-/// shared, so a copy of the data costs two reference-count bumps.
+/// Audio analysis for the render thread. The sample arrays are shared, so
+/// cloning costs two refcount bumps.
 #[derive(Clone)]
 pub struct AudioData {
-    /// Raw waveform data (normalized -1.0 to 1.0)
+    /// Raw waveform, -1.0 to 1.0.
     pub waveform: std::sync::Arc<[f32]>,
-    /// FFT magnitude spectrum (0.0 to 1.0, normalized)
+    /// FFT magnitude spectrum, normalized 0.0 to 1.0.
     pub fft: std::sync::Arc<[f32]>,
-    /// Current RMS level (0.0 to 1.0)
+    /// RMS level, 0.0 to 1.0.
     pub level: f32,
     /// Detected BPM (if available)
     pub bpm: Option<f32>,
-    /// Time since last beat (in seconds)
+    /// Seconds since the last beat.
     pub time_since_beat: f32,
-    /// Sample rate of the audio stream (needed to convert FFT bins to Hz)
+    /// Hz; needed to convert FFT bins to frequencies.
     pub sample_rate: f32,
 }
 
@@ -151,14 +144,14 @@ impl Default for AudioData {
 }
 
 impl AudioData {
-    /// Hz width of each FFT bin (derived from actual FFT data length)
+    /// Hz per FFT bin, from the FFT data length.
     fn bin_width(&self) -> f32 {
         let fft_size = self.fft.len() * 2;
         self.sample_rate / fft_size as f32
     }
 
-    /// Get energy in an arbitrary frequency range (Hz).
-    /// This is the core method — bass/mid/treble are just presets on top of it.
+    /// Energy in a frequency range (Hz). `bass`, `mid`, and `treble` are presets
+    /// over this.
     pub fn energy_in_range(&self, freq_low: f32, freq_high: f32) -> f32 {
         if self.fft.is_empty() {
             return 0.0;
@@ -173,7 +166,7 @@ impl AudioData {
             return 0.0;
         }
         let slice = &self.fft[bin_low..bin_high];
-        // RMS energy then dB-based perceptual mapping
+        // RMS energy, then a dB-based perceptual mapping.
         let rms = (slice.iter().map(|v| v * v).sum::<f32>() / slice.len() as f32).sqrt();
         if rms < 1e-6 {
             return 0.0;
@@ -182,22 +175,22 @@ impl AudioData {
         ((db + 60.0) / 60.0).clamp(0.0, 1.0)
     }
 
-    /// Get bass level (low frequencies, ~20-250Hz)
+    /// Bass level, ~20-250 Hz.
     pub fn bass(&self) -> f32 {
         self.energy_in_range(20.0, 250.0)
     }
 
-    /// Get mid level (mid frequencies, ~250-2000Hz)
+    /// Mid level, ~250-2000 Hz.
     pub fn mid(&self) -> f32 {
         self.energy_in_range(250.0, 2000.0)
     }
 
-    /// Get treble level (high frequencies, ~2000Hz+)
+    /// Treble level, ~2000 Hz and up.
     pub fn treble(&self) -> f32 {
         self.energy_in_range(2000.0, 20000.0)
     }
 
-    /// Get beat phase (0.0 to 1.0, where 0.0 is on the beat)
+    /// Beat phase, 0.0 to 1.0, where 0.0 is on the beat.
     pub fn beat_phase(&self) -> f32 {
         if let Some(bpm) = self.bpm {
             let beat_duration = 60.0 / bpm;
@@ -208,9 +201,9 @@ impl AudioData {
     }
 }
 
-/// Copy the finite values of `values` into a scratch buffer for median selection.
+/// Copies the finite values into a scratch buffer for median selection.
 fn finite_values(values: &[f32]) -> Vec<f32> {
-    // Non-short-circuiting scan so the common all-finite case stays a memcpy.
+    // Non-short-circuiting, so the common all-finite case stays a memcpy.
     if values.iter().fold(true, |ok, v| ok & v.is_finite()) {
         values.to_vec()
     } else {
@@ -218,19 +211,15 @@ fn finite_values(values: &[f32]) -> Vec<f32> {
     }
 }
 
-/// Float comparison for values already known to be finite.
+/// Comparison for values known to be finite.
 fn cmp_finite(a: f32, b: f32) -> std::cmp::Ordering {
     a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal)
 }
 
-/// Compute the adaptive onset threshold from a window of spectral flux values.
-/// Returns `median(flux_history) * ONSET_THRESHOLD_MULTIPLIER + ONSET_THRESHOLD_OFFSET`.
-///
-/// Uses `select_nth_unstable_by` (quickselect, O(n)) instead of a full sort
-/// to find the median without allocating a new Vec.
-///
-/// Non-finite values (a misbehaving driver) are skipped, so every compared value
-/// is finite and the comparison is a total order.
+/// Adaptive onset threshold for a window of spectral flux values:
+/// `median(flux_history) * ONSET_THRESHOLD_MULTIPLIER + ONSET_THRESHOLD_OFFSET`.
+/// The median uses quickselect (`select_nth_unstable_by`). Non-finite values
+/// are skipped, so the comparison is a total order.
 pub fn compute_onset_threshold(flux_history: &[f32]) -> f32 {
     let mut buf: Vec<f32> = finite_values(flux_history);
     if buf.is_empty() {
@@ -241,13 +230,9 @@ pub fn compute_onset_threshold(flux_history: &[f32]) -> f32 {
     buf[mid] * ONSET_THRESHOLD_MULTIPLIER + ONSET_THRESHOLD_OFFSET
 }
 
-/// Estimate BPM from a history of beat intervals using median-based outlier rejection.
-/// Returns `None` if fewer than 4 intervals, or if the resulting BPM is outside 30-300.
-///
-/// Uses `select_nth_unstable_by` (quickselect, O(n)) for the median, then
-/// filters outliers using the original (unsorted) slice to avoid a second allocation.
-///
-/// Non-finite intervals are skipped, so every compared value is finite.
+/// Estimates BPM from beat intervals, rejecting outliers around the median.
+/// `None` with fewer than 4 intervals or a BPM outside 30-300. The median uses
+/// quickselect; non-finite intervals are skipped.
 pub fn estimate_bpm(beat_intervals: &[f32]) -> Option<f32> {
     let mut buf: Vec<f32> = finite_values(beat_intervals);
     if buf.len() < 4 {
@@ -256,7 +241,7 @@ pub fn estimate_bpm(beat_intervals: &[f32]) -> Option<f32> {
     let mid = buf.len() / 2;
     buf.select_nth_unstable_by(mid, |a, b| cmp_finite(*a, *b));
     let median = buf[mid];
-    // Filter outliers and compute average in a single pass — no intermediate Vec.
+    // Filter outliers and average in one pass.
     let (sum, count) = buf.iter().fold((0.0f32, 0u32), |(s, c), &iv| {
         if (iv - median).abs() / median < TEMPO_TOLERANCE {
             (s + iv, c + 1)
@@ -273,42 +258,38 @@ pub fn estimate_bpm(beat_intervals: &[f32]) -> Option<f32> {
     None
 }
 
-/// An active audio source with its own capture stream.
+/// An open audio source and its capture stream.
 struct ActiveAudioSource {
     _stream: cpal::Stream,
     receiver: Receiver<AudioData>,
-    /// Latest polled data (cached between polls)
+    /// Latest polled data, cached between polls.
     pub latest: AudioData,
-    /// Native sample rate (Hz) of the capture device.
+    /// Native sample rate in Hz.
     sample_rate_hz: u32,
-    /// Native channel count of the capture device.
+    /// Native channel count.
     channels: u16,
-    /// Passthrough subscribers. Swapped lock-free so the real-time cpal
-    /// callback reads without locking while subscribe/unsubscribe mutate.
+    /// Passthrough subscribers, swapped lock-free so the capture callback never
+    /// takes a lock.
     pcm_subs: Arc<ArcSwap<Vec<PcmSubscriber>>>,
 }
 
-/// Manages audio device enumeration and multiple simultaneous audio input streams.
+/// Audio device enumeration and input streams.
 ///
-/// Capture is **lazy and derived from state**: a device is open only while it has
-/// at least one *holder*. Holders come in three kinds (see
-/// [/spec/audio-capture-lifecycle.md](/spec/audio-capture-lifecycle.md)):
-/// modulation references (`mod_refs`, reconciled per-frame via
-/// [`set_modulation_refs`](Self::set_modulation_refs)), PCM passthrough
-/// subscribers (`pcm_subs` on each source), and manual pins (`manual_pins`, via
-/// [`open_source`](Self::open_source)). A device with none of these is orphaned
-/// and closed.
+/// A device is open only while it has at least one holder: a modulation ref
+/// (`mod_refs`, reconciled each frame by
+/// [`set_modulation_refs`](Self::set_modulation_refs)), a PCM passthrough
+/// subscriber (`pcm_subs` on each source), or a manual pin (`manual_pins`, via
+/// [`open_source`](Self::open_source)). A device with no holder is closed.
 pub struct AudioManager {
-    /// Detected audio input devices (refreshed on scan).
+    /// Detected input devices, refreshed on scan.
     devices: Vec<AudioDeviceInfo>,
-    /// Active audio sources keyed by `AudioSourceId`.
     active: HashMap<AudioSourceId, ActiveAudioSource>,
-    /// Resolved default input id (OS default matched by name, else first),
-    /// cached at scan time. Used to resolve `AudioBand { source_id: None }`.
+    /// Default input id (OS default matched by name, else first), cached at
+    /// scan time. Resolves `AudioBand { source_id: None }`.
     default_source_id: Option<AudioSourceId>,
-    /// Devices explicitly pinned open by a consumer (`open_source`).
+    /// Devices pinned open by `open_source`.
     manual_pins: HashSet<AudioSourceId>,
-    /// Devices referenced by `AudioBand` modulators (last reconciled set).
+    /// Devices referenced by `AudioBand` modulators, as last reconciled.
     mod_refs: HashSet<AudioSourceId>,
 }
 
@@ -327,16 +308,15 @@ impl AudioManager {
             manual_pins: HashSet::new(),
             mod_refs: HashSet::new(),
         };
-        // Enumerate devices and cache the default input, but open nothing —
-        // capture starts only when a holder appears (issue #76).
+        // Enumerate and cache the default input, but open nothing: capture
+        // starts when a holder appears.
         mgr.scan_devices();
         mgr
     }
 
-    /// Choose which enumerated input is the default: the OS default input matched
-    /// by name if it is present in the scanned list, otherwise the first
-    /// enumerated device. Returns `None` when no inputs exist. Pure so it can be
-    /// unit-tested without audio hardware.
+    /// Picks the default input: the OS default matched by name if present,
+    /// else the first device. `None` with no inputs. Pure, for testing without
+    /// audio hardware.
     fn pick_default_input(
         default_name: Option<&str>,
         devices: &[AudioDeviceInfo],
@@ -349,7 +329,7 @@ impl AudioManager {
         devices.first().map(|d| d.id)
     }
 
-    /// Scan for available audio input devices and cache the resolved default.
+    /// Scans input devices and caches the default.
     pub fn scan_devices(&mut self) {
         let host = cpal::default_host();
         self.devices = host
@@ -369,9 +349,9 @@ impl AudioManager {
                     .collect()
             })
             .unwrap_or_default();
-        // Cache the default input (matched by OS-default name so we prefer the
-        // user's mic/interface over a silent BlackHole loopback that merely
-        // enumerates first). Queried here, off the per-frame hot path.
+        // Match the OS default by name, so the user's mic/interface wins over a
+        // silent BlackHole loopback that enumerates first. Done here, off the
+        // per-frame path.
         let default_name = host
             .default_input_device()
             .and_then(|d| d.description().ok().map(|desc| desc.name().to_string()));
@@ -382,36 +362,31 @@ impl AudioManager {
         }
     }
 
-    /// Get the list of detected audio input devices.
     pub fn devices(&self) -> &[AudioDeviceInfo] {
         &self.devices
     }
 
-    /// Resolved default input id, used to resolve `AudioBand { source_id: None }`.
+    /// Default input id, which resolves `AudioBand { source_id: None }`.
     pub fn default_source_id(&self) -> Option<AudioSourceId> {
         self.default_source_id
     }
 
-    /// Manually pin a source open (a co-equal-consumer holder).
-    ///
-    /// Pins the device so it stays open regardless of modulation/passthrough
-    /// holders, and starts capture if it isn't already running. Used by the HTTP
-    /// API (`POST /audio/sources/{id}/open`) and `ToggleAudioSource`. Release
-    /// with [`close_source`](Self::close_source).
+    /// Pins a source open regardless of other holders and starts capture if
+    /// needed. Used by `POST /audio/sources/{id}/open` and `ToggleAudioSource`.
+    /// Release with [`close_source`](Self::close_source).
     ///
     /// # Errors
     ///
-    /// Returns an error if the host cannot enumerate input devices, if no device
-    /// exists at index `id`, if the device has no usable default input config, if
-    /// its sample format is not `f32`/`i16`/`u16`, or if building or starting the
-    /// cpal input stream fails.
+    /// Returns an error if input devices can't be enumerated, no device exists
+    /// at `id`, the device has no default input config, its sample format isn't
+    /// `f32`/`i16`/`u16`, or the cpal stream fails to build or start.
     pub fn open_source(&mut self, id: AudioSourceId) -> Result<()> {
         self.manual_pins.insert(id);
         self.ensure_open(id)
     }
 
-    /// Start capture for a source if it isn't already active. Idempotent.
-    /// Does not register any holder — callers manage holder sets themselves.
+    /// Starts capture if not already active. Registers no holder; callers
+    /// manage holder sets.
     fn ensure_open(&mut self, id: AudioSourceId) -> Result<()> {
         if self.active.contains_key(&id) {
             return Ok(()); // Already open
@@ -485,13 +460,10 @@ impl AudioManager {
         Ok(())
     }
 
-    /// Subscribe to raw PCM passthrough for a source, opening it if needed.
-    ///
-    /// Returns a fresh receiver plus the device's native [`AudioFormat`] so the
-    /// caller can build matching ffmpeg input args. The audio callback fans raw
-    /// interleaved `f32` to this and every other subscriber off one hardware
-    /// clock, keeping analysis and passthrough coherent. Returns `None` if the
-    /// source can't be opened.
+    /// Subscribes to raw PCM passthrough for a source, opening it if needed.
+    /// Returns a receiver and the device's native [`AudioFormat`] for ffmpeg
+    /// input args. Analysis and every subscriber share one hardware clock.
+    /// `None` if the source can't be opened.
     pub fn subscribe_pcm(&mut self, id: AudioSourceId) -> Option<PcmSubscription> {
         if !self.active.contains_key(&id)
             && let Err(e) = self.ensure_open(id)
@@ -530,10 +502,8 @@ impl AudioManager {
         })
     }
 
-    /// Remove a PCM passthrough subscriber when its output stops.
-    ///
-    /// Dropping the last passthrough subscriber releases that holder; the device
-    /// is closed if no modulation ref or manual pin still needs it.
+    /// Removes a PCM passthrough subscriber when its output stops, and closes
+    /// the device if nothing else holds it.
     pub fn unsubscribe_pcm(&mut self, id: AudioSourceId, token: PcmToken) {
         if let Some(source) = self.active.get(&id) {
             source.pcm_subs.rcu(|cur| {
@@ -547,14 +517,14 @@ impl AudioManager {
         self.close_if_orphaned(id);
     }
 
-    /// Release a manual pin (`open_source`) and close the device if orphaned.
+    /// Releases a manual pin and closes the device if nothing else holds it.
     pub fn close_source(&mut self, id: AudioSourceId) {
         self.manual_pins.remove(&id);
         self.close_if_orphaned(id);
     }
 
-    /// Whether a source still has any holder: a manual pin, a modulation ref,
-    /// or at least one PCM passthrough subscriber.
+    /// Whether a source has any holder: manual pin, modulation ref, or PCM
+    /// passthrough subscriber.
     fn has_holder(&self, id: AudioSourceId) -> bool {
         self.manual_pins.contains(&id)
             || self.mod_refs.contains(&id)
@@ -564,8 +534,8 @@ impl AudioManager {
                 .is_some_and(|s| !s.pcm_subs.load().is_empty())
     }
 
-    /// Close and stop the `cpal` stream for a source if it has no remaining
-    /// holder. No-op if the source is not open or is still held.
+    /// Stops the `cpal` stream for a source with no holder. No-op if closed or
+    /// still held.
     fn close_if_orphaned(&mut self, id: AudioSourceId) {
         if self.has_holder(id) {
             return;
@@ -575,15 +545,12 @@ impl AudioManager {
         }
     }
 
-    /// Reconcile the set of devices referenced by `AudioBand` modulators.
-    ///
-    /// Declarative per-frame entry point: `needed` is the resolved set of device
-    /// ids that modulators currently require (with `None` already resolved to the
-    /// default input). Opens newly-needed devices and closes devices that dropped
-    /// out of the set and are no longer held by a pin or passthrough subscriber.
-    /// See [/spec/audio-capture-lifecycle.md](/spec/audio-capture-lifecycle.md).
+    /// Reconciles the devices referenced by `AudioBand` modulators. Call each
+    /// frame with the needed device ids (`None` already resolved to the
+    /// default). Opens new ones and closes dropped ones no longer held by a pin
+    /// or passthrough subscriber.
     pub fn set_modulation_refs(&mut self, needed: &BTreeSet<AudioSourceId>) {
-        // Devices leaving the modulation set: drop the ref, then close if orphaned.
+        // Leaving the set: drop the ref, then close if nothing holds it.
         let dropped: Vec<AudioSourceId> = self
             .mod_refs
             .iter()
@@ -594,7 +561,7 @@ impl AudioManager {
             self.mod_refs.remove(&id);
             self.close_if_orphaned(id);
         }
-        // Devices entering the modulation set: register the ref, then ensure open.
+        // Entering the set: add the ref, then open.
         for &id in needed {
             if (self.mod_refs.insert(id) || !self.active.contains_key(&id))
                 && let Err(e) = self.ensure_open(id)
@@ -605,10 +572,9 @@ impl AudioManager {
         }
     }
 
-    /// Resolve a list of `AudioBand` device selections into the concrete set of
-    /// device ids that must be open. `None` selections resolve to `default` (and
-    /// are dropped when no default input exists). Pure so it can be unit-tested
-    /// without audio hardware.
+    /// Resolves `AudioBand` device selections to the set of device ids to open.
+    /// `None` resolves to `default`, or is dropped with no default input. Pure,
+    /// for testing without audio hardware.
     pub fn needed_from_bands(
         bands: &[Option<AudioSourceId>],
         default: Option<AudioSourceId>,
@@ -616,7 +582,7 @@ impl AudioManager {
         bands.iter().filter_map(|sel| sel.or(default)).collect()
     }
 
-    /// Poll all active sources for latest data. Call once per frame.
+    /// Polls every active source. Call once per frame.
     pub fn poll(&mut self) {
         for source in self.active.values_mut() {
             while let Ok(data) = source.receiver.try_recv() {
@@ -625,23 +591,21 @@ impl AudioManager {
         }
     }
 
-    /// Get the latest `AudioData` for a specific source.
+    /// Latest `AudioData` for a source.
     pub fn get_data(&self, id: AudioSourceId) -> Option<&AudioData> {
         self.active.get(&id).map(|s| &s.latest)
     }
 
-    /// Get the first active source's data (convenience for default/primary audio).
+    /// First active source's data, or a default.
     pub fn get_primary_data(&self) -> &AudioData {
         static DEFAULT: std::sync::LazyLock<AudioData> =
             std::sync::LazyLock::new(AudioData::default);
-        // Return first active source's data, or a static default
         self.active
             .values()
             .next()
             .map_or_else(|| &*DEFAULT, |s| &s.latest)
     }
 
-    /// Get IDs of all active (open) sources.
     /// Each active source's latest analysis.
     pub fn active_data(&self) -> impl Iterator<Item = (AudioSourceId, &AudioData)> {
         self.active.iter().map(|(id, source)| (*id, &source.latest))
@@ -651,7 +615,6 @@ impl AudioManager {
         self.active.keys().copied().collect()
     }
 
-    /// Check if any source is active.
     pub fn has_active_source(&self) -> bool {
         !self.active.is_empty()
     }
@@ -681,21 +644,20 @@ impl AudioManager {
     }
 }
 
-/// Audio texture manager - creates wgpu textures for ISF audio inputs
+/// Textures for ISF audio inputs.
 pub struct AudioTextures {
-    /// Waveform texture (ISF "audio" input type)
+    /// ISF "audio" input.
     pub waveform_texture: wgpu::Texture,
     pub waveform_view: wgpu::TextureView,
 
-    /// FFT texture (ISF "audioFFT" input type)
+    /// ISF "audioFFT" input.
     pub fft_texture: wgpu::Texture,
     pub fft_view: wgpu::TextureView,
 }
 
 impl AudioTextures {
-    /// Create audio textures
     pub fn new(device: &wgpu::Device) -> Self {
-        // Create 1D-like textures (width=buffer_size, height=1)
+        // 1D-like textures: width = buffer size, height = 1.
         let waveform_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Audio Waveform Texture"),
             size: wgpu::Extent3d {
@@ -737,9 +699,8 @@ impl AudioTextures {
         }
     }
 
-    /// Update textures with new audio data
+    /// Uploads new audio data to the textures.
     pub fn update(&self, queue: &wgpu::Queue, audio_data: &AudioData) {
-        // Update waveform texture
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self.waveform_texture,
@@ -760,7 +721,6 @@ impl AudioTextures {
             },
         );
 
-        // Update FFT texture
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self.fft_texture,
@@ -794,19 +754,16 @@ mod tests {
                 0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (FFT_SIZE - 1) as f32).cos())
             })
             .collect();
-        // Endpoints should be ~0
         assert!(window[0].abs() < 1e-6, "Hann window start should be ~0");
         assert!(
             window[FFT_SIZE - 1].abs() < 1e-6,
             "Hann window end should be ~0"
         );
-        // Middle should be ~1
         let mid = window[FFT_SIZE / 2];
         assert!(
             (mid - 1.0).abs() < 0.01,
             "Hann window midpoint should be ~1.0, got {mid}"
         );
-        // Should be symmetric
         for i in 0..FFT_SIZE / 2 {
             assert!(
                 (window[i] - window[FFT_SIZE - 1 - i]).abs() < 1e-6,
@@ -828,7 +785,7 @@ mod tests {
             (bw - 23.4375).abs() < 0.01,
             "Bin width should be ~23.4Hz, got {bw}"
         );
-        // Bass range (20-250Hz) should span ~10 bins
+        // Bass (20-250 Hz) spans ~10 bins.
         let bass_bins = (250.0 / bw).ceil() as usize - (20.0 / bw).floor() as usize;
         assert!(
             bass_bins >= 9,
@@ -838,7 +795,7 @@ mod tests {
 
     #[test]
     fn spectral_flux_detects_onset_not_steady_state() {
-        // Steady-state: identical frames produce zero flux
+        // Identical frames: zero flux.
         let frame_a = vec![0.1_f32; FFT_SIZE / 2];
         let flux_steady: f32 = frame_a
             .iter()
@@ -850,7 +807,7 @@ mod tests {
             "Steady-state spectral flux should be ~0"
         );
 
-        // Onset: sharp increase produces positive flux
+        // Sharp increase: positive flux.
         let frame_b: Vec<f32> = vec![0.5; FFT_SIZE / 2];
         let flux_onset: f32 = frame_b
             .iter()
@@ -859,7 +816,7 @@ mod tests {
             .sum();
         assert!(flux_onset > 0.0, "Onset spectral flux should be positive");
 
-        // Decrease: energy drop produces zero flux (half-wave rectified)
+        // Energy drop: zero flux (half-wave rectified).
         let flux_decrease: f32 = frame_a
             .iter()
             .zip(frame_b.iter())
@@ -873,7 +830,7 @@ mod tests {
 
     #[test]
     fn onset_threshold_survives_non_finite_flux() {
-        // A driver can deliver NaN/Inf samples; the audio thread must not panic.
+        // Drivers can deliver NaN/Inf; the audio thread must not panic.
         let flux = [0.1, f32::NAN, 0.3, f32::INFINITY, 0.2];
         let _ = compute_onset_threshold(&flux);
     }
@@ -886,7 +843,7 @@ mod tests {
 
     #[test]
     fn bpm_outlier_rejection() {
-        // Simulate beat intervals: mostly ~0.5s (120 BPM) with one outlier
+        // Mostly ~0.5 s (120 BPM), one outlier.
         let intervals: Vec<f32> = vec![0.50, 0.51, 0.49, 0.50, 0.52, 0.48, 1.2, 0.50];
         let mut sorted = intervals.clone();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -898,7 +855,6 @@ mod tests {
             .copied()
             .collect();
 
-        // Outlier (1.2s) should be rejected
         assert!(
             !stable.contains(&1.2),
             "Outlier interval should be rejected"
@@ -912,7 +868,7 @@ mod tests {
 
     #[test]
     fn bpm_stability_consistent_beats() {
-        // All consistent intervals at 128 BPM (0.46875s)
+        // Steady 128 BPM (0.46875 s).
         let interval = 60.0 / 128.0;
         let intervals: Vec<f32> = vec![interval; BPM_HISTORY_SIZE];
         let mut sorted = intervals.clone();
@@ -940,8 +896,7 @@ mod tests {
 
     #[test]
     fn energy_in_range_with_new_fft_size() {
-        // With 2048-point FFT at 48kHz, bin width is ~23.4Hz
-        // Create synthetic FFT with energy only in bins 2-4 (~47-94Hz)
+        // At 48 kHz, 2048-point bins are ~23.4 Hz. Energy only in bins 2-4 (~47-94 Hz).
         let mut fft = vec![0.0_f32; FFT_SIZE / 2];
         fft[2] = 0.5;
         fft[3] = 0.5;
@@ -956,11 +911,9 @@ mod tests {
             time_since_beat: 0.0,
         };
 
-        // Energy in the active range should be non-zero
         let energy = data.energy_in_range(40.0, 100.0);
         assert!(energy > 0.0, "Should detect energy in 40-100Hz range");
 
-        // Energy outside the active range should be zero
         let energy_high = data.energy_in_range(5000.0, 10000.0);
         assert!(
             energy_high < 1e-6,
@@ -968,7 +921,7 @@ mod tests {
         );
     }
 
-    // ── Chaos Tests Round 2: Audio frequency edge cases ─────────────────
+    // ── Frequency edge cases ─────────────────────────────────────────────
 
     #[test]
     fn chaos_energy_in_range_nan_freq_low() {
@@ -981,8 +934,7 @@ mod tests {
             sample_rate: 48000.0,
         };
         let val = data.energy_in_range(f32::NAN, 1000.0);
-        // NaN / bw → NaN, floor as usize → 0 (saturating), .min(len-1) → 0
-        // Must not panic
+        // NaN / bw → NaN; floor as usize saturates to 0; .min(len-1) → 0. No panic.
         assert!(
             val.is_finite() || val == 0.0,
             "NaN freq_low should not crash"
@@ -1028,7 +980,7 @@ mod tests {
             sample_rate: 48000.0,
         };
         let val = data.energy_in_range(-1000.0, -500.0);
-        // Negative / bw → negative, floor as usize → 0 (saturating)
+        // Negative / bw → negative; floor as usize saturates to 0.
         assert!(
             val >= 0.0,
             "negative freq should not produce negative energy"
@@ -1074,7 +1026,7 @@ mod tests {
             sample_rate: 0.0,
         };
         let val = data.energy_in_range(100.0, 1000.0);
-        // bin_width = 0 / 2048 = 0, guarded by bw <= 0.0 check
+        // bin_width is 0, caught by the bw <= 0.0 guard.
         assert_eq!(val, 0.0, "zero sample rate should return 0.0");
     }
 
@@ -1092,7 +1044,7 @@ mod tests {
         assert_eq!(val, 0.0, "empty FFT should return 0.0");
     }
 
-    // ── Phase 19a: PCM passthrough tap ─────────────────────────────────
+    // ── PCM passthrough tap ────────────────────────────────────────────
 
     /// A subscriber plus its receiver, drop counter and lost-sample counter.
     fn make_sub(cap: usize) -> (PcmSubscriber, Receiver<PcmChunk>, Arc<AtomicU64>) {
@@ -1147,16 +1099,13 @@ mod tests {
         assert_eq!(dropped.load(Ordering::Relaxed), 3);
     }
 
-    /// A drop must record how much *time* was lost, not just that one happened.
-    ///
-    /// Consumers time the PCM stream by counting samples, so the only way to
-    /// survive a dropout is to put back exactly as many samples as went
-    /// missing. A chunk count cannot say that — chunks vary in length — so the
-    /// sample total is what the writer needs.
+    /// A drop records the samples lost, not just the event. Consumers time PCM
+    /// by sample count and chunk lengths vary, so they need the sample total to
+    /// fill the gap.
     #[test]
     fn pcm_fan_out_records_how_many_samples_were_lost() {
-        // Capacity 2, receiver never drains: 5 sends of 8 samples → 2 buffered,
-        // 3 dropped, so 24 samples owed back to the stream.
+        // Capacity 2, never drained: 5 sends of 8 samples → 2 buffered, 3
+        // dropped, 24 samples owed.
         let (sub, _rx, dropped, lost) = make_sub_counted(2);
         let subs = vec![sub];
 
@@ -1281,7 +1230,7 @@ mod tests {
             sample_rate: 48000.0,
         };
         let val = data.energy_in_range(0.0, 48000.0);
-        // single bin FFT — should not panic
+        // Single-bin FFT must not panic.
         assert!(val.is_finite());
     }
 }

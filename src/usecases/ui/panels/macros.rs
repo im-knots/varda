@@ -1,14 +1,13 @@
-//! Macro controls UI. Mirrors the transition-sequence pattern:
+//! Macro controls UI, following the transition-sequence pattern.
 //!
-//! - A compact **column** of macro widgets lives in the central mixer column
-//!   (`render_macro_column`), stacked below the mixer/sequences. Each widget is
-//!   just the live control (knob/fader/button) plus a click-to-select name.
-//! - Selecting a macro shows its full **detail** editor in the bottom bar
-//!   (`render_macro_detail`) — kind, value, per-target range/curve/invert, and
-//!   button behavior/triggers — exactly like selecting a deck or sequence.
+//! - A compact column of macro widgets in the central mixer column
+//!   (`render_macro_column`): the live control plus a click-to-select name.
+//! - Selecting a macro shows its detail editor in the bottom bar
+//!   (`render_macro_detail`): kind, value, per-target range/curve/invert, and
+//!   button behavior/triggers.
 //!
-//! The UI is a pure view over `UIData.macros`: it reads the snapshot and emits
-//! `EngineCommand`s / selection actions. All state mutation happens in the engine.
+//! Reads `UIData.macros` and emits `EngineCommand`s and selection actions; the
+//! engine does all state mutation.
 
 use super::super::{ModSourceUI, UIActions, UIData, modulator_color, widgets};
 use crate::engine::EngineCommand;
@@ -17,11 +16,8 @@ use crate::macros::{ButtonBehavior, GlobalAction, Macro, MacroCurve, MacroKind, 
 use crate::modulation::DEFAULT_ASSIGNMENT_AMOUNT;
 use crate::params::ParamValue;
 
-// ── Central column (compact widgets) ────────────────────────────────
-
-/// Render the compact macro column for the central mixer area: the stacked
-/// live controls plus the add buttons. Clicking a macro selects it for editing
-/// in the bottom bar.
+/// Compact macro column for the central mixer area: live controls plus add
+/// buttons. Clicking a macro selects it for editing in the bottom bar.
 pub(super) fn render_macro_column(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     ui.add_space(6.0);
     ui.separator();
@@ -74,11 +70,10 @@ pub(super) fn render_macro_column(ui: &mut egui::Ui, data: &UIData, actions: &mu
     });
 }
 
-/// One compact macro widget in the column: an interactive live control with its
-/// name. The control itself is played directly in the column; clicking anywhere
-/// *around* the control (the card background) opens the macro's config in the
-/// bottom bar. Mirrors the deck-thumbnail pattern: a background response senses
-/// card clicks while the child control widgets, drawn on top, capture their own.
+/// One compact macro widget: a live control with its name. Clicking the card
+/// around the control opens the macro's config in the bottom bar. As with deck
+/// thumbnails, a background response senses card clicks while the controls
+/// drawn on top capture their own.
 fn render_macro_compact(
     ui: &mut egui::Ui,
     idx: usize,
@@ -106,7 +101,7 @@ fn render_macro_compact(
     let card_w = ui.available_width();
     let total_h = padding + header_h + spacing + control_h + padding;
 
-    // Background: senses clicks that land off the control → open config.
+    // Background senses clicks off the control and opens the config.
     let (card_rect, card_resp) =
         ui.allocate_exact_size(egui::vec2(card_w, total_h), egui::Sense::click());
     let painter = ui.painter().clone();
@@ -125,7 +120,7 @@ fn render_macro_compact(
         inner.max,
     );
 
-    // Header: color dot + name (name color follows selection).
+    // Header: color dot and name; the name color follows selection.
     let mut header_ui = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(header_rect)
@@ -139,7 +134,7 @@ fn render_macro_compact(
     };
     header_ui
         .label(egui::RichText::new(super::utils::truncate_chars(&m.name, 12)).color(name_color));
-    // Delete button, right-aligned in the header (mirrors sequence cards).
+    // Delete button, right-aligned like on sequence cards.
     header_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         if ui
             .small_button(egui::RichText::new("x").small())
@@ -155,11 +150,10 @@ fn render_macro_compact(
         }
     });
 
-    // Live control drawn on top of the card background.
     let mut control_ui = ui.new_child(egui::UiBuilder::new().max_rect(control_rect));
     render_macro_value(&mut control_ui, m, accent, data, actions, 40.0);
 
-    // Click on the card (but not on the control) selects it for editing.
+    // A click on the card, not the control, selects the macro for editing.
     if !data.midi_learn_active && card_resp.clicked() {
         actions.session.select_macro = Some(m.uuid.clone());
     }
@@ -168,9 +162,7 @@ fn render_macro_compact(
     ui.add_space(2.0);
 }
 
-// ── Bottom bar (detail editor) ──────────────────────────────────────
-
-/// Render the full editor for the selected macro in the bottom bar.
+/// Full editor for the selected macro, in the bottom bar.
 pub(super) fn render_macro_detail(
     ui: &mut egui::Ui,
     uuid: &str,
@@ -184,7 +176,6 @@ pub(super) fn render_macro_detail(
     let accent = modulator_color(idx);
     let paths = collect_target_paths(data);
 
-    // Header: color, name, kind, delete, close.
     ui.horizontal(|ui| {
         color_dot(ui, accent);
 
@@ -223,7 +214,7 @@ pub(super) fn render_macro_detail(
     });
     ui.separator();
 
-    // Body: value control on the left, target/trigger editor on the right.
+    // Value control on the left, target/trigger editor on the right.
     ui.horizontal_top(|ui| {
         ui.vertical(|ui| {
             ui.set_width(200.0);
@@ -259,11 +250,8 @@ pub(super) fn render_macro_detail(
     });
 }
 
-// ── Shared control rendering ────────────────────────────────────────
-
-/// Render the live macro control (knob / fader / button). `knob_diameter`
-/// controls the knob size so the same code serves the compact column (small)
-/// and the detail editor (large).
+/// Live macro control (knob, fader or button). `knob_diameter` sets the knob
+/// size for the compact column (small) and the detail editor (large).
 fn render_macro_value(
     ui: &mut egui::Ui,
     m: &Macro,
@@ -273,8 +261,8 @@ fn render_macro_value(
     knob_diameter: f32,
 ) {
     let path = ParamAddress::macro_value(&m.uuid).to_string();
-    // If the macro's value is modulated, compute the live effective value + the
-    // modulator's color so the control can render a ghost indicator (like params).
+    // For a modulated macro, the effective value and modulator color for the ghost
+    // indicator, as on params.
     let ghost = macro_modulation_ghost(m, data);
     match m.kind {
         MacroKind::Knob => {
@@ -306,7 +294,7 @@ fn render_macro_value(
                     value: v,
                 });
             }
-            // Ghost line at the effective (modulated) value on the slider track.
+            // Ghost line at the modulated value on the slider track.
             if let Some((off, color)) = ghost {
                 let effective = (m.value + off).clamp(0.0, 1.0);
                 let r = resp.rect;
@@ -332,8 +320,7 @@ fn render_macro_value(
             macro_learn_overlay(ui, resp.rect, path, data, actions);
 
             if behavior == ButtonBehavior::Trigger {
-                // Fire once: rising edge (1.0) then release (0.0) so the next
-                // click is a fresh rising edge.
+                // Fire once: 1.0 then 0.0, so the next click is a new rising edge.
                 if resp.clicked() {
                     actions.commands.push(EngineCommand::SetMacroValue {
                         uuid: m.uuid.clone(),
@@ -345,7 +332,7 @@ fn render_macro_value(
                     });
                 }
             } else {
-                // Momentary/Toggle: emit on genuine press/release transitions.
+                // Momentary/Toggle: emit on actual press and release transitions.
                 let down = resp.is_pointer_button_down_on();
                 let id = ui.id().with(("macro_btn_down", &m.uuid));
                 let prev = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
@@ -408,8 +395,8 @@ fn render_button_behavior_selector(ui: &mut egui::Ui, m: &Macro, actions: &mut U
         });
 }
 
-/// Assign / clear a modulation source on a Knob/Fader macro's value. The
-/// modulator drives the whole macro (base + offset → all targets) each frame.
+/// Assign or clear a modulation source on a Knob/Fader macro's value. The
+/// modulator drives the whole macro (base + offset, to all targets) each frame.
 fn render_macro_modulation(ui: &mut egui::Ui, m: &Macro, data: &UIData, actions: &mut UIActions) {
     let key = Macro::value_mod_key(&m.uuid);
     let assigns = data.modulation_assignments.get(&key);
@@ -421,7 +408,7 @@ fn render_macro_modulation(ui: &mut egui::Ui, m: &Macro, data: &UIData, actions:
         return;
     }
 
-    // Current assignments, stacked vertically, each with its own delete button.
+    // Current assignments, one per row with a delete button.
     if let Some(list) = assigns {
         for a in list {
             let idx = data
@@ -455,16 +442,13 @@ fn render_macro_modulation(ui: &mut egui::Ui, m: &Macro, data: &UIData, actions:
         }
     }
 
-    // Add-modulation picker.
     egui::ComboBox::from_id_salt(("macro_mod", &m.uuid))
         .selected_text("+ Modulate")
         .width(140.0)
         .show_ui(ui, |ui| {
             ui.label(egui::RichText::new("Assign Modulation").small().strong());
             for (idx, entry) in data.modulation_sources.iter().enumerate() {
-                // A curve belongs to the one parameter it was drawn for, and a
-                // macro fans out to many. See /spec/automation.md § One
-                // envelope per parameter.
+                // An envelope drives the one parameter it was drawn for; a macro drives many.
                 if matches!(entry.source, ModSourceUI::Envelope { .. }) {
                     continue;
                 }
@@ -482,8 +466,8 @@ fn render_macro_modulation(ui: &mut egui::Ui, m: &Macro, data: &UIData, actions:
         });
 }
 
-/// Value label showing the base and, when modulated, the effective value the
-/// macro is currently fanning out (`base → effective`).
+/// Value label: the base and, when modulated, the effective value
+/// (`base → effective`).
 fn macro_value_text(m: &Macro, data: &UIData) -> egui::RichText {
     let key = Macro::value_mod_key(&m.uuid);
     if let Some(list) = data.modulation_assignments.get(&key)
@@ -505,9 +489,9 @@ fn macro_value_text(m: &Macro, data: &UIData) -> egui::RichText {
     egui::RichText::new(format!("value {:.2}", m.value)).small()
 }
 
-/// The live modulation offset applied to a Knob/Fader macro's value, paired with
-/// the color of the (first) driving source, or `None` when the macro isn't
-/// modulated. Used to draw a ghost indicator on the control.
+/// Live modulation offset on a Knob/Fader macro's value and the color of the
+/// first driving source, or `None` when not modulated. Drawn as a ghost
+/// indicator.
 fn macro_modulation_ghost(m: &Macro, data: &UIData) -> Option<(f32, egui::Color32)> {
     if !matches!(m.kind, MacroKind::Knob | MacroKind::Fader) {
         return None;
@@ -535,8 +519,8 @@ fn macro_modulation_ghost(m: &Macro, data: &UIData) -> Option<(f32, egui::Color3
     Some((offset, color))
 }
 
-/// Paint a small inline color dot, vertically centered against adjacent text.
-/// Painted (not the "●" glyph) so it renders regardless of the bundled UI font.
+/// Paint a small color dot, vertically centered with adjacent text. Painted
+/// rather than a "●" glyph so it renders with any bundled UI font.
 fn color_dot(ui: &mut egui::Ui, color: egui::Color32) {
     let d = 8.0_f32;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(d, d), egui::Sense::hover());
@@ -551,8 +535,7 @@ fn render_targets_editor(
 ) {
     ui.label(egui::RichText::new(format!("Targets ({})", m.targets.len())).small());
     for (ti, t) in m.targets.iter().enumerate() {
-        // Address and its range/curve/invert controls share one row — the wide
-        // bottom bar has room, so we avoid wrapping to a second line.
+        // Address and its range/curve/invert controls share one row.
         ui.horizontal(|ui| {
             let mut min = t.min;
             let mut max = t.max;
@@ -560,8 +543,8 @@ fn render_targets_editor(
             let mut invert = t.invert;
             let mut changed = false;
 
-            // Fixed-width, truncated address keeps the setting columns aligned
-            // across rows; the full path is on hover.
+            // Fixed-width truncated address keeps the setting columns aligned; the full
+            // path shows on hover.
             ui.add_sized(
                 [150.0, ui.spacing().interact_size.y],
                 egui::Label::new(egui::RichText::new(short_path(&t.path)).small().monospace())
@@ -689,7 +672,7 @@ fn render_trigger_editor(
     }
 }
 
-/// Combo that appends a new target on selection.
+/// Combo that appends the selected target.
 fn add_target_combo(
     ui: &mut egui::Ui,
     uuid: &str,
@@ -706,7 +689,7 @@ fn add_target_combo(
 }
 
 /// A "+ Add target" combo listing all mappable parameter paths. Returns the
-/// selected path (if any) this frame.
+/// path selected this frame, if any.
 fn target_picker_combo(
     ui: &mut egui::Ui,
     uuid: &str,
@@ -741,8 +724,8 @@ fn target_picker_combo(
     chosen
 }
 
-/// MIDI-learn affordance for the macro value control: reuses the shared learn
-/// state so a hardware control maps to `macro/<uuid>/value`.
+/// MIDI-learn overlay for the macro value control, mapping to
+/// `macro/<uuid>/value` through the shared learn state.
 fn macro_learn_overlay(
     ui: &egui::Ui,
     rect: egui::Rect,
@@ -766,8 +749,8 @@ fn macro_learn_overlay(
     }
 }
 
-/// Flatten all mappable, scalar parameter paths from the UI snapshot into
-/// `(label, path)` pairs for the target picker.
+/// All mappable scalar parameter paths in the UI snapshot, as `(label, path)`
+/// pairs for the target picker.
 fn collect_target_paths(data: &UIData) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
     out.push(("Crossfader".to_string(), "crossfader".to_string()));
@@ -810,12 +793,8 @@ fn collect_target_paths(data: &UIData) -> Vec<(String, String)> {
                     }
                 }
             }
-            // Every modulatable source control, for the same reason the 〰
-            // dropdowns exist: a macro that can move a clip's rate and
-            // playhead is worth as much as one that can move a shader's. In
-            // and out points are not offered, since they define the region a
-            // position offset is measured against. See
-            // /spec/video-playback-modulation.md.
+            // Every modulatable source control, as in the 〰 dropdowns. In and out points
+            // are excluded because a position offset is measured against them.
             if let Some(ty) = data
                 .sources
                 .iter()
@@ -844,9 +823,8 @@ fn collect_target_paths(data: &UIData) -> Vec<(String, String)> {
         }
     }
 
-    // Modulator params — macros can drive an LFO's rate, an ADSR envelope, etc.
-    // Paths route through `mod/<uuid>/<param>`; keep the param sets in sync with
-    // `param_router::apply_mod_param`.
+    // Modulator params (LFO rate, ADSR stages, ...), routed through
+    // `mod/<uuid>/<param>`. Keep these in sync with `param_router::apply_mod_param`.
     for (idx, entry) in data.modulation_sources.iter().enumerate() {
         let base = entry.label(idx);
         let params: &[&str] = match &entry.source {
@@ -855,9 +833,8 @@ fn collect_target_paths(data: &UIData) -> Vec<(String, String)> {
             ModSourceUI::ADSR { .. } => &["attack", "decay", "sustain", "release"],
             ModSourceUI::StepSequencer { .. } => &["rate"],
             ModSourceUI::Analyzer { .. } => &["smoothing"],
-            // An envelope's shape is its breakpoints, not a scalar a macro can
-            // ride. Keeping it unmodulatable is what keeps envelopes out of the
-            // mod-on-mod graph; see /spec/automation.md § Performance.
+            // An envelope's shape is its breakpoints, not a scalar. Excluding it keeps
+            // envelopes out of the mod-on-mod graph.
             ModSourceUI::Envelope { .. } => &[],
         };
         for p in params {
@@ -875,7 +852,7 @@ fn param_label(p: &super::super::ParamUIInfo) -> String {
     p.label.clone().unwrap_or_else(|| p.name.clone())
 }
 
-/// Shorten a router path for compact display (keeps the last two segments).
+/// Shorten a router path for display to its last two segments.
 fn short_path(path: &str) -> String {
     let segs: Vec<&str> = path.split('/').collect();
     if segs.len() <= 2 {
@@ -974,8 +951,8 @@ mod tests {
         });
     }
 
-    /// A curve drives the one parameter it was drawn for. A macro fans out to
-    /// many, so offering one here would share it by the back door.
+    /// An envelope drives the one parameter it was drawn for, so macros cannot
+    /// target it.
     #[test]
     fn a_curve_is_not_offered_to_a_macro() {
         use crate::usecases::ui::ModSourceUIEntry;

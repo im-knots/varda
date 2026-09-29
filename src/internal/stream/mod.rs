@@ -1,11 +1,6 @@
-//! Stream receive — background ffmpeg decode thread → shared buffer → GPU upload.
-//!
-//! Stream output is handled per output by the `delivery` module's
-//! `FfmpegSubprocess`. This module handles stream *input* (receiving
-//! video from SRT/HLS/DASH sources and displaying them as deck sources).
-//!
-//! Architecture mirrors `NdiManager`: background thread decodes frames into
-//! `Arc<Mutex<Option<Vec<u8>>>>`, main thread uploads to GPU each frame.
+//! Stream receive: an ffmpeg decode thread per receiver writes RGBA frames to a
+//! shared buffer, and the main thread uploads them each frame. Stream output is
+//! in the `delivery` module's `FfmpegSubprocess`.
 
 pub mod provider;
 
@@ -15,34 +10,35 @@ use std::sync::{
 };
 use std::thread::JoinHandle;
 
-/// Serializes ffmpeg context creation (`input_with_interrupt` + decoder open).
-/// ffmpeg's `avcodec_open2` is NOT thread-safe — two threads opening decoders
-/// simultaneously can corrupt the internal codec registry, producing silent
-/// black output. The mutex is released before entering the decode loop so
-/// frame decoding remains fully parallel across receivers.
+/// Serializes ffmpeg context creation (`input_with_interrupt` plus decoder
+/// open). `avcodec_open2` is not thread-safe; concurrent opens can corrupt the
+/// codec registry and produce black output. Released before the decode loop,
+/// so decoding stays parallel.
 static FFMPEG_INIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Stream protocol for input receivers.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub enum StreamProtocol {
-    /// SRT (Secure Reliable Transport) with connection mode.
-    Srt { mode: SrtMode },
-    /// HLS (HTTP Live Streaming) — reads `.m3u8` manifest.
+    /// SRT (Secure Reliable Transport).
+    Srt {
+        mode: SrtMode,
+    },
+    /// HLS (HTTP Live Streaming), `.m3u8` manifest.
     Hls,
-    /// DASH (Dynamic Adaptive Streaming over HTTP) — reads `.mpd` manifest.
+    /// DASH (Dynamic Adaptive Streaming over HTTP), `.mpd` manifest.
     Dash,
-    /// RTMP stream source with connection mode.
-    Rtmp { mode: RtmpMode },
+    Rtmp {
+        mode: RtmpMode,
+    },
 }
 
-/// SRT connection mode — listener waits for connections, caller connects out.
+/// SRT connection mode.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
 )]
 pub enum SrtMode {
-    /// Bind to a port and wait for incoming connections.
+    /// Binds a port and waits for connections.
     Listener,
-    /// Connect to a remote SRT endpoint.
+    /// Connects to a remote SRT endpoint.
     Caller,
 }
 
@@ -55,14 +51,14 @@ impl std::fmt::Display for SrtMode {
     }
 }
 
-/// RTMP connection mode: pull from a remote server or listen for incoming pushes.
+/// RTMP connection mode.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
 )]
 pub enum RtmpMode {
-    /// Connect to a remote RTMP server and pull the stream.
+    /// Pulls from a remote RTMP server.
     Pull,
-    /// Listen on a local RTMP port for incoming pushes (e.g. from OBS).
+    /// Listens on a local RTMP port for pushes (e.g. from OBS).
     Listen,
 }
 
@@ -85,13 +81,13 @@ struct StreamReceiver {
     thread: Option<JoinHandle<()>>,
     width: u32,
     height: u32,
-    /// Decks reading this receiver. Two decks on one URL share a receiver, so
-    /// it stops only when the last of them is removed.
+    /// Decks reading this receiver. Decks on the same URL share a receiver; it
+    /// stops when the last one is removed.
     holders: u32,
 }
 
-/// Manages stream input receivers (background decode threads + GPU textures).
-/// Handles SRT, HLS, and DASH input protocols.
+/// Stream input receivers (decode threads and GPU textures) for SRT, HLS,
+/// DASH and RTMP.
 pub struct StreamManager {
     receivers: Vec<StreamReceiver>,
     textures: Vec<(wgpu::Texture, wgpu::TextureView)>,
@@ -105,7 +101,7 @@ impl Default for StreamManager {
 
 impl StreamManager {
     pub fn new() -> Self {
-        // Init ffmpeg once on the main thread before any receiver threads spawn.
+        // Init ffmpeg once on the main thread before any receiver thread starts.
         ffmpeg_next::init().ok();
         Self {
             receivers: Vec::new(),
@@ -113,16 +109,14 @@ impl StreamManager {
         }
     }
 
-    /// Start receiving from a stream URL. Spawns a background ffmpeg decode thread.
-    /// Returns receiver index on success. If an active receiver for the same URL
-    /// already exists, returns its index.
+    /// Starts a decode thread for a stream URL and returns the receiver index.
+    /// Returns the existing index if a live receiver already has this URL.
     pub fn start_receive(
         &mut self,
         url: &str,
         protocol: StreamProtocol,
         device: &wgpu::Device,
     ) -> Option<usize> {
-        // Reuse existing receiver for the same URL if it's still alive
         if let Some(idx) = self
             .receivers
             .iter()
@@ -138,7 +132,6 @@ impl StreamManager {
         let connected = Arc::new(AtomicBool::new(false));
         let (width, height) = (1920u32, 1080u32);
 
-        // Build the full URL with protocol-specific params
         let full_url = match &protocol {
             StreamProtocol::Srt { mode } => build_srt_url(url, *mode),
             StreamProtocol::Hls | StreamProtocol::Dash => url.to_string(),
@@ -216,7 +209,6 @@ impl StreamManager {
         Some(idx)
     }
 
-    /// Start receiving from an SRT URL (convenience wrapper).
     pub fn start_srt_receive(
         &mut self,
         url: &str,
@@ -226,7 +218,6 @@ impl StreamManager {
         self.start_receive(url, StreamProtocol::Srt { mode }, device)
     }
 
-    /// Start receiving from an RTMP URL (convenience wrapper).
     pub fn start_rtmp_receive(
         &mut self,
         url: &str,
@@ -236,7 +227,7 @@ impl StreamManager {
         self.start_receive(url, StreamProtocol::Rtmp { mode }, device)
     }
 
-    /// Upload latest frames from all receivers to GPU.
+    /// Uploads the latest frame of every receiver.
     pub fn update(&self, queue: &wgpu::Queue) {
         for (i, receiver) in self.receivers.iter().enumerate() {
             if let Ok(mut guard) = receiver.frame_data.try_lock()
@@ -276,29 +267,25 @@ impl StreamManager {
         self.receivers.get(idx).map(|r| (r.width, r.height))
     }
 
-    /// Whether the receiver at `idx` has successfully connected and received a frame.
+    /// Whether receiver `idx` has connected and received a frame.
     pub fn is_connected(&self, idx: usize) -> bool {
         self.receivers
             .get(idx)
             .is_some_and(|r| r.connected.load(Ordering::SeqCst))
     }
 
-    /// Number of active receivers.
     pub fn receiver_count(&self) -> usize {
         self.receivers.len()
     }
 
-    /// Get URL of receiver at index.
     pub fn receiver_url(&self, idx: usize) -> Option<&str> {
         self.receivers.get(idx).map(|r| r.url.as_str())
     }
 
-    /// Get protocol of receiver at index.
     pub fn receiver_protocol(&self, idx: usize) -> Option<&StreamProtocol> {
         self.receivers.get(idx).map(|r| &r.protocol)
     }
 
-    /// Get SRT mode of receiver at index (convenience for SRT receivers).
     pub fn receiver_mode(&self, idx: usize) -> Option<SrtMode> {
         self.receivers.get(idx).and_then(|r| match &r.protocol {
             StreamProtocol::Srt { mode } => Some(*mode),
@@ -306,7 +293,6 @@ impl StreamManager {
         })
     }
 
-    /// Get RTMP mode of receiver at index (convenience for RTMP receivers).
     pub fn receiver_rtmp_mode(&self, idx: usize) -> Option<RtmpMode> {
         self.receivers.get(idx).and_then(|r| match &r.protocol {
             StreamProtocol::Rtmp { mode } => Some(*mode),
@@ -314,8 +300,8 @@ impl StreamManager {
         })
     }
 
-    /// Release one deck's hold on receiver `idx`, stopping it when no deck
-    /// reads it any more.
+    /// Releases one deck's hold on receiver `idx`, stopping it when no deck
+    /// reads it.
     pub fn stop_receive(&mut self, idx: usize) {
         if let Some(r) = self.receivers.get_mut(idx) {
             r.holders = r.holders.saturating_sub(1);
@@ -323,9 +309,8 @@ impl StreamManager {
                 return;
             }
             r.stop_flag.store(true, Ordering::SeqCst);
-            // Don't join — the thread may be blocked in ffmpeg I/O.
-            // The interrupt callback will cause ffmpeg to abort, and
-            // the thread holds only Arc clones so it's safe to detach.
+            // No join: the thread may be blocked in ffmpeg I/O. The interrupt callback
+            // aborts ffmpeg, and the thread holds only Arc clones, so detaching is safe.
             if let Some(t) = r.thread.take() {
                 drop(t);
             }
@@ -341,7 +326,7 @@ impl Drop for StreamManager {
     }
 }
 
-/// Build an SRT URL with mode query parameter.
+/// Builds an SRT URL with the mode query parameter.
 fn build_srt_url(url: &str, mode: SrtMode) -> String {
     let mode_str = match mode {
         SrtMode::Listener => "listener",
@@ -354,7 +339,7 @@ fn build_srt_url(url: &str, mode: SrtMode) -> String {
     }
 }
 
-/// Build an RTMP URL, appending `listen=1` for Listen mode.
+/// Builds an RTMP URL, appending `listen=1` for Listen mode.
 fn build_rtmp_url(url: &str, mode: RtmpMode) -> String {
     match mode {
         RtmpMode::Pull => url.to_string(),
@@ -368,10 +353,9 @@ fn build_rtmp_url(url: &str, mode: RtmpMode) -> String {
     }
 }
 
-/// Background thread: decode stream via `ffmpeg_next` into RGBA frames.
-/// Protocol-agnostic — ffmpeg handles SRT, HLS, DASH, and RTMP URLs natively.
-// `decoder` (the ffmpeg decoder) and `decoded` (the frame it produced) are both
-// the clearest names for what they hold; renaming either would obscure the code.
+/// Decodes a stream into RGBA frames. ffmpeg handles SRT, HLS, DASH and RTMP
+/// URLs itself.
+// `decoder` and `decoded` are the clearest names for what they hold.
 #[allow(clippy::similar_names)]
 fn stream_receive_thread(
     url: &str,
@@ -386,7 +370,7 @@ fn stream_receive_thread(
 
     log::info!("Stream receive thread starting for '{url_display}'");
 
-    // Exponential backoff: starts at 500ms, caps at 10s, resets on successful frame
+    // Backoff doubles from 500ms up to 10s and resets on a delivered frame.
     let mut backoff_ms: u64 = 500;
 
     loop {
@@ -394,9 +378,7 @@ fn stream_receive_thread(
             return;
         }
 
-        // Serialize ffmpeg context creation — avcodec_open2 is not thread-safe.
-        // Hold the lock through input open + decoder creation, release before
-        // entering the decode loop so frame decoding is parallel.
+        // Held through input open and decoder creation only.
         let setup_result = {
             let _guard = FFMPEG_INIT_LOCK
                 .lock()
@@ -466,7 +448,7 @@ fn stream_receive_thread(
 
                 Some((ctx, stream_idx, decoder, scaler))
             })()
-            // _guard dropped here — lock released before decode loop
+            // _guard drops here, before the decode loop.
         };
 
         let Some((mut input_ctx, stream_idx, mut decoder, mut scaler)) = setup_result else {
@@ -479,7 +461,7 @@ fn stream_receive_thread(
         log::info!("Stream '{url_display}' connected, decoding video");
 
         let mut last_frame_time = std::time::Instant::now();
-        // HLS/DASH segments can have multi-second gaps; use a longer timeout
+        // HLS/DASH segments can have multi-second gaps, so use a longer timeout.
         let is_segment_protocol = url.contains(".m3u8")
             || url.contains(".mpd")
             || url.starts_with("http://")
@@ -517,7 +499,7 @@ fn stream_receive_thread(
                     return;
                 }
 
-                // Lazily init/reinit scaler if dimensions changed
+                // Re-create the scaler when dimensions change.
                 if scaler.is_none() || decoded.width() != 1920 || decoded.height() != 1080 {
                     scaler = ffmpeg_next::software::scaling::Context::get(
                         decoded.format(),
@@ -567,7 +549,6 @@ fn stream_receive_thread(
                             *guard = Some(rgba);
                         }
                         last_frame_time = std::time::Instant::now();
-                        // Reset backoff on successful frame delivery
                         backoff_ms = MIN_BACKOFF_MS;
                         if !connected.load(Ordering::SeqCst) {
                             connected.store(true, Ordering::SeqCst);
@@ -579,8 +560,8 @@ fn stream_receive_thread(
                 }
             }
 
-            // If we haven't produced a frame in a while, the demuxer is
-            // likely stuck (e.g. HLS segments deleted). Force reconnect.
+            // No frame for a while means the demuxer is likely stuck (e.g. HLS
+            // segments deleted). Force a reconnect.
             if last_frame_time.elapsed() > stall_timeout {
                 log::warn!(
                     "Stream '{}': no frames for {:.1}s, reconnecting",
@@ -726,7 +707,6 @@ mod tests {
 
     #[test]
     fn srt_mode_deserialize_from_string() {
-        // Verify it can deserialize from JSON strings
         let listener: SrtMode = serde_json::from_str("\"Listener\"").unwrap();
         assert_eq!(listener, SrtMode::Listener);
         let caller: SrtMode = serde_json::from_str("\"Caller\"").unwrap();

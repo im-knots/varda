@@ -1,34 +1,29 @@
-/// HTML deck render-thread cost benchmark.
+/// Render-thread cost of HTML decks.
 ///
-/// Servo pumping (layout/script/rasterization) runs on a dedicated off-thread
-/// engine; the render thread only does `HtmlManager::update()` — a non-blocking
-/// `try_lock` + take + `queue.write_texture` per deck. This bench therefore
-/// measures the render-thread per-frame cost as a function of active HTML decks
-/// (0/1/2), not page complexity. The timed unit is `update()` followed by a
-/// queue flush so the upload is real and the staging belt is recalled each
-/// iteration; the `0_decks` case isolates the constant flush floor.
+/// Servo layout, script, and rasterization run off-thread; the render thread
+/// only calls `HtmlManager::update()`, a non-blocking `try_lock` + take +
+/// `queue.write_texture` per deck. The timed unit is `update()` plus a queue
+/// flush, measured against 0/1/2 active decks; `0_decks` is the flush floor.
 ///
-/// Decks use an animating (requestAnimationFrame) document so the off-thread
-/// engine keeps a fresh frame waiting in every slot — the worst case where each
-/// `update()` performs a real upload rather than skipping.
+/// Decks animate with requestAnimationFrame so every `update()` does a real
+/// upload (worst case).
 ///
-/// Skips cleanly when no GPU adapter is present or the `html` feature is off.
+/// Skips without a GPU adapter or the `html` feature.
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use criterion::{Criterion, criterion_group, criterion_main};
 use varda::{html::HtmlManager, renderer::context::GpuContext};
 
-/// 720p — a common output resolution and a balance between realism and the cost
-/// of Servo's CPU rasterizer. Bump to 1920×1080 to profile the full deck size.
+/// 720p keeps Servo's CPU rasterizer affordable. Use 1920×1080 to profile the
+/// full deck size.
 const W: u32 = 1280;
 const H: u32 = 720;
 
 /// An animating document: a requestAnimationFrame loop mutating element style
-/// each frame. This keeps Servo `animating()` true so the off-thread engine
-/// repaints continuously and a fresh frame is always waiting in the slot — the
-/// worst case for render-thread cost (every `update()` does a real upload).
-/// `tag` makes each deck's `data:` URL unique so `start_render` does not dedupe.
+/// each frame, so Servo repaints continuously and a fresh frame is always
+/// waiting. `tag` makes each deck's `data:` URL unique so `start_render` does
+/// not dedupe.
 fn animating_doc(tag: usize) -> String {
     format!(
         "<!doctype html><!--{tag}--><html><head><style>html,body{{margin:0;\
@@ -59,17 +54,16 @@ fn poll(ctx: &GpuContext) {
         .ok();
 }
 
-/// One frame as the engine sees it: pump Servo + upload, then flush the queue so
-/// the upload actually executes and the wgpu staging belt is recalled.
+/// One engine frame: pump Servo and upload, then flush the queue so the upload
+/// executes and the wgpu staging belt is recalled.
 fn frame(gpu: &GpuContext, mgr: &mut HtmlManager) {
     mgr.update(&gpu.device, &gpu.queue);
     gpu.queue.submit(std::iter::empty::<wgpu::CommandBuffer>());
     poll(gpu);
 }
 
-/// Give Servo wall-clock time to load the data URL and reach steady-state
-/// animation before timing. Sleeps between pumps (real async load), unlike the
-/// timed loop which measures raw per-frame cost.
+/// Give Servo wall-clock time to load the data URL and reach steady animation
+/// before timing. Sleeps between pumps, unlike the timed loop.
 fn warmup(gpu: &GpuContext, mgr: &mut HtmlManager, dur: Duration) {
     let start = Instant::now();
     while start.elapsed() < dur {
@@ -92,16 +86,9 @@ fn bench_render_thread(c: &mut Criterion) {
     group.sample_size(20);
     group.warm_up_time(Duration::from_secs(2));
 
-    // Sweep the render-thread cost of update() against the number of active HTML
-    // decks. Pumping is off-thread, so this isolates try_lock + take +
-    // write_texture (+ queue flush) and is independent of page complexity. The
-    // 0_decks case is the constant flush floor; each added deck is one more
-    // upload (animating content guarantees a fresh frame every iteration).
-    //
-    // A SINGLE manager is reused and decks are added incrementally: Servo's
-    // global `Opts` can be initialized only once per process, so each deck must
-    // be a WebView on the one shared engine — spawning a second `Servo` panics
-    // ("Already initialized"). This mirrors the production design exactly.
+    // One manager, decks added incrementally: Servo's global `Opts` initialize
+    // once per process, so a second `Servo` panics ("Already initialized").
+    // Each deck is a WebView on the shared engine, as in production.
     let mut mgr = HtmlManager::new();
     for decks in 0usize..=2 {
         if decks > 0 {

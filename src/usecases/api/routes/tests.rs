@@ -1,5 +1,4 @@
-//! Integration-style tests for all read-only routes.
-//! Uses a real axum router with populated engine state.
+//! Route tests against a real axum router with populated engine state.
 
 #[cfg(test)]
 #[allow(clippy::module_inception)]
@@ -21,7 +20,6 @@ mod tests {
         let engine_state =
             std::sync::Arc::new(crate::app::publish::StatePublication::with_state(state));
 
-        // Spawn a background task that processes commands
         tokio::spawn(async move {
             while let Some((_cmd, reply_tx)) = cmd_rx.recv().await {
                 if let Some(tx) = reply_tx {
@@ -152,10 +150,8 @@ mod tests {
         assert_eq!(json["source_label"], "Audio");
     }
 
-    /// A show run over the API has no popover to look at, so this route is the
-    /// only place a rig can be told what it is hearing. Every field a performer
-    /// would read off the panel has to be on the wire, including the input that
-    /// is not resolving.
+    /// Every field the timecode panel shows is on the wire, including inputs
+    /// that are not resolving.
     #[tokio::test]
     async fn test_state_timecode() {
         let mut state = make_test_state();
@@ -220,8 +216,7 @@ mod tests {
         assert_eq!(json["ltc_input"]["channel"], 1);
     }
 
-    /// With nothing patched and nothing arriving the route still answers, so a
-    /// client can tell "no timecode" from "no route".
+    /// With nothing patched the route still answers.
     #[tokio::test]
     async fn test_state_timecode_with_nothing_arriving() {
         let (status, json) = get_json(router_with_state(), "/api/state/timecode").await;
@@ -707,7 +702,7 @@ mod tests {
         assert_eq!(json["status"], "ok");
     }
 
-    /// Reorder ordinals stay integers — they are the payload, not the address.
+    /// Reorder positions are integers in the body.
     #[tokio::test]
     async fn test_reorder_deck() {
         let (status, json) = put_json(
@@ -2139,8 +2134,7 @@ mod tests {
         assert_eq!(json["status"], "ok");
     }
 
-    /// Everything the GUI shows is readable over the API too
-    /// (/spec/ui-engine-boundary.md § WS9).
+    /// Everything the GUI shows is readable over the API.
     #[tokio::test]
     async fn gui_parity_state_routes_serve_their_subtrees() {
         let mut state = make_test_state();
@@ -2663,7 +2657,7 @@ mod tests {
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     }
 
-    // ── Automation (/spec/automation.md) ─────────────────────────
+    // ── Automation ─────────────────────────
 
     #[tokio::test]
     async fn test_add_automation_lane() {
@@ -2677,8 +2671,7 @@ mod tests {
         assert_eq!(json["status"], "ok");
     }
 
-    /// An arrangement-authored lane is transport-locked, so the caller should
-    /// not have to say so.
+    /// The timebase defaults to `Transport`.
     #[tokio::test]
     async fn test_add_automation_lane_defaults_to_the_transport_timebase() {
         let (status, json) = post_json(
@@ -2706,8 +2699,7 @@ mod tests {
         assert_eq!(json["status"], "ok");
     }
 
-    /// `curve` defaults, so a caller drawing a plain ramp sends only the two
-    /// fields that carry meaning.
+    /// `curve` is optional.
     #[tokio::test]
     async fn test_set_envelope_breakpoints_curve_is_optional() {
         let (status, json) = put_json(
@@ -2793,8 +2785,7 @@ mod tests {
         }
     }
 
-    /// The rate is how a show counts frames, so a client setting it must reach
-    /// the engine with the rate it named rather than a default.
+    /// The rate a client sets reaches the engine unchanged.
     #[tokio::test]
     async fn test_transport_rate() {
         let (app, seen) = router_capturing_commands();
@@ -2813,8 +2804,7 @@ mod tests {
         }
     }
 
-    /// Which cable the show follows is a rig decision a headless installation
-    /// has to be able to make over the wire.
+    /// The timecode preference can be set over the API.
     #[tokio::test]
     async fn test_timecode_preference() {
         let (app, seen) = router_capturing_commands();
@@ -2836,8 +2826,7 @@ mod tests {
         }
     }
 
-    /// The channel is the whole point of the patch: music goes to the PA on one
-    /// and timecode comes to us on the other.
+    /// The LTC input's channel reaches the engine.
     #[tokio::test]
     async fn test_timecode_ltc_input() {
         let (app, seen) = router_capturing_commands();
@@ -2859,8 +2848,7 @@ mod tests {
         }
     }
 
-    /// Unpatching has to release the audio device, so `null` is a real value
-    /// rather than a missing field.
+    /// `null` unpatches the LTC input.
     #[tokio::test]
     async fn test_timecode_ltc_input_can_be_cleared() {
         let (app, seen) = router_capturing_commands();
@@ -2877,9 +2865,7 @@ mod tests {
         }
     }
 
-    /// A body that names no audio input at all is a mistake worth reporting, not
-    /// a silent unpatch: an installation script with a typo must fail loudly
-    /// rather than quietly stop listening for timecode.
+    /// A body with no input field is an error, not an unpatch.
     #[tokio::test]
     async fn test_timecode_ltc_input_rejects_a_malformed_patch() {
         for body in [
@@ -2924,8 +2910,7 @@ mod tests {
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     }
 
-    /// A show can be driven from a phone or a cue stack, and arming the
-    /// recorder is part of driving it.
+    /// Automation recording can be armed over the API.
     #[tokio::test]
     async fn test_transport_record_arm() {
         let (app, seen) = router_capturing_commands();
@@ -2942,8 +2927,7 @@ mod tests {
         }
     }
 
-    /// Folding a lane away is view state that belongs to the show, so it is
-    /// addressable rather than a UI-only click.
+    /// Folding a lane is addressable over the API.
     #[tokio::test]
     async fn test_set_lane_collapsed() {
         let (app, seen) = router_capturing_commands();
@@ -2977,8 +2961,7 @@ mod tests {
 
     // ── Clipboard ───────────────────────────────────────────────
 
-    /// The source and target are tagged enums, so a caller says what kind of
-    /// object it means rather than relying on the UUID to disambiguate.
+    /// Source and target are tagged enums that name the object kind.
     #[tokio::test]
     async fn test_copy_names_the_kind_of_object() {
         let (app, seen) = router_capturing_commands();
@@ -3004,8 +2987,7 @@ mod tests {
         }
     }
 
-    /// Omitting the flag copies the object without its placement, which is what
-    /// a caller that has never heard of the arrangement means.
+    /// Omitting the flag copies the object without its arrangement regions.
     #[tokio::test]
     async fn test_copy_leaves_the_arrangement_out_by_default() {
         let (app, seen) = router_capturing_commands();
@@ -3091,8 +3073,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    /// The region body is flattened, so a caller writes the region's own fields
-    /// rather than nesting them under a wrapper key.
+    /// The region body is flattened, not nested under a wrapper key.
     #[tokio::test]
     async fn test_add_region_takes_a_flat_body() {
         let (app, seen) = router_capturing_commands();
@@ -3115,8 +3096,7 @@ mod tests {
         }
     }
 
-    /// A lane and an index address a region, and neither may be substituted for
-    /// the other.
+    /// A region is addressed by its lane and its index.
     #[tokio::test]
     async fn test_update_region_does_not_swap_lane_and_index() {
         let (app, seen) = router_capturing_commands();
@@ -3165,8 +3145,7 @@ mod tests {
         }
     }
 
-    /// Omitting `seconds` is the common case and must not be an error: it means
-    /// "use the configured ramp".
+    /// Omitting `seconds` uses the configured ramp.
     #[tokio::test]
     async fn test_rearm_defaults_its_ramp_length() {
         let (app, seen) = router_capturing_commands();
@@ -3197,7 +3176,7 @@ mod tests {
         }
     }
 
-    /// A cue can be dropped without naming it, which is what the ruler does.
+    /// A cue can be added without a name.
     #[tokio::test]
     async fn test_add_cue_names_itself_when_the_body_does_not() {
         let (app, seen) = router_capturing_commands();
@@ -3217,8 +3196,7 @@ mod tests {
         }
     }
 
-    /// A move restates the position and nothing else, so a rename cannot be
-    /// undone by a drag that had no opinion about the name.
+    /// A move that omits the name leaves it unchanged.
     #[tokio::test]
     async fn test_update_cue_leaves_absent_fields_alone() {
         let (app, seen) = router_capturing_commands();
@@ -3253,8 +3231,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    /// The arrows are engine commands so a foot switch and the API walk a show
-    /// the same way the UI does.
+    /// Previous and next cue are engine commands, as in the UI.
     #[tokio::test]
     async fn test_cue_navigation_routes() {
         let (app, seen) = router_capturing_commands();
@@ -3274,8 +3251,8 @@ mod tests {
         ));
     }
 
-    /// One named cue, which is what the Performance-mode pads send. The literal
-    /// `prev` and `next` still win over the UUID pattern that follows them.
+    /// Locate to one cue. The literal `prev` and `next` routes still win over
+    /// the UUID pattern.
     #[tokio::test]
     async fn test_trigger_cue_route() {
         let (app, seen) = router_capturing_commands();
@@ -3288,8 +3265,7 @@ mod tests {
         }
     }
 
-    /// A Performance-only scene reports no arrangement rather than an empty one,
-    /// so clients can tell "not used" from "used and empty".
+    /// A scene without an arrangement reports none, not an empty one.
     #[tokio::test]
     async fn test_arrangement_state_is_absent_without_one() {
         let (status, json) = get_json(router_with_mock_engine(), "/api/state").await;
@@ -3574,7 +3550,7 @@ mod tests {
             tokio::sync::mpsc::unbounded_channel::<crate::engine::CommandEnvelope>();
         let engine_state =
             std::sync::Arc::new(crate::app::publish::StatePublication::with_state(state));
-        // Drop receiver immediately so sends fail
+        // Drop the receiver so sends fail.
         drop(cmd_rx);
         let shared = SharedState {
             command_tx: cmd_tx,
@@ -3694,8 +3670,7 @@ mod tests {
 
     // ── UUID addressing ─────────────────────────────────────────
 
-    /// A client that creates an entity and then addresses it takes the UUID from
-    /// the creation response, never a position in the entity list.
+    /// A client addresses a new entity by the UUID in the creation response.
     #[tokio::test]
     async fn test_created_uuid_addresses_the_new_entity() {
         let app = router_with_ok_with_id_engine();
@@ -3712,8 +3687,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
     }
 
-    /// An unresolvable UUID is a loud 404 rather than a silent write to whatever
-    /// entity currently occupies a position. See `/spec/api-addressing.md`.
+    /// An unknown UUID returns 404.
     #[tokio::test]
     async fn test_unresolvable_deck_uuid_returns_404() {
         let (status, json) = put_json(
@@ -3779,7 +3753,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_output_presentation_carries_an_hdr10_request() {
-        // The installation operator drives the same contract the GUI does.
         let (app, seen) = router_capturing_commands();
         let (status, json) = put_json(
             app,
@@ -3812,7 +3785,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_presentation_request_without_hdr_fields_stays_sdr() {
-        // A script written against Phase 49 must keep working unchanged.
+        // Requests without the HDR fields stay SDR.
         let (app, seen) = router_capturing_commands();
         let (status, _) = put_json(
             app,
@@ -3838,15 +3811,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_output_tonemap_carries_the_curve() {
-        // The installation operator can grade one output differently, same as
-        // the GUI can.
         let (app, seen) = router_capturing_commands();
         let (status, json) = put_json(
             app,
             "/api/outputs/out-001/tonemap",
-            // `TonemapMode` carries no `rename_all`, so its API representation is
-            // the variant name verbatim. That differs from the presentation enums,
-            // which are snake_case; changing either would break existing clients.
+            // `TonemapMode` has no `rename_all`, so it serializes as the variant
+            // name; the presentation enums are snake_case. Changing either breaks
+            // clients.
             serde_json::json!({"mode": "AgX"}),
         )
         .await;
@@ -3869,8 +3840,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_output_tonemap_null_clears_the_override() {
-        // Clearing must be expressible, or an output could be overridden and
-        // never returned to the show-wide curve through the API.
+        // `null` clears the override.
         let (app, seen) = router_capturing_commands();
         let (status, _) = put_json(
             app,
@@ -3903,8 +3873,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_look_lut_is_a_separate_slot_from_the_calibration_lut() {
-        // Two slots, two routes. Loading a look must not touch the calibration
-        // LUT, which is display-referred and bound to one output transform.
+        // Loading a look LUT must not touch the calibration LUT.
         let (app, seen) = router_capturing_commands();
         let (status, _) = put_json(
             app,
@@ -3975,9 +3944,8 @@ mod tests {
 
     // ── Address plumbing: path segments → command fields ────────
     //
-    // The mock engine replies `Ok` to anything, so a status assertion alone
-    // cannot catch a handler that puts a path segment in the wrong command
-    // field. These tests inspect the dispatched command instead.
+    // The mock engine replies `Ok` to everything, so these tests inspect the
+    // dispatched command to catch path segments in the wrong field.
 
     fn router_capturing_commands() -> (
         axum::Router,

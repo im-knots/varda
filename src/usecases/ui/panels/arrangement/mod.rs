@@ -2,13 +2,10 @@
 //!
 //! A channel is a group, a deck is a lane, and a region is a stretch of that
 //! deck's opacity envelope. Only the central area changes; the library, bottom
-//! bar, and right panel stay exactly as they are in Performance mode. See
-//! /spec/arrangement.md § UI.
+//! bar, and right panel are the same as in Performance mode.
 //!
-//! The whole timeline is painted from a single allocated rect rather than from
-//! nested egui layouts. Headers and tracks must agree on every row's vertical
-//! position to the pixel, and two independent layouts drift the moment either
-//! one's spacing changes.
+//! The timeline is painted from a single allocated rect instead of nested egui
+//! layouts, so headers and tracks agree on every row's position to the pixel.
 
 mod automation;
 mod cues;
@@ -16,14 +13,13 @@ mod focus;
 mod regions;
 mod selection;
 
-/// The colour a cue is drawn in, wherever it is drawn: the ruler here, and the
-/// bank of pads in Performance mode.
+/// Cue color, used on the ruler and the Performance-mode cue bank.
 pub(super) const CUE_COLOR: egui::Color32 = cues::COLOR;
 
 pub(super) use automation::a_lane_is_selected;
 
-/// Whether an arrangement slice selection is armed, so the scene-object copy
-/// shortcuts in the top-level keyboard handler stand down in its favour.
+/// Whether an arrangement slice selection is armed, so the top-level scene
+/// copy shortcuts yield to it.
 pub(in crate::usecases::ui::panels) fn selection_active(ctx: &egui::Context) -> bool {
     selection::load(ctx).is_some()
 }
@@ -44,23 +40,21 @@ const RULER_HEIGHT: f32 = 22.0;
 const GROUP_HEIGHT: f32 = 20.0;
 const LANE_HEIGHT: f32 = 32.0;
 const AUTOMATION_HEIGHT: f32 = 46.0;
-/// How much of the scale a wheel notch covers when the wheel is being used to
-/// zoom. egui's own figure for Cmd + wheel, so the fallback gesture and the
-/// pinch move the timeline at the same rate.
+/// Zoom per wheel notch. egui's value for Cmd + wheel, so the wheel fallback
+/// and pinch zoom at the same rate.
 const WHEEL_ZOOM_SPEED: f32 = 1.0 / 200.0;
-/// Blank time kept past the end of the last region, so there is somewhere to
-/// scroll to and somewhere to drop the next region.
+/// Blank time past the end of the last region, to scroll to and drop the next
+/// region in.
 const TRAILING_SECONDS: f64 = 30.0;
 
 /// One row of the timeline. Groups, lanes, and automation rows share a vertical
-/// rhythm so the fixed headers and the scrolling tracks cannot drift apart.
+/// layout so the fixed headers and scrolling tracks stay aligned.
 enum Row<'a> {
     Group {
         ch_idx: usize,
         name: &'a str,
     },
-    /// The mixer's own row, holding master effect automation. Sits below every
-    /// channel, where the mixer box sits in Performance mode.
+    /// The mixer's row, holding master effect automation, below every channel.
     Master,
     Lane(LaneRow<'a>),
     Automation(AutomationRow<'a>),
@@ -76,8 +70,8 @@ impl Row<'_> {
     }
 }
 
-/// What clicking an automation row's header selects, so the bottom bar shows the
-/// thing whose curve is being drawn.
+/// What clicking an automation row's header selects, so the bottom bar shows
+/// the curve's owner.
 #[derive(Clone, Copy)]
 enum Owner {
     Deck(usize, usize),
@@ -85,8 +79,7 @@ enum Owner {
     Master,
 }
 
-/// Everything one deck row needs, so the row renderer does not take a dozen
-/// positional arguments.
+/// Everything one deck row needs.
 struct LaneRow<'a> {
     ch_idx: usize,
     deck_idx: usize,
@@ -95,25 +88,24 @@ struct LaneRow<'a> {
     regions: &'a [RegionConfig],
     overridden: bool,
     collapsed: bool,
-    /// Whether there is anything to unfold, so the caret only appears where it
-    /// would do something.
+    /// Whether there is automation to unfold; the caret only shows if so.
     has_automation: bool,
 }
 
 /// One automated parameter, beneath whatever owns it.
 struct AutomationRow<'a> {
-    /// Channel the row takes its colour from. The master row borrows the last
-    /// channel's colour rather than inventing one.
+    /// Channel the row takes its color from. The master row uses the last
+    /// channel's color.
     ch_idx: usize,
     owner: Owner,
-    /// Display name, already stripped of the `deck/<uuid>/` addressing prefix
-    /// and qualified by the effect it belongs to where that is ambiguous.
+    /// Display name without the `deck/<uuid>/` prefix, qualified by its effect
+    /// where ambiguous.
     label: String,
     param_key: &'a str,
     envelope_uuid: &'a str,
     breakpoints: &'a [Breakpoint],
-    /// Whether a performer has this parameter by hand. Drives the row's own
-    /// badge, which hands back this key rather than the lane's opacity.
+    /// Whether a performer holds this parameter by hand. Drives the row's own
+    /// badge, which releases this key rather than the lane's opacity.
     overridden: bool,
 }
 
@@ -141,8 +133,7 @@ impl TimeAxis {
     }
 }
 
-/// Where one row sits and how it maps time to pixels. Bundled so the row
-/// renderers take a context rather than a parameter list.
+/// Where one row sits and how it maps time to pixels.
 #[derive(Clone, Copy)]
 struct RowGeometry {
     header: egui::Rect,
@@ -151,8 +142,7 @@ struct RowGeometry {
     idx: usize,
 }
 
-/// The timeline's two columns and how far the rows have been scrolled past the
-/// top of them. Bundled for the same reason as [`RowGeometry`].
+/// The timeline's two columns and how far the rows are scrolled.
 #[derive(Clone, Copy)]
 struct Layout {
     header: egui::Rect,
@@ -161,12 +151,10 @@ struct Layout {
     scroll_y: f32,
 }
 
-/// Round an edit to the nearest frame when the snap preference is on.
+/// Round an edit to the nearest frame when snapping is on.
 ///
-/// Snapping is a property of the gesture, never of the stored value: positions
-/// stay continuous `f64` so changing the ruler's frame rate re-labels the
-/// timeline without moving anything. See /spec/arrangement.md § Does the ruler
-/// own a frame rate?
+/// Only the gesture snaps; stored positions stay continuous `f64`, so changing
+/// the ruler's frame rate relabels the timeline without moving anything.
 fn snap_seconds(data: &UIData, seconds: f64) -> f64 {
     if !data.arrangement_snap {
         return seconds.max(0.0);
@@ -175,7 +163,7 @@ fn snap_seconds(data: &UIData, seconds: f64) -> f64 {
     ((seconds * fps).round() / fps).max(0.0)
 }
 
-/// Shortest region an edit may produce: one frame at the ruler's rate.
+/// Shortest region an edit can produce: one frame at the ruler's rate.
 fn min_span(data: &UIData) -> f64 {
     1.0 / data.transport.timecode_rate.fps()
 }
@@ -219,8 +207,8 @@ pub(super) fn render_arrangement(ui: &mut egui::Ui, data: &UIData, actions: &mut
         pps,
     };
 
-    // Clamped here rather than where it is stored, because the limit is this
-    // frame's row count against this frame's panel height.
+    // Clamped here because the limit depends on this frame's row count and panel
+    // height.
     let scroll_y = data
         .arrangement_scroll_y
         .clamp(0.0, max_scroll_y(&rows, lanes_rect));
@@ -236,17 +224,16 @@ pub(super) fn render_arrangement(ui: &mut egui::Ui, data: &UIData, actions: &mut
     };
     render_rows(ui, &rows, data, actions, layout);
     render_vertical_scrollbar(ui, actions, &rows, lanes_rect, scroll_y);
-    // The marquee is driven from raw pointer state rather than a widget, so it
-    // never fights the row tracks for the press: the bare-drag gestures already
-    // stand down while Shift is held, and this reads the same drag to build the
-    // selection. See /spec/arrangement-selection.md § Building the selection.
+    // The marquee reads raw pointer state instead of a widget, so it doesn't
+    // compete with the row tracks for the press; their bare-drag gestures ignore
+    // Shift.
     handle_marquee(ui, &rows, layout);
-    // After the marquee, which owns the Shift+drag, and before the highlight, so
-    // a move in flight draws its ghost under the selection it came from.
+    // After the marquee, which handles Shift+drag, and before the highlight, so a
+    // move's ghost draws under its selection.
     handle_selection_drag(ui, data, actions, &rows, layout);
     draw_selection(ui, &rows, layout);
-    // After the rows, so a cue's line reads over the regions it marks, and after
-    // the ruler, so its handle wins the press that would otherwise scrub.
+    // After the rows, so cue lines draw over regions, and after the ruler, so a
+    // cue handle takes the press instead of scrubbing.
     cues::render(ui, data, actions, ruler_rect, lanes_rect, axis);
     draw_playhead(ui, data, track_rect, axis);
     handle_selection_shortcuts(ui, data, actions, &rows, layout);
@@ -254,10 +241,8 @@ pub(super) fn render_arrangement(ui: &mut egui::Ui, data: &UIData, actions: &mut
     offer_drop_targets(ui, data, &rows, layout);
 }
 
-/// Every deck gets a lane, whether or not the arrangement has claimed it yet.
-///
-/// Showing only arranged decks would make an empty arrangement look like an
-/// empty scene, and would leave nowhere to drop a first region.
+/// Every deck gets a lane, arranged or not, so an empty arrangement still has
+/// somewhere to drop a first region.
 fn build_rows(data: &UIData) -> Vec<Row<'_>> {
     let arrangement = data.arrangement.as_ref();
     let mut rows = Vec::new();
@@ -285,9 +270,8 @@ fn build_rows(data: &UIData) -> Vec<Row<'_>> {
                 rows.extend(curves.into_iter().map(Row::Automation));
             }
         }
-        // The channel's own fader and its effects belong to the channel rather
-        // than to any one deck, so their curves sit directly under the group
-        // header.
+        // Channel fader and effect curves belong to the channel, so they sit directly
+        // under the group header.
         let mut channel_sources =
             vec![(crate::engine::value::param::channel_prefix(&ch.uuid), None)];
         channel_sources.extend(effect_sources(&ch.effects));
@@ -304,8 +288,7 @@ fn build_rows(data: &UIData) -> Vec<Row<'_>> {
         );
     }
 
-    // The master row is drawn whether or not it holds anything, because a curve
-    // authored on a master effect otherwise has nowhere to be edited.
+    // The master row is always drawn, so curves on master effects can be edited.
     let master_color = data.channels.len().saturating_sub(1);
     rows.push(Row::Master);
     rows.extend(
@@ -322,10 +305,8 @@ fn build_rows(data: &UIData) -> Vec<Row<'_>> {
     rows
 }
 
-/// Modulation key prefixes for an effect chain, each labelled by its effect.
-///
-/// Two effects can carry the same parameter name, so the effect's own name is
-/// carried alongside the prefix rather than being recovered from the key.
+/// Modulation key prefixes for an effect chain, each with its effect's name,
+/// since two effects can share a parameter name.
 fn effect_sources(effects: &[super::super::EffectInfo]) -> Vec<(String, Option<String>)> {
     effects
         .iter()
@@ -340,9 +321,8 @@ fn effect_sources(effects: &[super::super::EffectInfo]) -> Vec<(String, Option<S
 
 /// A deck's own parameters plus its effect chain.
 ///
-/// The region-compiled opacity curve is excluded: it is authored by dragging
-/// regions, and hand-editing its breakpoints would be undone by the next region
-/// edit.
+/// Excludes the region-compiled opacity curve, which is authored by dragging
+/// regions; hand edits to it would be overwritten by the next region edit.
 fn deck_automation_rows<'a>(
     data: &'a UIData,
     ch_idx: usize,
@@ -368,11 +348,10 @@ fn deck_automation_rows<'a>(
     )
 }
 
-/// A display name for a parameter, from its key relative to its owner.
+/// Display name for a parameter, from its key relative to its owner.
 ///
-/// Shader and effect parameters (`param/<name>`) are named by whoever wrote the
-/// shader, so they are shown as they are. A deck source's controls take the
-/// label its type declares, the one the deck's own column shows beside them.
+/// Shader and effect parameters (`param/<name>`) are shown as named. Deck source
+/// controls use the label their type declares.
 fn param_label<'a>(
     data: &'a UIData,
     deck: Option<&super::super::DeckUIInfo>,
@@ -388,11 +367,10 @@ fn param_label<'a>(
         .unwrap_or(relative)
 }
 
-/// The envelopes assigned to any parameter under `sources`, one row each.
+/// One row per envelope assigned to any parameter under `sources`.
 ///
-/// Derived from the modulation graph rather than from the lane, because an
-/// envelope can also be created from a parameter's modulation menu and would
-/// otherwise have no editor anywhere.
+/// Read from the modulation graph, not the lane, because an envelope can also
+/// be created from a parameter's modulation menu.
 fn automation_rows<'a>(
     data: &'a UIData,
     ch_idx: usize,
@@ -427,8 +405,7 @@ fn automation_rows<'a>(
             let ModSourceUI::Envelope { breakpoints } = &entry.source else {
                 return None;
             };
-            // Only the deck's own keys (no owning effect) can name a source
-            // control.
+            // Only the deck's own keys (no owning effect) can name a source control.
             let deck = match (owner, owner_label) {
                 (Owner::Deck(ch, dk), None) => data
                     .channels
@@ -454,22 +431,17 @@ fn automation_rows<'a>(
             })
         })
         .collect();
-    // Assignments live in a hash map, so without this the rows would reshuffle
-    // between frames.
+    // Assignments are in a hash map; sort so rows don't reshuffle between frames.
     rows.sort_by(|a, b| a.param_key.cmp(b.param_key));
     rows
 }
 
 /// Play, stop, zero, position, snap, and zoom, inline above the ruler.
 ///
-/// Duplicates the top bar popover rather than replacing it: the popover is what
-/// Performance mode has, and a mode switch should not move the controls a
-/// performer already learned. See /spec/arrangement.md § Transport controls are
-/// inline here.
+/// Duplicates the top bar popover so Performance mode's controls don't move.
 fn render_transport_strip(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     let t = &data.transport;
-    // Position is read-only while chasing, so offering the controls would be
-    // offering a lie.
+    // Position is read-only while chasing, so the controls are hidden.
     let scrubbable = t.source == TransportSource::Internal;
 
     ui.horizontal(|ui| {
@@ -566,11 +538,8 @@ fn render_transport_strip(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActi
     });
 }
 
-/// One click to hand every held parameter back, with a count so the performer
-/// knows how much is off the rails.
-///
-/// Per-lane badges alone would mean hunting for the lanes that are held, which
-/// is the wrong thing to be doing while the show runs.
+/// One click to release every held parameter, with a count of how many are
+/// held.
 fn render_rearm_all(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     let held = data
         .arrangement
@@ -597,11 +566,8 @@ fn render_rearm_all(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     }
 }
 
-/// What plays before the show reaches the arranged range.
-///
-/// Reachable from the timeline because the alternative to choosing is a black
-/// screen that looks exactly like a broken rig. See /spec/transport.md § Idle
-/// behaviour.
+/// What plays before the show reaches the arranged range. Without a choice the
+/// output is black, which looks like a broken rig.
 fn render_idle_picker(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     use crate::arrangement::IdleBehaviour;
 
@@ -657,11 +623,10 @@ fn render_idle_picker(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions)
     }
 }
 
-/// A pinch zooms the timescale, the wheel moves the rows, and Shift or a
+/// A pinch zooms the timescale, the wheel scrolls the rows, and Shift or a
 /// horizontal wheel pans along time.
 ///
-/// Zooming about the pointer rather than the left edge is what makes a long show
-/// navigable: the thing being looked at stays put.
+/// Zoom is anchored at the pointer so the point being looked at stays put.
 fn handle_pan_and_zoom(
     ui: &egui::Ui,
     data: &UIData,
@@ -687,10 +652,9 @@ fn handle_pan_and_zoom(
         )
     });
 
-    // A trackpad pinch and Cmd + wheel are one gesture by the time they reach
-    // here: egui turns both into a zoom factor and withholds the scroll they
-    // came from. Alt keeps a zoom on the wheel for a mouse that has no pinch to
-    // give, on the same multiplicative scale so both feel alike.
+    // egui turns a trackpad pinch and Cmd + wheel into a zoom factor and withholds
+    // their scroll. Alt + wheel zooms too, for mice without pinch, on the same
+    // multiplicative scale.
     let zoom = if (zoom_delta - 1.0).abs() > f32::EPSILON {
         zoom_delta
     } else if zoom_modifier && scroll_delta.y.abs() > 0.0 {
@@ -705,8 +669,8 @@ fn handle_pan_and_zoom(
         return;
     }
 
-    // A horizontal wheel pans, and so does the vertical one held with Shift, for
-    // the single-wheel mouse that has no other way across a long show.
+    // A horizontal wheel pans, as does the vertical wheel with Shift, for
+    // single-wheel mice.
     let pan_px = if scroll_delta.x.abs() > 0.0 {
         scroll_delta.x
     } else if pan_modifier {
@@ -720,9 +684,8 @@ fn handle_pan_and_zoom(
         return;
     }
 
-    // Everything else the wheel does is what it does in every other list: move
-    // the rows. A show with more channels than fit on screen is otherwise
-    // unreachable below the fold.
+    // Otherwise the wheel scrolls the rows, so shows with more channels than fit
+    // stay reachable.
     if scroll_delta.y.abs() > 0.0 {
         let limit = max_scroll_y(rows, lanes_rect);
         let next = (data.arrangement_scroll_y - scroll_delta.y).clamp(0.0, limit);
@@ -730,8 +693,8 @@ fn handle_pan_and_zoom(
     }
 }
 
-/// The strip down the right edge of the lanes, present only when the rows
-/// overrun their area. Drag it, or use the wheel.
+/// Scrollbar on the right edge of the lanes, shown only when the rows
+/// overflow. Drag it or use the wheel.
 fn render_vertical_scrollbar(
     ui: &egui::Ui,
     actions: &mut UIActions,
@@ -740,7 +703,7 @@ fn render_vertical_scrollbar(
     scroll_y: f32,
 ) {
     const WIDTH: f32 = 8.0;
-    /// Short enough to stay grabbable on a show with a hundred lanes.
+    /// Minimum thumb size, so it stays grabbable with a hundred lanes.
     const MIN_THUMB: f32 = 24.0;
 
     let limit = max_scroll_y(rows, lanes_rect);
@@ -771,8 +734,7 @@ fn render_vertical_scrollbar(
     let colors = ui.visuals().widgets.style(&response);
     painter.rect_filled(thumb.shrink(1.0), 4.0, colors.bg_fill);
 
-    // Both a drag on the thumb and a click on the track put the pointer where
-    // it asked to be, which is the same arithmetic either way.
+    // A thumb drag and a track click both move to the pointer, with the same math.
     if response.is_pointer_button_down_on()
         && let Some(pointer) = ui.ctx().pointer_latest_pos()
     {
@@ -782,14 +744,12 @@ fn render_vertical_scrollbar(
     }
 }
 
-/// The zoom and horizontal scroll a gesture of `factor` lands on, holding the
-/// instant under `pointer_x` where it is.
+/// Zoom and horizontal scroll after a gesture of `factor`, keeping the instant
+/// under `pointer_x` in place.
 ///
-/// Multiplicative, so a pinch out and back leaves the view where it started
-/// however many frames it took, and so the same gesture covers the same
-/// proportion of the scale at every zoom. Near the top of the show the anchor is
-/// given up rather than scrolling to before it starts, since there is nothing
-/// there to show.
+/// Multiplicative, so pinching out and back returns to the start view and a
+/// gesture covers the same proportion at every zoom. Near the start of the show
+/// the anchor is dropped instead of scrolling before time zero.
 fn zoomed(axis: TimeAxis, pointer_x: f32, factor: f32) -> (f32, f64) {
     let anchor = axis.seconds(pointer_x);
     let pps = (axis.pps * factor).clamp(MIN_PIXELS_PER_SECOND, MAX_PIXELS_PER_SECOND);
@@ -797,10 +757,8 @@ fn zoomed(axis: TimeAxis, pointer_x: f32, factor: f32) -> (f32, f64) {
     (pps, (anchor - offset).max(0.0))
 }
 
-/// Furthest the timeline can be panned.
-///
-/// Bounded so a flick of the wheel cannot strand the view in empty time hours
-/// past anything authored, with no landmark to navigate back by.
+/// Furthest the timeline can be panned, so the view can't end up hours past
+/// anything authored.
 fn max_scroll(data: &UIData) -> f64 {
     let authored = data.arrangement.as_ref().map_or(0.0, |a| a.duration);
     authored.max(data.transport.position) + TRAILING_SECONDS
@@ -813,8 +771,8 @@ fn render_ruler(
     rect: egui::Rect,
     axis: TimeAxis,
 ) {
-    // Scrubbing is refused rather than swallowed while chasing: a ruler that
-    // accepts clicks and does nothing is the worst of both.
+    // Scrubbing is disabled while chasing, rather than accepting clicks that do
+    // nothing.
     let scrubbable = data.transport.source == TransportSource::Internal;
     let sense = if scrubbable {
         egui::Sense::click_and_drag()
@@ -860,7 +818,7 @@ fn render_ruler(
         return;
     }
 
-    // Click and drag both locate, because scrubbing is the same gesture held.
+    // Click and drag both move the playhead.
     if (response.clicked() || response.dragged())
         && let Some(pos) = response.interact_pointer_pos()
     {
@@ -869,8 +827,8 @@ fn render_ruler(
         });
     }
 
-    // The double-click also located, on its first click. Landing the playhead on
-    // the cue it just made is what someone marking a moment wanted anyway.
+    // The double-click's first click already moved the playhead, so it lands on
+    // the new cue.
     if response.double_clicked()
         && let Some(pos) = response.interact_pointer_pos()
     {
@@ -886,7 +844,7 @@ fn tick_step(pps: f32) -> f64 {
     const CANDIDATES: [f64; 12] = [
         0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 300.0, 600.0,
     ];
-    // Roughly the width of an `HH:MM:SS:FF` label plus breathing room.
+    // About the width of an `HH:MM:SS:FF` label plus padding.
     const MIN_LABEL_SPACING: f64 = 72.0;
     for step in CANDIDATES {
         if step * f64::from(pps) >= MIN_LABEL_SPACING {
@@ -910,8 +868,8 @@ fn render_rows(
         axis,
         scroll_y,
     } = layout;
-    // A row straddling either edge is drawn and clipped rather than dropped, so
-    // scrolling reveals a row gradually instead of snapping it into place.
+    // Rows crossing either edge are drawn and clipped, not dropped, so scrolling
+    // reveals them gradually.
     let visible = egui::Rect::from_min_max(
         egui::pos2(header_rect.left(), lanes_rect.top()),
         lanes_rect.max,
@@ -953,8 +911,8 @@ fn render_rows(
     }
 }
 
-/// Top and height of each row, tiled from the top of the lane area with
-/// `scroll_y` pixels of rows already past it.
+/// Top and height of each row, stacked from the top of the lane area with
+/// `scroll_y` pixels already scrolled past.
 fn row_spans(rows: &[Row<'_>], lanes_rect: egui::Rect, scroll_y: f32) -> Vec<(f32, f32)> {
     let mut y = lanes_rect.top() - scroll_y;
     rows.iter()
@@ -966,24 +924,22 @@ fn row_spans(rows: &[Row<'_>], lanes_rect: egui::Rect, scroll_y: f32) -> Vec<(f3
         .collect()
 }
 
-/// Height of every row stacked, whether or not it fits.
+/// Total height of all rows.
 fn content_height(rows: &[Row<'_>]) -> f32 {
     rows.iter().map(Row::height).sum()
 }
 
-/// Furthest the rows can be scrolled: enough to bring the last one into view and
-/// no further, so a flick cannot leave the timeline showing nothing.
+/// Furthest the rows can scroll: enough to show the last one and no more.
 fn max_scroll_y(rows: &[Row<'_>], lanes_rect: egui::Rect) -> f32 {
     (content_height(rows) - lanes_rect.height()).max(0.0)
 }
 
 /// Publish arrangement rows as library drop targets.
 ///
-/// Generator drops still use `ch_drop_rect` on group rows (same as Performance
-/// channel columns). Effect drops use the surface keys in
-/// `/spec/effect-drop-targets.md`: deck lanes and deck automation → deck FX;
-/// groups and channel automation → channel FX; Master and its automation →
-/// Master FX.
+/// Generator drops use `ch_drop_rect` on group rows, like Performance channel
+/// columns. Effect drops: deck lanes and deck automation go to deck FX; groups
+/// and channel automation to channel FX; Master and its automation to Master
+/// FX.
 fn offer_drop_targets(ui: &egui::Ui, data: &UIData, rows: &[Row<'_>], layout: Layout) {
     let Layout {
         header: header_rect,
@@ -1094,8 +1050,7 @@ fn render_group_row(
         let Some(channel) = data.channels.get(ch_idx) else {
             return;
         };
-        // The menu the mixer's channel column shows, plus the delete the mixer
-        // keeps on a button beside the name.
+        // The mixer channel column's menu, plus the delete the mixer has as a button.
         let subject = clipboard_menu::Subject::channel(&channel.uuid, &channel.name);
         clipboard_menu::items(ui, data, actions, &subject);
         ui.separator();
@@ -1118,10 +1073,8 @@ fn render_group_row(
 
 /// The mixer's row, holding master effect automation.
 ///
-/// Drawn even when it holds nothing: a curve authored on a master effect from
-/// the bottom bar has to land somewhere, and an absent row would leave it
-/// running with no editor. The crossfader is not here because it is not a
-/// modulation target yet. See /spec/arrangement.md § Inside the central area.
+/// Always drawn so a curve authored on a master effect from the bottom bar has
+/// an editor. The crossfader is not a modulation target, so it isn't here.
 fn render_master_row(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions, geom: RowGeometry) {
     let RowGeometry {
         header,
@@ -1207,8 +1160,7 @@ fn render_lane_row(
         actions.session.select_deck = Some((lane.ch_idx, lane.deck_idx));
     }
     response.context_menu(|ui| {
-        // The same menu the mixer's deck card shows, so a copy made here also
-        // carries the deck's regions. See /spec/clipboard.md.
+        // The mixer deck card's menu, so a copy here also carries the deck's regions.
         let subject = clipboard_menu::Subject::deck(lane.uuid, lane.name);
         clipboard_menu::items(ui, data, actions, &subject);
         ui.separator();
@@ -1251,15 +1203,11 @@ fn render_lane_row(
 
 /// Drag a lane by its header to reorder the deck within its channel.
 ///
-/// Deliberately the mixer's `DeckDrag` payload and the mixer's `ReorderDeck`
-/// command rather than an arrangement-side notion of lane order. Row order is
-/// read from the channel's deck list, so there is one order and both views edit
-/// it; anything else would let the two drift apart.
+/// Uses the mixer's `DeckDrag` payload and `ReorderDeck` command: row order is
+/// the channel's deck list, so both views edit one order.
 ///
-/// A deck dragged onto another channel's lanes does nothing. Moving a deck
-/// between channels is a different operation whose target is a channel rather
-/// than a position between two lanes, and it stays in the mixer, which has
-/// somewhere to drop it.
+/// Dropping onto another channel's lanes does nothing. Moving a deck between
+/// channels is done in the mixer.
 fn handle_lane_reorder(
     ui: &egui::Ui,
     data: &UIData,
@@ -1280,8 +1228,8 @@ fn handle_lane_reorder(
     let Some(dragged) = egui::DragAndDrop::payload::<DeckDrag>(ui.ctx()) else {
         return;
     };
-    // Resolved at drop time rather than at drag start, so a reorder part way
-    // through a gesture cannot send a stale ordinal.
+    // Resolved at drop time, not drag start, so a reorder mid-gesture can't send
+    // a stale ordinal.
     let Some(channel) = data.channels.get(lane.ch_idx) else {
         return;
     };
@@ -1336,9 +1284,7 @@ fn handle_lane_reorder(
 /// Where a deck ends up after being dropped into the gap before `gap`.
 ///
 /// `ReorderDeck` removes before it inserts, so a deck moving down lands one
-/// short of the gap it was aimed at. Getting this wrong is off by one in only
-/// one of the two directions, which is exactly the kind of bug that survives a
-/// quick try in the app.
+/// before the gap it was dropped at.
 fn reorder_target(from: usize, gap: usize) -> usize {
     if from < gap { gap - 1 } else { gap }
 }
@@ -1380,15 +1326,12 @@ fn draw_collapse_caret(
     }
 }
 
-/// The "held by hand" marker, and the way back.
+/// The "held by hand" marker, clickable to hand control back to the
+/// arrangement.
 ///
-/// A performer who grabbed a fader needs to see that the arrangement is no
-/// longer driving it, and needs somewhere to hand it back; without both, the
-/// only route back to automation is to quit and reload.
-/// `param_key` is what the badge hands back, and `id_salt` only has to be unique
-/// among the badges on screen. They are separate because a deck lane's badge
-/// stands for the lane's opacity while an automation row's stands for its own
-/// parameter, and both live on a header of the same shape.
+/// `param_key` is what the badge releases; `id_salt` only needs to be unique
+/// among badges on screen. They differ because a deck lane's badge stands for
+/// the lane's opacity and an automation row's for its own parameter.
 pub(super) fn draw_override_badge(
     ui: &mut egui::Ui,
     header: egui::Rect,
@@ -1401,8 +1344,7 @@ pub(super) fn draw_override_badge(
         egui::vec2(14.0, 14.0),
     );
     let response = ui.interact(dot, ui.id().with(("rearm", id_salt)), egui::Sense::click());
-    // Custom-painted, so it needs an accessible name of its own or it is a dot
-    // that only a mouse can find.
+    // Custom-painted, so it needs its own accessible name.
     response.widget_info(|| {
         egui::WidgetInfo::labeled(
             egui::WidgetType::Button,
@@ -1423,8 +1365,8 @@ pub(super) fn draw_override_badge(
     }
 }
 
-/// Shortest Shift+drag that counts as a marquee rather than a click, in pixels.
-/// Below this a Shift+click leaves a region-click selection untouched.
+/// Shortest Shift+drag that counts as a marquee, in pixels. A shorter
+/// Shift+click leaves a region-click selection unchanged.
 const MARQUEE_MIN_DRAG: f32 = 3.0;
 /// Kept clear of the vertical scrollbar so a Shift+drag on it still scrolls.
 const MARQUEE_RIGHT_INSET: f32 = 8.0;
@@ -1447,9 +1389,8 @@ fn row_envelope<'a>(row: &Row<'a>) -> Option<&'a str> {
 
 /// Drive the Shift+drag marquee from raw pointer state.
 ///
-/// A widget would contend with the row tracks for the press; reading the pointer
-/// directly does not, and the bare-drag gestures already ignore Shift, so the
-/// same drag that would author a region instead builds the selection.
+/// Reading the pointer directly avoids competing with the row tracks for the
+/// press, and their bare-drag gestures ignore Shift.
 fn handle_marquee(ui: &egui::Ui, rows: &[Row<'_>], layout: Layout) {
     let Layout {
         lanes: lanes_rect,
@@ -1504,13 +1445,8 @@ fn handle_marquee(ui: &egui::Ui, rows: &[Row<'_>], layout: Layout) {
     }
 }
 
-/// The selection a marquee from `anchor` to `pointer` describes: every lane the
-/// rectangle crosses, in as many channels as it reaches.
-///
-/// Deliberately not penned into the group the drag started in. A show's
-/// structure runs across channels, and "everything between these two timecodes"
-/// is a normal thing to want to grab. See /spec/arrangement-selection.md
-/// § Marquees are not penned into one channel.
+/// The selection a marquee from `anchor` to `pointer` describes: every lane
+/// the rectangle crosses, across as many channels as it reaches.
 fn marquee_selection(
     rows: &[Row<'_>],
     lanes_rect: egui::Rect,
@@ -1542,39 +1478,34 @@ fn marquee_selection(
     }
 }
 
-/// A held selection move, carried across the frames of one gesture.
+/// A selection move in progress, carried across the frames of one gesture.
 ///
-/// The armed selection stays where it was until the release: the drag only draws
-/// a ghost, and one batch of commands is emitted at the end. Editing frame by
-/// frame would renumber a lane's regions underneath the indices the rest of the
-/// move was computed from, and would spread one gesture over several undo
-/// entries. See /spec/arrangement-selection.md § Moving a selection.
+/// The selection stays in place until release; the drag draws a ghost and one
+/// batch of commands is emitted at the end. Editing per frame would renumber
+/// regions under the indices the move was computed from, and spread the
+/// gesture over several undo entries.
 #[derive(Clone)]
 struct SelectionDrag {
     origin: selection::Selection,
     /// Show time under the press, so the move is an absolute offset rather than
     /// accumulated deltas.
     grab: f64,
-    /// Deck-lane ordinal nearest the press, against which vertical travel is
-    /// measured.
+    /// Deck-lane ordinal nearest the press; vertical travel is measured from it.
     grab_lane: Option<usize>,
-    /// Alt at the press: leave the original behind and move a copy.
+    /// Alt was held at the press: move a copy and leave the original.
     duplicate: bool,
 }
 
-/// Every deck lane in the timeline, in row order.
-///
-/// One stack rather than one per channel, so a vertical move can carry regions
-/// into another channel exactly as a marquee can select across one.
+/// Every deck lane in the timeline, in row order, as one stack so a vertical
+/// move can carry regions into another channel.
 fn deck_lanes<'a>(rows: &[Row<'a>]) -> Vec<&'a str> {
     rows.iter().filter_map(row_deck).collect()
 }
 
-/// The ordinal, among the timeline's deck lanes, of the one nearest `y`.
+/// Ordinal, among the timeline's deck lanes, of the one nearest `y`.
 ///
-/// Nearest rather than the row actually under the pointer, so a drag passing
-/// over the automation rows between two lanes keeps travelling instead of
-/// snapping back to no shift at all.
+/// Nearest rather than directly under the pointer, so passing over automation
+/// rows between lanes doesn't reset the shift.
 fn nearest_deck_lane(rows: &[Row<'_>], layout: Layout, y: f32) -> Option<usize> {
     rows.iter()
         .zip(row_spans(rows, layout.lanes, layout.scroll_y))
@@ -1588,8 +1519,8 @@ fn nearest_deck_lane(rows: &[Row<'_>], layout: Layout, y: f32) -> Option<usize> 
         .map(|(ordinal, _)| ordinal)
 }
 
-/// Whether a press landed inside the armed selection: within its span, on one of
-/// its member rows.
+/// Whether a press landed inside the armed selection: within its span, on a
+/// member row.
 fn selection_hit(
     rows: &[Row<'_>],
     layout: Layout,
@@ -1613,9 +1544,9 @@ fn selection_hit(
         })
 }
 
-/// Which lane each member deck's regions land on for a vertical travel of
-/// `shift` lanes, clamped so the block keeps its shape rather than piling up
-/// against the first or last lane of the timeline.
+/// Which lane each member deck's regions land on for a vertical move of
+/// `shift` lanes, clamped so the block keeps its shape at the first or last
+/// lane.
 fn lane_mapping(
     lanes: &[&str],
     selection: &selection::Selection,
@@ -1647,12 +1578,10 @@ fn lane_mapping(
         .collect()
 }
 
-/// Drag an armed selection to move everything it holds.
+/// Drag an armed selection to move its contents.
 ///
-/// Driven from raw pointer state for the same reason the marquee is: a widget
-/// would contend with the row tracks for the press. The tracks themselves stand
-/// down inside an armed selection, except on a region's edge and fade handles,
-/// which keep their grab zones.
+/// Reads raw pointer state, like the marquee. The row tracks yield inside an
+/// armed selection, except on a region's edge and fade handles.
 fn handle_selection_drag(
     ui: &egui::Ui,
     data: &UIData,
@@ -1694,8 +1623,8 @@ fn handle_selection_drag(
         return;
     };
 
-    // Snapping rounds where the selection lands rather than how far the pointer
-    // travelled, so a snapped move puts the block on a frame boundary.
+    // Snap the landing position, not the travel, so a snapped move lands on a
+    // frame boundary.
     let travelled = layout.axis.seconds(pointer.x) - drag.grab;
     let delta = (snap_seconds(data, drag.origin.start + travelled) - drag.origin.start)
         .max(-selection::move_floor(data, &drag.origin));
@@ -1723,13 +1652,12 @@ fn handle_selection_drag(
     for command in selection::move_commands(data, &drag.origin, delta, &lane_map, drag.duplicate) {
         actions.commands.push(command);
     }
-    // Re-armed where it landed, so the slice can be nudged again without being
-    // marked a second time.
+    // Re-armed where it landed, so the slice can be nudged again.
     selection::store(ctx, landed);
 }
 
-/// Outline where a move would land, leaving the armed highlight in place so both
-/// ends of the gesture are visible at once.
+/// Outline where a move would land, keeping the armed highlight so both ends
+/// of the gesture show.
 fn draw_move_ghost(ui: &egui::Ui, rows: &[Row<'_>], layout: Layout, landed: &selection::Selection) {
     let Layout {
         lanes: lanes_rect,
@@ -1765,8 +1693,8 @@ fn draw_move_ghost(ui: &egui::Ui, rows: &[Row<'_>], layout: Layout, landed: &sel
     }
 }
 
-/// Paint the selection: a translucent fill over each member row's span, and a
-/// thin span marker when the marquee holds no lanes at all.
+/// Paint the selection: a translucent fill over each member row's span, or a
+/// thin span marker when the marquee holds no lanes.
 fn draw_selection(ui: &egui::Ui, rows: &[Row<'_>], layout: Layout) {
     let Some(selection) = selection::load(ui.ctx()) else {
         return;
@@ -1815,9 +1743,8 @@ fn draw_selection(ui: &egui::Ui, rows: &[Row<'_>], layout: Layout) {
 
 /// Copy, Delete, Paste, and Escape for the arrangement selection.
 ///
-/// Runs before [`automation::handle_clipboard_shortcuts`] so a selection wins
-/// `Cmd+C` over the whole-curve clipboard; that handler stands down while a
-/// selection is armed.
+/// Runs before [`automation::handle_clipboard_shortcuts`] so a selection takes
+/// `Cmd+C` over the whole-curve clipboard.
 fn handle_selection_shortcuts(
     ui: &egui::Ui,
     data: &UIData,
@@ -1863,8 +1790,8 @@ fn handle_selection_shortcuts(
     }
 }
 
-/// Paste the held slice at the pointer when it is over a lane, or at the
-/// playhead onto the bottom-bar / envelope selection when it is not.
+/// Paste the held slice at the pointer when it is over a lane, otherwise at
+/// the playhead onto the bottom-bar or envelope selection.
 fn paste_from_keyboard(
     ui: &egui::Ui,
     data: &UIData,
@@ -2031,18 +1958,15 @@ mod tests {
         }
     }
 
-    /// Dropping into a gap is not the same as landing on an index, because the
-    /// deck is removed before it is inserted. Both directions are checked here
-    /// because only one of them is off by one.
+    /// The deck is removed before it is inserted, so a gap is not an index. Both
+    /// directions are checked since only one is off by one.
     #[test]
     fn a_deck_lands_in_the_gap_it_was_dropped_into() {
-        // Moving down: dropping deck 0 below deck 2 (gap 3) leaves it last of
-        // three, at index 2.
+        // Moving down: dropping deck 0 below deck 2 (gap 3) puts it at index 2.
         assert_eq!(reorder_target(0, 3), 2);
         assert_eq!(reorder_target(0, 1), 0, "the gap just below is a no-op");
 
-        // Moving up: nothing is removed from above it first, so the gap is the
-        // destination.
+        // Moving up: nothing above it is removed first, so the gap is the index.
         assert_eq!(reorder_target(2, 0), 0);
         assert_eq!(reorder_target(2, 2), 2, "the gap just above is a no-op");
     }
@@ -2056,8 +1980,8 @@ mod tests {
         });
     }
 
-    /// A scene with no arrangement still opens the mode: that is where the first
-    /// region gets made.
+    /// A scene with no arrangement still opens the mode, to create the first
+    /// region.
     #[test]
     fn render_arrangement_without_one_is_still_a_timeline() {
         let mut data = UIData::test_fixture();
@@ -2068,8 +1992,7 @@ mod tests {
         });
     }
 
-    /// Every deck gets a row whether or not the arrangement claimed it, so an
-    /// empty arrangement does not look like an empty scene.
+    /// Every deck gets a row, arranged or not.
     #[test]
     fn every_deck_gets_a_lane() {
         let data = fixture_with_arrangement();
@@ -2122,8 +2045,8 @@ mod tests {
         assert_eq!(flagged, vec![held.as_str()]);
     }
 
-    /// A held video parameter is not the lane's opacity, so the lane's badge
-    /// cannot stand for it. Its own row carries one that hands back its own key.
+    /// A held video parameter is not the lane's opacity, so its own row carries a
+    /// badge that releases its own key.
     #[test]
     fn an_automation_row_carries_its_own_override_badge() {
         let mut data = fixture_with_arrangement();
@@ -2141,7 +2064,7 @@ mod tests {
             .collect();
         assert_eq!(held, vec![(key.as_str(), true)]);
 
-        // And the lane itself stays unflagged, because opacity is not held.
+        // The lane itself stays unflagged; opacity is not held.
         assert!(
             !build_rows(&data)
                 .into_iter()
@@ -2149,10 +2072,8 @@ mod tests {
         );
     }
 
-    /// A source control's route is an internal identifier. Showing
-    /// `video/loop_mode` beside a control the deck's column calls "Loop" makes
-    /// them look like two different settings, so the row takes the label the
-    /// source type declares.
+    /// A source control's row uses the label its type declares ("Loop"), not the
+    /// internal route (`video/loop_mode`).
     #[test]
     fn source_controls_get_the_labels_their_type_declares() {
         use crate::source::DeckSourceProvider;
@@ -2199,7 +2120,7 @@ mod tests {
         assert_eq!(labels, vec!["Loop", "Position", "Scaling", "Speed"]);
     }
 
-    /// A shader author's parameter names are theirs, so they are shown verbatim.
+    /// Shader parameter names are shown verbatim.
     #[test]
     fn shader_parameter_names_are_left_alone() {
         let data = fixture_with_arrangement();
@@ -2225,8 +2146,7 @@ mod tests {
         assert_eq!(curves, vec!["env-speed"]);
     }
 
-    /// The region-compiled opacity curve is authored by dragging regions, so it
-    /// must not also appear as a hand-editable row.
+    /// The region-compiled opacity curve is not shown as a hand-editable row.
     #[test]
     fn the_region_curve_is_not_offered_for_hand_editing() {
         let mut data = fixture_with_automation();
@@ -2273,8 +2193,7 @@ mod tests {
         assert!(rows.iter().any(|r| matches!(r, Row::Lane(_))));
     }
 
-    /// Position and pixel must round-trip, or click-to-locate lands somewhere
-    /// other than where it was clicked.
+    /// Position and pixel round-trip, so click-to-locate lands where clicked.
     #[test]
     fn the_time_axis_round_trips() {
         let axis = axis();
@@ -2295,12 +2214,11 @@ mod tests {
         };
         // With ten seconds scrolled off the left, t=10 sits at the left edge.
         assert!((scrolled.x(10.0) - axis().left).abs() < 0.001);
-        // And the same instant has moved left by exactly ten seconds of pixels.
+        // The same instant moved left by exactly ten seconds of pixels.
         assert!((axis().x(10.0) - scrolled.x(10.0) - 400.0).abs() < 0.001);
     }
 
-    /// Labels must not collide at any zoom, and must not thin out to nothing
-    /// when zoomed in.
+    /// Labels never collide and never thin out to nothing when zoomed in.
     #[test]
     fn tick_spacing_stays_legible_at_every_zoom() {
         for pps in [
@@ -2312,8 +2230,8 @@ mod tests {
         ] {
             let step = tick_step(pps);
             assert!(step > 0.0, "zoom {pps} produced a non-positive step");
-            // The coarsest step is allowed to fall short at the very lowest
-            // zoom; everything else must clear the label width.
+            // The coarsest step may fall short at the lowest zoom; every other step
+            // clears the label width.
             if pps > MIN_PIXELS_PER_SECOND {
                 assert!(
                     step * f64::from(pps) >= 72.0,
@@ -2323,8 +2241,7 @@ mod tests {
         }
     }
 
-    /// Panning is bounded past the end of the show, so a flick of the wheel
-    /// cannot strand the view in empty time with nothing to navigate back by.
+    /// Panning is bounded past the end of the show.
     #[test]
     fn panning_stops_past_the_end_of_the_show() {
         let data = fixture_with_arrangement();
@@ -2334,14 +2251,11 @@ mod tests {
         assert!(limit < authored + 60.0, "but not unbounded room");
     }
 
-    /// Zooming about the pointer is what makes a long show navigable: the frame
-    /// being looked at has to stay under the finger while the scale changes
-    /// around it.
+    /// Zoom keeps the frame under the pointer in place.
     #[test]
     fn a_pinch_holds_the_instant_under_the_pointer() {
-        // Well into the show, so a zoom out has somewhere to go: an anchor near
-        // zero cannot be held, because holding it would put the view before the
-        // start of the show.
+        // Well into the show, so zooming out can hold the anchor without scrolling
+        // before time zero.
         let axis = TimeAxis {
             scroll: 600.0,
             ..axis()
@@ -2363,8 +2277,8 @@ mod tests {
         }
     }
 
-    /// A pinch out and back has to leave the view where it started, which it
-    /// only does if the gesture scales the timebase rather than adding to it.
+    /// Pinching out and back returns to the start view, since zoom scales the
+    /// timebase multiplicatively.
     #[test]
     fn pinching_out_and_back_returns_to_the_same_view() {
         let axis = TimeAxis {
@@ -2392,9 +2306,8 @@ mod tests {
         assert!((scroll_back - axis.scroll).abs() < 0.001);
     }
 
-    /// The scale is bounded at both ends, and a gesture that runs into a bound
-    /// still has to leave the pointer somewhere sensible rather than at a
-    /// negative position.
+    /// The scale is bounded at both ends, and a gesture hitting a bound never
+    /// leaves the view at a negative position.
     #[test]
     fn a_pinch_stops_at_the_ends_of_the_scale() {
         let axis = axis();
@@ -2409,8 +2322,8 @@ mod tests {
         assert!(scroll >= 0.0);
     }
 
-    /// The gesture arrives from egui as a zoom factor whether it was a trackpad
-    /// pinch or Cmd held on the wheel, so this covers both entry points.
+    /// egui delivers both a trackpad pinch and Cmd + wheel as a zoom factor, so
+    /// this covers both.
     #[test]
     fn a_pinch_over_the_timeline_zooms_the_timescale() {
         let data = fixture_with_arrangement();
@@ -2418,7 +2331,7 @@ mod tests {
         let mut harness = egui_kittest::Harness::new_ui(|ui| {
             render_arrangement(ui, &data, &mut actions);
         });
-        // Over the tracks rather than the headers, and past the ruler.
+        // Over the tracks, not the headers, and below the ruler.
         harness.event(egui::Event::PointerMoved(egui::pos2(400.0, 200.0)));
         harness.event(egui::Event::Zoom(1.5));
         harness.run();
@@ -2434,9 +2347,8 @@ mod tests {
         );
     }
 
-    /// A timeline is a view of the scene rather than a document beside it, so
-    /// the row menus delete the deck and the channel themselves, not just their
-    /// rows. Removing the *row* is the separate, weaker item beside it.
+    /// Row menus delete the deck and channel themselves; removing just the row is
+    /// a separate item.
     #[test]
     fn a_lane_header_deletes_the_deck_it_stands_for() {
         let data = fixture_with_arrangement();
@@ -2467,8 +2379,8 @@ mod tests {
     #[test]
     fn a_group_header_deletes_the_channel_it_stands_for() {
         let mut data = fixture_with_arrangement();
-        // A third channel, because the mixer keeps two and the item is refused
-        // below that. Empty, so no deck label appears twice in the tree.
+        // A third channel, since the mixer keeps at least two. Empty, so no deck label
+        // appears twice in the tree.
         let mut spare = data.channels[1].clone();
         spare.ch_idx = 2;
         spare.uuid = "cc000001".to_string();
@@ -2492,8 +2404,8 @@ mod tests {
         ));
     }
 
-    /// The engine keeps two channels whatever the UI asks, so the item is shown
-    /// disabled rather than firing a command that comes back refused.
+    /// The engine keeps at least two channels, so the item is shown disabled
+    /// instead of sending a command that would be refused.
     #[test]
     fn the_last_two_channels_cannot_be_deleted_from_the_timeline() {
         let data = fixture_with_arrangement();
@@ -2512,9 +2424,8 @@ mod tests {
         assert!(actions.commands.is_empty());
     }
 
-    /// Rows are laid out in one pass so the header and the track for a lane are
-    /// the same strip of screen. Drift here is the bug the single-rect layout
-    /// exists to prevent.
+    /// Rows are laid out in one pass, so a lane's header and track share the same
+    /// strip of screen.
     #[test]
     fn a_lane_header_and_its_track_share_a_row() {
         let data = fixture_with_automation();
@@ -2522,8 +2433,7 @@ mod tests {
         let lanes = egui::Rect::from_min_size(egui::pos2(0.0, 100.0), egui::vec2(600.0, 800.0));
         let spans = row_spans(&rows, lanes, 0.0);
 
-        // Rows tile without gaps or overlaps, which is what keeps the two
-        // columns aligned however the row heights change.
+        // Rows tile without gaps or overlaps.
         for pair in spans.windows(2) {
             assert!(
                 (pair[0].0 + pair[0].1 - pair[1].0).abs() < f32::EPSILON,
@@ -2533,8 +2443,7 @@ mod tests {
         assert!((spans[0].0 - lanes.top()).abs() < f32::EPSILON);
     }
 
-    /// Scrolling moves every row by the same amount, headers included. Anything
-    /// else would slide a lane's name away from its regions.
+    /// Scrolling moves every row, headers included, by the same amount.
     #[test]
     fn scrolling_the_rows_moves_all_of_them_together() {
         let data = fixture_with_automation();
@@ -2550,9 +2459,7 @@ mod tests {
         }
     }
 
-    /// A show with more channels than fit has to be reachable to the last row,
-    /// and no further: scrolling past the end would leave the timeline blank
-    /// with nothing to navigate back by.
+    /// Scrolling reaches the last row and no further.
     #[test]
     fn the_rows_scroll_exactly_far_enough_to_reach_the_last_one() {
         let data = fixture_with_automation();
@@ -2578,13 +2485,12 @@ mod tests {
         );
     }
 
-    /// The bug this fixes: rows below the fold used to stop being drawn, so a
-    /// scene with more channels than fit could not be managed at all.
+    /// Rows below the fold are still drawn when scrolled to.
     #[test]
     fn a_row_below_the_fold_is_reachable_by_scrolling() {
         let data = fixture_with_automation();
         let rows = build_rows(&data);
-        // A viewport too short for even the first two rows.
+        // A viewport shorter than the first two rows.
         let lanes = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(600.0, 24.0));
         let limit = max_scroll_y(&rows, lanes);
         assert!(
@@ -2608,10 +2514,8 @@ mod tests {
         );
     }
 
-    /// Dropping a generator on a group has to create the deck, which it does by
-    /// publishing the same drop rect the mixer's channel columns publish. If
-    /// this stops being written the library drag silently does nothing in
-    /// Arrangement mode.
+    /// Dropping a generator on a group creates the deck through the same drop
+    /// rect the mixer's channel columns publish.
     #[test]
     fn every_group_offers_itself_as_a_library_drop_target() {
         let data = fixture_with_arrangement();
@@ -2633,8 +2537,8 @@ mod tests {
         }
     }
 
-    /// Master effect parameters are automatable from the bottom bar, so their
-    /// curves need a home. Without the master row they would run with no editor.
+    /// Master effect parameters are automatable from the bottom bar, so the master
+    /// row holds their curves.
     #[test]
     fn a_master_effect_curve_lands_on_the_master_row() {
         let mut data = fixture_with_arrangement();
@@ -2662,8 +2566,7 @@ mod tests {
         assert_eq!(master[0].label(), "master_effect · intensity");
     }
 
-    /// A channel effect belongs to the channel rather than to any one deck, so
-    /// its curve sits under the group rather than under an arbitrary lane.
+    /// A channel effect's curve sits under the group, not under a lane.
     #[test]
     fn a_channel_effect_curve_lands_under_its_group() {
         let mut data = fixture_with_arrangement();
@@ -2683,8 +2586,7 @@ mod tests {
         assert_eq!(owners, vec![data.channels[0].ch_idx]);
     }
 
-    /// A channel's fader is the channel's, not any deck's, so its curve is a row
-    /// under the group header rather than inside a lane.
+    /// A channel fader's curve is a row under the group header, not inside a lane.
     #[test]
     fn a_channel_fader_curve_lands_under_its_group() {
         let mut data = fixture_with_arrangement();
@@ -2708,8 +2610,8 @@ mod tests {
         assert_eq!(rows, vec![(data.channels[0].ch_idx, "Opacity".to_string())]);
     }
 
-    /// A deck effect's curve belongs to the deck's lane, named for the effect so
-    /// two effects sharing a parameter name stay distinguishable.
+    /// A deck effect's curve is in the deck's lane, named for the effect so two
+    /// effects sharing a parameter name stay distinct.
     #[test]
     fn a_deck_effect_curve_is_named_for_its_effect() {
         let mut data = fixture_with_arrangement();
@@ -2726,8 +2628,7 @@ mod tests {
         assert_eq!(labels, vec!["test_effect · amount"]);
     }
 
-    /// Nothing held means nothing to hand back, so the button stays out of the
-    /// way until it means something.
+    /// With nothing held, the release-all button is hidden.
     #[test]
     fn re_arm_all_appears_only_while_something_is_held() {
         let data = fixture_with_arrangement();
@@ -2762,8 +2663,7 @@ mod tests {
         );
     }
 
-    /// Idle behaviour is the black-screen safeguard, so it has to be reachable
-    /// without the API.
+    /// The idle behavior picker is reachable without the API.
     #[test]
     fn the_idle_behaviour_is_pickable_from_the_timeline() {
         let data = fixture_with_arrangement();
@@ -2789,7 +2689,7 @@ mod tests {
         )));
     }
 
-    /// Snapping rounds to whole frames, and only when it is asked to.
+    /// Snapping rounds to whole frames, only when enabled.
     #[test]
     fn snapping_rounds_to_the_rulers_frame() {
         let mut data = fixture_with_arrangement();
@@ -2811,10 +2711,7 @@ mod tests {
         }
     }
 
-    /// A show's structure runs across channels, so a drag that reaches past the
-    /// group it started in takes the rows it crossed. This deliberately reverses
-    /// the confinement slices A–E shipped with. See
-    /// /spec/arrangement-selection.md § Marquees are not penned into one channel.
+    /// A marquee reaching past its starting group selects every row it crosses.
     #[test]
     fn a_marquee_reaches_across_channels() {
         let data = fixture_with_automation();
@@ -2823,7 +2720,7 @@ mod tests {
         let axis = marquee_axis();
         let spans = row_spans(&rows, lanes, 0.0);
 
-        // Anchor on the first channel's deck lane, drag far down past the second
+        // Anchor on the first channel's deck lane and drag down past the second
         // channel's rows.
         let (_, (top, height)) = rows
             .iter()
@@ -2871,8 +2768,8 @@ mod tests {
         assert!((armed.end - 12.0).abs() < f64::EPSILON);
     }
 
-    /// Delete of a region selection removes that region through the same engine
-    /// command a hand delete uses.
+    /// Deleting a region selection removes the region with the same engine
+    /// command as a hand delete.
     #[test]
     fn deleting_a_region_selection_removes_that_region() {
         let data = fixture_with_arrangement();
@@ -2890,8 +2787,8 @@ mod tests {
         )));
     }
 
-    /// A copied region slice rebases onto the paste anchor and lands on whatever
-    /// deck lane it is dropped on.
+    /// A copied region slice rebases onto the paste anchor and lands on the deck
+    /// lane it is dropped on.
     #[test]
     fn a_copied_region_slice_pastes_onto_another_lane() {
         let data = fixture_with_arrangement();
@@ -2921,15 +2818,13 @@ mod tests {
                 _ => None,
             })
             .expect("a region landed on the target lane");
-        // The region ran 4..12; rebased so its start sits at anchor 20, it is
-        // 20..28.
+        // The region ran 4..12; rebased to anchor 20 it runs 20..28.
         assert!((region.start - 20.0).abs() < 1e-9);
         assert!((region.end - 28.0).abs() < 1e-9);
     }
 
-    /// A block of lanes moves as a block, so a shift that would push its top
-    /// member off the end of the timeline is held back rather than piling the
-    /// members onto one lane.
+    /// A block of lanes moves as a block: a shift that would push its top member
+    /// off the timeline is held back instead of piling members onto one lane.
     #[test]
     fn a_lane_shift_stops_at_the_ends_of_the_timeline() {
         let lanes = ["a", "b", "c", "d"];
@@ -2953,9 +2848,8 @@ mod tests {
         assert_eq!(too_far_down[1].1, "d", "clamped at the last lane");
     }
 
-    /// The deck lanes are one stack across the whole timeline, so a vertical
-    /// move can carry regions into another channel exactly as a marquee can
-    /// select across one.
+    /// Deck lanes form one stack across the timeline, so a vertical move can carry
+    /// regions into another channel.
     #[test]
     fn a_vertical_move_can_carry_regions_into_another_channel() {
         let data = fixture_with_automation();
@@ -2964,9 +2858,8 @@ mod tests {
         let first = data.channels[0].decks[0].uuid.clone();
         let other_channel = data.channels[1].decks[0].uuid.clone();
 
-        // The stack runs through every channel's lanes in row order, so the
-        // travel that reaches the next channel is however many lanes this one
-        // has. Under the old rule no shift could reach it at all.
+        // The stack runs through every channel's lanes in row order, so reaching the
+        // next channel takes as many lanes as this one has.
         let reach = lanes
             .iter()
             .position(|lane| *lane == other_channel)
@@ -2987,8 +2880,8 @@ mod tests {
         assert_eq!(mapping, vec![(first, other_channel)]);
     }
 
-    /// A selection that names no deck lane has nowhere to be sent, so a vertical
-    /// drag over it is inert rather than mapping onto lane zero.
+    /// A selection with no deck lane ignores vertical drags instead of mapping
+    /// onto lane zero.
     #[test]
     fn a_curve_only_selection_never_changes_lane() {
         let curves = selection::Selection {
@@ -3000,8 +2893,8 @@ mod tests {
         assert!(lane_mapping(&["a", "b"], &curves, 1).is_empty());
     }
 
-    /// Only a press inside the marked rectangle, on a row the selection holds,
-    /// starts a move. Everywhere else the surface keeps its own gesture.
+    /// Only a press inside the selection rectangle, on a member row, starts a
+    /// move.
     #[test]
     fn only_a_press_inside_the_selection_starts_a_move() {
         let data = fixture_with_automation();
@@ -3053,9 +2946,9 @@ mod tests {
         );
     }
 
-    /// The whole gesture through the real event path: an armed selection dragged
-    /// sideways moves its region in one batch, and the lane it was dragged
-    /// across does not also author a region or move the region by itself.
+    /// Through the real event path: an armed selection dragged sideways moves its
+    /// region in one batch, and the lane underneath neither creates a region nor
+    /// moves the region on its own.
     #[test]
     fn dragging_an_armed_selection_moves_its_regions() {
         let data = fixture_with_arrangement();
@@ -3066,9 +2959,8 @@ mod tests {
         });
         harness.run();
 
-        // The published channel drop rect is the first row of the lane area, so
-        // the axis and the first deck lane's centre follow from it and the row
-        // constants rather than from guessed screen coordinates.
+        // The published channel drop rect is the first row of the lane area; the axis
+        // and the first deck lane's center are derived from it and the row constants.
         let group: egui::Rect = harness
             .ctx
             .memory(|mem| {
@@ -3140,8 +3032,7 @@ mod tests {
         assert!((armed.start - 8.0).abs() < 0.1, "{armed:?}");
     }
 
-    /// An armed selection owns the copy shortcut, so the scene-object handler
-    /// stands down for it.
+    /// An armed selection takes the copy shortcut from the scene-object handler.
     #[test]
     fn an_armed_selection_claims_the_clipboard() {
         let ctx = egui::Context::default();
@@ -3160,10 +3051,9 @@ mod tests {
         assert!(!selection_active(&ctx));
     }
 
-    /// Exercise the real egui event path, not only the pure marquee geometry.
-    /// Shift must survive pointer movement across frames, the row widgets must
-    /// stand down, and release must leave a coherent selection without also
-    /// authoring or editing arrangement content.
+    /// Through the real egui event path: Shift persists across frames, the row
+    /// widgets yield, and release leaves a coherent selection without creating or
+    /// editing arrangement content.
     #[test]
     fn chaos_shift_drag_event_sequence_selects_without_mutating() {
         let data = fixture_with_automation();
@@ -3224,11 +3114,9 @@ mod tests {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(512))]
 
-        /// Offensive gesture geometry: after a valid press on a deck lane, the
-        /// pointer may fly far before release, reverse direction, or leave the
-        /// viewport entirely. Reaching other channels is now the point rather
-        /// than the hazard, so what is guarded is that every row the marquee
-        /// claims is a real row of this timeline, claimed once.
+        /// After a valid press on a deck lane, the pointer may go far, reverse, or
+        /// leave the viewport before release. Every row the marquee claims must be a
+        /// real row of this timeline, claimed once.
         #[test]
         fn chaos_marquee_pointer_excursions_stay_on_real_rows(
             pointer_x in -20_000.0f32..20_000.0,
@@ -3264,7 +3152,7 @@ mod tests {
             });
             prop_assert!(envelopes_are_real_rows);
 
-            // A row claimed twice would delete or move its content twice over.
+            // A row claimed twice would have its content deleted or moved twice.
             let mut claimed = selected.decks.clone();
             claimed.extend(selected.envelopes.iter().cloned());
             let unique: std::collections::BTreeSet<&String> = claimed.iter().collect();

@@ -1,12 +1,8 @@
-//! Regression tests for UUID-only write addressing.
+//! UUID-only write addressing.
 //!
-//! See `/spec/api-addressing.md`. Before this change, write commands addressed
-//! entities positionally (`channel_idx` / `deck_idx` / `effect_idx`). A client
-//! that read state, then issued a write, could have its index invalidated by a
-//! concurrent reorder or removal between the read and the write — the write
-//! then landed on a *different* entity with no error. UUIDs make that
-//! impossible: an address either resolves to the entity the caller meant or
-//! fails with `NotFound`.
+//! A positional index read from state can be invalidated by a concurrent
+//! reorder or removal, sending the write to a different entity with no error.
+//! A UUID either resolves to the intended entity or fails with `NotFound`.
 
 use varda::app::VardaApp;
 use varda::engine::{CommandResult, EffectTarget, EngineCommand, ErrorCode};
@@ -16,7 +12,7 @@ mod common;
 fn headless_app() -> Option<VardaApp> {
     let gpu = common::headless_gpu()?;
     let config = varda::testing::headless_config();
-    // Once a GPU exists, a construction failure is a bug, not a reason to skip.
+    // With a GPU present, a construction failure is a bug, not a skip.
     Some(VardaApp::new(gpu, &config).expect("VardaApp::new"))
 }
 
@@ -71,14 +67,10 @@ fn deck_opacity(app: &VardaApp, deck_uuid: &str) -> f32 {
         .map_or_else(|| panic!("deck {deck_uuid} not found"), |d| d.opacity)
 }
 
-// ── The race this migration exists to close ────────────────────────
+// ── Concurrent removal ─────────────────────────────────────────────
 
-/// A write issued against a UUID must reach that deck even when an unrelated
+/// A write issued against a UUID reaches that deck even when an unrelated
 /// removal shifted every position in the channel first.
-///
-/// Positional addressing failed here: the client resolved deck D at index 3,
-/// another client removed deck A, and the write to index 3 landed nowhere (or,
-/// with a fourth deck present, on the wrong deck) without reporting an error.
 #[test]
 fn removal_does_not_repoint_a_pending_write() {
     let Some(mut app) = headless_app() else {
@@ -120,7 +112,7 @@ fn removal_does_not_repoint_a_pending_write() {
     }
 }
 
-/// Reordering within a channel likewise must not repoint a write.
+/// Reordering within a channel must not repoint a write.
 #[test]
 fn reorder_does_not_repoint_a_pending_write() {
     let Some(mut app) = headless_app() else {
@@ -242,8 +234,7 @@ fn unknown_uuids_report_not_found() {
     }
 }
 
-/// A removed entity's UUID must not be reusable — writes to it fail rather than
-/// silently landing on whatever took its place.
+/// A removed entity's UUID is not reusable: writes to it fail.
 #[test]
 fn writes_to_a_removed_deck_fail() {
     let Some(mut app) = headless_app() else {
@@ -404,8 +395,8 @@ fn fade_steps_hold_channel_uuids() {
     );
     assert!(matches!(r, CommandResult::Ok), "{r:?}");
 
-    // Delete channel 0, which the step does not reference. Under positional
-    // addressing this would shift ch1 to index 0 and silently repoint the step.
+    // Delete channel 0, which the step does not reference. A positional index
+    // would shift ch1 to index 0 and repoint the step.
     let ch0 = channel_uuid(&app, 0);
     fire(&mut app, EngineCommand::RemoveChannel { channel_uuid: ch0 });
 

@@ -1,16 +1,13 @@
 //! Servo-backed HTML rendering (feature `html`).
 //!
-//! See `/spec/html-source.md` ("Off-Thread Servo Rendering", AGREED). This module
-//! is the ONLY place the `servo` dependency is referenced. A single dedicated
-//! "html-servo" thread constructs and owns one [`Servo`] instance plus all its
-//! [`WebView`]s and [`SoftwareRenderingContext`]s — the `!Send` Servo handles
-//! never cross a thread boundary. The render thread talks to it only via `Send`
-//! data: [`HtmlCommand`]s in and finished RGBA frames out through per-instance
-//! [`FrameSlot`]s, mirroring the NDI/stream off-thread pattern.
+//! The only module that references `servo`. One "html-servo" thread creates and
+//! holds the [`Servo`] instance and all [`WebView`]s and
+//! [`SoftwareRenderingContext`]s, because those handles are `!Send`. The render
+//! thread sends [`HtmlCommand`]s and reads RGBA frames from per-instance
+//! [`FrameSlot`]s.
 //!
-//! Rendering is software-GL rasterization + CPU readback ([`RenderingContext::read_to_image`]),
-//! which works on all platforms without a native GPU-interop crate. Zero-copy GPU
-//! import is a follow-up (see spec Open Questions).
+//! Frames are rasterized with software GL and read back to the CPU
+//! ([`RenderingContext::read_to_image`]), which works on every platform.
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -32,9 +29,9 @@ use winit::dpi::PhysicalSize;
 
 use super::{FrameSlot, HtmlFrame, HtmlId, HtmlInputEvent};
 
-/// Cadence when at least one `WebView` is loading/animating/has a new frame.
+/// Park time while any `WebView` is loading, animating or has a new frame.
 const ACTIVE_PARK: Duration = Duration::from_millis(8);
-/// Idle cadence (safety net); the waker unparks the thread on Servo events.
+/// Idle park time; the waker unparks the thread on Servo events.
 const IDLE_PARK: Duration = Duration::from_millis(100);
 
 /// Wakes the pump thread from Servo's event loop by unparking it.
@@ -60,7 +57,7 @@ impl WebViewDelegate for FrameReadyDelegate {
     }
 }
 
-/// Commands from the render thread to the owning servo thread.
+/// Commands from the render thread to the servo thread.
 enum HtmlCommand {
     Start {
         id: HtmlId,
@@ -86,14 +83,14 @@ enum HtmlCommand {
     Shutdown,
 }
 
-/// Handle to the single shared servo pump thread.
+/// Handle to the shared servo thread.
 pub struct ServoEngine {
     sender: Sender<HtmlCommand>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl ServoEngine {
-    /// Spawn the owning servo thread. Servo is constructed lazily on the thread.
+    /// Spawns the servo thread. Servo is constructed on that thread.
     pub fn new() -> Self {
         let (sender, receiver) = mpsc::channel();
         let thread = thread::Builder::new()
@@ -127,7 +124,7 @@ impl ServoEngine {
         self.unpark();
     }
 
-    /// Forward an interactive-mode input event to the `WebView` `id`.
+    /// Forwards an interactive-mode input event to `WebView` `id`.
     pub fn send_input(&self, id: HtmlId, event: HtmlInputEvent) {
         let _ = self.sender.send(HtmlCommand::Input { id, event });
         self.unpark();
@@ -138,7 +135,7 @@ impl ServoEngine {
         self.unpark();
     }
 
-    /// Wake the pump thread so a freshly queued command is applied promptly.
+    /// Wakes the servo thread so a queued command applies promptly.
     fn unpark(&self) {
         if let Some(t) = &self.thread {
             t.thread().unpark();
@@ -156,8 +153,8 @@ impl Drop for ServoEngine {
     }
 }
 
-/// One offscreen `WebView` owned by the servo thread, rendering into its own
-/// software-GL surface and publishing finished frames into a shared [`FrameSlot`].
+/// One offscreen `WebView` on the servo thread, with its own software-GL
+/// surface and [`FrameSlot`].
 struct Entry {
     webview: WebView,
     rendering_context: Rc<SoftwareRenderingContext>,
@@ -168,8 +165,8 @@ struct Entry {
 }
 
 impl Entry {
-    /// Paint the `WebView` and read back the latest frame as RGBA bytes. Returns
-    /// `None` until a correctly-sized frame is available.
+    /// Paints the `WebView` and reads the frame back as RGBA. Returns `None`
+    /// until a frame of the right size is available.
     fn paint_and_read(&self) -> Option<HtmlFrame> {
         if let Err(e) = self.rendering_context.make_current() {
             log::debug!("HTML make_current failed: {e:?}");
@@ -191,7 +188,7 @@ impl Entry {
     }
 }
 
-/// Construct a `WebView` + software surface for `url` on the servo thread.
+/// Creates a `WebView` and software surface for `url` on the servo thread.
 fn create_entry(
     servo: &Servo,
     url: &str,
@@ -212,7 +209,7 @@ fn create_entry(
         .map_err(|e| anyhow!("make_current failed: {e:?}"))?;
 
     let parsed = Url::parse(url).map_err(|e| anyhow!("invalid URL '{url}': {e}"))?;
-    // Start "ready" so the first frame paints before any frame-ready notification.
+    // Start ready so the first frame paints without waiting for a notification.
     let ready = Rc::new(Cell::new(true));
     let delegate: Rc<dyn WebViewDelegate> = Rc::new(FrameReadyDelegate {
         ready: ready.clone(),
@@ -238,9 +235,8 @@ fn device_point(x: f32, y: f32) -> WebViewPoint {
     WebViewPoint::Device(DevicePoint::new(x, y))
 }
 
-/// Translate a `Send` [`HtmlInputEvent`] into the corresponding Servo input and
-/// apply it to `entry`'s `WebView`, flagging it for a fresh paint. The `WebView` is
-/// only ever touched here, on its owning thread.
+/// Converts an [`HtmlInputEvent`] to a Servo input, applies it to `entry`'s
+/// `WebView` and flags it for repaint.
 fn apply_input(entry: &Entry, event: HtmlInputEvent) {
     let wv = &entry.webview;
     match event {
@@ -298,13 +294,12 @@ fn apply_input(entry: &Entry, event: HtmlInputEvent) {
     entry.ready.set(true);
 }
 
-/// The owning servo thread: builds Servo, applies commands, and pumps `WebViews`,
-/// publishing the latest frame for each into its shared slot (latest-wins).
+/// Servo thread loop: applies commands, pumps Servo and publishes the latest
+/// frame of each `WebView` to its slot.
 fn run_servo_thread(rx: &Receiver<HtmlCommand>) {
     let waker = UnparkWaker(thread::current());
-    // Clear the Servo viewport to fully transparent instead of the default opaque
-    // white, so pages with a transparent html/body yield alpha=0 pixels in
-    // read_to_image. This is Blocker 1 for per-deck transparency (/spec/html-source.md §2).
+    // Transparent viewport instead of opaque white, so transparent pages read
+    // back with alpha 0.
     let preferences = Preferences {
         shell_background_color_rgba: [0.0, 0.0, 0.0, 0.0],
         ..Preferences::default()
@@ -316,7 +311,7 @@ fn run_servo_thread(rx: &Receiver<HtmlCommand>) {
     let mut entries: HashMap<HtmlId, Entry> = HashMap::new();
 
     'main: loop {
-        // 1) Drain queued commands.
+        // Drain queued commands.
         loop {
             match rx.try_recv() {
                 Ok(HtmlCommand::Start {
@@ -362,7 +357,7 @@ fn run_servo_thread(rx: &Receiver<HtmlCommand>) {
             }
         }
 
-        // 2) Pump Servo once, then paint/publish the WebViews that need it.
+        // Pump Servo once, then paint the WebViews that need it.
         servo.spin_event_loop();
         let mut active = false;
         for entry in entries.values() {
@@ -379,7 +374,7 @@ fn run_servo_thread(rx: &Receiver<HtmlCommand>) {
             }
         }
 
-        // 3) Sleep to cadence; the waker unparks early on Servo events.
+        // The waker unparks early on Servo events.
         thread::park_timeout(if active { ACTIVE_PARK } else { IDLE_PARK });
     }
 
@@ -390,12 +385,10 @@ fn run_servo_thread(rx: &Receiver<HtmlCommand>) {
     }
 }
 
-/// Off-thread rendering regression test (promoted from the threading spike, see
-/// `/spec/html-source.md`). Drives a real `ServoEngine` — Servo lives entirely on
-/// the spawned "html-servo" thread — and confirms a page renders by polling the
-/// shared frame slot from the test (render-thread) side.
+/// Renders a page with a real `ServoEngine` on the "html-servo" thread and
+/// polls the frame slot from the test thread.
 ///
-/// `#[ignore]` (starts a real Servo engine, several seconds). Run with:
+/// Ignored because it starts Servo (several seconds). Run with:
 ///   cargo test --features html `servo_renders_on_background_thread` -- --ignored --test-threads=1
 #[cfg(test)]
 mod offthread_spike {

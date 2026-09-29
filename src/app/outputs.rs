@@ -1,5 +1,5 @@
 //! Creating outputs, and the window host that gives window sinks their OS
-//! windows. See /spec/output-sink-providers.md.
+//! windows.
 
 use super::VardaApp;
 use crate::output::Output;
@@ -10,13 +10,8 @@ use crate::renderer::edge_blend::SurfaceOverlapZones;
 /// size for it.
 const DEFAULT_OUTPUT_WINDOW_BOX: (f64, f64) = (1280.0, 720.0);
 
-/// Opening size for a new output window, as the master's aspect ratio fitted
-/// inside [`DEFAULT_OUTPUT_WINDOW_BOX`].
-///
-/// The master is letterboxed into whatever size the window ends up, so this only
-/// picks the starting shape — but starting at the master's aspect means a
-/// vertical or square stage doesn't open in a 16:9 window with bars down both
-/// sides that the operator has to drag out by hand.
+/// Opening size for a new output window: the master's aspect ratio fitted
+/// inside [`DEFAULT_OUTPUT_WINDOW_BOX`], so a vertical stage opens without bars.
 fn default_output_window_size(render_width: u32, render_height: u32) -> (f64, f64) {
     let (box_w, box_h) = DEFAULT_OUTPUT_WINDOW_BOX;
     if render_width == 0 || render_height == 0 {
@@ -31,13 +26,13 @@ fn default_output_window_size(render_width: u32, render_height: u32) -> (f64, f6
 }
 
 impl VardaApp {
-    /// Build an output from its saved or requested config and add it. A sink
-    /// this run cannot build is kept as a placeholder holding its config, so
-    /// the output survives a save; the reason is shown. Returns the UUID.
+    /// Build an output from its config and add it. Returns the UUID. A sink
+    /// that cannot be built becomes a placeholder holding its config, so the
+    /// output survives a save.
     ///
     /// # Errors
     ///
-    /// Fails only when no GPU resources can be built for the output at all.
+    /// Fails only when no GPU resources can be built for the output.
     pub(crate) fn create_output(
         &mut self,
         config: &crate::scene::OutputConfig,
@@ -84,12 +79,10 @@ impl VardaApp {
         Ok(config.uuid)
     }
 
-    /// Make the live outputs match a saved stage. Outputs the stage does not
-    /// have are stopped and closed. An output it has is updated in place: one
-    /// whose sink settings match keeps its sink, so a recording or stream in
-    /// progress keeps running through a reload; one whose settings differ is
-    /// stopped and its sink rebuilt. New outputs are created, and the result
-    /// takes the saved order. Returns a message per output that failed.
+    /// Make the live outputs match a saved stage, in its order. Outputs not in
+    /// the stage are closed. A matching output keeps its sink if the sink
+    /// settings are equal (so a recording keeps running), otherwise the sink is
+    /// rebuilt. Returns a message per output that failed.
     pub(crate) fn reconcile_outputs(
         &mut self,
         saved: &[crate::scene::OutputConfig],
@@ -150,9 +143,8 @@ impl VardaApp {
         idx: usize,
         config: &crate::scene::OutputConfig,
     ) -> anyhow::Result<()> {
-        // One-time migration: pre-8i.5 files stored warp on the assignment.
-        // Move it onto the surface (first assignment wins; an existing surface
-        // warp, such as a dome mesh, takes precedence).
+        // Older files store warp on the assignment. Move it onto the surface;
+        // the first assignment wins and an existing surface warp is kept.
         for a in &config.surface_assignments {
             if let Some(warp) = &a.legacy_warp_mode
                 && let Some((_, surface)) = self
@@ -197,9 +189,8 @@ impl VardaApp {
         Ok(())
     }
 
-    /// The window host: create the OS windows window sinks are waiting for,
-    /// and hand each its window. Windows need the event loop, so the runner
-    /// calls this with it once per loop.
+    /// Create the OS windows that window sinks are waiting for. Needs the
+    /// event loop, so the runner calls this once per loop.
     pub fn create_pending_outputs(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         let render = (self.render.width, self.render.height);
         for idx in 0..self.output.outputs.len() {
@@ -305,8 +296,8 @@ impl VardaApp {
     }
 }
 
-/// Whether a live sink already has every setting a saved one names. The
-/// saved config may leave fields to the type's defaults.
+/// Whether a live sink has every setting a saved one names. Omitted saved
+/// fields use the type's defaults.
 fn same_sink(
     live: &crate::engine::value::provider::ProviderConfig,
     saved: &crate::engine::value::provider::ProviderConfig,
@@ -365,8 +356,7 @@ mod tests {
 
     #[test]
     fn zero_resolution_falls_back_to_the_box() {
-        // set_render_resolution rejects zero, so this only guards against a
-        // divide by zero if that ever changes.
+        // Guards the divide; set_render_resolution already rejects zero.
         assert_eq!(default_output_window_size(0, 0), (1280.0, 720.0));
         assert_eq!(default_output_window_size(1920, 0), (1280.0, 720.0));
     }

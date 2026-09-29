@@ -1,13 +1,10 @@
-/// Per-frame cost of handing a read-back frame to a headless output's target,
-/// the step every active headless output takes once per rendered frame.
+/// Per-frame cost of handing a read-back frame to a headless output's target.
 ///
 /// `no_encoder` delivers a 1080p frame header to a recording sink with no
-/// encoder running: the dispatch alone. The frame carries no bytes, so freeing it,
-/// which the render thread pays whether or not an encoder runs, is left out.
-/// `recording_feed` hands a freshly read-back 1080p frame to a recording's
-/// writer queue: `accepting`, where the writer keeps up, and `full`, where the
-/// frame is dropped. Making the frame is not timed; dropping it on the render
-/// thread is.
+/// encoder: dispatch only. The frame has no bytes, so freeing it is not timed.
+/// `recording_feed` hands a 1080p frame to a recording's writer queue:
+/// `accepting` (writer keeps up) and `full` (frame dropped). Dropping the frame
+/// on the render thread is timed; making it is not.
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use varda::output::OutputSinkInstance;
 use varda::output::ffmpeg::{FfmpegKind, FfmpegSink};

@@ -1,9 +1,5 @@
-//! Application layer — concrete engine implementation.
-//!
-//! `VardaApp` owns all engine subsystems (Mixer, Audio, Cameras, MIDI, OSC,
-//! `ShaderRegistry`, `SurfaceManager`) and implements the engine traits.
-//!
-//! The main.rs `App` struct owns window/egui state and holds a `VardaApp`.
+//! The engine implementation. `VardaApp` owns every engine subsystem and
+//! implements the engine traits; window and egui state live elsewhere.
 
 mod actions;
 mod classify;
@@ -12,7 +8,7 @@ mod deck_loads;
 mod engine_impl;
 pub(crate) mod history;
 mod inputs;
-/// Interactive mode for HTML decks (feature `html`). See /spec/html-source.md §4.
+/// Interactive mode for HTML decks (feature `html`).
 #[cfg(feature = "html")]
 pub(crate) mod interactive;
 mod outputs;
@@ -28,24 +24,20 @@ mod workspace;
 pub use render::{FileDialogRequest, FileDialogTarget, RenderTimes};
 pub use workspace::WorkspaceLoad;
 
-/// Default render resolution for all decks and stage output (Full HD 1080p)
+/// Default render width for decks and stage output.
 pub const DEFAULT_RENDER_WIDTH: u32 = 1920;
-/// Default render resolution for all decks and stage output (Full HD 1080p)
+/// Default render height for decks and stage output.
 pub const DEFAULT_RENDER_HEIGHT: u32 = 1080;
 
-/// Clamp a requested render resolution to what the GPU can allocate.
-///
-/// Varda imposes no artificial resolution cap; the only bound is the GPU's
-/// `max_texture_dimension_2d` (spec/resolution-and-scaling.md, "No Maximum
-/// Resolution"). Each dimension is independently clamped to `max_dim`. Zero is
-/// left untouched — callers reject it separately so this stays a pure clamp.
+/// Clamp each dimension to the GPU's `max_texture_dimension_2d`, the only
+/// resolution limit. Zero passes through; callers reject it.
 pub(crate) fn clamp_resolution_to_gpu(width: u32, height: u32, max_dim: u32) -> (u32, u32) {
     (width.min(max_dim), height.min(max_dim))
 }
 
-/// Session configuration derived from CLI flags + workspace defaults.
-/// CLI flags override persisted config for the session without modifying files.
-// CLI flag struct: each bool is an independent `--flag`, not a state enum.
+/// Session configuration from CLI flags. Flags override saved config for the
+/// session without changing files.
+// Each bool is an independent `--flag`.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, clap::Parser)]
 #[command(name = "varda", version, about = "Live visuals engine")]
@@ -102,24 +94,22 @@ pub struct AppConfig {
     #[arg(long = "no-html")]
     pub html_disabled: bool,
 
-    /// Disable screen / window capture deck sources (skips OS capture entirely,
-    /// so no Screen Recording permission is ever requested)
+    /// Disable screen / window capture deck sources (no Screen Recording
+    /// permission is requested)
     #[arg(long = "no-screen-capture")]
     pub screen_capture_disabled: bool,
 
-    /// Additional shader library directory (repeatable). Scanned and
-    /// hot-reloaded alongside the built-in locations. Added last, so a
-    /// shader here overrides a built-in shader of the same name — useful
-    /// for pointing at show- or rig-specific shader folders in the field.
+    /// Additional shader library directory (repeatable). Overrides built-in
+    /// shaders of the same name.
     #[arg(long = "shader-dir")]
     pub shader_dirs: Vec<std::path::PathBuf>,
 }
 
 impl AppConfig {
-    /// Resolve workspace root with three-tier fallback:
-    /// 1. Explicit `--workspace` flag (highest priority)
-    /// 2. CWD if it contains a `.varda/` directory (project-local workspace)
-    /// 3. Home directory as root → uses `~/.varda/` (default workspace)
+    /// Resolve the workspace root, first match wins:
+    /// 1. `--workspace`
+    /// 2. The current directory, if it contains `.varda/`
+    /// 3. The home directory (`~/.varda/`)
     pub fn effective_workspace_root(&self) -> std::path::PathBuf {
         Self::resolve_workspace_root(
             self.workspace_root.as_deref(),
@@ -128,27 +118,23 @@ impl AppConfig {
         )
     }
 
-    /// Pure workspace resolution — testable without touching environment.
+    /// Workspace resolution without reading the environment, for tests.
     fn resolve_workspace_root(
         explicit: Option<&std::path::Path>,
         cwd: Option<&std::path::Path>,
         home: Option<&std::path::Path>,
     ) -> std::path::PathBuf {
-        // Tier 1: explicit --workspace flag
         if let Some(ws) = explicit {
             return ws.to_path_buf();
         }
-        // Tier 2: CWD has .varda/
         if let Some(cwd) = cwd
             && cwd.join(".varda").is_dir()
         {
             return cwd.to_path_buf();
         }
-        // Tier 3: home directory (workspace data lives at ~/.varda/)
         if let Some(home) = home {
             return home.to_path_buf();
         }
-        // Ultimate fallback
         std::path::PathBuf::from(".")
     }
 }
@@ -183,20 +169,16 @@ pub(crate) struct Inputs {
     pub auto_map_engine: midi::AutoMapEngine,
     pub keymap: KeymapStore,
     pub clock_manager: crate::clock::ClockManager,
-    /// Absolute position from an external master. Distinct from the clock
-    /// beside it, which resolves tempo; see /spec/timecode.md § Why This Is Not
-    /// the Clock Either.
+    /// Absolute position from an external master. The clock handles tempo.
     pub timecode: crate::timecode::TimecodeManager,
     /// The PCM tap LTC is decoded from, while one is patched.
     pub ltc_tap: Option<LtcTap>,
-    /// Undo, redo, and save a control surface asked for, not yet dispatched.
+    /// Undo, redo and save from a control surface, not yet dispatched.
     pub pending_actions: inputs::PendingGlobalActions,
 }
 
-/// A live subscription to the raw PCM of the audio input carrying LTC.
-///
-/// Rides the same tee as the recording path, so listening for timecode costs
-/// no change to the capture callback. See /spec/audio-passthrough.md.
+/// A raw PCM subscription to the audio input carrying LTC, on the same tee
+/// as the recording path.
 pub(crate) struct LtcTap {
     pub source_id: crate::audio::AudioSourceId,
     pub token: crate::audio::PcmToken,
@@ -205,9 +187,8 @@ pub(crate) struct LtcTap {
     pub channels: u16,
 }
 
-/// Where the picture goes: output windows, headless outputs, the surface
-/// layout, and the dome.
-// `outputs` is the list this group is named for.
+/// Output windows, headless outputs, the surface layout, and the dome.
+// The group is named for its `outputs` field.
 #[allow(clippy::struct_field_names)]
 pub(crate) struct Outputs {
     pub outputs: Vec<crate::output::Output>,
@@ -218,10 +199,8 @@ pub(crate) struct Outputs {
     pub surface_manager: SurfaceManager,
     pub calibration_textures: Vec<(wgpu::Texture, wgpu::TextureView)>,
     pub domemaster: Option<crate::renderer::dome::DomemasterRenderer>,
-    /// Size the domemaster renderer is built at. Held alongside the renderer
-    /// rather than inside it because it outlives it: the setting is restored
-    /// from the stage before any dome surface exists, and `ensure_domemaster`
-    /// builds at whatever it says at the time.
+    /// Size the domemaster renderer is built at. Kept outside the renderer
+    /// because it is restored before the renderer exists.
     pub domemaster_resolution: crate::renderer::dome::DomemasterResolution,
     /// Dome projection the domemaster is rendered for.
     pub dome: crate::engine::value::dome::DomeConfig,
@@ -234,9 +213,8 @@ pub(crate) struct FrameStats {
     pub fps_smoothed: f32,
     pub frame_count: u64,
     pub system_monitor: crate::sysmon::SystemMonitor,
-    /// Command buffer commits issued during the previous frame, sampled once
-    /// per frame in `update_frame_timing`. Commits are not free — see
-    /// `renderer::submit_stats`.
+    /// Command buffer commits in the previous frame, sampled in
+    /// `update_frame_timing`. See `renderer::submit_stats`.
     pub last_frame_submits: u32,
 }
 
@@ -246,39 +224,28 @@ pub(crate) struct Session {
     pub preset_library: crate::persistence::presets::PresetLibrary,
     pub history: history::HistoryManager,
     pub notifications: NotificationSystem,
-    /// Stage editor prefs last sent by the GUI (or loaded from `stage.json`),
-    /// persisted by every save so a save from the API or a headless process
-    /// does not overwrite them with defaults.
+    /// Stage editor prefs last sent by the GUI or loaded from `stage.json`,
+    /// so API and headless saves keep them.
     pub editor_prefs: crate::engine::value::editor::EditorPrefs,
-    /// What copy is holding, as configs rather than live objects. Session state:
-    /// it survives no further than the process. See /spec/clipboard.md.
+    /// Copied configs. Not persisted.
     pub clipboard: Option<state::clipboard::ClipboardPayload>,
 }
 
-/// The show in time: the transport, what is being recorded into it, and the
-/// cue walk.
+/// The transport, automation recording, and cue navigation.
 pub(crate) struct Show {
-    /// Absolute show position. Distinct from the tempo clock in
-    /// `Inputs::clock_manager`; see /spec/transport.md.
+    /// Absolute show position. Tempo is `Inputs::clock_manager`.
     pub transport: crate::transport::Transport,
-    /// Whether live parameter writes are being kept as automation, and what is
-    /// being written right now. An arm is a mode the performer is in. See
-    /// /spec/automation-recording.md.
+    /// Automation record arm state and open takes.
     pub recorder: state::recorder::Recorder,
-    /// Where the last cue jump left the playhead, so repeated presses of an
-    /// arrow walk the list instead of returning to the same cue while playback
-    /// carries the position past it. Cleared by any other move of the playhead.
-    /// See /spec/arrangement.md § Cue points.
+    /// Where the last cue jump left the playhead, so repeated arrow presses
+    /// step through cues during playback. Cleared by any other locate.
     pub cue_anchor: Option<f64>,
-    /// When the transport last had timecode to chase, so silence can be
-    /// reported once rather than every frame of it.
+    /// When timecode went silent, so silence is reported once.
     pub chase_silent_since: Option<std::time::Instant>,
     pub chase_silence_reported: bool,
-    /// Last position republished over OSC, so the show is sent at the rate
-    /// frames exist rather than at the rate the renderer runs.
+    /// Last position sent over OSC, so each timecode frame is sent once.
     pub published_timecode: Option<String>,
-    /// Edge-detect for the arrangement blackout notice, so a deliberate
-    /// blackout reports once rather than every frame it lasts.
+    /// Edge detection for the arrangement blackout notice.
     pub blackout_reported: bool,
 }
 
@@ -291,8 +258,8 @@ pub(crate) struct DeckSources {
     pub deck_loader: deck_loads::DeckLoader,
     /// Every deck source type. See `sources.rs`.
     pub providers: crate::source::SourceRegistry,
-    /// Device managers the providers share with the rest of the engine: the
-    /// NDI, Syphon and Spout runtimes also send, so outputs borrow them here.
+    /// Device managers shared with the rest of the engine; outputs use the
+    /// NDI, Syphon and Spout runtimes here.
     pub services: crate::source::Services,
     /// Camera held open for surface detection, if any. See `AcquireDetectionCamera`.
     pub detection_camera: Option<crate::camera::CameraId>,
@@ -304,7 +271,7 @@ pub(crate) struct DeckSources {
 /// What the mixer renders into: the GPU, the render size, and the frame rate.
 pub(crate) struct RenderTarget {
     pub context: GpuContext,
-    /// The GPU adapter, read once: it cannot change during a session.
+    /// The GPU adapter, read once.
     pub gpu_info: crate::engine::types::GpuInfoSnapshot,
     pub width: u32,
     pub height: u32,
@@ -326,10 +293,9 @@ pub(crate) struct MessageBus {
 
 // ── Main application struct ─────────────────────────────────────
 
-/// Core engine application. Owns all subsystems except window/egui, grouped by
-/// what uses them, and processes `EngineCommand`s from every consumer. Work
-/// within one group is that group's method; work spanning groups is a method
-/// here that lends each group what it needs. See /spec/vardapp-decomposition.md.
+/// The engine. Owns all subsystems except window/egui, grouped by use, and
+/// processes `EngineCommand`s from every consumer. Work within a group is that
+/// group's method; work across groups is a method here.
 pub struct VardaApp {
     mixer: Mixer,
     render: RenderTarget,
@@ -339,16 +305,14 @@ pub struct VardaApp {
     input: Inputs,
     show: Show,
     session: Session,
-    /// Interactive HTML window state (feature `html`). See /spec/html-source.md §4.
+    /// Interactive HTML window state (feature `html`).
     #[cfg(feature = "html")]
     interactive: interactive::InteractiveHtmlState,
     frame_stats: FrameStats,
     bus: MessageBus,
 
-    // Channels force-rendered for off-air preview, set by `SetPreviewChannels`.
-    // Held by UUID so a reorder cannot move the cue; `preview_channels` is the
-    // positions resolved from them at the start of each frame. Never persisted;
-    // affects the render gate only. See /spec/channel-preview.md.
+    // Channels rendered for off-air preview (`SetPreviewChannels`), by UUID.
+    // `preview_channels` holds their positions, resolved each frame. Not persisted.
     preview_channel_uuids: Vec<String>,
     preview_channels: Vec<usize>,
 
@@ -356,19 +320,13 @@ pub struct VardaApp {
 }
 
 impl VardaApp {
-    /// Create a new `VardaApp` with all subsystems initialized.
-    ///
-    /// Requires a fully initialized `GpuContext` — the engine cannot exist
-    /// without a GPU. A default two-channel mixer is always created.
-    /// `config` provides session settings from CLI flags + workspace defaults.
+    /// Create a `VardaApp` with a default two-channel mixer.
     ///
     /// # Errors
-    /// Returns an error if the default mixer's GPU render targets cannot be
-    /// allocated, or if a subsystem required by `config` (MIDI, OSC, HTTP API)
-    /// fails to start.
+    /// Returns an error if the mixer's GPU targets cannot be allocated, or a
+    /// subsystem `config` requires (MIDI, OSC, HTTP API) fails to start.
     pub fn new(gpu: GpuContext, config: &AppConfig) -> anyhow::Result<Self> {
-        // Text and SVG decks read the system fonts; scanning them is slow, so
-        // it starts now and never on the render thread.
+        // Font scanning is slow; start it now, off the render thread.
         crate::fonts::warm();
         log::info!("[STARTUP]   Audio init...");
         let audio_manager = AudioManager::new();
@@ -376,10 +334,7 @@ impl VardaApp {
         log::info!("[STARTUP]   Workspace init...");
         let workspace = Workspace::new(config.effective_workspace_root());
 
-        // Build shader registry with all library paths. Order is precedence:
-        // later paths override earlier ones by shader name, and that ordering is
-        // held across the whole session (hot-reload and removal re-resolve the
-        // winner), not just at the initial scan.
+        // Library paths; later ones override earlier ones by shader name.
         // 1. Bundled shaders (exe-relative, for packaged .app / AppImage)
         // 2. CWD shaders/ (dev builds / cargo run)
         // 3. Workspace .varda/shaders/ (per-show user shaders)
@@ -424,7 +379,6 @@ impl VardaApp {
             log::warn!("Failed to start shader hot-reload: {e}");
         }
 
-        // Load OSC config from workspace (or use defaults), then apply CLI overrides
         let mut osc_config = if workspace.has_osc() {
             OscConfig::load(workspace.osc_path()).unwrap_or_else(|e| {
                 log::warn!("Failed to load OSC config: {e}, using defaults");
@@ -434,7 +388,6 @@ impl VardaApp {
             OscConfig::default()
         };
 
-        // CLI overrides for OSC
         if config.osc_disabled {
             osc_config.enabled = false;
         }
@@ -506,7 +459,6 @@ impl VardaApp {
         let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel();
         let publication = std::sync::Arc::new(publish::StatePublication::default());
 
-        // Always create GPU-dependent resources up front
         log::info!("[STARTUP]   GPU resources (textures, mixer)...");
         let audio_textures = crate::audio::AudioTextures::new(&gpu.device);
         let calibration_textures =
@@ -607,7 +559,7 @@ impl VardaApp {
         })
     }
 
-    /// Get a command sender for cross-thread consumers (HTTP API, CLI).
+    /// A command sender for other threads (HTTP API, CLI).
     pub fn command_sender(&self) -> tokio::sync::mpsc::UnboundedSender<CommandEnvelope> {
         self.bus.command_tx.clone()
     }
@@ -618,22 +570,12 @@ impl VardaApp {
     }
 
     /// Process all queued cross-thread commands. Called once per frame.
-    ///
-    /// Exhaustive match — the compiler enforces that every `EngineCommand` variant
-    /// is handled. Adding a new variant requires wiring it here.
     pub fn process_commands(&mut self) {
         self.attach_finished_deck_loads();
         while let Ok((cmd, reply_tx)) = self.bus.command_rx.try_recv() {
-            // Record pre-mutation state so bus-driven (HTTP API / WebSocket /
-            // CLI / MIDI-issued) edits are undoable on the same timeline the
-            // windowed UI uses. In-process UI mutations do NOT flow through the
-            // bus — the windowed runner records those itself — so there is no
-            // double-record here. See classify::command_is_undoable.
-            // A pass under way has already pushed the one entry it gets, and a
-            // performer playing a fader through the API would otherwise fill
-            // the stack a frame at a time. The step is kept only when the
-            // command succeeds: a rejected one changed nothing, and keeping it
-            // would clear the redo history.
+            // Record undo state for bus commands (the GUI records its own). A
+            // recording pass already has its entry. Kept only on success, so a
+            // rejected command doesn't clear redo.
             let before =
                 (self.is_undoable(&cmd) && !self.is_recording()).then(|| self.history_snapshot());
             let result = self.execute_command(cmd);
@@ -648,7 +590,7 @@ impl VardaApp {
         }
     }
 
-    /// Helper: access auto-transition on a deck, creating if needed, then apply mutation.
+    /// Apply `f` to a deck's auto-transition, creating it if needed.
     fn exec_auto_transition(
         &mut self,
         deck_uuid: &str,
@@ -670,7 +612,7 @@ impl VardaApp {
         CommandResult::Ok
     }
 
-    /// Helper: update a modulation source by UUID.
+    /// Update a modulation source by UUID.
     fn exec_modulation_update(
         &mut self,
         uuid: &str,
@@ -687,24 +629,22 @@ impl VardaApp {
         }
     }
 
-    /// Build a domain-neutral engine state snapshot for cross-thread consumers.
+    /// Build a framework-free engine state snapshot.
     pub fn build_engine_state(&self) -> EngineState {
         snapshot::build_engine_state(self)
     }
 
-    /// Build and publish a snapshot for cross-thread consumers (HTTP API,
-    /// WebSocket). Called every 10th frame.
+    /// Build and publish a snapshot. Called every 10th frame.
     pub fn publish_state(&self) {
         self.publish(self.build_engine_state());
     }
 
-    /// Publish a snapshot already built this frame, such as the one the GUI
-    /// built for its own view, instead of building a second.
+    /// Publish a snapshot already built this frame, such as the GUI's.
     pub fn publish(&self, state: EngineState) {
         self.bus.publication.publish(state);
     }
 
-    // ── Public accessors (controlled access for delivery layers) ─────
+    // ── Public accessors ─────────────────────────────────────────────
 
     /// Read-only access to the GPU context.
     pub fn gpu_context(&self) -> &GpuContext {
@@ -729,8 +669,8 @@ impl VardaApp {
     /// Open a camera, returning its resolution.
     ///
     /// # Errors
-    /// Returns an error if no camera with `id` is present, if the OS refuses
-    /// access to the device, or if its GPU textures cannot be allocated.
+    /// Returns an error if the camera is missing, access is refused, or its
+    /// GPU textures cannot be allocated.
     pub(crate) fn open_camera(
         &mut self,
         id: crate::camera::CameraId,
@@ -768,9 +708,8 @@ impl VardaApp {
             .map(super::internal::renderer::dome::DomemasterRenderer::output_view)
     }
 
-    /// Edge length of the live domemaster texture, or `None` when no renderer
-    /// has been built. Reports what the GPU actually holds, which can lag
-    /// [`Self::domemaster_resolution`] if a rebuild failed.
+    /// Edge length of the live domemaster texture, or `None` without a
+    /// renderer. Can differ from [`Self::domemaster_resolution`] after a failed rebuild.
     pub fn domemaster_output_size(&self) -> Option<u32> {
         self.output
             .domemaster
@@ -778,8 +717,7 @@ impl VardaApp {
             .map(super::internal::renderer::dome::DomemasterRenderer::output_size)
     }
 
-    /// Ensure the domemaster renderer exists and is enabled.
-    /// Creates it lazily on first call; subsequent calls just ensure `enabled = true`.
+    /// Create the domemaster renderer if needed, and enable it.
     pub fn ensure_domemaster(&mut self) {
         if let Some(dome) = &mut self.output.domemaster {
             dome.enabled = true;
@@ -810,12 +748,9 @@ impl VardaApp {
         self.output.domemaster_resolution
     }
 
-    /// Set the domemaster output size, rebuilding the renderer if one is live.
-    ///
-    /// Every texture in the renderer is sized at construction, so there is no
-    /// resize path — the old renderer is dropped and a new one built in its
-    /// place. A failed rebuild leaves no renderer rather than one at the old
-    /// size, so the dome goes black instead of silently ignoring the setting.
+    /// Set the domemaster output size, rebuilding a live renderer. A failed
+    /// rebuild leaves no renderer, so the dome goes black rather than keeping
+    /// the old size.
     pub fn set_domemaster_resolution(
         &mut self,
         resolution: crate::renderer::dome::DomemasterResolution,
@@ -857,9 +792,6 @@ impl VardaApp {
         }
     }
 
-    /// Set domemaster content rotation (azimuth, elevation, roll) in radians.
-    /// Called each frame from the UI layer so content rotation is applied
-    /// in real-time by the domemaster shader, not baked into warp meshes.
     /// Dome projection the domemaster is rendered for.
     pub fn dome_config(&self) -> crate::engine::value::dome::DomeConfig {
         self.output.dome
@@ -901,9 +833,6 @@ impl VardaApp {
         self.render.height
     }
 
-    /// Maximum render dimension (width or height) the GPU can allocate a
-    /// texture for. Varda imposes no artificial cap — this hardware limit is
-    /// the only bound on render resolution (see spec/resolution-and-scaling.md).
     /// Current target FPS (0 = uncapped).
     pub fn target_fps(&self) -> u32 {
         self.render.target_fps
@@ -919,15 +848,14 @@ impl VardaApp {
         self.shutdown_requested
     }
 
+    /// Largest render width or height the GPU can allocate, the only limit.
     pub fn max_render_dimension(&self) -> u32 {
         self.render.context.device.limits().max_texture_dimension_2d
     }
 
     /// Change the master render resolution. Resizes all textures in the pipeline.
     ///
-    /// Zero dimensions are rejected. Larger-than-hardware requests are clamped to
-    /// the GPU's `max_texture_dimension_2d` so both the UI and the HTTP API share
-    /// the same bound and neither can trigger a GPU allocation failure.
+    /// Zero is rejected; oversize requests are clamped to the GPU limit.
     pub fn set_render_resolution(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 {
             log::warn!("Ignoring zero render resolution {width}×{height}");
@@ -948,7 +876,7 @@ impl VardaApp {
         self.render.width = width;
         self.render.height = height;
         self.mixer.resize(&self.render.context, width, height);
-        // Clear sub-mix cache since textures were recreated
+        // Textures were recreated.
         self.mixer.clear_sub_mix_cache();
         let stopped = self.resize_headless_outputs(width, height);
         self.session
@@ -1199,7 +1127,7 @@ mod tests {
         .unwrap();
         app.process_commands();
         let result = reply_rx.blocking_recv().unwrap();
-        // Deck-creating commands report the new deck's UUID (ui-engine-boundary.md WS1).
+        // Deck-creating commands report the new deck's UUID.
         assert!(
             matches!(result, crate::engine::CommandResult::OkWithId { .. }),
             "command should succeed: {result:?}"
@@ -1228,9 +1156,7 @@ mod tests {
         assert!((state.mixer.channels[0].opacity - 0.5).abs() < 1e-5);
     }
 
-    /// Regression test for the previously-dead API undo/redo path: bus-driven
-    /// (HTTP API / headless) commands must record onto the shared timeline so
-    /// `Undo`/`Redo` sent over the same bus actually restore state.
+    /// Bus commands record undo state, and bus `Undo`/`Redo` restore it.
     #[test]
     fn api_command_undo_redo_roundtrip() {
         let Some(mut app) = headless_app() else {
@@ -1282,7 +1208,7 @@ mod tests {
         );
     }
 
-    /// Live-control commands (crossfader) must NOT pollute the undo timeline.
+    /// Live-control commands (crossfader) are not recorded for undo.
     #[test]
     fn live_control_commands_do_not_record_history() {
         let Some(mut app) = headless_app() else {
@@ -1325,10 +1251,8 @@ mod tests {
             (s.uuid.clone(), s.vertices.clone())
         };
 
-        // Snapshot the stage state before mutating.
         let snap = app.history_snapshot();
 
-        // Move the surface.
         tx.send((
             crate::engine::EngineCommand::MoveSurface {
                 uuid: uuid.clone(),
@@ -1396,12 +1320,10 @@ mod tests {
             return;
         };
         let tx = app.command_sender();
-        // Add a third channel first
         tx.send((crate::engine::EngineCommand::AddChannel, None))
             .unwrap();
         app.process_commands();
         assert_eq!(app.build_engine_state().mixer.channels.len(), 3);
-        // Remove the third channel
         let ch2 = channel_uuid(&app, 2);
         tx.send((
             crate::engine::EngineCommand::RemoveChannel { channel_uuid: ch2 },
@@ -1473,15 +1395,12 @@ mod tests {
             return;
         };
         app.set_render_resolution(0, 0);
-        // Should keep previous resolution
+        // Previous resolution kept.
         assert!(app.render_width() > 0);
         assert!(app.render_height() > 0);
     }
 
-    /// A headless output used to take the render resolution once, at creation,
-    /// so switching a project to portrait afterwards left the recording buffer
-    /// landscape and ffmpeg was spawned with the stale `-s WxH`. The saved file
-    /// came out the old shape with the portrait composite squashed into it.
+    /// A headless output follows render resolution changes made after creation.
     #[test]
     fn headless_outputs_follow_the_render_resolution() {
         let Some(mut app) = headless_app() else {
@@ -1538,7 +1457,7 @@ mod tests {
 
     // ── Extended smoke tests ───────────────────────────────────────
 
-    /// Helper: send command with reply, process, return result.
+    /// Send a command, process it, and return the result.
     fn send_cmd(
         app: &mut VardaApp,
         cmd: crate::engine::EngineCommand,
@@ -1550,7 +1469,7 @@ mod tests {
         reply_rx.blocking_recv().unwrap()
     }
 
-    /// Helper: fire-and-forget command.
+    /// Send a command without waiting for a result.
     fn fire(app: &mut VardaApp, cmd: crate::engine::EngineCommand) {
         app.command_sender().send((cmd, None)).unwrap();
         app.process_commands();
@@ -1574,8 +1493,7 @@ mod tests {
             app.update_frame_timing();
             app.render_mixer_frame();
         }
-        // Verify the auto crossfade was started and no crash occurred.
-        // Timing in headless mode is unpredictable, so just verify no panic.
+        // Headless timing is unpredictable; only check for no panic.
     }
 
     #[test]
@@ -1612,8 +1530,7 @@ mod tests {
             panic!("expected OkWithId, got {added:?}");
         };
 
-        // A solid color has no transport: a video control on it is refused,
-        // not silently dropped.
+        // A solid color has no transport, so a video control is refused.
         let result = send_cmd(
             &mut app,
             crate::engine::EngineCommand::SetSourceParam {

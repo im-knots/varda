@@ -36,20 +36,17 @@ pub fn detect_from_image(
     Ok(result)
 }
 
-/// Detect surfaces from raw RGBA pixel data (e.g. camera frame).
-/// Converts RGBA to grayscale directly, avoiding a PNG encode/decode round-trip.
+/// Detect surfaces from raw RGBA pixel data (e.g. a camera frame).
 ///
-/// The inner detection pipeline (`imageproc` Canny, blur, etc.) is wrapped in
-/// `catch_unwind` so that third-party panics never propagate to the caller.
-/// This is critical for live-performance safety — the main render thread must
-/// never crash due to edge-detection issues.
+/// Detection runs inside `catch_unwind` so an `imageproc` panic cannot crash
+/// the render thread.
 ///
 /// # Errors
 ///
 /// Returns [`ImportError::ImageLoad`] if `rgba` is smaller than `w * h * 4`,
 /// [`ImportError::InternalPanic`] if the detection pass panics, and
 /// [`ImportError::NoContours`] if no contours are found.
-// w/h/r/g/b are the idiomatic names for image dimensions and colour channels.
+// w/h/r/g/b are the idiomatic names for image dimensions and color channels.
 #[allow(clippy::many_single_char_names)]
 pub fn detect_from_rgba(
     rgba: &[u8],
@@ -65,7 +62,6 @@ pub fn detect_from_rgba(
             rgba.len()
         )));
     }
-    // Convert RGBA to grayscale using luminance formula
     let gray_pixels: Vec<u8> = rgba
         .as_chunks::<4>()
         .0
@@ -78,7 +74,6 @@ pub fn detect_from_rgba(
         ImportError::ImageLoad("Failed to create grayscale image from RGBA".into())
     })?;
 
-    // Wrap detection in catch_unwind to absorb any imageproc panics
     let params_clone = params.clone();
     let detect_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         detect_contours(&gray, &params_clone)
@@ -139,9 +134,8 @@ pub fn detect_from_file(
 
 /// Detect surfaces from SVG data (extracts geometric paths directly).
 ///
-/// Cubic/quadratic bezier control points are preserved into a [`SurfacePath`] on
-/// each detected contour, so curved outlines import as first-class editable
-/// curves rather than pre-flattened polygons.
+/// Bezier control points are kept in a [`SurfacePath`] on each contour, so
+/// curved outlines import as editable curves.
 ///
 /// # Errors
 ///
@@ -195,8 +189,7 @@ pub fn detect_from_svg(svg_data: &[u8]) -> Result<DetectionResult, ImportError> 
         let cx: f32 = normalized.iter().map(|v| v[0]).sum::<f32>() / normalized.len() as f32;
         let cy: f32 = normalized.iter().map(|v| v[1]).sum::<f32>() / normalized.len() as f32;
         let suggested_name = suggest_name([cx, cy], i);
-        // Normalize the path's control points with the same transform as the
-        // flattened vertices so both spaces stay in sync.
+        // Normalize the control points with the same transform as the vertices.
         let mut path = raw_path.clone();
         path.apply_map(normalize);
         contours.push(DetectedContour {
@@ -229,17 +222,12 @@ pub fn detect_from_svg(svg_data: &[u8]) -> Result<DetectionResult, ImportError> 
 /// Recursively walk a usvg Group, extracting an editable [`SurfacePath`] from
 /// each Path node with the accumulated ancestor transform baked in.
 ///
-/// usvg keeps each path's geometry in local coordinates and carries placement
-/// (`<use transform="rotate(...)">`, viewBox scaling, Illustrator/Inkscape group
-/// transforms) on the ancestor groups' *relative* transforms. We compose those
-/// group `transform()`s from the root down (`acc`) and apply the result, so
-/// every transformed copy lands where it belongs instead of collapsing onto its
-/// untransformed base.
+/// usvg stores path geometry in local coordinates and placement (`<use>`
+/// transforms, viewBox scaling, group transforms) on ancestor groups. The group
+/// `transform()`s are composed from the root down in `acc`.
 ///
-/// Note: we deliberately do NOT use `Path::abs_transform()`. For `<use>`-resolved
-/// nodes usvg reports an absolute transform that double-applies the ancestor
-/// rotation, which halves the effective radial symmetry (e.g. a 12-fold mandala
-/// renders as 6 stacked pairs).
+/// Do not use `Path::abs_transform()`: for `<use>` nodes it applies the ancestor
+/// rotation twice.
 fn walk_svg_group(group: &usvg::Group, acc: usvg::Transform, out: &mut Vec<SurfacePath>) {
     for node in group.children() {
         match node {
@@ -266,8 +254,8 @@ fn walk_svg_group(group: &usvg::Group, acc: usvg::Transform, out: &mut Vec<Surfa
 /// Convert a `tiny_skia_path::Path` into a closed [`SurfacePath`], preserving
 /// bezier control points. Quadratic segments are converted losslessly to cubics
 /// (the only curved segment kind). Returns `None` if the path has no drawable
-/// segments. Subpaths after the first are joined with straight segments, matching
-/// the historical single-outline behavior.
+/// segments. Subpaths after the first are joined with straight segments into one
+/// outline.
 fn svg_path_to_surface_path(path: &tiny_skia_path::Path) -> Option<SurfacePath> {
     let mut start: Option<[f32; 2]> = None;
     let mut segments: Vec<PathSegment> = Vec::new();
@@ -538,7 +526,7 @@ mod tests {
 
     #[test]
     fn detect_from_image_with_white_rect() {
-        // Create a simple PNG with a white rectangle on black background
+        // White rectangle on black.
         let mut img = image::RgbaImage::new(200, 200);
         for y in 50..150 {
             for x in 50..150 {
@@ -596,11 +584,8 @@ mod tests {
 
     #[test]
     fn detect_from_svg_applies_node_transforms() {
-        // Two instances of the same base rect, placed at opposite corners via
-        // `<use transform="translate(...)">`. usvg keeps the geometry in local
-        // coords and stores placement in the node transform; if the importer
-        // ignores that transform both copies collapse onto the base position.
-        // Regression guard for the mandala "all arms stacked at 12 o'clock" bug.
+        // Two `<use transform="translate(...)">` copies of one rect at opposite
+        // corners. Ignoring the transform would stack both on the base.
         let svg = br##"<svg xmlns="http://www.w3.org/2000/svg"
                            xmlns:xlink="http://www.w3.org/1999/xlink"
                            viewBox="0 0 100 100">
@@ -630,12 +615,9 @@ mod tests {
 
     #[test]
     fn detect_from_svg_rotate_use_is_not_doubled() {
-        // A marker rect at 12 o'clock, plus a copy rotated 90° about the centre.
-        // Correct placement puts the rotated copy at 3 o'clock (right edge).
-        // usvg's `Path::abs_transform()` double-applies the ancestor rotation for
-        // `<use>` nodes, which would land it at 6 o'clock (bottom) instead —
-        // halving radial symmetry (the mandala "6 arms not 12" bug). We compose
-        // the group `transform()`s ourselves to avoid that; this guards it.
+        // A marker rect at 12 o'clock plus a copy rotated 90° about the center,
+        // which belongs at 3 o'clock. `Path::abs_transform()` applies the
+        // rotation twice and would put it at 6 o'clock.
         let svg = br##"<svg xmlns="http://www.w3.org/2000/svg"
                            xmlns:xlink="http://www.w3.org/1999/xlink"
                            viewBox="0 0 100 100">
@@ -758,7 +740,6 @@ mod tests {
 
     #[test]
     fn detect_from_file_unsupported_extension() {
-        // Create a temp file with an unsupported extension
         let dir = std::env::temp_dir();
         let path = dir.join("test_detect.xyz");
         std::fs::write(&path, b"dummy").unwrap();

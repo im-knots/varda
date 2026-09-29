@@ -96,7 +96,6 @@ pub(super) fn handle(
         best.map(|(u, e, c, _)| (u, e, c))
     };
 
-    // Hover feedback.
     if let Some(pos) = resp.hover_pos() {
         let [nx, ny] = geom.to_norm_raw(pos);
         if hit_handle(nx, ny).is_some() || hit_anchor(nx, ny).is_some() {
@@ -143,7 +142,6 @@ pub(super) fn handle(
         }
     }
 
-    // Apply the active drag.
     if resp.dragged() {
         // Bezier anchor/handle drag is one undo gesture.
         if state.dragging_handle.is_some() || state.dragging_anchor.is_some() {

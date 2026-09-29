@@ -1,7 +1,6 @@
-/// Per-frame cost of gathering audio for modulation: each active source's
-/// analysis into `AudioValues`, and the copy of the primary source's data the
-/// mixer reads BPM and beat phase from. See /spec/performance-hot-paths.md
-/// item I.
+/// Per-frame cost of gathering audio for modulation: each source's analysis
+/// into `AudioValues`, plus the copy of the primary source's data the mixer
+/// reads BPM and beat phase from.
 ///
 ///   `collect/N` — `AudioValues` from N sources with full-size spectra.
 ///   `primary` — the copy of one source's `AudioData`.

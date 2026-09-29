@@ -1,7 +1,5 @@
-//! UI panel rendering
-//!
-//! Each sub-module renders a specific panel or UI section.
-//! The `render_ui` function orchestrates the top-level layout.
+//! UI panel rendering. `render_ui` lays out the top level; each submodule
+//! renders one panel or section.
 
 mod arrangement;
 mod bottom_bar;
@@ -43,19 +41,19 @@ use popovers::{
 };
 use right_panel::render_right_panel;
 
-/// Top-level UI rendering entry point. Orchestrates all panels.
+/// Top-level UI entry point.
 pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
     let mut actions = UIActions::new();
 
-    // Disable all egui animations — instant panel/widget transitions
+    // Disable egui animations so panel and widget transitions are instant.
     ui.global_style_mut(|style| {
         style.animation_time = 0.0;
     });
 
-    // Before any panel publishes: effect drop surfaces are rebuilt every frame.
+    // Effect drop surfaces are rebuilt every frame, before any panel publishes.
     begin_fx_surface_frame(ui.ctx());
 
-    // === LEFT PANEL: Library (collapsible) ===
+    // === LEFT PANEL: Library ===
     if data.library_panel_open {
         egui::Panel::left("library_panel")
             .min_size(180.0)
@@ -82,7 +80,7 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
             });
     }
 
-    // === RIGHT PANEL: Main Output + Master Effects (collapsible) ===
+    // === RIGHT PANEL: Main Output + Master Effects ===
     if data.right_panel_open {
         egui::Panel::right("master_panel")
             .min_size(280.0)
@@ -106,9 +104,7 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                         actions.session.toggle_right_panel = true;
                     }
                 });
-                // Telemetry stays readable when the panel is reclaimed for
-                // screen space: losing the frame rate is worst exactly when
-                // someone is fighting for performance.
+                // Telemetry stays visible when the panel is collapsed.
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
                     ui.add_space(6.0);
                     render_monitoring_strip(ui, data);
@@ -116,7 +112,7 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
             });
     }
 
-    // === BOTTOM PANEL: Audio, Modulation, Shader Browser ===
+    // === BOTTOM PANEL ===
     egui::Panel::bottom("bottom_panel")
         .min_size(80.0)
         .max_size(400.0)
@@ -128,12 +124,11 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
             render_bottom_panel(ui, data, &mut actions);
         });
 
-    // === TOP BAR: Save button + FPS/BPM status ===
+    // === TOP BAR ===
     egui::Panel::top("top_bar").exact_size(28.0).show(ui, |ui| {
         ui.horizontal_centered(|ui| {
             let any_learn = data.midi_learn_active || data.keyboard_learn_active;
-            // Undo / Redo / Save — in learn mode: show glow + select target on click.
-            // Outside learn mode: normal action on click.
+            // Undo / Redo / Save. In learn mode, glow and select the target on click.
             {
                 let undo_enabled = if any_learn { true } else { data.can_undo };
                 let undo_resp = ui
@@ -245,9 +240,8 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
 
             ui.separator();
 
-            // Performance and Arrangement are two views of one scene, so the
-            // switch is a toggle rather than a mode people enter and leave.
-            // See /spec/arrangement.md § UI.
+            // Performance and Arrangement are two views of one scene, so the switch is a
+            // toggle.
             {
                 let label = if data.arrangement_mode_open {
                     "🎛 Perform"
@@ -264,7 +258,6 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                 }
             }
 
-            // Learn mode indicators
             if data.midi_learn_active {
                 let text = egui::RichText::new("🎹 MIDI LEARN")
                     .color(egui::Color32::from_rgb(180, 100, 255))
@@ -291,7 +284,7 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // BPM from unified clock (MIDI > OSC > Audio > --)
+                // BPM from the unified clock (MIDI > OSC > Audio > --).
                 let bpm_text = if let Some(bpm) = data.clock_bpm {
                     format!("{bpm:.0} BPM")
                 } else {
@@ -300,7 +293,7 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                 if let Some(dev) = &data.clock_device_name {
                     ui.label(egui::RichText::new(format!("({dev})")).weak().small());
                 }
-                // Clickable BPM label → opens clock source popover
+                // Clicking the BPM label opens the clock source popover.
                 let bpm_rich = if clock_is_live(data) {
                     egui::RichText::new(&bpm_text).monospace()
                 } else {
@@ -323,9 +316,7 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
 
                 ui.separator();
 
-                // Show position sits beside the tempo it will eventually be
-                // able to drive: both answer "where are we?", one in bars
-                // and one in absolute time.
+                // Show position sits beside the tempo: bars and absolute time.
                 let transport_response = ui
                     .add(
                         egui::Label::new(
@@ -348,7 +339,6 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
 
                 ui.separator();
 
-                // Resolution selector
                 let res_label = format!("📐 {}×{}", data.render_width, data.render_height);
                 let res_response = ui
                     .add(
@@ -362,7 +352,6 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
 
                 ui.separator();
 
-                // FPS target selector
                 let fps_target_label = if data.target_fps == 0 {
                     "🎯 Uncapped".to_string()
                 } else {
@@ -381,42 +370,37 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
         });
     });
 
-    // === CENTRAL AREA: Decks as columns; macro controls live in the center
-    // column (see mixer.rs) and their config shows in the bottom bar. ===
+    // === CENTRAL AREA: decks as columns. Macro controls are in the center column
+    // (see mixer.rs); their config shows in the bottom bar. ===
     egui::CentralPanel::default().show(ui, |ui| {
         render_central_panel(ui, data, &mut actions);
     });
 
-    // === LIBRARY DnD: deferred drop handler ===
     handle_library_dnd(ui, data, &mut actions);
 
-    // === EFFECT REORDER DnD: deferred drop handler ===
     handle_effect_dnd(ui, data, &mut actions);
 
-    // === SEQUENCE STEP REORDER DnD: deferred drop handler ===
     handle_sequence_step_dnd(ui, data, &mut actions);
 
-    // === NOTIFICATION OVERLAY ===
     render_notifications(ui, &data.notifications, &mut actions);
 
-    // === GLOBAL RIGHT-CLICK: Toggle MIDI Learn Mode ===
+    // Global right-click toggles MIDI learn mode.
     handle_midi_learn_popup(ui, data, &mut actions);
 
-    // === KEYBOARD SHORTCUTS (data-driven via keymap) ===
+    // Keyboard shortcuts via the keymap.
     {
         use crate::keymap::{ActionId, KeyTarget};
         use crate::usecases::ui::keyboard::collect_pressed_keys;
         let pressed = collect_pressed_keys(ui.ctx());
 
         if data.keyboard_learn_active {
-            // In learn mode: intercept key presses for binding, don't dispatch normally
+            // In learn mode, key presses are captured for binding instead of dispatched.
             if let Some(combo) = pressed.first() {
                 actions.commands.push(EngineCommand::KeyboardLearnBind {
                     combo: combo.clone(),
                 });
             }
         } else {
-            // Normal dispatch: look up each pressed key in the keymap
             for combo in &pressed {
                 if let Some(target) = data.keymap_bindings.get(combo) {
                     match target {
@@ -440,11 +424,9 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                         KeyTarget::Action(
                             id @ (ActionId::Copy | ActionId::Paste | ActionId::Duplicate),
                         ) => {
-                            // Never into a text field, never over an automation
-                            // lane (its own breakpoint clipboard), and never
-                            // while an arrangement slice selection is armed (its
-                            // slice clipboard wins). See
-                            // /spec/arrangement-selection.md § Copy.
+                            // Not into a text field, not over an automation lane (it has its own
+                            // breakpoint clipboard), and not while an arrangement slice
+                            // selection is armed (its slice clipboard wins).
                             if !ui.egui_wants_keyboard_input()
                                 && !arrangement::a_lane_is_selected(ui.ctx())
                                 && !arrangement::selection_active(ui.ctx())
@@ -457,7 +439,7 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                                 .commands
                                 .push(EngineCommand::ToggleParam { path: path.clone() });
                         }
-                        // Stage-context actions are handled in stage.rs
+                        // Stage-context actions are handled in stage.rs.
                         KeyTarget::Action(_) => {}
                     }
                 }
@@ -479,13 +461,12 @@ mod tests {
         let harness = egui_kittest::Harness::new_ui(|ui| {
             let _ = render_ui(ui, &data);
         });
-        // Running the harness processes a frame — if render_ui panics, this test fails.
+        // Running the harness processes a frame; a panic in render_ui fails the test.
         let _ = harness;
     }
 
-    /// Every preview and stage canvas now sizes itself from the render
-    /// resolution, so a portrait or square project drives layout arithmetic
-    /// that a 16:9 fixture never reaches.
+    /// Previews and stage canvases size from the render resolution, so a portrait
+    /// or square project exercises layout math a 16:9 fixture does not.
     #[test]
     fn render_ui_smoke_non_landscape_resolutions() {
         for (w, h) in [(1080u32, 1920u32), (1080, 1080), (1080, 1350), (0, 0)] {
@@ -558,7 +539,6 @@ mod tests {
             control.min.y > heading.max.y && control.min.y < size.y,
             "the text deck's controls are in the bar: {control:?}"
         );
-        // The dedicated layout: its columns, side by side.
         let columns = ["Speaker colors", "Vertical", "Transition", "Always"]
             .map(|control| harness.get_by_label(control).rect());
         assert!(

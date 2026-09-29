@@ -1,22 +1,12 @@
-// Content light level reduction for HDR10 mastering metadata.
+// Content light level reduction for HDR10 mastering metadata (CTA-861.3
+// MaxCLL and MaxFALL), measured on the encoded frame about to be written.
 //
-// CTA-861.3 defines MaxCLL as the largest light level of any pixel across the
-// programme, and MaxFALL as the largest frame-average light level. Both are
-// properties of the encoded content, so this measures the frame that is about to
-// be written rather than anything upstream of it.
-//
-// Reduces 4x4 at a time into (max, sum, count). Carrying the count rather than a
-// mean keeps edge tiles exact: a frame whose dimensions are not a multiple of the
-// reduction factor has partial tiles, and averaging those as if they were full
-// would bias MaxFALL.
-//
-// See /spec/hdr-recording-output.md and measure.rs, which holds this to known
-// values rather than to inspection.
+// Reduces 4x4 at a time into (max, sum, count). The count keeps partial edge
+// tiles from biasing MaxFALL. Tested in measure.rs.
 
 struct MeasureParams {
-    // 1 on the first pass, where the source is PQ-encoded video and each texel
-    // must be decoded to absolute luminance. 0 on later passes, where the source
-    // is already (max, sum, count).
+    // 1 on the first pass, which decodes PQ to absolute luminance; 0 on later
+    // passes, which read (max, sum, count).
     decode_pq: u32,
     _pad0: u32,
     _pad1: u32,
@@ -64,7 +54,7 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     for (var dy = 0; dy < 4; dy = dy + 1) {
         for (var dx = 0; dx < 4; dx = dx + 1) {
             let p = dst * 4 + vec2<i32>(dx, dy);
-            // Outside the source: a partial tile, not a pixel to invent.
+            // Outside the source (partial tile).
             if (p.x >= dims.x || p.y >= dims.y) {
                 continue;
             }

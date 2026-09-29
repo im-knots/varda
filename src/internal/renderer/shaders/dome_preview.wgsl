@@ -1,6 +1,5 @@
-// 3D Dome Preview Shader
-// Renders a hemisphere mesh with domemaster texture mapped via equidistant azimuthal projection.
-// Uses MVP (Model-View-Projection) matrix for orbit camera.
+// 3D dome preview: a hemisphere mesh textured with the domemaster
+// (equidistant azimuthal), viewed through an orbit camera's MVP matrix.
 
 struct Uniforms {
     mvp: mat4x4<f32>,
@@ -46,8 +45,7 @@ fn rotate_z(v: vec3<f32>, angle: f32) -> vec3<f32> {
 
 // Compute domemaster UV from a dome surface direction, with content rotation applied.
 fn domemaster_uv(dir_in: vec3<f32>, content_az: f32, content_el: f32, content_roll: f32) -> vec2<f32> {
-    // Apply inverse content rotation to the sampling direction
-    // Order: roll (Z) → elevation (X) → azimuth (Y)
+    // Inverse content rotation. Order: roll (Z), elevation (X), azimuth (Y).
     var d = rotate_z(dir_in, -content_roll);
     d = rotate_x(d, -content_el);
     d = rotate_y(d, -content_az);
@@ -76,7 +74,6 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Use world normal to compute rotated domemaster UV
     let uv = domemaster_uv(
         in.world_normal,
         uniforms.content_rotation.x,
@@ -85,7 +82,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     );
     let color = textureSample(dome_texture, dome_sampler, uv);
 
-    // Simple hemisphere lighting
+    // Hemisphere lighting.
     let light_dir = normalize(vec3<f32>(0.3, 1.0, 0.5));
     let ndotl = max(dot(in.world_normal, light_dir), 0.0);
     let ambient = 0.4;

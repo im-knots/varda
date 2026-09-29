@@ -1,7 +1,7 @@
-//! Camera surface-detection mode: opening and releasing the camera as the mode
-//! changes, and applying the UI's detection actions.
+//! Camera surface-detection mode: opens and releases the camera as the mode
+//! changes and applies the UI's detection actions.
 //!
-//! Detection itself runs on the worker in [`super::detect`]; this module owns the
+//! Detection runs on the worker in [`super::detect`]; this module owns the
 //! mode's lifecycle and its egui texture.
 
 use super::UIRunner;
@@ -10,11 +10,10 @@ use crate::engine::EngineCommand;
 use crate::usecases::ui;
 
 impl UIRunner {
-    /// Ask the engine to hold the camera the current mode needs, and register
-    /// its preview once the engine reports it open.
+    /// Ask the engine for the camera the current mode needs, and register its
+    /// preview once the engine reports it open.
     ///
-    /// Runs before this frame's command drain, so a request queued here is
-    /// answered by the next call.
+    /// Runs before this frame's command drain, so the next call sees the answer.
     pub(super) fn sync_camera_detect_capture(&mut self) {
         let wanted = match &self.layout.camera_detect_mode {
             ui::CameraDetectMode::Live { camera_id, .. }
@@ -47,7 +46,7 @@ impl UIRunner {
             return;
         };
         if varda.detection_camera() != Some(cam_id) {
-            // The engine refused the camera and has already told the operator.
+            // The engine refused the camera and has already notified the operator.
             log::error!("Camera detection: camera {cam_id} could not be opened");
             self.layout.camera_detect_mode = ui::CameraDetectMode::Off;
             return;
@@ -66,7 +65,7 @@ impl UIRunner {
     }
 
     /// Apply the frame's queued camera-detection actions (enter, capture, accept,
-    /// cancel), mutating the runner's mode and texture state.
+    /// cancel).
     pub(super) fn apply_camera_detect_actions(&mut self, ui_actions: &mut ui::UIActions) {
         let actions = std::mem::take(&mut ui_actions.session.camera_detect_actions);
         for action in actions {
@@ -79,7 +78,7 @@ impl UIRunner {
                 }
                 ui::CameraDetectAction::Exit => {
                     self.layout.camera_detect_mode = ui::CameraDetectMode::Off;
-                    // Camera release handled by lifecycle block on next frame
+                    // The lifecycle block releases the camera next frame.
                 }
                 ui::CameraDetectAction::UpdateParams(params) => {
                     if let ui::CameraDetectMode::Live {
@@ -87,12 +86,11 @@ impl UIRunner {
                     } = self.layout.camera_detect_mode
                     {
                         *p = params.clone();
-                        // Detection runs every frame in the lifecycle block — no need to run here
+                        // The lifecycle block runs detection every frame.
                     }
                 }
                 ui::CameraDetectAction::Capture => {
-                    // Send a capture request to the background thread — the
-                    // response (polled above) will transition to Preview mode.
+                    // Send a capture request to the worker; its response switches to Preview mode.
                     if let ui::CameraDetectMode::Live {
                         camera_id,
                         ref params,

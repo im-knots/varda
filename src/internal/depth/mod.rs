@@ -1,15 +1,11 @@
-//! Depth-sensor capture manager — shared sensor sessions for N deck consumers.
+//! Depth-sensor capture manager: one shared session per sensor, read by any
+//! number of decks.
 //!
-//! One `DepthSensorManager` owns all depth capture sessions. Each physical
-//! sensor produces shared GPU textures (depth `R16Uint` + optional RGBA) that
-//! any number of decks can read from and reproject as a point cloud.
-//!
-//! Capture runs on a dedicated thread per device, mirroring `CameraManager`:
-//! the thread owns the `DepthBackend`, polls `next_frame()`, and swaps each
-//! frame into an `Arc<Mutex<Option<DepthFrame>>>`. The render thread only
-//! uploads (non-blocking `try_lock`) — it never calls into the driver.
-//!
-//! See spec/depth-sensors.md.
+//! Each sensor produces shared GPU textures (depth `R16Uint` plus optional
+//! RGBA). Capture runs on one thread per device, like `CameraManager`: the
+//! thread owns the `DepthBackend`, polls `next_frame()`, and swaps each frame
+//! into an `Arc<Mutex<Option<DepthFrame>>>`. The render thread only uploads
+//! (non-blocking `try_lock`) and never calls into the driver.
 
 pub mod backend;
 #[cfg(feature = "depth")]
@@ -29,11 +25,11 @@ use std::sync::{Arc, Mutex};
 /// Opaque depth-sensor identifier.
 pub type DepthSensorId = u32;
 
-/// Assumed inter-frame interval before two frames have been observed
-/// (Kinect v1 runs at ~30 Hz).
+/// Frame interval assumed until two frames have arrived (Kinect v1 runs at
+/// ~30 Hz).
 const DEFAULT_FRAME_DT: f32 = 1.0 / 30.0;
 
-/// An active depth capture session with its shared GPU textures.
+/// A capture session and its shared GPU textures.
 struct ActiveSensor {
     depth_texture: wgpu::Texture,
     depth_view: wgpu::TextureView,
@@ -43,22 +39,22 @@ struct ActiveSensor {
     height: u32,
     intrinsics: DepthIntrinsics,
     ref_count: u32,
-    /// Latest decoded frame — capture thread swaps in, render thread takes.
+    /// Latest frame. The capture thread swaps it in; the render thread takes it.
     frame_data: Arc<Mutex<Option<DepthFrame>>>,
     stop_flag: Arc<AtomicBool>,
     connected: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
-    /// Bumped on every GPU upload. Consumers that derive work from the sensor
-    /// image gate on this so a 30 Hz sensor does not drive 60 Hz of GPU passes.
+    /// Bumped on every upload, so consumers can skip GPU work when the 30 Hz
+    /// sensor has no new frame at a 60 Hz render rate.
     generation: u64,
-    /// Wall-clock instant of the previous upload, for real inter-frame `dt`.
+    /// Time of the previous upload, for the measured `frame_dt`.
     last_upload: Option<std::time::Instant>,
-    /// Seconds between the last two uploads. Falls back to the Kinect v1 rate
-    /// until two frames have arrived.
+    /// Seconds between the last two uploads; the Kinect v1 rate until two
+    /// frames have arrived.
     frame_dt: f32,
 }
 
-/// Manages depth-sensor enumeration, capture sessions, and shared textures.
+/// Depth-sensor enumeration, capture sessions, and shared textures.
 pub struct DepthSensorManager {
     devices: Vec<DepthDeviceInfo>,
     active: HashMap<DepthSensorId, ActiveSensor>,
@@ -80,11 +76,8 @@ impl DepthSensorManager {
         mgr
     }
 
-    /// Scan for connected depth sensors.
-    ///
-    /// With the `depth` feature this enumerates real Kinect devices via
-    /// libfreenect. Without it, no devices are reported (the mock backend is
-    /// only used for tests / explicit `open_mock`).
+    /// Scans for connected depth sensors. Without the `depth` feature it finds
+    /// none; the mock backend is opened only through `open_mock`.
     pub fn scan_devices(&mut self) {
         self.devices.clear();
         #[cfg(feature = "depth")]
@@ -108,12 +101,11 @@ impl DepthSensorManager {
         }
     }
 
-    /// Get the list of detected depth devices.
     pub fn devices(&self) -> &[DepthDeviceInfo] {
         &self.devices
     }
 
-    /// Create the shared GPU textures for a sensor of the given resolution.
+    /// Creates the shared GPU textures for a sensor resolution.
     fn create_textures(
         device: &wgpu::Device,
         id: DepthSensorId,
@@ -144,15 +136,9 @@ impl DepthSensorManager {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            // 8-bit sRGB, matching the bytes the backend actually delivers and
-            // the format `CameraManager` uses for the same kind of source.
-            //
-            // This was `COLOR_PATH_FORMAT` (`Rgba16Float`, 8 bytes/texel) while
-            // `upload_rgb` wrote RGBA8 rows at `width * 4`, so the first colour
-            // frame from a real sensor aborted the process on a wgpu validation
-            // error. The mock backend yields `rgb: None`, so no test reached it.
-            // `Srgb` rather than plain `Unorm` so the hardware decodes to linear
-            // light on sample — see spec/unified-color-pipeline.md.
+            // 8-bit sRGB: matches the RGBA8 bytes the backend delivers (the
+            // stride `upload_rgb` uses) and `CameraManager`'s format. `Srgb`
+            // so sampling decodes to linear light.
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
@@ -160,13 +146,13 @@ impl DepthSensorManager {
         (depth_texture, rgb_texture)
     }
 
-    /// Open a real depth sensor and start capturing on a dedicated thread.
-    /// Returns the sensor's resolution. If already open, increments ref count.
+    /// Opens a real depth sensor and starts capture on its own thread, or
+    /// increments the ref count if already open. Returns the resolution.
     ///
     /// # Errors
     ///
-    /// Returns an error if the Kinect device cannot be opened, or if the
-    /// capture thread cannot be spawned.
+    /// Returns an error if the Kinect cannot be opened or the capture thread
+    /// cannot be spawned.
     #[cfg(feature = "depth")]
     pub fn open(&mut self, id: DepthSensorId, device: &wgpu::Device) -> Result<(u32, u32)> {
         if let Some(active) = self.active.get_mut(&id) {
@@ -178,8 +164,8 @@ impl DepthSensorManager {
         self.start_session(id, Box::new(backend), device)
     }
 
-    /// Open a synthetic sensor (mock backend). Always available; used for tests
-    /// and for exercising the point-cloud pass without hardware.
+    /// Opens a synthetic sensor (mock backend), for tests and for running the
+    /// point-cloud pass without hardware.
     ///
     /// # Errors
     ///
@@ -199,7 +185,7 @@ impl DepthSensorManager {
         self.start_session(id, Box::new(backend), device)
     }
 
-    /// Spawn the capture thread and register the session. Shared by real/mock.
+    /// Spawns the capture thread and registers the session.
     fn start_session(
         &mut self,
         id: DepthSensorId,
@@ -255,7 +241,7 @@ impl DepthSensorManager {
         Ok((width, height))
     }
 
-    /// Background capture loop — runs on a dedicated thread per sensor.
+    /// Capture loop, one thread per sensor.
     fn capture_loop(
         id: DepthSensorId,
         backend: &mut dyn DepthBackend,
@@ -278,7 +264,7 @@ impl DepthSensorManager {
         log::info!("Depth {id} capture thread stopped");
     }
 
-    /// Upload latest frames to GPU. Non-blocking. Call once per frame.
+    /// Uploads the latest frames to the GPU without blocking. Call once per frame.
     pub fn update(&mut self, queue: &wgpu::Queue) {
         for active in self.active.values_mut() {
             let frame = match active.frame_data.try_lock() {
@@ -356,7 +342,7 @@ impl DepthSensorManager {
         self.active.get(&id).map(|a| &a.depth_view)
     }
 
-    /// RGB texture view (`Rgba8Unorm`) for per-point colour.
+    /// RGB texture view (`Rgba8UnormSrgb`) for per-point color.
     pub fn rgb_view(&self, id: DepthSensorId) -> Option<&wgpu::TextureView> {
         self.active.get(&id).map(|a| &a.rgb_view)
     }
@@ -372,17 +358,13 @@ impl DepthSensorManager {
     }
 
     /// Upload counter for an active sensor, bumped once per new frame.
-    ///
-    /// Consumers that derive GPU work from the sensor image compare this against
-    /// the value they last processed and skip when it is unchanged, so a 30 Hz
-    /// sensor does not drive 60 Hz of redundant passes.
+    /// Consumers skip GPU work while it is unchanged.
     pub fn frame_generation(&self, id: DepthSensorId) -> Option<u64> {
         self.active.get(&id).map(|a| a.generation)
     }
 
-    /// Measured seconds between the last two frame uploads. Use this rather than
-    /// the render `dt` for rate calculations — they differ whenever the deck runs
-    /// faster than the sensor.
+    /// Measured seconds between the last two uploads. Use it instead of the
+    /// render `dt` for rate math; the deck usually runs faster than the sensor.
     pub fn frame_dt(&self, id: DepthSensorId) -> Option<f32> {
         self.active.get(&id).map(|a| a.frame_dt)
     }
@@ -399,12 +381,12 @@ impl DepthSensorManager {
         self.active.contains_key(&id)
     }
 
-    /// Reference count for an active sensor (0 if not active).
+    /// Reference count, 0 if not active.
     pub fn ref_count(&self, id: DepthSensorId) -> u32 {
         self.active.get(&id).map_or(0, |a| a.ref_count)
     }
 
-    /// Release a sensor reference. Stops the capture thread at `ref_count` 0.
+    /// Releases a reference. Stops the capture thread at 0.
     pub fn release(&mut self, id: DepthSensorId) {
         if let Some(active) = self.active.get_mut(&id) {
             active.ref_count = active.ref_count.saturating_sub(1);
@@ -428,15 +410,13 @@ impl DepthSensorManager {
     }
 }
 
-/// Open a depth sensor for use, abstracting over the `depth` feature gate.
-///
-/// With the `depth` feature this opens the real Kinect backend. Without it,
-/// there are no real devices, so this returns an error (callers skip the deck
-/// with a warning, matching camera-not-found behaviour).
+/// Opens a depth sensor. Without the `depth` feature there are no devices, so
+/// it returns an error and the caller skips the deck with a warning, as for a
+/// missing camera.
 ///
 /// # Errors
 ///
-/// With the `depth` feature, propagates errors from
+/// With the `depth` feature, returns errors from
 /// [`DepthSensorManager::open`]. Without it, always returns an error.
 pub fn open_depth_sensor(
     manager: &mut DepthSensorManager,
@@ -508,8 +488,7 @@ mod tests {
         }
         assert!(first > 0, "mock backend never produced a frame");
 
-        // A second update with no newly captured frame must not advance the
-        // counter — that is what lets consumers skip redundant GPU work.
+        // An update with no new frame must not advance the counter.
         mgr.update(&gpu.queue);
         let second = mgr.frame_generation(0).expect("active");
         assert!(
@@ -517,7 +496,7 @@ mod tests {
             "generation jumped {first} -> {second} without new frames"
         );
 
-        // Unknown sensors report nothing rather than a misleading zero.
+        // Unknown sensors report `None`, not zero.
         assert_eq!(mgr.frame_generation(99), None);
         assert_eq!(mgr.frame_dt(99), None);
         mgr.release(0);
@@ -543,10 +522,9 @@ mod tests {
         let Some(gpu) = headless() else { return };
         let mut mgr = DepthSensorManager::new();
         mgr.open_mock(0, 16, 16, &gpu.device).expect("open mock");
-        // Wait for a real frame rather than a fixed sleep: the upload is the
-        // thing under test, and a `continue` on an empty slot would pass
-        // vacuously. The mock now produces colour, so this exercises the RGB
-        // path too — a wrong row stride aborts the process here.
+        // Wait for a real frame, not a fixed sleep, so the test can't pass
+        // vacuously. The mock produces color, so this covers the RGB upload
+        // path too; a wrong row stride aborts here.
         let mut uploaded = false;
         for _ in 0..200 {
             mgr.update(&gpu.queue);
@@ -564,11 +542,9 @@ mod tests {
 
     #[test]
     fn shared_texture_formats_match_the_bytes_the_backend_delivers() {
-        // Guard for the class of bug that took down a live session: the colour
-        // texture was `Rgba16Float` (8 bytes/texel) while `upload_rgb` wrote
-        // RGBA8 rows at `width * 4`, which wgpu rejects as a short row. Depth is
-        // `u16`, colour is RGBA8 — assert both against the frame layout rather
-        // than trusting the two sites to stay in agreement.
+        // Depth is `u16` and color is RGBA8. Check both texture formats against
+        // the frame layout; a mismatch makes wgpu reject the upload as a short
+        // row.
         let Some(gpu) = headless() else { return };
         let mut mgr = DepthSensorManager::new();
         mgr.open_mock(0, 16, 16, &gpu.device).expect("open mock");
@@ -589,8 +565,7 @@ mod tests {
         assert_eq!(rgb_bpt, 4, "colour frames are RGBA8");
         assert!(
             active.rgb_texture.format().is_srgb(),
-            "sensor colour is sRGB-encoded and must decode to linear light on \
-             sample — see spec/unified-color-pipeline.md"
+            "sensor color is sRGB-encoded and must decode to linear light on sample"
         );
         mgr.release(0);
     }

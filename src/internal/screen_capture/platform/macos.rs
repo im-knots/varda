@@ -1,23 +1,19 @@
-//! macOS screen/window capture via `ScreenCaptureKit`.
+//! macOS screen and window capture via `ScreenCaptureKit` (SCK).
 //!
-//! `ScreenCaptureKit` is push-based: an `SCStream` delivers `CMSampleBuffer`s to
-//! an `SCStreamOutput` delegate on a dispatch queue. The delegate repacks each
-//! frame into a tightly-packed BGRA buffer and drops it into a shared slot;
-//! [`MacosBackend::next_frame`] then takes whatever is there. The capture thread
-//! never blocks on the OS, and a stalled stream simply yields `None`.
+//! An `SCStream` pushes `CMSampleBuffer`s to an `SCStreamOutput` delegate on a
+//! dispatch queue. The delegate repacks each frame into tightly packed BGRA and
+//! puts it in a shared slot; [`MacosBackend::next_frame`] takes it. The capture
+//! thread never blocks on the OS, and a stalled stream yields `None`.
 //!
-//! Two SCK features are the reason this is a hand-written backend rather than a
-//! crate (see spec/screen-capture.md § Decision):
+//! Written directly against SCK for two features:
 //!
-//! - `SCContentFilter` can exclude specific windows from a display capture,
-//!   which is how `exclude_varda` avoids turning a full-display capture into an
-//!   infinite mirror.
+//! - `SCContentFilter` excludes windows from a display capture, which is how
+//!   `exclude_varda` prevents an infinite mirror.
 //! - `SCStreamConfiguration.width/height` scales at capture time, so a 4K
-//!   display arrives already sized for the deck instead of moving 33 MB a frame.
+//!   display arrives at deck size instead of 33 MB a frame.
 //!
-//! Frames are BGRA8 in sRGB, uploaded to a `Bgra8UnormSrgb` texture — no CPU
-//! swizzle. This is CPU readback by design; zero-copy `IOSurface` import is a
-//! measured follow-up, see spec/screen-capture.md § Decision: CPU readback first.
+//! Frames are sRGB BGRA8, uploaded to a `Bgra8UnormSrgb` texture with no CPU
+//! swizzle, through CPU readback.
 
 #![allow(unsafe_code)]
 
@@ -49,16 +45,16 @@ use crate::screen_capture::backend::{
     CaptureTargetKind, PermissionState, ScreenCaptureBackend,
 };
 
-/// `kCVPixelFormatType_32BGRA` — the four-char code SCK uses for BGRA output.
+/// `kCVPixelFormatType_32BGRA`, SCK's four-char code for BGRA output.
 const PIXEL_FORMAT_32BGRA: u32 = u32::from_be_bytes(*b"BGRA");
 
-/// How long to wait for `SCShareableContent`'s completion handler. Enumeration
-/// is a synchronous call from our side; without a bound, a wedged capture daemon
-/// would hang the render thread on a library rescan.
+/// Timeout for `SCShareableContent`'s completion handler. Enumeration blocks
+/// the caller, so a wedged capture daemon would otherwise hang the render
+/// thread on a rescan.
 const ENUMERATE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// How long to wait for `startCaptureWithCompletionHandler:`. A stream that has
-/// not started by now has failed, and reporting that beats a black deck.
+/// Timeout for `startCaptureWithCompletionHandler:`. A stream not started by
+/// then has failed, and an error is better than a black deck.
 const START_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn backend_name() -> &'static str {
@@ -66,11 +62,9 @@ pub fn backend_name() -> &'static str {
 }
 
 pub fn permission_state() -> PermissionState {
-    // `CGPreflightScreenCaptureAccess` cannot distinguish "never asked" from
-    // "refused" — both are `false`. Treating an un-granted state as
-    // `NotDetermined` is the useful lie: it makes the UI offer the request
-    // button, and the request is harmless if the answer was already no (macOS
-    // silently no-ops and the user is directed to System Settings).
+    // `CGPreflightScreenCaptureAccess` returns `false` for both "never asked"
+    // and "refused". Report `NotDetermined` so the UI offers the request
+    // button; requesting after a refusal is a silent no-op.
     if CGPreflightScreenCaptureAccess() {
         PermissionState::Granted
     } else {
@@ -79,13 +73,13 @@ pub fn permission_state() -> PermissionState {
 }
 
 pub fn request_permission() {
-    // Raises the TCC prompt on first call. The grant does not apply to the
-    // running process — macOS requires a restart — which the UI must say.
+    // Raises the TCC prompt on first call. A grant needs an app restart, which
+    // the UI must say.
     let granted = CGRequestScreenCaptureAccess();
     log::info!("Screen recording access request returned granted={granted}");
 }
 
-/// Enumerate displays and on-screen windows.
+/// Enumerates displays and on-screen windows.
 ///
 /// # Errors
 ///
@@ -97,8 +91,7 @@ pub fn enumerate() -> Result<Vec<CaptureTargetInfo>, CaptureError> {
     let our_pid = std::process::id().cast_signed();
     let mut targets = Vec::new();
 
-    // Displays first — they are the stable entries and belong at the top of the
-    // library panel.
+    // Displays first, at the top of the library panel.
     for (i, display) in unsafe { content.displays() }.iter().enumerate() {
         let (w, h) = unsafe { (display.width(), display.height()) };
         targets.push(CaptureTargetInfo {
@@ -119,7 +112,7 @@ pub fn enumerate() -> Result<Vec<CaptureTargetInfo>, CaptureError> {
         }
         let frame = unsafe { window.frame() };
         let (width, height) = (frame.size.width as u32, frame.size.height as u32);
-        // Menu-bar extras and other 1×1 helpers are noise in the picker.
+        // Skip menu-bar extras and other 1×1 helpers.
         if width < 32 || height < 32 {
             continue;
         }
@@ -146,8 +139,8 @@ pub fn enumerate() -> Result<Vec<CaptureTargetInfo>, CaptureError> {
             kind: CaptureTargetKind::Window,
             platform_id: u64::from(unsafe { window.windowID() }),
             label,
-            // Persistence matches on the bundle id when there is one: it
-            // survives an app rename, which the display name does not.
+            // Match on the bundle id when there is one; it survives an app rename,
+            // the display name does not.
             app: bundle_id.or(app_name),
             title,
             width,
@@ -159,13 +152,13 @@ pub fn enumerate() -> Result<Vec<CaptureTargetInfo>, CaptureError> {
     Ok(targets)
 }
 
-/// Open a capture stream for `target`.
+/// Opens a capture stream for `target`.
 ///
 /// # Errors
 ///
-/// Returns [`CaptureError::TargetNotFound`] if the display or window has gone
-/// away since enumeration, [`CaptureError::PermissionDenied`] if TCC refuses,
-/// or [`CaptureError::Backend`] for any SCK failure.
+/// Returns [`CaptureError::TargetNotFound`] if the display or window is gone,
+/// [`CaptureError::PermissionDenied`] if TCC refuses, or
+/// [`CaptureError::Backend`] for any SCK failure.
 pub fn open(
     target: &CaptureTargetInfo,
     config: &CaptureConfig,
@@ -194,7 +187,7 @@ fn shareable_content() -> Result<Retained<SCShareableContent>, CaptureError> {
                     .ok_or_else(|| "failed to retain SCShareableContent".to_string()))
                 .and_then(|r| r)
             };
-            // The receiver may already have timed out and gone; that is fine.
+            // The receiver may already have timed out and dropped; that is fine.
             let _ = tx.send(msg);
         },
     );
@@ -210,8 +203,8 @@ fn shareable_content() -> Result<Retained<SCShareableContent>, CaptureError> {
     match rx.recv_timeout(ENUMERATE_TIMEOUT) {
         Ok(Ok(content)) => Ok(content),
         Ok(Err(detail)) => {
-            // SCK reports a TCC refusal as a generic error, so classify it here
-            // rather than showing the user "error -3801".
+            // SCK reports a TCC refusal as a generic error; classify it here instead
+            // of showing "error -3801".
             if detail.contains("declined") || detail.contains("permission") {
                 Err(CaptureError::PermissionDenied)
             } else {
@@ -225,7 +218,7 @@ fn shareable_content() -> Result<Retained<SCShareableContent>, CaptureError> {
     }
 }
 
-/// Latest-wins frame slot shared between the SCK delegate queue and the capture
+/// Latest-wins frame slot shared by the SCK delegate queue and the capture
 /// thread.
 type FrameSlot = Arc<Mutex<Option<CaptureFrame>>>;
 
@@ -237,8 +230,8 @@ define_class!(
     // SAFETY:
     // - NSObject has no subclassing requirements.
     // - The class does not implement Drop.
-    // - It is not main-thread-only: SCK invokes the output on the dispatch queue
-    //   supplied to `addStreamOutput:type:sampleHandlerQueue:`.
+    // - Not main-thread-only: SCK calls the output on the queue passed to
+    //   `addStreamOutput:type:sampleHandlerQueue:`.
     #[unsafe(super(NSObject))]
     #[name = "VardaSCStreamOutput"]
     #[ivars = OutputIvars]
@@ -273,27 +266,23 @@ impl StreamOutput {
     }
 }
 
-/// Whether a sample buffer carries a frame worth uploading.
+/// Whether a sample buffer has a frame to upload.
 ///
-/// SCK delivers a buffer on every tick of the stream's interval, not only when
-/// the content changed, and tags each one with an `SCFrameStatus`. Only
-/// `Complete` is guaranteed to have valid pixels — `Idle` repeats a surface
-/// whose contents SCK may already have recycled, and `Blank` is explicitly
-/// empty. Uploading those interleaves stale or black frames with real ones,
-/// which reads as flicker. Apple's own capture sample filters on this, and it
-/// is the single most load-bearing line in this file.
+/// SCK delivers a buffer every interval, tagged with an `SCFrameStatus`. Only
+/// `Complete` has valid pixels: `Idle` repeats a surface SCK may have recycled
+/// and `Blank` is empty. Uploading those mixes stale or black frames in, which
+/// shows as flicker.
 ///
 /// # Safety
 ///
 /// `sample_buffer` must be a live sample buffer delivered by SCK.
 unsafe fn frame_is_complete(sample_buffer: &CMSampleBuffer) -> bool {
     let Some(attachments) = (unsafe { sample_buffer.sample_attachments_array(false) }) else {
-        // No attachments at all predates the status key; treat as usable rather
-        // than dropping every frame on an OS that does not report status.
+        // Older macOS reports no status attachments; treat the frame as usable.
         return true;
     };
-    // CFArray/CFDictionary are toll-free bridged to their NS counterparts, and
-    // the ObjC accessors are far less error-prone than raw CF index/key calls.
+    // CFArray/CFDictionary are toll-free bridged to NS types, whose ObjC
+    // accessors are safer than raw CF index/key calls.
     let attachments: &NSArray<NSDictionary<NSString, NSObject>> =
         unsafe { &*std::ptr::from_ref(&*attachments).cast() };
     let Some(info) = attachments.firstObject() else {
@@ -308,7 +297,7 @@ unsafe fn frame_is_complete(sample_buffer: &CMSampleBuffer) -> bool {
     status.integerValue() == SCFrameStatus::Complete.0
 }
 
-/// Repack a `CMSampleBuffer`'s pixel buffer into a tightly-packed BGRA frame.
+/// Repacks a `CMSampleBuffer`'s pixel buffer into a tightly packed BGRA frame.
 ///
 /// # Safety
 ///
@@ -324,7 +313,7 @@ unsafe fn frame_from_sample_buffer(sample_buffer: &CMSampleBuffer) -> Option<Cap
     if unsafe { CVPixelBufferLockBaseAddress(pixel_buffer, lock) } != 0 {
         return None;
     }
-    // Everything below must reach the matching unlock, so no `?` past here.
+    // Everything below must reach the unlock, so no `?` past here.
     let result = (|| {
         let base = CVPixelBufferGetBaseAddress(pixel_buffer);
         if base.is_null() {
@@ -337,9 +326,8 @@ unsafe fn frame_from_sample_buffer(sample_buffer: &CMSampleBuffer) -> Option<Cap
             return None;
         }
 
-        // SCK pads rows to a hardware-friendly stride. wgpu wants
-        // `bytes_per_row` we control, so repack to width*4 here — on the SCK
-        // delegate queue, off both the render thread and the capture thread.
+        // SCK pads rows to a hardware stride. Repack to width*4 for wgpu, on the
+        // SCK delegate queue, off the render and capture threads.
         let row_bytes = width * 4;
         let mut data = vec![0u8; row_bytes * height];
         for y in 0..height {
@@ -359,14 +347,12 @@ unsafe fn frame_from_sample_buffer(sample_buffer: &CMSampleBuffer) -> Option<Cap
     result
 }
 
-/// The `ObjC` objects backing a live stream.
+/// The `ObjC` objects behind a live stream.
 ///
-/// `SCStream` and friends are not `Sync`, so `Retained<_>` is not `Send` and the
-/// session cannot be moved to the capture thread as-is. They are, however,
-/// ordinary background-thread-safe `ObjC` objects — SCK explicitly drives them
-/// from its own dispatch queues and none is main-thread-only. We construct them
-/// on the calling thread, hand ownership to exactly one capture thread, and
-/// never touch them from anywhere else, so the move is sound.
+/// `SCStream` and related types are not `Sync`, so `Retained<_>` is not
+/// `Send`. They are safe to use off the main thread (SCK drives them from its
+/// own queues). They are created on the calling thread, moved to one capture
+/// thread, and used only there.
 struct StreamHandles {
     stream: Retained<SCStream>,
     output: Retained<StreamOutput>,
@@ -374,7 +360,7 @@ struct StreamHandles {
     _queue: dispatch2::DispatchRetained<DispatchQueue>,
 }
 
-// SAFETY: see `StreamHandles` docs — single-owner move, no main-thread affinity.
+// SAFETY: moved to a single owner; no main-thread affinity.
 unsafe impl Send for StreamHandles {}
 
 pub struct MacosBackend {
@@ -464,9 +450,9 @@ fn start_capture(stream: &SCStream) -> Result<(), CaptureError> {
     }
 }
 
-/// Resolve the target back onto a live `SCDisplay` / `SCWindow` and wrap it in a
-/// content filter. Display captures exclude Varda's own windows when asked —
-/// this is the mechanism behind `exclude_varda`, not a post-hoc mask.
+/// Resolves the target to a live `SCDisplay` or `SCWindow` and wraps it in a
+/// content filter. Display captures exclude Varda's windows here when
+/// `exclude_varda` is set.
 fn build_filter(
     content: &SCShareableContent,
     target: &CaptureTargetInfo,
@@ -513,14 +499,13 @@ fn build_filter(
     }
 }
 
-/// Output size after `scale_to` and crop. Crop shrinks the delivered frame so
-/// the uploaded bytes shrink with it, rather than cropping after the upload.
+/// Output size after `scale_to` and crop. Cropping at capture shrinks the
+/// uploaded bytes.
 ///
-/// `scale_to` is a bound rather than an exact extent, matching what
-/// [`Geometry::resolve`](super::super::resample::Geometry::resolve) does on the
-/// other platforms. Using it verbatim would hand `setScalesToFit` a differently
-/// shaped box, and it would letterbox the target into it — baking bars into the
-/// pixels and leaving the deck's scaling mode with nothing to do.
+/// `scale_to` is a bound, as in
+/// [`Geometry::resolve`](super::super::resample::Geometry::resolve). Passing it
+/// as-is to `setScalesToFit` would letterbox the target into that box, baking
+/// bars into the pixels and leaving the deck's scaling mode nothing to do.
 fn output_size(target: &CaptureTargetInfo, config: &CaptureConfig) -> (u32, u32) {
     let (native_w, native_h) = (target.width.max(1), target.height.max(1));
     let (base_w, base_h) = config.scale_to.map_or((native_w, native_h), |(w, h)| {
@@ -529,9 +514,9 @@ fn output_size(target: &CaptureTargetInfo, config: &CaptureConfig) -> (u32, u32)
     scaled_crop_size(base_w, base_h, config)
 }
 
-/// Apply the crop extent to a base size, keeping the result even and non-zero.
-/// SCK wants even dimensions for several pixel formats, and a zero-sized capture
-/// would be an unrecoverable stream error rather than a merely tiny one.
+/// Applies the crop extent to a base size, keeping the result even and
+/// non-zero. SCK needs even dimensions for several pixel formats, and a zero
+/// size is a fatal stream error.
 fn scaled_crop_size(base_w: u32, base_h: u32, config: &CaptureConfig) -> (u32, u32) {
     let crop = config.crop.clamped();
     let w = ((base_w as f32) * crop.w).round().max(2.0) as u32;
@@ -550,15 +535,13 @@ fn build_configuration(
         sc.setHeight(height as usize);
         sc.setPixelFormat(PIXEL_FORMAT_32BGRA);
         sc.setShowsCursor(config.show_cursor);
-        // Opaque output: the deck's default blit composites over black anyway,
-        // and a transparent desktop background is never what a VJ wants here.
+        // Opaque output: the deck blit composites over black anyway.
         sc.setShouldBeOpaque(true);
-        // Depth 3 is Apple's guidance for a live (non-recording) consumer: deep
-        // enough to absorb jitter, shallow enough not to accumulate latency.
+        // Queue depth 3 is Apple's guidance for live use: absorbs jitter without
+        // adding latency.
         sc.setQueueDepth(3);
         sc.setScalesToFit(true);
-        // Frame pacing at the source. This is what makes the 30 fps default an
-        // actual saving rather than a throttle applied after the work is done.
+        // Pace frames at the source, so a lower rate saves capture work.
         sc.setMinimumFrameInterval(CMTime {
             value: 1_000,
             timescale: (config.rate * 1_000.0) as i32,
@@ -569,8 +552,8 @@ fn build_configuration(
 
     let crop = config.crop.clamped();
     if !crop.is_full_frame() {
-        // sourceRect is in the filter's point space; we only know normalized
-        // crop, so scale it by the configured output extent.
+        // sourceRect is in the filter's point space; scale the normalized crop by
+        // the configured output extent.
         let full_w = f64::from(width) / f64::from(crop.w.max(f32::EPSILON));
         let full_h = f64::from(height) / f64::from(crop.h.max(f32::EPSILON));
         unsafe {
@@ -604,21 +587,20 @@ impl ScreenCaptureBackend for MacosBackend {
 
     fn next_frame(&mut self) -> Option<CaptureFrame> {
         let frame = self.slot.try_lock().ok()?.take()?;
-        // A stream reconfiguration lands asynchronously, so trust the frame over
-        // our own bookkeeping.
+        // A reconfiguration applies asynchronously, so trust the frame size.
         self.width = frame.width;
         self.height = frame.height;
         Some(frame)
     }
 
     fn pixel_format(&self) -> CapturePixelFormat {
-        // `PIXEL_FORMAT_32BGRA` is what the stream configuration asks for.
+        // Matches the stream configuration's `PIXEL_FORMAT_32BGRA`.
         CapturePixelFormat::Bgra8UnormSrgb
     }
 
     fn is_self_paced(&self) -> bool {
-        // `minimumFrameInterval` puts the rate in SCK's hands; the delegate
-        // pushes frames on the compositor's clock, not ours.
+        // `minimumFrameInterval` hands pacing to SCK; frames arrive on the
+        // compositor's clock.
         true
     }
 
@@ -629,8 +611,8 @@ impl ScreenCaptureBackend for MacosBackend {
         let exclusion_changed = config.exclude_varda != self.config.exclude_varda;
         self.config = config.clone();
 
-        // Recompute from the requested scale, falling back to the current output
-        // when the caller never asked for a specific size.
+        // Recompute from the requested scale, or keep the current output size if
+        // none was requested.
         let (base_w, base_h) = config.scale_to.unwrap_or((self.width, self.height));
         let (width, height) = scaled_crop_size(base_w, base_h, config);
 
@@ -642,8 +624,8 @@ impl ScreenCaptureBackend for MacosBackend {
         }
 
         if exclusion_changed {
-            // The window-exclusion set lives in the filter, not the config, so
-            // toggling `exclude_varda` needs the filter rebuilt.
+            // The window exclusion list lives in the filter, so toggling
+            // `exclude_varda` rebuilds the filter.
             log::debug!(
                 "Screen capture '{}': exclude_varda changed; filter rebuild required",
                 self.label
@@ -686,14 +668,13 @@ mod tests {
         }
     }
 
-    /// The declared format must match what the stream is configured to emit, or
-    /// the shared texture is allocated wrong and every capture starts by
-    /// throwing one away.
+    /// The declared format must match the stream's configured format, or the
+    /// shared texture is allocated in the wrong format.
     #[test]
     fn declared_pixel_format_matches_the_configured_stream_format() {
         assert_eq!(PIXEL_FORMAT_32BGRA, u32::from_be_bytes(*b"BGRA"));
-        // `MacosBackend::pixel_format` is a constant; assert the pairing here
-        // rather than opening a real stream just to read it back.
+        // `MacosBackend::pixel_format` is a constant; check the pairing without
+        // opening a real stream.
         assert_eq!(
             CapturePixelFormat::Bgra8UnormSrgb.wgpu_format(),
             wgpu::TextureFormat::Bgra8UnormSrgb
@@ -702,7 +683,7 @@ mod tests {
 
     #[test]
     fn pixel_format_constant_is_the_bgra_four_char_code() {
-        // 'BGRA' == 0x42475241. A wrong code silently yields garbage colours.
+        // 'BGRA' == 0x42475241. A wrong code yields garbage colors.
         assert_eq!(PIXEL_FORMAT_32BGRA, 0x4247_5241);
     }
 
@@ -712,7 +693,7 @@ mod tests {
             scale_to: Some((1920, 1080)),
             ..Default::default()
         };
-        // This is the whole bandwidth argument: a 4K display must not deliver 4K.
+        // A 4K display must not deliver 4K.
         assert_eq!(output_size(&target(3840, 2160), &cfg), (1920, 1080));
     }
 
@@ -739,9 +720,8 @@ mod tests {
 
     #[test]
     fn output_size_keeps_the_targets_shape_rather_than_the_requested_box() {
-        // A 4:3 window asked to fill a 16:9 deck must come back 4:3. Obeying the
-        // box literally is what made the deck's Scale control a no-op: the
-        // capture already matched the deck, so no mode had anything to change.
+        // A 4:3 window for a 16:9 deck must come back 4:3, or the deck's Scale
+        // control has nothing to change.
         let cfg = CaptureConfig {
             scale_to: Some((1920, 1080)),
             ..Default::default()

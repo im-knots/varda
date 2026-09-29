@@ -226,7 +226,7 @@ pub struct InterpolationBody {
 }
 #[derive(Deserialize, ToSchema)]
 pub struct TimebaseBody {
-    /// Which notion of time the source follows.
+    /// Which timebase the source follows.
     pub timebase: crate::timebase::Timebase,
 }
 
@@ -250,12 +250,11 @@ pub async fn update_timebase(
 
 #[derive(Deserialize, ToSchema)]
 pub struct AddAutomationLaneBody {
-    /// Modulation key of the parameter to automate, not a router path:
-    /// `deck/<uuid>/opacity`, `deck/<uuid>/video/speed`, `effect/<uuid>/param/amount`. The pre-v8 `deck_<uuid>:opacity` family is still accepted.
-    /// See /spec/modulation.md § Internal key scheme.
+    /// Modulation key of the parameter to automate: `deck/<uuid>/opacity`,
+    /// `deck/<uuid>/video/speed`, `effect/<uuid>/param/amount`. The pre-v8
+    /// `deck_<uuid>:opacity` form is also accepted.
     pub target: String,
-    /// Timebase the curve is drawn against. Defaults to `Transport`, which is
-    /// what an arrangement-authored lane uses.
+    /// Timebase the curve is drawn against. Defaults to `Transport`.
     #[serde(default = "default_automation_timebase")]
     pub timebase: crate::timebase::Timebase,
 }
@@ -266,7 +265,7 @@ fn default_automation_timebase() -> crate::timebase::Timebase {
 
 #[derive(Deserialize, ToSchema)]
 pub struct BreakpointsBody {
-    /// Replacement curve. Order does not matter; the engine sorts by position.
+    /// Replacement curve, in any order; the engine sorts it.
     pub breakpoints: Vec<crate::modulation::Breakpoint>,
 }
 
@@ -612,8 +611,6 @@ pub async fn update_step_seq_interpolation(
         Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
-
-// ── Missing Parity Routes ─────────────────────────────────────────
 
 #[derive(Deserialize, ToSchema)]
 pub struct ModAudioSourceBody {

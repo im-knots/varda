@@ -1,18 +1,12 @@
-//! Guard: every shader must declare its ISF params with the GLSL types the
-//! engine actually writes. See `docs/12-isf-authoring.md` § Input Types.
+//! Every shader declares its ISF params with the GLSL types the engine writes.
+//! See `docs/12-isf-authoring.md` § Input Types.
 //!
-//! This is a *value* contract, not a validation one — a mismatch compiles and
-//! links cleanly, builds a valid pipeline, and then silently misbehaves at
-//! runtime. It cannot be caught by pipeline creation or by pixel tests that
-//! don't happen to exercise the affected parameter.
+//! A mismatch compiles, builds a valid pipeline, and misbehaves only at
+//! runtime. For example, `ParamValue::Bool` is written as a `u32`; read as a
+//! `float`, `1` becomes the denormal `1.4e-45`, which fails `> 0.5`, so the
+//! toggle is stuck off.
 //!
-//! The bug this was written for: `invert.fs` (and four others) declared ISF
-//! `bool` inputs as `float`, but `ParamValue::Bool` is written as a `u32`. The
-//! bytes `01 00 00 00` reinterpreted as an IEEE-754 float are `1.4e-45` — a
-//! denormal that fails `> 0.5` — so every such toggle was permanently stuck
-//! off and `invert.fs` was a no-op.
-//!
-//! Pure source analysis: no GPU, runs everywhere including CI.
+//! Source analysis only; no GPU.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -58,8 +52,7 @@ fn shader_files() -> Vec<PathBuf> {
 }
 
 /// The executable source: no ISF header, no uniform block declarations, no
-/// comments. What is left is what actually runs, so a parameter appearing here
-/// is a parameter the shader applies.
+/// comments. A parameter that appears here is one the shader uses.
 fn executable_body(src: &str) -> String {
     let mut out = String::with_capacity(src.len());
     let mut rest = src;
@@ -81,7 +74,7 @@ fn executable_body(src: &str) -> String {
         .join("\n");
 
     // Drop `uniform <Block> { ... }` declarations, keeping bare `uniform
-    // sampler x;` lines (no block) as-is — they declare no parameters.
+    // sampler x;` lines; they declare no parameters.
     let mut body = String::with_capacity(no_line_comments.len());
     let mut rest = no_line_comments.as_str();
     while let Some(u) = rest.find("uniform ") {
@@ -101,8 +94,8 @@ fn executable_body(src: &str) -> String {
 }
 
 /// Collect `name -> declared_glsl_type` from every `uniform <Block> { ... }`.
-/// The params block is variously named `UserParams`, `TransitionParams`, etc.,
-/// so scan all uniform blocks rather than hard-coding one name.
+/// The params block name varies (`UserParams`, `TransitionParams`, ...), so all
+/// blocks are scanned.
 fn declared_types(src: &str) -> HashMap<String, String> {
     let mut out = HashMap::new();
     let mut rest = src;
@@ -170,7 +163,7 @@ fn isf_params_are_declared_with_the_glsl_types_the_engine_writes() {
                 bools_checked += 1;
             }
             match declared.get(pname) {
-                // Unreferenced params are legal — the shader simply ignores them.
+                // Unreferenced params are legal.
                 None => {}
                 Some(got) if got == want => {}
                 Some(got) => violations.push(format!(
@@ -187,7 +180,7 @@ fn isf_params_are_declared_with_the_glsl_types_the_engine_writes() {
         violations.len(),
         violations.join("\n  ")
     );
-    // Guard the guard: if parsing silently stops finding params this must fail.
+    // Fail if parsing stops finding params.
     assert!(
         checked > 400,
         "expected to check hundreds of params, only saw {checked}"
@@ -198,8 +191,8 @@ fn isf_params_are_declared_with_the_glsl_types_the_engine_writes() {
     );
 }
 
-/// The playback modulation targets must be distinct from each other, or two
-/// would share a key and silently drive one another.
+/// The playback modulation targets are distinct, or two would share a key and
+/// drive each other.
 #[test]
 fn playback_modulation_targets_are_unique() {
     use varda::video::modulation as vm;
@@ -229,9 +222,8 @@ fn is_word_boundary(src: &str, at: usize, len: usize) -> bool {
     before && after
 }
 
-/// `expr` with the arguments of every function call removed, so that a value
-/// consumed by `sin`, `mod` or `fract` no longer counts as present. Those bound
-/// their result, and a bounded value is not a growing one.
+/// `expr` with every function call's arguments removed, so a value inside
+/// `sin`, `mod` or `fract` no longer counts: those bound their result.
 fn without_call_arguments(expr: &str) -> String {
     let mut out = String::with_capacity(expr.len());
     let mut chars = expr.char_indices().peekable();
@@ -268,10 +260,8 @@ fn without_call_arguments(expr: &str) -> String {
     out
 }
 
-/// Top-level function bodies, so a local in one is not read as the same name in
-/// another. `particle_collider.fs` has both an arc parameter `t` and, in
-/// `main`, a phase alias `t`; without this split the first looks like the
-/// second and the guard reports a bug in correct geometry code.
+/// Top-level function bodies, so a local in one function isn't confused with
+/// the same name in another (e.g. `t` in `particle_collider.fs`).
 fn function_bodies(body: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let (mut depth, mut start) = (0usize, 0usize);
@@ -299,12 +289,12 @@ fn function_bodies(body: &str) -> Vec<&str> {
 /// four accumulators plus anything assigned from one *outside* a call.
 ///
 /// `float t = PHASE_TIME_0;` and `coord += PHASE_TIME_0;` both alias the phase.
-/// `float f = fract(PHASE_TIME_0);` does not — `fract` bounds it.
+/// `float f = fract(PHASE_TIME_0);` does not, because `fract` bounds it.
 fn growing_names(func: &str) -> std::collections::HashSet<String> {
     let mut names: std::collections::HashSet<String> =
         (0..4).map(|i| format!("PHASE_TIME_{i}")).collect();
     // Assignments can chain (`a = PHASE_TIME_0; b = a; c = b;`), so iterate.
-    // Four passes is far past the depth any shipped shader uses.
+    // Four passes exceeds any shipped shader's depth.
     for _ in 0..4 {
         for stmt in func.split(';') {
             let Some((lhs, rhs)) = stmt.split_once('=') else {
@@ -340,10 +330,9 @@ fn growing_names(func: &str) -> std::collections::HashSet<String> {
 /// Parameters in the multiplicative chain around the token at `[at, at+len)`.
 ///
 /// Walks right through `* x`, `/ x` and `* (…)`, and left through `x *`, so
-/// `PHASE_TIME_0 * 0.5 * look_speed` is caught even though the adjacent operand
-/// is a constant. The walk stops at `+`, `-`, `,` or a closing paren, which is
-/// what keeps the legitimate bounded case out: in `sin(PHASE_TIME_0) * animate`
-/// the phase is immediately followed by `)`, so `animate` is never reached.
+/// `PHASE_TIME_0 * 0.5 * look_speed` is caught. The walk stops at `+`, `-`,
+/// `,` or a closing paren, so in `sin(PHASE_TIME_0) * animate` it never
+/// reaches `animate`.
 fn chain_params(expr: &str, at: usize, len: usize, is_param: &dyn Fn(&str) -> bool) -> Vec<String> {
     let bytes = expr.as_bytes();
     let ident_at = |s: &str| -> Vec<String> {
@@ -385,9 +374,8 @@ fn chain_params(expr: &str, at: usize, len: usize, is_param: &dyn Fn(&str) -> bo
             }
             found.extend(ident_at(&expr[start..i]));
         } else {
-            // `.` is part of the operand so that a decimal literal or a
-            // swizzle does not end the walk: `PHASE_TIME_0 * 0.5 * look_speed`
-            // is exactly the shape that got past the adjacency-only check.
+            // `.` is part of the operand so a decimal literal or swizzle
+            // doesn't end the walk (`PHASE_TIME_0 * 0.5 * look_speed`).
             let start = i;
             while i < bytes.len()
                 && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'.')
@@ -395,7 +383,7 @@ fn chain_params(expr: &str, at: usize, len: usize, is_param: &dyn Fn(&str) -> bo
                 i += 1;
             }
             if i == start {
-                break; // Not an operand we understand; stop rather than guess.
+                break; // Unknown operand; stop.
             }
             found.extend(ident_at(&expr[start..i]));
         }
@@ -432,30 +420,19 @@ fn chain_params(expr: &str, at: usize, len: usize, is_param: &dyn Fn(&str) -> bo
 
 /// Every place a shader scales a growing time value by a live float parameter.
 ///
-/// `PHASE_TIME_n` grows without bound, so multiplying it by a parameter means
-/// changing that parameter multiplies a large number by a new factor and the
-/// animation teleports — the further into a set you are, the bigger the jump.
-/// That is the precise discontinuity the accumulator exists to remove, and
-/// `MULTIPLY_BY` exists so the factor goes *inside* the integral instead.
+/// `PHASE_TIME_n` grows without bound, so changing a parameter that multiplies
+/// it makes the animation jump, further the longer the set runs. `MULTIPLY_BY`
+/// puts the factor inside the integral instead.
 ///
-/// Three things have to line up for this to be both sound and useful, and each
-/// of them was a bug that shipped:
-///
-/// * The chain is walked to its end, not just the adjacent operand.
-///   `steel_lattice.fs` wrote `rot(PHASE_TIME_0 * 0.5 * look_speed)`, where the
-///   operand next to the phase is a harmless constant.
-/// * Local aliases count. `liquid_light.fs` hid behind `float t =
-///   PHASE_TIME_0;`, and `bars.fs`, `scanlines.fs` and `lines.fs` behind
+/// * The chain is walked to its end, not just the adjacent operand
+///   (`rot(PHASE_TIME_0 * 0.5 * look_speed)`).
+/// * Local aliases count: `float t = PHASE_TIME_0;`, or
 ///   `coord += PHASE_TIME_0;` followed by `fract(coord * bar_count)`.
-/// * Aliases are per function, because names repeat. `particle_collider.fs`
-///   has an arc parameter named `t` in one function and a phase alias named `t`
-///   in another; conflating them reports a bug in correct code.
+/// * Aliases are per function, because names repeat across functions.
 ///
-/// The remaining gap is interprocedural: `eyes.fs` passes `PHASE_TIME_0` into
-/// `eye(…, float t)` and scales it by `blink_speed` in the callee, which is
-/// invisible here. Following arguments across call sites is more machinery than
-/// the bug rate justifies; the behavioural test in `tests/render_correctness.rs`
-/// covers the class from the other side by measuring the jump.
+/// Not covered: phase passed into another function and scaled there (e.g.
+/// `eye(…, float t)` in `eyes.fs`). `tests/render_correctness.rs` measures the
+/// jump directly.
 fn phase_scaled_by_parameter(name: &str, src: &str) -> Vec<String> {
     let body = executable_body(src);
     let declared = declared_types(src);
@@ -484,15 +461,11 @@ fn phase_scaled_by_parameter(name: &str, src: &str) -> Vec<String> {
     found
 }
 
-/// Guard: no shipped shader multiplies accumulated phase by a live parameter.
-/// See `spec/phase-accumulators.md` § Authoring Rules.
+/// No shipped shader multiplies accumulated phase by a live parameter.
 ///
-/// Not catchable downstream: it compiles, links, builds a valid pipeline and
-/// renders a plausible frame. Only moving the fader reveals it, which in
-/// practice means only a performance does. `lagrangian.fs` and
-/// `liquid_light.fs` both shipped with a version of it.
+/// It compiles and renders plausible frames; only moving the fader shows it.
 ///
-/// Pure source analysis: no GPU, runs everywhere including CI.
+/// Source analysis only; no GPU.
 #[test]
 fn no_shader_scales_accumulated_phase_by_a_parameter() {
     let mut violations: Vec<String> = Vec::new();
@@ -541,10 +514,8 @@ layout(set = 0, binding = 1) uniform UserParams {{
     )
 }
 
-/// The guard above passes vacuously — that is the point of it — so the detector
-/// has to be shown to fail on the bugs it is meant to catch. Every positive
-/// case here is distilled from a shader that actually shipped with it, and the
-/// negative cases are shapes the library legitimately uses and must not lose.
+/// The guard above passes on the library, so check the detector fails on the
+/// bug shapes it targets and passes on shapes the library legitimately uses.
 #[test]
 fn the_phase_scaling_detector_catches_the_bug_it_guards() {
     let must_flag: &[(&str, &str)] = &[
@@ -558,8 +529,7 @@ fn the_phase_scaling_detector_catches_the_bug_it_guards() {
             "void main() { float a = PHASE_TIME_0 * (1.0 + rot_speed * 0.8); }",
         ),
         (
-            // steel_lattice.fs — the adjacent operand is an innocent constant,
-            // so an adjacency-only check reads this as clean.
+            // steel_lattice.fs: the adjacent operand is a constant.
             "a parameter further down the chain",
             "void main() { float a = PHASE_TIME_0 * 0.5 * rot_speed; }",
         ),
@@ -569,8 +539,8 @@ fn the_phase_scaling_detector_catches_the_bug_it_guards() {
             "void main() { float t = PHASE_TIME_0; float a = t * rot_speed; }",
         ),
         (
-            // bars.fs, scanlines.fs — the phase is folded into a coordinate and
-            // the multiply happens later, inside a bounding call.
+            // bars.fs, scanlines.fs: phase is added into a coordinate and
+            // multiplied later, inside a bounding call.
             "a coordinate the phase was added into",
             "void main() { float c = 0.5; c += PHASE_TIME_0; float a = fract(c * bar_count); }",
         ),
@@ -590,9 +560,8 @@ fn the_phase_scaling_detector_catches_the_bug_it_guards() {
 
     let must_not_flag: &[(&str, &str)] = &[
         (
-            // twist.fs — stepping an amplitude is a smoothing concern, not an
-            // accumulator one. This is the case that rules out simply looking
-            // for a parameter anywhere in the statement.
+            // twist.fs: stepping an amplitude is a smoothing concern. Rules out
+            // flagging any parameter in the statement.
             "a bounded function of phase scaled by a parameter",
             "void main() { float a = sin(PHASE_TIME_0) * rot_speed; }",
         ),
@@ -606,15 +575,14 @@ fn the_phase_scaling_detector_catches_the_bug_it_guards() {
         ),
         (
             // particle_collider.fs: `t` is an arc parameter in one function and
-            // a phase alias in another. Without per-function scoping the arc
-            // maths is reported as a teleport.
+            // a phase alias in another.
             "a same-named local in a different function",
             "float arcPt(float t) { return t * rot_speed; } \
              void main() { float t = PHASE_TIME_0; float a = sin(t); }",
         ),
         (
-            // The fix for bars.fs: the count multiplies position, and the phase
-            // is added after, with the count inside the integral.
+            // The bars.fs fix: the count multiplies position and the phase is
+            // added after, with the count inside the integral.
             "the shape of the fix",
             "void main() { float c = 0.5; float a = fract(c * bar_count + PHASE_TIME_0); }",
         ),

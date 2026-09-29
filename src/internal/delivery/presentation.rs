@@ -2,8 +2,7 @@
 //! Syphon server or Spout sender resolves a request to, and which modes it can
 //! offer at all. Streams and recordings answer through the same ffmpeg plan
 //! that runs when they start, so the picker cannot disagree with the outcome.
-//! Each sink calls the function for its own kind. See
-//! /spec/presentation-mode-offering.md.
+//! Each sink calls the function for its own kind.
 
 use crate::delivery::StreamingProtocol;
 use crate::engine::value::render::{
@@ -15,10 +14,9 @@ use crate::engine::value::render::{
 
 /// Every mode with the reason `resolve` cannot deliver it.
 ///
-/// A mode is deliverable when resolving it produces no fallback reason, and
-/// the reason is the one the resolver would have reported. Derived from the
-/// resolver itself rather than a capability table, so the picker cannot
-/// disagree with the outcome.
+/// A mode is deliverable when resolving it gives no fallback reason; otherwise
+/// the reason is the resolver's. Derived from the resolver, not a capability
+/// table, so the picker matches the outcome.
 pub fn modes_for(
     resolve: impl Fn(PresentationRequest) -> ResolvedPresentation,
 ) -> Vec<ModeAvailability> {
@@ -77,21 +75,13 @@ pub fn syphon_presentation(request: PresentationRequest) -> ResolvedPresentation
 
 /// What a Spout sender can carry.
 ///
-/// Unlike Syphon, which is BGRA8 and nothing else, Spout's shared textures can be
-/// `R10G10B10A2` as well, so ten-bit SDR is a real option here rather than a
-/// fallback warning.
+/// Spout textures can also be `R10G10B10A2`, so ten-bit SDR is offered. There
+/// is no HDR mode: Spout carries no transfer function, primaries or mastering
+/// metadata, so receivers could not interpret it.
 ///
-/// There is no HDR mode and there will not be one. Spout shares a texture and
-/// carries no transfer function, primaries, or mastering metadata, so declaring a
-/// float format and calling it HDR would be a private convention no receiver
-/// could honour. That is the same reasoning that rules out NDI HDR in
-/// /spec/hdr-output.md.
-///
-/// Eight-bit is listed first because order decides where a blocked request
-/// lands: an HDR request degrades to the first non-HDR entry, and BGRA8 is the
-/// interoperable one. A ten-bit request still matches exactly, since `resolve`
-/// looks for an exact depth and transfer before it considers the order.
-/// See /spec/spout-output.md § Presentation contract.
+/// Eight-bit is listed first because a blocked HDR request degrades to the
+/// first non-HDR entry, and BGRA8 is the interoperable one. A ten-bit request
+/// still matches exactly, since `resolve` checks for an exact match first.
 ///
 /// # Panics
 ///
@@ -122,7 +112,7 @@ pub fn spout_presentation(request: PresentationRequest) -> ResolvedPresentation 
 }
 
 /// What a recording with `codec` delivers for `request`, resolved by the same
-/// plan that runs when recording starts rather than assumed to be eight-bit.
+/// plan that runs when recording starts.
 pub fn recording_presentation(
     codec: &RecordingCodec,
     request: PresentationRequest,
@@ -174,14 +164,11 @@ mod tests {
             .and_then(|entry| entry.blocked)
     }
 
-    /// What a stream can carry follows its codec, so the picker follows it too.
-    /// Reported from the field as a bug: switching an output from Syphon to SRT
-    /// still showed only eight-bit. It is not stale state. SRT and HLS default to
-    /// H.264, which is eight-bit.
+    /// What a stream can carry follows its codec. SRT and HLS default to H.264,
+    /// which is eight-bit.
     ///
-    /// Asserted through the blocking *reason* rather than the resulting set,
-    /// because whether HEVC can actually carry ten bits is a fact about the
-    /// installed FFmpeg rather than about this code.
+    /// Asserts on the blocking reason rather than the set, because whether HEVC
+    /// carries ten bits depends on the installed FFmpeg.
     #[test]
     fn a_streams_blocking_reason_follows_its_codec() {
         let h264 = |r| streaming_presentation(StreamingProtocol::Srt, &StreamingCodec::H264, r);
@@ -197,9 +184,8 @@ mod tests {
             "the reason should name the codec the operator can change: {h264_reason}"
         );
 
-        // On HEVC the codec stops being the obstacle. Either the mode opens up,
-        // or the obstacle becomes the installed encoder. What must never happen
-        // is the H.264 reason surviving a codec change.
+        // On HEVC the mode is either deliverable or blocked by the installed
+        // encoder, never by the H.264 reason.
         let h265 = |r| streaming_presentation(StreamingProtocol::Hls, &StreamingCodec::H265, r);
         if let Some(reason) = blocked_reason(h265, PresentationMode::Hdr10) {
             assert!(
@@ -213,7 +199,7 @@ mod tests {
         }
     }
 
-    /// Spout carries more than Syphon does, and the picker should say so.
+    /// Spout offers ten-bit; Syphon does not.
     #[test]
     fn spout_offers_ten_bit_where_syphon_cannot() {
         assert_eq!(
@@ -226,8 +212,7 @@ mod tests {
         );
     }
 
-    /// Spout shares a texture and carries no transfer signalling, so there is no
-    /// HDR mode to offer and the reason has to say that.
+    /// Spout carries no transfer signaling, so HDR is blocked with that reason.
     #[test]
     fn spout_blocks_hdr_and_explains_that_it_carries_no_transfer() {
         for mode in [
@@ -254,7 +239,7 @@ mod tests {
         );
     }
 
-    /// The degrade lands on the interoperable format, not merely the best one.
+    /// HDR degrades to the interoperable eight-bit format, not ten-bit.
     #[test]
     fn an_hdr_request_on_spout_degrades_to_eight_bit_not_ten() {
         let resolved =
@@ -262,8 +247,8 @@ mod tests {
         assert_eq!(resolved.resolved, PresentationDepth::Sdr8);
     }
 
-    /// EDR is a display monitoring contract. No container, codec, or stream
-    /// carries it, so it must never be offered on a delivery path.
+    /// No container, codec or stream carries EDR, so delivery paths never
+    /// offer it.
     #[test]
     fn edr_is_never_offered_on_a_delivery_path() {
         let recording = |r| recording_presentation(&RecordingCodec::H265, r);
@@ -275,7 +260,7 @@ mod tests {
         assert!(!deliverable(syphon_presentation).contains(&PresentationMode::Edr));
     }
 
-    /// The request must degrade and say why, not resolve silently.
+    /// The request degrades with a reason.
     #[test]
     fn an_edr_request_on_a_recording_degrades_and_names_the_reason() {
         let resolved = recording_presentation(
@@ -296,9 +281,8 @@ mod tests {
         );
     }
 
-    /// Reported from the field: an HDR10 request on an HEVC recording showed
-    /// eight-bit before Start was pressed, because the idle resolver answered
-    /// eight-bit for every codec.
+    /// An idle HEVC recording resolves an HDR10 request by its codec, not as
+    /// blanket eight-bit.
     #[test]
     fn an_idle_hdr_recording_reports_its_codec_not_a_blanket_eight_bit() {
         let resolved = recording_presentation(

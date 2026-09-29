@@ -1,9 +1,7 @@
 //! NDI SDK dynamic loader.
 //!
-//! Wraps `libloading::Library` + function pointers for the NDI SDK.
-//! All NDI functions are accessed through the loaded SDK struct.
-//! If the SDK is not installed, `NdiSdk::load()` returns `None` and
-//! all NDI features gracefully degrade.
+//! Wraps `libloading::Library` and the NDI SDK's function pointers. If the SDK
+//! is not installed, `NdiSdk::load()` returns `None` and NDI is unavailable.
 
 use super::ffi::{
     NDIlib_find_create_t, NDIlib_find_instance_t, NDIlib_frame_type_e, NDIlib_recv_create_v3_t,
@@ -15,9 +13,8 @@ use std::os::raw::{c_char, c_uint};
 
 /// Evidence available from the dynamically loaded runtime for high-bit sending.
 ///
-/// NDI 6 documents P216 submission through the same `send_send_video_v2`
-/// symbol resolved below. The compatible v2 frame structure is compiled into
-/// this adapter, so runtime generation is the remaining capability evidence.
+/// NDI 6 documents P216 submission through `send_send_video_v2`. The v2 frame
+/// struct is compiled in, so only the runtime version needs checking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NdiSendCapability {
     runtime_major: Option<u32>,
@@ -38,7 +35,7 @@ impl NdiSendCapability {
         matches!(self.runtime_major, Some(6..)) && self.send_video_v2_resolved
     }
 
-    /// User-facing explanation for the honest UYVY fallback.
+    /// User-facing explanation for the UYVY fallback.
     pub fn p216_unavailable_reason(self) -> String {
         match self.runtime_major {
             None => "the NDI runtime version is unavailable, so P216 sending cannot be verified"
@@ -112,7 +109,7 @@ impl NdiSdk {
     }
 
     fn try_load_library() -> Option<Library> {
-        // Check app bundle Frameworks directory first (bundled NDI)
+        // Bundled NDI first.
         if let Some(lib) = Self::try_load_from_bundle() {
             return Some(lib);
         }

@@ -1,26 +1,21 @@
-//! Windows screen/window capture via Windows Graphics Capture (WGC).
+//! Windows screen and window capture via Windows Graphics Capture (WGC).
 //!
-//! WGC is push-based, like `ScreenCaptureKit`: a `Direct3D11CaptureFramePool`
-//! raises `FrameArrived` on a thread-pool thread, the handler copies the frame
-//! into a tightly-packed BGRA buffer and drops it into a shared slot, and
-//! [`WindowsBackend::next_frame`] takes whatever is there. The capture thread
-//! never blocks on the OS, and a stalled stream simply yields `None`.
+//! Push-based like `ScreenCaptureKit`: a `Direct3D11CaptureFramePool` raises
+//! `FrameArrived` on a thread-pool thread, the handler copies the frame into
+//! tightly packed BGRA in a shared slot, and [`WindowsBackend::next_frame`]
+//! takes it. The capture thread never blocks on the OS, and a stalled stream
+//! yields `None`.
 //!
-//! Two things differ from the macOS backend and shape the code below:
+//! Differences from macOS:
 //!
-//! - **The pool has no rate control.** WGC delivers on the compositor's clock,
-//!   which is the display refresh rate. `CaptureConfig.rate` is therefore
-//!   enforced in the arrival handler, *before* the GPU-to-CPU copy, so a 30 fps
-//!   capture on a 144 Hz display genuinely costs 30 readbacks a second rather
-//!   than throttling after paying for all 144.
-//! - **There is no capture-time scaling.** `SCStreamConfiguration.width/height`
-//!   has no WGC equivalent; the frame pool's size selects a region, it does not
-//!   resample. Crop is free (it becomes a smaller `CopySubresourceRegion`), but
-//!   `scale_to` costs a CPU downsample. See [`downscale`].
+//! - The pool has no rate control and delivers at the display refresh rate.
+//!   `CaptureConfig.rate` is enforced in the arrival handler before the
+//!   GPU-to-CPU copy, so 30 fps on a 144 Hz display costs 30 readbacks a second.
+//! - No capture-time scaling. Crop is a smaller `CopySubresourceRegion`, but
+//!   `scale_to` needs a CPU downsample; see [`downscale`].
 //!
-//! Frames are BGRA8 uploaded to a `Bgra8UnormSrgb` texture, so no CPU swizzle.
-//! This is CPU readback by design; sharing the D3D11 texture with wgpu is a
-//! measured follow-up, exactly as on macOS. See spec/screen-capture.md.
+//! Frames are BGRA8 uploaded to a `Bgra8UnormSrgb` texture with no CPU
+//! swizzle, through CPU readback.
 
 #![allow(unsafe_code)]
 
@@ -69,11 +64,12 @@ use crate::screen_capture::backend::{
     CaptureTargetKind, PermissionState, ScreenCaptureBackend,
 };
 
-/// Buffers in the capture frame pool. Matching the macOS `queueDepth`: deep
-/// enough to absorb compositor jitter, shallow enough not to bank latency.
+/// Frame pool buffers. Same as the macOS `queueDepth`: absorbs compositor
+/// jitter without adding latency.
 const FRAME_POOL_BUFFERS: i32 = 3;
 
-/// Menu-bar-extra equivalents: tiny helper windows that are noise in the picker.
+/// Size threshold below which windows are helpers (like menu-bar extras) and
+/// are skipped.
 const MIN_WINDOW_EDGE: i32 = 32;
 
 pub fn backend_name() -> &'static str {
@@ -81,21 +77,20 @@ pub fn backend_name() -> &'static str {
 }
 
 pub fn permission_state() -> PermissionState {
-    // Windows has no capture permission gate. WGC does draw a yellow border
-    // around the captured target on most builds, which is the OS's chosen
-    // consent signal and cannot be suppressed without a packaged-app identity.
+    // Windows has no capture permission. WGC draws a yellow border around the
+    // target on most builds; it cannot be turned off without a packaged-app
+    // identity.
     PermissionState::NotRequired
 }
 
 pub fn request_permission() {}
 
-/// Enumerate monitors and top-level windows.
+/// Enumerates monitors and top-level windows.
 ///
 /// # Errors
 ///
-/// Returns [`CaptureError::Backend`] if this build of Windows has no Graphics
-/// Capture support (pre-1903), which is the one case where an empty list would
-/// otherwise look like "no displays attached".
+/// Returns [`CaptureError::Backend`] if this Windows build lacks Graphics
+/// Capture (pre-1903), so an empty list is not mistaken for "no displays".
 pub fn enumerate() -> Result<Vec<CaptureTargetInfo>, CaptureError> {
     ensure_supported()?;
     let mut targets = enumerate_monitors();
@@ -103,14 +98,13 @@ pub fn enumerate() -> Result<Vec<CaptureTargetInfo>, CaptureError> {
     Ok(targets)
 }
 
-/// Open a capture session for `target`.
+/// Opens a capture session for `target`.
 ///
 /// # Errors
 ///
 /// Returns [`CaptureError::Unavailable`] on a build without WGC,
-/// [`CaptureError::TargetNotFound`] if the monitor or window has gone away
-/// since enumeration, or [`CaptureError::Backend`] for any D3D11 or `WinRT`
-/// failure.
+/// [`CaptureError::TargetNotFound`] if the monitor or window is gone, or
+/// [`CaptureError::Backend`] for any D3D11 or `WinRT` failure.
 pub fn open(
     target: &CaptureTargetInfo,
     config: &CaptureConfig,
@@ -120,9 +114,9 @@ pub fn open(
 }
 
 fn ensure_supported() -> Result<(), CaptureError> {
-    // Keeps the process in the MTA for as long as it runs. WGC's free-threaded
-    // frame pool needs an initialized apartment, and this is the only way to
-    // get one without imposing a threading model on threads we do not own.
+    // Keeps the process in the MTA for its lifetime. WGC's free-threaded frame
+    // pool needs an initialized apartment, and this avoids setting a threading
+    // model on threads Varda does not own.
     static MTA: OnceLock<()> = OnceLock::new();
     MTA.get_or_init(|| unsafe {
         let _ = CoIncrementMTAUsage();
@@ -142,8 +136,8 @@ fn ensure_supported() -> Result<(), CaptureError> {
 
 // ── Enumeration ─────────────────────────────────────────────────────
 
-/// Collected by the `EnumDisplayMonitors` / `EnumWindows` callbacks, which can
-/// only carry a raw pointer across the FFI boundary.
+/// Filled by the `EnumDisplayMonitors` / `EnumWindows` callbacks, which take
+/// only a raw pointer across FFI.
 struct Collector {
     targets: Vec<CaptureTargetInfo>,
     our_pid: u32,
@@ -158,9 +152,8 @@ fn enumerate_monitors() -> Vec<CaptureTargetInfo> {
     unsafe {
         let _ = EnumDisplayMonitors(None, None, Some(monitor_proc), lparam);
     }
-    // The enumeration order is not stable across hot-plug, so number the
-    // entries as they arrive and let identity matching work off the label —
-    // the same contract the macOS backend has.
+    // Enumeration order changes on hot-plug, so number entries as they arrive
+    // and match identity on the label, as on macOS.
     for (i, t) in collector.targets.iter_mut().enumerate() {
         t.label = format!("Display {}", i + 1);
     }
@@ -217,20 +210,18 @@ unsafe extern "system" fn window_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     BOOL::from(true)
 }
 
-/// Build a target for `hwnd`, or `None` if it is not something a performer
-/// would recognise as a window.
+/// Builds a target for `hwnd`, or `None` if it is not a user-facing window.
 unsafe fn describe_window(hwnd: HWND, our_pid: u32) -> Option<CaptureTargetInfo> {
     if !unsafe { IsWindowVisible(hwnd) }.as_bool() {
         return None;
     }
-    // Tool windows are palettes and tooltips; nobody drags those onto a deck.
+    // Skip tool windows (palettes, tooltips).
     let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
     if ex_style & WS_EX_TOOLWINDOW.0 != 0 {
         return None;
     }
-    // Cloaked windows are visible by every legacy test yet render nothing:
-    // suspended UWP apps and virtual-desktop ghosts. Without this the picker
-    // fills up with entries that capture pure black.
+    // Cloaked windows pass every legacy visibility test but render nothing
+    // (suspended UWP apps, other virtual desktops). They would capture black.
     if unsafe { is_cloaked(hwnd) } {
         return None;
     }
@@ -262,8 +253,8 @@ unsafe fn describe_window(hwnd: HWND, our_pid: u32) -> Option<CaptureTargetInfo>
         kind: CaptureTargetKind::Window,
         platform_id: hwnd.0 as u64,
         label,
-        // The executable name is the closest Windows equivalent to a bundle
-        // id: it survives a retitle, which is what persistence matches on.
+        // The executable name stands in for a bundle id: it survives a retitle,
+        // and persistence matches on it.
         app,
         title: Some(title),
         width: width as u32,
@@ -298,8 +289,8 @@ unsafe fn window_title(hwnd: HWND) -> String {
     String::from_utf16_lossy(&buf[..written as usize])
 }
 
-/// Executable file stem for `pid`, e.g. `firefox`. `None` for processes we are
-/// not allowed to query, which is normal for elevated and system processes.
+/// Executable file stem for `pid`, e.g. `firefox`. `None` when the process
+/// cannot be queried, which is normal for elevated and system processes.
 unsafe fn process_name(pid: u32) -> Option<String> {
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
     let mut buf = [0u16; 260];
@@ -312,7 +303,7 @@ unsafe fn process_name(pid: u32) -> Option<String> {
             &raw mut len,
         )
     };
-    // The handle is ours and nothing else can be holding it.
+    // The handle is owned here and held nowhere else.
     let _ = unsafe { windows::Win32::Foundation::CloseHandle(handle) };
     ok.ok()?;
     let path = String::from_utf16_lossy(&buf[..len as usize]);
@@ -323,34 +314,32 @@ unsafe fn process_name(pid: u32) -> Option<String> {
 
 // ── Capture session ─────────────────────────────────────────────────
 
-/// Latest-wins frame slot shared between the WGC thread pool and the capture
+/// Latest-wins frame slot shared by the WGC thread pool and the capture
 /// thread.
 type FrameSlot = Arc<Mutex<Option<CaptureFrame>>>;
 
-/// Everything the arrival handler needs, in one allocation so the closure can
-/// hold a single `Arc`.
+/// State for the arrival handler, in one allocation so the closure holds a
+/// single `Arc`.
 struct ArrivalState {
     slot: FrameSlot,
-    /// Live geometry: `(crop_box, output_width, output_height)`. Swapped
-    /// wholesale by `set_config` so the handler never sees a half-applied
-    /// change and copies a region that does not match the size it reports.
+    /// Live geometry: `(crop_box, output_width, output_height)`. `set_config`
+    /// replaces it as a whole so the handler never copies a region that
+    /// disagrees with the size it reports.
     geometry: Mutex<Geometry>,
-    /// Rate gate. Held here rather than read from the config so the handler
-    /// does not take the geometry lock on every discarded frame.
+    /// Rate gate. Kept separate from the config so discarded frames skip the
+    /// geometry lock.
     min_interval: Mutex<Duration>,
     last_delivered: Mutex<Option<Instant>>,
-    /// Set once the pool has been asked to stop, so a frame still in flight
-    /// does not resurrect the session.
+    /// Set when the pool is stopping, so an in-flight frame does not revive the
+    /// session.
     stopped: Arc<AtomicBool>,
 }
 
-/// The COM/WinRT objects backing a live capture.
+/// The COM/WinRT objects behind a live capture.
 ///
-/// None of these is apartment-affine once the process is in the MTA, and the
-/// session is constructed on the calling thread then owned by exactly one
-/// capture thread. The `windows` crate marks them `!Send` because a single-
-/// threaded-apartment caller *could* pin them; we opt out of that
-/// conservatism, and the single-owner move is what makes it sound.
+/// In the MTA none of them is apartment-bound. The `windows` crate marks them
+/// `!Send` because an STA caller could pin them; here they are created on the
+/// calling thread and moved to one capture thread, which owns them alone.
 struct SessionHandles {
     _item: GraphicsCaptureItem,
     _device: ID3D11Device,
@@ -359,7 +348,7 @@ struct SessionHandles {
     session: GraphicsCaptureSession,
 }
 
-// SAFETY: see `SessionHandles` docs — MTA-resident objects, single-owner move.
+// SAFETY: MTA objects moved to a single owner; see `SessionHandles`.
 unsafe impl Send for SessionHandles {}
 
 pub struct WindowsBackend {
@@ -420,8 +409,8 @@ impl WindowsBackend {
         let session = frame_pool
             .CreateCaptureSession(&item)
             .map_err(|e| CaptureError::Backend(format!("capture session creation failed: {e}")))?;
-        // Both are post-1903 additions and throw on older builds, where the
-        // OS behaviour (cursor shown, border drawn) is simply not adjustable.
+        // Both need 1903 or later and throw on older builds, where cursor and
+        // border cannot be changed.
         let _ = session.SetIsCursorCaptureEnabled(config.show_cursor);
         let _ = session.SetIsBorderRequired(false);
         session
@@ -455,7 +444,7 @@ impl WindowsBackend {
     }
 }
 
-/// Resolve a target back onto a live monitor or window and wrap it in a
+/// Resolves a target to a live monitor or window and wraps it in a
 /// `GraphicsCaptureItem`.
 fn capture_item(target: &CaptureTargetInfo) -> Result<GraphicsCaptureItem, CaptureError> {
     let interop: IGraphicsCaptureItemInterop =
@@ -471,8 +460,8 @@ fn capture_item(target: &CaptureTargetInfo) -> Result<GraphicsCaptureItem, Captu
 }
 
 fn create_d3d_device() -> Result<(ID3D11Device, ID3D11DeviceContext), CaptureError> {
-    // WARP is the documented fallback for machines with no hardware device
-    // available to this session (RDP, some VMs). Capture still works, slower.
+    // WARP is the fallback when the session has no hardware device (RDP,
+    // some VMs). Capture works, slower.
     for driver in [D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP] {
         let mut device: Option<ID3D11Device> = None;
         let mut context: Option<ID3D11DeviceContext> = None;
@@ -481,8 +470,8 @@ fn create_d3d_device() -> Result<(ID3D11Device, ID3D11DeviceContext), CaptureErr
                 None,
                 driver,
                 HMODULE::default(),
-                // WGC surfaces are BGRA, and the runtime refuses to hand them
-                // to a device that did not ask for BGRA support.
+                // WGC surfaces are BGRA, and the runtime rejects devices created
+                // without BGRA support.
                 D3D11_CREATE_DEVICE_BGRA_SUPPORT,
                 None,
                 D3D11_SDK_VERSION,
@@ -513,12 +502,11 @@ fn winrt_device(device: &ID3D11Device) -> Result<IDirect3DDevice, CaptureError> 
         .map_err(|e| CaptureError::Backend(format!("WinRT device cast failed: {e}")))
 }
 
-/// `FrameArrived` handler. Runs on a WGC thread-pool thread.
+/// `FrameArrived` handler, on a WGC thread-pool thread.
 ///
-/// The rate gate is checked before anything expensive: WGC delivers at the
-/// compositor's refresh rate and a discarded frame must cost only a
-/// `TryRecycle`, or a 30 fps capture on a 144 Hz display would still pay for
-/// 144 GPU-to-CPU copies a second.
+/// Checks the rate gate first so a discarded frame costs only a
+/// `TryRecycle`; otherwise 30 fps on a 144 Hz display would still pay for 144
+/// GPU-to-CPU copies a second.
 fn on_frame_arrived(
     pool: &Direct3D11CaptureFramePool,
     context: &ID3D11DeviceContext,
@@ -567,10 +555,10 @@ fn on_frame_arrived(
     }
 }
 
-/// Copy the cropped region of a GPU texture into a tightly-packed BGRA frame.
+/// Copies the cropped region of a GPU texture into a tightly packed BGRA
+/// frame.
 ///
-/// Returns `None` on any D3D failure: a dropped frame is always better than a
-/// torn one, and the next arrival is 16 ms away.
+/// Returns `None` on any D3D failure; dropping a frame beats a torn one.
 fn read_back(
     context: &ID3D11DeviceContext,
     texture: &ID3D11Texture2D,
@@ -579,9 +567,9 @@ fn read_back(
     let mut desc = D3D11_TEXTURE2D_DESC::default();
     unsafe { texture.GetDesc(&raw mut desc) };
 
-    // The pool hands back the frame at the target's *current* size, which can
-    // differ from the size the crop was computed against if the window was
-    // resized between arrivals. Clamp rather than reading out of bounds.
+    // The frame has the target's current size, which may differ from the size
+    // the crop was computed for if the window was resized. Clamp instead of
+    // reading out of bounds.
     let src_x = geometry.src_x.min(desc.Width.saturating_sub(1));
     let src_y = geometry.src_y.min(desc.Height.saturating_sub(1));
     let src_w = geometry.src_w.min(desc.Width - src_x).max(1);
@@ -622,7 +610,7 @@ fn read_back(
 
     let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
     unsafe { context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&raw mut mapped)) }.ok()?;
-    // Everything below must reach the matching Unmap, so no `?` past here.
+    // Everything below must reach the Unmap, so no `?` past here.
     let packed = {
         let row_bytes = (src_w as usize) * 4;
         let stride = mapped.RowPitch as usize;
@@ -670,8 +658,7 @@ impl ScreenCaptureBackend for WindowsBackend {
 
     fn next_frame(&mut self) -> Option<CaptureFrame> {
         let frame = self.state.slot.try_lock().ok()?.take()?;
-        // A resize lands asynchronously, so trust the frame over our own
-        // bookkeeping.
+        // A resize applies asynchronously, so trust the frame size.
         self.width = frame.width;
         self.height = frame.height;
         Some(frame)
@@ -683,9 +670,8 @@ impl ScreenCaptureBackend for WindowsBackend {
     }
 
     fn is_self_paced(&self) -> bool {
-        // The arrival handler enforces `rate`, so the manager's capture thread
-        // must oversample rather than run a second clock at the same nominal
-        // frequency. See `ScreenCaptureBackend::is_self_paced`.
+        // The arrival handler enforces `rate`, so the capture thread must
+        // oversample. See `ScreenCaptureBackend::is_self_paced`.
         true
     }
 
@@ -715,8 +701,8 @@ impl ScreenCaptureBackend for WindowsBackend {
 
 impl Drop for WindowsBackend {
     fn drop(&mut self) {
-        // Order matters: flag first, so a frame already dispatched to the
-        // thread pool returns without touching a half-torn-down session.
+        // Set the flag first so a frame already dispatched returns without
+        // touching a half-dismantled session.
         self.stopped.store(true, Ordering::Relaxed);
         let _ = self.handles.session.Close();
         let _ = self.handles.frame_pool.Close();

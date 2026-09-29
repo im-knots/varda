@@ -1,6 +1,5 @@
-//! Editing the arrangement the mixer plays: lanes, regions, cues, and what the
-//! show does when idle. Lanes and regions are ordinary scene data, so every
-//! edit here is undoable through the command path. See /spec/arrangement.md.
+//! Editing the arrangement the mixer plays: lanes, regions, cues, and idle behavior. All of it
+//! is scene data, so every edit is undoable through the command path.
 
 use super::Mixer;
 use crate::arrangement::{Cue, IdleBehaviour, LaneConfig, RegionConfig};
@@ -41,8 +40,8 @@ impl Mixer {
 
     /// Add a lane for a deck, or keep the existing one.
     ///
-    /// A lane *is* the deck, so this creates no entity and is idempotent: two
-    /// callers racing to arrange the same deck must not produce two rows.
+    /// Idempotent: a lane is the deck's placement, not a separate entity, so two callers arranging
+    /// the same deck produce one row.
     ///
     /// # Errors
     ///
@@ -58,14 +57,11 @@ impl Mixer {
         Ok(())
     }
 
-    /// Take a lane and its curves out of the scene, handing the deck back to
-    /// Performance mode. Reports whether there was one.
+    /// Remove a lane and its curves, returning the deck to Performance mode. Reports whether there
+    /// was one.
     ///
-    /// Also the teardown a deck's own removal runs: a lane is a deck's placement
-    /// rather than an object beside it, so a deck that is gone cannot keep one.
-    /// An orphan lane draws no row (rows are read from the mixer's decks) but
-    /// still saves, and its envelopes still drive a parameter key nothing
-    /// answers to.
+    /// Also runs when the deck itself is removed. An orphan lane draws no row but still saves, and
+    /// its envelopes still drive a parameter key nothing reads.
     pub fn drop_lane(&mut self, deck_uuid: &str) -> bool {
         let Some(envelopes) = self
             .arrangement()
@@ -78,8 +74,8 @@ impl Mixer {
         else {
             return false;
         };
-        // Envelopes belong to the modulation graph, so removing the row has to
-        // take them with it or the deck stays driven by an orphan curve.
+        // Envelopes live in the modulation graph, so remove them too or the deck stays driven by an
+        // orphan curve.
         for uuid in &envelopes {
             self.modulation_mut().remove_source(uuid);
         }
@@ -174,7 +170,7 @@ impl Mixer {
 
     /// # Errors
     ///
-    /// Returns an error if the behaviour shows a deck that does not exist.
+    /// Returns an error if the idle behavior shows a deck that does not exist.
     pub fn set_idle_behaviour(&mut self, idle: IdleBehaviour) -> Edit<()> {
         if let IdleBehaviour::ShowDeck { deck_uuid } = &idle
             && self.find_deck_by_uuid(deck_uuid).is_none()
@@ -187,9 +183,7 @@ impl Mixer {
 
     /// Mark an instant worth returning to. Returns the cue's UUID.
     ///
-    /// An empty name is filled in from how many cues exist, so the common case
-    /// (drop one and keep working) still produces something the arrows can be
-    /// read against.
+    /// An empty name is filled in from the cue count.
     ///
     /// # Errors
     ///
@@ -214,8 +208,7 @@ impl Mixer {
         Ok(uuid)
     }
 
-    /// Move or rename a cue. Absent fields are left alone, so a drag does not
-    /// have to restate the name.
+    /// Move or rename a cue. `None` fields are left unchanged.
     ///
     /// # Errors
     ///

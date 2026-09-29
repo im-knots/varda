@@ -1,33 +1,29 @@
 //! Which notion of "now" a consumer follows.
 //!
-//! Varda runs several independent clocks: wall time since engine start, musical
-//! time from [`crate::clock::ClockManager`], and (from the transport onward)
-//! absolute show position. A [`Timebase`] names one of them, a [`TimeContext`]
-//! is one of them resolved for the current frame, and a [`TimebaseSet`] is all
-//! of them resolved together so a consumer can pick per item without re-reading
-//! any source.
-//!
-//! See /spec/timebase.md.
+//! Varda has several clocks: wall time since engine start, musical time from
+//! [`crate::clock::ClockManager`], and show position from the transport. A
+//! [`Timebase`] names one, a [`TimeContext`] is one resolved for the current
+//! frame, and a [`TimebaseSet`] holds all of them resolved, so a consumer can
+//! pick per item without re-reading any source.
 
 use serde::{Deserialize, Serialize};
 
 /// Which notion of time a consumer follows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum Timebase {
-    /// Wall clock since engine start. The default, and the behaviour every
-    /// modulation source had before timebases existed.
+    /// Wall clock since engine start. The default.
     #[default]
     FreeRun,
     /// Musical time in beats, derived from the resolved clock. An LFO at
     /// `frequency = 1.0` completes one cycle per beat.
     Beat,
-    /// Absolute show position in seconds, read from the transport. Frozen until
-    /// the transport has run, which is what keeps a cold start honest.
+    /// Absolute show position in seconds, from the transport. Frozen until the
+    /// transport has run.
     Transport,
 }
 
 impl Timebase {
-    /// Label used by the UI and by API responses.
+    /// Label for the UI and API responses.
     pub fn label(self) -> &'static str {
         match self {
             Timebase::FreeRun => "Free",
@@ -36,14 +32,12 @@ impl Timebase {
         }
     }
 
-    /// Every variant, in the order the UI presents them.
+    /// Every variant, in UI order.
     pub const ALL: [Timebase; 3] = [Timebase::FreeRun, Timebase::Beat, Timebase::Transport];
 }
 
-/// The transport sampled for one frame.
-///
-/// `None` in [`TimebaseInput`] means the transport is not yet a usable position
-/// source (it has never run), which freezes every transport-locked consumer.
+/// The transport sampled for one frame. `None` in [`TimebaseInput`] means the
+/// transport has never run, which freezes every transport-locked consumer.
 #[derive(Debug, Clone, Copy)]
 pub struct TransportSample {
     /// Absolute position in seconds, at full precision.
@@ -89,8 +83,7 @@ pub struct TimebaseSet {
 }
 
 impl TimebaseSet {
-    /// Build a set directly. Used by tests and by callers that already hold
-    /// resolved contexts; the engine goes through [`TimebaseResolver`].
+    /// Builds a set directly. The engine uses [`TimebaseResolver`] instead.
     pub fn new(free_run: TimeContext, beat: TimeContext, transport: TimeContext) -> Self {
         Self {
             free_run,
@@ -100,8 +93,8 @@ impl TimebaseSet {
         }
     }
 
-    /// A set where every timebase reports the same free-running seconds. Used
-    /// by call sites that have no clock (benchmarks, headless tests).
+    /// A set where every timebase reports the same free-running seconds, for
+    /// callers with no clock (benchmarks, headless tests).
     pub fn free_running(time: f32, dt: f32) -> Self {
         let ctx = TimeContext {
             time,
@@ -125,20 +118,16 @@ impl TimebaseSet {
         }
     }
 
-    /// Show position at full precision.
-    ///
-    /// `TimeContext::time` narrows to `f32`, which is ample for an oscillator
-    /// but not for resolving an automation breakpoint an hour into a show. Kept
-    /// off `TimeContext` deliberately: that struct is copied per source in the
-    /// modulation loop, and widening it would cost the hot path for a value
-    /// almost nothing reads. See /spec/timebase.md § Precision.
+    /// Show position at full precision. `TimeContext::time` is `f32`, too
+    /// coarse for automation breakpoints late in a show. Kept off
+    /// `TimeContext` because that struct is copied per source in the
+    /// modulation hot loop.
     pub fn transport_position(&self) -> f64 {
         self.transport_position
     }
 
-    /// The free-run context, which is always available. Sources that ignore
-    /// their timebase (envelope followers, ADSR) read this regardless of what
-    /// they are set to.
+    /// The free-run context, always available. Sources that ignore their
+    /// timebase (envelope followers, ADSR) read this.
     pub fn free_run(&self) -> &TimeContext {
         &self.free_run
     }
@@ -156,9 +145,8 @@ pub struct TimebaseInput {
     pub transport: Option<TransportSample>,
 }
 
-/// Turns raw per-frame samples into a [`TimebaseSet`], carrying the last known
-/// position of each source so an unavailable timebase freezes rather than
-/// snapping to zero.
+/// Turns per-frame samples into a [`TimebaseSet`]. Keeps each source's last
+/// position so an unavailable timebase freezes instead of snapping to zero.
 #[derive(Debug, Default)]
 pub struct TimebaseResolver {
     free_run: TimeContext,
@@ -172,7 +160,7 @@ impl TimebaseResolver {
         Self::default()
     }
 
-    /// Resolve every timebase for this frame. Call once per frame, before any
+    /// Resolves every timebase for this frame. Call once per frame, before any
     /// consumer reads time.
     pub fn resolve(&mut self, input: TimebaseInput) -> TimebaseSet {
         self.free_run = TimeContext {
@@ -184,8 +172,8 @@ impl TimebaseResolver {
 
         self.beat = match input.beat_time {
             Some(beats) => {
-                // Beats are accumulated as f64 so a long show does not lose
-                // resolution; the delta is small and narrows safely.
+                // Beats accumulate as f64 to keep resolution in long shows; the
+                // delta is small and narrows safely.
                 let time = beats as f32;
                 TimeContext {
                     time,
@@ -195,14 +183,12 @@ impl TimebaseResolver {
                         0.0
                     },
                     running: true,
-                    // A clock coming back after a dropout is a jump, not a
-                    // smooth advance, so integrating consumers are told.
+                    // A clock returning after a dropout is a jump.
                     discontinuity: !self.beat.running,
                 }
             }
-            // Hold the last beat position. Freezing is honest: a modulator
-            // locked to a clock that has gone away holds its look instead of
-            // silently reverting to free-run.
+            // Hold the last beat position, so a modulator whose clock is gone
+            // keeps its look instead of reverting to free-run.
             None => TimeContext {
                 dt: 0.0,
                 running: false,
@@ -216,8 +202,8 @@ impl TimebaseResolver {
                 let time = sample.position as f32;
                 let ctx = TimeContext {
                     time,
-                    // Derived from the f64 positions rather than the narrowed
-                    // values, so a frame delta stays exact deep into a show.
+                    // Computed from the f64 positions so the delta stays exact
+                    // late in a show.
                     dt: if self.transport.running {
                         (sample.position - self.transport_position) as f32
                     } else {
@@ -229,9 +215,9 @@ impl TimebaseResolver {
                 self.transport_position = sample.position;
                 ctx
             }
-            // The transport has never run. Freezing is what keeps a cold start
-            // honest: a missing timecode cable holds the saved look rather than
-            // driving everything to a pre-show value.
+            // The transport has never run. Freeze, so a missing timecode cable
+            // holds the saved look instead of driving everything to a pre-show
+            // value.
             None => TimeContext {
                 dt: 0.0,
                 running: false,
@@ -408,8 +394,8 @@ mod tests {
         assert!((ctx.dt - 0.5).abs() < 1e-4);
     }
 
-    /// A cold start with no transport must hold, not drive everything to a
-    /// pre-show value. See /spec/transport.md § Engagement.
+    /// A cold start with no transport holds instead of driving everything to a
+    /// pre-show value.
     #[test]
     fn transport_freezes_until_it_has_run() {
         let mut r = TimebaseResolver::new();
@@ -470,8 +456,8 @@ mod tests {
         assert!(set.get(Timebase::Transport).discontinuity);
     }
 
-    /// An hour into a show, `f32` seconds quantise to about 0.25 ms, which is
-    /// fine for an oscillator and not fine for an automation breakpoint.
+    /// An hour into a show, `f32` seconds quantize to about 0.25 ms, too
+    /// coarse for an automation breakpoint.
     #[test]
     fn full_precision_position_survives_a_long_show() {
         let mut r = TimebaseResolver::new();
@@ -492,8 +478,8 @@ mod tests {
         assert_eq!(*set.free_run(), *set.get(Timebase::FreeRun));
     }
 
-    /// Scenes store the timebase by name, so renaming a variant would silently
-    /// reinterpret saved shows.
+    /// Scenes store the timebase by name, so renaming a variant would change
+    /// the meaning of saved shows.
     #[test]
     fn variants_serialize_by_name() {
         assert_eq!(
@@ -507,8 +493,7 @@ mod tests {
         );
     }
 
-    /// The names are a persisted format: a scene written by any build has to
-    /// keep meaning the same thing, so a rename is a scene migration.
+    /// The names are a persisted format; a rename needs a scene migration.
     #[test]
     fn every_variant_round_trips_through_its_name() {
         for timebase in Timebase::ALL {
@@ -518,8 +503,7 @@ mod tests {
         }
     }
 
-    /// A scene written before timebases existed has no field at all, and must
-    /// open free-running rather than failing to parse.
+    /// Scenes without a timebase field open as free-running.
     #[test]
     fn an_absent_timebase_reads_as_free_run() {
         #[derive(serde::Deserialize)]

@@ -1,27 +1,18 @@
-//! Linux screen/window capture — XDG Desktop Portal + `PipeWire` on Wayland,
-//! X11 otherwise.
+//! Linux screen and window capture: XDG Desktop Portal plus `PipeWire` on
+//! Wayland, X11 otherwise.
 //!
-//! Unlike macOS and Windows, "Linux" is two unrelated capture stacks with
-//! opposite security models, so the provider dispatches on the session type at
-//! runtime rather than at compile time. One binary has to serve both: distro
-//! packages are built once, and a user can log out of Wayland into an X11
-//! session without changing the executable.
+//! The session type is detected at runtime so one binary serves both, since a
+//! user can switch between Wayland and X11 sessions.
 //!
-//! - **Wayland.** The compositor never lets a client read the screen. Capture
-//!   goes through `org.freedesktop.portal.ScreenCast`, which shows the
-//!   compositor's own picker and hands back a `PipeWire` node. Varda therefore
-//!   cannot enumerate targets: see [`wayland::enumerate`] for what the library
-//!   panel shows instead.
-//! - **X11.** No access control at all, and no event-driven capture API, so the
-//!   backend polls `GetImage` (over MIT-SHM where available) at
-//!   `CaptureConfig.rate`.
+//! - Wayland: clients cannot read the screen. Capture goes through
+//!   `org.freedesktop.portal.ScreenCast`, which shows the compositor's picker
+//!   and returns a `PipeWire` node, so Varda cannot enumerate targets; see
+//!   [`wayland::enumerate`].
+//! - X11: no access control and no event-driven capture, so the backend polls
+//!   `GetImage` (over MIT-SHM where available) at `CaptureConfig.rate`.
 //!
-//! XWayland deliberately resolves to the Wayland branch. A Varda running under
-//! XWayland has `DISPLAY` set and X11 would appear to work, but it would only
-//! ever see other XWayland clients and the root window would come back blank —
-//! a plausible-looking black capture is worse than the portal dialog.
-//!
-//! See spec/screen-capture.md § Platform Support.
+//! XWayland uses the Wayland path. Under XWayland `DISPLAY` is set, but X11
+//! capture sees only other XWayland clients and the root window is blank.
 
 pub mod wayland;
 pub mod x11;
@@ -30,19 +21,19 @@ use crate::screen_capture::backend::{
     CaptureConfig, CaptureError, CaptureTargetInfo, PermissionState, ScreenCaptureBackend,
 };
 
-/// Which display server this process is talking to.
+/// The display server this process uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Session {
     Wayland,
     X11,
 }
 
-/// Detect the session type from the environment.
+/// Detects the session type from the environment.
 ///
-/// `WAYLAND_DISPLAY` is the load-bearing signal — it is set by the compositor
-/// for any client that can speak Wayland, including one that also has `DISPLAY`
-/// from XWayland. `XDG_SESSION_TYPE` is consulted as a fallback because a few
-/// session managers set it without exporting `WAYLAND_DISPLAY`.
+/// `WAYLAND_DISPLAY` decides: the compositor sets it for every Wayland client,
+/// including one that also has `DISPLAY` from XWayland. `XDG_SESSION_TYPE` is
+/// the fallback because some session managers set it without exporting
+/// `WAYLAND_DISPLAY`.
 pub fn session() -> Session {
     let wayland_display = std::env::var_os("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty());
     let session_type = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
@@ -62,17 +53,16 @@ pub fn backend_name() -> &'static str {
 
 pub fn permission_state() -> PermissionState {
     match session() {
-        // The portal prompts per session and the answer is not queryable ahead
-        // of time, so there is no state for the UI to render. `NotRequired`
-        // keeps the library panel free of a permission banner that could never
-        // resolve; the compositor's dialog is the real gate.
+        // The portal prompts per session and cannot be queried ahead of time.
+        // `NotRequired` keeps an unresolvable permission banner out of the library
+        // panel; the compositor's dialog is the real check.
         Session::Wayland | Session::X11 => PermissionState::NotRequired,
     }
 }
 
 pub fn request_permission() {}
 
-/// Enumerate capturable targets for the active session.
+/// Enumerates capture targets for the active session.
 ///
 /// # Errors
 ///
@@ -85,7 +75,7 @@ pub fn enumerate() -> Result<Vec<CaptureTargetInfo>, CaptureError> {
     }
 }
 
-/// Open a capture session for `target`.
+/// Opens a capture session for `target`.
 ///
 /// # Errors
 ///
@@ -106,8 +96,8 @@ pub fn open(
 mod tests {
     use super::*;
 
-    /// The env vars this reads are process-global, so the cases share one test
-    /// rather than racing each other under the test harness's thread pool.
+    /// The env vars are process-global, so all cases share one test instead of
+    /// racing in parallel tests.
     #[test]
     fn session_detection_prefers_wayland_and_treats_xwayland_as_wayland() {
         let saved = (
@@ -123,8 +113,8 @@ mod tests {
             std::env::set_var("DISPLAY", ":0");
             assert_eq!(session(), Session::X11);
 
-            // XWayland: both are set. Wayland must win, or the capture silently
-            // returns a blank root window.
+            // XWayland sets both. Wayland must win, or capture returns a blank root
+            // window.
             std::env::set_var("WAYLAND_DISPLAY", "wayland-0");
             assert_eq!(session(), Session::Wayland);
 
@@ -153,8 +143,7 @@ mod tests {
 
     #[test]
     fn neither_session_gates_capture_behind_a_permission_prompt() {
-        // X11 has no gate; Wayland's gate is the portal dialog, which is raised
-        // at `open` and cannot be queried in advance.
+        // X11 has no check; Wayland's is the portal dialog, raised at `open`.
         assert!(permission_state().allows_capture());
     }
 }

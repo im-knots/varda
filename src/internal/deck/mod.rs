@@ -13,13 +13,12 @@ use crate::source::DeckSourceInstance;
 use std::collections::HashMap;
 use std::time::Instant;
 
-/// A shader deck's depth-sensor preprocessor as a scene stores it, under the
-/// source config's `depth_prepro` key.
+/// A shader deck's depth-sensor preprocessor as saved under the source config's
+/// `depth_prepro` key.
 ///
-/// The sensor is matched by **name** on restore, the convention cameras and
-/// depth-sensor decks use: device ids are not stable across replugs. Params
-/// are denormalized (physical units), matching `DepthPreprocessParams`, and
-/// every field defaults so scenes written before a field existed still load.
+/// The sensor is matched by name on restore, since device ids change across replugs. Params
+/// are in physical units, matching `DepthPreprocessParams`, and every field has a default so
+/// older scenes load.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DepthPreproConfig {
     pub sensor_name: String,
@@ -41,30 +40,28 @@ pub struct DepthPreproConfig {
 
 /// Live state for a deck's `depth_sensor` shader preprocessor.
 ///
-/// The sensor reference is ref-counted on `DepthSensorManager`; it is acquired
-/// before the deck is constructed and released when the deck is removed, so any
-/// number of preprocessor decks and point-cloud decks can share one device.
+/// The sensor is ref-counted on `DepthSensorManager`: acquired before the deck is built and
+/// released on removal, so any number of decks can share one device.
 pub struct DepthPreprocessState {
-    /// The acquired sensor. Held so deck teardown can release the reference.
+    /// The acquired sensor, released on deck teardown.
     pub sensor_id: crate::depth::DepthSensorId,
-    /// Device name, captured at acquisition. Persistence matches sensors by name
-    /// (ids are not stable across replugs), and snapshotting a scene must not
-    /// need the device manager.
+    /// Device name, captured at acquisition. Persistence matches sensors by name, and snapshots
+    /// must not need the device manager.
     pub sensor_name: String,
     /// Router-exposed params (`deck/<uuid>/depth_prepro/*`).
     pub params: crate::depth::preprocess::DepthPreprocessParams,
     /// The conversion pipeline and its owned output textures.
     pub pipeline: crate::depth::preprocess::DepthPreprocessPipeline,
-    /// Whether any consuming shader declared the `rgb` output. When false the
-    /// colour pass is skipped entirely.
+    /// Whether any consuming shader declared the `rgb` output. When false the color pass is
+    /// skipped.
     pub wants_rgb: bool,
     /// Last sensor frame generation processed, so a 30 Hz sensor does not drive
     /// 60 Hz of redundant passes.
     pub last_generation: Option<u64>,
     /// Set while the sensor reports disconnected, so the warning fires once.
     pub warned_disconnected: bool,
-    /// This frame's sensor inputs, pushed by the app render loop (which owns the
-    /// manager). `None` before the first tick or while the sensor is gone.
+    /// This frame's sensor inputs, pushed by the app render loop. `None` before the first tick or
+    /// while the sensor is gone.
     pub input: Option<DepthPreprocessInput>,
 }
 
@@ -72,7 +69,7 @@ pub struct DepthPreprocessState {
 pub struct DepthPreprocessInput {
     /// Shared `R16Uint` depth texture owned by `DepthSensorManager`.
     pub depth_view: wgpu::TextureView,
-    /// Shared colour texture owned by `DepthSensorManager`.
+    /// Shared color texture owned by `DepthSensorManager`.
     pub rgb_view: wgpu::TextureView,
     /// Manager upload counter, used to skip redundant passes.
     pub generation: u64,
@@ -86,14 +83,11 @@ pub struct DepthPreprocessInput {
 pub struct Effect {
     /// Stable UUID for this effect (8-char hex).
     ///
-    /// Private, with [`Effect::set_uuid`] as the only way to change it, because
-    /// `param_prefix` is derived from it and the two must never disagree. Scene
-    /// restore used to assign the field directly, leaving the prefix pointing at
-    /// the throwaway UUID minted by `Effect::new`; modulation assignments are
-    /// keyed on the prefix, so every effect modulation silently stopped applying
-    /// after a reload while the UI still showed it attached.
+    /// Private so that [`Effect::set_uuid`] keeps `param_prefix`, which modulation assignments are
+    /// keyed on, in step with it.
     uuid: String,
-    /// Cached "fx_{uuid}" prefix for modulation key lookups (avoids per-frame format!)
+    /// Cached `effect/<uuid>/param` prefix for modulation key lookups, avoiding a per-frame
+    /// `format!`.
     param_prefix: String,
     pub shader: ISFShader,
     pub pipeline: UnifiedPipeline,
@@ -114,16 +108,13 @@ pub struct Effect {
 
 // Effect impl is in effect.rs
 
-/// A Deck is an independent render unit that outputs a texture: its source,
-/// then its effect chain.
-///
-/// What the source is (a shader, a clip, a camera) is the source's business;
-/// the deck owns what every deck has. See /spec/deck-source-providers.md.
+/// A deck renders its source, then its effect chain, into a texture.
 pub struct Deck {
     /// Stable UUID for this deck (8-char hex, persists across moves/saves)
     uuid: String,
 
-    /// Cached "deck_{uuid}" prefix for modulation key lookups (avoids per-frame format!)
+    /// Cached `deck/<uuid>/param` prefix for modulation key lookups, avoiding a per-frame
+    /// `format!`.
     param_prefix: String,
 
     /// Display name, from the source unless the user renamed the deck.
@@ -132,15 +123,13 @@ pub struct Deck {
     /// What draws the base image.
     source: Box<dyn DeckSourceInstance>,
 
-    /// Generator parameters, from the source's ISF `INPUTS` when it declares
-    /// them. Owned by the deck so every ISF-style source gets MIDI, OSC,
-    /// modulation, presets and exploration for free.
+    /// Generator parameters, from the source's ISF `INPUTS` when it declares them. Held by the
+    /// deck so every ISF-style source gets MIDI, OSC, modulation, presets and exploration.
     pub generator_params: ShaderParams,
 
     /// Render target texture (primary)
     pub texture: wgpu::Texture,
 
-    /// Texture view
     pub texture_view: wgpu::TextureView,
 
     /// Secondary texture for ping-pong rendering in effect chain
@@ -153,29 +142,24 @@ pub struct Deck {
     /// Deck opacity (0.0 - 1.0)
     pub opacity: f32,
 
-    /// When true, the deck's base texture preserves source alpha (transparent
-    /// letterbox + transparent HTML regions). When false (default), the source is
-    /// composited over opaque black, reproducing the historical opaque behavior.
-    /// See /spec/html-source.md §2 (Option A).
+    /// When true, the base texture preserves source alpha (transparent letterbox and HTML
+    /// regions). When false (default), the source is composited over opaque black.
     transparent: bool,
 
-    /// Accumulated render time for TIME uniform (advances by fixed dt each render).
-    /// Decoupled from wall clock so skipped frames don't cause animation jumps.
+    /// Accumulated render time for the TIME uniform, advanced by a fixed dt per render so skipped
+    /// frames don't cause jumps.
     render_time: f32,
 
-    /// Fixed time step per render (`1/target_fps`). Updated by the channel when
-    /// the deck is rendered, so skipped frames simply don't advance `render_time`.
+    /// Fixed time step per render (`1/target_fps`), set by the channel.
     render_dt: f32,
 
-    /// Frame counter
     frame_count: u32,
 
     /// Last wall-clock render instant (for FPS measurement only, not for TIME uniform)
     last_frame_time: Instant,
 
-    /// Depth-sensor shader preprocessor, present when this deck's shader (or one
-    /// of its effects) declared a `depth_sensor` PREPROCESSOR and the device was
-    /// successfully acquired. See spec/depth-sensor-preprocessor.md.
+    /// Depth-sensor shader preprocessor, present when this deck's shader or one of its effects
+    /// declared a `depth_sensor` PREPROCESSOR and the device was acquired.
     pub depth_prepro: Option<DepthPreprocessState>,
 
     /// Smoothed FPS derived from actual render pipeline timing (EMA of `1/time_delta`)
@@ -190,15 +174,12 @@ pub struct Deck {
     /// Per-deck analyzer instances (brightness, beat detection, etc.)
     pub(crate) analyzers: crate::analyzer::DeckAnalyzers,
 
-    /// Set when this deck raised a GPU error, which quarantines it: it stops
-    /// rendering and holds its last good frame instead of aborting the process.
-    /// Cleared by [`Deck::clear_gpu_error`] when the shader is reloaded.
-    /// See spec/error-handling.md § Shader Errors.
+    /// Set when this deck raised a GPU error. A quarantined deck stops rendering and holds its
+    /// last good frame. Cleared by [`Deck::clear_gpu_error`] when the shader is reloaded.
     gpu_error: Option<String>,
 }
 
-/// Accessors for Deck properties.
-/// Constructors are in source.rs, rendering in render.rs.
+/// Accessors. Constructors are in source.rs, rendering in render.rs.
 impl Deck {
     /// Get the stable UUID for this deck
     pub fn uuid(&self) -> &str {
@@ -261,10 +242,9 @@ impl Deck {
         std::mem::replace(&mut self.source, source)
     }
 
-    /// The config that rebuilds this deck's source as it is now, with the
-    /// deck-owned parts every source type shares: generator parameter values
-    /// under `params`, and a shader deck's depth preprocessor under
-    /// `depth_prepro`. Scenes have always stored both there.
+    /// The config that rebuilds this deck's source as it is now, plus the deck-held parts all
+    /// source types share: generator parameter values under `params` and a shader deck's depth
+    /// preprocessor under `depth_prepro`.
     pub fn source_config(&self) -> crate::source::SourceConfig {
         let mut config = self.source.config();
         if !self.generator_params.values.is_empty() {
@@ -296,7 +276,6 @@ impl Deck {
 
     /// Set a depth-preprocessor parameter from a normalized value (0.0–1.0).
     /// Returns `false` if this deck has no `depth_sensor` preprocessor.
-    /// See spec/depth-sensor-preprocessor.md.
     pub fn set_depth_prepro_param(&mut self, name: &str, value: f32) -> bool {
         self.depth_prepro
             .as_mut()
@@ -312,11 +291,9 @@ impl Deck {
 
     /// Attach an acquired depth sensor's preprocessor to this deck.
     ///
-    /// Rebinds every `depth_sensor` preprocessor slot — on the source shader and
-    /// on every effect — to the pipeline's owned output textures. The clones are
-    /// `Arc`-backed handles to the same GPU resources, so this is a rebind, not a
-    /// copy. Called by the app layer after `open_depth_sensor` succeeds, because
-    /// device managers live above `internal::deck`.
+    /// Rebinds every `depth_sensor` preprocessor slot, on the source shader and every effect, to
+    /// the pipeline's output textures (`Arc`-backed handles, not copies). Called by the app layer
+    /// after `open_depth_sensor` succeeds, since device managers live above `internal::deck`.
     pub fn attach_depth_preprocessor(
         &mut self,
         sensor_id: crate::depth::DepthSensorId,
@@ -337,11 +314,11 @@ impl Deck {
         self.rebind_depth_preprocessor_slots();
     }
 
-    /// Point every `depth_sensor` preprocessor slot at the attached pipeline's
-    /// outputs, and recompute whether the colour pass is needed.
+    /// Point every `depth_sensor` preprocessor slot at the attached pipeline's outputs, and
+    /// recompute whether the color pass is needed.
     ///
-    /// Idempotent, and must be re-run after adding an effect that declares the
-    /// preprocessor to a deck that already has one attached.
+    /// Idempotent. Re-run after adding an effect that declares the preprocessor to a deck that
+    /// already has one attached.
     pub fn rebind_depth_preprocessor_slots(&mut self) {
         use crate::depth::preprocess::{Output, PREPROCESSOR_TYPE};
 
@@ -400,12 +377,11 @@ impl Deck {
             })
     }
 
-    /// Drop the depth preprocessor if nothing on this deck consumes it any more,
-    /// returning the sensor ID the caller must release on the manager.
+    /// Drop the depth preprocessor if nothing on this deck consumes it, returning the sensor ID the
+    /// caller must release.
     ///
-    /// Called after removing an effect: if that effect was the only consumer,
-    /// holding the device open would keep a capture thread and three GPU passes
-    /// alive for nothing.
+    /// Called after removing an effect, so an unused device does not keep a capture thread and
+    /// three GPU passes running.
     pub fn detach_depth_preprocessor_if_unused(&mut self) -> Option<crate::depth::DepthSensorId> {
         if self.depth_prepro.is_none() || self.wants_depth_preprocessor() {
             return None;
@@ -423,11 +399,8 @@ impl Deck {
         self.gpu_error.as_deref()
     }
 
-    /// Lift the quarantine and let the deck render again.
-    ///
-    /// Called on shader hot-reload: the author has just changed the source, so
-    /// the thing that failed may no longer exist. Without this a single bad save
-    /// would black out the deck until the app restarts.
+    /// Lift the quarantine and let the deck render again. Called on shader hot-reload, so one bad
+    /// save does not black out the deck until restart.
     pub fn clear_gpu_error(&mut self) {
         if self.gpu_error.take().is_some() {
             log::info!("Deck '{}': GPU quarantine lifted", self.uuid);

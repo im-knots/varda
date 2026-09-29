@@ -1,6 +1,5 @@
-// Composite blend shader - reads source layer and destination (composite-so-far),
-// blends per-pixel based on blend_mode uniform.
-// CompositeParams is 32 bytes (8 x f32)
+// Composite blend shader: blends the source layer over the composite so far
+// using the blend_mode uniform. CompositeParams is 32 bytes (8 x f32).
 
 struct CompositeParams {
     opacity: f32,
@@ -26,25 +25,14 @@ var<uniform> params: CompositeParams;
 
 const EPSILON: f32 = 0.001;
 
-// sRGB OETF / EOTF, extended beyond the [0,1] domain.
+// sRGB OETF / EOTF, extended beyond [0,1].
 //
-// Overlay, Soft Light, and Hard Light are defined against *gamma-encoded*
-// operands: their 0.5 pivot means perceptual middle grey, which is linear
-// 0.214. Evaluating them on the linear-light composite moves that pivot to
-// sRGB 0.735, so mid-tones land far on the darken side of the branch. These
-// convert into and out of the encoded space for those three modes only —
-// every other mode is physical and stays linear.
-// See /spec/blend-modes.md § Blend Space.
+// Overlay, Soft Light and Hard Light pivot at 0.5 in gamma-encoded space
+// (linear 0.214), so only those modes convert in and out of it.
 //
-// Extended by pure power above 1.0 rather than clamped, so HDR values produced
-// upstream by Add / Color Dodge survive the round trip instead of hard-clipping
-// in these three modes alone. Mirrored through the origin for negatives (Linear
-// Burn is specified to go below zero and floor at the tonemap), keeping the
-// transform odd-symmetric and monotonic across the whole float domain.
-//
-// Vectorised: one `pow` per vec3 rather than three scalar calls. `select` with
-// a vec3<bool> condition is componentwise, so both the piecewise curve and the
-// sign restore stay branch-free.
+// Above 1.0 the curve continues as a pure power so HDR values survive, and it
+// is mirrored through the origin for negatives (Linear Burn goes below zero),
+// keeping it monotonic.
 fn srgb_encode(v: vec3<f32>) -> vec3<f32> {
     let a = abs(v);
     let hi = 1.055 * pow(a, vec3<f32>(1.0 / 2.4)) - vec3<f32>(0.055);
@@ -63,7 +51,7 @@ fn srgb_decode(v: vec3<f32>) -> vec3<f32> {
 
 @fragment
 fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
-    // Sample source with UV transform (scaling modes)
+    // Sample source with UV transform (scaling modes).
     let source_uv = uv * params.uv_scale + params.uv_offset;
 
     var src: vec4<f32>;
@@ -73,34 +61,28 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
         src = textureSample(source_texture, texture_sampler, source_uv);
     }
 
-    // Premultiplied sources (channel composites fed into the mixer) carry
-    // coverage baked into RGB. The blend-mode math and the OVER below assume a
-    // straight (un-premultiplied) source, so recover it here. Opaque content
-    // (a = 1) is unchanged; a ≈ 0 is guarded (it early-outs on src_a below).
+    // The blend math and OVER below need straight alpha, so un-premultiply
+    // premultiplied sources (channel composites). a ≈ 0 early-outs below.
     if (params.premultiplied == 1u && src.a > EPSILON) {
         src = vec4<f32>(src.rgb / src.a, src.a);
     }
 
-    // Sample destination at raw UV (full composite, no transform)
+    // Destination at raw UV (no transform).
     let dst = textureSample(dest_texture, texture_sampler, uv);
 
-    // Apply opacity to source alpha
     let src_a = src.a * params.opacity;
 
-    // Early out: fully transparent source contributes nothing
+    // A fully transparent source contributes nothing.
     if (src_a <= 0.0) {
         return dst;
     }
 
-    // Compute blended RGB based on blend mode
     var blended: vec3<f32>;
     let mode = params.blend_mode;
 
-    // Pivot modes (Overlay=5, Soft Light=6, Hard Light=7) evaluate on
-    // gamma-encoded operands; every other mode is physical and stays linear.
-    // The encode happens *after* the un-premultiply above — the blend math
-    // requires straight alpha, and a non-linear curve must never be applied to
-    // a coverage-weighted value. See /spec/blend-modes.md § Blend Space.
+    // Pivot modes (Overlay=5, Soft Light=6, Hard Light=7) use gamma-encoded
+    // operands. Encoding follows the un-premultiply: a non-linear curve must
+    // not see coverage-weighted values.
     let pivot_mode = (mode == 5u || mode == 6u || mode == 7u);
     var s = src.rgb;
     var d = dst.rgb;
@@ -110,7 +92,7 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
     }
 
     if (mode == 0u) {
-        // Normal (alpha-over): just use source color
+        // Normal (alpha-over)
         blended = s;
     } else if (mode == 1u) {
         // Add (unclamped — values > 1.0 preserved for downstream tonemap)
@@ -181,7 +163,7 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
         blended = srgb_decode(blended);
     }
 
-    // Mix based on source alpha and compute final alpha (standard OVER)
+    // Standard OVER.
     let result_rgb = mix(dst.rgb, blended, src_a);
     let result_a = src_a + dst.a * (1.0 - src_a);
 

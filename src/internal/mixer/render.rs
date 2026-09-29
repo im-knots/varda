@@ -1,15 +1,12 @@
-//! Mixer render pipeline — compositing, master effects, sub-mixes.
+//! Mixer render pipeline: compositing, master effects, sub-mixes.
 
 use super::{AutoCrossfade, CrossfadeEasing, Mixer, ProgramKey};
 use crate::renderer::tonemap::TonemapMode;
 use crate::renderer::{GpuContext, ISFUniforms};
 use anyhow::Result;
 
-/// Stack-friendly container for per-channel compositing opacities.
-///
-/// The common 2-channel case uses a fixed-size array on the stack, avoiding a
-/// heap allocation.  N-channel mode falls back to `Vec`.  Derefs to `&[f32]`
-/// so callers can use `.iter()`, `.get()`, indexing, etc. unchanged.
+/// Per-channel compositing opacities: on the stack for the common 2-channel case, a `Vec`
+/// otherwise. Derefs to `&[f32]`.
 enum CompositingOpacities {
     Two([f32; 2]),
     Many(Vec<f32>),
@@ -28,11 +25,10 @@ impl std::ops::Deref for CompositingOpacities {
 impl Mixer {
     /// Resolve every timebase for this frame.
     ///
-    /// `beat_time` is the clock's monotonic beat position, or `None` when no
-    /// clock source is active, which freezes beat-locked sources. `transport`
-    /// is `None` until the transport has run, which freezes transport-locked
-    /// sources. `free_run_time` is `None` whenever frames are paced by the wall,
-    /// which is every live frame. See /spec/timebase.md.
+    /// `beat_time` is the clock's beat position, or `None` with no clock source, which freezes
+    /// beat-locked sources. `transport` is `None` until the transport has run, which freezes
+    /// transport-locked sources. `free_run_time` is `None` when frames are paced by the wall
+    /// clock, as every live frame is.
     fn resolve_timebases(
         &mut self,
         free_run_time: Option<f32>,
@@ -46,14 +42,12 @@ impl Mixer {
         })
     }
 
-    /// Drive knob/fader macros from any modulation assigned to their value, then
-    /// fan the modulated value out to every target. The macro's stored value is
-    /// the base (manual set point); modulation rides on top as an offset. Only
-    /// macros with an active assignment on `macro_<uuid>:value` pay the cost.
-    /// See `/spec/macro-controls.md` §Macro Value Modulation.
+    /// Drive knob/fader macros from modulation assigned to their value, then fan the modulated
+    /// value out to every target. The stored value is the base; modulation adds an offset. Only
+    /// macros with an assignment on `macro/<uuid>/value` pay the cost.
     ///
-    /// Must run after `ModulationEngine::update` and before compositing so
-    /// opacity/param targets take effect the same frame.
+    /// Must run after `ModulationEngine::update` and before compositing so targets take effect the
+    /// same frame.
     pub fn apply_macro_modulation(&mut self, write: super::ParamWriter) {
         if self.macros.macros().is_empty() || self.modulation.source_count() == 0 {
             return;
@@ -80,14 +74,12 @@ impl Mixer {
         }
     }
 
-    /// Give every deck's source its per-frame controls: modulation of its own
-    /// parameters, the transport a chasing clip servos against, residency,
-    /// and the rate the renderer presents at.
+    /// Give every deck's source its per-frame controls: modulation of its own parameters, the
+    /// transport a chasing clip follows, residency, and the present rate.
     ///
-    /// Must run after [`crate::modulation::ModulationEngine::update`] and after
-    /// the arrangement, because whether a clip is chasing decides whether a
-    /// modulator may touch its playhead, and the arrangement is what puts a
-    /// deck to sleep. See /spec/video-playback-modulation.md.
+    /// Must run after [`crate::modulation::ModulationEngine::update`] and after the arrangement:
+    /// whether a clip is chasing decides whether a modulator may move its playhead, and the
+    /// arrangement puts decks to sleep.
     pub fn control_sources(&mut self, clock: crate::source::SourceClock, target_fps: u32) {
         // Disjoint field borrows: the engine is read while the decks it drives
         // are written.
@@ -102,50 +94,42 @@ impl Mixer {
         }
     }
 
-    /// Let the arrangement drive the decks it owns, and mark those decks so
-    /// their auto-transitions stand down for the frame.
+    /// Let the arrangement drive the decks it owns, and mark those decks so their
+    /// auto-transitions pause for the frame.
     ///
-    /// Authority is per lane and gated on the transport having actually run
-    /// ([`crate::arrangement::Authority`]), so a cold start renders the saved
-    /// scene rather than an arrangement's pre-show state. A lane whose opacity
-    /// the performer has grabbed resolves to no absolute value at all, which is
-    /// how an override leaves the deck exactly where they put it.
-    ///
-    /// See /spec/arrangement.md § Authority.
+    /// Authority is per lane and waits for the transport to run
+    /// ([`crate::arrangement::Authority`]), so a cold start renders the saved scene. A lane whose
+    /// opacity the performer has overridden resolves to no absolute value, leaving the deck where
+    /// they put it.
     pub(super) fn apply_arrangement(
         &mut self,
         transport: Option<crate::timebase::TransportSample>,
         preview_channels: &[usize],
     ) {
-        // Moved out rather than borrowed so the deck writes below can take
-        // `&mut self`; this is an `Option` move, not a deep clone.
+        // Taken out of `self` so the deck writes below can borrow `&mut self`; an `Option` move,
+        // not a clone.
         let Some(arrangement) = self.arrangement.take() else {
             self.clear_arrangement_authority();
             return;
         };
 
-        // Cleared unconditionally first: a lane deleted or emptied since the
-        // last frame must give its deck back rather than leave it pinned.
+        // Cleared first so a lane deleted or emptied since the last frame releases its deck.
         self.clear_arrangement_authority();
         self.arrangement_blacked_out = false;
 
         let engaged =
             crate::arrangement::Authority::resolve(Some(&arrangement), transport.as_ref())
                 .is_engaged();
-        // Outside the arranged range the arrangement has said nothing, so idle
-        // behaviour speaks for it. `HoldPerformance` means exactly that: stay
-        // out of the way. Gaps *inside* the range are authored silence and are
-        // not idle.
+        // Outside the arranged range, idle behavior applies; `HoldPerformance` stays out of the
+        // way. Gaps inside the range are authored silence, not idle.
         let outside_range = transport.is_some_and(|t| !arrangement.within_range(t.position));
         let idle_outside_range =
             outside_range && arrangement.idle == crate::arrangement::IdleBehaviour::HoldPerformance;
 
         if engaged && !idle_outside_range {
-            // A Fade step targets a *pair* of channels, so transition sequences
-            // cannot partition per lane the way auto-transitions do. The rule is
-            // therefore blunt: a sequence still free-running when the
-            // arrangement takes authority is stopped rather than left to fight
-            // the crossfader automation.
+            // A Fade step targets a pair of channels, so sequences cannot be split per lane like
+            // auto-transitions. A sequence still running when the arrangement takes authority is
+            // stopped so it does not fight the crossfader automation.
             self.stop_free_running_sequences();
 
             let mut key = String::with_capacity(48);
@@ -162,8 +146,8 @@ impl Mixer {
 
                 crate::arrangement::write_opacity_param_key(&mut key, &lane.deck_uuid);
 
-                // A previewed or tapped channel is being watched off-air, which
-                // is the same exemption the opacity cull already makes.
+                // A previewed or tapped channel is watched off-air, the same exemption the opacity
+                // cull makes.
                 let watched =
                     preview_channels.contains(&ch) || self.channels[ch].tap_view().is_some();
                 self.channels[ch].decks[dk].source_demand = match transport {
@@ -182,24 +166,21 @@ impl Mixer {
             }
 
             if let crate::arrangement::IdleBehaviour::ShowDeck { deck_uuid } = &arrangement.idle {
-                // "Run this loop until the schedule starts" is a normal
-                // installation requirement, so the pre-show state needs
-                // something to *be* rather than something to fail at.
+                // Show the idle deck until the schedule starts, e.g. an installation's pre-show
+                // loop.
                 if outside_range && let Some((ch, dk)) = self.find_deck_by_uuid(deck_uuid) {
                     self.channels[ch].decks[dk].opacity = 1.0;
                     self.channels[ch].decks[dk].arrangement_authority = true;
-                    // The one deck on screen before the show starts, which
-                    // its own lane may have just called idle.
+                    // The one deck on screen before the show, which its own lane may have just
+                    // marked idle.
                     self.channels[ch].decks[dk].source_demand =
                         crate::arrangement::SourceDemand::Unscheduled;
                     visible += 1;
                 }
             }
 
-            // Idle and broken look identical on the output, so the fact that the
-            // arrangement is driving everything to nothing gets reported rather
-            // than inferred. Never an intervention: deliberate blackouts are
-            // legitimate.
+            // Report when the arrangement drives every deck to nothing, since idle and broken look
+            // the same on the output. Deliberate blackouts are legitimate, so nothing intervenes.
             self.arrangement_blacked_out =
                 driven > 0 && visible == 0 && transport.is_some_and(|t| t.running);
         }
@@ -219,15 +200,12 @@ impl Mixer {
 
     /// What the arrangement predicts about the source behind one opacity key.
     ///
-    /// Deliberately conservative, and every uncertain answer is `Unscheduled`:
-    /// gating one deck too few costs a decode thread nobody needed, and gating
-    /// one too many is a black frame in front of an audience.
-    ///
-    /// See /spec/deck-residency.md § When a deck is scheduled.
+    /// Every uncertain answer is `Unscheduled`: gating too few decks wastes a decode thread,
+    /// gating too many shows a black frame.
     fn opacity_demand(&self, key: &str, position: f64) -> crate::arrangement::SourceDemand {
         use crate::arrangement::SourceDemand;
 
-        // A hand on the fader is the least predictable driver there is.
+        // A performer override is unpredictable.
         if self.modulation.is_overridden(key) {
             return SourceDemand::Unscheduled;
         }
@@ -235,9 +213,8 @@ impl Mixer {
         crate::arrangement::residency::demand(
             self.modulation.assignments_for(key).iter().map(|a| {
                 let entry = self.modulation.find_source_by_uuid(&a.source_id)?;
-                // A curve on any other timebase is positioned in beats or in
-                // wall-clock seconds, so a window in show seconds says nothing
-                // about it.
+                // A curve on another timebase is in beats or wall-clock seconds, so a window in
+                // show seconds says nothing about it.
                 if entry.timebase != crate::timebase::Timebase::Transport {
                     return None;
                 }
@@ -252,11 +229,9 @@ impl Mixer {
         )
     }
 
-    /// Render all channels and composite them via crossfader, then apply master effects.
-    /// `target_fps` is used for adaptive deck render skipping budget calculation.
-    /// `preview_channels` are force-rendered even when culled by opacity, so their
-    /// off-air previews update live — without affecting the compositor (see
-    /// /spec/channel-preview.md).
+    /// Render all channels, composite them via the crossfader, then apply master effects.
+    /// `target_fps` sets the adaptive deck skip budget. `preview_channels` render even when
+    /// culled by opacity, so their off-air previews update without reaching the compositor.
     ///
     /// # Errors
     ///
@@ -402,12 +377,11 @@ impl Mixer {
         // Drive any modulation-assigned macros and fan their values out to targets
         // before compositing reads opacities/params this frame.
         self.apply_macro_modulation(write_param);
-        // The arrangement runs after macros so a scheduled region wins over a
-        // macro fan-out on the same deck: a macro turn is a live gesture, and
-        // taking a deck back from the show is what an override is for.
+        // The arrangement runs after macros so a scheduled region wins over a macro fan-out on the
+        // same deck; taking a deck back from the show is what a live override is for.
         self.apply_arrangement(transport, preview_channels);
-        // Last, because whether a clip is chasing decides whether a modulator
-        // may touch its playhead, and the arrangement is what puts it to sleep.
+        // Last: whether a clip is chasing decides whether a modulator may move its playhead, and
+        // the arrangement puts decks to sleep.
         let beat = timebases.get(crate::timebase::Timebase::Beat);
         let clock = crate::source::SourceClock {
             transport,
@@ -434,11 +408,9 @@ impl Mixer {
             &n_ch_buf
         };
 
-        // Upload every awake deck's source frames on every channel, so players
-        // stay in sync even when a channel is fully faded out by the crossfader.
-        // One encoder for the double-buffered staging uploads, not submitted
-        // here: it is passed as a prefix to the first channel's deck submit,
-        // which saves a queue.submit() that would stall under GPU pressure.
+        // Upload every awake deck's source frames on every channel, so players stay in sync even
+        // when faded out. The encoder is not submitted here; it becomes a prefix of the first
+        // channel's deck submit, saving a queue.submit() that stalls under GPU pressure.
         let t_video_tick = std::time::Instant::now();
         let mut video_encoder =
             context
@@ -455,8 +427,8 @@ impl Mixer {
         // Count total active decks from last frame for per-deck budget calculation
         let total_active_decks: u32 = self.channels.iter().map(|ch| ch.active_deck_count).sum();
 
-        // Snapshot the current GPU load ratio for this frame's skip decisions.
-        // This is updated at the end of the frame based on actual vs CPU-measured time.
+        // Snapshot the GPU load ratio for this frame's skip decisions; it is updated at the end of
+        // the frame.
         let gpu_load_ratio = self.gpu_load_ratio;
 
         // Allocate per-frame GPU timing context (128 queries = 64 deck measurements)
@@ -472,12 +444,10 @@ impl Mixer {
         let mut per_ch_gpu_us: Vec<(String, u128)> = Vec::new();
         for (ch_idx, channel) in self.channels.iter_mut().enumerate() {
             let culled = effective_opacities.get(ch_idx).copied().unwrap_or(0.0) < 0.001;
-            // Cued channels are force-rendered so their off-air previews update
-            // live; the compositor stays opacity-gated so they never leak to output.
-            // A tapped channel is force-rendered for a stronger reason: some
-            // visible deck reads its composite, so its own opacity says nothing
-            // about whether it reaches the program. Culling it would show that
-            // deck black. See spec/program-tap.md.
+            // Cued channels are force-rendered so their off-air previews update, while the
+            // compositor stays opacity-gated so they never reach the output. A tapped channel is
+            // force-rendered because a visible deck reads its composite; culling it would show that
+            // deck black.
             let spared = preview_channels.contains(&ch_idx) || channel.tap_view().is_some();
             if culled && !spared {
                 // Reset stats so culled channels don't show stale render metrics
@@ -543,9 +513,9 @@ impl Mixer {
         };
 
         self.sync_transition_progress();
-        // With a master tap the composite and master FX write into the tap
-        // target instead, so the pre-tonemap program survives into next frame
-        // without a copy. Swapping the fields keeps those two passes unaware.
+        // With a master tap, the composite and master FX write into the tap target so the
+        // pre-tonemap program survives into the next frame without a copy. Swapping the fields
+        // keeps both passes unchanged.
         self.swap_master_tap();
         let t_mixer_composite = std::time::Instant::now();
         let composite_cmds = self.composite_channels(context);
@@ -554,15 +524,13 @@ impl Mixer {
         let t_master_fx = std::time::Instant::now();
         let master_fx = self.apply_master_effects(context, audio_data, time, composite_cmds);
         let master_fx_us = t_master_fx.elapsed().as_micros();
-        // Unconditional, so a failed effect chain cannot leave the composite
-        // and tap fields permanently transposed.
+        // Always swap back, so a failed effect chain cannot leave the fields transposed.
         self.swap_master_tap();
         master_fx?;
 
-        // No grade here. The tonemap *is* the output transform, so it runs per
-        // output in `prepare_programs`; `composite_texture` stays linear
-        // scene-referred so an HDR output still has range to encode.
-        // See /spec/hdr-per-output-encode.md.
+        // No grade here: the tonemap is the output transform and runs per output in
+        // `prepare_programs`. `composite_texture` stays linear scene-referred so HDR outputs keep
+        // their range.
 
         // GPU profiling: drain composite + master FX GPU work
         let gpu_composite_us = if profiling {
@@ -577,14 +545,11 @@ impl Mixer {
         };
 
         // ── GPU Timestamp: resolve + readback ───────────────────────────
-        // Only issue a new resolve/copy/map when no map is in flight.
-        // `timing_map_inflight` is set the moment a map_async is *issued* (not
-        // when its callback fires), so the pending window between issue and
-        // callback is covered. Deriving this from `staging_mapped_idx` alone is
-        // unsound: it stays `MAX` until the callback runs, which would let a
-        // second map_async be issued on the other buffer, leaving one buffer
-        // permanently mapped and crashing the next submit with "still mapped".
-        // Dropping an occasional measurement is harmless; a stuck map is fatal.
+        // Only issue a new resolve/copy/map when no map is in flight. `timing_map_inflight` is set
+        // when map_async is issued, not when its callback fires. `staging_mapped_idx` stays `MAX`
+        // until the callback, so relying on it would let a second map start on the other buffer
+        // and crash the next submit with "still mapped". Dropping a measurement is harmless; a
+        // stuck map is fatal.
         if !self.timing_map_inflight
             && let (Some(qs), Some(resolve_buf), Some(staging)) =
                 (&self.query_set, &self.resolve_buffer, &self.staging_buffers)
@@ -616,9 +581,8 @@ impl Mixer {
                         }
                     });
 
-                // Mark the map in flight from the moment it is issued so
-                // no second map_async can be started before the read path
-                // consumes and unmaps this buffer.
+                // Marked in flight at issue so no second map_async starts before the read path
+                // unmaps this buffer.
                 self.timing_map_inflight = true;
 
                 // Save allocations for readback next frame
@@ -637,10 +601,9 @@ impl Mixer {
             f32::MAX
         };
         let actual_frame_us = dt * 1_000_000.0;
-        // A frame that encoded essentially nothing carries no evidence either
-        // way, and its `dt` is whatever wall-clock gap preceded it — a paused or
-        // hidden window would otherwise drive the ratio up and leave decks
-        // skipping for the first moments after they come back.
+        // A frame that encoded almost nothing carries no evidence, and its `dt` is whatever gap
+        // preceded it; a paused or hidden window would otherwise push the ratio up and make decks
+        // skip when it returns.
         let mixer_cpu_us = channels_us + mixer_composite_us + master_fx_us;
         let (deck_gpu_us, deck_encode_us) = self.active_deck_costs();
         if mixer_cpu_us > 100
@@ -800,23 +763,17 @@ impl Mixer {
             return Vec::new();
         }
 
-        // Fallback: opacity-based crossfade
+        // Fallback: opacity-based crossfade.
         //
-        // For 2-channel mode the first channel is blitted onto a cleared-to-
-        // transparent target using ALPHA_BLENDING.  The hardware blend applies
-        // SrcAlpha to the RGB output, so if the blit shader also multiplies alpha
-        // by opacity, the effective weight becomes opacity² (double-application).
+        // In 2-channel mode the first channel is blitted with ALPHA_BLENDING onto a transparent
+        // target. The hardware blend already applies SrcAlpha, so scaling alpha by opacity in the
+        // shader too would weight it by opacity². The first channel is therefore blitted at full
+        // opacity and the crossfader drives only the second channel's opacity; the composite
+        // shader's `mix(dst, src, src_a)` then gives (1-cf)·A + cf·B.
         //
-        // To avoid this, the first channel is always blitted at full opacity and
-        // the crossfader value is used solely as the second channel's composite
-        // opacity.  The composite shader performs `mix(dst, src, src_a)`, which
-        // yields the correct linear crossfade: (1-cf)·A + cf·B.
-        //
-        // The clear is TRANSPARENT (not BLACK) so the program output carries the
-        // channels' alpha through to alpha-capable outputs. Because the clear RGB
-        // is zero either way, RGB is byte-identical to the old over-black result
-        // (the program becomes premultiplied-alpha); opaque content (alpha=1) and
-        // the over-black display path are unchanged. See /spec/html-source.md §2.
+        // The clear is TRANSPARENT so the program carries channel alpha to alpha-capable outputs.
+        // The clear RGB is zero either way, so opaque content matches the over-black result; the
+        // program is premultiplied alpha.
         let opacities = self.compositing_opacities();
 
         let visible: Vec<(&wgpu::TextureView, f32, u32)> = self
@@ -877,9 +834,8 @@ impl Mixer {
             }
             self.composite_sub_mix(&indices, context);
 
-            // Tonemap the sub-mix in-place (same pattern as main composite).
-            // Uses effect_ping as scratch — safe because composite_sub_mix has
-            // already finished with it by the time we get here.
+            // Tonemap the sub-mix in place, using effect_ping as scratch; composite_sub_mix has
+            // finished with it.
             if let Some((sub_tex, sub_view)) = self.sub_mix_cache.get(&indices) {
                 tonemap_in_place(
                     self.tonemap_mode,
@@ -1094,15 +1050,12 @@ impl Mixer {
 
     /// Build the graded master programs the active outputs asked for.
     ///
-    /// One pass per distinct [`ProgramKey`], not per output: outputs sharing a
-    /// curve and range share a result, so the common single-output show
-    /// materializes exactly one and pays what the old global tonemap paid. A key
-    /// whose grade is a no-op is not materialized at all, so a Bypass show with
-    /// no LUT still runs zero grading passes and reads the linear composite
-    /// directly.
+    /// One pass per distinct [`ProgramKey`], not per output, so outputs sharing a curve and range
+    /// share a result. A key whose grade is a no-op is not materialized, so a Bypass show with no
+    /// LUT runs no grading passes and reads the linear composite.
     ///
-    /// The linear composite is never written here. That is what makes it safe
-    /// for an HDR output to read it and what keeps the master tap linear.
+    /// The linear composite is never written here, so HDR outputs can read it and the master tap
+    /// stays linear.
     pub fn prepare_programs(&mut self, keys: &[ProgramKey], context: &GpuContext) {
         self.program_cache.retain(|key, _| keys.contains(key));
         self.apply_look(context);
@@ -1124,9 +1077,7 @@ impl Mixer {
                 self.program_cache.insert(key, (tex, view));
             }
 
-            // Source and destination are distinct textures, so the grade needs no
-            // scratch copy. The old in-place path had to copy first whenever no
-            // master tap was allocated.
+            // Source and destination are distinct textures, so no scratch copy is needed.
             let target = &self.program_cache[&key].1;
             let mut encoder =
                 context
@@ -1173,10 +1124,9 @@ impl Mixer {
 
     /// Apply the scene-referred look to the linear program.
     ///
-    /// Runs once per frame, ahead of every output transform, so one grade reaches
-    /// every output including HDR ones. It writes into a separate target rather
-    /// than over the composite, which keeps the master tap ungraded: tapping the
-    /// looked program would compound the grade once per feedback cycle.
+    /// Runs once per frame, before every output transform, so the grade reaches HDR outputs too.
+    /// Writes to a separate target so the master tap stays ungraded; tapping the graded program
+    /// would compound the grade every feedback cycle.
     fn apply_look(&mut self, context: &GpuContext) {
         let Some(look) = &self.look_lut else {
             self.look_texture = None;
@@ -1225,10 +1175,9 @@ impl Mixer {
             .map_or_else(|| self.program_source(), |(_, view)| view)
     }
 
-    /// Prepare tonemapped copies of individual channel composites.
-    /// Called for channels used as direct `OutputSource::Channel(idx)` sources.
-    /// Channel composites can't be tonemapped in-place because they feed into
-    /// the mixer composite on subsequent frames.
+    /// Prepare tonemapped copies of channel composites used as `OutputSource::Channel(idx)`
+    /// sources. They can't be tonemapped in place because they feed the mixer composite on later
+    /// frames.
     pub fn prepare_channel_tonemaps(&mut self, channel_indices: &[usize], context: &GpuContext) {
         use crate::renderer::tonemap::TonemapMode;
 
@@ -1256,8 +1205,7 @@ impl Mixer {
                 self.tonemapped_channel_cache.insert(ch_idx, (tex, view));
             }
 
-            // Tonemap directly: channel composite → cached texture
-            // (no copy needed since source and target are different textures)
+            // Tonemap directly from the channel composite into the cached texture.
             let tonemap_target = &self.tonemapped_channel_cache[&ch_idx].1;
             let mut encoder =
                 context
@@ -1296,14 +1244,12 @@ impl Mixer {
         }
     }
 
-    /// Summed GPU and CPU render costs over the decks that are actually drawing
-    /// *and* have GPU timing for this frame.
+    /// Summed GPU and CPU render costs over decks that are drawing and have GPU timing this
+    /// frame.
     ///
-    /// Both sums come from the same set of decks so their quotient stays a
-    /// like-for-like comparison; a deck still waiting on its first timestamp
-    /// would otherwise contribute CPU cost with no GPU cost and understate the
-    /// ratio. Returns `(0.0, 0.0)` when no deck has timing yet, which is what
-    /// puts [`raw_gpu_load_ratio`] onto its fallback.
+    /// Both sums use the same decks so their quotient compares like with like; a deck without its
+    /// first timestamp would add CPU cost only and understate the ratio. Returns `(0.0, 0.0)` when
+    /// no deck has timing, which sends [`raw_gpu_load_ratio`] to its fallback.
     fn active_deck_costs(&self) -> (f32, f32) {
         self.channels
             .iter()
@@ -1315,28 +1261,21 @@ impl Mixer {
     }
 }
 
-/// Ceiling on the load ratio. Generous enough to express a genuinely
-/// GPU-bound shader — a 10 ms pass encoded in 200 µs really is 50× — while
-/// still bounding how far one bad frame can push every deck toward skipping.
+/// Ceiling on the load ratio. High enough for a GPU-bound shader (a 10 ms pass encoded in
+/// 200 µs is 50×), while bounding how far one bad frame pushes decks toward skipping.
 const MAX_GPU_LOAD_RATIO: f32 = 64.0;
 
-/// How much to scale CPU-measured deck cost to estimate true GPU cost.
+/// How much to scale CPU-measured deck cost to estimate GPU cost.
 ///
-/// `None` means the frame carried no usable signal, leaving the smoothed ratio
-/// untouched rather than dragging it toward an invented value.
+/// `None` means the frame carried no usable signal, leaving the smoothed ratio unchanged.
 ///
-/// GPU timestamps are the honest answer: they time the same work the CPU figure
-/// times, so their quotient is the underestimation factor and nothing else.
-/// Without them, how far the frame overran its budget is a coarser stand-in,
-/// but it is proportionate and bounded by construction.
+/// GPU timestamps time the same work as the CPU figure, so their quotient is the
+/// underestimation factor. Without them, how far the frame overran its budget is a coarser,
+/// bounded stand-in.
 ///
-/// What this must not be is whole-frame wall time over the mixer's encode time.
-/// That quotient is roughly `frame_budget / encode_time` — around 20× on a
-/// perfectly healthy frame — so any render-thread work outside the mixer (a
-/// screen-capture upload, say) that pushes one frame past budget made every
-/// deck look twentyfold more expensive than it is, ratcheting the smoothed
-/// ratio up until unrelated shader decks started skipping while the frame loop
-/// still reported its target rate.
+/// Whole-frame wall time over mixer encode time is not a valid ratio: it is about
+/// `frame_budget / encode_time`, around 20× on a healthy frame, so render-thread work outside
+/// the mixer that pushed a frame over budget would make unrelated decks skip.
 fn raw_gpu_load_ratio(
     deck_gpu_us: f32,
     deck_encode_us: f32,
@@ -1349,8 +1288,7 @@ fn raw_gpu_load_ratio(
     if frame_budget_us >= f32::MAX || actual_frame_us <= 0.0 {
         return None;
     }
-    // `dt` includes the vsync idle wait, so a frame at or under budget is
-    // evidence of no GPU pressure rather than evidence of none being measurable.
+    // `dt` includes the vsync wait, so a frame at or under budget shows no GPU pressure.
     Some(if actual_frame_us > frame_budget_us * 1.05 {
         (actual_frame_us / frame_budget_us).clamp(1.0, MAX_GPU_LOAD_RATIO)
     } else {
@@ -1452,12 +1390,9 @@ mod gpu_load_ratio_tests {
         assert!((ratio - 1.0).abs() < f32::EPSILON, "got {ratio}");
     }
 
-    /// The regression this pins. A screen-capture upload costs ~1 ms of
-    /// render-thread time outside the mixer, which pushes the frame a little
-    /// over budget. The old formula divided whole-frame wall time by the
-    /// mixer's encode time and called the result GPU pressure, yielding ~24x
-    /// for a frame only 1.14x over — enough, once smoothed, to force unrelated
-    /// shader decks into skipping while the loop still hit 60 fps.
+    /// A screen-capture upload costs ~1 ms of render-thread time outside the mixer and pushes the
+    /// frame slightly over budget. Dividing whole-frame wall time by mixer encode time would give
+    /// ~24x for a frame only 1.14x over, enough to make unrelated shader decks skip at 60 fps.
     #[test]
     fn an_over_budget_frame_caused_by_non_mixer_work_stays_proportionate() {
         let actual = BUDGET_60FPS + 2425.0; // ~19.1 ms, as measured on an M2 Max
@@ -1506,9 +1441,7 @@ mod program_cache_tests {
     use super::super::ProgramKey;
     use crate::renderer::tonemap::TonemapMode;
 
-    /// The gate for the whole slice: a Bypass show with no LUT must still run
-    /// zero grading passes, exactly as the old in-place tonemap did when it
-    /// early-returned on Bypass.
+    /// A Bypass show with no LUT must run zero grading passes.
     #[test]
     fn bypass_without_a_lut_needs_no_grading_pass() {
         let key = ProgramKey::sdr(TonemapMode::Bypass);
@@ -1550,8 +1483,7 @@ mod program_cache_tests {
 
     #[test]
     fn hdr_headroom_follows_the_configured_peak() {
-        // 1000 cd/m² over 203 cd/m² reference white is 4.93x, the figure in
-        // /spec/hdr-color-management.md Decision 3.
+        // 1000 cd/m² over 203 cd/m² reference white is 4.93x.
         let key = ProgramKey {
             tonemap: TonemapMode::Bypass,
             hdr_peak: Some(1000),
@@ -1565,8 +1497,7 @@ mod program_cache_tests {
         assert!(dimmer.headroom() < key.headroom());
     }
 
-    /// The gap 50b exists to close: a look reaches HDR outputs, a calibration
-    /// LUT does not.
+    /// A look reaches HDR outputs; a calibration LUT does not.
     #[test]
     fn the_look_reaches_every_contract_but_calibration_stops_at_sdr() {
         let sdr = ProgramKey::sdr(TonemapMode::Aces);
@@ -1577,8 +1508,8 @@ mod program_cache_tests {
         // Calibration is display-referred and bound to one output transform.
         assert!(sdr.takes_calibration_lut());
         assert!(!hdr.takes_calibration_lut());
-        // The look is upstream of every output transform, so no key opts out of
-        // it: it is applied to the program, not per key.
+        // The look is upstream of every output transform and applied to the program, so no key opts
+        // out.
         assert!(!super::Mixer::program_needs_grading(hdr, false));
     }
 

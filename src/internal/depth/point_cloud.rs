@@ -1,13 +1,12 @@
-//! GPU point-cloud reprojection pipeline for depth sensors.
+//! GPU point-cloud reprojection for depth sensors.
 //!
-//! Renders one splat per depth texel into the deck target texture, deprojecting
-//! via intrinsics and orbiting a virtual camera. Colour comes from the RGB
-//! stream, a depth ramp, or a solid tint. See `point_cloud.wgsl` and
-//! spec/depth-sensors.md.
+//! Renders one splat per depth texel into the deck texture, deprojecting with
+//! the intrinsics and orbiting a virtual camera. Color comes from the RGB
+//! stream, a depth ramp, or a solid tint. Shader: `point_cloud.wgsl`.
 
 use super::backend::DepthIntrinsics;
 
-/// Point colouring mode (fader-bucketed on the param router).
+/// Point coloring mode, bucketed from a fader.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorMode {
     Rgb,
@@ -42,7 +41,7 @@ impl ColorMode {
     }
 }
 
-/// User-facing point-cloud parameters (router-exposed).
+/// Point-cloud parameters exposed to the router.
 #[derive(Debug, Clone, Copy)]
 pub struct PointCloudParams {
     pub orbit_yaw: f32,
@@ -53,11 +52,11 @@ pub struct PointCloudParams {
     pub depth_min_mm: f32,
     pub depth_max_mm: f32,
     pub solid_color: [f32; 3],
-    /// Per-point jitter amount (metres of max offset). `0` = rigid texel grid.
+    /// Per-point jitter, in meters of max offset. `0` keeps the rigid texel grid.
     pub seed: f32,
-    /// Time-animated drift of the jitter offset (0 = static, higher = faster/larger flow).
+    /// Speed and size of the jitter drift over time. `0` is static.
     pub drift: f32,
-    /// Strength of the shared procedural curl/noise displacement field (0 = off).
+    /// Strength of the shared curl-noise displacement field. `0` is off.
     pub disruption: f32,
 }
 
@@ -80,11 +79,9 @@ impl Default for PointCloudParams {
 }
 
 impl PointCloudParams {
-    /// Denormalize a fader value (`0..1`) into the physical range of `name` and
-    /// apply it. Returns `false` for an unknown param (nothing mutated).
-    ///
-    /// This is the pure param-scaling half of `Deck::set_depth_param`, split out
-    /// so the mapping can be unit-tested without a live depth deck.
+    /// Maps a fader value (`0..1`) into the physical range of `name` and
+    /// applies it. Returns `false` for an unknown param, changing nothing.
+    /// Split from `Deck::set_depth_param` so it can be tested without a deck.
     pub fn set_normalized_param(&mut self, name: &str, value: f32) -> bool {
         let v = value.clamp(0.0, 1.0);
         match name {
@@ -103,12 +100,10 @@ impl PointCloudParams {
         true
     }
 
-    /// Normalized (`0..1`) value of `name` — the inverse of
-    /// [`Self::set_normalized_param`]. Returns `None` for an unknown param.
-    ///
-    /// Consumers render faders from this rather than caching their own copy of
-    /// the position, so a fader always reflects real engine state after a scene
-    /// load, a preset recall, or a MIDI/OSC/modulation write.
+    /// Fader value (`0..1`) of `name`, the inverse of
+    /// [`Self::set_normalized_param`]. `None` for an unknown param. Faders read
+    /// this so they match engine state after scene loads, presets, and
+    /// MIDI/OSC/modulation writes.
     pub fn normalized_param(&self, name: &str) -> Option<f32> {
         use std::f32::consts::{PI, TAU};
         Some(match name {
@@ -235,7 +230,7 @@ impl PointCloudPipeline {
         }
     }
 
-    /// Upload params + intrinsics for this frame.
+    /// Uploads params and intrinsics for this frame.
     #[allow(clippy::too_many_arguments)]
     pub fn update_uniform(
         &self,
@@ -279,8 +274,8 @@ impl PointCloudPipeline {
         queue.write_buffer(&self.uniform, 0, bytemuck::cast_slice(&[gpu]));
     }
 
-    /// Render the point cloud into `target`. Clears to black first.
-    /// `point_count` = `src_w` * `src_h` (one splat per depth texel).
+    /// Renders the point cloud into `target` after clearing it to black.
+    /// `point_count` is `src_w * src_h`.
     pub fn render(
         &self,
         device: &wgpu::Device,
@@ -346,7 +341,7 @@ mod tests {
         assert_eq!(ColorMode::Rgb.as_f32(), 0.0);
         assert_eq!(ColorMode::DepthRamp.as_f32(), 1.0);
         assert_eq!(ColorMode::Solid.as_f32(), 2.0);
-        // from_u8 is the persistence inverse of as_f32.
+        // from_u8 inverts as_u8.
         assert_eq!(ColorMode::from_u8(0), ColorMode::Rgb);
         assert_eq!(ColorMode::from_u8(1), ColorMode::DepthRamp);
         assert_eq!(ColorMode::from_u8(2), ColorMode::Solid);
@@ -359,7 +354,7 @@ mod tests {
         assert!(p.zoom > 0.0);
         assert!(p.point_size > 0.0);
         assert!(p.depth_min_mm < p.depth_max_mm);
-        // New animation params default to off so legacy behaviour is unchanged.
+        // Animation params default to off.
         assert_eq!(p.seed, 0.0);
         assert_eq!(p.drift, 0.0);
         assert_eq!(p.disruption, 0.0);
@@ -369,7 +364,7 @@ mod tests {
     fn normalized_orbit_maps_full_sweep() {
         use std::f32::consts::{PI, TAU};
         let mut p = PointCloudParams::default();
-        // Yaw sweeps a full turn centred on 0.
+        // Yaw sweeps a full turn centered on 0.
         assert!(p.set_normalized_param("orbit_yaw", 0.0));
         assert!((p.orbit_yaw - (-0.5 * TAU)).abs() < 1e-5);
         p.set_normalized_param("orbit_yaw", 0.5);
@@ -434,7 +429,7 @@ mod tests {
     #[test]
     fn normalized_param_clamps_out_of_range_input() {
         let mut p = PointCloudParams::default();
-        // Values outside 0..1 clamp before scaling, so they never exceed endpoints.
+        // Values outside 0..1 clamp before scaling.
         p.set_normalized_param("zoom", -5.0);
         assert!((p.zoom - 0.1).abs() < 1e-5);
         p.set_normalized_param("zoom", 9.0);
@@ -443,10 +438,9 @@ mod tests {
 
     #[test]
     fn normalized_params_round_trip_through_the_inverse() {
-        // The bottom-bar faders render straight from `normalized_param`, so any
-        // asymmetry with `set_normalized_param` shows up as a slider that jumps
-        // when you touch it. `color_mode` is excluded: it is bucketed, so it is
-        // lossy by construction and is asserted separately below.
+        // Faders render from `normalized_param`, so asymmetry with
+        // `set_normalized_param` makes a slider jump on touch. `color_mode` is
+        // bucketed and lossy, so it is checked separately below.
         let mut p = PointCloudParams::default();
         for (name, value) in [
             ("orbit_yaw", 0.2_f32),

@@ -28,11 +28,8 @@ fn upload_texture_to_slot(
     if tex_data.generation != 0 && slot.last_uploaded_generation == Some(tex_data.generation) {
         return;
     }
-    // The slot's format is the shader's declared contract, fixed for the
-    // slot's lifetime because the pipeline layout's filterability was derived
-    // from it. An analyzer publishing a different encoding cannot be honored
-    // by recreating the texture — the bytes would be reinterpreted wrongly —
-    // so the mismatch is refused loudly instead of rendered plausibly.
+    // The slot's format is fixed by the shader's declaration and the pipeline layout. Recreating
+    // the texture in another encoding would misread the bytes, so a mismatch is refused.
     if super::preprocessor_texture_format(&tex_data.format) != slot.format {
         log::warn!(
             "Preprocessor '{}' published '{}' but the shader declared {:?}; dropping upload",
@@ -60,8 +57,8 @@ fn upload_texture_to_slot(
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            // Data texture (packed analyzer output) — NOT part of the color path.
-            // Format is the encoding contract the shader declared.
+            // Data texture (packed analyzer output), not part of the color path. Format is the
+            // encoding the shader declared.
             format: slot.format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
@@ -95,11 +92,9 @@ fn upload_texture_to_slot(
 /// Accumulate phase times: for each `PhaseInput`, adds
 /// `dt * param_value * multiply_by * scale` to the accumulator.
 ///
-/// Parameter values are the modulated ones, not the stored bases. A shader that declares
-/// `PHASE_INPUTS` reads `PHASE_TIME_N` rather than the raw speed uniform, so integrating
-/// the base value would make modulation of that parameter invisible.
-///
-/// See [/spec/phase-accumulators.md](/spec/phase-accumulators.md).
+/// Uses modulated parameter values, not stored bases: a shader declaring `PHASE_INPUTS` reads
+/// `PHASE_TIME_N` instead of the raw speed uniform, so integrating the base would hide
+/// modulation.
 fn accumulate_phase_times(
     accumulators: &mut [f32; 4],
     dt: f32,
@@ -202,27 +197,18 @@ impl Deck {
         self.render_with_prefix(context, audio_data, modulation, &prefix, cmd_buffers, None)
     }
 
-    /// Start the analyzers this deck's shader declares, using the built-in
-    /// registry.
+    /// Start the analyzers this deck's shader declares, using the built-in registry.
     ///
-    /// The app owns a registry and drives this through
-    /// [`Self::ensure_preprocessor_analyzers`], but an embedder that only wants
-    /// to render a deck has no way to reach either, so a shader declaring a
-    /// `PREPROCESSORS` block would silently render with unbound preprocessor
-    /// textures. That is a difficult failure to attribute from the outside: the
-    /// frame renders, it is just wrong. This is the one-call version for those
-    /// callers, including `examples/shader_preview`.
-    ///
-    /// Idempotent, and safe to call when the shader declares nothing.
+    /// For embedders without their own registry, such as `examples/shader_preview`. Without it, a
+    /// shader with a `PREPROCESSORS` block renders with unbound preprocessor textures and no
+    /// error. Idempotent, and safe when the shader declares nothing.
     pub fn start_declared_preprocessors(&mut self) {
         let registry = analyzer_registry();
         self.ensure_preprocessor_analyzers(&registry);
     }
 
-    /// Ensure analyzers are running for all preprocessor slots that need them.
-    ///
-    /// Called once at deck creation or when effects change. Automatically
-    /// requests analyzer types declared in PREPROCESSORS blocks.
+    /// Start analyzers for every preprocessor slot that needs one. Called at deck creation and
+    /// when effects change.
     pub(crate) fn ensure_preprocessor_analyzers(&mut self, registry: &AnalyzerRegistry) {
         // Collect all (analyzer_type, options) needed by preprocessor slots
         let mut needed: Vec<(String, serde_json::Value)> = Vec::new();
@@ -238,10 +224,9 @@ impl Deck {
         // Deduplicate by analyzer_type and request each
         let mut seen = std::collections::HashSet::new();
         for (analyzer_type, options) in &needed {
-            // GPU-inline preprocessors have no factory and no worker thread —
-            // their passes are driven from the deck render path. Handing one to
-            // `DeckAnalyzers` would log a spurious failure every load.
-            // See /spec/effect-preprocessing.md § Preprocessor Categories.
+            // GPU-inline preprocessors have no factory or worker thread; the deck render path
+            // drives them. Passing one to `DeckAnalyzers` would log a spurious failure on every
+            // load.
             if registry
                 .category_for(analyzer_type)
                 .is_some_and(PreprocessorCategory::is_gpu)
@@ -274,18 +259,14 @@ impl Deck {
 
     /// Render this deck, containing any GPU error it raises.
     ///
-    /// wgpu reports validation errors through a device-wide handler rather than
-    /// a `Result`, and the default handler panics — which on the render thread
-    /// ends the show. A malformed shader is a user-authored input, so it must be
-    /// survivable: the deck is quarantined, keeps displaying its last good
-    /// frame, and everything else carries on rendering.
-    /// See spec/error-handling.md § Shader Errors.
+    /// wgpu reports validation errors through a device-wide handler whose default panics, which
+    /// would stop the render thread. A malformed shader instead quarantines the deck, which keeps
+    /// its last good frame while everything else renders.
     ///
     /// # Errors
     ///
-    /// Propagates errors raised while encoding the source and effect chain
-    /// (for example a failed effect application). GPU validation errors are
-    /// *not* propagated: they quarantine the deck and return `Ok(())`.
+    /// Propagates errors raised while encoding the source and effect chain. GPU validation errors
+    /// quarantine the deck and return `Ok(())`.
     pub fn render_with_prefix(
         &mut self,
         context: &GpuContext,
@@ -296,8 +277,7 @@ impl Deck {
         gpu_timing: Option<(&wgpu::QuerySet, u32, u32)>,
     ) -> Result<()> {
         if self.gpu_error.is_some() {
-            // Quarantined. The deck's texture still holds its last good frame,
-            // which is the "freeze the last good frame" fallback the spec allows.
+            // Quarantined: the texture still holds the last good frame.
             return Ok(());
         }
 
@@ -321,9 +301,8 @@ impl Deck {
         match result {
             Ok(inner) => inner,
             Err(message) => {
-                // Drop anything this deck encoded before failing: submitting a
-                // partial frame from a deck we are about to quarantine risks
-                // raising the same error again downstream.
+                // Drop this deck's partial command buffers so the same error is not raised again
+                // downstream.
                 cmd_buffers.truncate(before);
                 log::error!(
                     "Deck '{}' ({}) raised a GPU error and was disabled: {}",
@@ -371,9 +350,7 @@ impl Deck {
             cmd_buffers.push(enc.finish());
         }
 
-        // Advance render_time by a fixed dt so skipped frames don't cause
-        // animation jumps. The shader sees smooth, consistent time steps
-        // regardless of how many frames were skipped.
+        // Advance render_time by a fixed dt so skipped frames don't cause animation jumps.
         let time_delta = self.render_dt;
         self.render_time += time_delta;
         let time = self.render_time;
@@ -409,8 +386,8 @@ impl Deck {
 
         let source_to_b = enabled_effects.len() % 2 == 1;
 
-        // Depth-sensor preprocessor passes run before the shader so its bindings
-        // hold this frame's fields. See spec/depth-sensor-preprocessor.md.
+        // Depth-sensor preprocessor passes run before the shader so its bindings hold this frame's
+        // fields.
         self.run_depth_preprocess(context, cmd_buffers);
 
         let (target, target_texture) = if source_to_b {
@@ -490,9 +467,8 @@ impl Deck {
             read_from_b = !read_from_b;
         }
 
-        // Capture frame and the exact live values declared by each analyzer.
-        // The state is immutable once it crosses the worker channel, so an
-        // asynchronous result can sign the map it actually evaluated.
+        // Capture the frame and the live values each analyzer declared. The state is immutable once
+        // sent to the worker, so an async result is tagged with the exact map it evaluated.
         let mut analyzer_states = HashMap::new();
         if self.analyzers.has_active_instances() {
             collect_preprocessor_state(
@@ -537,11 +513,9 @@ impl Deck {
 
     /// Run the depth-sensor preprocessor's conversion passes for this frame.
     ///
-    /// No-op unless a sensor frame has actually arrived since the last run: the
-    /// sensor is ~30 Hz and the deck is typically 60, so gating on the manager's
-    /// upload counter halves this work. Also a no-op while the sensor reports
-    /// disconnected, which freezes the outputs at their last good values rather
-    /// than tearing down a live deck. See spec/depth-sensor-preprocessor.md.
+    /// Skipped unless a new sensor frame arrived since the last run (sensor ~30 Hz, deck typically
+    /// 60), and while the sensor is disconnected, which holds the outputs at their last good
+    /// values.
     fn run_depth_preprocess(
         &mut self,
         context: &GpuContext,
@@ -644,11 +618,8 @@ mod tests {
         ModulationEngine::new()
     }
 
-    /// A unipolar step sequencer at 0 Hz holds a constant +1.0, so modulation
-    /// depth is exactly `amount` regardless of when the engine is ticked.
-    ///
-    /// Unipolar matters: bipolar sources carry a range-scale weight of 0.5, so a
-    /// bipolar stand-in would halve the depth under test.
+    /// A unipolar step sequencer at 0 Hz holds +1.0, so modulation depth is exactly `amount`.
+    /// Bipolar sources are range-scaled by 0.5 and would halve the depth.
     fn constant_modulation(target: &str, amount: f32) -> ModulationEngine {
         let mut engine = ModulationEngine::new();
         let uuid = engine.add_source(ModulationSource::StepSequencer {
@@ -1082,7 +1053,7 @@ mod tests {
         assert!((accum[0] - 0.5).abs() < 1e-5, "got {}", accum[0]);
     }
 
-    // ── Offensive: zero-size texture guard on resize ─────────────────
+    // ── Zero-size texture guard on resize ───────────────────────────
 
     #[test]
     fn deck_resize_zero_dimensions_does_not_panic() {

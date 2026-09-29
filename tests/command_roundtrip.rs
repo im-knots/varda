@@ -1,7 +1,5 @@
-//! Round-trip command tests verifying the Step 5 delegation layer.
-//!
-//! Each test sends a command through `execute_command()` via the command
-//! channel, then verifies the resulting state through `build_engine_state()`.
+//! Round-trip command tests: send a command through `execute_command()` via
+//! the command channel, then check `build_engine_state()`.
 
 use varda::app::{AppConfig, VardaApp};
 use varda::engine::{CommandResult, EngineCommand, ErrorCode};
@@ -17,7 +15,7 @@ fn parse_args(args: &[&str]) -> AppConfig {
 fn headless_app() -> Option<VardaApp> {
     let gpu = common::headless_gpu()?;
     let config = varda::testing::headless_config();
-    // Once a GPU exists, a construction failure is a bug, not a reason to skip.
+    // With a GPU present, a construction failure is a bug, not a skip.
     Some(VardaApp::new(gpu, &config).expect("VardaApp::new"))
 }
 
@@ -29,7 +27,7 @@ fn send_cmd(app: &mut VardaApp, cmd: EngineCommand) -> CommandResult {
     reply_rx.blocking_recv().unwrap()
 }
 
-/// The UUID a creating command reports (see ui-engine-boundary.md WS1).
+/// The UUID a creating command reports.
 fn new_uuid(result: CommandResult) -> String {
     match result {
         CommandResult::OkWithId { uuid } => uuid,
@@ -109,7 +107,7 @@ fn surface_duplicate_roundtrip() {
     let r = send_cmd(&mut app, EngineCommand::DuplicateSurface { uuid });
     assert!(matches!(r, CommandResult::OkWithId { .. }));
     let state = app.build_engine_state();
-    // Should have original + duplicate
+    // Original + duplicate
     let originals: Vec<_> = state
         .outputs
         .surfaces
@@ -370,10 +368,8 @@ fn headless_output_create_and_stop() {
     assert!(matches!(r, CommandResult::Ok));
 }
 
-/// A saved or requested output whose type this run cannot drive (Syphon with
-/// `--no-syphon`, or off macOS) is kept with its settings, and says why when
-/// started, rather than being dropped or silently publishing nothing. See
-/// /spec/output-sink-providers.md.
+/// An output whose type this run cannot drive (Syphon with `--no-syphon`, or
+/// off macOS) keeps its settings and reports why when started.
 #[test]
 fn an_output_this_run_cannot_drive_is_kept_and_refuses_to_start() {
     let Some(mut app) = headless_app() else {
@@ -428,7 +424,7 @@ fn hls_library_add_remove() {
     );
     assert!(matches!(r, CommandResult::Ok));
     assert_eq!(saved(&mut app), 1);
-    // Add duplicate: should be idempotent
+    // Adding a duplicate is idempotent.
     send_cmd(
         &mut app,
         EngineCommand::AddSourceLibraryEntry {
@@ -476,7 +472,7 @@ fn headless_app_in(dir: &std::path::Path) -> Option<VardaApp> {
         "--workspace",
         ws,
     ]);
-    // Once a GPU exists, a construction failure is a bug, not a reason to skip.
+    // With a GPU present, a construction failure is a bug, not a skip.
     Some(VardaApp::new(gpu, &config).expect("VardaApp::new"))
 }
 
@@ -664,6 +660,6 @@ fn headless_render_smoke() {
     }
     let state = app.build_engine_state();
     assert!(state.fps >= 0.0);
-    // frame_count is incremented during render_outputs, not render_mixer_frame in headless
-    // Just verify no crash and FPS is valid
+    // Headless frame_count advances in render_outputs, not render_mixer_frame;
+    // this only checks for no crash and a valid FPS.
 }

@@ -1,22 +1,19 @@
-//! Guard: the shipped shader library's `GROUP` conventions.
+//! `GROUP` conventions for the bundled shader library.
 //!
-//! See `/spec/parameter-inspector.md` § Library conventions. `GROUP` itself is
-//! free text and stays that way, because rejecting an unknown group name would
-//! break the community shaders Varda commits to loading. These rules apply to
-//! the bundled library only, which is what a performer actually meets.
+//! `GROUP` is free text so community shaders keep loading; these rules apply
+//! only to bundled shaders.
 //!
-//! The rule that is not stylistic is the last one. `hidden_prefixes` in
-//! `src/usecases/ui/widgets.rs` hides `<prefix>_*` when a bool `<prefix>_mode`
-//! is false. Put that gate in a different group from what it gates and the
-//! performer gets a section that will not open, with the switch that opens it
-//! filed somewhere else. Nothing crashes and no pixel test notices.
+//! The last rule is functional. `hidden_prefixes` in `src/usecases/ui/widgets.rs`
+//! hides `<prefix>_*` when a bool `<prefix>_mode` is false. If the gate sits in a
+//! different group from what it gates, the performer gets a section that won't
+//! open, with its switch in another group. Nothing crashes and no pixel test
+//! notices.
 //!
-//! Pure source analysis: no GPU, runs everywhere including CI.
+//! Source analysis only; no GPU.
 
 use std::path::{Path, PathBuf};
 
-/// At or above this many uniform parameters, a flat list stops being scannable
-/// and the shader must declare groups. See the spec for why fourteen.
+/// At or above this many uniform parameters, a shader must declare groups.
 const GROUPING_REQUIRED_AT: usize = 14;
 
 /// ISF types that never reach the params column: they are textures, not
@@ -119,8 +116,7 @@ fn large_shaders_declare_groups() {
     }
     assert!(
         offenders.is_empty(),
-        "a shader with {GROUPING_REQUIRED_AT} or more parameters must section them with GROUP \
-         (see /spec/parameter-inspector.md § Library conventions):\n  {}",
+        "a shader with {GROUPING_REQUIRED_AT} or more parameters must section them with GROUP:\n  {}",
         offenders.join("\n  ")
     );
 }
@@ -203,9 +199,8 @@ fn mode_gate_shares_a_group_with_what_it_gates() {
     );
 }
 
-/// The gate rule only bites when a gate is actually off by default, since that
-/// is when the section is hidden on load. Kept separate so the library cannot
-/// quietly lose its only worked example of the interaction.
+/// The gate rule only matters when a gate is off by default, since the section
+/// is then hidden on load. Separate so the library keeps at least one example.
 #[test]
 fn chroma_flow_palette_gate_stays_with_its_colours() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders/chroma_flow.fs");

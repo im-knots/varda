@@ -1,4 +1,4 @@
-//! Rectangle, polygon and circle tools: the create-new-surface gestures.
+//! Rectangle, polygon and circle tools for creating surfaces.
 
 use super::super::super::super::{UIActions, UIData};
 use super::super::hit_test::{CanvasGeometry, point_in_any_surface as hit_surface};
@@ -59,7 +59,7 @@ pub(super) fn polygon(
     {
         let pt = geom.to_norm(pos);
 
-        // If no polygon in progress and clicking inside existing surface, select it
+        // With no polygon in progress, a click inside an existing surface selects it.
         let mut handled = false;
         if state.polygon_verts.is_empty()
             && let Some(uuid) = hit_surface(&data.surfaces, pt[0], pt[1])
@@ -70,14 +70,13 @@ pub(super) fn polygon(
             handled = true;
         }
 
-        // Check if clicking near first vertex to close
+        // A click near the first vertex closes the polygon.
         if !handled && state.polygon_verts.len() >= 3 {
             let first = state.polygon_verts[0];
             let dx = pt[0] - first[0];
             let dy = pt[1] - first[1];
             let close_threshold = 15.0 / geom.width;
             if (dx * dx + dy * dy).sqrt() < close_threshold {
-                // Close polygon
                 let idx = data.surfaces.len() + 1;
                 actions.commands.push(EngineCommand::AddPolygonSurface {
                     name: format!("Surface {idx}"),

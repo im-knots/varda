@@ -1,17 +1,8 @@
 //! Content light level measurement for HDR10 mastering metadata.
 //!
-//! CTA-861.3 expects `MaxCLL` and `MaxFALL` to describe the content, measured across
-//! the programme. Declaring them from a configured peak is true only because the
-//! encoder clamps to it, and is not what the standard asks for.
-//!
-//! Measuring on the CPU from the readback the recording already performs was
-//! tried first and rejected on measurement: 2.44 ms per frame at 1080p and
-//! 6.58 ms at 4K, the latter 40% of a 60fps budget. Replacing the float
-//! accumulation with an integer histogram barely moved it (2.63 to 2.44 ms),
-//! which showed the cost was bandwidth reading the frame a second time rather
-//! than arithmetic. On the GPU the frame is already resident.
-//!
-//! See /spec/hdr-recording-output.md § Mastering and Content Metadata.
+//! CTA-861.3 `MaxCLL` and `MaxFALL` describe the measured content. The
+//! reduction runs on the GPU: a CPU pass over the readback cost 6.58 ms per
+//! frame at 4K, mostly memory bandwidth.
 
 use anyhow::Result;
 use std::num::NonZeroU64;
@@ -42,9 +33,8 @@ pub struct FrameLightLevels {
 
 /// Running content light levels across a recording.
 ///
-/// `MaxCLL` is the largest pixel seen anywhere; `MaxFALL` is the largest *frame
-/// average* seen, not the average of averages, so a single bright frame raises
-/// it and a long dark passage does not lower it.
+/// `MaxCLL` is the largest pixel seen; `MaxFALL` is the largest frame average,
+/// not the average of averages.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ContentLightLevels {
     max_cll: f32,
@@ -66,9 +56,8 @@ impl ContentLightLevels {
 
     /// Measured `MaxCLL` and `MaxFALL`, rounded as the metadata carries them.
     ///
-    /// `None` until at least one frame has been observed: declaring measured
-    /// values for a recording nothing was measured from would be worse than
-    /// saying it was declared.
+    /// `None` until a frame has been observed, so unmeasured recordings aren't
+    /// labeled as measured.
     #[must_use]
     pub fn measured(self) -> Option<(u32, u32)> {
         (self.frames > 0).then(|| {
@@ -105,8 +94,7 @@ impl ContentLightMeter {
     ///
     /// # Errors
     ///
-    /// Never returns `Err` today; the `Result` keeps the constructor uniform with
-    /// the other pipelines so callers can `?` it.
+    /// Never returns `Err`; the `Result` matches the other pipeline constructors.
     pub fn new(device: &wgpu::Device) -> Result<Self> {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Measure Shader"),
@@ -119,8 +107,8 @@ impl ContentLightMeter {
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
-                        // `textureLoad` only, so no filtering is required and the
-                        // float target needs no filterable-float feature.
+                        // `textureLoad` only, so the float target needs no
+                        // filterable-float feature.
                         sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
@@ -251,8 +239,7 @@ impl ContentLightMeter {
 
     /// Enqueue the reduction for one frame and start its readback.
     ///
-    /// `source` is the PQ-encoded frame about to be written, so what is measured
-    /// is what the file will contain.
+    /// `source` is the PQ-encoded frame about to be written.
     pub fn measure(
         &mut self,
         device: &wgpu::Device,
@@ -311,9 +298,7 @@ impl ContentLightMeter {
 
     /// Collect a completed measurement, if one is ready.
     ///
-    /// Non-blocking, on the same asynchronous contract as every other readback:
-    /// a frame's numbers arrive a frame or two after it was measured, which is
-    /// immaterial for a running maximum.
+    /// Non-blocking; results arrive a frame or two late.
     pub fn try_read(&mut self, device: &wgpu::Device) -> Option<FrameLightLevels> {
         let frame = self.readback.as_mut()?.try_read(device)?;
         let floats: &[f32] = bytemuck::cast_slice(frame.bytes());
@@ -356,16 +341,14 @@ mod tests {
 
     #[test]
     fn a_tiny_source_still_produces_a_level() {
-        // Guards the arithmetic, not any real configuration: an empty chain would
-        // mean nothing to read back and a silently missing measurement.
+        // An empty chain would silently skip the measurement.
         assert!(!ContentLightMeter::level_sizes(1, 1).is_empty());
         assert!(!ContentLightMeter::level_sizes(0, 0).is_empty());
     }
 
     #[test]
     fn max_cll_is_the_largest_pixel_and_max_fall_the_largest_frame_average() {
-        // MaxFALL is the largest frame average, not the average of averages: one
-        // bright frame raises it and a long dark passage must not lower it.
+        // MaxFALL is the largest frame average, not the average of averages.
         let mut levels = ContentLightLevels::default();
         levels.observe(FrameLightLevels {
             max: 900.0,
@@ -389,8 +372,7 @@ mod tests {
 
     #[test]
     fn nothing_measured_reports_nothing_rather_than_zero() {
-        // Zeroes would be indistinguishable from a genuinely black programme and
-        // would be written as if measured.
+        // Zeroes would be indistinguishable from a black program.
         assert_eq!(ContentLightLevels::default().measured(), None);
     }
 
@@ -487,8 +469,7 @@ mod gpu_tests {
 
     #[test]
     fn a_uniform_frame_measures_its_own_luminance() {
-        // 594 is the PQ code for 203 cd/m², BT.2408 reference white, so this is
-        // the value a correctly anchored pipeline puts display white at.
+        // 594 is the 10-bit PQ code for 203 cd/m² (BT.2408 reference white).
         let Some(levels) = measure_frame(64, 64, |_, _| 594) else {
             return;
         };
@@ -509,8 +490,7 @@ mod gpu_tests {
 
     #[test]
     fn one_bright_pixel_raises_max_but_barely_moves_the_average() {
-        // The distinction MaxCLL and MaxFALL exist to draw: a specular highlight
-        // is bright but contributes almost nothing to the frame average.
+        // A single bright pixel raises MaxCLL but barely moves the average.
         let Some(levels) = measure_frame(64, 64, |x, y| if x == 0 && y == 0 { 1023 } else { 0 })
         else {
             return;
@@ -532,9 +512,8 @@ mod gpu_tests {
 
     #[test]
     fn a_partial_tile_does_not_bias_the_average() {
-        // 65x65 is not a multiple of the 4x4 reduction, so the edge tiles are
-        // partial. Carrying a sample count rather than assuming full tiles is
-        // what keeps a uniform frame reading as uniform.
+        // 65x65 leaves partial edge tiles; the per-tile sample count keeps a
+        // uniform frame's average correct.
         let Some(levels) = measure_frame(65, 65, |_, _| 594) else {
             return;
         };

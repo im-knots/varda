@@ -1,13 +1,11 @@
-/// Render-thread cost of NDI video conversion at 1080p. See
-/// /spec/performance-hot-paths.md items A and B.
+/// Render-thread cost of NDI video conversion at 1080p.
 ///
-///   `ndi_send/uyvy_1080p` — one 8-bit NDI frame from a rendered output to the
+///   `ndi_send/uyvy_1080p` — one 8-bit frame from a rendered output to the
 ///                          UYVY bytes the sender publishes: recording and
-///                          submitting the frame's GPU work, then collecting
-///                          the finished frame. The GPU's own time between the
-///                          two is excluded; it is not the render thread's.
+///                          submitting GPU work, then collecting the frame.
+///                          GPU execution time between the two is excluded.
 ///
-/// Skipped when no GPU adapter is available.
+/// Skipped without a GPU adapter.
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::time::{Duration, Instant};
 use varda::renderer::context::GpuContext;

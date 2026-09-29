@@ -9,13 +9,10 @@
 //! - One map per sender, named after the sender, holding its
 //!   [`SharedTextureInfo`](super::protocol::SharedTextureInfo).
 //!
-//! Each map has a companion mutex named `<map name>_mutex`. Spout waits 100ms on
-//! it and proceeds anyway on timeout, which is the behaviour mirrored here: a
-//! frame is worth more than a perfectly serialised read of a 280-byte struct
-//! another process is rewriting.
+//! Each map has a companion mutex named `<map name>_mutex`. Like Spout, this
+//! waits 100ms on it and proceeds on timeout.
 //!
-//! No GPU is involved, so all of this runs on a CI runner. See
-//! /spec/spout-output.md § Wire protocol.
+//! No GPU is involved, so this runs on CI.
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::System::Memory::{
@@ -48,8 +45,7 @@ fn c_string(name: &str) -> Vec<u8> {
 
 /// One named region plus the mutex guarding it.
 ///
-/// Owns its handles and unmaps on drop. Not `Send`: every caller is on the
-/// render thread, the same discipline the Syphon manager follows.
+/// Unmaps and closes its handles on drop. Not `Send`: render thread only.
 pub struct SharedMemory {
     map: HANDLE,
     view: *mut u8,
@@ -60,8 +56,7 @@ pub struct SharedMemory {
 impl SharedMemory {
     /// Open a region another application created.
     ///
-    /// `None` when no sender of that name is publishing, which is the ordinary
-    /// case rather than an error.
+    /// `None` when no sender of that name is publishing.
     pub fn open(name: &str, size: usize) -> Option<Self> {
         let c_name = c_string(name);
         let map = unsafe { OpenFileMappingA(FILE_MAP_ALL_ACCESS.0, false, PCSTR(c_name.as_ptr())) }
@@ -72,8 +67,7 @@ impl SharedMemory {
     /// Create the region, or open it if it already exists.
     ///
     /// `CreateFileMappingA` returns the existing mapping when the name is taken,
-    /// which is what Spout relies on: two applications publishing the same sender
-    /// name share one region rather than one of them failing.
+    /// so two applications publishing the same name share one region.
     pub fn create(name: &str, size: usize) -> Option<Self> {
         let c_name = c_string(name);
         let map = unsafe {
@@ -96,11 +90,8 @@ impl SharedMemory {
             unsafe { CloseHandle(map) }.ok()?;
             return None;
         }
-        // Never trust the requested size. `CreateFileMappingA` hands back the
-        // *existing* mapping when the name is already taken, ignoring the size
-        // asked for, and `open` is reading a region another application sized. So
-        // the usable length is whatever was actually mapped, and every access is
-        // bounded by that rather than by what the caller hoped for.
+        // Use the mapped size, not the requested one: an existing mapping keeps
+        // the size another application gave it.
         let mut info = MEMORY_BASIC_INFORMATION::default();
         let queried = unsafe {
             VirtualQuery(
@@ -112,7 +103,7 @@ impl SharedMemory {
         let mapped = if queried == 0 { 0 } else { info.RegionSize };
         let mutex_name = c_string(&format!("{name}_mutex"));
         let Ok(mutex) = (unsafe { CreateMutexA(None, false, PCSTR(mutex_name.as_ptr())) }) else {
-            // Do not leak the view and handle on the way out.
+            // Release the view and handle on failure.
             unsafe {
                 let _ =
                     UnmapViewOfFile(windows::Win32::System::Memory::MEMORY_MAPPED_VIEW_ADDRESS {
@@ -132,9 +123,8 @@ impl SharedMemory {
 
     /// Hold the region's mutex for the duration of `f`.
     ///
-    /// Proceeds on timeout rather than giving up, matching Spout: the worst case
-    /// is one torn read of a struct that is rewritten every frame anyway, and
-    /// blocking the render thread on another application's lock is worse.
+    /// Proceeds on timeout, like Spout. A torn read of a per-frame struct is
+    /// better than blocking the render thread.
     fn locked<T>(&self, f: impl FnOnce() -> T) -> T {
         let held = unsafe { WaitForSingleObject(self.mutex, WAIT_TIMEOUT_MS) } == WAIT_OBJECT_0;
         let out = f();
@@ -146,10 +136,9 @@ impl SharedMemory {
 
     /// Copy the region out.
     ///
-    /// Copies through a raw pointer rather than materialising a `&mut [u8]`.
-    /// Several `SharedMemory` values can address one region, by design and by
-    /// test, so handing out overlapping mutable slices would be aliasing UB even
-    /// though the bytes are shared memory rather than heap.
+    /// Copies through a raw pointer rather than creating a `&mut [u8]`: several
+    /// `SharedMemory` values can map one region, and overlapping mutable slices
+    /// would be aliasing UB.
     #[must_use]
     pub fn read(&self) -> Vec<u8> {
         self.locked(|| {
@@ -186,9 +175,8 @@ impl Drop for SharedMemory {
 
 /// How many sender slots the name table holds.
 ///
-/// Spout stores this in the registry so every application on the machine agrees.
-/// Reading it matters for compatibility: a user who raised the limit for another
-/// application would otherwise see Varda miss senders past slot ten.
+/// Read from the registry, where Spout stores it for every application on the
+/// machine.
 #[must_use]
 pub fn max_senders() -> usize {
     use windows::Win32::System::Registry::{
@@ -228,8 +216,7 @@ pub fn max_senders() -> usize {
         return DEFAULT_MAX_SENDERS;
     }
     let n = u32::from_le_bytes(data) as usize;
-    // A zero or absurd value is a corrupt registry rather than an instruction to
-    // allocate a gigabyte of name table.
+    // Treat zero or huge values as a corrupt registry.
     if n == 0 || n > 1024 {
         DEFAULT_MAX_SENDERS
     } else {
@@ -263,9 +250,9 @@ pub fn sender_info(name: &str) -> Option<SharedTextureInfo> {
 
 /// Add a name to the table, keeping the region alive for the caller.
 ///
-/// The returned handle must be held: Windows frees a mapping when its last
-/// handle closes, so dropping it deregisters the sender. `None` when the table
-/// is full, which is Spout's behaviour rather than evicting somebody else.
+/// Hold the returned handle: Windows frees a mapping when its last handle
+/// closes, so dropping it unregisters the sender. `None` when the table is
+/// full.
 #[must_use]
 pub fn register_sender(name: &str) -> Option<SharedMemory> {
     let name = clamp_sender_name(name);
@@ -295,8 +282,7 @@ pub fn release_sender(name: &str) {
 
 /// Publish a sender's texture description, keeping its region alive.
 ///
-/// Held for the same reason as [`register_sender`]: the map lives only as long
-/// as a handle to it does.
+/// Hold the returned handle, as for [`register_sender`].
 #[must_use]
 pub fn publish_sender_info(name: &str, info: &SharedTextureInfo) -> Option<SharedMemory> {
     let map = SharedMemory::create(&clamp_sender_name(name), SHARED_TEXTURE_INFO_BYTES)?;
@@ -308,13 +294,10 @@ pub fn publish_sender_info(name: &str, info: &SharedTextureInfo) -> Option<Share
 mod tests {
     use super::*;
 
-    /// These touch machine-global named objects, so two of them running at once
-    /// would race on the same name table. Cargo runs tests in parallel by
-    /// default, hence the lock.
+    /// Serializes tests that share machine-global named objects.
     static TABLE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    /// Distinct per test, and distinctive enough not to collide with a real
-    /// application if someone runs the suite with Spout senders live.
+    /// Unique per test and unlikely to collide with real Spout senders.
     fn test_name(suffix: &str) -> String {
         format!("Varda Test Sender {suffix}")
     }
@@ -335,8 +318,7 @@ mod tests {
 
     #[test]
     fn a_second_handle_sees_the_first_ones_writes() {
-        // The property the whole protocol rests on: `CreateFileMappingA` returns
-        // the existing mapping for a taken name rather than a private one.
+        // `CreateFileMappingA` returns the existing mapping for a taken name.
         let name = test_name("shared");
         let a = SharedMemory::create(&name, 32).expect("create");
         let b = SharedMemory::open(&name, 32).expect("the name is taken, so open must find it");
@@ -346,8 +328,7 @@ mod tests {
 
     #[test]
     fn opening_a_name_nobody_published_is_none_rather_than_an_error() {
-        // A receiver polls for senders that mostly do not exist. This is the
-        // ordinary case, not a failure.
+        // Receivers often poll for senders that do not exist.
         assert!(SharedMemory::open("Varda Test Sender That Does Not Exist", 32).is_none());
         assert!(sender_info("Varda Test Sender That Does Not Exist").is_none());
     }
@@ -393,9 +374,8 @@ mod tests {
 
     #[test]
     fn dropping_the_handle_takes_the_sender_down() {
-        // Windows frees a mapping when its last handle closes, so the lifetime of
-        // the returned handle *is* the lifetime of the sender. Getting this wrong
-        // would leave a sender advertised after the output stopped.
+        // Windows frees a mapping when its last handle closes, so the handle's
+        // lifetime is the sender's.
         let name = test_name("lifetime");
         let info = SharedTextureInfo {
             share_handle: 1,

@@ -1,14 +1,11 @@
-//! Input processing — shader hot-reload, audio polling, OSC, MIDI.
-//!
-//! Called once per frame before the render pass.
-//! After processing, changed parameters are broadcast via OSC feedback.
+//! Per-frame input processing before render: shader hot reload, audio, OSC,
+//! MIDI, and timecode. Changed parameters are sent as OSC feedback.
 
 use super::VardaApp;
 use crate::engine::EngineCommand;
 use crate::engine::value::param::ParamAddress;
 
-/// Undo/redo/save requested by a control surface (MIDI, OSC, or a macro
-/// trigger) and not yet dispatched.
+/// Undo/redo/save requested by MIDI, OSC or a macro trigger, not yet dispatched.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PendingGlobalActions {
     pub(crate) undo: bool,
@@ -22,11 +19,9 @@ fn bucket(value: f32, n: usize) -> usize {
 }
 
 impl VardaApp {
-    /// The command a write of `value` to `path` asks for, when its target
-    /// lives outside the mixer: a cue, an output, a surface. `None` for every
-    /// path the parameter router handles, which includes every deck source's
-    /// actions. Presses (a cue, start, stop) fire on the rising edge, like
-    /// `deck/<uuid>/trigger`.
+    /// The command for a write to a target outside the mixer (cue, output,
+    /// surface). `None` for paths the parameter router handles. Presses fire
+    /// on the rising edge, like `deck/<uuid>/trigger`.
     pub(crate) fn surface_command(&self, path: &str, value: f32) -> Option<EngineCommand> {
         use crate::engine::value::param::OutputControl;
         let pressed = value > 0.5;
@@ -81,15 +76,13 @@ impl VardaApp {
                     })
                 }
             },
-            // A surface source is text, so a fader has no meaningful
-            // position for it; everything else belongs to the router.
+            // A surface source is text; a fader can't set it.
             _ => None,
         }
     }
 
-    /// The command a toggle of `path` asks for, when its target lives
-    /// outside the mixer: a press of a cue or output, and a flip of an
-    /// output's delivery or a surface's place on it.
+    /// The command for a toggle of a target outside the mixer: a cue or output
+    /// press, or flipping an output's delivery or surface assignment.
     pub(crate) fn surface_toggle(&self, path: &str) -> Option<EngineCommand> {
         use crate::engine::value::param::OutputControl;
         let address = path.parse::<ParamAddress>().ok()?;
@@ -125,14 +118,12 @@ impl VardaApp {
             .map(|spec| spec.name.clone())
     }
 
-    /// Hand the pending control-surface actions to a windowed consumer, which
-    /// runs them against its UI layout. Clears them.
+    /// Take the pending control-surface actions for a windowed consumer.
     pub(crate) fn take_pending_global_actions(&mut self) -> PendingGlobalActions {
         std::mem::take(&mut self.input.pending_actions)
     }
 
-    /// Run the pending control-surface actions through the engine's own command
-    /// arms, for consumers with no UI layout (headless). Clears them.
+    /// Run and clear the pending control-surface actions, for headless use.
     pub(crate) fn run_pending_global_actions(&mut self) {
         use crate::engine::CommandResult;
         let pending = self.take_pending_global_actions();
@@ -150,16 +141,10 @@ impl VardaApp {
         }
     }
 
-    /// One normalized write from a control surface, whichever surface it came
-    /// from.
-    ///
-    /// MIDI and OSC address the same paths, so they ask the same three
-    /// questions in the same order: is this a global action, is it a target
-    /// outside the mixer, is it a parameter. Targets outside the mixer fire on
-    /// the rising edge like `deck/<uuid>/trigger`, so one press of a pad is one
-    /// command and a fader swept past halfway is one too. Their commands are
-    /// collected rather than run here because a cue jump mid-drain would
-    /// reorder the writes still queued behind it.
+    /// One normalized write from MIDI or OSC. Checked in order: global action,
+    /// target outside the mixer, parameter. Commands for targets outside the
+    /// mixer fire on the rising edge and are deferred, since a cue jump
+    /// mid-drain would reorder the queued writes.
     fn apply_surface_write(
         &mut self,
         path: &str,
@@ -168,12 +153,12 @@ impl VardaApp {
         changed_params: &mut Vec<(String, f32)>,
     ) {
         if path.starts_with("action/") && value > 0.5 {
-            // Global actions — trigger on note-on / CC > 50%
+            // Global actions trigger on note-on or CC > 50%.
             match path {
                 "action/undo" => self.input.pending_actions.undo = true,
                 "action/redo" => self.input.pending_actions.redo = true,
                 "action/save" => self.input.pending_actions.save = true,
-                // A pad, so it toggles rather than needing two bindings.
+                // Toggles, so one pad is enough.
                 "action/record" => self.set_record_armed(!self.show.recorder.armed()),
                 _ => log::debug!("Unknown action path: {path}"),
             }
@@ -196,15 +181,12 @@ impl VardaApp {
         }
     }
 
-    /// Process all external inputs: shader hot-reload, audio, OSC, MIDI.
-    /// Changed parameter paths are collected and broadcast to OSC feedback targets.
+    /// Process all external inputs and send changed parameters as OSC feedback.
     pub fn process_inputs(&mut self) {
-        // Collect (path, value) pairs changed this frame for OSC feedback
+        // (path, value) pairs changed this frame.
         let mut changed_params: Vec<(String, f32)> = Vec::new();
-        // Commands a control surface asked for outside the mixer. Run after
-        // the loops below, which hold a borrow of the receiver they are draining.
+        // Run after the loops below, which borrow the receivers.
         let mut deferred: Vec<EngineCommand> = Vec::new();
-        // Poll for shader file changes (hot-reload)
         let shader_events = self.sources.registry.poll_changes();
         for event in &shader_events {
             match event {
@@ -216,9 +198,7 @@ impl VardaApp {
                     self.session
                         .notifications
                         .info(format!("Shader reloaded: {name}"));
-                    // Lift any GPU quarantine: the author just changed the
-                    // source, so whatever failed may be fixed. Without this a
-                    // single bad save blacks the deck out until restart.
+                    // Lift GPU quarantine, since the source changed.
                     for ch in self.mixer.channels_mut() {
                         for slot in &mut ch.decks {
                             slot.deck.clear_gpu_error();
@@ -249,11 +229,8 @@ impl VardaApp {
             }
         }
 
-        // Reconcile audio capture with modulator demand: capture a device only
-        // while an AudioBand modulator references it (issue #76). Derived from
-        // mixer state each frame, so add/remove/device-switch/scene-load are all
-        // handled here with no per-handler bookkeeping.
-        // See /spec/audio-capture-lifecycle.md.
+        // Capture a device only while an AudioBand modulator references it.
+        // Derived from mixer state each frame, so no handler tracks it.
         {
             let bands = self.mixer.modulation().audio_band_source_ids();
             let default = self.audio.manager.default_source_id();
@@ -261,26 +238,21 @@ impl VardaApp {
             self.audio.manager.set_modulation_refs(&needed);
         }
 
-        // One frame time for every signal ingested below, so LTC and MTC are
-        // aged against the same instant rather than against each other.
+        // One timestamp for LTC and MTC this frame.
         let now = std::time::Instant::now();
 
-        // Poll all audio sources
         self.audio.manager.poll();
 
-        // Timecode arrives on two paths. This is the audio one; the MIDI one is
-        // answered in the drain below.
+        // LTC (audio). MTC is handled in the MIDI drain below.
         self.tick_ltc(now);
 
-        // Update audio textures (using primary source)
+        // From the primary source.
         self.audio.textures.update(
             &self.render.context.queue,
             self.audio.manager.get_primary_data(),
         );
 
-        // Process OSC messages via shared param router. Drained first because
-        // dispatching a write needs the whole app, and the receiver is part of
-        // it.
+        // Drained first, since dispatch needs `&mut self`.
         let osc_inputs: Vec<crate::osc::OscInput> = self
             .input
             .osc_receiver
@@ -307,11 +279,8 @@ impl VardaApp {
             }
         }
 
-        // Process MIDI messages → apply to mixer via mapping store, forward
-        // clock to ClockManager. Clock messages are answered as they are
-        // drained, since they need only the clock manager and the device name
-        // beside it. Everything mappable is kept for the pass below, which needs
-        // the whole app.
+        // Clock messages are handled while draining; mappable messages are
+        // kept for the pass below, which needs `&mut self`.
         let mut mappable: Vec<crate::midi::MidiMessage> = Vec::new();
         if let Some(midi) = &self.input.midi_devices {
             while let Some(msg) = midi.try_recv() {
@@ -333,8 +302,7 @@ impl VardaApp {
                     crate::midi::MidiMessage::ClockStop { .. } => {
                         self.input.clock_manager.process_midi_stop();
                     }
-                    // Timecode, like clock, is an engine-internal signal rather
-                    // than a control, so it never reaches the mapping store.
+                    // Timecode never reaches the mapping store.
                     crate::midi::MidiMessage::MtcQuarterFrame { device_id, .. }
                     | crate::midi::MidiMessage::MtcFullFrame { device_id, .. } => {
                         let device_id = *device_id;
@@ -353,7 +321,7 @@ impl VardaApp {
                 continue;
             };
 
-            // Auto-map: intercept keys owned by auto-mapping before normal lookup
+            // Auto-mapped keys take precedence.
             if self
                 .input
                 .auto_map_engine
@@ -413,15 +381,14 @@ impl VardaApp {
 
             let value = msg.normalized_value();
 
-            // Learn mode: map next MIDI input to the learn target
+            // Learn mode maps the next input to the learn target.
             if self.input.midi_mappings.learn_mode {
                 self.input.midi_mappings.process_learn(key);
             }
 
-            // Apply mapped value to mixer, clock, or global actions
             if let Some(path) = self.input.midi_mappings.get(&key).cloned() {
                 if path == "clock/bpm" {
-                    // Map normalized 0.0–1.0 → 20–300 BPM range
+                    // 0..1 to 20..300 BPM.
                     let bpm = 20.0 + value * 280.0;
                     if matches!(
                         self.input.clock_manager.preference(),
@@ -441,19 +408,14 @@ impl VardaApp {
             }
         }
 
-        // Run what a control surface pressed outside the mixer. A cue or deck
-        // that has since been deleted is ignored the way a mapping to a deleted
-        // deck is. See /spec/arrangement.md § The cue bank.
+        // A deleted cue or deck is ignored.
         for cmd in deferred {
             if let crate::engine::CommandResult::Err { message, .. } = self.execute_command(cmd) {
                 log::debug!("Control-surface command ignored: {message}");
             }
         }
 
-        // Drain macro-triggered global actions. Trigger buttons routed through
-        // `macro/<uuid>/value` queue these on the macro bank; here we forward
-        // them onto the same pending actions as the MIDI `action/*` paths so
-        // undo/redo/save dispatch uniformly.
+        // Macro trigger actions join the MIDI `action/*` pending actions.
         for action in self.mixer.macros_mut().take_pending_actions() {
             match action {
                 crate::macros::GlobalAction::Undo => self.input.pending_actions.undo = true,
@@ -462,7 +424,6 @@ impl VardaApp {
             }
         }
 
-        // Feed audio BPM to ClockManager
         {
             let primary = self.audio.manager.get_primary_data();
             self.input
@@ -470,34 +431,24 @@ impl VardaApp {
                 .update_audio(primary.bpm, primary.beat_phase());
         }
 
-        // Resolve clock priority
         self.input.clock_manager.update();
 
-        // Resolve timecode and hand the transport its position. Before the tick
-        // below, so a master's locate is published as this frame's jump rather
-        // than next frame's.
+        // Before the transport tick, so a master's locate lands this frame.
         self.chase_timecode(now);
 
-        // Advance the show position. After command processing, so a locate that
-        // arrived this frame is published rather than overwritten.
+        // After commands, so a locate this frame isn't overwritten.
         self.show.transport.update();
 
-        // Every surface write above is a performer's hand, so anything that
-        // landed on a parameter the arrangement drives takes that lane back.
-        // Done once at the end rather than per write, so a controller sweeping a
-        // fader across a frame holds the parameter once.
+        // Control-surface writes override the arrangement, once per param per frame.
         for (path, value) in &changed_params {
             self.note_live_route_write(path, *value);
         }
 
-        // After the writes, so a take that opened this frame is not closed by
-        // the same frame's stop, and after the transport, so a loop wrap has
-        // already been published as the jump it is.
+        // After the writes and the transport tick, so loop wraps are already visible.
         self.tick_recorder();
 
         self.publish_timecode();
 
-        // Broadcast changed parameters to OSC feedback targets
         if !changed_params.is_empty()
             && let Some(ref sender) = self.input.osc_feedback
             && sender.has_targets()
@@ -508,11 +459,7 @@ impl VardaApp {
         }
     }
 
-    /// Republish the show position over OSC, once per frame of timecode.
-    ///
-    /// Rate-limited by the label rather than by the render loop: a receiver
-    /// wants the position at the rate positions exist, and 60 fps of identical
-    /// frame numbers is noise on someone else's network.
+    /// Publish the show position over OSC when the timecode frame changes.
     fn publish_timecode(&mut self) {
         let Some(sender) = &self.input.osc_feedback else {
             return;
@@ -528,12 +475,8 @@ impl VardaApp {
         self.show.published_timecode = Some(label);
     }
 
-    /// Keep the LTC tap matching what is patched, and decode what it heard.
-    ///
-    /// The subscription is reconciled from the patch each frame rather than on
-    /// a command, so naming an input, changing it, switching the preference to
-    /// `Off`, and loading a scene all release the device by the same path.
-    /// See /spec/audio-capture-lifecycle.md.
+    /// Match the LTC tap to the patch and decode it. Reconciled each frame,
+    /// so every patch change releases the device the same way.
     fn tick_ltc(&mut self, now: std::time::Instant) {
         let wanted = self
             .input
@@ -565,8 +508,7 @@ impl VardaApp {
                         "Could not open audio source {} to listen for timecode",
                         input.source_id
                     ));
-                    // Forget the patch, or this retries every frame for the
-                    // rest of the show.
+                    // Forget the patch so it isn't retried every frame.
                     self.input.timecode.set_ltc_input(None);
                 }
             }
@@ -601,9 +543,7 @@ impl VardaApp {
             speed: state.speed,
         });
 
-        // Armed to chase and hearing nothing looks exactly like a show that has
-        // not started. Headless has nobody watching the popover, so it is said
-        // out loud, once per silence rather than every frame of it.
+        // Warn once per silence when chasing and nothing arrives.
         if state.running {
             self.show.chase_silent_since = None;
             self.show.chase_silence_reported = false;
@@ -631,10 +571,7 @@ mod tests {
     use crate::midi::{MidiDeviceManager, MidiKey, MidiMessage};
     use crate::osc::{OscInput, OscReceiver};
 
-    /// An app with one white deck in channel 0, returning the deck's UUID.
-    ///
-    /// Returns `None` with no GPU adapter, the way every other GPU-backed test
-    /// in the tree does.
+    /// An app with one white deck in channel 0, and its UUID. `None` without a GPU.
     fn app_with_a_deck() -> Option<(VardaApp, String)> {
         let mut app = crate::testing::headless_app()?;
         let channel = crate::app::snapshot::build_mixer_snapshot(&app).channels[0]
@@ -650,11 +587,8 @@ mod tests {
         Some((app, uuid))
     }
 
-    /// Modulation updates once per frame, in render, where the frame's
-    /// analyzer values exist. Input processing leaves it where the last render
-    /// left it, so a view built between the two reads that frame's values, and
-    /// a smoothed source is not pulled toward the empty analyzer values input
-    /// processing has. See /spec/performance-hot-paths.md item G.
+    /// Modulation updates only in render, where analyzer values exist; input
+    /// processing leaves it unchanged.
     #[test]
     fn input_processing_leaves_modulation_where_the_last_render_left_it() {
         let Some((mut app, _)) = app_with_a_deck() else {
@@ -719,8 +653,7 @@ mod tests {
         assert!((opacity(&mut app) - 0.25).abs() < 1e-4);
     }
 
-    /// A path that names nothing is logged and dropped: a stale mapping in
-    /// someone's controller must not take the show down.
+    /// A path that names nothing is logged and dropped.
     #[test]
     fn a_write_to_a_path_that_names_nothing_is_survivable() {
         let Some((mut app, _deck)) = app_with_a_deck() else {
@@ -739,8 +672,7 @@ mod tests {
         assert!((opacity(&mut app) - 1.0).abs() < 1e-4, "nothing moved");
     }
 
-    /// Actions are edges, not states, so they arm on the press and ignore the
-    /// release. The runner clears the flag when it dispatches.
+    /// Actions fire on press and ignore release. The runner clears the flag.
     #[test]
     fn an_action_path_arms_on_the_press_and_ignores_the_release() {
         let Some((mut app, _deck)) = app_with_a_deck() else {
@@ -775,8 +707,7 @@ mod tests {
         );
     }
 
-    /// Headless has no UI session to hand the action to, so the engine runs it
-    /// through the same command arm the HTTP API uses.
+    /// Headless runs actions through the HTTP API's command arm.
     #[test]
     fn a_controller_undo_runs_without_a_window() {
         let Some((mut app, deck)) = app_with_a_deck() else {
@@ -823,8 +754,7 @@ mod tests {
         assert!(opacity(&mut app).abs() < 1e-4, "the knob is at its bottom");
     }
 
-    /// A controller sends far more than it is mapped for, and every unmapped
-    /// message is a message the show has to ignore quietly.
+    /// Unmapped messages are ignored quietly.
     #[test]
     fn an_unmapped_control_moves_nothing() {
         let Some((mut app, _deck)) = app_with_a_deck() else {
@@ -837,8 +767,7 @@ mod tests {
         assert!((opacity(&mut app) - 1.0).abs() < 1e-4);
     }
 
-    /// Clock messages carry no mapping key, so they must reach the clock and
-    /// never be looked up as controls.
+    /// Clock messages reach the clock and are never looked up as controls.
     #[test]
     fn clock_messages_are_not_mistaken_for_controls() {
         let Some((mut app, deck)) = app_with_a_deck() else {
@@ -854,8 +783,7 @@ mod tests {
         assert!((opacity(&mut app) - 1.0).abs() < 1e-4);
     }
 
-    /// The pad on the desk and the pad in the UI are the same press: both locate
-    /// the show to the cue and leave the transport as they found it.
+    /// A mapped cue press locates to the cue without changing run state, like the UI.
     #[test]
     fn a_mapped_pad_fires_the_cue_it_names() {
         let Some((mut app, _deck)) = app_with_a_deck() else {
@@ -880,9 +808,7 @@ mod tests {
         );
     }
 
-    /// A hand on a controller is a hand on the show: a mapped write during an
-    /// arranged run takes that parameter back from the arrangement, exactly as
-    /// dragging the fader in the UI does.
+    /// A mapped write during an arranged run overrides the arrangement, like the UI.
     #[test]
     fn a_surface_write_takes_the_parameter_back_from_the_show() {
         let Some((mut app, deck)) = app_with_a_deck() else {
@@ -920,8 +846,7 @@ mod tests {
         );
     }
 
-    /// The same press against a cue that has since been deleted is ignored, the
-    /// way a mapping to a deleted deck is.
+    /// A press for a deleted cue is ignored.
     #[test]
     fn a_pad_pointing_at_a_deleted_cue_is_ignored() {
         let Some((mut app, _deck)) = app_with_a_deck() else {
@@ -970,8 +895,7 @@ mod tests {
         app.process_inputs();
     }
 
-    /// The end of the whole feature: bytes off a MIDI port become the show's
-    /// position, and that is what engages the arrangement.
+    /// MTC from a MIDI port sets the show position and engages the arrangement.
     #[test]
     fn an_incoming_master_drives_the_show() {
         let Some((mut app, _deck)) = app_with_a_deck() else {
@@ -1004,8 +928,7 @@ mod tests {
         );
     }
 
-    /// A cable left patched from yesterday must not drag the playhead of a show
-    /// being run by hand.
+    /// Timecode is ignored when not chasing.
     #[test]
     fn a_master_is_ignored_until_the_transport_is_asked_to_follow_it() {
         let Some((mut app, _deck)) = app_with_a_deck() else {
@@ -1030,8 +953,7 @@ mod tests {
         );
     }
 
-    /// A master that stops leaves the show where it stopped rather than
-    /// releasing it, so a pulled cable holds the last look.
+    /// When the master stops, the show holds its last position.
     #[test]
     fn the_show_holds_where_a_master_left_it() {
         let Some((mut app, _deck)) = app_with_a_deck() else {
@@ -1076,12 +998,8 @@ mod tests {
         app.audio.manager.devices().iter().map(|d| d.id).collect()
     }
 
-    /// Patch LTC to `source_id` and let one frame reconcile the tap, returning
-    /// the source it actually opened.
-    ///
-    /// `None` when the device could not be opened, which is the CI case: there
-    /// is no mock capture device, so the tests below skip the way the
-    /// GPU-backed ones do with no adapter.
+    /// Patch LTC to `source_id`, run one frame, and return the opened source.
+    /// `None` if the device couldn't open (as in CI), and the tests skip.
     fn patch_ltc(
         app: &mut VardaApp,
         source_id: crate::audio::AudioSourceId,
@@ -1098,9 +1016,7 @@ mod tests {
         app.input.ltc_tap.as_ref().map(|tap| tap.source_id)
     }
 
-    /// Naming an input is what opens the interface, and unpatching it is what
-    /// gives it back. A rehearsal that is done with timecode must not hold a
-    /// channel of somebody else's console open for the rest of the night.
+    /// Patching an input opens the device; unpatching releases it.
     #[test]
     fn unpatching_ltc_gives_the_audio_interface_back() {
         let Some((mut app, _deck)) = app_with_a_deck() else {
@@ -1128,9 +1044,7 @@ mod tests {
         );
     }
 
-    /// `Off` is the same release by another route: deciding not to follow
-    /// timecode this evening leaves the patch written down but must not leave
-    /// the device open.
+    /// `Off` keeps the patch but releases the device.
     #[test]
     fn switching_timecode_off_releases_the_audio_interface() {
         let Some((mut app, _deck)) = app_with_a_deck() else {
@@ -1156,9 +1070,7 @@ mod tests {
         );
     }
 
-    /// Moving the patch to another interface moves the tap rather than adding a
-    /// second one: two taps would decode two positions, and the interface the
-    /// patch left would still be held open by a reader nobody is asking.
+    /// Moving the patch to another interface moves the tap instead of adding one.
     #[test]
     fn repatching_ltc_moves_the_tap_rather_than_stacking_one() {
         let Some((mut app, _deck)) = app_with_a_deck() else {
@@ -1182,10 +1094,7 @@ mod tests {
         );
     }
 
-    /// Both channels of one interface arrive on the same tap, so changing which
-    /// one carries timecode must not reopen the device. A reopen is a gap in the
-    /// capture, and on the standard field rig the other channel is the music
-    /// going to the PA.
+    /// Changing the LTC channel on one interface doesn't reopen the device.
     #[test]
     fn changing_channel_on_the_same_interface_keeps_the_stream_open() {
         let Some((mut app, _deck)) = app_with_a_deck() else {
@@ -1215,10 +1124,7 @@ mod tests {
         );
     }
 
-    /// A patch pointing at an interface the rig no longer has is reported and
-    /// then forgotten. Left in place it would try to open a device that is not
-    /// there sixty times a second, and log it sixty times a second, for the rest
-    /// of the show.
+    /// A patch to a missing interface is reported once, then forgotten.
     #[test]
     fn a_patch_naming_an_absent_interface_is_reported_once_and_dropped() {
         let Some((mut app, _deck)) = app_with_a_deck() else {
@@ -1267,8 +1173,7 @@ mod tests {
 
     // ── Republishing the position over OSC ──────────────────────
 
-    /// A feedback sender aimed at a socket this test owns, so what went on the
-    /// wire can be read back.
+    /// A feedback sender aimed at a socket the test reads.
     fn osc_loopback() -> Option<(std::net::UdpSocket, crate::osc::OscFeedbackSender)> {
         let socket = std::net::UdpSocket::bind("127.0.0.1:0").ok()?;
         socket
@@ -1294,14 +1199,12 @@ mod tests {
         addresses
     }
 
-    /// An app publishing to a socket the test owns, with the show parked at a
-    /// position that has already been published once.
+    /// An app publishing to a test socket, parked at an already-published position.
     fn app_publishing_position() -> Option<(VardaApp, std::net::UdpSocket)> {
         let (mut app, _deck) = app_with_a_deck()?;
         let (socket, sender) = osc_loopback()?;
         app.input.osc_feedback = Some(sender);
-        // Nothing is published until the show has actually moved, so play a
-        // frame and then park it.
+        // Nothing is published until the show moves.
         app.execute_command(C::TransportPlay);
         app.process_inputs();
         app.execute_command(C::TransportStop);
@@ -1310,9 +1213,7 @@ mod tests {
         Some((app, socket))
     }
 
-    /// A receiver wants the position at the rate positions exist. Sixty frames
-    /// a second of the same frame number is traffic on somebody else's show
-    /// network, where traffic is dropped packets.
+    /// An unchanged position is not republished.
     #[test]
     fn a_position_that_has_not_moved_is_not_republished() {
         let Some((mut app, socket)) = app_publishing_position() else {
@@ -1327,8 +1228,7 @@ mod tests {
         );
     }
 
-    /// A position that moved is published again, or software following Varda
-    /// would sit at the old position through a locate.
+    /// A changed position is published again.
     #[test]
     fn a_position_that_moved_is_published_again() {
         let Some((mut app, socket)) = app_publishing_position() else {
@@ -1353,9 +1253,7 @@ mod tests {
 
     // ── Chasing nothing ─────────────────────────────────────────
 
-    /// Armed to chase with nothing arriving looks exactly like a show that has
-    /// not started yet. A headless rig has nobody watching the popover, so it
-    /// has to be said out loud.
+    /// Chasing with no timecode arriving logs a warning.
     #[test]
     fn chasing_silence_is_reported_after_a_few_seconds() {
         let Some((mut app, _deck)) = app_with_a_deck() else {
@@ -1382,8 +1280,7 @@ mod tests {
         );
     }
 
-    /// And it arms again when the master comes back, so a second dropout later
-    /// in the night is reported rather than swallowed by the first one.
+    /// The warning re-arms when the master returns, so a second dropout is reported.
     #[test]
     fn the_silence_warning_arms_again_when_a_master_returns() {
         let Some((mut app, _deck)) = app_with_a_deck() else {
@@ -1448,9 +1345,8 @@ mod tests {
         }
     }
 
-    /// Outputs are addressed like everything else, so a pad can start a
-    /// recording and a knob can pick a calibration card. See
-    /// /spec/output-sink-providers.md Decision 11.
+    /// Output paths map to commands, so controllers can start a recording or pick
+    /// a calibration card.
     #[test]
     fn output_addresses_become_output_commands() {
         use crate::renderer::context::{CalibrationMode, OutputRotation};

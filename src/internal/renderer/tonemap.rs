@@ -1,13 +1,12 @@
-//! Tonemap post-process pipeline — applies tonemapping to linear HDR composites.
+//! Tonemap post-process pipeline for linear HDR composites.
 use anyhow::Result;
 use std::num::NonZeroU64;
 use wgpu::util::DeviceExt;
 
-// `TonemapMode` is a framework-free value type; defined in `config` and
-// re-exported here so `crate::renderer::tonemap::TonemapMode` still resolves.
+// Re-exported so `crate::renderer::tonemap::TonemapMode` resolves.
 pub use super::config::TonemapMode;
 
-/// GPU uniform for tonemap shader — 16 bytes, matches `TonemapParams` in tonemap.wgsl.
+/// GPU uniform for the tonemap shader: 16 bytes, matches `TonemapParams` in tonemap.wgsl.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct TonemapParams {
@@ -20,9 +19,6 @@ struct TonemapParams {
 }
 
 /// One output transform: a curve and the scene-linear range it targets.
-///
-/// The two always travel together, because a curve without its range is not a
-/// transform, so they are one value rather than two arguments.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OutputTransform {
     /// Curve to apply.
@@ -43,10 +39,8 @@ impl TonemapPipeline {
     ///
     /// # Errors
     ///
-    /// Never returns `Err` today: every wgpu resource here is created
-    /// infallibly (device validation failures surface on the device's error
-    /// scope instead). The `Result` keeps the constructor signature uniform
-    /// with the other pipelines so callers can `?` it.
+    /// Never returns `Err`; validation failures surface on the device's error
+    /// scope. The `Result` matches the other pipeline constructors.
     pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Result<Self> {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Tonemap Bind Group Layout"),
@@ -162,12 +156,8 @@ impl TonemapPipeline {
     }
 
     /// Run the output transform for one program, writing mode and headroom for
-    /// this call.
-    ///
-    /// One pipeline serves every program key: the parameters are per draw, so
-    /// two outputs with different curves do not need two pipelines. `headroom`
-    /// is 1.0 for SDR and `peak/203` for HDR
-    /// (/spec/hdr-color-management.md Decision 3).
+    /// this draw. One pipeline serves every program. `headroom` is 1.0 for SDR
+    /// and `peak/203` for HDR.
     pub fn render_with_headroom(
         &self,
         device: &wgpu::Device,
@@ -209,8 +199,7 @@ impl TonemapPipeline {
     ///
     /// # Panics
     ///
-    /// Panics if `size_of::<TonemapParams>()` is zero, which cannot happen for
-    /// a non-empty `#[repr(C)]` struct.
+    /// Panics if `size_of::<TonemapParams>()` is zero, which cannot happen.
     pub fn create_bind_group(
         &self,
         device: &wgpu::Device,

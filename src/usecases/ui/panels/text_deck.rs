@@ -1,10 +1,9 @@
-//! The text deck's controls in the deck detail bar: Text, Style, Layout,
-//! Motion and Transport columns instead of one stacked column.
+//! Text deck controls in the deck detail bar, laid out as Text, Style, Layout,
+//! Motion and Transport columns.
 //!
-//! Drawn for a source whose controls carry `WidgetHint::TextDeck`. Every
-//! control keeps its learn target, modulation menu and inactive graying,
-//! through the same helpers the generic column uses. See
-//! /spec/text-source.md § Deck controls.
+//! Used for sources whose controls carry `WidgetHint::TextDeck`. Controls keep
+//! their learn target, modulation menu and inactive graying through the same
+//! helpers as the generic column.
 
 use super::super::{DeckUIInfo, UIActions, UIData};
 use super::deck_detail::{
@@ -17,7 +16,7 @@ use crate::engine::value::provider::{
     ControlKind, ControlSpec, ControlValue, ProviderTypeSnapshot,
 };
 
-/// Everything a column draws from.
+/// Inputs shared by every column.
 struct Controls<'a> {
     deck: &'a DeckUIInfo,
     ty: &'a ProviderTypeSnapshot,
@@ -37,7 +36,7 @@ impl<'a> Controls<'a> {
         self.deck.source.status.display.get(name)
     }
 
-    /// A control drawn the generic way.
+    /// A control drawn by the generic helper.
     fn param(&self, ui: &mut egui::Ui, name: &str, actions: &mut UIActions) {
         if let Some(spec) = self.spec(name) {
             source_param(ui, self.deck, self.ty, spec, self.data, actions);
@@ -122,9 +121,8 @@ impl<'a> Controls<'a> {
     }
 }
 
-/// A column of the layout: a titled panel that scrolls within the bar and
-/// collapses to a strip when its title is clicked, like the params and
-/// auto-transition columns.
+/// A titled column that scrolls within the bar and collapses to a strip when
+/// its title is clicked, like the params and auto-transition columns.
 fn column(
     ui: &mut egui::Ui,
     id: (&str, &str),
@@ -163,7 +161,7 @@ fn weak_note(ui: &mut egui::Ui, note: Option<&String>) {
     }
 }
 
-/// The text deck's columns, side by side in the deck detail bar.
+/// The text deck's columns, side by side.
 pub(super) fn text_deck_columns(
     ui: &mut egui::Ui,
     deck: &DeckUIInfo,
@@ -258,8 +256,8 @@ fn text_column(ui: &mut egui::Ui, d: &Controls, actions: &mut UIActions) {
     });
 }
 
-/// A field that adds its line to the text on Enter and clears itself, for
-/// feeding lines one at a time the way a caption feed does.
+/// A field that appends its line to the text on Enter and clears itself, for
+/// feeding lines one at a time like a caption feed.
 fn append_line(ui: &mut egui::Ui, deck_uuid: &str, actions: &mut UIActions) {
     let id = ui.id().with(("text_append", deck_uuid));
     let mut line: String = ui.data(|d| d.get_temp(id)).unwrap_or_default();

@@ -1,4 +1,4 @@
-// Text deck drawing. See /spec/text-source.md § Rendering.
+// Text deck drawing.
 //
 // Draws one line or word's coverage mask as a quad, premultiplied, so
 // overlapping units blend correctly. `text_resolve.wgsl` turns the result

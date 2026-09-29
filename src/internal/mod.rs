@@ -32,9 +32,8 @@ pub mod scene;
 pub mod screen_capture;
 pub mod solid_color;
 pub mod source;
-// The Spout protocol module is pure and builds everywhere so its wire-format
-// tests run on the development machine; the D3D backend it will gain is Windows
-// only. See /spec/spout-output.md § Verification.
+// Pure Rust so its wire-format tests run on every platform; the D3D backend is
+// Windows only.
 pub mod spout;
 pub mod still;
 pub mod stream;

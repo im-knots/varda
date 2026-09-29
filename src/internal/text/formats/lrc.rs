@@ -1,5 +1,4 @@
-//! LRC lyrics, with enhanced LRC word tags. See /spec/text-source.md
-//! § Timed text parsing.
+//! LRC lyrics, with enhanced LRC word tags.
 
 use crate::text::cue::{Cue, Parsed, Problem, Word};
 

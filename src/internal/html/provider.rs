@@ -1,4 +1,4 @@
-//! HTML pages (rendered by Servo) as a deck source. See /spec/html-source.md.
+//! HTML pages (rendered by Servo) as a deck source.
 
 use super::HtmlManager;
 use crate::source::{
@@ -27,7 +27,7 @@ struct Config {
     scaling_mode: crate::source::ScalingMode,
 }
 
-/// HTML sources, with the URLs the user has saved to the library this session.
+/// HTML sources, plus the URLs saved to the library this session.
 #[derive(Default)]
 pub struct HtmlProvider {
     library: Vec<String>,
@@ -174,15 +174,14 @@ impl DeckSourceProvider for HtmlProvider {
     }
 }
 
-/// One HTML deck.
 pub struct HtmlFeed {
     url: String,
     instance: usize,
     feed: Feed,
-    /// Set by the reload action; the provider reloads the page next frame,
+    /// Set by the reload action. The provider reloads the page next frame,
     /// since only it holds the manager.
     reload_requested: bool,
-    /// Set by the interactive action; the app opens or closes the window,
+    /// Set by the interactive action. The app opens or closes the window,
     /// since only it can create one. See [`take_interactive_request`].
     interactive_requested: bool,
 }
@@ -198,7 +197,6 @@ impl HtmlFeed {
         )
     }
 
-    /// The HTML manager instance this deck shows.
     pub fn instance(&self) -> usize {
         self.instance
     }
@@ -209,8 +207,8 @@ pub fn html_instance(source: &dyn DeckSourceInstance) -> Option<usize> {
     downcast_ref::<HtmlFeed>(source).map(HtmlFeed::instance)
 }
 
-/// Take a pending request to toggle the interactive window for this deck.
-/// Returns the HTML instance to show when one was pending.
+/// Takes a pending request to toggle this deck's interactive window,
+/// returning the HTML instance to show.
 pub fn take_interactive_request(source: &mut dyn DeckSourceInstance) -> Option<usize> {
     let deck = downcast_mut::<HtmlFeed>(source)?;
     std::mem::take(&mut deck.interactive_requested).then_some(deck.instance)

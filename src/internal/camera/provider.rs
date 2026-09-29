@@ -1,5 +1,5 @@
 //! Cameras as a deck source. One capture session per device feeds every deck
-//! that shows it. See /spec/deck-sources.md § 4.
+//! that shows it.
 
 use super::{CameraId, CameraManager};
 use crate::source::{
@@ -23,7 +23,6 @@ struct Config {
     scaling_mode: crate::source::ScalingMode,
 }
 
-/// Cameras.
 #[derive(Default)]
 pub struct CameraProvider {
     /// Cameras some visible or cued deck shows this frame. Only these upload.
@@ -161,7 +160,6 @@ impl DeckSourceProvider for CameraProvider {
     }
 }
 
-/// One camera deck.
 pub struct CameraFeed {
     name: String,
     id: CameraId,

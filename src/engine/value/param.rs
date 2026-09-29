@@ -1,9 +1,8 @@
 //! The address of every parameter a control surface, the API, automation, or
 //! modulation can reach.
 //!
-//! One type, one spelling: `Display` renders the canonical path and `FromStr`
-//! parses it, along with the older spellings still found in saved bindings.
-//! See /spec/parameter-routing.md (WS4).
+//! `Display` renders the canonical path. `FromStr` parses it and the older
+//! spellings found in saved bindings.
 
 use std::fmt;
 use std::str::FromStr;
@@ -22,23 +21,23 @@ pub fn effect_param_prefix(effect: &str) -> String {
     format!("effect/{effect}/param")
 }
 
-/// Prefix every key a deck owns shares (`deck/<u>/`): its built-ins and its
-/// shader parameters. For matching or removing them together.
+/// Prefix of every key a deck owns (`deck/<u>/`), built-ins and shader
+/// parameters alike.
 pub fn deck_prefix(deck: &str) -> String {
     format!("deck/{deck}/")
 }
 
-/// Prefix every key a channel owns shares (`ch/<u>/`).
+/// Prefix of every key a channel owns (`ch/<u>/`).
 pub fn channel_prefix(channel: &str) -> String {
     format!("ch/{channel}/")
 }
 
-/// Prefix every key an effect owns shares (`effect/<u>/`).
+/// Prefix of every key an effect owns (`effect/<u>/`).
 pub fn effect_prefix(effect: &str) -> String {
     format!("effect/{effect}/")
 }
 
-/// Prefix every key a modulator owns shares (`mod/<u>/`).
+/// Prefix of every key a modulator owns (`mod/<u>/`).
 pub fn modulator_prefix(source: &str) -> String {
     format!("mod/{source}/")
 }
@@ -67,8 +66,7 @@ impl ComponentKind {
 
 /// One channel of a color or one axis of a point, addressed by a path suffix
 /// (`.../color/r`, `.../param/offset/x`). Source controls and shader
-/// parameters use the same suffixes. See /spec/deck-source-providers.md
-/// § One component vocabulary.
+/// parameters use the same suffixes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Component {
     R,
@@ -157,8 +155,8 @@ impl Component {
 }
 
 /// The canonical spelling of a router path, or `path` unchanged when it names
-/// no parameter. Older saved bindings (`video/seek`, owner-qualified effect
-/// paths) are rewritten this way as they load.
+/// no parameter. Rewrites older saved bindings (`video/seek`, owner-qualified
+/// effect paths) on load.
 pub fn canonical_path(path: &str) -> String {
     path.parse::<ParamAddress>()
         .map_or_else(|_| path.to_string(), |address| address.to_string())
@@ -177,8 +175,8 @@ pub enum ParamAddress {
     ChannelOpacity { channel: String },
     /// `deck/<uuid>/...`
     Deck { deck: String, target: DeckTarget },
-    /// `effect/<uuid>/param/<name>`. Effects are addressed by UUID alone; the
-    /// chain that owns one never changes.
+    /// `effect/<uuid>/param/<name>`. An effect never changes chain, so the
+    /// UUID alone addresses it.
     EffectParam { effect: String, param: String },
     /// `mod/<uuid>/<param>` or `mod/<uuid>/step/<n>`
     Modulator {
@@ -187,22 +185,21 @@ pub enum ParamAddress {
     },
     /// `macro/<uuid>/value`
     MacroValue { macro_uuid: String },
-    /// `output/<uuid>/...`. See /spec/output-sink-providers.md Decision 11.
+    /// `output/<uuid>/...`
     Output {
         output: String,
         target: OutputControl,
     },
     /// `surface/<uuid>/source`: what a surface shows, as text
     /// (`master`, `domemaster`, `ch/<uuid>`, `chs/<uuid>,<uuid>`,
-    /// `deck/<uuid>`). See /spec/output-sink-providers.md Decision 12.
+    /// `deck/<uuid>`).
     SurfaceSource { surface: String },
 }
 
 /// What on an output an address names.
 ///
-/// The output's own controls are listed here. Its sink's settings are
-/// [`OutputControl::Sink`], a route the sink type declares: the address layer
-/// names no sink type.
+/// Sink settings are [`OutputControl::Sink`], by the route the sink type
+/// declares.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum OutputControl {
     /// `start`: begin delivering (a press).
@@ -223,10 +220,8 @@ pub enum OutputControl {
 
 /// What on a deck an address names.
 ///
-/// The deck's own controls are listed here. Its source's controls are
-/// [`DeckTarget::Source`], a route the source type declares (`video/speed`,
-/// `capture/rate`, `scaling_mode`): the address layer names no source type.
-/// See /spec/deck-source-providers.md.
+/// Source controls are [`DeckTarget::Source`], by the route the source type
+/// declares (`video/speed`, `capture/rate`, `scaling_mode`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DeckTarget {
     Opacity,
@@ -332,9 +327,9 @@ impl ParamAddress {
         }
     }
 
-    /// Whether modulation or automation can drive this address. Actions,
-    /// triggers, and in/out points cannot: an in or out point is the reference
-    /// a position offset is scaled against, so modulating it would feed back.
+    /// Whether modulation or automation can drive this address. In and out
+    /// points cannot: a position offset is scaled against them, so
+    /// modulating them would feed back.
     pub fn is_modulatable(&self) -> bool {
         match self {
             Self::ChannelOpacity { .. }
@@ -344,15 +339,14 @@ impl ParamAddress {
                 target: ModulatorTarget::Param(_),
                 ..
             } => true,
-            // Whether a source control is modulatable is its source type's
-            // call, which this layer cannot see; the engine checks the
-            // schema before it accepts an assignment.
+            // The engine checks the source schema before accepting an
+            // assignment to a source control.
             Self::Deck { target, .. } => matches!(
                 target,
                 DeckTarget::Opacity | DeckTarget::Param(_) | DeckTarget::Source(_)
             ),
             // Output controls start encoders, rebuild sinks and re-route
-            // surfaces: discrete changes no curve should sweep.
+            // surfaces; they are discrete.
             Self::Output { .. }
             | Self::SurfaceSource { .. }
             | Self::Crossfader
@@ -367,7 +361,7 @@ impl ParamAddress {
 
     /// Read a modulation key written before scene version 8
     /// (`deck_<u>:<name>`, `fx_<u>:<name>`, `ch_<u>:opacity`, `macro_<u>:value`,
-    /// `mod:<u>:<param>`). Only the scene and preset migrations need this.
+    /// `mod:<u>:<param>`). Used by scene and preset migrations.
     pub fn from_legacy_modulation_key(key: &str) -> Option<Self> {
         if let Some(rest) = key.strip_prefix("mod:") {
             let (source, param) = rest.split_once(':')?;
@@ -375,8 +369,8 @@ impl ParamAddress {
         }
         let (owner, name) = key.split_once(':')?;
         if let Some(deck) = owner.strip_prefix("deck_") {
-            // Before v8 a shader parameter named `opacity` shared this key with
-            // the deck's own opacity. The deck built-in is what it meant.
+            // Pre-v8 `deck_<u>:opacity` meant the deck's opacity, not a
+            // shader parameter.
             let target = match name {
                 "opacity" => DeckTarget::Opacity,
                 "video_speed" => DeckTarget::source("video/speed"),
@@ -499,8 +493,7 @@ impl FromStr for ParamAddress {
                     ["rotation"] => OutputControl::Rotation,
                     ["surface", surface] => OutputControl::Surface(owned(surface)),
                     [] => return Err(unknown()),
-                    // Anything else is a sink setting; whether the output's
-                    // sink has it is answered when the path is routed.
+                    // Anything else is a sink setting, checked when routed.
                     route => OutputControl::Sink(route.join("/")),
                 };
                 Self::output(output, target)
@@ -516,11 +509,10 @@ impl FromStr for ParamAddress {
                     ["transparent"] => DeckTarget::Transparent,
                     ["depth_prepro", name] => DeckTarget::DepthPreprocess(owned(name)),
                     ["param", name] => DeckTarget::Param(owned(name)),
-                    // The playhead's older spelling, still in saved bindings.
+                    // Older playhead spelling found in saved bindings.
                     ["video", "seek"] => DeckTarget::source("video/position"),
                     [] => return Err(unknown()),
-                    // Anything else is a source control; whether the deck's
-                    // source has it is answered when the path is routed.
+                    // Anything else is a source control, checked when routed.
                     route => DeckTarget::Source(route.join("/")),
                 };
                 Self::deck(deck, target)
@@ -589,8 +581,7 @@ mod tests {
         assert_eq!(point, [0.5, 0.6]);
     }
 
-    /// Outputs and surfaces are addressed like every other entity, by UUID.
-    /// See /spec/output-sink-providers.md Decisions 11 and 12.
+    /// Outputs and surfaces are addressed by UUID.
     #[test]
     fn output_and_surface_paths_round_trip() {
         let cases = [
@@ -633,7 +624,7 @@ mod tests {
         assert!("surface/s1/warp".parse::<ParamAddress>().is_err());
     }
 
-    /// Every canonical form, as written today and after v8.
+    /// Every canonical form.
     const CANONICAL: &[&str] = &[
         "crossfader",
         "action/undo",

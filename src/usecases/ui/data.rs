@@ -1,8 +1,7 @@
-//! Per-frame view model: the engine state projected into plain data the panels
-//! render from.
+//! Per-frame view model: engine state projected into plain data for the panels.
 //!
 //! Built once per frame by [`super::build_ui_data`]. Panels read this and never
-//! touch the engine directly (/spec/ui-engine-boundary.md).
+//! touch the engine directly.
 
 use super::{CameraDetectMode, panels};
 use crate::BlendMode;
@@ -15,7 +14,7 @@ use crate::renderer::slicer::{DomeGeometry, DomePreset};
 use crate::surface::detect::DetectedContour;
 use crate::surface::{CircleHint, ContentMapping, SurfaceOutputType, SurfacePath};
 
-/// Parameter info for UI rendering (collected before egui to avoid borrow conflicts)
+/// Parameter info for UI rendering, collected before egui to avoid borrow conflicts.
 #[derive(Clone)]
 pub struct ParamUIInfo {
     pub name: String,
@@ -23,8 +22,8 @@ pub struct ParamUIInfo {
     pub value: ParamValue,
     pub min: Option<f32>,
     pub max: Option<f32>,
-    /// Inspector section. `None` groups with the other ungrouped params, which
-    /// render first and unheaded. See /spec/parameter-inspector.md.
+    /// Inspector section. `None` params are ungrouped and render first, without a
+    /// header.
     pub group: Option<String>,
     /// Options for a `long` param, empty for every other type.
     pub choices: Vec<ParamChoiceUI>,
@@ -37,26 +36,26 @@ pub struct ParamChoiceUI {
     pub label: String,
 }
 
-/// Shader parameters info for UI (generator or effect)
+/// Shader parameters for the UI (generator or effect).
 #[derive(Clone)]
 pub struct ShaderParamsUI {
     pub shader_name: String,
     pub params: Vec<ParamUIInfo>,
 }
 
-/// Modulation source data snapshot for UI display (paired with UUID)
+/// Modulation source snapshot for the UI, with its UUID.
 #[derive(Clone)]
 pub struct ModSourceUIEntry {
     pub uuid: String,
     pub source: ModSourceUI,
-    /// Which notion of time this source follows. See /spec/timebase.md.
+    /// Which clock this source follows.
     pub timebase: crate::timebase::Timebase,
 }
 
 impl ModSourceUIEntry {
-    /// Short label naming this source, for anywhere a modulator is listed as a
-    /// choice or shown as the origin of a value. `idx` is the source's position
-    /// in the full modulation list, which is also what picks its colour.
+    /// Short label for this source wherever a modulator is listed or shown as a
+    /// value's origin. `idx` is the source's position in the full modulation list,
+    /// which also picks its color.
     pub fn label(&self, idx: usize) -> String {
         match &self.source {
             ModSourceUI::LFO { .. } => format!("LFO {}", idx + 1),
@@ -75,7 +74,7 @@ impl ModSourceUIEntry {
     }
 }
 
-/// Modulation source data snapshot for UI display
+/// Modulation source snapshot for the UI.
 #[derive(Clone)]
 pub enum ModSourceUI {
     LFO {
@@ -113,23 +112,22 @@ pub enum ModSourceUI {
         output_name: String,
         smoothing: f32,
     },
-    /// Automation curve. Edited in its arrangement lane rather than as a card in
-    /// the right panel; see /spec/automation.md § UI.
+    /// Automation curve, edited in its arrangement lane rather than as a card.
     Envelope {
         breakpoints: Vec<crate::modulation::Breakpoint>,
     },
 }
 
-/// Infinite non-colliding modulation source colors via binary hue subdivision.
+/// Modulation source color, unique for any index via binary hue subdivision.
 ///
-/// Uses the same subdivision algorithm as channel colors but offset by half the
-/// hue wheel (0.26 vs 0.76) and with higher saturation / different lightness
-/// bands, so modulator colors are always visually distinct from channel colors.
+/// Same algorithm as channel colors, offset by half the hue wheel and with
+/// higher saturation and different lightness bands, so modulator colors stay
+/// distinct from channel colors.
 pub fn modulator_color(idx: usize) -> egui::Color32 {
-    // Opposite side of the hue wheel from channel colors (0.76 + 0.5 = 0.26)
+    // Opposite side of the hue wheel from channel colors (0.76 + 0.5 = 0.26).
     const HUE_OFFSET: f32 = 0.26;
 
-    // Brighter / more saturated styles than channels to stand out on dark UI
+    // Brighter and more saturated than channel styles, to stand out on a dark UI.
     const RING_STYLES: [(f32, f32); 6] = [
         (0.90, 0.55), // ring 0: vivid
         (0.85, 0.62), // ring 1: vivid light
@@ -147,18 +145,17 @@ pub fn modulator_color(idx: usize) -> egui::Color32 {
     egui::Color32::from_rgb((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
 }
 
-/// Modulation assignment snapshot for UI display
+/// Modulation assignment snapshot for the UI.
 #[derive(Clone)]
 pub struct ModAssignmentUI {
     pub source_id: String,
     pub amount: f32,
 }
 
-/// Effect info tuple for UI: (name, enabled, params)
-/// Effect info for UI: (uuid, name, enabled, params)
+/// Effect info for the UI: (uuid, name, enabled, params).
 pub type EffectInfo = (String, String, bool, ShaderParamsUI);
 
-/// Auto-transition state snapshot for UI display
+/// Auto-transition state snapshot for the UI.
 // Mirrors independent engine-side flags one-for-one; collapsing them would obscure the mapping.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone)]
@@ -174,7 +171,6 @@ pub struct AutoTransitionUI {
 }
 
 /// Normalized (`0..1`) depth-preprocessor params backing the bottom-bar faders.
-/// See spec/depth-sensor-preprocessor.md.
 #[derive(Clone)]
 pub struct DepthPreproUI {
     pub sensor_name: String,
@@ -187,7 +183,7 @@ pub struct DepthPreproUI {
     pub mirror: bool,
 }
 
-/// Deck info for UI display
+/// Deck info for the UI.
 // Flat projection of independent deck flags (solo/mute/transparent/source kind).
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone)]
@@ -200,10 +196,10 @@ pub struct DeckUIInfo {
     pub source: crate::engine::value::source::DeckSourceSnapshot,
     /// Depth-preprocessor controls (None = no `depth_sensor` preprocessor).
     pub depth_prepro: Option<DepthPreproUI>,
-    /// True when the interactive window is currently open for this deck.
+    /// True while the deck's interactive window is open.
     pub is_interactive: bool,
     pub opacity: f32,
-    /// Effective opacity accounting for auto-transition state (for visual feedback only)
+    /// Opacity including auto-transition state, for display only.
     pub effective_opacity: f32,
     pub blend_mode: BlendMode,
     pub solo: bool,
@@ -212,19 +208,19 @@ pub struct DeckUIInfo {
     pub transparent: bool,
     pub generator: ShaderParamsUI,
     pub effects: Vec<EffectInfo>,
-    /// Auto-transition state (None = no auto-transition configured)
+    /// Auto-transition state (None = not configured).
     pub auto_transition: Option<AutoTransitionUI>,
-    /// Per-deck render FPS setting
+    /// Per-deck render FPS setting.
     pub render_fps: DeckRenderFps,
-    /// Effective render rate this deck is achieving
+    /// Render rate the deck is achieving.
     pub effective_render_fps: f32,
-    /// Smoothed render cost in microseconds
+    /// Smoothed render cost in microseconds.
     pub render_cost_us: f32,
-    /// GPU-measured render cost in microseconds (0 = not available)
+    /// GPU-measured render cost in microseconds (0 = not available).
     pub gpu_render_cost_us: f32,
 }
 
-/// Channel info for UI display
+/// Channel info for the UI.
 #[derive(Clone)]
 pub struct ChannelUIInfo {
     pub ch_idx: usize,
@@ -236,7 +232,7 @@ pub struct ChannelUIInfo {
     pub effects: Vec<EffectInfo>,
 }
 
-/// Audio input device info for UI display.
+/// Audio input device info for the UI.
 #[derive(Clone)]
 pub struct AudioDeviceUI {
     pub id: AudioSourceId,
@@ -244,7 +240,7 @@ pub struct AudioDeviceUI {
     pub active: bool,
 }
 
-/// Audio data snapshot for UI display
+/// Audio snapshot for the UI.
 #[derive(Clone)]
 pub struct AudioUIData {
     pub level: f32,
@@ -254,15 +250,15 @@ pub struct AudioUIData {
     pub bpm: Option<f32>,
     pub beat_phase: f32,
     pub enabled: bool,
-    /// Available audio input devices
+    /// Available audio input devices.
     pub devices: Vec<AudioDeviceUI>,
-    /// FFT spectrum of primary source (for spectrum visualization, 256 bins)
+    /// FFT spectrum of the primary source, 256 bins.
     pub fft: Vec<f32>,
-    /// Sample rate of primary source
+    /// Sample rate of the primary source.
     pub sample_rate: f32,
 }
 
-/// Notification snapshot for UI rendering (avoids borrowing `NotificationSystem` during egui)
+/// Notification snapshot, so egui rendering doesn't borrow `NotificationSystem`.
 #[derive(Clone)]
 pub struct NotificationUI {
     /// Stable id to dismiss this notification by.
@@ -272,18 +268,18 @@ pub struct NotificationUI {
     pub progress: f32,
 }
 
-/// Per-channel render statistics for the FPS popover
+/// Per-channel render statistics for the FPS popover.
 pub struct ChannelRenderStats {
     pub name: String,
-    /// Average FPS across active decks in this channel (from deck render pipeline timing)
+    /// Average FPS across active decks in this channel, from deck render timing.
     pub avg_deck_fps: f32,
-    /// Number of active (rendered) decks
+    /// Number of active (rendered) decks.
     pub active_deck_count: u32,
-    /// Total channel render time in milliseconds
+    /// Total channel render time in milliseconds.
     pub render_time_ms: f32,
 }
 
-/// All collected data needed to render the UI
+/// Everything needed to render the UI.
 // Aggregate view model; its bools are unrelated engine states, not a state machine.
 #[allow(clippy::struct_excessive_bools)]
 pub struct UIData {
@@ -292,72 +288,71 @@ pub struct UIData {
     pub channels: Vec<ChannelUIInfo>,
     pub master_effect_info: Vec<EffectInfo>,
     pub modulation_sources: Vec<ModSourceUIEntry>,
-    /// Current computed values for each modulation source by UUID
+    /// Current value of each modulation source, by UUID.
     pub modulation_current_values: std::collections::HashMap<String, f32>,
-    /// Modulation assignments: `param_key` -> list of (`source_id`, amount)
+    /// Modulation assignments: `param_key` -> list of (`source_id`, amount).
     pub modulation_assignments: std::collections::HashMap<String, Vec<ModAssignmentUI>>,
     /// User-defined macro controls (one control → many parameter targets).
     pub macros: Vec<crate::macros::Macro>,
     pub audio: AudioUIData,
-    /// Deck preview textures keyed by deck UUID. UUID keys survive reordering
-    /// and removal, so the map needs no reindex pass — see
-    /// [`/spec/api-addressing.md`].
+    /// Deck preview textures keyed by deck UUID, which survives reordering and
+    /// removal.
     pub deck_preview_textures: std::collections::HashMap<String, egui::TextureId>,
-    /// Channel preview textures keyed by `ch_idx`
+    /// Channel preview textures keyed by `ch_idx`.
     pub channel_preview_textures: std::collections::HashMap<usize, egui::TextureId>,
-    /// Output preview textures keyed by output index
+    /// Output preview textures keyed by output index.
     pub output_preview_textures: std::collections::HashMap<usize, egui::TextureId>,
     pub main_output_texture: Option<egui::TextureId>,
     pub notifications: Vec<NotificationUI>,
-    /// Crossfader position (0.0 = A, 1.0 = B)
+    /// Crossfader position (0.0 = A, 1.0 = B).
     pub crossfader: f32,
-    /// Whether an auto-crossfade is currently running
+    /// Whether an auto-crossfade is running.
     pub auto_crossfade_active: bool,
-    /// Progress of auto-crossfade (0.0–1.0), if active
+    /// Auto-crossfade progress (0.0–1.0), if active.
     pub auto_crossfade_progress: f32,
-    /// Current tonemap mode (Bypass or ACES)
+    /// Current tonemap mode.
     pub tonemap_mode: crate::renderer::tonemap::TonemapMode,
-    /// Active LUT filename (if any)
+    /// Active LUT filename, if any.
     pub active_lut_filename: Option<String>,
     /// Scene-referred look LUT filename, applied before every output transform.
     pub look_lut_filename: Option<String>,
-    /// Available LUT files in .varda/luts/
+    /// LUT files available in .varda/luts/.
     pub available_luts: std::sync::Arc<[String]>,
-    /// Whether MIDI learn mode is active
+    /// Whether MIDI learn mode is active.
     pub midi_learn_active: bool,
-    /// The parameter path currently waiting for MIDI learn
+    /// Parameter path waiting for MIDI learn.
     pub midi_learn_target: Option<String>,
-    /// Whether keyboard learn mode is active
+    /// Whether keyboard learn mode is active.
     pub keyboard_learn_active: bool,
-    /// Display string for current keyboard learn target
+    /// Display string for the keyboard learn target.
     pub keyboard_learn_target: Option<String>,
-    /// All current keybindings (read-only snapshot for dispatch + settings panel)
+    /// Current keybindings, read-only, for dispatch and the settings panel.
     pub keymap_bindings:
         std::collections::HashMap<crate::keymap::KeyCombo, crate::keymap::KeyTarget>,
-    /// Available transition shader names (from registry)
+    /// Transition shader names from the registry.
     pub transition_names: Vec<String>,
-    /// Currently active transition name, if any
+    /// Active transition name, if any.
     pub active_transition_name: Option<String>,
-    /// Currently selected deck for detail view in bottom bar (`ch_idx`, `deck_idx`)
+    /// Selected deck for the bottom-bar detail view (`ch_idx`, `deck_idx`).
     pub selected_deck: Option<(usize, usize)>,
-    /// Currently selected channel for detail view in bottom bar (`ch_idx`)
+    /// Selected channel for the bottom-bar detail view (`ch_idx`).
     pub selected_channel: Option<usize>,
-    /// Whether the master output is selected for detail view in bottom bar
+    /// Whether master output is selected for the bottom-bar detail view.
     pub selected_master: bool,
-    /// Currently selected sequence for detail view in bottom bar (`seq_idx`)
+    /// Selected sequence for the bottom-bar detail view (`seq_idx`).
     pub selected_sequence: Option<usize>,
-    /// Currently selected step within the selected sequence (`seq_idx`, `step_idx`)
+    /// Selected step within the selected sequence (`seq_idx`, `step_idx`).
     pub selected_sequence_step: Option<(usize, usize)>,
-    /// Currently selected macro (by UUID) for detail view in bottom bar
+    /// Selected macro (by UUID) for the bottom-bar detail view.
     pub selected_macro: Option<String>,
-    /// Unified outputs (windowed + headless) for UI display
+    /// All outputs, windowed and headless.
     pub outputs: Vec<OutputUI>,
-    /// Surfaces in the stage layout
+    /// Surfaces in the stage layout.
     pub surfaces: Vec<SurfaceUI>,
-    /// Whether the full-screen stage editor is open (replaces deck view)
+    /// Whether the full-screen stage editor is open (replaces the deck view).
     pub stage_editor_open: bool,
     /// Whether the central area shows the arrangement timeline instead of the
-    /// mixer. See /spec/arrangement.md § UI.
+    /// mixer.
     pub arrangement_mode_open: bool,
     /// The scene's arrangement, absent in a Performance-only scene.
     pub arrangement: Option<crate::engine::types::ArrangementSnapshot>,
@@ -369,128 +364,124 @@ pub struct UIData {
     pub arrangement_scroll_y: f32,
     /// Whether timeline edits round to whole frames at the ruler's rate.
     pub arrangement_snap: bool,
-    /// The stretch of show being worked on. Seeded from the transport's loop on
-    /// a scene that was saved with one, so a durable loop opens visible.
+    /// The part of the show being worked on. Seeded from the transport's loop for
+    /// a scene saved with one.
     pub arrangement_focus: Option<crate::usecases::ui::state::FocusRange>,
-    /// What copy is holding, so a menu can name it and disable Paste when it
-    /// holds nothing that fits. See /spec/clipboard.md § UI surface.
+    /// What the clipboard holds, so menus can name it and disable Paste when it
+    /// doesn't fit.
     pub clipboard: Option<crate::engine::ClipboardSummary>,
-    /// Whether the 3D dome preview is open in the stage editor
+    /// Whether the 3D dome preview is open in the stage editor.
     pub dome_preview_open: bool,
-    /// Dome preview texture (rendered 3D hemisphere)
+    /// Dome preview texture (rendered 3D hemisphere).
     pub dome_preview_texture: Option<egui::TextureId>,
-    /// Whether the stage editor is in 3D Dome mode (vs 2D Polygon mode)
+    /// Whether the stage editor is in 3D Dome mode (vs 2D Polygon mode).
     pub dome_mode_active: bool,
-    /// Active dome preset
+    /// Active dome preset.
     pub dome_preset: DomePreset,
-    /// Active dome geometry (radius, truncation, tilt)
+    /// Active dome geometry (radius, truncation, tilt).
     pub dome_geometry: DomeGeometry,
-    /// Size the domemaster is rendered at (square)
+    /// Domemaster render size (square).
     pub domemaster_resolution: crate::renderer::dome::DomemasterResolution,
-    /// Camera detection mode texture (live camera feed registered with egui)
+    /// Live camera feed texture for camera detection.
     pub camera_detect_texture: Option<egui::TextureId>,
-    /// Current camera detection mode state
+    /// Camera detection mode state.
     pub camera_detect_mode: CameraDetectMode,
-    /// Contours detected in current frame (for overlay rendering)
+    /// Contours detected in the current frame, for the overlay.
     pub camera_detect_contours: Vec<DetectedContour>,
-    /// Whether the library panel (left sidebar) is open
+    /// Whether the library panel (left sidebar) is open.
     pub library_panel_open: bool,
-    /// Whether the right panel (master output sidebar) is open
+    /// Whether the right panel (master output sidebar) is open.
     pub right_panel_open: bool,
-    /// Stage editor grid size (normalized, e.g. 0.05 = 20 divisions)
+    /// Stage editor grid size (normalized; 0.05 = 20 divisions).
     pub stage_editor_grid_size: f32,
-    /// Whether snap-to-grid is enabled in the stage editor
+    /// Whether snap-to-grid is on in the stage editor.
     pub stage_editor_snap: bool,
-    /// Available display monitors (refreshed each frame)
+    /// Available display monitors, refreshed each frame.
     pub available_monitors: Vec<MonitorInfo>,
-    /// Connected MIDI devices
+    /// Connected MIDI devices.
     pub midi_devices: Vec<MidiDeviceUI>,
-    /// Current MIDI mappings (for display)
+    /// Current MIDI mappings.
     pub midi_mappings: Vec<MidiMappingUI>,
-    /// Available camera devices (name, id)
+    /// Available camera devices (name, id).
     pub cameras: Vec<(String, crate::camera::CameraId)>,
-    /// Every registered deck source type: its controls and what its library
-    /// offers. See /spec/deck-source-providers.md.
+    /// Every registered deck source type: its controls and library.
     pub sources: std::sync::Arc<Vec<crate::engine::value::provider::ProviderTypeSnapshot>>,
-    /// Every output sink type: its settings and what its library offers.
+    /// Every output sink type: its settings and library.
     pub sinks: std::sync::Arc<Vec<crate::engine::value::provider::ProviderTypeSnapshot>>,
-    // Recording/SRT state is now per-output (see OutputUI.is_active, active_duration)
-    /// Transition sequences (multiple named sequences)
+    /// Transition sequences.
     pub sequences: Vec<SequenceUIData>,
-    /// Number of channels (for channel dropdowns in sequence builder)
+    /// Number of channels, for the sequence builder's channel dropdowns.
     pub channel_count: usize,
-    /// Pipeline-derived FPS: average of per-channel FPSes (from deck render timing)
+    /// Average of per-channel FPS, from deck render timing.
     pub fps: f32,
-    /// Per-channel render stats: (`channel_name`, `avg_deck_fps`, `active_deck_count`, `render_time_ms`)
+    /// Per-channel render stats.
     pub channel_render_stats: Vec<ChannelRenderStats>,
-    /// GPU device name (e.g. "Apple M1 Pro")
+    /// GPU device name (e.g. "Apple M1 Pro").
     pub gpu_device_name: String,
-    /// GPU backend (e.g. "Metal", "Vulkan", "Dx12")
+    /// GPU backend (e.g. "Metal", "Vulkan", "Dx12").
     pub gpu_backend: String,
-    /// GPU driver info string
+    /// GPU driver name.
     pub gpu_driver: String,
-    /// GPU driver version/info
+    /// GPU driver version info.
     pub gpu_driver_info: String,
-    /// GPU device type (e.g. "`DiscreteGpu`", "`IntegratedGpu`")
+    /// GPU device type (e.g. "`DiscreteGpu`", "`IntegratedGpu`").
     pub gpu_device_type: String,
-    /// GPU utilization % (0–100), from GPU timestamp data
+    /// GPU utilization % (0–100), from GPU timestamps.
     pub gpu_utilization: f32,
-    /// CPU usage % (0–100)
+    /// CPU usage % (0–100).
     pub cpu_usage: f32,
-    /// RAM used in bytes
+    /// RAM used, in bytes.
     pub ram_used: u64,
-    /// RAM total in bytes
+    /// RAM total, in bytes.
     pub ram_total: u64,
-    /// Clock sync source label ("Audio", "MIDI", "OSC", "None")
+    /// Clock sync source label ("Audio", "MIDI", "OSC", "None").
     pub clock_source: String,
-    /// Clock sync BPM (if active)
+    /// Clock sync BPM, if active.
     pub clock_bpm: Option<f32>,
-    /// Clock sync active
+    /// Whether clock sync is active.
     pub clock_active: bool,
-    /// Clock MIDI device name (if source is MIDI)
+    /// Clock MIDI device name, if the source is MIDI.
     pub clock_device_name: Option<String>,
-    /// Detected MIDI clock sources for the popover
+    /// Detected MIDI clock sources for the popover.
     pub clock_detected_midi: Vec<crate::engine::types::DetectedClockSourceSnapshot>,
-    /// Whether OSC clock is currently active
+    /// Whether OSC clock is active.
     pub clock_osc_active: bool,
-    /// OSC BPM (if active)
+    /// OSC BPM, if active.
     pub clock_osc_bpm: Option<f32>,
-    /// Audio BPM (fallback)
+    /// Audio BPM (fallback).
     pub clock_audio_bpm: Option<f32>,
-    /// Current clock preference label
+    /// Current clock preference label.
     pub clock_preference: String,
-    /// Device ID if preference is `ForceMidi`
+    /// Device ID when the preference is `ForceMidi`.
     pub clock_preference_force_device_id: Option<crate::midi::DeviceId>,
-    /// Manual BPM value (if preference is `ForceManual`)
+    /// Manual BPM when the preference is `ForceManual`.
     pub clock_manual_bpm: Option<f32>,
-    /// How many modulation sources are locked to the beat. Drives the readout's
-    /// emphasis; see /spec/transport.md § Tempo and position are both shown.
+    /// Number of modulation sources locked to the beat; sets the tempo readout's
+    /// emphasis.
     pub clock_beat_followers: usize,
-    /// Absolute show position. Distinct from the tempo clock above; see
-    /// /spec/transport.md.
+    /// Absolute show position, separate from the tempo clock.
     pub transport: crate::engine::types::TransportSnapshot,
-    /// Every timecode input being listened to, and which one is driving.
-    /// Read by the transport popover so a bad cable is diagnosable separately
-    /// from a stopped show. See /spec/timecode.md.
+    /// Every timecode input being listened to, and which one is driving. The
+    /// transport popover shows it so a bad cable can be told from a stopped show.
     pub timecode: crate::engine::types::TimecodeSnapshot,
-    /// Current master render width
+    /// Master render width.
     pub render_width: u32,
-    /// Current master render height
+    /// Master render height.
     pub render_height: u32,
-    /// GPU's maximum 2D texture dimension — the only bound on custom render
-    /// resolution (Varda imposes no artificial cap).
+    /// GPU's maximum 2D texture dimension, the only limit on custom render
+    /// resolution.
     pub max_render_dimension: u32,
-    /// Target FPS (0 = uncapped)
+    /// Target FPS (0 = uncapped).
     pub target_fps: u32,
-    /// Whether undo is available
+    /// Whether undo is available.
     pub can_undo: bool,
-    /// Whether redo is available
+    /// Whether redo is available.
     pub can_redo: bool,
-    /// Number of decks currently loading in background threads
+    /// Number of decks loading in background threads.
     pub pending_deck_loads: usize,
-    /// Loaded deck preset names (from `PresetLibrary`)
+    /// Deck preset names from `PresetLibrary`.
     pub deck_presets: Vec<String>,
-    /// Loaded channel preset names (from `PresetLibrary`)
+    /// Channel preset names from `PresetLibrary`.
     pub channel_presets: Vec<String>,
 }
 
@@ -511,9 +502,8 @@ impl UIData {
         self.sinks.iter().find(|t| t.type_id == type_id)
     }
 
-    /// A surface source as the performer reads it: channel and deck names
-    /// rather than UUIDs. A reference to something that no longer exists reads
-    /// as missing rather than silently as the master.
+    /// A surface source by channel and deck names instead of UUIDs. A reference to
+    /// something that no longer exists reads as missing, not as the master.
     pub fn surface_source_label(&self, source: &crate::renderer::context::OutputSource) -> String {
         use crate::renderer::context::OutputSource;
         let channel = |uuid: &str| {
@@ -544,8 +534,8 @@ impl UIData {
         }
     }
 
-    /// The label `deck`'s source gives the control at `route`, so every panel
-    /// names a source control the way the deck's own column does.
+    /// The label `deck`'s source gives the control at `route`, so every panel names
+    /// source controls like the deck's own column.
     pub fn source_param_label(&self, deck: &DeckUIInfo, route: &str) -> Option<&str> {
         self.source_type(&deck.source.source_type)?
             .params
@@ -555,33 +545,33 @@ impl UIData {
     }
 }
 
-/// Read-only snapshot of a single transition sequence
+/// Read-only snapshot of one transition sequence.
 #[derive(Clone)]
 pub struct SequenceUIData {
-    /// Stable UUID — the address for every sequence command.
+    /// Stable UUID used to address every sequence command.
     pub uuid: String,
-    /// Display name
+    /// Display name.
     pub name: String,
-    /// Whether the sequence is enabled
+    /// Whether the sequence is enabled.
     pub enabled: bool,
-    /// Whether the sequencer is currently playing
+    /// Whether the sequencer is playing.
     pub playing: bool,
-    /// Current step index (while playing)
+    /// Current step index while playing.
     pub current_step: usize,
-    /// Elapsed time within the current step (seconds)
+    /// Elapsed time within the current step, in seconds.
     pub step_elapsed: f64,
-    /// Step descriptions for display
+    /// Step descriptions for display.
     pub steps: Vec<SequenceStepUI>,
 }
 
-/// A single step displayed in the sequence builder
+/// One step shown in the sequence builder.
 #[derive(Clone)]
 pub struct SequenceStepUI {
     pub label: String,
     pub kind: SequenceStepKindUI,
 }
 
-/// UI-friendly step kind representation
+/// Step kind for the UI.
 #[derive(Clone)]
 pub enum SequenceStepKindUI {
     Fade {
@@ -602,7 +592,7 @@ pub enum SequenceStepKindUI {
     },
 }
 
-/// Info about an available display monitor (for UI display selector)
+/// An available display monitor, for the display selector.
 #[derive(Clone)]
 pub struct MonitorInfo {
     pub name: String,
@@ -611,7 +601,7 @@ pub struct MonitorInfo {
     pub height: u32,
 }
 
-/// MIDI device info for UI display.
+/// MIDI device info for the UI.
 #[derive(Clone)]
 pub struct MidiDeviceUI {
     pub id: crate::midi::DeviceId,
@@ -621,7 +611,7 @@ pub struct MidiDeviceUI {
     pub profile: String,
 }
 
-/// MIDI mapping entry for UI display.
+/// MIDI mapping entry for the UI.
 #[derive(Clone)]
 pub struct MidiMappingUI {
     pub key: crate::midi::MidiKey,
@@ -630,7 +620,7 @@ pub struct MidiMappingUI {
     pub param_path: String,
 }
 
-/// Snapshot of a surface assignment for UI display
+/// Surface assignment snapshot for the UI.
 #[derive(Clone)]
 pub struct SurfaceAssignmentUI {
     pub surface_uuid: String,
@@ -640,7 +630,7 @@ pub struct SurfaceAssignmentUI {
     pub overlap_zones: crate::renderer::edge_blend::SurfaceOverlapZones,
 }
 
-/// Snapshot of an output's state for UI display (unified — windowed or headless)
+/// Output state snapshot for the UI, windowed or headless.
 #[derive(Clone)]
 pub struct OutputUI {
     pub uuid: String,
@@ -648,27 +638,27 @@ pub struct OutputUI {
     /// Where the output delivers: its sink type, settings and state. The
     /// type's settings schema is in [`UIData::sinks`].
     pub sink: crate::engine::types::OutputSinkSnapshot,
-    /// Whether the output is showing: a window always, a startable sink
-    /// while it runs.
+    /// Whether the output is showing: a window always, a startable sink while it
+    /// runs.
     pub is_active: bool,
     /// What the output shows with no surfaces assigned.
     pub unassigned: crate::engine::value::render::Unassigned,
-    /// Duration of active recording/streaming
+    /// Duration of active recording or streaming.
     pub active_duration: std::time::Duration,
     pub surface_assignments: Vec<SurfaceAssignmentUI>,
     pub calibration_mode: crate::renderer::context::CalibrationMode,
-    /// Edge blend mode (Auto / Manual)
+    /// Edge blend mode (Auto / Manual).
     pub edge_blend_mode: crate::renderer::edge_blend::EdgeBlendMode,
-    /// Edge blending configuration
+    /// Edge blending configuration.
     pub edge_blend: crate::renderer::edge_blend::EdgeBlendConfig,
-    /// Per-output rotation (0°/90°/180°/270°)
+    /// Per-output rotation (0°/90°/180°/270°).
     pub rotation: crate::renderer::context::OutputRotation,
     /// Persisted precision and dithering request.
     pub presentation_request: crate::engine::value::render::PresentationRequest,
     /// Runtime format selected by the active adapter.
     pub resolved_presentation: crate::engine::value::render::ResolvedPresentation,
-    /// Every presentation mode, with the reason this output cannot deliver it.
-    /// The picker disables the blocked ones. See /spec/presentation-mode-offering.md.
+    /// Every presentation mode, with the reason this output cannot deliver it, if
+    /// any. The picker disables blocked modes.
     pub mode_availability: Vec<crate::engine::value::render::ModeAvailability>,
     /// Per-output tonemap override. `None` inherits the show-wide curve.
     pub tonemap_override: Option<crate::engine::value::render::TonemapMode>,
@@ -676,11 +666,9 @@ pub struct OutputUI {
     pub audio_passthrough: Option<AudioPassthroughUI>,
     /// ffmpeg video health (None = no subprocess on this output).
     pub delivery: Option<DeliveryHealthUI>,
-    /// Pixel size of the texture the output panel previews. A headless output
-    /// is at the render resolution; a windowed one is at its (rotated) window
-    /// size, which need not share the render aspect. The panel has to size the
-    /// widget from this rather than from the render resolution, or a windowed
-    /// preview is stretched whenever the two disagree.
+    /// Pixel size of the texture the output panel previews: the render resolution
+    /// for a headless output, the (rotated) window size for a windowed one. The
+    /// panel sizes the widget from this so a windowed preview isn't stretched.
     pub preview_width: u32,
     pub preview_height: u32,
 }
@@ -694,8 +682,8 @@ pub struct AudioPassthroughUI {
     pub frames_written: u64,
     /// PCM chunks dropped on backpressure.
     pub frames_dropped: u64,
-    /// Samples of silence written in place of those drops. This, not the chunk
-    /// count, is what the listener hears.
+    /// Samples of silence written in place of those drops, which is what the
+    /// listener hears.
     pub silence_spliced: u64,
 }
 
@@ -712,17 +700,17 @@ pub struct DeliveryHealthUI {
 /// `SetDomeGeometry`.
 #[derive(Debug, Clone)]
 pub enum DomeAction {
-    /// Toggle between 2D Polygon mode and 3D Dome mode
+    /// Toggle between 2D Polygon mode and 3D Dome mode.
     SetMode(bool),
-    /// Rotate orbit camera by pixel delta
+    /// Rotate the orbit camera by a pixel delta.
     RotateCamera { delta_x: f32, delta_y: f32 },
-    /// Zoom orbit camera by scroll delta
+    /// Zoom the orbit camera by a scroll delta.
     ZoomCamera { delta: f32 },
-    /// Reset orbit camera to default
+    /// Reset the orbit camera.
     ResetCamera,
 }
 
-/// Snapshot of a surface for UI display
+/// Surface snapshot for the UI.
 #[derive(Clone)]
 pub struct SurfaceUI {
     pub uuid: String,
@@ -734,16 +722,15 @@ pub struct SurfaceUI {
     pub output_type: SurfaceOutputType,
     pub circle_hint: Option<CircleHint>,
     /// Effective per-surface warp (corner-pin or mesh); `None` = no warp. While
-    /// `warp_bound`, this is the shape-conforming warp. Drives the stage
-    /// bottom-bar warp editor.
+    /// `warp_bound`, this is the shape-conforming warp.
     pub warp: Option<crate::surface::warp::WarpMode>,
-    /// Whether the warp auto-conforms to the surface shape. When `true` the
-    /// bottom-bar warp controls are locked (read-only).
+    /// Whether the warp conforms to the surface shape. When `true` the bottom-bar
+    /// warp controls are read-only.
     pub warp_bound: bool,
-    /// Curve authoring path, when the surface is bezier-edited. Drives the
-    /// anchor/handle overlay and edge hit-testing in the stage editor.
+    /// Curve authoring path for bezier-edited surfaces. Drives the anchor/handle
+    /// overlay and edge hit-testing in the stage editor.
     pub path: Option<SurfacePath>,
-    /// Subtractive cut-out holes (8i.7), drawn as editable overlay contours.
+    /// Subtractive cut-out holes, drawn as editable overlay contours.
     pub holes: Vec<SurfacePath>,
     /// Flattened hole contours (canvas coords) for overlay rendering.
     pub hole_contours: Vec<Vec<[f32; 2]>>,

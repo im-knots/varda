@@ -1,8 +1,7 @@
 //! Contour detection pipeline for surface auto-detection.
 //!
-//! DTOs (`DetectedContour`, `DetectionMethod`, `HullMode`, `DetectionParams`,
-//! `DetectionResult`) live in `engine::value::detect` (see
-//! /spec/engine-value-types.md); this module holds the CV pipeline.
+//! The DTOs (`DetectedContour`, `DetectionMethod`, `HullMode`,
+//! `DetectionParams`, `DetectionResult`) live in `engine::value::detect`.
 
 pub use crate::engine::value::detect::{
     DetectedContour, DetectionMethod, DetectionParams, DetectionResult, HullMode,
@@ -68,7 +67,7 @@ pub fn detect_contours(img: &image::GrayImage, params: &DetectionParams) -> Dete
         binary
     };
 
-    // 4. Border following (replaces old angle-from-centroid trace_contours)
+    // 4. Border following
     let raw_contours = follow_borders(&cleaned);
 
     // 5. Process each contour
@@ -761,9 +760,8 @@ mod tests {
 
     #[test]
     fn follow_borders_concave_l_shape() {
-        // L-shaped region: a single connected concave shape.
-        // Moore neighbor tracing may produce 1 or 2 contours at the inner corner;
-        // both are valid — the key is that border pixels are found and ordered.
+        // L-shaped region: a single connected concave shape. Moore tracing may
+        // produce 1 or 2 contours at the inner corner; both are valid.
         let mut img = image::GrayImage::new(100, 100);
         // Vertical bar (x: 10..30, y: 10..90)
         for y in 10..90 {

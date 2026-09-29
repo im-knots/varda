@@ -1,13 +1,9 @@
-//! UUID → position resolution.
+//! UUID → index resolution.
 //!
-//! Every write command addresses its target by UUID (see
-//! [`/spec/api-addressing.md`]). These turn a UUID into the transient index the
-//! mixer's collections need. The returned indices are valid only until the
-//! containing collection is mutated, so resolve immediately before use and
-//! never store the result.
+//! Write commands address targets by UUID. The returned indices are valid only until the
+//! containing collection is mutated, so resolve immediately before use and never store them.
 //!
-//! Failure is always "not found", never a silent no-op: an unresolvable UUID
-//! means the caller's view of the world is stale, and the caller needs to know.
+//! An unresolvable UUID is always an error, never a no-op: the caller's view is stale.
 
 use super::{EffectLocation, Mixer};
 use crate::engine::value::entity::{EffectTarget, Resolved, UnknownEntity};
@@ -21,9 +17,8 @@ pub enum EffectChain {
 }
 
 impl Mixer {
-    /// The sorted, deduplicated positions of the channels `uuids` names, the
-    /// key a sub-mix is prepared and looked up under. Channels that no longer
-    /// exist are left out.
+    /// The sorted, deduplicated positions of the channels `uuids` names; the key a sub-mix is
+    /// prepared and looked up under. Missing channels are left out.
     pub fn channel_positions(&self, uuids: &[String]) -> Vec<usize> {
         let mut positions: Vec<usize> = uuids
             .iter()
@@ -76,9 +71,8 @@ impl Mixer {
             .ok_or_else(|| UnknownEntity::new("sequence", uuid))
     }
 
-    /// Resolve the chain an [`EffectTarget`] names, without naming an effect.
-    /// Used by append and reorder, which are chain-scoped rather than
-    /// effect-scoped.
+    /// Resolve the chain an [`EffectTarget`] names. Used by append and reorder, which act on the
+    /// whole chain.
     ///
     /// # Errors
     ///

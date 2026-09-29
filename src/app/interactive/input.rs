@@ -1,14 +1,9 @@
-//! winit → [`HtmlInputEvent`] translation for interactive HTML decks.
+//! winit to [`HtmlInputEvent`] translation for interactive HTML decks, kept
+//! here so winit never reaches `internal/html`. Cursor positions map from window
+//! logical coordinates to `WebView` device pixels.
 //!
-//! All conversion from winit input types into the engine's `Send`
-//! [`HtmlInputEvent`] happens here so winit never reaches `internal/html`.
-//! Cursor positions are mapped from window logical coordinates to `WebView`
-//! **device** pixels (fixed 1:1, see `/spec/html-source.md` §4).
-//!
-//! Key/Code/NamedKey names follow the W3C UI Events spec in both winit and
-//! `keyboard_types`, so most map via `FromStr` on the variant name with a few
-//! documented special cases (winit `Super` ↔ W3C `Meta`). These are pure,
-//! stateless helpers; IME composition start/end tracking lives in the caller.
+//! winit and `keyboard_types` both use W3C UI Events names, so most keys map via
+//! `FromStr` on the variant name. winit `Super` is W3C `Meta`.
 
 use std::str::FromStr;
 
@@ -23,11 +18,11 @@ use winit::keyboard::{
 
 use crate::html::HtmlInputEvent;
 
-/// Lines→pixels factor for `MouseScrollDelta::LineDelta` (typical UA line height).
+/// Pixels per line for `MouseScrollDelta::LineDelta` (typical UA line height).
 const LINE_HEIGHT_PX: f64 = 16.0;
 
-/// Map window logical cursor coords → `WebView` device-pixel point, clamped to the
-/// `WebView` size. `scale` is the window scale factor (device px per logical px).
+/// Map a logical cursor position to a `WebView` device-pixel point, clamped to
+/// the `WebView` size. `scale` is device px per logical px.
 pub fn to_device_point(logical: (f64, f64), scale: f64, size: (u32, u32)) -> (f32, f32) {
     let max_x = f64::from(size.0.saturating_sub(1));
     let max_y = f64::from(size.1.saturating_sub(1));
@@ -66,9 +61,8 @@ pub fn mouse_button(point: (f32, f32), button: MouseButton, state: ElementState)
     }
 }
 
-/// A wheel event in device pixels. winit and Servo agree on sign (positive = the
-/// view scrolls up/left, revealing earlier content), so deltas pass through.
-/// `PixelDelta` is already physical px; `LineDelta` is scaled by line height.
+/// A wheel event in device pixels. winit and Servo use the same sign, so deltas
+/// pass through; `LineDelta` is scaled by line height.
 pub fn wheel(point: (f32, f32), delta: MouseScrollDelta) -> HtmlInputEvent {
     let (dx, dy) = match delta {
         MouseScrollDelta::LineDelta(x, y) => {
@@ -113,7 +107,7 @@ pub fn ime_preedit(text: String, start: bool) -> HtmlInputEvent {
     HtmlInputEvent::Ime(CompositionEvent { state, data: text })
 }
 
-/// An IME commit (`compositionend`) — the composed text is inserted.
+/// An IME commit (`compositionend`).
 pub fn ime_commit(text: String) -> HtmlInputEvent {
     HtmlInputEvent::Ime(CompositionEvent {
         state: CompositionState::End,
@@ -145,7 +139,7 @@ fn named_key(nk: WNamedKey) -> Key {
 fn physical_code(pk: PhysicalKey) -> Code {
     match pk {
         PhysicalKey::Code(kc) => {
-            // winit `SuperLeft`/`SuperRight` ↔ W3C `MetaLeft`/`MetaRight`.
+            // winit `SuperLeft`/`SuperRight` are W3C `MetaLeft`/`MetaRight`.
             let name = match format!("{kc:?}").as_str() {
                 "SuperLeft" => "MetaLeft".to_string(),
                 "SuperRight" => "MetaRight".to_string(),
@@ -191,11 +185,9 @@ mod tests {
 
     #[test]
     fn device_point_scales_and_clamps() {
-        // 1:1 at scale 1.0 within bounds.
         assert_eq!(to_device_point((10.0, 20.0), 1.0, (320, 240)), (10.0, 20.0));
-        // Scale factor applied (HiDPI).
         assert_eq!(to_device_point((10.0, 20.0), 2.0, (640, 480)), (20.0, 40.0));
-        // Clamped to size-1 and to >= 0.
+        // Clamped to [0, size-1].
         assert_eq!(
             to_device_point((9999.0, -5.0), 1.0, (320, 240)),
             (319.0, 0.0)
@@ -270,7 +262,6 @@ mod tests {
             named_key(WNamedKey::ArrowLeft),
             Key::Named(NamedKey::ArrowLeft)
         );
-        // winit Super maps to W3C Meta.
         assert_eq!(named_key(WNamedKey::Super), Key::Named(NamedKey::Meta));
     }
 

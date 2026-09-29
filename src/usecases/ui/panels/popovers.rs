@@ -1,6 +1,4 @@
-//! Status-bar popovers and the global MIDI-learn popup.
-//!
-//! Transient overlays rendered above the main layout: FPS, GPU, clock,
+//! Status-bar popovers and the global MIDI-learn popup: FPS, GPU, clock,
 //! transport, resolution and target FPS readouts, plus the right-click
 //! MIDI-learn toggle.
 
@@ -28,10 +26,9 @@ pub(super) fn handle_midi_learn_popup(ctx: &egui::Context, data: &UIData, action
                 .layer_id_at(pos)
                 .is_none_or(|layer| layer.order == egui::Order::Background)
         {
-            // A widget with its own context menu keeps the click, and so does
-            // anything already floating above the layout. This popup is drawn
-            // last, so opening it on the same right-click would cover that
-            // menu and eat every press aimed at its items.
+            // A widget with its own context menu, or anything already floating, keeps the
+            // right-click. This popup is drawn last, so opening it would cover that menu
+            // and block presses on its items.
             ctx.memory_mut(|mem| {
                 mem.data.insert_temp(popup_id, pos);
                 mem.data.insert_temp(popup_fresh_id, true);
@@ -94,17 +91,14 @@ pub(super) fn handle_midi_learn_popup(ctx: &egui::Context, data: &UIData, action
     }
 }
 
-/// A status-bar popover that survives the dropdowns inside it.
+/// A status-bar popover that stays open while its own dropdowns are used.
 ///
-/// egui remembers one open popup per window, so a `ComboBox` opening its list
-/// evicts the popover the list was opened from: the transport panel vanished the
-/// moment a performer reached for the LTC input, and patching it needs two
-/// choices in a row (a device, then a channel). So this owns its open state
-/// rather than renting egui's, and decides dismissal itself: a click that lands
-/// in a floating layer belongs to this popover or to a list it opened, and only
-/// a click that reaches the main UI behind it puts it away. That rule also keeps
-/// the status bar's popovers mutually exclusive, since their triggers sit in
-/// that main UI.
+/// egui tracks one open popup per window, so a `ComboBox` inside would close
+/// the popover (patching LTC takes two choices in a row). This keeps its own
+/// open state: a click in a floating layer belongs to the popover or a list it
+/// opened, and only a click on the main UI closes it. That also keeps the
+/// status bar's popovers mutually exclusive, since their triggers are in the
+/// main UI.
 pub(super) fn status_popover(button: &egui::Response, content: impl FnOnce(&mut egui::Ui)) {
     let ctx = button.ctx.clone();
     let id = button.id.with("status_popover");
@@ -121,8 +115,8 @@ pub(super) fn status_popover(button: &egui::Response, content: impl FnOnce(&mut 
             .show(content);
     }
 
-    // Escape is already handled: egui closes on it and writes that back through
-    // the bool above. The press that opened it is not the press that closes it.
+    // egui already closes on Escape and writes that back through the bool above.
+    // The press that opened the popover does not close it.
     if open && !toggled {
         let clicked_away = ctx.input(|i| i.pointer.any_click())
             && ctx.input(|i| i.pointer.interact_pos()).is_some_and(|pos| {
@@ -137,7 +131,7 @@ pub(super) fn status_popover(button: &egui::Response, content: impl FnOnce(&mut 
     ctx.data_mut(|d| d.insert_temp(id, open));
 }
 
-/// Render the FPS details popover (shown when clicking FPS in the top bar).
+/// FPS details popover, opened from the FPS readout in the top bar.
 pub(super) fn render_fps_popover(ui: &mut egui::Ui, data: &UIData) {
     ui.set_min_width(220.0);
     ui.label(egui::RichText::new("⏱ Render Pipeline").strong());
@@ -213,7 +207,7 @@ pub(super) fn render_fps_popover(ui: &mut egui::Ui, data: &UIData) {
     }
 }
 
-/// Render the GPU details popover (shown when clicking GPU device in the top bar).
+/// GPU details popover, opened from the GPU device in the top bar.
 pub(super) fn render_gpu_popover(ui: &mut egui::Ui, data: &UIData) {
     ui.set_min_width(220.0);
     ui.label(egui::RichText::new("🖥 GPU Details").strong());
@@ -262,11 +256,8 @@ pub(super) fn render_gpu_popover(ui: &mut egui::Ui, data: &UIData) {
     });
 }
 
-/// Colour for the top bar position readout.
-///
-/// Chasing timecode is deliberately loud: it is the state where the position is
-/// out of the operator's hands, and finding that out by scrubbing and having
-/// nothing move is a bad way to learn it.
+/// Color for the top bar position readout. Chasing timecode is highlighted,
+/// since the position is then out of the operator's hands.
 pub(super) fn transport_color(data: &UIData) -> egui::Color32 {
     if data.transport.source == crate::transport::TransportSource::Timecode {
         egui::Color32::from_rgb(120, 180, 255)
@@ -279,23 +270,20 @@ pub(super) fn transport_color(data: &UIData) -> egui::Color32 {
     }
 }
 
-/// Whether the tempo readout is currently driving anything.
+/// Whether the tempo readout is driving anything.
 ///
-/// Tempo and position are both always shown, in both modes; the weaker of the
-/// two is the one nothing is reading. That is a statement about engine state,
-/// not about which UI mode is open, so it stays honest when a show is running
-/// on both clocks at once. See /spec/transport.md § Tempo and position are both
-/// shown.
+/// Tempo and position are always shown; the one nothing reads is dimmed. This
+/// follows engine state, not UI mode, so it stays correct when a show runs on
+/// both clocks.
 pub(super) fn clock_is_live(data: &UIData) -> bool {
     data.clock_active && data.clock_beat_followers > 0
 }
 
 /// Hover text naming what follows each clock.
 ///
-/// This is the actual answer to "why is something moving when I have not
-/// pressed play": there are three motion sources (free-running, beat-locked,
-/// transport-locked) and only two have readouts, so the readouts have to say
-/// what depends on them.
+/// There are three motion sources (free-running, beat-locked,
+/// transport-locked) and only two readouts, so each readout lists what depends
+/// on it.
 pub(super) fn followers_hint(count: usize, what: &str) -> String {
     match count {
         0 => format!("nothing is locked to {what}"),
@@ -304,8 +292,7 @@ pub(super) fn followers_hint(count: usize, what: &str) -> String {
     }
 }
 
-/// Idle, armed, and writing are three states, and a performer mid-show reads
-/// them by colour rather than by hovering for the tooltip.
+/// Idle, armed and writing each get a color, readable without the tooltip.
 fn record_colour(ui: &egui::Ui, data: &UIData) -> egui::Color32 {
     if !data.transport.recording_params.is_empty() {
         egui::Color32::from_rgb(255, 80, 80)
@@ -316,12 +303,8 @@ fn record_colour(ui: &egui::Ui, data: &UIData) -> egui::Color32 {
     }
 }
 
-/// The automation record arm. Drawn in both modes, beside the position.
-///
-/// Out in the open rather than inside the transport popover: the gesture it
-/// catches is the one about to be played, and a control you have to go and find
-/// first is one you reach for after the moment has gone. See
-/// /spec/automation-recording.md § Arming.
+/// The automation record arm, beside the position in both modes, so it is
+/// reachable without opening the transport popover.
 pub(super) fn record_button(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     let t = &data.transport;
     let writing = t.recording_params.len();
@@ -353,7 +336,7 @@ pub(super) fn record_button(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAc
     }
 }
 
-/// Render the transport popover (shown when clicking the position in the top bar).
+/// Transport popover, opened from the position readout in the top bar.
 pub(super) fn render_transport_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     use crate::transport::{TimecodeRate, TransportSource};
 
@@ -375,8 +358,7 @@ pub(super) fn render_transport_popover(ui: &mut egui::Ui, data: &UIData, actions
             .color(transport_color(data)),
     );
 
-    // Position is read-only while chasing, so offering the controls would be
-    // offering a lie.
+    // Position is read-only while chasing, so the controls are hidden.
     let scrubbable = t.source == TransportSource::Internal;
 
     ui.horizontal(|ui| {
@@ -442,11 +424,10 @@ pub(super) fn render_transport_popover(ui: &mut egui::Ui, data: &UIData, actions
     }
 }
 
-/// The signals a performer may tell the transport to follow.
+/// The signals the transport can follow.
 ///
-/// Only devices actually sending timecode are offered: a list of every MIDI
-/// port in the building is a search, not a choice. LTC is always offered,
-/// because its input is patched in settings rather than discovered here.
+/// Only devices sending timecode are offered. LTC is always offered, because
+/// its input is patched in settings rather than discovered.
 fn follow_choices(
     tc: &crate::engine::types::TimecodeSnapshot,
 ) -> Vec<(crate::timecode::TimecodePreference, String)> {
@@ -470,10 +451,8 @@ fn follow_choices(
 
 /// Which audio input, and which channel of it, carries LTC.
 ///
-/// A channel and not just a device, because the standard field rig sends music
-/// to the PA on one channel and timecode to us on the other. Nothing is opened
-/// until an input is chosen: sniffing every device for timecode would take
-/// hardware nobody offered. See /spec/timecode.md § LTC.
+/// A channel, because a typical field rig sends music on one channel and
+/// timecode on the other. No device is opened until an input is chosen.
 fn render_ltc_patch(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     use crate::timecode::LtcInput;
 
@@ -516,8 +495,7 @@ fn render_ltc_patch(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
             egui::ComboBox::from_id_salt("ltc_channel")
                 .selected_text(format!("Ch {}", input.channel + 1))
                 .show_ui(ui, |ui| {
-                    // Two is what a stereo pair offers and what the rig uses;
-                    // the channel count of a device is not in this snapshot.
+                    // A stereo pair; the device channel count is not in this snapshot.
                     for channel in 0..2_u16 {
                         if ui
                             .selectable_label(
@@ -537,13 +515,10 @@ fn render_ltc_patch(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     });
 }
 
-/// The incoming timecode, as the signal rather than as the transport's summary
-/// of it.
+/// Incoming timecode signals, separate from the transport position.
 ///
-/// Separate from the position above because they answer different questions:
-/// "where is the show" is one line, and "is the cable working" is this. A
-/// performer with a dead output needs to tell a master that stopped from a
-/// master nobody is listening to. See /spec/timecode.md § Control Surfaces.
+/// Lets a performer tell a master that stopped from a master nobody is
+/// listening to.
 pub(super) fn render_timecode_inputs(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     let tc = &data.timecode;
 
@@ -620,7 +595,7 @@ pub(super) fn render_timecode_inputs(ui: &mut egui::Ui, data: &UIData, actions: 
     }
 }
 
-/// Render the clock source popover (shown when clicking BPM in the top bar).
+/// Clock source popover, opened from the BPM readout in the top bar.
 pub(super) fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     ui.set_min_width(220.0);
     ui.label(egui::RichText::new("🕐 Clock Source").strong());
@@ -628,14 +603,12 @@ pub(super) fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &m
 
     let is_auto = data.clock_preference == "Auto";
 
-    // Auto option
     if ui.radio(is_auto, "Auto (recommended)").clicked() && !is_auto {
         actions.commands.push(EngineCommand::SetClockPreference {
             preference: crate::clock::ClockPreference::Auto,
         });
     }
 
-    // Detected MIDI devices
     for src in &data.clock_detected_midi {
         let is_selected = data.clock_preference_force_device_id == Some(src.device_id);
         let bpm_str = src.bpm.map_or("--".to_string(), |b| format!("{b:.0}"));
@@ -649,7 +622,7 @@ pub(super) fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &m
         }
     }
 
-    // OSC option (only shown if OSC is active)
+    // OSC option, only while OSC is active.
     if data.clock_osc_active {
         let is_osc = data.clock_preference == "ForceOsc";
         let bpm_str = data
@@ -663,7 +636,6 @@ pub(super) fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &m
         }
     }
 
-    // Audio only option
     let is_audio = data.clock_preference == "ForceAudio";
     let audio_bpm_str = data
         .clock_audio_bpm
@@ -675,7 +647,6 @@ pub(super) fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &m
         });
     }
 
-    // Manual BPM option
     let is_manual = data.clock_preference == "ForceManual";
     let mut manual_bpm = data.clock_manual_bpm.unwrap_or(120.0);
     ui.horizontal(|ui| {
@@ -699,7 +670,7 @@ pub(super) fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &m
         }
     });
 
-    // Current status line
+    // Current status line.
     ui.separator();
     let status = match data.clock_source.as_str() {
         "MIDI" => {
@@ -727,7 +698,7 @@ pub(super) fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &m
 /// A named render resolution offered in the popover: label, width, height.
 type ResolutionPreset = (&'static str, u32, u32);
 
-/// Render the resolution popover (shown when clicking resolution in the top bar).
+/// Resolution popover, opened from the resolution readout in the top bar.
 pub(super) fn render_resolution_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     ui.set_min_width(200.0);
     ui.label(egui::RichText::new("📐 Render Resolution").strong());
@@ -736,11 +707,9 @@ pub(super) fn render_resolution_popover(ui: &mut egui::Ui, data: &UIData, action
     let current_w = data.render_width;
     let current_h = data.render_height;
 
-    // Landscape presets, then the shapes short-form video actually ships in.
-    // 1080×1920 is the single 9:16 master every vertical platform takes —
-    // Reels, TikTok, Shorts, Stories and Facebook Reels all specify exactly
-    // that. 1080×1350 is the 4:5 Instagram feed post, which claims more of the
-    // scroll than square does, and 1080×1080 is the 1:1 fallback.
+    // Landscape presets, then short-form video shapes: 1080×1920 (9:16) is the
+    // master for Reels, TikTok, Shorts and Stories; 1080×1350 is the 4:5
+    // Instagram feed post; 1080×1080 is the 1:1 fallback.
     let landscape: &[ResolutionPreset] = &[
         ("720p", 1280, 720),
         ("1080p", 1920, 1080),
@@ -771,7 +740,7 @@ pub(super) fn render_resolution_popover(ui: &mut egui::Ui, data: &UIData, action
     ui.separator();
     ui.label(egui::RichText::new("Custom").strong().small());
 
-    // Custom W×H input — use persistent state via egui memory
+    // Custom W×H input, persisted in egui memory.
     let custom_width_id = ui.id().with("custom_res_w");
     let custom_height_id = ui.id().with("custom_res_h");
     let mut custom_w: u32 = ui
@@ -781,8 +750,7 @@ pub(super) fn render_resolution_popover(ui: &mut egui::Ui, data: &UIData, action
         .data(|d| d.get_temp(custom_height_id))
         .unwrap_or(current_h);
 
-    // No artificial cap: the upper bound is the GPU's max texture dimension,
-    // matching what the engine/API accept (spec/resolution-and-scaling.md).
+    // The upper bound is the GPU's max texture dimension, as in the engine and API.
     let max_dim = data.max_render_dimension;
     ui.horizontal(|ui| {
         ui.label("W:");
@@ -826,7 +794,7 @@ pub(super) fn render_resolution_popover(ui: &mut egui::Ui, data: &UIData, action
     );
 }
 
-/// Render the target FPS popover (shown when clicking FPS target in the top bar).
+/// Target FPS popover, opened from the FPS target in the top bar.
 pub(super) fn render_target_fps_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     ui.set_min_width(180.0);
     ui.label(egui::RichText::new("🎯 Target FPS").strong());
@@ -865,8 +833,7 @@ mod tests {
     use super::*;
     use crate::transport::TransportSource;
 
-    /// Emphasis follows engine state, not UI mode: the tempo readout is only
-    /// live when a clock exists *and* something reads it.
+    /// The tempo readout is live only when a clock exists and something reads it.
     #[test]
     fn tempo_is_live_only_when_a_clock_has_followers() {
         let mut data = UIData::test_fixture();
@@ -889,9 +856,8 @@ mod tests {
         );
     }
 
-    /// Chasing timecode must not dim the tempo readout. Beat-locked modulators
-    /// keep running through a timecode-chased section, and timecode carries no
-    /// tempo to replace them with. See /spec/transport.md.
+    /// Chasing timecode does not dim the tempo readout: beat-locked modulators keep
+    /// running, and timecode carries no tempo.
     #[test]
     fn chasing_timecode_does_not_dim_the_tempo() {
         let mut data = UIData::test_fixture();
@@ -918,8 +884,7 @@ mod tests {
         );
     }
 
-    /// The press is a toggle, so a performer ending a pass presses the same
-    /// thing they started it with.
+    /// The record button toggles, so the same press starts and ends a pass.
     #[test]
     fn the_record_button_arms_and_disarms() {
         use egui_kittest::kittest::Queryable;
@@ -943,9 +908,7 @@ mod tests {
         }
     }
 
-    /// A pass that is actually writing has to be visible from across a room:
-    /// the difference between armed and recording is the difference between a
-    /// take you can still set up and one you are already in.
+    /// A pass that is writing looks distinct from one that is only armed.
     #[test]
     fn a_pass_being_written_looks_different_from_being_armed() {
         let mut harness = egui_kittest::Harness::new_ui(|ui| {
@@ -984,8 +947,7 @@ mod tests {
         }
     }
 
-    /// The reason the readout is a list: the input that is *not* resolving is
-    /// the one a performer is trying to diagnose.
+    /// Every input is listed, including ones that are not resolving.
     #[test]
     fn every_input_is_shown_not_only_the_one_driving() {
         use egui_kittest::kittest::Queryable;
@@ -1008,8 +970,7 @@ mod tests {
         harness.get_by_label_contains("MTC (Tascam Model 12)");
     }
 
-    /// Nothing arriving must say so, and say what to do about it, rather than
-    /// leaving an empty panel that looks like a broken UI.
+    /// With nothing arriving, the panel says so and what to do.
     #[test]
     fn silence_says_what_to_do_about_it() {
         use egui_kittest::kittest::Queryable;
@@ -1026,8 +987,7 @@ mod tests {
         harness.get_by_label_contains("No timecode arriving");
     }
 
-    /// Only devices actually sending timecode are offered to follow: listing
-    /// every MIDI port in the building is a search, not a choice.
+    /// Only devices sending timecode are offered to follow.
     #[test]
     fn only_devices_sending_timecode_are_offered() {
         use crate::timecode::TimecodePreference;
@@ -1061,9 +1021,8 @@ mod tests {
         );
     }
 
-    /// LTC is only listened for on an input someone named, so naming one is the
-    /// gesture that starts it. The channel comes with it because a field rig
-    /// sends programme audio down the other one.
+    /// LTC is only listened for on a named input, so naming one starts it. The
+    /// channel is part of the choice.
     #[test]
     fn patching_ltc_names_a_device_and_a_channel() {
         use egui_kittest::kittest::Queryable;
@@ -1103,8 +1062,7 @@ mod tests {
         );
     }
 
-    /// Moving to the other channel is a different patch on the same box, not a
-    /// reason to forget which box it is.
+    /// Switching channel keeps the same device.
     #[test]
     fn changing_the_ltc_channel_keeps_the_device() {
         use egui_kittest::kittest::Queryable;
@@ -1148,9 +1106,8 @@ mod tests {
         );
     }
 
-    /// Patching LTC takes two choices (a box, then a channel), so the panel has
-    /// to survive the first one. A chooser that lives in its own layer counts as
-    /// "outside" the popover it was opened from, and dismissed the whole thing.
+    /// Patching LTC takes two choices (device, then channel), so the popover must
+    /// stay open after the first, even though the chooser is in its own layer.
     #[test]
     fn choosing_an_input_leaves_the_transport_popover_open() {
         use egui_kittest::kittest::Queryable;
@@ -1205,9 +1162,7 @@ mod tests {
         );
     }
 
-    /// Surviving its own dropdowns must not make a popover sticky: the reading
-    /// it covers is the one a performer wants back, and the status bar's other
-    /// readouts sit in the UI behind it.
+    /// A popover still closes on a click on the UI behind it.
     #[test]
     fn a_click_in_the_ui_behind_puts_a_popover_away() {
         use egui_kittest::kittest::Queryable;
@@ -1239,9 +1194,7 @@ mod tests {
         );
     }
 
-    /// Escape is the reflex for "put that away" and it has to work while the
-    /// hand is nowhere near the mouse, because the reading the popover covers
-    /// is the one being watched.
+    /// Escape closes the popover.
     #[test]
     fn escape_puts_a_status_popover_away() {
         use egui_kittest::kittest::Queryable;
@@ -1266,10 +1219,8 @@ mod tests {
         );
     }
 
-    /// The status bar is a row of readouts, and reaching for the next one is a
-    /// single press. Owning the open state rather than renting egui's memory
-    /// gave up the one-popup-per-window rule, so the mutual exclusion it used
-    /// to provide has to be pinned here.
+    /// Opening another status-bar popover closes the current one. The popovers
+    /// own their open state, so egui's one-popup rule does not enforce this.
     #[test]
     fn opening_one_status_popover_closes_the_other() {
         use egui_kittest::kittest::Queryable;
@@ -1303,9 +1254,8 @@ mod tests {
         );
     }
 
-    /// Unpatching is as ordinary as patching: the rig changes between load-ins
-    /// and a stale input is worse than none, because it keeps a dead channel
-    /// open and reports silence as if it were the master's.
+    /// Unpatching is supported; a stale input would keep a dead channel open and
+    /// report silence as the master's.
     #[test]
     fn clearing_the_ltc_patch_asks_for_no_input() {
         use egui_kittest::kittest::Queryable;
@@ -1343,9 +1293,8 @@ mod tests {
         );
     }
 
-    /// Auto picks a master by priority, which is the wrong answer when two are
-    /// arriving and only one is the show. Naming the box is how a performer
-    /// overrules that, so the choice has to carry the box.
+    /// Auto picks a master by priority; naming a device overrides it, so the
+    /// choice carries the device.
     #[test]
     fn choosing_a_named_master_from_the_ui_forces_that_device() {
         use egui_kittest::kittest::Queryable;
@@ -1361,8 +1310,7 @@ mod tests {
         harness.run();
         harness.get_by_value("Auto").click();
         harness.run();
-        // The same text appears in the list of arriving inputs below, as a
-        // label rather than a choice.
+        // The same text also appears as a label in the arriving-inputs list below.
         harness
             .get_by_role_and_label(egui::accesskit::Role::Button, "MTC (Model 12)")
             .click();
@@ -1381,9 +1329,8 @@ mod tests {
         );
     }
 
-    /// Freewheeling is the state that lies: the position keeps moving, so a
-    /// performer reading only the numbers cannot tell a master still sending
-    /// from a cable that went out a second ago. The mark is what tells them.
+    /// Freewheeling is marked, since the position keeps moving and the numbers
+    /// alone can't show the master was lost.
     #[test]
     fn a_freewheeling_input_is_marked_differently_from_a_healthy_one() {
         use egui_kittest::kittest::Queryable;
@@ -1414,8 +1361,7 @@ mod tests {
         }
     }
 
-    /// MIDI learn is reached by right-clicking the layout itself, because the
-    /// control being mapped is whatever the performer is already looking at.
+    /// MIDI learn is opened by right-clicking the layout.
     #[test]
     fn right_clicking_the_main_ui_offers_midi_learn() {
         use egui_kittest::kittest::Queryable;
@@ -1441,9 +1387,7 @@ mod tests {
         );
     }
 
-    /// The gesture that opened it is the gesture that takes it back, so a
-    /// performer who opened it by accident mid-show does not have to find a
-    /// safe patch of screen to click on.
+    /// The same gesture that opened the popup closes it.
     #[test]
     fn a_second_right_click_puts_the_midi_learn_popup_away() {
         use egui_kittest::kittest::Queryable;
@@ -1468,9 +1412,8 @@ mod tests {
         );
     }
 
-    /// This popup is drawn last, so opening it over something already floating
-    /// would cover that thing and eat every press aimed at its items. A right
-    /// click that lands on a floating layer belongs to whatever is floating.
+    /// A right-click on a floating layer belongs to that layer; this popup, drawn
+    /// last, would cover it.
     #[test]
     fn right_clicking_something_floating_does_not_open_the_midi_learn_popup() {
         use egui_kittest::kittest::Queryable;
@@ -1497,9 +1440,7 @@ mod tests {
         );
     }
 
-    /// Learn mode is entered and left through this one popup, and both learn
-    /// modes are offered from it because a mapping is a mapping whichever
-    /// surface it comes from.
+    /// Both learn modes are entered and left through this popup.
     #[test]
     fn the_midi_learn_popup_asks_for_the_mode_it_names() {
         use egui_kittest::kittest::Queryable;

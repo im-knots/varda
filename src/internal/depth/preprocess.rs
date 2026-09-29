@@ -1,25 +1,22 @@
-//! Depth-sensor shader preprocessor — GPU-inline conversion of a raw sensor
-//! stream into render-ready fields for ISF shaders.
+//! Depth-sensor shader preprocessor: converts a raw sensor stream on the GPU
+//! into fields for ISF shaders.
 //!
 //! A shader declares `{"NAME": "mask", "TYPE": "depth_sensor"}` in its ISF
-//! `PREPROCESSORS` block; the engine acquires an attached sensor through the
-//! ref-counted [`crate::depth::DepthSensorManager`] and this pipeline converts
-//! the shared `R16Uint` depth texture into `depth` / `mask` / `motion` / `rgb`.
-//!
-//! Nothing here touches host memory: the sensor's pixels are already GPU
-//! resident and stay there. See preprocess.wgsl and
-//! spec/depth-sensor-preprocessor.md.
+//! `PREPROCESSORS` block. The engine acquires a sensor through
+//! [`crate::depth::DepthSensorManager`], and this pipeline turns its shared
+//! `R16Uint` depth texture into `depth` / `mask` / `motion` / `rgb`. The data
+//! stays on the GPU. Shader: preprocess.wgsl.
 
 use crate::analyzer::traits::{AnalyzerSchema, TextureOutputDef};
 use crate::analyzer::{AnalyzerRegistry, PreprocessorCategory};
 use anyhow::Context as _;
 
-/// The ISF `TYPE` string shaders declare to request this preprocessor.
+/// ISF `TYPE` for this preprocessor.
 pub const PREPROCESSOR_TYPE: &str = "depth_sensor";
 
-/// Millimetre span the normalized `near`/`far` faders address.
+/// Millimeter span the normalized `near`/`far` faders cover.
 const RANGE_MM: f32 = 8000.0;
-/// Maximum hole-fill / feather radius, matching `MAX_RADIUS` in preprocess.wgsl.
+/// Max hole-fill / feather radius; matches `MAX_RADIUS` in preprocess.wgsl.
 const MAX_RADIUS: f32 = 8.0;
 
 /// One shader-visible output of the `depth_sensor` preprocessor.
@@ -29,17 +26,17 @@ pub enum Output {
     Depth,
     /// Feathered silhouette occupancy.
     Mask,
-    /// Approximate screen-space velocity of the depth surface, UV units/second.
+    /// Approximate screen-space velocity of the depth surface, in UV units per second.
     Motion,
-    /// The sensor's colour stream, mirrored to match the depth outputs.
+    /// The sensor's color stream, mirrored to match the depth outputs.
     Rgb,
 }
 
 impl Output {
-    /// All outputs, in binding-allocation order.
+    /// All outputs, in binding order.
     pub const ALL: [Output; 4] = [Output::Depth, Output::Mask, Output::Motion, Output::Rgb];
 
-    /// The ISF `NAME` a shader uses to select this output.
+    /// ISF `NAME` that selects this output.
     pub fn name(self) -> &'static str {
         match self {
             Output::Depth => "depth",
@@ -63,13 +60,13 @@ impl Output {
         }
     }
 
-    /// Resolved from [`Self::format_key`] so the schema string and the texture
-    /// the pipeline actually allocates cannot drift apart.
+    /// Resolved from [`Self::format_key`] so the schema and the allocated
+    /// texture always agree.
     ///
     /// # Panics
     ///
-    /// Panics if a format key returned by [`Self::format_key`] is not a known
-    /// texture format — a programming error, covered by unit tests.
+    /// Panics if [`Self::format_key`] returns an unknown format (a bug, covered
+    /// by tests).
     pub fn wgpu_format(self) -> wgpu::TextureFormat {
         crate::analyzer::traits::texture_format_from_str(self.format_key())
             .expect("depth_sensor output format keys are resolvable")
@@ -85,12 +82,10 @@ impl Output {
     }
 }
 
-/// Add the depth preprocessor to `registry`.
-///
-/// Device-backed GPU preprocessor: no factory, no worker thread. Registered
-/// unconditionally. Without the `depth` feature no sensor enumerates, so a
-/// shader declaring it fails its pre-flight with a clear message rather than
-/// an "unknown preprocessor type". See /spec/depth-sensor-preprocessor.md.
+/// Adds the depth preprocessor to `registry`: a device-backed GPU preprocessor
+/// with no factory or worker thread. Always registered, so without the `depth`
+/// feature a shader using it fails pre-flight with a clear message instead of
+/// "unknown preprocessor type".
 pub(crate) fn register(registry: AnalyzerRegistry) -> AnalyzerRegistry {
     registry.register_gpu(
         PREPROCESSOR_TYPE,
@@ -99,7 +94,7 @@ pub(crate) fn register(registry: AnalyzerRegistry) -> AnalyzerRegistry {
     )
 }
 
-/// Schema published to the preprocessor registry.
+/// Schema for the preprocessor registry.
 pub(crate) fn schema() -> AnalyzerSchema {
     AnalyzerSchema {
         scalars: Vec::new(),
@@ -114,7 +109,7 @@ pub(crate) fn schema() -> AnalyzerSchema {
     }
 }
 
-/// Router-exposed preprocessor parameters (`deck/<uuid>/depth_prepro/*`).
+/// Preprocessor parameters exposed to the router (`deck/<uuid>/depth_prepro/*`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DepthPreprocessParams {
     pub near_mm: f32,
@@ -127,8 +122,8 @@ pub struct DepthPreprocessParams {
     pub mask_feather: f32,
     /// Multiplier on the `motion` output.
     pub motion_gain: f32,
-    /// Flip X. On by default — the sensor faces the audience, so unmirrored
-    /// output moves the wrong way relative to the projection.
+    /// Flip X. On by default: the sensor faces the audience, so unmirrored
+    /// output moves opposite to the performer.
     pub mirror: bool,
 }
 
@@ -147,17 +142,16 @@ impl Default for DepthPreprocessParams {
 }
 
 impl DepthPreprocessParams {
-    /// Denormalize a fader value (`0..1`) into the physical range of `name` and
-    /// apply it. Returns `false` for an unknown param (nothing mutated).
-    ///
-    /// Split out from `Deck::set_depth_prepro_param` so the mapping is unit
-    /// testable without a live sensor, mirroring `PointCloudParams`.
+    /// Maps a fader value (`0..1`) into the physical range of `name` and
+    /// applies it. Returns `false` for an unknown param, changing nothing.
+    /// Split from `Deck::set_depth_prepro_param` so it can be tested without a
+    /// sensor.
     pub(crate) fn set_normalized_param(&mut self, name: &str, value: f32) -> bool {
         let v = value.clamp(0.0, 1.0);
         match name {
             "near" => {
                 self.near_mm = v * RANGE_MM;
-                // Keep the range non-degenerate; `far` always stays above `near`.
+                // `far` always stays above `near`.
                 self.far_mm = self.far_mm.max(self.near_mm + 1.0);
             }
             "far" => self.far_mm = (v * RANGE_MM).max(self.near_mm + 1.0),
@@ -186,12 +180,10 @@ impl DepthPreprocessParams {
     }
 }
 
-/// The sensor index a shader's `PREPROCESSORS` block asks for, if it declares
-/// this preprocessor at all.
-///
-/// `OPTIONS: {"device": N}` pins a specific sensor; absent, the first enumerated
-/// device is used. Deliberately not a live router param — switching sensors means
-/// rebuilding the pipeline and its textures, which is not a mid-set operation.
+/// The sensor index a shader's `PREPROCESSORS` block asks for, or `None` if it
+/// doesn't use this preprocessor. `OPTIONS: {"device": N}` pins a sensor;
+/// otherwise the first enumerated one is used. Not a router param, because
+/// switching sensors rebuilds the pipeline and textures.
 pub fn requested_device(metadata: &crate::isf::ISFMetadata) -> Option<u32> {
     let mut found = false;
     let mut index = 0;
@@ -207,21 +199,16 @@ pub fn requested_device(metadata: &crate::isf::ISFMetadata) -> Option<u32> {
     found.then_some(index)
 }
 
-/// Resolve and acquire the sensor a shader requires, building its pipeline.
-///
-/// Returns `Ok(None)` when the shader declares no `depth_sensor` preprocessor.
-/// Returns `Err` when it declares one and no sensor can be acquired: this is a
-/// *required* preprocessor, so the caller must abort the load rather than
-/// degrade. See /spec/effect-preprocessing.md § Required Preprocessors.
-///
-/// The sensor is opened through the ref-counted manager, so it is shared with
-/// any point-cloud decks or other preprocessor decks already using it.
+/// Acquires the sensor a shader requires and builds its pipeline. `Ok(None)`
+/// if the shader has no `depth_sensor` preprocessor. The preprocessor is
+/// required, so the caller must abort the load on `Err`. The sensor is shared
+/// through the ref-counted manager with any other decks using it.
 ///
 /// # Errors
 ///
-/// Returns an error when the shader declares a `depth_sensor` preprocessor but
-/// no device is detected, the requested device cannot be resolved or opened, or
-/// the preprocess pipeline cannot be built.
+/// Returns an error if the shader needs a sensor and none is detected, the
+/// requested device can't be resolved or opened, or the pipeline can't be
+/// built.
 pub fn acquire_for_shader(
     manager: &mut super::DepthSensorManager,
     device: &wgpu::Device,
@@ -251,15 +238,13 @@ pub fn acquire_for_shader(
 }
 
 /// The detected sensor a shader's `depth_sensor` preprocessor asks for, without
-/// opening it. `Ok(None)` when the shader declares no such preprocessor.
-///
-/// Cheap and read-only, so a deck-creating command can refuse a shader that
-/// cannot load before building it in the background.
+/// opening it. `Ok(None)` if the shader has no such preprocessor. Cheap, so a
+/// deck-creating command can reject the shader before building it.
 ///
 /// # Errors
 ///
-/// Returns an error when the shader needs a sensor and none is detected, or the
-/// requested one is not among those detected.
+/// Returns an error if the shader needs a sensor and none is detected, or the
+/// requested one is not detected.
 pub fn preflight_for_shader(
     manager: &super::DepthSensorManager,
     metadata: &crate::isf::ISFMetadata,
@@ -286,7 +271,7 @@ pub fn preflight_for_shader(
         })
 }
 
-/// A sensor reference acquired for a shader, with its ready-to-run pipeline.
+/// A sensor reference acquired for a shader, with its pipeline.
 pub struct AcquiredSensor {
     pub id: super::DepthSensorId,
     pub name: String,
@@ -304,12 +289,9 @@ struct GpuParams {
     misc: [f32; 4],
 }
 
-/// Owned output textures plus the passes that fill them.
-///
-/// The textures live here rather than in the deck's `PreprocessorSlot`s: the
-/// slots hold cheap `wgpu::Texture`/`TextureView` clones of these, so the
-/// shader's bind group stays valid regardless of what the device does. See
-/// spec/effect-preprocessing.md Decision #4.
+/// Output textures and the passes that fill them. The deck's
+/// `PreprocessorSlot`s hold clones of these handles, so the shader's bind group
+/// stays valid whatever the device does.
 pub struct DepthPreprocessPipeline {
     normalize: wgpu::RenderPipeline,
     mask: wgpu::RenderPipeline,
@@ -320,10 +302,10 @@ pub struct DepthPreprocessPipeline {
     uniform: wgpu::Buffer,
 
     outputs: Vec<(Output, wgpu::Texture, wgpu::TextureView)>,
-    /// Ping-pong depth history for temporal smoothing and motion differencing.
+    /// Ping-pong depth history for smoothing and motion.
     history: [wgpu::TextureView; 2],
     _history_tex: [wgpu::Texture; 2],
-    /// Ping-pong silhouette history, for the mask's temporal hysteresis.
+    /// Ping-pong silhouette history for mask hysteresis.
     mask_history: [wgpu::TextureView; 2],
     _mask_history_tex: [wgpu::Texture; 2],
     read_idx: usize,
@@ -360,8 +342,7 @@ impl DepthPreprocessPipeline {
                 },
                 count: None,
             };
-        // Every read is a `textureLoad`, so nothing needs a sampler and nothing
-        // needs to be filterable.
+        // Every read is a `textureLoad`, so no sampler or filtering is needed.
         let unfiltered = wgpu::TextureSampleType::Float { filterable: false };
 
         let normalize_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -471,9 +452,7 @@ impl DepthPreprocessPipeline {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format,
-                // COPY_SRC so the fields can be read back — used by the GPU
-                // behaviour tests, and the only way to debug this pass on real
-                // hardware.
+                // COPY_SRC for readback in GPU tests and hardware debugging.
                 usage: wgpu::TextureUsages::TEXTURE_BINDING
                     | wgpu::TextureUsages::RENDER_ATTACHMENT
                     | wgpu::TextureUsages::COPY_SRC,
@@ -481,9 +460,8 @@ impl DepthPreprocessPipeline {
             })
         };
 
-        // All four outputs are allocated regardless of what the shader declared.
-        // The total is ~4.6 MB at VGA, and unconditional allocation keeps slot
-        // resolution a pure lookup with no ordering dependency on the ISF header.
+        // All four outputs are always allocated (~4.6 MB at VGA), so slot
+        // lookup doesn't depend on the ISF header.
         let outputs = Output::ALL
             .into_iter()
             .map(|o| {
@@ -539,8 +517,8 @@ impl DepthPreprocessPipeline {
         (self.width, self.height)
     }
 
-    /// Clone the texture + view for one output, for a deck's `PreprocessorSlot`.
-    /// Both are `Arc`-backed handles to the same GPU resource — no copy.
+    /// The texture and view for one output, for a deck's `PreprocessorSlot`.
+    /// Both are `Arc`-backed handles to the same GPU resource.
     pub fn output(&self, output: Output) -> Option<(wgpu::Texture, wgpu::TextureView)> {
         self.outputs
             .iter()
@@ -557,9 +535,8 @@ impl DepthPreprocessPipeline {
             .2
     }
 
-    /// Upload this frame's params. `dt` is the sensor's inter-frame interval, not
-    /// the render interval — using render dt would misreport velocity whenever
-    /// the deck runs faster than the sensor.
+    /// Uploads this frame's params. `dt` is the sensor's frame interval, not the
+    /// render interval, or velocity is wrong when the deck outruns the sensor.
     pub fn update_uniform(&self, queue: &wgpu::Queue, params: &DepthPreprocessParams, dt: f32) {
         let span = (params.far_mm - params.near_mm).max(1.0);
         let gpu = GpuParams {
@@ -585,10 +562,8 @@ impl DepthPreprocessPipeline {
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&gpu));
     }
 
-    /// Run the conversion passes for one sensor frame.
-    ///
-    /// `rgb_src` is `None` when the shader did not declare the `rgb` output, in
-    /// which case the colour pass is skipped entirely.
+    /// Runs the conversion passes for one sensor frame. `rgb_src` is `None` if
+    /// the shader didn't declare `rgb`; the color pass is then skipped.
     pub fn run(
         &mut self,
         device: &wgpu::Device,
@@ -710,7 +685,7 @@ fn attachment(view: &wgpu::TextureView) -> wgpu::RenderPassColorAttachment<'_> {
         view,
         resolve_target: None,
         ops: wgpu::Operations {
-            // Every texel is written unconditionally, so the load is discardable.
+            // Every texel is written, so the old contents can be discarded.
             load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             store: wgpu::StoreOp::Store,
         },
@@ -777,7 +752,7 @@ mod tests {
         p.set_normalized_param("far", 0.1);
         p.set_normalized_param("near", 0.9);
         assert!(p.far_mm > p.near_mm, "{p:?}");
-        // And lowering `far` below `near` must clamp rather than invert.
+        // Lowering `far` below `near` clamps instead of inverting.
         p.set_normalized_param("far", 0.0);
         assert!(p.far_mm > p.near_mm, "{p:?}");
     }
@@ -802,17 +777,16 @@ mod tests {
         }
     }
 
-    // ── GPU behaviour ────────────────────────────────────────────────────────
+    // ── GPU behavior ─────────────────────────────────────────────────────────
     //
-    // These drive the real passes against a synthetic depth image and read the
-    // results back. They are the only thing that can catch a wrong sign, a
-    // mirrored axis, or a hole-fill that quietly does nothing.
+    // Runs the real passes on a synthetic depth image and reads back the
+    // results, to catch a wrong sign, a mirrored axis, or a no-op hole-fill.
 
     const W: u32 = 16;
     const H: u32 = 8;
 
-    /// Upload a millimetre depth image to an `R16Uint` texture shaped like the
-    /// one `DepthSensorManager` owns.
+    /// Uploads a millimeter depth image to an `R16Uint` texture like the one
+    /// `DepthSensorManager` owns.
     fn upload_depth(gpu: &crate::renderer::GpuContext, mm: &[u16]) -> wgpu::TextureView {
         assert_eq!(mm.len() as u32, W * H);
         let tex = gpu.device.create_texture(&wgpu::TextureDescriptor {
@@ -851,9 +825,9 @@ mod tests {
         tex.create_view(&wgpu::TextureViewDescriptor::default())
     }
 
-    /// Read back a single-channel `f16` output as `f32`.
+    /// Reads back a single-channel `f16` output as `f32`.
     fn read_r16f(gpu: &crate::renderer::GpuContext, texture: &wgpu::Texture) -> Vec<f32> {
-        // 256-byte row alignment is a wgpu copy requirement.
+        // wgpu copies need 256-byte row alignment.
         let unpadded = W * 2;
         let padded = unpadded.div_ceil(256) * 256;
         let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
@@ -912,7 +886,7 @@ mod tests {
         out
     }
 
-    /// Run the passes once against `mm` and return the `depth` output.
+    /// Runs the passes once on `mm` and returns the `depth` output.
     fn run_once(
         gpu: &crate::renderer::GpuContext,
         params: &DepthPreprocessParams,
@@ -1027,8 +1001,8 @@ mod tests {
         let Some(gpu) = crate::testing::headless_gpu() else {
             return;
         };
-        // A ramp, so the depth gradient is non-zero everywhere and motion is
-        // only zero because nothing moved — not because the gradient vanished.
+        // A ramp keeps the depth gradient non-zero, so zero motion means nothing
+        // moved.
         let mm: Vec<u16> = (0..W * H).map(|i| 1000 + (i % W) as u16 * 50).collect();
 
         let mut pipeline = DepthPreprocessPipeline::new(&gpu.device, W, H);
@@ -1043,8 +1017,7 @@ mod tests {
         }
 
         let (motion_tex, _) = pipeline.output(Output::Motion).expect("motion output");
-        // Rg16Float: read the R channel of each texel via the same row stride
-        // logic, doubled for two components.
+        // Rg16Float: two components per texel.
         let motion = read_rg16f_x(&gpu, &motion_tex);
         for (i, v) in motion.iter().enumerate() {
             assert!(
@@ -1054,7 +1027,7 @@ mod tests {
         }
     }
 
-    /// Read the R channel of an `Rg16Float` texture.
+    /// Reads the R channel of an `Rg16Float` texture.
     fn read_rg16f_x(gpu: &crate::renderer::GpuContext, texture: &wgpu::Texture) -> Vec<f32> {
         let unpadded = W * 4;
         let padded = unpadded.div_ceil(256) * 256;

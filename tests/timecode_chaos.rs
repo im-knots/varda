@@ -1,16 +1,11 @@
-//! Offensive tests for the timecode receiver: hostile input, not happy paths.
+//! Fuzz tests for the timecode receiver.
 //!
-//! Everything here arrives from outside the building. A MIDI port is a shared
-//! bus carrying other people's traffic, an audio input carries whatever is
-//! plugged into it, and a master is someone else's machine which may be
-//! rewinding, stopping, lying about its rate or half unplugged. None of that
-//! may panic, invent a position, or leave the show somewhere it cannot render.
+//! Input is external: MIDI ports carry other traffic, audio inputs carry
+//! anything, and a master may rewind, stop, misreport its rate, or drop out.
+//! None of that may panic, invent a position, or leave the show unrenderable.
 //!
-//! The invariants are deliberately about the *show*, not about the decoders:
-//! a position that is finite, never negative, never beyond the clock, and a
-//! resolution that names an input that actually exists.
-//!
-//! See /spec/timecode.md.
+//! The invariants cover the show, not the decoders: a finite, non-negative
+//! position within the clock, and a resolution that names an existing input.
 
 use std::time::{Duration, Instant};
 
@@ -24,7 +19,7 @@ use varda::transport::{Chase, TimecodeRate, Transport, TransportSource};
 /// The end of the timecode day, which no address can be past.
 const CLOCK: f64 = 24.0 * 3600.0;
 
-/// What must be true of the receiver after anything at all has happened to it.
+/// Invariants that must hold after any input.
 fn assert_sane(manager: &TimecodeManager, after: &str) -> Result<(), TestCaseError> {
     let state = manager.state();
     prop_assert!(
@@ -61,10 +56,8 @@ fn assert_sane(manager: &TimecodeManager, after: &str) -> Result<(), TestCaseErr
 }
 
 proptest! {
-    /// A MIDI port is a shared bus. Clock, notes from a keyboard someone leant
-    /// on, a synth dumping its patches: all of it arrives here, and a reader
-    /// that could be talked into a position by any of it would be a show that
-    /// jumps when a musician touches a key.
+    /// A MIDI port is a shared bus: clock, stray notes, and patch dumps must
+    /// never move the position.
     #[test]
     fn a_bus_full_of_other_peoples_traffic_cannot_break_the_reader(
         packets in prop::collection::vec(prop::collection::vec(any::<u8>(), 1..12), 1..120),
@@ -82,10 +75,8 @@ proptest! {
         }
     }
 
-    /// Load-in is hostile scheduling: cables going in and out, someone cycling
-    /// the Follow menu to see what happens, a master that rewinds and stops.
-    /// The receiver is asked to survive the order those arrive in, not a
-    /// rehearsed one.
+    /// Arbitrary order of events: inputs connecting and disconnecting, the
+    /// Follow menu cycling, a master rewinding and stopping.
     #[test]
     fn cables_and_menus_being_thrashed_leave_the_reader_coherent(
         ops in prop::collection::vec(
@@ -98,8 +89,8 @@ proptest! {
         let mut at = start;
 
         for (op, millis, position) in ops {
-            // Time never runs backwards, but it does stand still: two frames
-            // can share an instant, and a stalled render can skip minutes.
+            // Time never runs backwards, but two frames can share an instant
+            // and a stalled render can skip minutes.
             at += Duration::from_millis(millis);
             let frame = TimecodeFrame::at(position, TimecodeRate::Fps25);
 
@@ -134,10 +125,8 @@ proptest! {
         }
     }
 
-    /// Timecode is audio, and an audio input carries whatever is plugged into
-    /// it at whatever the device claims its shape is. A mono input described as
-    /// eight channels, or a sample rate of nothing, is a driver bug rather than
-    /// a reason to take the show down.
+    /// An audio input may report any shape: a mono input described as eight
+    /// channels, or a zero sample rate, must not panic.
     #[test]
     fn a_lying_audio_device_cannot_take_the_reader_down(
         samples in prop::collection::vec(-1.5f32..1.5, 0..2000),
@@ -155,10 +144,8 @@ proptest! {
     }
 }
 
-/// A master is someone else's machine, and the transport is what the whole
-/// renderer reads. Position has to stay somewhere a show can be rendered even
-/// when what arrived is not a number: holding the last look is the worst that
-/// may happen, and a black or frozen show is not.
+/// Non-numeric or absurd positions from a master must leave the transport
+/// renderable. At worst it holds the last position.
 #[test]
 fn a_master_talking_nonsense_cannot_poison_the_show() {
     let sane = Chase {
@@ -169,7 +156,7 @@ fn a_master_talking_nonsense_cannot_poison_the_show() {
         speed: 1.0,
     };
 
-    // Not a place at all: the show holds where it last was.
+    // Not a position: hold where it was.
     for nonsense in [
         Chase {
             position: f64::NAN,
@@ -196,8 +183,8 @@ fn a_master_talking_nonsense_cannot_poison_the_show() {
         );
     }
 
-    // A place, but an absurd one, and a speed that is not a number: the show
-    // still has to be somewhere renderable, moving at some rate.
+    // An absurd position and a non-numeric speed: the transport stays
+    // renderable, moving at some rate.
     for nonsense in [
         Chase {
             position: -1.0e9,
@@ -239,9 +226,8 @@ fn a_master_talking_nonsense_cannot_poison_the_show() {
     }
 }
 
-/// Eight quarter frames make one address, and a bus that drops, repeats or
-/// reorders them must not be assembled into a position anyway. Half an address
-/// is not a place to put the show.
+/// Eight quarter frames make one address. Dropped, repeated, or reordered
+/// quarter frames must not assemble into a position.
 #[test]
 fn a_mangled_quarter_frame_sequence_is_not_assembled_into_a_position() {
     let sent = TimecodeFrame::new(1, 2, 3, 4, TimecodeRate::Fps25);
@@ -275,7 +261,7 @@ fn a_mangled_quarter_frame_sequence_is_not_assembled_into_a_position() {
         );
     }
 
-    // The same eight, in the order a bus under load might deliver them.
+    // The same eight, reordered as a loaded bus might deliver them.
     let mut manager = TimecodeManager::new();
     let at = Instant::now();
     for piece in [7, 0, 3, 1, 6, 2, 5, 4] {

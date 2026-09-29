@@ -25,7 +25,7 @@ pub struct AddRectSurfaceBody {
 pub struct AddPolygonSurfaceBody {
     /// Display name for the surface.
     pub name: String,
-    /// Vertex positions as [x, y] pairs in normalised coordinates.
+    /// Vertex positions as [x, y] pairs in normalized coordinates.
     pub vertices: Vec<[f32; 2]>,
     /// Content source for the surface.
     pub source: OutputSource,
@@ -35,9 +35,9 @@ pub struct AddPolygonSurfaceBody {
 pub struct AddCircleSurfaceBody {
     /// Display name for the surface.
     pub name: String,
-    /// Centre position as [x, y] in normalised coordinates.
+    /// Center position as [x, y] in normalized coordinates.
     pub center: [f32; 2],
-    /// Circle radius in normalised units.
+    /// Circle radius in normalized units.
     pub radius: f32,
     /// Number of polygon sides used to approximate the circle.
     pub sides: u32,
@@ -222,7 +222,7 @@ pub async fn rename(
 
 #[derive(Deserialize, ToSchema)]
 pub struct VerticesBody {
-    /// Vertex positions as [x, y] pairs in normalised coordinates.
+    /// Vertex positions as [x, y] pairs in normalized coordinates.
     pub vertices: Vec<[f32; 2]>,
 }
 
@@ -283,8 +283,6 @@ pub async fn flip_vertical(
     }
 }
 
-// ── Missing Parity Routes ─────────────────────────────────────────
-
 #[derive(Deserialize, ToSchema)]
 pub struct InsertVertexBody {
     /// Index of the existing vertex after which to insert.
@@ -309,16 +307,16 @@ pub struct CombineBody {
 }
 #[derive(Deserialize, ToSchema)]
 pub struct MoveBody {
-    /// Horizontal offset in normalised coordinates.
+    /// Horizontal offset in normalized coordinates.
     pub dx: f32,
-    /// Vertical offset in normalised coordinates.
+    /// Vertical offset in normalized coordinates.
     pub dy: f32,
 }
 #[derive(Deserialize, ToSchema)]
 pub struct RotateBody {
     /// Rotation in radians (clockwise in canvas space, y-down).
     pub angle: f32,
-    /// Pivot point [x, y] in normalised coordinates.
+    /// Pivot point [x, y] in normalized coordinates.
     pub pivot: [f32; 2],
 }
 #[derive(Deserialize, ToSchema)]
@@ -327,7 +325,7 @@ pub struct ScaleBody {
     pub sx: f32,
     /// Vertical scale factor.
     pub sy: f32,
-    /// Pivot point [x, y] in normalised coordinates.
+    /// Pivot point [x, y] in normalized coordinates.
     pub pivot: [f32; 2],
 }
 #[derive(Deserialize, ToSchema)]
@@ -348,7 +346,7 @@ pub struct ConvertEdgeBody {
 pub struct MovePathAnchorBody {
     /// Index of the curve-path anchor to move.
     pub anchor_idx: usize,
-    /// New anchor position [x, y] in normalised coordinates.
+    /// New anchor position [x, y] in normalized coordinates.
     pub pos: [f32; 2],
 }
 #[derive(Deserialize, ToSchema)]
@@ -357,7 +355,7 @@ pub struct MovePathHandleBody {
     pub segment_idx: usize,
     /// Which control handle of the cubic segment (C1 or C2).
     pub handle: CubicHandle,
-    /// New handle position [x, y] in normalised coordinates.
+    /// New handle position [x, y] in normalized coordinates.
     pub pos: [f32; 2],
 }
 
@@ -590,13 +588,13 @@ pub async fn move_path_handle(
     }
 }
 
-// ── Per-surface warp (8i.5) ───────────────────────────────────────
+// ── Per-surface warp ───────────────────────────────────────
 
 #[derive(Deserialize, ToSchema)]
 pub struct SetWarpCornerBody {
     /// Corner index (0–3, TL/TR/BR/BL).
     pub corner_idx: usize,
-    /// New [x, y] position for the corner in normalised coordinates.
+    /// New [x, y] position for the corner in normalized coordinates.
     pub position: [f32; 2],
 }
 
@@ -666,7 +664,7 @@ pub struct SetWarpMeshPointBody {
     pub row: usize,
     /// Grid column of the point (0-based).
     pub col: usize,
-    /// New [x, y] position in normalised coordinates.
+    /// New [x, y] position in normalized coordinates.
     pub position: [f32; 2],
 }
 
@@ -692,8 +690,8 @@ pub async fn set_warp_mesh_point(
 
 #[derive(Deserialize, ToSchema)]
 pub struct SetWarpBoundBody {
-    /// `true` = auto-conform the warp to the surface shape; `false` = unbind for
-    /// manual fine-tuning (materialises the conforming warp).
+    /// `true` makes the warp follow the surface shape; `false` unbinds it for
+    /// manual editing, keeping the current warp.
     pub bound: bool,
 }
 
@@ -735,7 +733,7 @@ pub struct MoveWarpAnchorBody {
     pub row: usize,
     /// Anchor grid column (0-based).
     pub col: usize,
-    /// New [x, y] position in normalised coordinates.
+    /// New [x, y] position in normalized coordinates.
     pub position: [f32; 2],
 }
 
@@ -770,7 +768,7 @@ pub struct MoveWarpHandleBody {
     pub col: usize,
     /// Which handle of the edge: 0 (near start anchor) or 1 (near end anchor).
     pub which: usize,
-    /// New [x, y] position in normalised coordinates.
+    /// New [x, y] position in normalized coordinates.
     pub position: [f32; 2],
 }
 
@@ -823,11 +821,11 @@ pub async fn set_bezier_cage_subdivisions(
     }
 }
 
-// ── Subtractive holes (8i.7) ──────────────────────────────────────
+// ── Subtractive holes ──────────────────────────────────────
 
 #[derive(Deserialize, ToSchema)]
 pub struct AddHoleBody {
-    /// Closed curve path defining the cut-out, in normalised canvas coordinates.
+    /// Closed curve path defining the cut-out, in normalized canvas coordinates.
     pub hole: SurfacePath,
 }
 
@@ -863,8 +861,8 @@ pub async fn remove_hole(
     }
 }
 
-/// "Make Hole" (8i.7): convert the surface identified by `uuid` into a cut-out
-/// hole in the topmost other surface under its centroid, consuming the source.
+/// Turn surface `uuid` into a hole in the topmost other surface under its
+/// centroid, removing the source surface.
 #[utoipa::path(post, path = "/api/surfaces/{uuid}/punch", params(("uuid" = String, Path, description = "Source surface UUID")), responses((status = 200, body = CommandResult)), tag = "Surfaces")]
 pub async fn punch_hole(
     State(s): State<SharedState>,
@@ -885,8 +883,7 @@ pub struct ReorderBody {
     pub op: SurfaceReorderOp,
 }
 
-/// Change a surface's global stacking order (8i.12): move it front/back/up/down
-/// within the authoritative surface order (index 0 = bottom, last = top).
+/// Change a surface's stacking order: to front, to back, up, or down.
 #[utoipa::path(post, path = "/api/surfaces/{uuid}/reorder", params(("uuid" = String, Path, description = "Surface UUID")), request_body = ReorderBody, responses((status = 200, body = CommandResult)), tag = "Surfaces")]
 pub async fn reorder(
     State(s): State<SharedState>,

@@ -1,9 +1,5 @@
-//! Engine state mutation methods on `VardaApp`.
+//! Engine state mutation methods on `VardaApp`. Callers never need `&mut Mixer`.
 //!
-//! These methods encapsulate all mixer/modulation/sequence mutations.
-//! They access self.mixer internally — callers never need &mut Mixer.
-//!
-//! Split into focused sub-modules:
 //! - `arrangement` — lane and region CRUD, authority, and live override
 //! - `clipboard` — copy, paste, and duplicate of decks, channels, and effects
 //! - `recorder` — capturing live parameter writes as automation curves

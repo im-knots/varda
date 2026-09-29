@@ -1,12 +1,7 @@
-//! Guards the dependency inversion fixed by /spec/engine-value-types.md: the
-//! engine contract layer (`src/engine/{mod,types,traits}.rs`) must name its
-//! value vocabulary from `engine::value` (a leaf with no dependency on
-//! `internal`), never reach back into the `renderer`/`surface`/`video`
-//! implementation modules. `engine::value`'s own files are exempt — they are
-//! the destination, and their doc comments may discuss the modules they
-//! replaced. This is an integration test (not `#[cfg(test)]` inside
-//! `src/engine`) so the forbidden-path string literals it greps for don't
-//! trip the guard against itself.
+//! The engine contract layer (`src/engine/{mod,types,traits}.rs`) takes its
+//! value types from `engine::value`, never from the `renderer`/`surface`/`video`
+//! modules. `engine::value` itself is exempt. This lives in `tests/` so the
+//! forbidden-path literals it greps for don't match this file.
 
 use std::path::Path;
 
@@ -18,7 +13,7 @@ fn check_dir(dir: &Path, violations: &mut Vec<String>) {
         let path = entry.path();
         if path.is_dir() {
             if path.file_name().and_then(|n| n.to_str()) == Some("value") {
-                continue; // engine::value is the destination, not a violator.
+                continue; // engine::value is exempt.
             }
             check_dir(&path, violations);
             continue;
@@ -44,8 +39,7 @@ fn engine_names_no_internal_infra_modules() {
     check_dir(&engine_dir, &mut violations);
     assert!(
         violations.is_empty(),
-        "src/engine/** must not name crate::renderer::/crate::surface::/crate::video:: \
-         (dependency inversion per /spec/engine-value-types.md); found:\n{}",
+        "src/engine/** must not name crate::renderer::/crate::surface::/crate::video::; found:\n{}",
         violations.join("\n")
     );
 }

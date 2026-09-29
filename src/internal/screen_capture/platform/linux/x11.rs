@@ -1,30 +1,21 @@
-//! X11 screen/window capture via `GetImage`.
+//! X11 screen and window capture via `GetImage`.
 //!
-//! X11 has no event-driven capture API: nothing tells a client that the screen
-//! changed, so the only way to get frames is to ask for them. The backend is
-//! therefore polled — [`ScreenCaptureBackend::is_self_paced`] is `false` and the
-//! capture loop drives it at `CaptureConfig.rate`. That is the opposite of every
-//! other platform here, and it is why the CPU cost of an X11 capture scales
-//! linearly with the configured rate.
+//! X11 has no event-driven capture, so the backend is polled:
+//! [`ScreenCaptureBackend::is_self_paced`] is `false` and the capture loop
+//! drives it at `CaptureConfig.rate`. CPU cost scales linearly with the rate.
 //!
-//! Crop is pushed down into the request rather than applied afterwards: a
-//! `GetImage` for a sub-rectangle genuinely transfers fewer bytes. `scale_to` is
-//! a CPU resample after the fact, so it saves GPU upload bandwidth but not X11
-//! wire bandwidth.
+//! Crop is part of the `GetImage` request, so it transfers fewer bytes.
+//! `scale_to` is a CPU resample afterwards; it saves GPU upload bandwidth, not
+//! X11 bandwidth.
 //!
-//! ## Known limitations, both inherent to X11
+//! ## Known limitations
 //!
-//! - **`exclude_varda` is not honoured.** X11 has no compositing filter, so a
-//!   display capture necessarily includes Varda's own windows. Pointing a deck
-//!   at the display Varda is on will produce a feedback mirror. The capture rate
-//!   defaulting below the render rate keeps that stable rather than seizing, but
-//!   it cannot be prevented the way `SCContentFilter` prevents it on macOS.
-//! - **Window captures read the window's front buffer.** Without the Composite
-//!   extension redirecting the window to an offscreen pixmap, regions covered by
-//!   another window come back as whatever is physically on screen there. Most
-//!   modern desktops run a compositor, in which case this is a non-issue.
-//!
-//! See spec/screen-capture.md § Platform Support.
+//! - `exclude_varda` is ignored. X11 has no compositing filter, so a display
+//!   capture includes Varda's windows and capturing Varda's own display makes
+//!   a feedback mirror. The low default capture rate keeps it stable.
+//! - Window captures read the front buffer. Without the Composite extension,
+//!   covered regions show whatever is on screen there. Most desktops run a
+//!   compositor, so this rarely matters.
 
 use x11rb::connection::Connection;
 use x11rb::protocol::randr::ConnectionExt as _;
@@ -41,28 +32,27 @@ use crate::screen_capture::resample::{Geometry, downscale};
 
 pub const BACKEND_NAME: &str = "X11";
 
-/// Every plane. X11 lets a client mask off bit planes; we always want all of them.
+/// All bit planes.
 const ALL_PLANES: u32 = !0;
 
-/// Upper bound on a `_NET_CLIENT_LIST` read, in 32-bit words. A desktop with
-/// more than this many managed windows is pathological, and an unbounded length
-/// would let a hostile root property allocate arbitrarily.
+/// Maximum `_NET_CLIENT_LIST` read, in 32-bit words. Bounded so a hostile
+/// root property cannot force a huge allocation.
 const MAX_CLIENT_LIST_WORDS: u32 = 1024;
 
-/// Upper bound on a text property read, in 32-bit words.
+/// Maximum text property read, in 32-bit words.
 const MAX_TEXT_WORDS: u32 = 256;
 
-/// Where the R, G and B bytes sit within one 32-bit `ZPixmap` pixel.
+/// Byte positions of R, G and B within one 32-bit `ZPixmap` pixel.
 ///
-/// Derived from the visual's channel masks combined with the server's image
-/// byte order, so a big-endian or unusually-masked server is repacked rather
-/// than rendered with swapped channels.
+/// Derived from the visual's channel masks and the server's byte order, so
+/// big-endian or unusual servers are repacked instead of showing swapped
+/// channels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ByteLayout {
-    /// Bytes arrive as B, G, R, X. The overwhelmingly common case (little-endian
-    /// server, `TrueColor` 24/32-bit visual) and the one that needs no swizzle.
+    /// Bytes arrive as B, G, R, X. The usual case (little-endian server,
+    /// `TrueColor` 24/32-bit visual); needs no swizzle.
     Bgrx,
-    /// Anything else. Repacked to RGBA on the CPU using these byte offsets.
+    /// Any other layout, repacked to RGBA on the CPU with these offsets.
     Other { r: usize, g: usize, b: usize },
 }
 
@@ -75,11 +65,10 @@ impl ByteLayout {
     }
 }
 
-/// Byte offset of a single 8-bit channel within a 32-bit pixel.
+/// Byte offset of an 8-bit channel within a 32-bit pixel.
 ///
-/// Returns `None` for a mask that is not one byte-aligned octet, which rules out
-/// 16-bit and paletted visuals — those are repacked by the caller's fallback
-/// rather than mis-decoded.
+/// `None` for a mask that is not one aligned byte (16-bit and paletted
+/// visuals); the caller's fallback handles those.
 fn channel_byte(mask: u32, msb_first: bool) -> Option<usize> {
     if mask == 0 {
         return None;
@@ -92,7 +81,7 @@ fn channel_byte(mask: u32, msb_first: bool) -> Option<usize> {
     Some(if msb_first { 3 - index } else { index })
 }
 
-/// Resolve the pixel layout of a `ZPixmap` from a visual's masks.
+/// Resolves a `ZPixmap`'s pixel layout from a visual's masks.
 pub fn resolve_layout(red: u32, green: u32, blue: u32, msb_first: bool) -> ByteLayout {
     match (
         channel_byte(red, msb_first),
@@ -101,21 +90,18 @@ pub fn resolve_layout(red: u32, green: u32, blue: u32, msb_first: bool) -> ByteL
     ) {
         (Some(2), Some(1), Some(0)) => ByteLayout::Bgrx,
         (Some(r), Some(g), Some(b)) => ByteLayout::Other { r, g, b },
-        // A visual we cannot decode. Assume the common layout rather than
-        // failing the capture outright: wrong colours beat a black deck, and
-        // this is unreachable on any TrueColor desktop.
+        // Undecodable visual. Assume the common layout: wrong colors beat a
+        // black deck, and no TrueColor desktop reaches this.
         _ => ByteLayout::Bgrx,
     }
 }
 
-/// Normalize a `GetImage` payload into tightly packed 4-byte pixels.
+/// Normalizes a `GetImage` payload into tightly packed 4-byte pixels.
 ///
-/// Alpha is forced opaque. A depth-24 drawable leaves the fourth byte
-/// undefined, and uploading that as alpha makes a capture of an ordinary
-/// desktop come out randomly transparent.
+/// Alpha is forced opaque: a depth-24 drawable leaves the fourth byte
+/// undefined, which would make the capture randomly transparent.
 ///
-/// 32-bit `ZPixmap` rows need no unpadding: the scanline pad is 32 bits and a
-/// row is already `width * 32` bits wide.
+/// 32-bit `ZPixmap` rows need no unpadding: the scanline pad is 32 bits.
 pub fn repack(data: &[u8], width: u32, height: u32, layout: ByteLayout) -> Vec<u8> {
     let pixels = (width as usize) * (height as usize);
     let mut out = vec![0u8; pixels * 4];
@@ -157,7 +143,7 @@ fn atom(conn: &RustConnection, name: &str) -> Option<Atom> {
         .filter(|a| *a != 0)
 }
 
-/// Read a UTF-8 or Latin-1 text property.
+/// Reads a UTF-8 or Latin-1 text property.
 fn text_property(conn: &RustConnection, window: Window, property: Atom) -> Option<String> {
     let reply = conn
         .get_property(false, window, property, AtomEnum::ANY, 0, MAX_TEXT_WORDS)
@@ -167,7 +153,7 @@ fn text_property(conn: &RustConnection, window: Window, property: Atom) -> Optio
     if reply.value.is_empty() {
         return None;
     }
-    // Latin-1 `WM_NAME` is not valid UTF-8, so fall back per byte instead of
+    // Latin-1 `WM_NAME` is not valid UTF-8; fall back per byte instead of
     // dropping the title.
     let text = String::from_utf8(reply.value.clone())
         .unwrap_or_else(|_| reply.value.iter().map(|b| char::from(*b)).collect());
@@ -181,8 +167,8 @@ fn window_title(conn: &RustConnection, window: Window) -> Option<String> {
         .or_else(|| text_property(conn, window, AtomEnum::WM_NAME.into()))
 }
 
-/// `WM_CLASS` is two NUL-separated strings: instance name then class name. The
-/// class is the stable, human-recognisable one ("Firefox", not "Navigator").
+/// `WM_CLASS` holds two NUL-separated strings, instance then class. The class
+/// is the recognizable one ("Firefox", not "Navigator").
 fn window_class(conn: &RustConnection, window: Window) -> Option<String> {
     let reply = conn
         .get_property(
@@ -213,7 +199,7 @@ fn window_pid(conn: &RustConnection, window: Window) -> Option<u32> {
     reply.value32().and_then(|mut v| v.next())
 }
 
-/// Enumerate `RandR` monitors as displays and managed top-level windows.
+/// Enumerates `RandR` monitors as displays, plus managed top-level windows.
 ///
 /// # Errors
 ///
@@ -228,8 +214,8 @@ pub fn enumerate() -> Result<Vec<CaptureTargetInfo>, CaptureError> {
     for (i, monitor) in monitors(&conn, root).into_iter().enumerate() {
         targets.push(CaptureTargetInfo {
             kind: CaptureTargetKind::Display,
-            // Index, not a RandR id: the identity that survives a restart is the
-            // label, and `open` re-resolves by label with this as the fallback.
+            // Index, not a RandR id: identity across restarts is the label, and
+            // `open` resolves by label with this as the fallback.
             platform_id: i as u64,
             label: monitor.label,
             app: None,
@@ -253,7 +239,7 @@ pub fn enumerate() -> Result<Vec<CaptureTargetInfo>, CaptureError> {
         let Ok(Ok(geom)) = conn.get_geometry(window).map(x11rb::cookie::Cookie::reply) else {
             continue;
         };
-        // 1x1 keep-alive and IPC windows are managed but not capturable content.
+        // 1x1 keep-alive and IPC windows are managed but have no content.
         if geom.width < 2 || geom.height < 2 {
             continue;
         }
@@ -318,8 +304,7 @@ fn monitors(conn: &RustConnection, root: Window) -> Vec<MonitorRect> {
     if !listed.is_empty() {
         return listed;
     }
-    // No RandR (or a server that reports no active monitors): the root window is
-    // the only display there is.
+    // No RandR, or no active monitors: the root window is the only display.
     conn.get_geometry(root)
         .ok()
         .and_then(|c| c.reply().ok())
@@ -346,13 +331,12 @@ fn client_list(conn: &RustConnection, root: Window) -> Vec<Window> {
         .unwrap_or_default()
 }
 
-/// Open a capture for `target`.
+/// Opens a capture for `target`.
 ///
 /// # Errors
 ///
 /// Returns [`CaptureError::Backend`] if the X display cannot be reached, or
-/// [`CaptureError::TargetNotFound`] if the display or window has gone away
-/// since enumeration.
+/// [`CaptureError::TargetNotFound`] if the display or window is gone.
 pub fn open(
     target: &CaptureTargetInfo,
     config: &CaptureConfig,
@@ -364,10 +348,10 @@ pub struct X11Backend {
     conn: RustConnection,
     label: String,
     drawable: Drawable,
-    /// Whether the drawable is a window, whose size can change under us.
+    /// Whether the drawable is a window, whose size can change.
     is_window: bool,
-    /// Origin of the captured area within the drawable. Non-zero for a monitor
-    /// on a multi-head root window.
+    /// Origin of the captured area in the drawable. Non-zero for a monitor on a
+    /// multi-head root window.
     origin_x: i16,
     origin_y: i16,
     native_w: u32,
@@ -389,8 +373,8 @@ impl X11Backend {
         let (drawable, is_window, origin_x, origin_y, native_w, native_h) = match target.kind {
             CaptureTargetKind::Display => {
                 let all = monitors(&conn, root);
-                // Match by label first: a rescan or a restart reorders the list,
-                // and the label is what persistence stores.
+                // Match by label first: rescans and restarts reorder the list, and the
+                // label is what persistence stores.
                 let monitor = all
                     .iter()
                     .find(|m| m.label == target.label)
@@ -448,8 +432,8 @@ impl X11Backend {
         })
     }
 
-    /// Re-read a window's size, which the user can change at any time, and
-    /// re-resolve the crop against it.
+    /// Re-reads a window's size, which can change at any time, and re-resolves
+    /// the crop against it.
     fn refresh_window_size(&mut self) -> bool {
         let Ok(Ok(geom)) = self
             .conn
@@ -483,8 +467,8 @@ impl ScreenCaptureBackend for X11Backend {
 
     fn next_frame(&mut self) -> Option<CaptureFrame> {
         if self.is_window && !self.refresh_window_size() {
-            // The window was closed. The manager keeps the deck alive and
-            // unbound rather than dropping it, so `None` is the right answer.
+            // The window was closed. The manager keeps the deck unbound, so return
+            // `None`.
             return None;
         }
         let g = self.geometry;
@@ -512,8 +496,8 @@ impl ScreenCaptureBackend for X11Backend {
             .reply()
             .ok()?;
         if reply.depth < 24 {
-            // A paletted or 16-bit drawable would need a colormap lookup we do
-            // not implement. Report nothing rather than garbage.
+            // Paletted or 16-bit drawables need a colormap lookup, which is not
+            // implemented. Return nothing instead of garbage.
             log::warn!(
                 "X11 capture '{}': unsupported drawable depth {}",
                 self.label,
@@ -552,8 +536,8 @@ impl ScreenCaptureBackend for X11Backend {
     fn set_config(&mut self, config: &CaptureConfig) -> Result<(), CaptureError> {
         let config = config.clone().sanitized();
         if config.show_cursor != self.config.show_cursor && config.show_cursor {
-            // Compositing the pointer needs XFixes `GetCursorImage` plus manual
-            // alpha blending per frame. Not implemented; see spec/screen-capture.md.
+            // Cursor capture needs XFixes `GetCursorImage` and per-frame alpha
+            // blending. Not implemented.
             log::debug!(
                 "X11 capture '{}': cursor overlay is not supported",
                 self.label
@@ -584,7 +568,7 @@ mod tests {
 
     #[test]
     fn little_endian_truecolor_needs_no_swizzle() {
-        // The masks every mainstream X server reports for a 24/32-bit visual.
+        // The masks mainstream X servers report for a 24/32-bit visual.
         assert_eq!(
             resolve_layout(0x00FF_0000, 0x0000_FF00, 0x0000_00FF, false),
             ByteLayout::Bgrx
@@ -609,8 +593,8 @@ mod tests {
 
     #[test]
     fn repack_forces_alpha_opaque_on_a_depth_24_drawable() {
-        // Depth 24 leaves the fourth byte undefined; here it is zero, which
-        // would render the whole capture transparent if trusted.
+        // Depth 24 leaves the fourth byte undefined; here it is zero, which would
+        // make the capture transparent if used as alpha.
         let src = vec![10, 20, 30, 0, 40, 50, 60, 0];
         let out = repack(&src, 2, 1, ByteLayout::Bgrx);
         assert_eq!(out, vec![10, 20, 30, 255, 40, 50, 60, 255]);
@@ -626,7 +610,7 @@ mod tests {
 
     #[test]
     fn repack_tolerates_a_short_reply_without_panicking() {
-        // A truncated GetImage must degrade, not take the render thread down.
+        // A truncated GetImage must degrade, not crash the render thread.
         let src = vec![1, 2, 3, 4];
         let out = repack(&src, 4, 4, ByteLayout::Bgrx);
         assert_eq!(out.len(), 4 * 4 * 4);

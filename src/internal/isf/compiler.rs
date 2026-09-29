@@ -1,26 +1,23 @@
 use anyhow::{Context, Result};
 use shaderc::{Compiler, ShaderKind};
 
-/// Compile GLSL fragment shader to SPIR-V
+/// Compiles a GLSL fragment shader to SPIR-V.
 ///
 /// # Errors
 ///
-/// Returns an error if the shaderc compiler or its compile options cannot be
-/// created, or if `glsl_source` fails to compile (the shaderc diagnostic is
-/// attached as context).
+/// Returns an error if shaderc cannot be set up or `glsl_source` fails to
+/// compile (the diagnostic is attached as context).
 pub fn compile_glsl_to_spirv(glsl_source: &str, shader_name: &str) -> Result<Vec<u32>> {
     let compiler = Compiler::new().context("Failed to create shaderc compiler")?;
 
     let mut options = shaderc::CompileOptions::new().context("Failed to create compile options")?;
 
-    // Set GLSL version to 330 (common for ISF shaders)
     options.set_source_language(shaderc::SourceLanguage::GLSL);
     options.set_target_env(
         shaderc::TargetEnv::Vulkan,
         shaderc::EnvVersion::Vulkan1_2 as u32,
     );
 
-    // Compile to SPIR-V
     let binary_result = compiler
         .compile_into_spirv(
             glsl_source,
@@ -31,7 +28,6 @@ pub fn compile_glsl_to_spirv(glsl_source: &str, shader_name: &str) -> Result<Vec
         )
         .with_context(|| format!("Failed to compile shader '{shader_name}'"))?;
 
-    // Check for warnings
     if binary_result.get_num_warnings() > 0 {
         log::warn!(
             "Shader '{}' compiled with warnings:\n{}",
@@ -43,13 +39,12 @@ pub fn compile_glsl_to_spirv(glsl_source: &str, shader_name: &str) -> Result<Vec
     Ok(binary_result.as_binary().to_vec())
 }
 
-/// Compile GLSL compute shader to SPIR-V
+/// Compiles a GLSL compute shader to SPIR-V.
 ///
 /// # Errors
 ///
-/// Returns an error if the shaderc compiler or its compile options cannot be
-/// created, or if `glsl_source` fails to compile (the shaderc diagnostic is
-/// attached as context).
+/// Returns an error if shaderc cannot be set up or `glsl_source` fails to
+/// compile (the diagnostic is attached as context).
 pub fn compile_glsl_compute_to_spirv(glsl_source: &str, shader_name: &str) -> Result<Vec<u32>> {
     let compiler = Compiler::new().context("Failed to create shaderc compiler")?;
 
@@ -82,10 +77,9 @@ pub fn compile_glsl_compute_to_spirv(glsl_source: &str, shader_name: &str) -> Re
     Ok(binary_result.as_binary().to_vec())
 }
 
-/// Inject ISF automatic uniforms into GLSL source
-/// ISF provides these built-in variables:
-/// - TIME: float (elapsed time in seconds)
-/// - TIMEDELTA: float (time since last frame)
+/// Injects the ISF automatic uniforms into GLSL source:
+/// - TIME: float (elapsed seconds)
+/// - TIMEDELTA: float (seconds since last frame)
 /// - FRAMEINDEX: int (frame counter)
 /// - RENDERSIZE: vec2 (output resolution)
 /// - DATE: vec4 (year, month, day, seconds)
@@ -94,7 +88,7 @@ pub fn inject_isf_uniforms(glsl_source: &str) -> String {
     inject_isf_uniforms_with_params(glsl_source, &[])
 }
 
-/// Inject ISF uniforms including user parameters (legacy GLSL 330 style)
+/// Injects ISF uniforms plus user parameters, GLSL 330 style.
 pub fn inject_isf_uniforms_with_params(glsl_source: &str, inputs: &[super::ISFInput]) -> String {
     let mut isf_uniforms = String::from(
         r"
@@ -114,7 +108,6 @@ in vec2 isf_FragNormCoord;
 ",
     );
 
-    // Add user parameter uniforms
     for input in inputs {
         let uniform_decl = match input.input_type.as_str() {
             "float" => format!("uniform float {};", input.name),
@@ -122,7 +115,7 @@ in vec2 isf_FragNormCoord;
             "long" => format!("uniform int {};", input.name),
             "color" => format!("uniform vec4 {};", input.name),
             "point2D" => format!("uniform vec2 {};", input.name),
-            // image, audio, audioFFT are handled as samplers elsewhere
+            // image, audio, audioFFT are samplers, handled elsewhere.
             _ => continue,
         };
         isf_uniforms.push('\n');
@@ -130,7 +123,7 @@ in vec2 isf_FragNormCoord;
     }
     isf_uniforms.push('\n');
 
-    // Insert uniforms after the version directive (if present) or at the beginning
+    // Insert after the version directive if present, else at the start.
     if let Some(version_end) = glsl_source.find('\n') {
         let first_line = &glsl_source[..version_end];
         if first_line.contains("#version") {
@@ -148,8 +141,7 @@ in vec2 isf_FragNormCoord;
     }
 }
 
-/// Generate GLSL 450 user params uniform block declaration
-/// Returns the uniform block code and whether any params were generated
+/// GLSL 450 uniform block for user params, or `None` if there are none.
 pub fn generate_user_params_block(inputs: &[super::ISFInput]) -> Option<String> {
     let mut members = Vec::new();
 
@@ -200,7 +192,7 @@ void main() {
         let spirv_data = spirv.unwrap();
         assert!(!spirv_data.is_empty());
 
-        // SPIR-V magic number check
+        // SPIR-V magic number.
         assert_eq!(spirv_data[0], 0x0723_0203);
     }
 
@@ -232,9 +224,9 @@ void main() {
         let injected = inject_isf_uniforms(glsl);
         let spirv = compile_glsl_to_spirv(&injected, "isf_test");
 
-        // Legacy injection uses bare uniforms (not blocks) and lacks explicit
-        // locations, so Vulkan SPIR-V compilation is expected to fail here.
-        // The modern path uses the ISFUniforms block in pipeline.rs instead.
+        // Legacy injection uses bare uniforms without explicit locations, so
+        // Vulkan SPIR-V compilation is expected to fail. The real path uses the
+        // ISFUniforms block in pipeline.rs.
         if let Err(e) = spirv {
             println!("Expected compilation error (legacy uniforms vs Vulkan blocks): {e}");
         }
@@ -257,7 +249,7 @@ void main() {
         }
         let spirv_data = spirv.unwrap();
 
-        // Now test naga parse + validation (same as pipeline.rs)
+        // naga parse + validation, as in pipeline.rs.
         let spirv_bytes: Vec<u8> = spirv_data.iter().flat_map(|w| w.to_le_bytes()).collect();
         let module =
             naga::front::spv::parse_u8_slice(&spirv_bytes, &naga::front::spv::Options::default())
@@ -272,7 +264,6 @@ void main() {
             panic!("Naga validation failed: {e:?}");
         }
 
-        // Try WGSL output too
         let wgsl = naga::back::wgsl::write_string(
             &module,
             &info.unwrap(),
@@ -358,7 +349,6 @@ void main() {
             return;
         };
 
-        // Parse ISF metadata
         let json_end = source.find("}*/").expect("ISF JSON header not found");
         let json_str = &source[2..=json_end]; // skip /*
         let meta: super::super::ISFMetadata =
@@ -370,10 +360,9 @@ void main() {
             "should have 2 storage buffers (particles + grid)"
         );
 
-        // Extract GLSL (everything after }*/)
         let glsl = source[json_end + 3..].trim();
 
-        // Step 1: shaderc GLSL → SPIR-V
+        // shaderc GLSL → SPIR-V
         let spirv = compile_glsl_compute_to_spirv(glsl, "black_hole_sim.comp");
         if let Err(ref e) = spirv {
             panic!("shaderc compilation failed: {e}");
@@ -381,7 +370,7 @@ void main() {
         let spirv_data = spirv.unwrap();
         assert_eq!(spirv_data[0], 0x0723_0203, "SPIR-V magic number");
 
-        // Step 2: naga SPIR-V parse + validation
+        // naga SPIR-V parse + validation
         let spirv_bytes: Vec<u8> = spirv_data.iter().flat_map(|w| w.to_le_bytes()).collect();
         let module =
             naga::front::spv::parse_u8_slice(&spirv_bytes, &naga::front::spv::Options::default())
@@ -394,7 +383,7 @@ void main() {
         .validate(&module)
         .expect("naga validation should succeed");
 
-        // Step 3: naga → WGSL output
+        // naga → WGSL
         let wgsl =
             naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())
                 .expect("WGSL output should succeed");
@@ -416,7 +405,6 @@ void main() {
             return;
         };
 
-        // Parse ISF metadata
         let json_end = source.find("}*/").expect("ISF JSON header not found");
         let json_str = &source[2..=json_end]; // skip /*
         let meta: super::super::ISFMetadata =
@@ -430,10 +418,9 @@ void main() {
         let compute = meta.compute.as_ref().expect("compute config");
         assert_eq!(compute.num_passes, 3, "Zel'dovich sim is a 3-pass compute");
 
-        // Extract GLSL (everything after }*/)
         let glsl = source[json_end + 3..].trim();
 
-        // Step 1: shaderc GLSL → SPIR-V
+        // shaderc GLSL → SPIR-V
         let spirv = compile_glsl_compute_to_spirv(glsl, "cosmic_web.comp");
         if let Err(ref e) = spirv {
             panic!("shaderc compilation failed: {e}");
@@ -441,7 +428,7 @@ void main() {
         let spirv_data = spirv.unwrap();
         assert_eq!(spirv_data[0], 0x0723_0203, "SPIR-V magic number");
 
-        // Step 2: naga SPIR-V parse + validation
+        // naga SPIR-V parse + validation
         let spirv_bytes: Vec<u8> = spirv_data.iter().flat_map(|w| w.to_le_bytes()).collect();
         let module =
             naga::front::spv::parse_u8_slice(&spirv_bytes, &naga::front::spv::Options::default())
@@ -454,7 +441,7 @@ void main() {
         .validate(&module)
         .expect("naga validation should succeed");
 
-        // Step 3: naga → WGSL output
+        // naga → WGSL
         let wgsl =
             naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())
                 .expect("WGSL output should succeed");
@@ -476,7 +463,7 @@ void main() {
             return;
         };
 
-        // Parse ISF metadata — point cloud samples inputImage, so it's a Filter.
+        // Point cloud samples inputImage, so it's a Filter.
         let json_end = source.find("}*/").expect("ISF JSON header not found");
         let json_str = &source[2..=json_end]; // skip /*
         let meta: super::super::ISFMetadata =
@@ -486,10 +473,9 @@ void main() {
             "point cloud should be a filter (has image input)"
         );
 
-        // Extract GLSL (everything after }*/)
         let glsl = source[json_end + 3..].trim();
 
-        // Step 1: shaderc GLSL → SPIR-V
+        // shaderc GLSL → SPIR-V
         let spirv = compile_glsl_to_spirv(glsl, "point_cloud.fs");
         if let Err(ref e) = spirv {
             panic!("shaderc compilation failed: {e}");
@@ -497,7 +483,7 @@ void main() {
         let spirv_data = spirv.unwrap();
         assert_eq!(spirv_data[0], 0x0723_0203, "SPIR-V magic number");
 
-        // Step 2: naga SPIR-V parse + validation
+        // naga SPIR-V parse + validation
         let spirv_bytes: Vec<u8> = spirv_data.iter().flat_map(|w| w.to_le_bytes()).collect();
         let module =
             naga::front::spv::parse_u8_slice(&spirv_bytes, &naga::front::spv::Options::default())
@@ -510,7 +496,7 @@ void main() {
         .validate(&module)
         .expect("naga validation should succeed");
 
-        // Step 3: naga → WGSL output
+        // naga → WGSL
         let wgsl =
             naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())
                 .expect("WGSL output should succeed");

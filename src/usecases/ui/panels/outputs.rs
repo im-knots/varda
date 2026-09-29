@@ -25,7 +25,6 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
 
     ui.add_space(4.0);
 
-    // List all outputs (unified)
     if data.outputs.is_empty() {
         ui.label(
             egui::RichText::new("No outputs")
@@ -40,7 +39,6 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
                 .fill(egui::Color32::from_rgb(30, 30, 45))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        // Status indicator
                         let status_color = if output.is_active {
                             egui::Color32::from_rgb(80, 255, 80)
                         } else {
@@ -57,19 +55,18 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
                         });
                     });
 
-                    // What the sink is sending to
+                    // The sink's destination.
                     ui.label(egui::RichText::new(&output.sink.label).small().weak());
 
-                    // Audio passthrough health (active outputs with audio only)
+                    // Audio passthrough health, for active outputs with audio.
                     if let Some(audio) = &output.audio_passthrough {
                         let color = if audio.frames_dropped > 0 {
                             egui::Color32::from_rgb(255, 200, 80)
                         } else {
                             egui::Color32::from_rgb(120, 200, 255)
                         };
-                        // Spliced silence is the audible part of a drop, so it
-                        // is what the warning reports; the chunk count alone
-                        // says nothing about how long the interruption was.
+                        // Reports spliced silence, the audible length of a drop; the chunk count
+                        // alone doesn't give the duration.
                         let mut text = format!(
                             "♪ {} — {} sent, {} dropped",
                             audio.device, audio.frames_written, audio.frames_dropped
@@ -96,7 +93,6 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
                         ui.label(egui::RichText::new(text).small().color(color));
                     }
 
-                    // Preview toggle + image
                     {
                         let preview_id = egui::Id::new("output_preview_toggle").with(&output.uuid);
                         let show_preview: bool =
@@ -115,9 +111,8 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
                         if show_preview {
                             if let Some(&tex_id) = data.output_preview_textures.get(&idx) {
                                 let width = ui.available_width().min(320.0);
-                                // The output's own texture size, not the render
-                                // resolution: a windowed output previews its
-                                // window, which can be a different shape.
+                                // The output's own texture size, not the render resolution: a
+                                // windowed output previews its window, which can differ in shape.
                                 let size = super::utils::preview_size(
                                     egui::vec2(width, width),
                                     output.preview_width,
@@ -153,15 +148,12 @@ fn render_presentation_controls(
 
     let request = output.presentation_request;
     let requested_mode = request.mode();
-    // Every mode is listed; the ones this output cannot deliver are disabled and
-    // name their obstacle on hover, which is usually a codec set elsewhere on this
-    // same card. Hiding them was honest but silent, and left a user who knows
-    // their protocol carries HDR with no idea what to change.
+    // Every mode is listed. Modes this output cannot deliver are disabled and
+    // name their obstacle on hover, usually a codec set elsewhere on this card.
     //
-    // When a stored request is not deliverable, because the target or codec
-    // changed under it, the delivered mode is shown as the selection and the
-    // request is left alone, so it comes back the moment the output can carry it
-    // again. See /spec/presentation-mode-offering.md.
+    // When a stored request is not deliverable (the target or codec changed), the
+    // delivered mode is shown as selected and the request is kept, so it returns
+    // once the output can carry it again.
     let availability = &output.mode_availability;
     let deliverable = |mode: PresentationMode| {
         availability
@@ -184,8 +176,8 @@ fn render_presentation_controls(
                 for entry in availability {
                     let mode = entry.mode;
                     if let Some(reason) = &entry.blocked {
-                        // Disabled rather than absent: it cannot be selected into a
-                        // wrong state, and it says what to change.
+                        // Disabled rather than hidden, so it cannot be selected and still says what
+                        // to change.
                         ui.add_enabled(false, egui::Button::selectable(false, mode.label()))
                             .on_disabled_hover_text(format!(
                                 "{}\n\nUnavailable: {reason}",
@@ -216,7 +208,7 @@ fn render_presentation_controls(
         }
     });
 
-    // Peak luminance only exists for an HDR contract, so it only appears for one.
+    // Peak luminance applies only to HDR modes.
     if current_mode.is_hdr() {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Peak:").small());
@@ -247,8 +239,7 @@ fn render_presentation_controls(
         });
     }
 
-    // The tonemap is an output transform, so it belongs on the output card as
-    // well as in the show-wide Tonemap panel. `None` inherits.
+    // Per-output tonemap override; `None` inherits the show-wide setting.
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Tonemap:").small());
         let effective = output.tonemap_override.unwrap_or(data.tonemap_mode);
@@ -324,8 +315,8 @@ fn render_presentation_controls(
     };
     ui.label(egui::RichText::new(status).small().color(color));
     if let Some(reason) = &resolved.fallback_reason {
-        // The requested contract names the fallback, so an HDR request that
-        // degrades does not report itself as a bit-depth problem.
+        // Named from the requested contract, so a degraded HDR request is not
+        // reported as a bit-depth problem.
         let label = if request.transfer.is_hdr() {
             "HDR10 fallback"
         } else {
@@ -338,10 +329,9 @@ fn render_presentation_controls(
         );
     }
 
-    // EDR headroom is runtime health, not part of the resolved contract: it
-    // climbs from 1.0 once EDR engages and moves with display brightness. It
-    // answers whether the monitor can currently show the top of the range being
-    // graded. See /spec/hdr-edr-display.md.
+    // EDR headroom is runtime health, not part of the resolved contract: it rises
+    // from 1.0 once EDR engages and moves with display brightness. It shows whether
+    // the monitor can currently display the top of the graded range.
     if resolved.transfer == PresentationTransfer::EdrLinear
         && let Some(headroom) = crate::renderer::edr::primary_headroom()
     {
@@ -368,9 +358,8 @@ fn render_presentation_controls(
         );
     }
 
-    // CTA-861.3 expects MaxCLL and MaxFALL to be measured across the programme.
-    // Saying which one is in force keeps a non-standard declaration from passing
-    // as a measured one (/spec/hdr-recording-output.md).
+    // CTA-861.3 expects MaxCLL and MaxFALL to be measured across the program, so
+    // the card says whether the values are measured or declared.
     if let Some(metadata) = resolved.hdr_metadata {
         let color = match metadata {
             crate::engine::value::render::HdrMetadataSource::MeasuredFromContent => {
@@ -387,10 +376,9 @@ fn render_presentation_controls(
         );
     }
 
-    // A curve fitted against an SDR target is substituted rather than rescaled on
-    // an HDR output (/spec/hdr-per-output-encode.md § Output transform range).
-    // The substitution is reported so a look choice never silently changes the
-    // picture a delivery carries.
+    // A curve fitted for an SDR target is substituted, not rescaled, on an HDR
+    // output. The substitution is reported so the delivered look never changes
+    // silently.
     let effective_tonemap = output.tonemap_override.unwrap_or(data.tonemap_mode);
     if resolved.transfer.is_hdr() && !effective_tonemap.has_hdr_form() {
         ui.label(
@@ -403,9 +391,7 @@ fn render_presentation_controls(
         );
     }
 
-    // The calibration LUT is display-referred and does not apply to an HDR
-    // output (/spec/hdr-color-management.md Decision 4). Say so here rather than
-    // letting the user find it by opening the file.
+    // The calibration LUT is display-referred and does not apply to an HDR output.
     if resolved.transfer.is_hdr()
         && let Some(lut) = &data.active_lut_filename
     {
@@ -419,11 +405,10 @@ fn render_presentation_controls(
     }
 }
 
-/// Every output's controls: its sink type and settings, start and stop for a
-/// sink that runs, rotation, calibration, what it shows with nothing
-/// assigned, its surfaces, and edge blending. Drawn from the sink type's
-/// schema, so a new output type needs no code here.
-/// See /spec/output-sink-providers.md.
+/// Every output's controls: sink type and settings, start/stop for a sink that
+/// runs, rotation, calibration, what it shows with nothing assigned, its
+/// surfaces, and edge blending. Drawn from the sink type's schema, so a new
+/// output type needs no code here.
 fn render_output_controls(
     ui: &mut egui::Ui,
     output_uuid: &str,
@@ -466,8 +451,7 @@ fn render_output_controls(
         );
     }
 
-    // Settings. A running encoder is stopped by a change, so they lock while
-    // it runs.
+    // A settings change stops a running encoder, so settings lock while it runs.
     if let Some(ty) = sink_type {
         let locked = output.is_active && output.sink.startable;
         ui.add_enabled_ui(!locked, |ui| {
@@ -536,7 +520,6 @@ fn render_output_controls(
         });
     }
 
-    // Rotation selector
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Rotation:").small());
         egui::ComboBox::from_id_salt(format!("output_rotation_{output_uuid}"))
@@ -557,8 +540,8 @@ fn render_output_controls(
             });
     });
 
-    // Calibration mode selector (Off / Projector test card / per-Surface
-    // cards), on every output. Warp editing lives in the stage editor.
+    // Calibration mode (Off / Projector test card / per-Surface cards), on every
+    // output. Warp editing is in the stage editor.
     ui.horizontal(|ui| {
         use crate::renderer::context::CalibrationMode;
         ui.label(egui::RichText::new("🔧 Calibrate:").small());
@@ -752,8 +735,8 @@ fn sink_param(
             });
         }
         (_, ControlKind::Text { .. }) => {
-            // Edited in a buffer and sent on Enter or when focus leaves, so a
-            // path or URL is not applied one keystroke at a time.
+            // Edited in a buffer and sent on Enter or focus loss, so a path or URL is not
+            // applied per keystroke.
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(format!("{}:", spec.label)).small());
                 let id = egui::Id::new(("sink_text", output_uuid, &spec.name));
@@ -841,7 +824,7 @@ fn render_copyable_url(
     response.on_hover_text("Click to copy URL");
 }
 
-/// Render edge blending controls for an output (shared by windowed and headless).
+/// Edge blending controls for an output (windowed and headless).
 fn render_edge_blend_controls(
     ui: &mut egui::Ui,
     output_uuid: &str,
@@ -855,7 +838,7 @@ fn render_edge_blend_controls(
         .id_salt(collapse_id)
         .default_open(false)
         .show(ui, |ui| {
-            // Mode toggle: Auto / Manual
+            // Mode toggle: Auto / Manual.
             let is_auto = output.edge_blend_mode == EdgeBlendMode::Auto;
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Mode:").small());
@@ -885,7 +868,7 @@ fn render_edge_blend_controls(
             let mut changed = false;
 
             if is_auto {
-                // Auto mode: show per-surface overlap zones (read-only)
+                // Auto mode: read-only per-surface overlap zones.
                 let mut any_zones = false;
                 for sa in &output.surface_assignments {
                     if sa.overlap_zones.any_enabled() {
@@ -941,7 +924,7 @@ fn render_edge_blend_controls(
                     );
                 }
             } else {
-                // Manual mode: full per-edge controls (existing behavior)
+                // Manual mode: per-edge controls.
                 for (label, edge) in [
                     ("Left", &mut cfg.left),
                     ("Right", &mut cfg.right),
@@ -1023,9 +1006,8 @@ mod tests {
             rotation: crate::renderer::context::OutputRotation::default(),
             presentation_request: crate::engine::value::render::PresentationRequest::default(),
             resolved_presentation: resolved,
-            // Existing cases exercise the fallback line rather than the picker, so
-            // they keep an "everything deliverable" shape. The picker's own tests
-            // below override this.
+            // Most tests exercise the fallback line, not the picker, so everything is
+            // deliverable here. The picker tests override this.
             mode_availability: crate::engine::value::render::PresentationMode::ALL
                 .into_iter()
                 .map(|mode| crate::engine::value::render::ModeAvailability {
@@ -1115,9 +1097,7 @@ mod tests {
         harness.get_by_label("10-bit fallback: Syphon interoperability is limited to BGRA8");
     }
 
-    // ── the offered set (/spec/presentation-mode-offering.md) ────────
-
-    /// An eight-bit-only output, with every other mode blocked and explained.
+    /// An eight-bit-only output with every other mode blocked and explained.
     fn only_eight_bit_is_deliverable() -> Vec<crate::engine::value::render::ModeAvailability> {
         use crate::engine::value::render::{ModeAvailability, PresentationMode};
         PresentationMode::ALL
@@ -1130,10 +1110,8 @@ mod tests {
             .collect()
     }
 
-    /// The case that motivated this change, and its correction after the second
-    /// field report. An eight-bit-only output must not let you *select* HDR10,
-    /// but it must still show it and say why, because the obstacle is usually a
-    /// codec set elsewhere on the same card and hiding it teaches nothing.
+    /// An eight-bit-only output must not allow selecting HDR10, but must show it
+    /// and say why, since the obstacle is usually a codec set on the same card.
     #[test]
     fn a_blocked_mode_is_shown_with_its_reason_but_cannot_be_selected() {
         use crate::engine::value::render::PresentationMode;
@@ -1151,17 +1129,16 @@ mod tests {
                     render_output_section(ui, &data, &mut actions);
                 });
             harness.run();
-            // A ComboBox exposes its selected text as AccessKit `value`, not
-            // `label`, and its list renders only while open.
+            // A ComboBox exposes its selected text as AccessKit `value`, not `label`, and
+            // its list renders only while open.
             harness.get_by_value(PresentationMode::Sdr8.label()).click();
             harness.run();
 
-            // Visible, so the user can see what they are missing...
+            // Visible...
             let blocked = harness
                 .query_by_label(PresentationMode::Hdr10.label())
                 .expect("a blocked mode must still be listed, not hidden");
-            // ...and inert, so it cannot be selected into a state that would only
-            // produce a warning.
+            // ...and not selectable.
             blocked.click();
             harness.run();
         }
@@ -1175,9 +1152,8 @@ mod tests {
         );
     }
 
-    /// A request the output can no longer carry is kept rather than clamped, and
-    /// the picker shows what is actually being delivered instead of a mode the
-    /// output is not producing.
+    /// A request the output can no longer carry is kept, not clamped, and the
+    /// picker shows the mode actually delivered.
     #[test]
     fn an_undeliverable_request_is_retained_and_the_delivered_mode_is_shown() {
         use crate::engine::value::render::{
@@ -1192,7 +1168,7 @@ mod tests {
             fallback_reason: Some("this codec is eight-bit".into()),
             ..ResolvedPresentation::default()
         });
-        // The operator asked for HDR10 before the codec changed underneath them.
+        // HDR10 was requested before the codec changed.
         output.presentation_request =
             PresentationRequest::default().with_mode(PresentationMode::Hdr10);
         output.mode_availability = only_eight_bit_is_deliverable();
@@ -1214,7 +1190,7 @@ mod tests {
         harness.run();
         // Selected text is the delivered mode, not the undeliverable request.
         harness.get_by_value(PresentationMode::Sdr8.label());
-        // And the card still explains the difference, which is what the warning is for.
+        // The card still explains the difference.
         harness.get_by_label("HDR10 fallback: this codec is eight-bit");
     }
 
@@ -1224,8 +1200,7 @@ mod tests {
             AlphaMode, PresentationColorProfile, PresentationDepth, PresentationMode,
             PresentationPixelFormat, PresentationTransfer, ResolvedPresentation,
         };
-        // An operator reading the card should not have to infer the transfer,
-        // the container, the peak the file was mastered against, or whether the
+        // The card must show the transfer, container, mastering peak, and whether the
         // mastering metadata was measured.
         let mut data = UIData::test_fixture();
         let mut output = sample_output(ResolvedPresentation {
@@ -1253,7 +1228,7 @@ mod tests {
                 render_output_section(ui, &data, &mut actions);
             });
         harness.run();
-        // A declaration must never pass as a measurement.
+        // A declared value must not read as measured.
         assert!(
             harness
                 .query_by_label_contains("declared from peak")
@@ -1323,7 +1298,6 @@ mod tests {
                 render_output_section(ui, &data, &mut actions);
             });
         harness.run();
-        // The operator must not discover this by opening the file.
         assert!(
             harness.query_by_label_contains("club_grade.cube").is_some(),
             "an HDR output with a LUT loaded must say the LUT is not applied"
@@ -1425,12 +1399,10 @@ mod tests {
         assert!(harness.query_by_label_contains("no HDR form").is_none());
     }
 
-    // Note: the per-output tonemap ComboBox's selected text is not exposed to the
-    // accessibility tree, so it cannot be asserted on here. Two tests that tried
-    // were removed rather than weakened into assertions that observe nothing. The
-    // override's effect on this panel is covered below through the substitution
-    // warning, which is a real label, and end to end by the engine, API, and
-    // persistence tests.
+    // The per-output tonemap ComboBox's selected text is not in the accessibility
+    // tree, so it cannot be asserted here. The override is covered below through
+    // the substitution warning, and end to end by the engine, API and persistence
+    // tests.
 
     #[test]
     fn the_substitution_warning_follows_the_override_not_the_show_curve() {
@@ -1439,8 +1411,8 @@ mod tests {
             PresentationPixelFormat, PresentationTransfer, ResolvedPresentation,
         };
         use crate::renderer::tonemap::TonemapMode;
-        // Show-wide curve has an HDR form; the override does not. The warning
-        // must describe what this output actually runs.
+        // The show-wide curve has an HDR form; the override does not. The warning
+        // must describe what this output runs.
         let mut data = UIData::test_fixture();
         data.tonemap_mode = TonemapMode::Bypass;
         let mut output = sample_output(ResolvedPresentation {

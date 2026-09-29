@@ -1,7 +1,6 @@
-//! 3D Dome Preview — renders a hemisphere with domemaster texture for the Stage Editor.
-//!
-//! Uses a UV sphere mesh with equidistant azimuthal UVs, an orbit camera,
-//! and renders to an offscreen texture that egui can display.
+//! 3D dome preview for the Stage Editor: a hemisphere textured with the
+//! domemaster (equidistant azimuthal UVs), seen through an orbit camera and
+//! rendered offscreen for egui.
 
 use anyhow::Result;
 use wgpu::util::DeviceExt;
@@ -45,7 +44,7 @@ impl DomeVertex {
 pub struct OrbitCamera {
     /// Azimuth angle in radians (horizontal rotation).
     pub azimuth: f32,
-    /// Elevation angle in radians (vertical rotation, clamped to avoid gimbal lock).
+    /// Elevation angle in radians, clamped to avoid gimbal lock.
     pub elevation: f32,
     /// Distance from center.
     pub distance: f32,
@@ -140,7 +139,7 @@ pub struct DomePreviewRenderer {
     /// Output render target.
     pub output_texture: wgpu::Texture,
     pub output_view: wgpu::TextureView,
-    /// Depth buffer — kept alive so `depth_view` remains valid.
+    /// Kept alive for `depth_view`.
     #[allow(dead_code)]
     depth_texture: wgpu::Texture,
     depth_view: wgpu::TextureView,
@@ -149,7 +148,7 @@ pub struct DomePreviewRenderer {
     /// Current render target dimensions.
     width: u32,
     height: u32,
-    /// Texture format (needed for resize).
+    /// Needed for resize.
     format: wgpu::TextureFormat,
     // ── Slice overlay ──
     overlay_pipeline: wgpu::RenderPipeline,
@@ -172,10 +171,8 @@ impl DomePreviewRenderer {
     ///
     /// # Errors
     ///
-    /// Never returns `Err` today: every wgpu resource here is created
-    /// infallibly (device validation failures surface on the device's error
-    /// scope instead). The `Result` keeps the constructor signature uniform
-    /// with the other pipelines so callers can `?` it.
+    /// Never returns `Err`; validation failures surface on the device's error
+    /// scope. The `Result` matches the other pipeline constructors.
     pub fn new_with_size(
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
@@ -300,7 +297,7 @@ impl DomePreviewRenderer {
             ),
         });
 
-        // Overlay shares the same uniform buffer (MVP), so reuse bind group layout entry 0 only
+        // The overlay shares the MVP uniform buffer, so it only needs entry 0.
         let overlay_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Dome Overlay BGL"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -346,7 +343,7 @@ impl DomePreviewRenderer {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(false), // don't write depth (overlay sits on top)
+                depth_write_enabled: Some(false), // overlay sits on top
                 depth_compare: Some(wgpu::CompareFunction::LessEqual),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState {
@@ -360,7 +357,6 @@ impl DomePreviewRenderer {
             cache: None,
         });
 
-        // Empty initial overlay vertex buffer
         let overlay_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Dome Overlay VB"),
             contents: &[0u8; 4], // minimum size
@@ -473,7 +469,6 @@ impl DomePreviewRenderer {
         content_roll: f32,
     ) {
         let device = &context.device;
-        // Update uniforms
         let view = self.camera.view_matrix();
         let aspect = self.width as f32 / self.height.max(1) as f32;
         let proj = perspective(std::f32::consts::FRAC_PI_4, aspect, 0.1, 100.0);
@@ -544,7 +539,6 @@ impl DomePreviewRenderer {
             rp.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             rp.draw_indexed(0..self.num_indices, 0, 0..1);
 
-            // Draw slice overlays on top of the dome
             if self.overlay_num_vertices > 0 {
                 let overlay_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("Dome Overlay Bind Group"),
@@ -564,13 +558,12 @@ impl DomePreviewRenderer {
         context.submit(std::iter::once(encoder.finish()));
     }
 
-    /// Preview size in pixels (returns width, kept for compatibility).
+    /// Preview width in pixels.
     pub fn size(&self) -> u32 {
         self.width
     }
 
-    /// Build overlay geometry from a dome setup's projector configs.
-    /// Each projector gets a colored semi-transparent wedge on the hemisphere.
+    /// Build overlay geometry: a colored semi-transparent wedge per projector.
     pub fn set_slice_overlays(
         &mut self,
         device: &wgpu::Device,
@@ -595,10 +588,8 @@ impl DomePreviewRenderer {
             let [cr, cg, cb] = COLORS[pi % COLORS.len()];
             let color = [cr, cg, cb, ALPHA];
 
-            // Compute a grid of 3D dome positions for this projector's coverage
             let positions = projector_dome_positions(proj, &setup.geometry, GRID);
 
-            // Triangulate the grid into triangle strips
             for row in 0..(GRID - 1) {
                 for col in 0..(GRID - 1) {
                     let tl = (row * GRID + col) as usize;
@@ -653,9 +644,8 @@ impl DomePreviewRenderer {
 
 // ── Projector footprint → 3D dome positions ────────────────────────────
 
-/// Compute a grid of 3D positions on the unit hemisphere for a projector's coverage.
-/// Uses the same ray-tracing approach as the slicer, but outputs 3D positions
-/// instead of domemaster UVs.
+/// A grid of unit-hemisphere positions covering a projector's footprint. Same
+/// ray casting as the slicer, returning 3D positions instead of UVs.
 fn projector_dome_positions(
     proj: &crate::renderer::slicer::ProjectorConfig,
     _geometry: &crate::renderer::slicer::DomeGeometry,
@@ -676,7 +666,6 @@ fn projector_dome_positions(
             let u = col as f32 / (grid - 1) as f32;
             let angle_h = half_fov_h * (2.0 * u - 1.0);
 
-            // Ray direction in projector-local space
             let local_len = (angle_h.tan().powi(2) + angle_v.tan().powi(2) + 1.0).sqrt();
             let local_dir = [
                 angle_h.tan() / local_len,
@@ -700,7 +689,7 @@ fn projector_dome_positions(
                 -after_el[0] * sa + after_el[2] * ca,
             ];
 
-            // Normalize to unit sphere — this IS the dome surface position
+            // Normalized, this is the dome surface position.
             let len = (world_dir[0].powi(2) + world_dir[1].powi(2) + world_dir[2].powi(2)).sqrt();
             let pos = if len > 1e-6 {
                 [world_dir[0] / len, world_dir[1] / len, world_dir[2] / len]
@@ -708,16 +697,15 @@ fn projector_dome_positions(
                 [0.0, 1.0, 0.0] // fallback: zenith
             };
 
-            // Clamp to upper hemisphere (y >= 0)
+            // Points below the equator are projected onto it.
             let pos = if pos[1] < 0.0 {
-                // Project onto equator
                 let xz_len = (pos[0].powi(2) + pos[2].powi(2)).sqrt().max(1e-6);
                 [pos[0] / xz_len, 0.0, pos[2] / xz_len]
             } else {
                 pos
             };
 
-            // Slight offset outward to avoid z-fighting with dome mesh
+            // Offset outward to avoid z-fighting with the dome mesh.
             positions.push([pos[0] * 1.002, pos[1] * 1.002, pos[2] * 1.002]);
         }
     }
@@ -727,8 +715,7 @@ fn projector_dome_positions(
 
 // ── Hemisphere mesh generation ──────────────────────────────────────────
 
-/// Generate a hemisphere mesh with equidistant azimuthal UV mapping.
-/// Returns (vertices, indices) for indexed triangle rendering.
+/// Hemisphere mesh with equidistant azimuthal UVs, as (vertices, indices).
 pub fn generate_hemisphere(segments: u32, rings: u32) -> (Vec<DomeVertex>, Vec<u16>) {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
@@ -755,7 +742,6 @@ pub fn generate_hemisphere(segments: u32, rings: u32) -> (Vec<DomeVertex>, Vec<u
         }
     }
 
-    // Generate triangle indices
     let verts_per_ring = segments + 1;
     for ring in 0..rings {
         for seg in 0..segments {

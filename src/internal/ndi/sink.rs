@@ -1,7 +1,6 @@
 //! NDI outputs: a named sender on the network. The finished texture is
 //! converted to the sender's pixel format on the GPU and read back by the NDI
 //! manager, so the output never reads RGBA back for it.
-//! See /spec/performance-hot-paths.md A.
 
 use super::{FrameConversion, NdiManager};
 use crate::engine::value::render::PresentationRequest;
@@ -76,8 +75,7 @@ impl OutputSinkInstance for NdiSink {
         FramePath::Converted
     }
 
-    /// What NDI can carry comes from the loaded runtime rather than from the
-    /// config. See /spec/presentation-mode-offering.md.
+    /// What NDI can carry depends on the loaded runtime, not the config.
     fn configure(
         &mut self,
         _gpu: &GpuContext,

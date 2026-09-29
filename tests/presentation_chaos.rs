@@ -1,13 +1,9 @@
-//! Offensive tests for the output presentation contract.
+//! Fuzz tests for the output presentation contract.
 //!
-//! A presentation request can come from a hand-edited `stage.json`, the HTTP
-//! API, or an in-process command, and it is resolved against whatever the
-//! installed GPU, FFmpeg build, and NDI runtime happen to offer. None of those
-//! combinations may panic, invent a contract the adapter did not advertise, or
-//! quietly rewrite what the user asked for.
-//!
-//! See /spec/sdr-presentation-precision.md § Negotiation Rules and
-//! /spec/hdr-per-output-encode.md § Domain contract extension.
+//! Requests from `stage.json`, the HTTP API, or commands are resolved against
+//! whatever the GPU, FFmpeg build, and NDI runtime offer. No combination may
+//! panic, pick a format the adapter didn't advertise, or rewrite the stored
+//! request.
 
 use proptest::prelude::*;
 use varda::engine::value::render::{
@@ -92,9 +88,8 @@ fn any_format() -> impl Strategy<Value = PresentationFormat> {
 }
 
 proptest! {
-    /// An adapter advertising an arbitrary format list must never make the
-    /// resolver panic, and whatever comes back must be something the adapter
-    /// actually offered.
+    /// An arbitrary advertised format list never panics the resolver, and the
+    /// result is always one the adapter offered.
     #[test]
     fn resolution_only_ever_selects_an_advertised_format(
         request in any_request(),
@@ -103,7 +98,7 @@ proptest! {
     ) {
         let caps = PresentationCapabilities::new(formats.clone(), reason);
         let Ok(resolved) = caps.resolve(request) else {
-            // No usable format is a legitimate answer, not a panic.
+            // No usable format is a valid answer.
             return Ok(());
         };
         prop_assert!(
@@ -118,8 +113,8 @@ proptest! {
         );
     }
 
-    /// The Phase 49 rule that survives every later phase: a capability failure is
-    /// runtime state and must never rewrite what the user stored.
+    /// A capability failure is runtime state and never rewrites the stored
+    /// request.
     #[test]
     fn resolution_never_rewrites_the_request(
         request in any_request(),
@@ -156,9 +151,8 @@ proptest! {
         );
     }
 
-    /// An SDR request must never come back HDR, whatever an adapter advertises
-    /// or in whatever order. Delivering unrequested HDR would silently change
-    /// the picture a show ships.
+    /// An SDR request never comes back HDR, whatever the adapter advertises or
+    /// in whatever order.
     #[test]
     fn an_sdr_request_never_resolves_to_hdr(
         depth in any_depth(),
@@ -182,9 +176,8 @@ proptest! {
         );
     }
 
-    /// Peak luminance is reported only where it means something, and only within
-    /// the representable range. A peak on an SDR output would be a number the
-    /// operator could act on that describes nothing.
+    /// Peak luminance is reported only for HDR outputs, and only within the
+    /// representable range.
     #[test]
     fn peak_is_present_only_for_a_transfer_that_uses_one(
         request in any_request(),
@@ -209,8 +202,7 @@ proptest! {
         }
     }
 
-    /// Normalization is idempotent and always lands somewhere coherent, however
-    /// incoherent the stored request was.
+    /// Normalization is idempotent and always yields a coherent request.
     #[test]
     fn normalization_reaches_a_fixed_point_in_one_step(request in any_request()) {
         let once = request.normalized();
@@ -226,8 +218,8 @@ proptest! {
         );
     }
 
-    /// The user-facing picker and the domain must agree in both directions, so
-    /// no reachable request displays as a mode that would set something else.
+    /// The UI picker and the domain agree both ways, so no reachable request
+    /// displays as a mode that would set something else.
     #[test]
     fn mode_and_request_agree_in_both_directions(
         request in any_request(),
@@ -245,18 +237,16 @@ proptest! {
             "mode did not round trip through {:?}",
             applied
         );
-        // Switching contract must not silently discard the operator's other
-        // settings.
+        // Switching contract keeps the operator's other settings.
         prop_assert_eq!(applied.dither, request.dither);
         prop_assert_eq!(applied.peak_nits, request.peak_nits);
     }
 }
 
 proptest! {
-    /// A curve fitted against an SDR target must never reach an HDR output
-    /// transform, from any entry point. This is the gate that stops a plausible
-    /// wrong picture, so it is asserted over the whole enum rather than the two
-    /// cases the UI happens to offer.
+    /// A curve fitted for an SDR target never reaches an HDR output transform,
+    /// from any entry point. Checked over the whole enum, not only the cases
+    /// the UI offers.
     #[test]
     fn no_sdr_fitted_curve_ever_reaches_an_hdr_output(
         index in 0usize..TonemapMode::ALL.len(),
@@ -271,8 +261,7 @@ proptest! {
         prop_assert!(key.headroom() > 1.0, "an HDR program must target more than display white");
     }
 
-    /// SDR is left alone: every curve is inside its fitted range there, so
-    /// substituting would change a picture that was already correct.
+    /// SDR is left alone: every curve is inside its fitted range there.
     #[test]
     fn sdr_outputs_keep_every_curve_untouched(index in 0usize..TonemapMode::ALL.len()) {
         let mode = TonemapMode::ALL[index];
