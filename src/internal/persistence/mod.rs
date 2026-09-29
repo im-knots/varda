@@ -950,6 +950,16 @@ pub(crate) fn restore_deck(
         }
     }
 
+    // Host-inline preprocessor state, stored under `preprocessor_state`. Applied when each
+    // preprocessor starts.
+    if let Some(states) = config
+        .source
+        .get("preprocessor_state")
+        .and_then(serde_json::Value::as_object)
+    {
+        deck.restore_preprocessor_state(states);
+    }
+
     // A missing required depth sensor leaves the deck a placeholder.
     if let Some(metadata) = deck.shader().map(|s| s.metadata.clone()) {
         let saved: Option<crate::deck::DepthPreproConfig> = config

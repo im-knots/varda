@@ -956,21 +956,15 @@ impl Channel {
             let width = self.composite_texture.width();
             let height = self.composite_texture.height();
 
-            let uniforms = ISFUniforms {
+            let uniforms = crate::generator::pass::uniforms(
+                audio_data,
                 time,
-                time_delta: 1.0 / 60.0,
-                frame_index: self.frame_count,
-                pass_index: 0,
-                render_size: [width as f32, height as f32],
-                audio_level: audio_data.level,
-                audio_bass: audio_data.bass(),
-                audio_mid: audio_data.mid(),
-                audio_treble: audio_data.treble(),
-                audio_bpm: audio_data.bpm.unwrap_or(0.0),
-                audio_beat_phase: audio_data.beat_phase(),
-                date: crate::deck::get_current_date(),
-                phase_times: [0.0; 4],
-            };
+                1.0 / 60.0,
+                self.frame_count,
+                0,
+                [width as f32, height as f32],
+                [0.0; 4],
+            );
 
             let mut read_from_composite = true;
             let mut fx_cmd_buffers: Vec<wgpu::CommandBuffer> = Vec::new();

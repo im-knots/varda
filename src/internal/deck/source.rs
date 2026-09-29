@@ -72,6 +72,7 @@ impl Deck {
             phase_accumulators: [0.0; 4],
             generator_phase_inputs,
             analyzers: crate::analyzer::DeckAnalyzers::new(),
+            host_inline: crate::analyzer::HostInlineSet::new(),
             gpu_error: None,
         }
     }

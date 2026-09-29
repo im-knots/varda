@@ -36,7 +36,8 @@ impl ISFShader {
     /// # Errors
     ///
     /// Returns an error if the `/*{ ... }*/` JSON header is missing or
-    /// unterminated, or its JSON does not deserialize into [`ISFMetadata`].
+    /// unterminated, its JSON does not deserialize into [`ISFMetadata`], or it
+    /// declares passes the renderer cannot honor.
     pub fn from_string(content: &str) -> Result<Self> {
         // ISF files start with a `/*{ ... }*/` JSON header.
         let (metadata, fragment_source) = extract_json_and_glsl(content)?;
@@ -96,6 +97,7 @@ fn extract_json_and_glsl(content: &str) -> Result<(ISFMetadata, String)> {
 
     let metadata: ISFMetadata =
         serde_json::from_str(json_str).context("Failed to parse ISF JSON metadata")?;
+    metadata.validate()?;
 
     let glsl_start = json_start + json_end + 3; // Skip "}*/"
     let fragment_source = content[glsl_start..].trim().to_string();
@@ -329,6 +331,78 @@ void main() {}
         assert_eq!(passes[0].target, Some("buffer1".into()));
         assert_eq!(passes[0].persistent, Some(true));
         assert!(passes[1].target.is_none());
+    }
+
+    fn parse_passes(passes_json: &str) -> Result<Vec<crate::isf::ISFPass>> {
+        let isf = format!("/*{{ \"PASSES\": {passes_json} }}*/\nvoid main() {{}}\n");
+        Ok(ISFShader::from_string(&isf)?.metadata.passes.unwrap())
+    }
+
+    #[test]
+    fn history_and_formats_parse() {
+        use crate::isf::PassFormat;
+        let passes = parse_passes(
+            r#"[
+                {"TARGET": "taa", "HISTORY": true, "FORMAT": "rgba32float"},
+                {"TARGETS": ["gA", "gB"], "FORMATS": ["rgba32float", "r32float"]},
+                {"TARGET": "plain"},
+                {}
+            ]"#,
+        )
+        .unwrap();
+        assert!(passes[0].is_history());
+        assert_eq!(passes[0].target_names(), ["taa"]);
+        assert_eq!(passes[0].target_formats(), [Some(PassFormat::Rgba32Float)]);
+        assert_eq!(passes[1].target_names(), ["gA", "gB"]);
+        assert_eq!(
+            passes[1].target_formats(),
+            [Some(PassFormat::Rgba32Float), Some(PassFormat::R32Float)]
+        );
+        assert_eq!(passes[2].target_formats(), [None]);
+        assert!(!passes[3].is_targeted());
+    }
+
+    #[test]
+    fn invalid_pass_declarations_are_rejected() {
+        let cases = [
+            (
+                r#"[{"TARGET": "a", "HISTORY": true, "PERSISTENT": true}, {}]"#,
+                "HISTORY and PERSISTENT",
+            ),
+            (
+                r#"[{"TARGET": "a", "TARGETS": ["b"]}, {}]"#,
+                "both TARGET and TARGETS",
+            ),
+            (
+                r#"[{"TARGETS": ["a", "b", "c", "d", "e"]}, {}]"#,
+                "the limit is 4",
+            ),
+            (r#"[{"TARGETS": []}, {}]"#, "empty TARGETS"),
+            (
+                r#"[{"TARGETS": ["a", "b"], "FORMATS": ["r32float"]}, {}]"#,
+                "1 FORMATS for 2 TARGETS",
+            ),
+            (
+                r#"[{"TARGETS": ["a"], "FORMAT": "r32float"}, {}]"#,
+                "give its formats as FORMATS",
+            ),
+            (
+                r#"[{"TARGET": "a", "FORMATS": ["r32float"]}, {}]"#,
+                "give its format as FORMAT",
+            ),
+            (
+                r#"[{"TARGET": "a", "FORMAT": "rgba8unorm"}, {}]"#,
+                "not one of",
+            ),
+            (r#"[{"HISTORY": true}]"#, "output pass"),
+        ];
+        for (json, expected) in cases {
+            let err = parse_passes(json).expect_err(json);
+            assert!(
+                format!("{err:#}").contains(expected),
+                "{json}: expected '{expected}', got '{err:#}'"
+            );
+        }
     }
 
     #[test]

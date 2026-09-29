@@ -19,6 +19,13 @@ pub struct ISFUniforms {
     pub date: [f32; 4],
     /// Engine-side phase accumulators (sum of dt * param * scale per frame).
     pub phase_times: [f32; 4],
+    /// Sub-pixel offset in output pixels, in `[-0.5, 0.5)`. `JITTER`.
+    pub jitter: [f32; 2],
+    /// Index in the jitter cycle. `JITTERINDEX`.
+    pub jitter_index: i32,
+    /// 0 on the first frame after `HISTORY` targets were cleared, else 1.
+    /// `HISTORYVALID`.
+    pub history_valid: i32,
 }
 
 impl Default for ISFUniforms {
@@ -37,6 +44,9 @@ impl Default for ISFUniforms {
             audio_beat_phase: 0.0,
             date: [2026.0, 2.0, 27.0, 0.0],
             phase_times: [0.0; 4],
+            jitter: [0.0; 2],
+            jitter_index: 0,
+            history_valid: 1,
         }
     }
 }
@@ -50,9 +60,11 @@ impl Default for ISFUniforms {
 ///   Multi-pass filter:  [0: Uniforms, 1: Sampler, 2: inputImage, 3..N: passBuffers, N+1..M: imported, M+1..P: preprocessor, P+1: `UserParams`]
 ///   With imported:      [0: Uniforms, 1: Sampler, ..., N+1..M: imported, M+1..P: preprocessor, P+1: `UserParams`]
 pub struct UnifiedPipeline {
-    /// Every target (final and pass buffers) is `COLOR_PATH_FORMAT`, so one
-    /// pipeline covers all of them.
+    /// The pipeline for the output pass, writing `surface_format`.
     pub pipeline: wgpu::RenderPipeline,
+    /// One pipeline per distinct set of pass target formats (ISF `FORMAT`,
+    /// `TARGETS`), in attachment order.
+    pass_pipelines: Vec<(Vec<wgpu::TextureFormat>, wgpu::RenderPipeline)>,
     pub bind_group_layout: wgpu::BindGroupLayout,
     /// Uniforms, one slot per pass.
     uniforms: super::pass_uniforms::PassUniforms,
@@ -73,7 +85,9 @@ impl UnifiedPipeline {
     /// Create a unified pipeline from SPIR-V bytecode.
     ///
     /// - `has_input_image`: true for filters (binding for inputImage texture)
-    /// - `num_pass_buffers`: number of persistent/pass buffer textures
+    /// - `pass_buffer_filterable`: one entry per pass buffer binding; false for
+    ///   32-bit float targets, which the shader must read with `texelFetch`
+    /// - `pass_target_formats`: the target formats of each targeted pass
     /// - `num_imported_textures`: number of ISF IMPORTED image textures
     /// - `preprocessor_filterable`: one entry per preprocessor texture binding;
     ///   false for `texelFetch`-only float data (`FORMAT: "rgba32float"`)
@@ -82,7 +96,8 @@ impl UnifiedPipeline {
     /// # Errors
     ///
     /// Returns an error if the SPIR-V fails to parse, fails naga validation, or
-    /// cannot be transpiled to WGSL.
+    /// cannot be transpiled to WGSL, or if the shader binds more sampled
+    /// textures than the device allows.
     // Takes many distinct GPU descriptors with nothing in common to bundle.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -90,11 +105,24 @@ impl UnifiedPipeline {
         spirv: &[u32],
         surface_format: wgpu::TextureFormat,
         has_input_image: bool,
-        num_pass_buffers: usize,
+        pass_buffer_filterable: &[bool],
+        pass_target_formats: &[Vec<wgpu::TextureFormat>],
         num_imported_textures: usize,
         preprocessor_filterable: &[bool],
     ) -> Result<Self> {
+        let num_pass_buffers = pass_buffer_filterable.len();
         let num_preprocessor_textures = preprocessor_filterable.len();
+        let sampled_textures = usize::from(has_input_image)
+            + num_pass_buffers
+            + num_imported_textures
+            + num_preprocessor_textures;
+        let limit = device.limits().max_sampled_textures_per_shader_stage as usize;
+        if sampled_textures > limit {
+            anyhow::bail!(
+                "shader binds {sampled_textures} textures (input, pass buffers, IMPORTED and \
+                 PREPROCESSORS); this GPU allows {limit}"
+            );
+        }
         // SPIR-V to WGSL via naga.
         let spirv_bytes: Vec<u8> = spirv.iter().flat_map(|word| word.to_le_bytes()).collect();
 
@@ -182,13 +210,16 @@ impl UnifiedPipeline {
             next_binding += 1;
         }
 
-        // Pass buffer textures
-        for _ in 0..num_pass_buffers {
+        // Pass buffer textures. A non-filterable one is valid next to the
+        // filtering sampler as long as the shader reads it with `texelFetch`.
+        for filterable in pass_buffer_filterable {
             layout_entries.push(wgpu::BindGroupLayoutEntry {
                 binding: next_binding,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    sample_type: wgpu::TextureSampleType::Float {
+                        filterable: *filterable,
+                    },
                     view_dimension: wgpu::TextureViewDimension::D2,
                     multisampled: false,
                 },
@@ -269,8 +300,23 @@ impl UnifiedPipeline {
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/fullscreen.wgsl").into()),
         });
 
-        let create_pipeline = |format: wgpu::TextureFormat, label: &str| {
-            let blend_state = Some(wgpu::BlendState::REPLACE);
+        let create_pipeline = |formats: &[wgpu::TextureFormat], label: &str| {
+            // 32-bit float targets are not blendable; no blend state means
+            // replace for them too.
+            let targets: Vec<Option<wgpu::ColorTargetState>> = formats
+                .iter()
+                .map(|&format| {
+                    let blendable = !matches!(
+                        format,
+                        wgpu::TextureFormat::Rgba32Float | wgpu::TextureFormat::R32Float
+                    );
+                    Some(wgpu::ColorTargetState {
+                        format,
+                        blend: blendable.then_some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })
+                })
+                .collect();
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&pipeline_layout),
@@ -283,11 +329,7 @@ impl UnifiedPipeline {
                 fragment: Some(wgpu::FragmentState {
                     module: &shader_module,
                     entry_point: Some("main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend: blend_state,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
+                    targets: &targets,
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                 }),
                 primitive: wgpu::PrimitiveState {
@@ -310,10 +352,22 @@ impl UnifiedPipeline {
             })
         };
 
-        let pipeline = create_pipeline(surface_format, "ISF Unified Render Pipeline");
+        let pipeline = create_pipeline(&[surface_format], "ISF Unified Render Pipeline");
+        let mut pass_pipelines: Vec<(Vec<wgpu::TextureFormat>, wgpu::RenderPipeline)> = Vec::new();
+        for formats in pass_target_formats {
+            if formats.as_slice() != [surface_format]
+                && !pass_pipelines.iter().any(|(f, _)| f == formats)
+            {
+                pass_pipelines.push((
+                    formats.clone(),
+                    create_pipeline(formats, "ISF Pass Render Pipeline"),
+                ));
+            }
+        }
 
         Ok(Self {
             pipeline,
+            pass_pipelines,
             bind_group_layout,
             uniforms,
             sampler,
@@ -478,6 +532,23 @@ impl UnifiedPipeline {
         user_params_buffer: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         self.create_bind_group(device, None, &[], &[], &[], Some(user_params_buffer))
+    }
+
+    /// The pipeline writing a pass's targets, in attachment order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `formats` was not among the pass target formats the pipeline
+    /// was built with, which is a caller bug.
+    pub fn pipeline_for(&self, formats: &[wgpu::TextureFormat]) -> &wgpu::RenderPipeline {
+        if formats == [self.surface_format] {
+            return &self.pipeline;
+        }
+        self.pass_pipelines
+            .iter()
+            .find(|(f, _)| f == formats)
+            .map(|(_, pipeline)| pipeline)
+            .expect("pass target formats were declared when the pipeline was built")
     }
 
     /// Update a single-pass shader's uniforms.

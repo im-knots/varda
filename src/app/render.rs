@@ -151,6 +151,16 @@ impl VardaApp {
                         );
                     }
                 }
+                for (preprocessor_type, snapshot) in slot.deck.host_inline.snapshots() {
+                    for (name, value) in &snapshot.scalars {
+                        vals.insert(
+                            deck_id.to_owned(),
+                            preprocessor_type.to_owned(),
+                            name.clone(),
+                            *value,
+                        );
+                    }
+                }
             }
         }
         vals

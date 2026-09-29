@@ -204,6 +204,18 @@ fn fallback_backends() -> wgpu::Backends {
 }
 
 impl GpuContext {
+    /// Device limits: WebGPU defaults, 16K textures, and every sampled texture
+    /// per stage the adapter supports, so many-pass ISF shaders fit.
+    fn required_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
+        wgpu::Limits {
+            max_texture_dimension_2d: 16384,
+            max_sampled_textures_per_shader_stage: adapter
+                .limits()
+                .max_sampled_textures_per_shader_stage,
+            ..wgpu::Limits::default()
+        }
+    }
+
     /// Create a GPU context + window surface from a window.
     ///
     /// The adapter is selected for compatibility with the window's surface.
@@ -306,10 +318,7 @@ impl GpuContext {
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("Varda Device"),
                 required_features,
-                required_limits: wgpu::Limits {
-                    max_texture_dimension_2d: 16384,
-                    ..wgpu::Limits::default()
-                },
+                required_limits: Self::required_limits(&adapter),
                 memory_hints: wgpu::MemoryHints::default(),
                 experimental_features: wgpu::ExperimentalFeatures::default(),
                 trace: wgpu::Trace::default(),
@@ -505,10 +514,7 @@ impl GpuContext {
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("Varda Headless Device"),
             required_features,
-            required_limits: wgpu::Limits {
-                max_texture_dimension_2d: 16384,
-                ..wgpu::Limits::default()
-            },
+            required_limits: Self::required_limits(&adapter),
             memory_hints: wgpu::MemoryHints::default(),
             experimental_features: wgpu::ExperimentalFeatures::default(),
             trace: wgpu::Trace::default(),

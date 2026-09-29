@@ -2,15 +2,15 @@ mod effect;
 mod render;
 mod source;
 
-pub use crate::generator::{PassBuffer, get_current_date};
+use crate::generator::PassSet;
+pub use crate::generator::get_current_date;
 pub use crate::source::{PreprocessorSlot, ScalingMode, preprocessor_texture_format};
 pub(crate) use render::analyzer_registry;
 
-use crate::isf::{ISFPass, ISFShader};
+use crate::isf::ISFShader;
 use crate::params::ShaderParams;
 use crate::renderer::UnifiedPipeline;
 use crate::source::DeckSourceInstance;
-use std::collections::HashMap;
 use std::time::Instant;
 
 /// A shader deck's depth-sensor preprocessor as saved under the source config's
@@ -93,8 +93,7 @@ pub struct Effect {
     pub pipeline: UnifiedPipeline,
     pub enabled: bool,
     pub params: ShaderParams,
-    pub pass_buffers: HashMap<String, PassBuffer>,
-    pub passes: Vec<ISFPass>,
+    pub passes: PassSet,
     pub target_format: wgpu::TextureFormat,
     /// GPU textures loaded from ISF IMPORTED images (sorted by name for deterministic binding)
     pub imported_textures: Vec<(String, wgpu::Texture, wgpu::TextureView)>,
@@ -174,6 +173,9 @@ pub struct Deck {
     /// Per-deck analyzer instances (brightness, beat detection, etc.)
     pub(crate) analyzers: crate::analyzer::DeckAnalyzers,
 
+    /// Host-inline preprocessors, stepped before the source renders each frame.
+    pub(crate) host_inline: crate::analyzer::HostInlineSet,
+
     /// Set when this deck raised a GPU error. A quarantined deck stops rendering and holds its
     /// last good frame. Cleared by [`Deck::clear_gpu_error`] when the shader is reloaded.
     gpu_error: Option<String>,
@@ -243,8 +245,9 @@ impl Deck {
     }
 
     /// The config that rebuilds this deck's source as it is now, plus the deck-held parts all
-    /// source types share: generator parameter values under `params` and a shader deck's depth
-    /// preprocessor under `depth_prepro`.
+    /// source types share: generator parameter values under `params`, a shader deck's depth
+    /// preprocessor under `depth_prepro`, and host-inline preprocessor state under
+    /// `preprocessor_state`.
     pub fn source_config(&self) -> crate::source::SourceConfig {
         let mut config = self.source.config();
         if !self.generator_params.values.is_empty() {
@@ -266,7 +269,16 @@ impl Deck {
                 },
             );
         }
+        let states = self.host_inline.persisted_states();
+        if !states.is_empty() {
+            config.set("preprocessor_state", states);
+        }
         config
+    }
+
+    /// Restore host-inline preprocessor state saved by [`Self::source_config`].
+    pub fn restore_preprocessor_state(&mut self, states: &serde_json::Map<String, serde_json::Value>) {
+        self.host_inline.restore_states(states);
     }
 
     /// The ISF shader this deck runs, when its source is one.

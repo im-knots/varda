@@ -7,20 +7,17 @@
 pub mod pass;
 
 pub use pass::{
-    PassBuffer, create_pass_buffers, create_preprocessor_slots, get_current_date,
+    PassBindings, PassBuffer, PassSet, create_preprocessor_slots, get_current_date,
     load_imported_textures, parse_size_expression, preprocessor_filterability,
 };
 
-use crate::isf::{
-    ISFMetadata, ISFPass, ISFShader, compile_glsl_compute_to_spirv, compile_glsl_to_spirv,
-};
+use crate::isf::{ISFMetadata, ISFShader, compile_glsl_compute_to_spirv, compile_glsl_to_spirv};
 use crate::renderer::{ComputePipeline, DispatchMode, GpuContext, UnifiedPipeline};
 use crate::source::{
     DeckSourceInstance, DeckSourceProvider, LibraryEntry, LibrarySection, PreprocessorSlot,
     SourceConfig, SourceEnv, SourceFrame, SourceLoader, SourceQuery,
 };
 use anyhow::{Context, Result};
-use std::collections::HashMap;
 use std::path::Path;
 
 pub const SOURCE_TYPE: &str = "Shader";
@@ -138,8 +135,7 @@ impl DeckSourceProvider for ShaderProvider {
 enum Program {
     Fragment {
         pipeline: UnifiedPipeline,
-        pass_buffers: HashMap<String, PassBuffer>,
-        passes: Vec<ISFPass>,
+        passes: PassSet,
         /// Loaded from ISF `IMPORTED`, sorted by name for deterministic binding.
         imported_textures: Vec<(String, wgpu::Texture, wgpu::TextureView)>,
         preprocessor_slots: Vec<PreprocessorSlot>,
@@ -175,16 +171,9 @@ impl Shader {
         let spirv = compile_glsl_to_spirv(&shader.fragment_source, &shader.name())
             .context("Failed to compile shader to SPIR-V")?;
         let passes = shader.metadata.passes.clone().unwrap_or_default();
-        // All pass buffers use the color-path format; ISF `"FLOAT": true` does
-        // not change it.
-        let pass_buffers = create_pass_buffers(
-            gpu,
-            &passes,
-            width,
-            height,
-            gpu.compositing_format,
-            "Pass Buffer",
-        );
+        // Targets without a `FORMAT` use the color-path format; ISF
+        // `"FLOAT": true` does not change it.
+        let default_format = gpu.compositing_format;
         let imported_textures =
             load_imported_textures(&shader.metadata, shader.file_path.as_deref(), gpu);
         let preprocessor_slots = create_preprocessor_slots(gpu, &shader.metadata);
@@ -193,14 +182,15 @@ impl Shader {
             &spirv,
             gpu.compositing_format,
             false,
-            pass_buffers.len(),
+            &PassSet::binding_filterability(&passes, default_format),
+            &PassSet::target_formats(&passes, default_format),
             imported_textures.len(),
             &preprocessor_filterability(&preprocessor_slots),
         )
         .context("Failed to create shader pipeline")?;
+        let passes = PassSet::new(gpu, passes, width, height, default_format, "Pass Buffer");
         Ok(Program::Fragment {
             pipeline,
-            pass_buffers,
             passes,
             imported_textures,
             preprocessor_slots,
@@ -244,8 +234,7 @@ impl Shader {
     fn render_fragment(
         frame: &mut SourceFrame,
         pipeline: &UnifiedPipeline,
-        pass_buffers: &mut HashMap<String, PassBuffer>,
-        passes: &[ISFPass],
+        passes: &mut PassSet,
         imported: &[&wgpu::TextureView],
         preprocessors: &[&wgpu::TextureView],
     ) {
@@ -261,60 +250,23 @@ impl Shader {
         };
         let size = [frame.width as f32, frame.height as f32];
 
-        if pipeline.num_pass_buffers == 0 {
-            let uniforms = pass::uniforms(
-                frame.audio,
-                frame.time,
-                frame.time_delta,
-                frame.frame_index,
-                0,
-                size,
-                frame.phase_times,
-            );
-            pipeline.update_uniforms(&frame.gpu.queue, &uniforms);
-            let bind_group = pipeline.create_bind_group(
-                &frame.gpu.device,
-                None,
-                &[],
-                imported,
-                preprocessors,
-                Some(user_params),
-            );
-            let mut encoder =
-                frame
-                    .gpu
-                    .device
-                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("Deck Source Render Encoder"),
-                    });
-            draw_pass(
-                &mut encoder,
-                pipeline,
-                &bind_group,
-                frame.target,
-                "Deck Source Render Pass",
-            );
-            frame.cmd_buffers.push(encoder.finish());
-            return;
-        }
-
-        let iterations_of = |pass: &ISFPass| {
-            if pass.persistent.unwrap_or(false) {
-                SIMULATION_ITERATIONS
-            } else {
-                1
-            }
-        };
         // One uniform slot per pass iteration plus one for the final pass. The
         // targeted passes share one command buffer, submitted now so the GPU
-        // starts early; the final pass joins the frame's batch.
-        let slots = passes
-            .iter()
-            .filter(|p| p.target.is_some())
-            .map(iterations_of)
-            .sum::<usize>()
-            + 1;
-        pipeline.ensure_pass_slots(&frame.gpu.device, slots);
+        // starts early; the final pass joins the frame's batch. A single-pass
+        // shader is the final pass alone.
+        pipeline.ensure_pass_slots(
+            &frame.gpu.device,
+            passes.uniform_slots(SIMULATION_ITERATIONS),
+        );
+        let bindings = PassBindings {
+            device: &frame.gpu.device,
+            queue: &frame.gpu.queue,
+            pipeline,
+            input: None,
+            imported,
+            preprocessors,
+            user_params,
+        };
         let mut encoder =
             frame
                 .gpu
@@ -322,49 +274,39 @@ impl Shader {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Multi-pass Encoder"),
                 });
-        let mut slot = 0;
-        for (pass_idx, pass) in passes.iter().enumerate() {
-            let Some(target_name) = &pass.target else {
-                continue;
+        let (audio, time, time_delta, frame_index, phase_times) = (
+            frame.audio,
+            frame.time,
+            frame.time_delta,
+            frame.frame_index,
+            frame.phase_times,
+        );
+        // A persistent pass substeps with a fraction of the frame's delta and
+        // its own frame index. RENDERSIZE is the pass buffer's own size, so
+        // shaders that store per-pixel state can address their own texels.
+        let slot = passes.encode_targeted(&mut encoder, &bindings, SIMULATION_ITERATIONS, |step| {
+            let (delta, index) = if step.substeps > 1 {
+                (
+                    time_delta / step.substeps as f32,
+                    frame_index * step.substeps as u32 + step.substep as u32,
+                )
+            } else {
+                (time_delta, frame_index)
             };
-            // The pass buffer's own size is RENDERSIZE, so shaders that store
-            // per-pixel state can address their own texels.
-            let pass_size = pass_buffers.get(target_name).map_or(size, |pb| {
-                let sz = pb.texture_a.size();
-                [sz.width as f32, sz.height as f32]
-            });
-            for iter in 0..iterations_of(pass) {
-                let uniforms = pass::uniforms(
-                    frame.audio,
-                    frame.time,
-                    frame.time_delta / SIMULATION_ITERATIONS as f32,
-                    frame.frame_index * SIMULATION_ITERATIONS as u32 + iter as u32,
-                    pass_idx,
-                    pass_size,
-                    frame.phase_times,
-                );
-                pipeline.write_pass_uniforms(&frame.gpu.queue, slot, &uniforms);
-                let target = pass_buffers
-                    .get(target_name)
-                    .map_or(frame.target, PassBuffer::write_view);
-                encode_multi_pass(
-                    &frame.gpu.device,
-                    pipeline,
-                    &mut encoder,
-                    slot,
-                    passes,
-                    pass_buffers,
-                    imported,
-                    preprocessors,
-                    user_params,
-                    target,
-                );
-                slot += 1;
-                if let Some(pb) = pass_buffers.get_mut(target_name) {
-                    pb.swap();
-                }
-            }
-        }
+            let mut uniforms = pass::uniforms(
+                audio,
+                time,
+                delta,
+                index,
+                step.pass_index,
+                step.size,
+                phase_times,
+            );
+            // Jitter follows the rendered frame, not the substep.
+            uniforms.jitter = pass::jitter(frame_index);
+            uniforms.jitter_index = i32::try_from(frame_index % pass::JITTER_CYCLE).unwrap_or(0);
+            uniforms
+        });
         if slot > 0 {
             frame.gpu.submit(std::iter::once(encoder.finish()));
             encoder = frame
@@ -375,28 +317,21 @@ impl Shader {
                 });
         }
         let uniforms = pass::uniforms(
-            frame.audio,
-            frame.time,
-            frame.time_delta,
-            frame.frame_index,
-            passes.len(),
+            audio,
+            time,
+            time_delta,
+            frame_index,
+            if passes.has_targeted_passes() {
+                passes.passes().len()
+            } else {
+                0
+            },
             size,
-            frame.phase_times,
+            phase_times,
         );
-        pipeline.write_pass_uniforms(&frame.gpu.queue, slot, &uniforms);
-        encode_multi_pass(
-            &frame.gpu.device,
-            pipeline,
-            &mut encoder,
-            slot,
-            passes,
-            pass_buffers,
-            imported,
-            preprocessors,
-            user_params,
-            frame.target,
-        );
+        passes.encode_output(&mut encoder, &bindings, slot, uniforms, frame.target);
         frame.cmd_buffers.push(encoder.finish());
+        passes.finish_frame();
     }
 
     fn render_compute(frame: &mut SourceFrame, pipeline: &ComputePipeline) {
@@ -475,66 +410,6 @@ impl Shader {
     }
 }
 
-fn draw_pass(
-    encoder: &mut wgpu::CommandEncoder,
-    pipeline: &UnifiedPipeline,
-    bind_group: &wgpu::BindGroup,
-    target: &wgpu::TextureView,
-    label: &str,
-) {
-    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some(label),
-        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view: target,
-            resolve_target: None,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                store: wgpu::StoreOp::Store,
-            },
-            depth_slice: None,
-        })],
-        depth_stencil_attachment: None,
-        timestamp_writes: None,
-        occlusion_query_set: None,
-        multiview_mask: None,
-    });
-    pass.set_pipeline(&pipeline.pipeline);
-    pass.set_bind_group(0, bind_group, &[]);
-    pass.draw(0..3, 0..1);
-}
-
-/// Encode one pass of a multi-pass generator into `target`, reading its
-/// uniforms from `slot` and every pass buffer's current contents.
-#[allow(clippy::too_many_arguments)] // the pass's bindings, all borrowed from different owners
-fn encode_multi_pass(
-    device: &wgpu::Device,
-    pipeline: &UnifiedPipeline,
-    encoder: &mut wgpu::CommandEncoder,
-    slot: usize,
-    passes: &[ISFPass],
-    pass_buffers: &HashMap<String, PassBuffer>,
-    imported: &[&wgpu::TextureView],
-    preprocessors: &[&wgpu::TextureView],
-    user_params: &wgpu::Buffer,
-    target: &wgpu::TextureView,
-) {
-    let pass_views: Vec<&wgpu::TextureView> = passes
-        .iter()
-        .filter_map(|p| p.target.as_ref().and_then(|t| pass_buffers.get(t)))
-        .map(PassBuffer::read_view)
-        .collect();
-    let bind_group = pipeline.create_pass_bind_group(
-        device,
-        slot,
-        None,
-        &pass_views,
-        imported,
-        preprocessors,
-        Some(user_params),
-    );
-    draw_pass(encoder, pipeline, &bind_group, target, "Multi-pass Render");
-}
-
 impl DeckSourceInstance for Shader {
     fn source_type(&self) -> &str {
         SOURCE_TYPE
@@ -552,7 +427,6 @@ impl DeckSourceInstance for Shader {
         match &mut self.program {
             Program::Fragment {
                 pipeline,
-                pass_buffers,
                 passes,
                 imported_textures,
                 preprocessor_slots,
@@ -561,18 +435,18 @@ impl DeckSourceInstance for Shader {
                     imported_textures.iter().map(|(_, _, v)| v).collect();
                 let preprocessors: Vec<&wgpu::TextureView> =
                     preprocessor_slots.iter().map(|s| &s.view).collect();
-                Self::render_fragment(
-                    frame,
-                    pipeline,
-                    pass_buffers,
-                    passes,
-                    &imported,
-                    &preprocessors,
-                );
+                Self::render_fragment(frame, pipeline, passes, &imported, &preprocessors);
             }
             Program::Compute { pipeline } => Self::render_compute(frame, pipeline),
         }
         Ok(())
+    }
+
+    /// Pass buffers follow the deck's size. `HISTORY` targets start over.
+    fn resize(&mut self, gpu: &GpuContext, width: u32, height: u32) {
+        if let Program::Fragment { passes, .. } = &mut self.program {
+            passes.resize(gpu, width, height);
+        }
     }
 
     fn shader(&self) -> Option<&ISFShader> {

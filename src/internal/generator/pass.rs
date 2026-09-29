@@ -1,8 +1,9 @@
-//! Shared ISF plumbing for shader decks and effects: pass buffers, imported
-//! textures, size expressions, and the date uniform.
+//! Shared ISF plumbing for shader decks and effects: pass buffers and the
+//! multi-pass loop, imported textures, size expressions, uniforms.
 
-use crate::isf::ISFMetadata;
-use crate::renderer::GpuContext;
+use crate::isf::{ISFMetadata, ISFPass, PassFormat};
+use crate::renderer::{GpuContext, ISFUniforms, UnifiedPipeline};
+use std::collections::HashMap;
 use std::time::Instant;
 
 /// A buffer from an ISF `PASSES` entry, double-buffered so a pass can read
@@ -18,6 +19,293 @@ pub struct PassBuffer {
     pub persistent: bool,
     /// 0 = read from A, 1 = read from B.
     pub read_idx: usize,
+}
+
+/// The texture format of an ISF pass format.
+pub fn wgpu_pass_format(format: PassFormat) -> wgpu::TextureFormat {
+    match format {
+        PassFormat::Rgba16Float => wgpu::TextureFormat::Rgba16Float,
+        PassFormat::Rgba32Float => wgpu::TextureFormat::Rgba32Float,
+        PassFormat::R32Float => wgpu::TextureFormat::R32Float,
+    }
+}
+
+/// Target formats of one pass, in attachment order. Undeclared targets use
+/// `default`.
+fn pass_formats(pass: &ISFPass, default: wgpu::TextureFormat) -> Vec<wgpu::TextureFormat> {
+    pass.target_formats()
+        .into_iter()
+        .map(|f| f.map_or(default, wgpu_pass_format))
+        .collect()
+}
+
+/// One run of a targeted pass, for choosing its uniforms.
+#[derive(Debug, Clone, Copy)]
+pub struct PassStep {
+    /// `PASSINDEX`.
+    pub pass_index: usize,
+    /// Which run of the pass this frame, from 0.
+    pub substep: usize,
+    /// Runs of the pass this frame: more than 1 for a `PERSISTENT` pass.
+    pub substeps: usize,
+    /// The pass buffer's size.
+    pub size: [f32; 2],
+}
+
+/// What every pass of one shader binds besides the pass buffers.
+pub struct PassBindings<'a> {
+    pub device: &'a wgpu::Device,
+    pub queue: &'a wgpu::Queue,
+    pub pipeline: &'a UnifiedPipeline,
+    /// A filter's input image.
+    pub input: Option<&'a wgpu::TextureView>,
+    pub imported: &'a [&'a wgpu::TextureView],
+    pub preprocessors: &'a [&'a wgpu::TextureView],
+    pub user_params: &'a wgpu::Buffer,
+}
+
+/// The pass buffers of one ISF shader and the loop that renders its targeted
+/// passes into them.
+///
+/// Pass buffers bind in declaration order: each targeted pass's targets, in
+/// attachment order.
+pub struct PassSet {
+    passes: Vec<ISFPass>,
+    buffers: HashMap<String, PassBuffer>,
+    default_format: wgpu::TextureFormat,
+    label: &'static str,
+    /// Frames finished since the buffers were created. 0 means `HISTORY`
+    /// targets hold nothing yet.
+    frames: u32,
+}
+
+impl PassSet {
+    /// Allocate the buffers `passes` declare, sized against `width × height`.
+    /// Targets without a `FORMAT` use `default_format`.
+    pub fn new(
+        gpu: &GpuContext,
+        passes: Vec<ISFPass>,
+        width: u32,
+        height: u32,
+        default_format: wgpu::TextureFormat,
+        label: &'static str,
+    ) -> Self {
+        let buffers = create_pass_buffers(gpu, &passes, width, height, default_format, label);
+        Self {
+            passes,
+            buffers,
+            default_format,
+            label,
+            frames: 0,
+        }
+    }
+
+    /// Reallocate for a new size. History starts over.
+    pub fn resize(&mut self, gpu: &GpuContext, width: u32, height: u32) {
+        self.buffers = create_pass_buffers(
+            gpu,
+            &self.passes,
+            width,
+            height,
+            self.default_format,
+            self.label,
+        );
+        self.frames = 0;
+    }
+
+    /// Whether any pass renders into a buffer.
+    pub fn has_targeted_passes(&self) -> bool {
+        self.passes.iter().any(ISFPass::is_targeted)
+    }
+
+    /// All passes, the output pass included.
+    pub fn passes(&self) -> &[ISFPass] {
+        &self.passes
+    }
+
+    /// Whether `HISTORY` targets hold last frame's output. `HISTORYVALID`.
+    pub fn history_valid(&self) -> bool {
+        self.frames > 0
+    }
+
+    /// Per binding, whether the pass buffer is filterable, for the pipeline
+    /// layout.
+    pub fn binding_filterability(
+        passes: &[ISFPass],
+        default_format: wgpu::TextureFormat,
+    ) -> Vec<bool> {
+        passes
+            .iter()
+            .flat_map(|pass| pass_formats(pass, default_format))
+            .map(|format| format == wgpu::TextureFormat::Rgba16Float)
+            .collect()
+    }
+
+    /// Target formats of every targeted pass, for the pipeline.
+    pub fn target_formats(
+        passes: &[ISFPass],
+        default_format: wgpu::TextureFormat,
+    ) -> Vec<Vec<wgpu::TextureFormat>> {
+        passes
+            .iter()
+            .filter(|pass| pass.is_targeted())
+            .map(|pass| pass_formats(pass, default_format))
+            .collect()
+    }
+
+    /// Uniform slots one frame needs: one per targeted pass iteration and
+    /// one for the output pass.
+    pub fn uniform_slots(&self, persistent_substeps: usize) -> usize {
+        self.passes
+            .iter()
+            .filter(|pass| pass.is_targeted())
+            .map(|pass| iterations(pass, persistent_substeps))
+            .sum::<usize>()
+            + 1
+    }
+
+    /// Every pass buffer's current read view, in binding order.
+    pub fn binding_views(&self) -> Vec<&wgpu::TextureView> {
+        self.passes
+            .iter()
+            .flat_map(ISFPass::target_names)
+            .filter_map(|name| self.buffers.get(name))
+            .map(PassBuffer::read_view)
+            .collect()
+    }
+
+    /// Encode every targeted pass. `PERSISTENT` passes run
+    /// `persistent_substeps` times. `uniforms` gives each run's uniforms;
+    /// `HISTORYVALID` is filled in here. Returns the next free uniform slot.
+    pub fn encode_targeted(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        bindings: &PassBindings<'_>,
+        persistent_substeps: usize,
+        mut uniforms: impl FnMut(PassStep) -> ISFUniforms,
+    ) -> usize {
+        let history_valid = i32::from(self.history_valid());
+        let mut slot = 0;
+        for (pass_idx, pass) in self.passes.iter().enumerate() {
+            let names = pass.target_names();
+            let Some(first) = names.first().and_then(|n| self.buffers.get(*n)) else {
+                continue;
+            };
+            let size = first.texture_a.size();
+            let size = [size.width as f32, size.height as f32];
+            let formats = pass_formats(pass, self.default_format);
+            let substeps = iterations(pass, persistent_substeps);
+            for substep in 0..substeps {
+                let mut pass_uniforms = uniforms(PassStep {
+                    pass_index: pass_idx,
+                    substep,
+                    substeps,
+                    size,
+                });
+                pass_uniforms.history_valid = history_valid;
+                bindings
+                    .pipeline
+                    .write_pass_uniforms(bindings.queue, slot, &pass_uniforms);
+                {
+                    let views = self.binding_views();
+                    let targets: Vec<&wgpu::TextureView> = names
+                        .iter()
+                        .filter_map(|n| self.buffers.get(*n))
+                        .map(PassBuffer::write_view)
+                        .collect();
+                    encode_pass(encoder, bindings, slot, &views, &targets, &formats);
+                }
+                slot += 1;
+                for name in &names {
+                    if let Some(buffer) = self.buffers.get_mut(*name) {
+                        buffer.swap();
+                    }
+                }
+            }
+        }
+        slot
+    }
+
+    /// Encode the output pass into `target`, reading uniforms from `slot`.
+    pub fn encode_output(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        bindings: &PassBindings<'_>,
+        slot: usize,
+        mut uniforms: ISFUniforms,
+        target: &wgpu::TextureView,
+    ) {
+        uniforms.history_valid = i32::from(self.history_valid());
+        bindings
+            .pipeline
+            .write_pass_uniforms(bindings.queue, slot, &uniforms);
+        let views = self.binding_views();
+        encode_pass(
+            encoder,
+            bindings,
+            slot,
+            &views,
+            &[target],
+            &[bindings.pipeline.surface_format],
+        );
+    }
+
+    /// Mark the frame rendered: from the next frame, history is valid.
+    pub fn finish_frame(&mut self) {
+        self.frames = self.frames.saturating_add(1);
+    }
+}
+
+fn iterations(pass: &ISFPass, persistent_substeps: usize) -> usize {
+    if pass.is_persistent() {
+        persistent_substeps
+    } else {
+        1
+    }
+}
+
+fn encode_pass(
+    encoder: &mut wgpu::CommandEncoder,
+    bindings: &PassBindings<'_>,
+    slot: usize,
+    pass_views: &[&wgpu::TextureView],
+    targets: &[&wgpu::TextureView],
+    formats: &[wgpu::TextureFormat],
+) {
+    let bind_group = bindings.pipeline.create_pass_bind_group(
+        bindings.device,
+        slot,
+        bindings.input,
+        pass_views,
+        bindings.imported,
+        bindings.preprocessors,
+        Some(bindings.user_params),
+    );
+    let attachments: Vec<Option<wgpu::RenderPassColorAttachment<'_>>> = targets
+        .iter()
+        .map(|view| {
+            Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })
+        })
+        .collect();
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("ISF Pass"),
+        color_attachments: &attachments,
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    pass.set_pipeline(bindings.pipeline.pipeline_for(formats));
+    pass.set_bind_group(0, &bind_group, &[]);
+    pass.draw(0..3, 0..1);
 }
 
 impl PassBuffer {
@@ -50,60 +338,69 @@ impl PassBuffer {
 }
 
 /// Allocate the pass buffers an ISF shader's `PASSES` declare, sized against
-/// `width × height`.
+/// `width × height`. A target named by two passes is allocated once, by the
+/// first.
 ///
 /// Every pass buffer is double-buffered: each pass samples all pass buffers,
 /// so a single texture would be both target and resource in its own pass,
-/// which wgpu rejects.
-pub fn create_pass_buffers(
+/// which wgpu rejects. The same double-buffering gives a `HISTORY` pass last
+/// frame's output.
+fn create_pass_buffers(
     gpu: &GpuContext,
-    passes: &[crate::isf::ISFPass],
+    passes: &[ISFPass],
     width: u32,
     height: u32,
-    format: wgpu::TextureFormat,
+    default_format: wgpu::TextureFormat,
     label: &str,
-) -> std::collections::HashMap<String, PassBuffer> {
-    let mut buffers = std::collections::HashMap::new();
+) -> HashMap<String, PassBuffer> {
+    let mut buffers = HashMap::new();
     for pass in passes {
-        let Some(target_name) = pass.target.clone() else {
-            continue;
-        };
         let pass_width = parse_size_expression(pass.width.as_deref(), width);
         let pass_height = parse_size_expression(pass.height.as_deref(), height);
-        let make = |side: &str| {
-            let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(&format!("{label} {side}: {target_name}")),
-                size: wgpu::Extent3d {
-                    width: pass_width,
-                    height: pass_height,
-                    depth_or_array_layers: 1,
+        for (target_name, format) in pass
+            .target_names()
+            .into_iter()
+            .zip(pass_formats(pass, default_format))
+        {
+            if buffers.contains_key(target_name) {
+                continue;
+            }
+            let target_name = target_name.to_owned();
+            let make = |side: &str| {
+                let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some(&format!("{label} {side}: {target_name}")),
+                    size: wgpu::Extent3d {
+                        width: pass_width,
+                        height: pass_height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING
+                        | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                (texture, view)
+            };
+            let (texture_a, view_a) = make("A");
+            let (texture_b, view_b) = make("B");
+            buffers.insert(
+                target_name.clone(),
+                PassBuffer {
+                    name: target_name,
+                    texture_a,
+                    view_a,
+                    texture_b: Some(texture_b),
+                    view_b: Some(view_b),
+                    persistent: pass.is_persistent(),
+                    read_idx: 0,
                 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            (texture, view)
-        };
-        let (texture_a, view_a) = make("A");
-        let (texture_b, view_b) = make("B");
-        buffers.insert(
-            target_name.clone(),
-            PassBuffer {
-                name: target_name,
-                texture_a,
-                view_a,
-                texture_b: Some(texture_b),
-                view_b: Some(view_b),
-                persistent: pass.persistent.unwrap_or(false),
-                read_idx: 0,
-            },
-        );
+            );
+        }
     }
     buffers
 }
@@ -182,7 +479,31 @@ pub fn uniforms(
         audio_beat_phase: audio.beat_phase(),
         date: get_current_date(),
         phase_times,
+        jitter: jitter(frame_index),
+        jitter_index: i32::try_from(frame_index % JITTER_CYCLE).unwrap_or(0),
+        history_valid: 1,
     }
+}
+
+/// Frames in one jitter cycle.
+pub const JITTER_CYCLE: u32 = 16;
+
+/// The `JITTER` offset for a frame: the Halton (2, 3) sequence over
+/// [`JITTER_CYCLE`] frames, centered on the pixel.
+pub fn jitter(frame_index: u32) -> [f32; 2] {
+    let index = frame_index % JITTER_CYCLE + 1;
+    [halton(index, 2) - 0.5, halton(index, 3) - 0.5]
+}
+
+fn halton(mut index: u32, base: u32) -> f32 {
+    let mut fraction = 1.0;
+    let mut result = 0.0;
+    while index > 0 {
+        fraction /= base as f32;
+        result += fraction * (index % base) as f32;
+        index /= base;
+    }
+    result
 }
 
 /// Parse ISF size expressions like "$WIDTH", "$WIDTH/2", "1024", etc.
@@ -354,6 +675,18 @@ pub fn get_current_date() -> [f32; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jitter_follows_halton_2_3() {
+        assert_eq!(jitter(0), [0.0, 1.0 / 3.0 - 0.5]);
+        assert_eq!(jitter(1), [-0.25, 2.0 / 3.0 - 0.5]);
+        assert_eq!(jitter(2), [0.25, 1.0 / 9.0 - 0.5]);
+        assert_eq!(jitter(JITTER_CYCLE), jitter(0));
+        for frame in 0..JITTER_CYCLE {
+            let [x, y] = jitter(frame);
+            assert!((-0.5..0.5).contains(&x) && (-0.5..0.5).contains(&y));
+        }
+    }
 
     #[test]
     fn parse_size_none_returns_base() {
