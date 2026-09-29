@@ -1,39 +1,31 @@
 //! Which decks the arrangement still needs frames from.
 //!
-//! The existing zero-opacity cull skips a deck's render pass but not its decode
-//! thread, which keeps running so a fader can bring anything up instantly. That
-//! is right in Performance mode and wrong in a two-hour arrangement, where a
-//! deck's next region can be forty minutes away.
+//! The zero-opacity cull skips a deck's render pass but keeps its decode thread running so a
+//! fader can bring it up instantly. In a long arrangement a deck's next region can be forty
+//! minutes away, so residency also pauses decoding.
 //!
-//! The signal is the deck's opacity envelope rather than a separate window
-//! model: it is already a pure function of position, so "visible anywhere in the
-//! next few seconds" is a query against data that exists, and it covers
+//! The signal is the deck's opacity envelope, a pure function of position, so it also covers
 //! hand-drawn opacity curves that no region produced.
-//!
-//! See /spec/deck-residency.md.
 
 use crate::modulation::{Breakpoint, envelope_active_between};
 
 /// How far ahead of the playhead a deck must start decoding.
 ///
-/// Suspension pauses an already-running decoder rather than tearing it down, so
-/// resuming costs a command wake plus one frame. A second is generous cover for
-/// a slow disk and a 4K frame, and a second of wasted decode per region is
-/// nothing against a show's length.
+/// Resuming a paused decoder costs a command wake plus one frame; a second covers a slow disk
+/// and a 4K frame.
 pub const PREROLL_SECONDS: f64 = 1.0;
 
 /// How long a deck keeps decoding after it stops being visible.
 ///
-/// Expressed as a backward extension of the same window rather than a per-deck
-/// timer, which keeps the predicate pure: a run of short regions cannot thrash
-/// the decoder, and there is no state to get stuck.
+/// Applied as a backward extension of the window instead of a per-deck timer, so the predicate
+/// stays pure and short regions cannot thrash the decoder.
 pub const RELEASE_DELAY_SECONDS: f64 = 2.0;
 
 /// What the arrangement predicts about one deck's source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SourceDemand {
-    /// Nothing is scheduling this deck, so every source keeps running exactly
-    /// as it always has. The default, and what all of Performance mode uses.
+    /// Nothing schedules this deck, so every source keeps running. The default, and all of
+    /// Performance mode.
     #[default]
     Unscheduled,
     /// Visible now, or soon enough that its frames are needed.
@@ -43,21 +35,19 @@ pub enum SourceDemand {
 }
 
 impl SourceDemand {
-    /// Whether frames should keep flowing. Only an explicit `Idle` stops them,
-    /// so any gap in the reasoning above leaves a deck running rather than dark.
+    /// Whether frames should keep flowing. Only `Idle` stops them, so an unknown case leaves a
+    /// deck running rather than dark.
     pub fn wants_frames(self) -> bool {
         self != SourceDemand::Idle
     }
 }
 
-/// The demand for a deck whose opacity is driven by `drivers`, at `position`
-/// show seconds.
+/// The demand for a deck whose opacity is driven by `drivers`, at `position` show seconds.
 ///
-/// Each driver is one modulation assigned to the deck's opacity: `Some` for an
-/// automation curve laid out against show position, and `None` for anything
-/// residency cannot read off the timeline. One `None` is enough to make the
-/// deck unschedulable, because an LFO or an audio band can raise it at any
-/// moment. A deck with no drivers at all is a plain performance deck.
+/// Each driver is one modulation on the deck's opacity: `Some` for an automation curve against
+/// show position, `None` for anything else. One `None` makes the deck unschedulable, since an
+/// LFO or audio band can raise it at any moment. A deck with no drivers is a plain performance
+/// deck.
 pub fn demand<'a>(
     drivers: impl IntoIterator<Item = Option<&'a [Breakpoint]>>,
     position: f64,
@@ -109,7 +99,7 @@ mod tests {
         assert_eq!(demand_at(40.0), SourceDemand::Idle);
     }
 
-    /// The whole point: frames must be flowing before the audience sees any.
+    /// Frames must be flowing before the deck becomes visible.
     #[test]
     fn decoding_starts_before_the_region_does() {
         assert_eq!(
@@ -165,8 +155,8 @@ mod tests {
         assert_eq!(demand(both(), 20.0), SourceDemand::Idle);
     }
 
-    /// A modulator residency cannot read off the timeline can raise the deck at
-    /// any moment, so nothing else about it matters.
+    /// A modulator that is not a timeline curve can raise the deck at any moment, so the deck
+    /// stays needed.
     #[test]
     fn one_live_modulator_makes_a_deck_unschedulable() {
         let dark = vec![Breakpoint::new(0.0, 0.0), Breakpoint::new(60.0, 0.0)];
@@ -177,8 +167,7 @@ mod tests {
         assert_eq!(demand([None], 30.0), SourceDemand::Unscheduled);
     }
 
-    /// A deck with nothing on its opacity is a performance deck, and Performance
-    /// mode has never gated anything.
+    /// A deck with nothing on its opacity is a performance deck and is never gated.
     #[test]
     fn a_deck_with_no_drivers_is_unscheduled() {
         assert_eq!(demand([], 5.0), SourceDemand::Unscheduled);

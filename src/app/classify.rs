@@ -1,25 +1,20 @@
-//! What a command is, beyond what it does: whether it starts an undo step, and
-//! which parameter it writes as a live gesture.
+//! Command classification: whether a command starts an undo step, and which
+//! parameters it writes as a live gesture.
 
 use super::VardaApp;
 use crate::engine::EngineCommand;
 use crate::engine::value::param::{DeckTarget, ParamAddress};
 
-/// Whether a bus-driven command should record an undo/redo snapshot before it
-/// executes. This is what makes API / WebSocket / CLI edits undoable on the
-/// same timeline the windowed UI uses (see [undo-redo.md](/spec/undo-redo.md)).
+/// Whether a command records an undo snapshot before it runs. API, WebSocket,
+/// CLI and GUI edits share one timeline; the GUI uses this via `batch_has_undoable`.
 ///
-/// The predicate is an explicit **denylist** of live-control, transient, and
-/// non-authored commands; everything else defaults to undoable. New commands
-/// are therefore undoable unless added here — when introducing a live control
-/// (transport, device toggle, output-window lifecycle) or a transient action,
-/// add it below so it does not pollute the undo timeline. The windowed
-/// consumer uses the same predicate through `batch_has_undoable`.
+/// This is a denylist: new commands are undoable unless listed here. Add live
+/// controls, device config and transient actions below.
 pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
     use EngineCommand as C;
     !matches!(
         cmd,
-        // Live crossfader control (spec: ⚠️ live, excluded).
+        // Live crossfader control.
         C::SetCrossfader(..)
             | C::AutoCrossfade { .. }
             | C::BeatCrossfade { .. }
@@ -31,9 +26,8 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
             | C::ScanAudioDevices
             | C::RescanAudio
             | C::ToggleAudioSource { .. }
-            // A deck source's momentary actions (reload a page, clear in/out
-            // points). Its controls are decided in `VardaApp::is_undoable`,
-            // which can read the source's schema.
+            // A deck source's momentary actions. Its controls are decided in
+            // `VardaApp::is_undoable`, which reads the source's schema.
             | C::TriggerSourceAction { .. }
             // ADSR live triggers.
             | C::TriggerAdsr { .. }
@@ -44,8 +38,8 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
             | C::ToggleSequence { .. }
             // Copying reads the scene; paste and duplicate are undoable.
             | C::Copy { .. }
-            // Arming is a mode. What a pass records is undoable, in one entry
-            // pushed when the first take opens.
+            // Arming is a mode. A recorded pass is one undo entry, pushed when
+            // the first take opens.
             | C::SetRecordArmed { .. }
             // HTML interactive window (transient).
             | C::OpenHtmlInteractive { .. }
@@ -54,8 +48,8 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
             | C::AddSourceLibraryEntry { .. }
             | C::RemoveSourceLibraryEntry { .. }
             | C::SourceLibraryAction { .. }
-            // Output-window lifecycle / device config (spec: ❌, excluded).
-            // Surface→output *assignments* remain undoable (default true).
+            // Output lifecycle and device config. Surface-to-output assignments
+            // stay undoable.
             | C::CreateOutput { .. }
             | C::CloseOutput { .. }
             | C::SetOutputTarget { .. }
@@ -71,8 +65,7 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
             | C::SetOutputTonemap { .. }
             | C::SetEdgeBlend { .. }
             | C::SetEdgeBlendMode { .. }
-            // Surface auto-detection produces preview contours only; the scene
-            // is not mutated until ConfirmDetectedContours (which is undoable).
+            // Detection only previews contours; ConfirmDetectedContours is undoable.
             | C::DetectFromImage { .. }
             | C::DetectFromSvg { .. }
             | C::DetectFromDxf { .. }
@@ -90,13 +83,11 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
             // Clock preference / manual BPM (live sync config).
             | C::SetClockPreference { .. }
             | C::SetManualBpm { .. }
-            // Which cable the show is following is live rig config, like the
-            // clock's: undoing an edit must not silently re-patch the room.
+            // Timecode source is live rig config, like the clock.
             | C::SetTimecodePreference { .. }
             | C::SetLtcInput { .. }
             // Show position and re-arm are session state. Lane and region edits
-            // are ordinary scene data and stay undoable; undoing one of them
-            // must not also rewind the show or revive a released fader.
+            // stay undoable.
             | C::TransportPlay
             | C::TransportStop
             | C::TransportLocate { .. }
@@ -106,15 +97,14 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
             | C::SetTransportSource { .. }
             | C::RearmParam { .. }
             | C::RearmAll { .. }
-            // Folding a lane away rearranges the view, not the show.
+            // View state.
             | C::SetLaneCollapsed { .. }
             // Global engine settings / profiling.
             | C::SetRenderResolution { .. }
             | C::SetDomemasterResolution { .. }
             // Stage editor view state the engine only stores for the GUI.
             | C::SetEditorPrefs { .. }
-            // Learn modes bind controls, and notifications are feedback; neither
-            // is an edit to the show.
+            // Learn modes and notifications.
             | C::MidiLearnToggle
             | C::MidiLearnSelect { .. }
             | C::KeyboardLearnToggle
@@ -122,14 +112,13 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
             | C::KeyboardLearnBind { .. }
             | C::DismissNotification { .. }
             | C::NotifyInfo { .. }
-            // What a consumer is looking at, not what the show is.
+            // Consumer view state.
             | C::SetPreviewChannels { .. }
             | C::AcquireDetectionCamera { .. }
             | C::ReleaseDetectionCamera
             | C::SetTargetFps { .. }
             | C::StartPerfProfile { .. }
-            // Param toggle is a live keyboard/shortcut affordance (SetParam edits
-            // stay undoable; the two-value toggle does not pollute the timeline).
+            // Live shortcut toggle; SetParam edits stay undoable.
             | C::ToggleParam { .. }
             // Saving a preset writes to disk; loading one (structural) is undoable.
             | C::SaveDeckPreset { .. }
@@ -144,10 +133,8 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
 }
 
 impl VardaApp {
-    /// Whether `cmd` starts an undo step: [`command_is_undoable`], plus the
-    /// one question it cannot answer without the scene. A deck source's
-    /// control is authoring unless its source draws it as part of a clip
-    /// transport, which is live playback like the crossfader.
+    /// Whether `cmd` starts an undo step: [`command_is_undoable`], plus deck
+    /// source controls, which are undoable unless they belong to a clip transport.
     pub(crate) fn is_undoable(&self, cmd: &EngineCommand) -> bool {
         if !command_is_undoable(cmd) {
             return false;
@@ -169,18 +156,13 @@ impl VardaApp {
             .any(|s| s.name == *name && s.widget == Some(crate::source::WidgetHint::Transport))
     }
 
-    /// The parameter a command writes as a live gesture, as the modulation key
-    /// and the normalized value it lands on: what the automation recorder
-    /// captures and what takes the lane back from the arrangement.
+    /// Every parameter a command writes as a live gesture, as (modulation key,
+    /// normalized value). The recorder captures these and they override the
+    /// arrangement. A color or point write gives one entry per changed component
+    /// (`.../color/r`).
     ///
-    /// Read before the command runs, because some values depend on the state
-    /// it replaces (a toggle's new play state, a seek's clip length). The match
-    /// lists every command so a new one cannot be added without deciding
-    /// whether it is a live write. See /spec/vardapp-decomposition.md.
-    /// Every parameter a command writes as a live gesture. A color or point
-    /// write is one entry per channel or axis it changes, keyed by its
-    /// component path (`.../color/r`). See /spec/deck-source-providers.md
-    /// § Per-component Color and Point controls.
+    /// Called before the command runs, since some values depend on prior state.
+    /// The match is exhaustive so every new command must be classified.
     pub(crate) fn live_writes(&self, cmd: &EngineCommand) -> Vec<(String, f32)> {
         use EngineCommand as C;
         let components = match cmd {
@@ -224,8 +206,8 @@ impl VardaApp {
             .unwrap_or_else(|| self.live_write(cmd).into_iter().collect())
     }
 
-    /// The component writes a typed color or point write to a modulatable
-    /// source control makes. `None` for any other control.
+    /// Per-component writes for a color or point write to a modulatable source
+    /// control. `None` for any other control.
     fn source_component_writes(
         &self,
         deck_uuid: &str,
@@ -265,9 +247,8 @@ impl VardaApp {
                 ParamAddress::channel_opacity(channel_uuid).to_string(),
                 *opacity,
             )),
-            // A source control is a live write when modulation can drive it:
-            // the key is its router path and the value is already normalized,
-            // the space the override ramp and the recorder both work in.
+            // A modulatable source control; the key is its router path and the
+            // value is already normalized.
             C::SetSourceParam {
                 deck_uuid,
                 name,
@@ -286,8 +267,7 @@ impl VardaApp {
                     value.as_f32()?,
                 ))
             }
-            // A shader parameter is a live write only when it has a range to
-            // normalize into.
+            // Only shader parameters with a range can be normalized.
             C::SetGeneratorParam {
                 deck_uuid,
                 name,
@@ -338,7 +318,7 @@ impl VardaApp {
         | C::RemoveEffect { .. }
         | C::ToggleEffect { .. }
         | C::MoveEffect { .. }
-        // Clipboard (see /spec/clipboard.md)
+        // Clipboard
         | C::Copy { .. }
         | C::Paste { .. }
         | C::Duplicate { .. }
@@ -588,8 +568,8 @@ impl VardaApp {
     }
 }
 
-/// The component writes a typed color or point write to a shader parameter
-/// makes, keyed under `key`. Empty for any other value.
+/// Per-component writes for a color or point shader parameter, keyed under
+/// `key`. Empty for any other value.
 fn shader_component_writes(
     params: &crate::ShaderParams,
     key: &str,
@@ -625,8 +605,7 @@ mod tests {
         crate::testing::headless_app()
     }
 
-    /// Every gesture that writes a parameter reaches the recorder through
-    /// `execute_command`, with no per-command wiring to forget.
+    /// Every parameter-writing gesture reaches the recorder via `execute_command`.
     #[test]
     fn parameter_gestures_record_while_a_pass_is_armed() {
         let Some(mut app) = headless_app() else {
@@ -761,7 +740,7 @@ mod tests {
             value: crate::engine::ParamValue::Float(0.5),
         }));
         assert!(command_is_undoable(&C::RemoveSurface { uuid: "s".into() }));
-        // Surface→output assignment is authoring and must be undoable.
+        // Surface-to-output assignment is undoable.
         assert!(command_is_undoable(&C::AssignSurfaceToOutput {
             output_uuid: "o".into(),
             surface_uuid: "s".into(),
@@ -792,8 +771,7 @@ mod tests {
         assert!(!command_is_undoable(&C::Redo));
         assert!(!command_is_undoable(&C::SaveWorkspace));
         assert!(!command_is_undoable(&C::Shutdown));
-        // Audio device lifecycle, detection previews, and global settings are
-        // all live/transient — excluded from the undo timeline.
+        // Device lifecycle, detection previews and global settings are not undoable.
         assert!(!command_is_undoable(&C::ScanAudioDevices));
         assert!(!command_is_undoable(&C::RescanAudio));
         assert!(!command_is_undoable(&C::DetectFromImage {
@@ -808,15 +786,14 @@ mod tests {
             resolution: crate::renderer::dome::DomemasterResolution::R4K,
         }));
         assert!(!command_is_undoable(&C::SetTargetFps { fps: 30 }));
-        // Saving a preset writes to disk; it is not undoable (loading is).
+        // Saving a preset is not undoable; loading is.
         assert!(!command_is_undoable(&C::SaveChannelPreset {
             channel_uuid: "ch".into(),
             name: "p".into(),
         }));
     }
 
-    /// A color picker write records one entry per channel it changed, keyed
-    /// by the component path, so a recorded lane replays one channel.
+    /// A color write records one entry per changed channel, keyed by component path.
     #[test]
     fn a_color_write_records_per_changed_channel() {
         let Some(mut app) = headless_app() else {
@@ -883,8 +860,8 @@ mod tests {
         assert!(matches!(refused, crate::engine::CommandResult::Err { .. }));
     }
 
-    /// Assignments saved with a component index are rewritten to component
-    /// paths once the deck exists to say the target is a color.
+    /// Assignments saved with a component index become component paths once
+    /// the deck exists to identify a color target.
     #[test]
     fn a_saved_component_index_becomes_a_component_path() {
         let Some(mut app) = headless_app() else {

@@ -3,13 +3,12 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 
-/// Atomic file write: writes to a `.tmp` sibling then renames into place.
-/// Prevents data loss if the process crashes mid-write.
+/// Writes to a `.tmp` sibling, then renames it over `path`, so a crash
+/// mid-write leaves the old file intact.
 ///
 /// # Errors
 ///
-/// Returns an error if the temporary sibling file cannot be written (missing
-/// parent directory, permissions, disk full) or if renaming it over `path`
+/// Returns an error if the temporary file cannot be written or the rename
 /// fails.
 pub fn atomic_write<P: AsRef<Path>>(path: P, content: &str) -> Result<()> {
     let path = path.as_ref();

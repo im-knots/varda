@@ -1,6 +1,5 @@
 //! Select tool: vertex, edge, surface, radius and gizmo dragging, plus marquee
-//! selection. The largest interaction handler — it owns every gesture that edits
-//! existing geometry rather than creating it.
+//! selection. Handles every gesture that edits existing geometry.
 
 use super::super::super::super::SurfaceUI;
 use super::super::super::super::{UIActions, UIData};
@@ -24,15 +23,15 @@ pub(super) fn handle(
     state: &mut StageEditorState,
     geom: CanvasGeometry,
 ) {
-    // Helper: pixel-space distance between a normalized point and a vertex
+    // Pixel distance between a normalized point and a vertex.
     let pixel_dist = |nx: f32, ny: f32, vx: f32, vy: f32| -> f32 {
         let dx_px = (nx - vx) * geom.width;
         let dy_px = (ny - vy) * geom.height;
         (dx_px * dx_px + dy_px * dy_px).sqrt()
     };
 
-    // Helper: find the closest edge of a specific surface within a threshold.
-    // Returns (contour_idx, edge_start_idx, projected_point, distance_px).
+    // Closest edge of one surface within a threshold, as (contour_idx,
+    // edge_start_idx, projected_point, distance_px).
     let find_closest_edge = |nx: f32,
                              ny: f32,
                              surface: &SurfaceUI,
@@ -68,15 +67,12 @@ pub(super) fn handle(
         best
     };
 
-    // Helper: find what's under the cursor
-    // vertex: (surface_uuid, contour_idx, vertex_idx)
-    // edge: (surface_uuid, contour_idx, edge_start_idx, projected_point)
-    // surface: (surface_uuid, nx, ny)
+    // What is under the cursor.
     let hit_test = |nx: f32, ny: f32| -> HitTestResult {
         let vertex_threshold_px = 14.0;
         let edge_threshold_px = 10.0;
-        // Wider threshold for edges when cursor is inside the surface.
-        // This ensures top/right edges are grabbable from inside.
+        // Wider edge threshold when the cursor is inside the surface, so top and right
+        // edges can be grabbed from inside.
         let edge_inner_threshold_px = 24.0;
         let mut found_vertex = None;
         let mut found_edge = None;
@@ -84,10 +80,9 @@ pub(super) fn handle(
 
         for surface in data.surfaces.iter().rev() {
             let uid = &surface.uuid;
-            // Path-backed surfaces edit via the Bezier tool; their
-            // flattened vertices/edges are not directly grabbable here.
+            // Path-backed surfaces are edited with the Bezier tool; their flattened
+            // vertices and edges are not grabbable here.
             let is_path = surface.path.is_some();
-            // Check all contours for vertex/edge hits
             let contours: Vec<&Vec<[f32; 2]>> = std::iter::once(&surface.vertices)
                 .chain(surface.extra_contours.iter())
                 .collect();
@@ -100,7 +95,7 @@ pub(super) fn handle(
                 }
             }
 
-            // Standard edge detection (narrow threshold, works from outside)
+            // Narrow edge threshold, works from outside.
             if !is_path
                 && found_edge.is_none()
                 && let Some((ci, ei, proj, _d)) =
@@ -109,7 +104,6 @@ pub(super) fn handle(
                 found_edge = Some((uid.clone(), ci, ei, proj));
             }
 
-            // Point-in-polygon (any contour)
             if found_surface.is_none() {
                 let point_in = |verts: &[[f32; 2]]| -> bool {
                     let n = verts.len();
@@ -132,8 +126,7 @@ pub(super) fn handle(
                 if point_in(&surface.vertices) || surface.extra_contours.iter().any(|c| point_in(c))
                 {
                     found_surface = Some((uid.clone(), nx, ny));
-                    // If cursor is inside the surface but no edge found yet,
-                    // try again with a wider threshold to catch edges from inside.
+                    // Inside the surface with no edge hit yet: retry with the wider threshold.
                     if !is_path
                         && found_edge.is_none()
                         && let Some((ci, ei, proj, _d)) =
@@ -147,9 +140,8 @@ pub(super) fn handle(
         (found_vertex, found_edge, found_surface)
     };
 
-    // Hover feedback: change cursor when over interactive elements.
-    // Hit-testing uses the raw (un-snapped) cursor so off-grid vertices
-    // and edges remain grabbable; snapping applies only to placement.
+    // Hover cursor feedback. Hit-testing uses the raw cursor so off-grid vertices
+    // and edges stay grabbable; snapping applies only to placement.
     if let Some(pos) = resp.hover_pos() {
         let [nx, ny] = geom.to_norm_raw(pos);
         let (found_vertex, found_edge, found_surface) = hit_test(nx, ny);
@@ -164,7 +156,6 @@ pub(super) fn handle(
 
     let shift_held = ui.input(|i| i.modifiers.shift);
 
-    // Click to select (without drag)
     if resp.clicked()
         && let Some(pos) = resp.interact_pointer_pos()
     {
@@ -172,7 +163,6 @@ pub(super) fn handle(
         let (found_vertex, _found_edge, found_surface) = hit_test(nx, ny);
         if let Some((si, _ci, _vi)) = found_vertex {
             if shift_held {
-                // Toggle selection with shift
                 if !state.selected_surfaces.remove(&si) {
                     state.selected_surfaces.insert(si);
                 }
@@ -194,7 +184,7 @@ pub(super) fn handle(
         }
     }
 
-    // Double-click on edge to insert vertex
+    // Double-click on an edge inserts a vertex.
     if resp.double_clicked()
         && let Some(pos) = resp.interact_pointer_pos()
     {
@@ -212,19 +202,18 @@ pub(super) fn handle(
         }
     }
 
-    // Drag start: begin radius drag, vertex drag, surface move, or marquee selection
+    // Drag start: radius drag, vertex drag, surface move, or marquee.
     if resp.drag_started()
         && let Some(pos) = resp.interact_pointer_pos()
     {
         let [nx, ny] = geom.to_norm(pos);
-        // Raw cursor for hit-testing; off-grid vertices/edges (e.g.
-        // after a gizmo scale/rotate) stay grabbable. Placement and
-        // drag-reference math below stay in snapped space.
+        // Raw cursor for hit-testing so off-grid geometry (e.g. after a gizmo
+        // scale/rotate) stays grabbable. Drag math below uses snapped coordinates.
         let [rnx, rny] = geom.to_norm_raw(pos);
 
-        // Transform gizmo handles take priority over vertex/edge/body.
-        // The gizmo hit-tests in raw pixels; nx,ny only seed the
-        // rotate start angle (kept snapped to match the drag loop).
+        // Gizmo handles take priority over vertex, edge and body. The gizmo hit-tests
+        // in raw pixels; nx, ny only seed the rotate start angle, snapped to match the
+        // drag loop.
         let gizmo_consumed = try_begin_gizmo_drag(
             state,
             &data.surfaces,
@@ -237,7 +226,7 @@ pub(super) fn handle(
         );
 
         if !gizmo_consumed {
-            // Check for radius handle hit on selected circles first
+            // Radius handles on selected circles are checked first.
             let mut found_radius_handle = None;
             for sel_uuid in &state.selected_surfaces {
                 if let Some(surface) = data.surfaces.iter().find(|s| s.uuid == *sel_uuid)
@@ -262,7 +251,7 @@ pub(super) fn handle(
                 let (found_vertex, found_edge, found_surface) = hit_test(rnx, rny);
 
                 if let Some((uuid, ci, vi)) = found_vertex {
-                    // If vertex drag on a circle, auto-convert to polygon first
+                    // A vertex drag on a circle converts it to a polygon first.
                     if data
                         .surfaces
                         .iter()
@@ -282,9 +271,8 @@ pub(super) fn handle(
                     state.selection_rect_start = None;
                     state.dragging_edge = None;
                 } else if let Some((uuid, ci, ei, _proj)) = found_edge {
-                    // Edge drag: store original edge endpoints + grab point.
-                    // Grab point is the snapped cursor so the drag loop
-                    // (also snapped) starts with a zero delta — no jump.
+                    // Edge drag stores the original endpoints and the snapped grab point, so the
+                    // snapped drag loop starts with a zero delta.
                     if let Some(surface) = data.surfaces.iter().find(|s| s.uuid == uuid) {
                         let verts = if ci == 0 {
                             &surface.vertices
@@ -294,7 +282,6 @@ pub(super) fn handle(
                         let ej = (ei + 1) % verts.len();
                         let v0 = verts[ei];
                         let v1 = verts[ej];
-                        // Auto-convert circle to polygon before edge drag
                         if surface.circle_hint.is_some() {
                             actions
                                 .commands
@@ -316,8 +303,7 @@ pub(super) fn handle(
                         state.selected_surfaces.clear();
                     }
                     state.selected_surfaces.insert(uuid.clone());
-                    // Store the snapped grab point so the move loop
-                    // (snapped) starts with a zero delta — no jump.
+                    // Snapped grab point, so the snapped move loop starts with a zero delta.
                     state.moving_surface = Some((uuid, nx, ny));
                     state.dragging_vertex = None;
                     state.selection_rect_start = None;
@@ -336,8 +322,7 @@ pub(super) fn handle(
     }
 
     if resp.dragged() {
-        // A mutating drag (not marquee selection) is one undo gesture —
-        // flag it so the runner collapses the drag into a single step.
+        // A mutating drag (not marquee) is one undo gesture.
         if state.dragging_rotate.is_some()
             || state.dragging_scale.is_some()
             || state.dragging_radius.is_some()
@@ -420,7 +405,7 @@ pub(super) fn handle(
                     ..sc
                 });
             } else if let Some(ref uuid) = state.dragging_radius {
-                // Compute new radius from cursor distance to circle center
+                // Radius from the cursor's distance to the circle center.
                 if let Some(surface) = data.surfaces.iter().find(|s| s.uuid == *uuid)
                     && let Some(hint) = &surface.circle_hint
                 {
@@ -455,8 +440,7 @@ pub(super) fn handle(
                 }
             } else if let Some((ref uuid, ci, ei, orig_v0, orig_v1, grab_pt)) = state.dragging_edge
             {
-                // Edge drag: move both edge endpoints by the cursor displacement
-                // relative to where the user first grabbed the edge.
+                // Move both edge endpoints by the cursor's offset from the grab point.
                 let dx = nx - grab_pt[0];
                 let dy = ny - grab_pt[1];
                 if let Some(surface) = data.surfaces.iter().find(|s| s.uuid == *uuid) {
@@ -488,7 +472,7 @@ pub(super) fn handle(
             } else if let Some((ref moving_uuid, lx, ly)) = state.moving_surface {
                 let dx = nx - lx;
                 let dy = ny - ly;
-                // Move ALL selected surfaces by the same delta
+                // Move every selected surface by the same delta.
                 for surf_uuid in &state.selected_surfaces {
                     if data.surfaces.iter().any(|s| s.uuid == *surf_uuid) {
                         actions.commands.push(EngineCommand::MoveSurface {
@@ -500,7 +484,6 @@ pub(super) fn handle(
                 }
                 state.moving_surface = Some((moving_uuid.clone(), nx, ny));
             } else if let Some(start) = state.selection_rect_start {
-                // Draw marquee selection rectangle
                 let x0 = geom.rect.left() + start[0] * geom.width;
                 let y0 = geom.rect.top() + start[1] * geom.height;
                 let x1 = geom.rect.left() + nx * geom.width;
@@ -522,7 +505,7 @@ pub(super) fn handle(
     }
 
     if resp.drag_stopped() {
-        // Finish marquee selection: select all surfaces that intersect the rect
+        // Finish marquee: select every surface whose bounding box intersects the rect.
         if let Some(start) = state.selection_rect_start
             && let Some(pos) = resp.interact_pointer_pos()
         {
@@ -533,7 +516,6 @@ pub(super) fn handle(
             let sel_max_y = start[1].max(ny);
 
             for surface in &data.surfaces {
-                // Compute bounding box of surface vertices
                 let (mut bb_min_x, mut bb_min_y) = (f32::MAX, f32::MAX);
                 let (mut bb_max_x, mut bb_max_y) = (f32::MIN, f32::MIN);
                 for v in &surface.vertices {
@@ -542,7 +524,6 @@ pub(super) fn handle(
                     bb_max_x = bb_max_x.max(v[0]);
                     bb_max_y = bb_max_y.max(v[1]);
                 }
-                // Check if surface bounding box overlaps the selection rect
                 let intersects = bb_min_x < sel_max_x
                     && bb_max_x > sel_min_x
                     && bb_min_y < sel_max_y
@@ -561,5 +542,5 @@ pub(super) fn handle(
         state.dragging_rotate = None;
     }
 
-    // Delete selected surfaces (handled below via keymap)
+    // Deleting selected surfaces is handled by the keymap.
 }

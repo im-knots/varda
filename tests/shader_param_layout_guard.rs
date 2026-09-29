@@ -1,18 +1,13 @@
-//! Guard: every shipped shader's `UserParams` block must match the byte layout the
-//! engine writes into it.
+//! Every shipped shader's `UserParams` block must match the byte layout the
+//! engine writes.
 //!
-//! The user-parameter binding is created with `min_binding_size: None`, so wgpu never
-//! checks it. The engine serialises parameters in `INPUTS` order using std140 rules and
-//! the shader reads them positionally, which means a shader that declares its block in a
-//! different order — or that loses a member to SPIR-V dead-code elimination — reads
-//! neighbouring parameters' bytes. Nothing crashes; the shader just silently misbehaves,
-//! and `shader_pipeline_guard.rs` still passes because the pipeline builds and renders
-//! fine.
-//!
-//! This became a live risk when parameters started moving into `PHASE_INPUTS`: the engine
-//! integrates those itself, so the shader body stops referencing them and they become
-//! exactly the dead uniforms the compiler is entitled to strip. See
-//! [/spec/phase-accumulators.md](/spec/phase-accumulators.md).
+//! The binding uses `min_binding_size: None`, so wgpu never checks it. The
+//! engine writes parameters in `INPUTS` order with std140 rules and the shader
+//! reads them by position. A block declared in another order, or missing a
+//! member to SPIR-V dead-code elimination, reads its neighbors' bytes without
+//! any error, and `shader_pipeline_guard.rs` still passes. Parameters in
+//! `PHASE_INPUTS` are integrated by the engine, so the shader body often never
+//! references them and the compiler may strip them.
 
 use varda::isf::{ISFShader, compile_glsl_compute_to_spirv, compile_glsl_to_spirv};
 use varda::params::ShaderParams;
@@ -52,13 +47,9 @@ fn expected_offsets(params: &ShaderParams) -> Vec<(String, u32)> {
 
 /// Reflect the user-parameter uniform block out of compiled SPIR-V.
 ///
-/// The engine binds this block by index — it is always the last uniform binding — not
-/// by name, and shaders variously call it `UserParams`, `FilterParams`, or
-/// `TransitionParams`. Match the engine: take the highest-bound uniform struct that
-/// isn't `ISFUniforms`.
-///
-/// Returns `None` when the shader declares no such block, which is the correct state
-/// for a shader with no parameters.
+/// Shaders name it `UserParams`, `FilterParams`, or `TransitionParams`, so, like
+/// the engine, take the highest-bound uniform struct that isn't `ISFUniforms`.
+/// Returns `None` when the shader has no such block (no parameters).
 fn reflect_user_params(spirv: &[u32]) -> Option<Vec<(String, u32)>> {
     let bytes: Vec<u8> = spirv.iter().flat_map(|w| w.to_le_bytes()).collect();
     let module =

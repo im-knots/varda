@@ -1,25 +1,23 @@
 /// GPU compositing benchmarks at 1080p.
 ///
 ///   `channel_composite_solid`  — solid-color decks (`LoadOp::Clear`, no fragment shader).
-///                              The slope across deck counts isolates per-deck
-///                              copy-on-composite cost. The level at decks/1
-///                              includes fixed render-pass setup, not just
-///                              compositing.
+///                              The slope across deck counts is the per-deck
+///                              copy-on-composite cost. decks/1 also includes
+///                              fixed render-pass setup.
 ///
-///   `channel_composite_shader` — same shape but with bars.fs running on every
-///                              pixel. Difference vs solid at N decks ≈
-///                              N × per-deck shader execution cost.
+///   `channel_composite_shader` — same shape with bars.fs on every pixel. The
+///                              difference vs solid at N decks ≈ N × per-deck
+///                              shader cost.
 ///
 ///   `mixer_crossfade`          — two channels through the crossfader at 50%.
 ///
-///   `composite_resolution`     — solid decks at 1080p and 4K. Compositing traffic
-///                              scales with texel count, so the 4K/1080p ratio at
-///                              a fixed deck count isolates how bandwidth-bound
-///                              the stage is. Solid decks keep fragment cost flat
-///                              so the difference is data movement, not shading.
+///   `composite_resolution`     — solid decks at 1080p and 4K. The 4K/1080p
+///                              ratio at a fixed deck count shows how
+///                              bandwidth-bound compositing is; solid decks keep
+///                              fragment cost flat.
 ///
-/// After the criterion groups complete, the per-deck slope (decks/8 minus
-/// decks/1, divided by 7) is computed from fresh samples and printed.
+/// After the criterion groups, the per-deck slope (decks/8 minus decks/1,
+/// divided by 7) is computed from fresh samples and printed.
 use std::time::Instant;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
@@ -33,8 +31,7 @@ use varda::{
     renderer::context::GpuContext,
 };
 
-/// Silent audio, no modulation, no clock: the benchmark measures compositing,
-/// not signal handling.
+/// Silent audio, no modulation, no clock, so only compositing is measured.
 fn frame_inputs<'a>(
     audio_data: &'a AudioData,
     audio_values: &'a AudioValues,
@@ -63,8 +60,8 @@ const FRAME_BUDGET_US: u128 = 16_670;
 
 const BARS_SHADER: &str = include_str!("../shaders/bars.fs");
 
-/// Generator with one `PERSISTENT` pass — the shape that forces per-iteration
-/// submits in `render_multi_pass`.
+/// Generator with one `PERSISTENT` pass, which forces per-iteration submits in
+/// `render_multi_pass`.
 const TURING_SHADER: &str = include_str!("../shaders/turing_patterns.fs");
 
 fn make_context() -> Option<GpuContext> {
@@ -193,15 +190,13 @@ fn bench_channel_composite_solid(c: &mut Criterion) {
     group.finish();
 }
 
-/// Cost of a single full-frame `copy_texture_to_texture` between two
-/// `Rgba16Float` compositing textures, isolated from the render path.
+/// Cost of one full-frame `copy_texture_to_texture` between two `Rgba16Float`
+/// compositing textures.
 ///
-/// Compositing currently issues one such copy per layer above the first,
-/// plus one each for tonemap and LUT. Whole-frame benchmarks cannot resolve
-/// that cost — it sits below the run-to-run noise floor of a laptop under
-/// thermal drift. Batching `COPIES_PER_ITER` copies into one submit amortises
-/// encode/submit/poll so the measurement is dominated by the copies
-/// themselves; divide the reported time by `COPIES_PER_ITER` for per-copy cost.
+/// Compositing issues one such copy per layer above the first, plus one each
+/// for tonemap and LUT. That cost is below whole-frame noise, so
+/// `COPIES_PER_ITER` copies share one submit; divide the reported time by
+/// `COPIES_PER_ITER` for per-copy cost.
 const COPIES_PER_ITER: usize = 32;
 
 fn bench_raw_copy_cost(c: &mut Criterion) {
@@ -213,8 +208,8 @@ fn bench_raw_copy_cost(c: &mut Criterion) {
     let mut group = c.benchmark_group("raw_copy_cost");
     group.sample_size(50);
 
-    // Distinct destinations break the write-after-write chain that a single
-    // dst imposes, separating serialisation latency from real per-copy cost.
+    // Distinct destinations break the write-after-write chain of a single dst,
+    // separating serialization latency from per-copy cost.
     let dsts: Vec<wgpu::Texture> = (0..8)
         .map(|_| ctx.create_compositing_texture(WIDTH, HEIGHT))
         .collect();
@@ -376,10 +371,9 @@ fn bench_mixer_crossfade(c: &mut Criterion) {
 
 /// Solid decks with a pivot blend mode on every layer above the base.
 ///
-/// Overlay/Hard Light/Soft Light encode their operands before the blend math
-/// (spec/blend-modes.md § Blend Space), so they carry two `pow`s per channel
-/// that the physical modes do not. This group isolates that cost — compare
-/// against `channel_composite_solid` at the same deck count for the delta.
+/// Overlay/Hard Light/Soft Light encode their operands before blending, adding
+/// two `pow`s per channel. Compare against `channel_composite_solid` at the same
+/// deck count.
 fn setup_mixer_blend(context: &GpuContext, n_decks: usize, mode: BlendMode) -> Mixer {
     let mut mixer = Mixer::new(context, WIDTH, HEIGHT).expect("mixer");
     let ch = mixer.channel_mut(0).expect("channel 0");
@@ -439,11 +433,9 @@ fn bench_channel_composite_blend(c: &mut Criterion) {
 /// Decks running a shader with a `PERSISTENT` pass.
 ///
 /// `render_multi_pass` runs `SIMULATION_ITERATIONS` (4) iterations per
-/// persistent pass and calls `queue.submit()` inside that loop, because
-/// `UnifiedPipeline` owns a single uniform buffer that each iteration
-/// overwrites. So every such deck costs 4 command buffer commits per frame on
-/// top of the batched deck/composite submits. Compare against
-/// `channel_composite_shader` at the same deck count for the delta.
+/// persistent pass and submits inside that loop, because `UnifiedPipeline` has
+/// one uniform buffer each iteration overwrites: 4 extra commits per deck per
+/// frame. Compare against `channel_composite_shader` at the same deck count.
 fn setup_mixer_multipass(context: &GpuContext, n_decks: usize, src: &str) -> Mixer {
     let mut mixer = Mixer::new(context, WIDTH, HEIGHT).expect("mixer");
     let ch = mixer.channel_mut(0).expect("channel 0");
@@ -492,9 +484,8 @@ fn bench_channel_composite_multipass(c: &mut Criterion) {
 
 /// Prints command buffer commits per `Mixer::render` for a few configurations.
 ///
-/// Mixer scope only — the output, preview, and present submits happen in the
-/// frame loop above the mixer and are not counted here. Read alongside the
-/// `[PERF] frame | submits=` log, which covers a whole frame.
+/// Mixer only: output, preview, and present submits are not counted. The
+/// `[PERF] frame | submits=` log covers a whole frame.
 fn report_submits_per_frame(_c: &mut Criterion) {
     let Some(ctx) = make_context() else { return };
     let audio = AudioData::default();

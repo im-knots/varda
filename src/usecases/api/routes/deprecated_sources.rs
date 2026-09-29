@@ -1,10 +1,6 @@
-//! Deprecated per-source-type routes, kept for one release as thin aliases
-//! onto the generic source routes in [`super::sources`].
-//!
-//! Every route here is marked deprecated in the `OpenAPI` document and answers
-//! exactly as it did before providers existed. The file is deleted as a unit
-//! when the transition release ends. See /spec/deck-source-providers.md
-//! Decision 6.
+//! Deprecated per-source-type routes: aliases onto the generic source routes
+//! in [`super::sources`], marked deprecated in the `OpenAPI` document. Delete
+//! this file as a unit when the aliases are dropped.
 
 #![allow(deprecated)] // the aliases are deprecated; registering them is not
 
@@ -165,7 +161,7 @@ pub async fn add_video_deck(
 
 #[derive(Deserialize, ToSchema)]
 pub struct ColorBody {
-    /// RGBA colour as four floats in 0.0–1.0.
+    /// RGBA color as four floats in 0.0–1.0.
     pub color: [f32; 4],
 }
 
@@ -227,8 +223,8 @@ pub struct DepthBody {
     pub depth_sensor_id: u32,
 }
 
-/// The library entry at `index` of a source type, which is how the old routes'
-/// device ids (positions in the last scan) map onto names.
+/// The library entry at `index` of a source type. These routes take device
+/// ids as positions in the last scan.
 fn entry_at(state: &SharedState, source_type: &str, index: usize) -> Option<SourceConfig> {
     let published = read_or_error(state).ok()?;
     published
@@ -545,7 +541,7 @@ pub async fn video_set_speed(
 
 #[derive(Deserialize, ToSchema)]
 pub struct LoopModeBody {
-    /// Loop behaviour for the video.
+    /// Loop behavior for the video.
     pub mode: crate::video::LoopMode,
 }
 
@@ -639,8 +635,7 @@ pub async fn video_set_transport_sync(
         ("chase_offset", ControlValue::Float(b.offset as f32)),
         ("chase_delay", ControlValue::Float(b.delay_frames as f32)),
     ];
-    // Stop at the first refusal (a deck that is not a clip), so the answer
-    // is that refusal rather than the last write's.
+    // Stop at the first refusal (a deck that is not a clip) and return it.
     let mut answer = invalid(REPLACED);
     for (name, value) in writes {
         answer = set(&state, deck_uuid.clone(), name, value).await;
@@ -833,8 +828,7 @@ pub async fn remove_rtmp_library_entry(
     library_entry(&state, "Rtmp", b, false).await
 }
 
-/// A source type's library entries as `{name}` rows, the shape the old
-/// per-type library routes answered with.
+/// A source type's library entries as `{name}` rows.
 fn entry_names(state: &SharedState, source_type: &str) -> axum::response::Response {
     match read_or_error(state) {
         Ok(s) => {

@@ -1,8 +1,6 @@
-//! Guards preview-texture ownership: `src/usecases/ui/runner/preview.rs` is the
-//! only place that registers or re-points egui preview textures. Previews show
-//! gamma-encoded `PreviewEncoder` targets, and a registration made anywhere else
-//! against a raw (linear) render view is never replaced, because the sync pass
-//! skips slots it already knows about.
+//! Only `src/usecases/ui/runner/preview.rs` may register or re-point egui
+//! preview textures. A registration elsewhere against a raw linear view is
+//! never replaced, because the sync pass skips slots it already knows.
 
 use std::path::Path;
 

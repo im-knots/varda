@@ -1,22 +1,15 @@
 //! Shared value types for the engine layer.
 //!
-//! These types are used in engine trait signatures and snapshot structs.
-//! They MUST NOT reference wgpu, egui, winit, or any GPU/UI framework types.
+//! Used in engine trait signatures and snapshot structs. Must not reference
+//! wgpu, egui, winit, or any GPU or UI framework type.
 //!
-//! Per /spec/engine-value-types.md, this module names its value vocabulary
-//! from two places, and never reaches into `internal::{renderer,surface,video}`
-//! directly:
-//! - **Tier 1** (`engine::value::*`): plain data owned by the engine, whose
-//!   *definitions* live in `crate::engine::value` — `renderer`/`surface`/
-//!   `video` `pub use` them back to keep their existing call paths working.
-//! - **Tier 2** (domain modules below): genuine domain entities that already
-//!   lived in pure, framework-free modules (`audio`, `camera`, `channel`,
-//!   `deck`, `mixer`, `modulation`, `params`) — out of scope for the Tier 1
-//!   relocation; re-exported here as-is.
+//! Types come from `crate::engine::value` and from the framework-free domain
+//! modules (`audio`, `camera`, `channel`, `deck`, `mixer`, `modulation`,
+//! `params`), never from `internal::{renderer,surface,video}`.
 
 use serde::{Deserialize, Serialize};
 
-// Tier 2 — pure domain modules, re-exported as-is.
+// Framework-free domain modules.
 pub use crate::audio::AudioSourceId;
 pub use crate::camera::CameraId;
 pub use crate::channel::{BlendMode, DeckRenderFps};
@@ -28,7 +21,7 @@ pub use crate::modulation::{
 pub use crate::params::ParamValue;
 pub use crate::source::ScalingMode;
 
-// Tier 1 — engine-owned value types (see `crate::engine::value`).
+// Engine value types.
 pub use crate::engine::value::render::OutputSource;
 pub use crate::engine::value::source::{DeckTransportSync, TransportSyncMode};
 pub use crate::engine::value::surface::{
@@ -38,7 +31,7 @@ pub use crate::engine::value::video::LoopMode;
 
 pub use crate::engine::value::entity::EffectTarget;
 
-/// What a copy is taken from. See [`/spec/clipboard.md`].
+/// What a copy is taken from.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum ClipboardSource {
     Deck(String),
@@ -48,9 +41,8 @@ pub enum ClipboardSource {
 
 /// Where a paste lands.
 ///
-/// The `After*` forms are what a right-click uses, so a copy arrives directly
-/// below the thing the menu was opened on; the `Into*` forms append, which is
-/// what the container's own menu and an API caller mean.
+/// `After*` places the copy directly below the right-clicked item; `Into*`
+/// appends to the container.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum PasteTarget {
     /// This deck's channel, directly below it.
@@ -80,10 +72,8 @@ pub enum ClipboardKind {
     Effect,
 }
 
-/// Per-frame engine state snapshot — plain data, no GPU types, no lifetimes.
-///
-/// Produced by `VardaApp` each frame. Distributed to consumers via watch channel.
-/// `UIData` is derived from this for the egui UI consumer.
+/// Per-frame engine state snapshot, built by `VardaApp` and sent to consumers
+/// on a watch channel. The egui `UIData` is derived from it.
 // Serialized DTO: the flags mirror independent engine toggles, not a state enum.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Serialize)]
@@ -100,13 +90,10 @@ pub struct EngineState {
     pub midi: MidiSnapshot,
     /// Cameras, for the stage editor's surface detection.
     pub cameras: CameraSnapshot,
-    /// Every registered deck source type: its controls and what its library
-    /// offers. See /spec/deck-source-providers.md.
-    /// Shared with the engine's cached listing, so cloning a snapshot does not
-    /// copy every library.
+    /// Every registered deck source type: its controls and library. Shared
+    /// with the engine's cache, so cloning a snapshot does not copy it.
     pub sources: std::sync::Arc<Vec<crate::engine::value::provider::ProviderTypeSnapshot>>,
-    /// Every registered output sink type: its settings and what its library
-    /// offers. See /spec/output-sink-providers.md.
+    /// Every registered output sink type: its settings and library.
     pub sinks: std::sync::Arc<Vec<crate::engine::value::provider::ProviderTypeSnapshot>>,
     pub clock: ClockSnapshot,
     pub transport: TransportSnapshot,
@@ -118,11 +105,11 @@ pub struct EngineState {
     /// Target FPS (0 = uncapped)
     pub target_fps: u32,
     pub analyzers: Vec<AnalyzerTypeInfo>,
-    /// User-defined macro controls (one control → many parameter targets).
+    /// User-defined macro controls, each driving many parameters.
     pub macros: Vec<crate::macros::Macro>,
-    /// Whether the undo timeline has an undoable action (shared UI/API timeline).
+    /// Whether there is an action to undo. The UI and API share one timeline.
     pub can_undo: bool,
-    /// Whether the redo timeline has a redoable action (shared UI/API timeline).
+    /// Whether there is an action to redo.
     pub can_redo: bool,
     pub keymap: KeymapSnapshot,
     pub presets: PresetsSnapshot,
@@ -137,7 +124,7 @@ pub struct EngineState {
 /// Keyboard shortcuts and keyboard learn.
 #[derive(Clone, Default, Serialize)]
 pub struct KeymapSnapshot {
-    /// Every binding, as a list: a key combination is not a JSON map key.
+    /// Every binding, as a list because a key combination cannot be a JSON key.
     pub bindings: Vec<KeyBindingSnapshot>,
     pub learn_active: bool,
     /// What the next key pressed will be bound to, while learning.
@@ -213,7 +200,7 @@ pub struct DetectedClockSourceSnapshot {
 /// Snapshot of the unified clock state for UI display.
 #[derive(Clone, Serialize)]
 pub struct ClockSnapshot {
-    /// Current BPM from the resolved clock source.
+    /// BPM from the active clock source.
     pub bpm: Option<f32>,
     /// Beat phase 0.0–1.0.
     pub beat_phase: f32,
@@ -229,7 +216,7 @@ pub struct ClockSnapshot {
     pub osc_active: bool,
     /// Current OSC BPM (if active).
     pub osc_bpm: Option<f32>,
-    /// Current audio BPM (always available as fallback).
+    /// Audio BPM, always available as a fallback.
     pub audio_bpm: Option<f32>,
     /// Current preference label: "Auto", "`ForceMidi`(<name>)", "`ForceOsc`", "`ForceAudio`", "`ForceManual`".
     pub preference_label: String,
@@ -237,62 +224,48 @@ pub struct ClockSnapshot {
     pub preference_force_device_id: Option<crate::engine::value::midi::DeviceId>,
     /// Manual BPM value (if preference is `ForceManual`).
     pub manual_bpm: Option<f32>,
-    /// How many modulation sources are locked to the beat. Drives the readout's
-    /// emphasis and answers "what stops if this clock goes away".
-    /// See /spec/transport.md § Tempo and position are both shown.
+    /// How many modulation sources are locked to the beat.
     pub beat_followers: usize,
 }
 
-/// Snapshot of arrangement mode. See /spec/arrangement.md.
-///
-/// Absent when the scene has no arrangement, which is how a Performance-only
-/// scene stays free of arrangement concepts entirely.
+/// Snapshot of arrangement mode. Absent when the scene has no arrangement.
 #[derive(Clone, Serialize, Default)]
 pub struct ArrangementSnapshot {
-    /// The authored lanes and idle behaviour, verbatim.
+    /// The authored lanes and idle behavior.
     pub config: crate::arrangement::ArrangementConfig,
-    /// Whether the arrangement is currently driving decks. False before the
-    /// transport has run, so a scene that opens in Performance mode stays there.
+    /// Whether the arrangement is driving decks. False until the transport
+    /// first runs.
     pub engaged: bool,
-    /// Modulation keys a performer has taken by hand. Drives the "held" badge
-    /// and the re-arm affordance.
+    /// Modulation keys the performer has overridden by hand.
     pub overridden_params: Vec<String>,
     /// Latest position covered by any region, for the ruler's default extent.
     pub duration: f64,
 }
 
-/// Snapshot of the absolute show position. See /spec/transport.md.
-///
-/// Distinct from [`ClockSnapshot`], which is tempo. Both can be live at once.
+/// Snapshot of the absolute show position. Tempo is in [`ClockSnapshot`].
 #[derive(Clone, Serialize)]
 pub struct TransportSnapshot {
-    /// Absolute position in seconds. `f64` because shows conventionally start
-    /// at hour 1.
+    /// Absolute position in seconds. `f64` because shows often start at hour 1.
     pub position: f64,
     pub running: bool,
-    /// Whether the transport has advanced at least once this session. Until it
-    /// has, position-locked features stay inert.
+    /// Whether the transport has advanced this session. Position-locked
+    /// features stay inactive until it has.
     pub has_run: bool,
     pub source: crate::transport::TransportSource,
-    /// Why the transport is or is not moving, so idle and broken are
-    /// distinguishable on a dark stage.
+    /// Why the transport is or is not moving.
     pub status_label: String,
     pub loop_region: Option<crate::transport::LoopRegion>,
     /// Frame rate positions are displayed at.
     pub timecode_rate: crate::transport::TimecodeRate,
-    /// Position pre-rendered as `HH:MM:SS:FF`, so every consumer shows the
-    /// same string rather than each reimplementing drop-frame.
+    /// Position as `HH:MM:SS:FF`, drop-frame applied.
     pub timecode: String,
-    /// How many modulation sources are locked to the transport. Counterpart to
-    /// [`ClockSnapshot::beat_followers`].
+    /// How many modulation sources are locked to the transport.
     pub followers: usize,
-    /// Whether live parameter writes are being kept as automation. Armed and
-    /// recording are different states: nothing is written until the position
-    /// moves. See /spec/automation-recording.md.
+    /// Whether automation recording is armed. Nothing is written until the
+    /// position moves.
     pub record_armed: bool,
-    /// Parameter keys with a take open right now, so the lanes catching a pass
-    /// can say so. Filled in by the snapshot builder, which can see the
-    /// recorder.
+    /// Parameter keys currently being recorded. Filled in by the snapshot
+    /// builder.
     pub recording_params: Vec<String>,
 }
 
@@ -315,9 +288,8 @@ impl Default for TransportSnapshot {
 }
 
 impl From<&crate::transport::Transport> for TransportSnapshot {
-    /// `followers` is left at zero here: the count lives in the modulation
-    /// engine, which the transport has no reference to. The snapshot builder
-    /// fills it in.
+    /// Leaves `followers` at zero; the snapshot builder fills it from the
+    /// modulation engine.
     fn from(t: &crate::transport::Transport) -> Self {
         Self {
             position: t.position(),
@@ -337,7 +309,7 @@ impl From<&crate::transport::Transport> for TransportSnapshot {
 
 // ── Timecode Snapshot ──────────────────────────────────────────────
 
-/// One timecode input, resolved or not. See /spec/timecode.md.
+/// One timecode input, resolved or not.
 #[derive(Clone, Serialize, utoipa::ToSchema)]
 pub struct TimecodeInputSnapshot {
     /// Stable name, `ltc` or `mtc:<device>`, and what `resolved` names.
@@ -345,8 +317,7 @@ pub struct TimecodeInputSnapshot {
     /// For a readout: "LTC (channel 2)", "MTC (Tascam Model 12)".
     pub label: String,
     pub position: f64,
-    /// Position as `HH:MM:SS:FF` at this input's own rate, which is not
-    /// necessarily the rate the ruler is drawn at.
+    /// Position as `HH:MM:SS:FF` at this input's own rate.
     pub timecode: String,
     pub rate: crate::transport::TimecodeRate,
     pub running: bool,
@@ -356,16 +327,10 @@ pub struct TimecodeInputSnapshot {
     pub speed: f64,
 }
 
-/// Every timecode input being listened to, and which one is driving.
-///
-/// A list rather than an object even though one signal drives the transport: a
-/// performer chasing a bad cable needs to see the input that is *not*
-/// resolving. See /spec/timecode.md § Dual simultaneous inputs.
 /// A deck being built in the background, or one that failed to build.
 ///
-/// Deck-creating commands answer with the new deck's UUID straight away; the
-/// deck joins its channel once built. See /spec/ui-engine-boundary.md
-/// (Decision #15).
+/// Deck-creating commands return the new deck's UUID immediately; the deck
+/// joins its channel once built.
 #[derive(Clone, Debug, PartialEq, Serialize, utoipa::ToSchema)]
 pub struct DeckLoadSnapshot {
     /// The UUID the deck has, or would have had.
@@ -382,6 +347,8 @@ pub enum DeckLoadStatus {
     Failed { message: String },
 }
 
+/// Every timecode input being listened to, and which one drives the
+/// transport. Unresolved inputs are listed too.
 #[derive(Clone, Serialize, Default, utoipa::ToSchema)]
 pub struct TimecodeSnapshot {
     pub inputs: Vec<TimecodeInputSnapshot>,
@@ -447,7 +414,7 @@ pub struct DeckSnapshot {
     /// The deck's source: its type, and the state of its controls. The type's
     /// schema is in `EngineState::sources`.
     pub source: crate::engine::value::source::DeckSourceSnapshot,
-    /// True when the interactive window is currently open for this deck.
+    /// True when this deck's interactive window is open.
     pub is_interactive: bool,
     /// True when this deck has a `depth_sensor` shader preprocessor attached.
     pub has_depth_prepro: bool,
@@ -465,7 +432,7 @@ pub struct DeckSnapshot {
     pub auto_transition: Option<AutoTransitionSnapshot>,
     /// Configured render FPS (Auto or fixed value)
     pub render_fps: DeckRenderFps,
-    /// Effective render rate (actual FPS this deck is rendering at)
+    /// Actual render FPS.
     pub effective_render_fps: f32,
     /// Smoothed render cost in microseconds
     pub render_cost_us: f32,
@@ -473,17 +440,13 @@ pub struct DeckSnapshot {
     pub gpu_render_cost_us: f32,
     /// Smoothed FPS from actual deck render pipeline timing
     pub fps: f32,
-    /// True while the arrangement has this deck's source asleep because no
-    /// region or curve will show it soon. A sleeping video holds its frame and
-    /// resumes from there, which is why a frozen clip is worth reporting rather
-    /// than leaving someone to wonder. See /spec/deck-residency.md.
+    /// True while the arrangement has put this deck's source to sleep because
+    /// nothing will show it soon. A sleeping video holds its frame.
     pub source_asleep: bool,
     pub running_analyzers: Vec<RunningAnalyzerSnapshot>,
 }
 
-/// Router-exposed `deck/<uuid>/depth_prepro/*` values, normalized to `0..1` so a
-/// consumer can render faders without reaching into the engine.
-/// See spec/depth-sensor-preprocessor.md.
+/// `deck/<uuid>/depth_prepro/*` values, normalized to `0..1`.
 #[derive(Clone, Serialize)]
 pub struct DepthPreproParamsSnapshot {
     /// Name of the sensor the preprocessor acquired.
@@ -520,7 +483,7 @@ pub struct ParamSnapshot {
     pub min: Option<f32>,
     pub max: Option<f32>,
     /// Inspector section, from the shader's `GROUP` key. `None` groups with the
-    /// other ungrouped params. See /spec/parameter-inspector.md.
+    /// other ungrouped params.
     pub group: Option<String>,
     /// Selectable values for a `long` input, paired with their labels.
     pub choices: Option<Vec<ParamChoice>>,
@@ -583,7 +546,7 @@ pub struct ModulationSnapshot {
 pub struct ModulationSourceSnapshotEntry {
     pub uuid: String,
     pub source: ModulationSourceSnapshot,
-    /// Which notion of time this source follows. See /spec/timebase.md.
+    /// Which timebase this source follows.
     pub timebase: crate::timebase::Timebase,
 }
 
@@ -657,8 +620,8 @@ pub struct SequenceStepSnapshot {
 #[derive(Debug, Clone, Serialize)]
 pub enum SequenceStepKindSnapshot {
     Fade {
-        /// Source channel UUID. Resolve against the channel list for a name; a
-        /// UUID that no longer resolves means the channel was deleted.
+        /// Source channel UUID. One that does not resolve names a deleted
+        /// channel.
         from_ch: String,
         to_ch: String,
         duration_val: f64,
@@ -693,7 +656,7 @@ pub struct OutputSinkSnapshot {
     pub type_id: String,
     /// What the sink is sending to, for display.
     pub label: String,
-    /// False when this run cannot drive the type, and the output is a
+    /// False when this run cannot drive the type; the output is then a
     /// placeholder holding its settings.
     pub available: bool,
     /// Whether the sink is started and stopped rather than always showing.
@@ -707,8 +670,7 @@ pub struct OutputWindowSnapshot {
     pub name: String,
     /// Where the output delivers: its sink type, settings and state.
     pub sink: OutputSinkSnapshot,
-    /// Whether a startable sink is delivering. Always false for a window,
-    /// which shows without being started.
+    /// Whether a startable sink is delivering. Always false for a window.
     pub is_active: bool,
     /// What the output shows with no surfaces assigned: the user's choice, or
     /// the sink's default.
@@ -720,8 +682,7 @@ pub struct OutputWindowSnapshot {
     /// Runtime format selected by the active output adapter.
     pub resolved_presentation: crate::engine::value::render::ResolvedPresentation,
     /// Every presentation mode, with the reason this output cannot deliver it.
-    /// A client building a picker should disable the blocked ones and show the
-    /// reason. See /spec/presentation-mode-offering.md.
+    /// A picker should disable blocked modes and show the reason.
     pub mode_availability: Vec<crate::engine::value::render::ModeAvailability>,
     /// Per-output tonemap override. `None` inherits the mixer's show-wide curve.
     pub tonemap_override: Option<crate::engine::value::render::TonemapMode>,
@@ -755,7 +716,7 @@ pub struct AudioPassthroughSnapshot {
 /// Video frames offered to an ffmpeg subprocess, split by fate.
 #[derive(Clone, Serialize)]
 pub struct DeliveryHealthSnapshot {
-    /// Frames the writer actually put down the pipe from the renderer.
+    /// Frames written to the pipe.
     pub frames_written: u64,
     /// Frames dropped because the writer channel was full.
     pub frames_dropped: u64,
@@ -782,13 +743,13 @@ pub struct SurfaceSnapshot {
     pub content_mapping: ContentMapping,
     pub output_type: SurfaceOutputType,
     pub circle_hint: Option<CircleHint>,
-    /// Effective warp (auto-conforming to the shape while `warp_bound`).
+    /// Effective warp; follows the shape while `warp_bound`.
     pub warp: Option<crate::engine::value::warp::WarpMode>,
-    /// Whether the warp auto-conforms to the surface shape (auto-warp).
+    /// Whether the warp follows the surface shape.
     pub warp_bound: bool,
     /// Curve authoring path, when the surface is bezier-edited.
     pub path: Option<SurfacePath>,
-    /// Subtractive cut-out holes (8i.7).
+    /// Cut-out holes.
     pub holes: Vec<SurfacePath>,
     /// Flattened hole contours (canvas coords), derived from `holes`.
     pub hole_contours: Vec<Vec<[f32; 2]>>,

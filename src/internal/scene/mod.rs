@@ -1,8 +1,5 @@
-//! Scene configuration — serializable snapshot of the full VJ performance state.
-//!
-//! This is the data model for `.varda/scene.json`. It captures everything needed
-//! to reconstruct a show: channels, decks, effects, modulation.
-//! Surfaces and outputs live in `stage.json` (venue-specific, not show-specific).
+//! The data model for `.varda/scene.json`: channels, decks, effects and
+//! modulation. Surfaces and outputs live in `stage.json`.
 
 use crate::channel::{BlendMode, DeckRenderFps};
 use crate::macros::MacroBank;
@@ -17,73 +14,66 @@ pub mod reidentify;
 
 // ── Scene (top-level) ──────────────────────────────────────────────
 
-/// Full scene configuration — the root of `.varda/scene.json`.
+/// The root of `.varda/scene.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SceneConfig {
-    /// File format version (for future migrations)
+    /// File format version; see [`Self::migrate`].
     #[serde(default = "default_version")]
     pub version: u32,
 
-    /// Channel configurations (ordered)
     #[serde(default)]
     pub channels: Vec<ChannelConfig>,
 
-    /// Crossfader position (0.0 = Ch 0, 1.0 = Ch 1)
+    /// Crossfader position (0.0 = Ch 0, 1.0 = Ch 1).
     #[serde(default)]
     pub crossfader: f32,
 
-    /// Active transition shader name (None = opacity crossfade)
+    /// Active transition shader name (`None` = opacity crossfade).
     #[serde(default)]
     pub active_transition: Option<String>,
 
-    /// Master effect chain
     #[serde(default)]
     pub master_effects: Vec<EffectConfig>,
 
-    /// Modulation engine state (sources + assignments, already Serialize/Deserialize)
+    /// Modulation sources and assignments.
     #[serde(default)]
     pub modulation: ModulationEngine,
 
-    /// Macro controls (user-defined knobs/faders/buttons → many parameter targets).
-    /// Additive since scene v4; pre-macro scenes default to an empty bank.
+    /// Macro controls, each driving many parameters. Scenes before v4 have none.
     #[serde(default)]
     pub macros: MacroBank,
 
-    /// Transition sequences (channel-to-channel automation). Multiple named sequences.
+    /// Named transition sequences.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transition_sequences: Vec<TransitionSequenceConfig>,
 
-    /// Master render width (defaults to 1920 if absent in old files)
+    /// Master render width (1920 if absent).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub render_width: Option<u32>,
 
-    /// Master render height (defaults to 1080 if absent in old files)
+    /// Master render height (1080 if absent).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub render_height: Option<u32>,
 
-    /// Tonemap mode (defaults to ACES if absent)
+    /// Tonemap mode (ACES if absent).
     #[serde(default)]
     pub tonemap_mode: crate::renderer::tonemap::TonemapMode,
 
-    /// Active LUT filename (relative to `.varda/luts/`), if any
+    /// Active LUT filename, relative to `.varda/luts/`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_lut: Option<String>,
 
-    /// Arrangement mode data. Absent in scenes authored in Performance mode
-    /// only. Additive since scene v7.
+    /// Arrangement mode data. Absent in Performance-only scenes and before v7.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arrangement: Option<crate::arrangement::ArrangementConfig>,
 
-    /// How this show counts frames and where it loops. Held with the scene
-    /// rather than inside `arrangement`, because the position readout needs a
-    /// rate before any arrangement exists.
+    /// Frame rate and loop range. Outside `arrangement` because the position
+    /// readout needs a rate without one.
     #[serde(default)]
     pub transport: TransportConfig,
 }
 
-/// The persisted half of the transport. Position and run state are deliberately
-/// absent: a scene should open where it was authored to start, not wherever it
-/// happened to be stopped when it was saved.
+/// The saved part of the transport. Position and run state are not saved.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct TransportConfig {
     #[serde(default)]
@@ -100,21 +90,15 @@ impl SceneConfig {
     /// Version written by this build. Bump when adding a migration below.
     pub const CURRENT_VERSION: u32 = 9;
 
-    /// Bring an older scene up to [`Self::CURRENT_VERSION`] in place.
+    /// Bring an older scene up to [`Self::CURRENT_VERSION`] in place. Runs on
+    /// load, before validation; steps run in version order.
     ///
-    /// Runs on load, before validation. Each step is guarded by the version it
-    /// upgrades *from*, so a scene several versions behind walks through them in
-    /// order.
-    ///
-    /// v8 → v9 stops writing a component index on modulation assignments; the
-    /// component is part of the key (`.../color/r`). Assignments that carry an
-    /// index are rewritten by the app once their targets exist
+    /// v8 scenes store a component index on modulation assignments; v9 puts it
+    /// in the key (`.../color/r`). The app rewrites them once targets exist
     /// ([`crate::mixer::Mixer::rekey_legacy_modulation`]), since only the
-    /// target can say whether index 0 means `r` or `x`.
+    /// target knows whether index 0 means `r` or `x`.
     ///
-    /// v6 → v7 adds the arrangement and the persisted transport settings. Both
-    /// are optional and serde-defaulted, so there is no transformation step:
-    /// a v6 scene loads as a Performance-only show, which is exactly what it is.
+    /// v6 scenes have no arrangement or transport settings; both default.
     pub fn migrate(&mut self) {
         if self.version < 6 {
             self.migrate_v5_bipolar_amplitude();
@@ -125,13 +109,11 @@ impl SceneConfig {
         self.version = Self::CURRENT_VERSION;
     }
 
-    /// v7 → v8: modulation assignments (automation included, since envelopes
-    /// are modulation sources) are keyed by router path instead of the older
-    /// `deck_<u>:<name>` family. See /spec/parameter-routing.md § WS4.
+    /// v7 to v8: pre-v8 scenes key modulation assignments (envelopes included)
+    /// as `deck_<u>:<name>`; v8 uses router paths.
     ///
-    /// Before v8 a shader parameter named `opacity` shared its key with the
-    /// deck's own opacity; the key moves to the deck built-in it was written for.
-    /// Keys the migration does not recognize are kept as they are.
+    /// Pre-v8 scenes used the `opacity` key for the deck's opacity, not a
+    /// shader parameter. Unrecognized keys are kept.
     fn migrate_v7_modulation_keys(&mut self) {
         let assignments = std::mem::take(&mut self.modulation.assignments);
         let mut rekeyed = 0;
@@ -154,8 +136,8 @@ impl SceneConfig {
         if rekeyed > 0 {
             log::info!("Scene migration v7→v8: re-keyed {rekeyed} modulation target(s)");
         }
-        // Macro targets were already router paths, but may use the spellings
-        // v8 retired (`video/seek`, owner-qualified effect paths).
+        // Pre-v8 macro targets are router paths but may use retired spellings
+        // (`video/seek`, owner-qualified effect paths).
         for macro_control in self.macros.macros_mut() {
             for target in &mut macro_control.targets {
                 target.path = crate::engine::value::param::canonical_path(&target.path);
@@ -163,23 +145,12 @@ impl SceneConfig {
         }
     }
 
-    /// v5 → v6: bipolar sources stopped double-sweeping their target's range.
+    /// v5 to v6: bipolar contributions have a 0.5 weight, so a full-amplitude
+    /// bipolar LFO sweeps the range exactly. Pre-v6 scenes scaled by the whole
+    /// range and clipped.
     ///
-    /// Before v6 a bipolar source's -1..1 output was scaled by the *whole*
-    /// parameter range, giving twice the excursion a fader can hold: the value
-    /// hung against both ends and rushed through the middle. Bipolar
-    /// contributions now carry a 0.5 weight, so a full-amplitude bipolar LFO
-    /// sweeps the range exactly, centred on the base value.
-    ///
-    /// That halves the excursion of existing patches. An LFO can compensate —
-    /// amplitude 0.5 was the only setting that did *not* clip before, and
-    /// doubling it reproduces the old motion exactly. Anything above 0.5 was
-    /// clipping regardless; clamping it to full amplitude gives the whole fader,
-    /// which is the closest thing to what the patch asked for.
-    ///
-    /// Step sequencers have no amplitude control — their steps already span the
-    /// full output range — so they cannot be compensated. They were clipping
-    /// before and are simply correct now.
+    /// LFO amplitude is doubled and clamped to 1.0, which reproduces the
+    /// unclipped motion. Step sequencers have no amplitude and are left as is.
     fn migrate_v5_bipolar_amplitude(&mut self) {
         let mut rescaled = 0;
         for entry in &mut self.modulation.sources {
@@ -225,11 +196,8 @@ pub struct ChannelConfig {
     #[serde(default)]
     pub effects: Vec<EffectConfig>,
 
-    /// Modulation on this channel's own effects, in the portable recipe form.
-    /// Empty in `scene.json`, where the modulation engine is serialized whole;
-    /// filled when a channel travels on its own, as a preset or on the
-    /// clipboard, since its effects' assignments would otherwise be left behind.
-    /// See /spec/clipboard.md.
+    /// Modulation on this channel's own effects, as recipes. Empty in
+    /// `scene.json`; filled for presets and the clipboard.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub modulation: Vec<ModulationRecipe>,
 }
@@ -251,76 +219,62 @@ pub struct DeckConfig {
     #[serde(default = "generate_default_uuid")]
     pub uuid: String,
 
-    /// Display name
     #[serde(default)]
     pub name: String,
 
-    /// Source configuration
     pub source: SourceConfig,
 
-    /// Effect chain
     #[serde(default)]
     pub effects: Vec<EffectConfig>,
 
-    /// Deck opacity (0.0 - 1.0)
+    /// Deck opacity (0.0-1.0).
     #[serde(default = "default_opacity")]
     pub opacity: f32,
 
-    /// Transparent compositing: preserve source alpha instead of flattening over
-    /// black. Defaults to false for backward compatibility with existing scenes.
+    /// Preserve source alpha instead of flattening over black.
     #[serde(default)]
     pub transparent: bool,
 
-    /// Blend mode for compositing
     #[serde(default)]
     pub blend_mode: BlendModeConfig,
 
-    /// Mute state
     #[serde(default)]
     pub mute: bool,
 
-    /// Solo state
     #[serde(default)]
     pub solo: bool,
 
-    /// Z-index for layer ordering
+    /// Z-index for layer ordering.
     #[serde(default)]
     pub z_index: i32,
 
-    /// Per-deck render FPS cap (default: auto adaptive)
+    /// Per-deck render FPS cap (default: adaptive).
     #[serde(default)]
     pub render_fps: DeckRenderFps,
 
-    /// Auto-transition configuration (None = no auto-transition)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_transition: Option<AutoTransitionConfig>,
 
-    /// Modulation recipes (for preset portability)
+    /// Modulation recipes, for presets and the clipboard.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub modulation: Vec<ModulationRecipe>,
 }
 
-/// A modulation recipe stored in a preset.
-/// Contains a source definition and which params it targets (relative keys).
+/// A modulation source and the params it targets, as stored in a preset.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModulationRecipe {
-    /// UUID of the modulation source
     #[serde(default = "crate::ids::generate_short_uuid")]
     pub source_uuid: String,
-    /// The modulation source definition
     pub source: crate::modulation::ModulationSource,
-    /// Which clock the source follows. It lives on the engine's entry rather
-    /// than inside the source, so a recipe that omitted it restored an
-    /// arrangement curve as free-running. See /spec/timebase.md.
+    /// Which clock the source follows. Stored on the engine entry, not the source.
     #[serde(default)]
     pub timebase: crate::timebase::Timebase,
-    /// Assignments using relative param keys (no ch/deck prefix)
+    /// Assignments with owner-relative param keys.
     pub assignments: Vec<ModulationRecipeAssignment>,
 }
 
 impl ModulationRecipe {
-    /// Rewrite assignments saved before scene version 8 in the current
-    /// spelling. See [`canonical_recipe_param`].
+    /// Rewrite pre-v8 assignment keys; see [`canonical_recipe_param`].
     pub fn canonicalize(&mut self) {
         for assignment in &mut self.assignments {
             assignment.param = canonical_recipe_param(&assignment.param);
@@ -332,9 +286,8 @@ impl ModulationRecipe {
 ///
 /// Deck-owned entries are relative to `deck/<uuid>/` (`param/speed`,
 /// `opacity`, `video/speed`); effect entries are full
-/// `effect/<uuid>/param/<name>` keys. Presets saved before scene version 8 hold
-/// `speed`, `video_speed`, or `fx_<uuid>:<name>`. Reads either, so it is safe to
-/// apply more than once.
+/// `effect/<uuid>/param/<name>` keys. Pre-v8 presets hold `speed`,
+/// `video_speed`, or `fx_<uuid>:<name>`. Idempotent.
 pub fn canonical_recipe_param(param: &str) -> String {
     use crate::engine::value::param::ParamAddress;
     if param.starts_with("fx_") {
@@ -380,10 +333,9 @@ pub struct ModulationRecipeAssignment {
     /// Relative to the owning deck (`param/brightness`, `opacity`), or a full
     /// `effect/<uuid>/param/<name>` key for an effect parameter.
     pub param: String,
-    /// Modulation amount
     pub amount: f32,
-    /// A component index saved before scene version 9. Read, never written;
-    /// see [`crate::modulation::ParamModulation::legacy_component`].
+    /// Component index in pre-v9 files. Read, never written; see
+    /// [`crate::modulation::ParamModulation::legacy_component`].
     #[serde(default, rename = "component", skip_serializing)]
     pub legacy_component: Option<usize>,
 }
@@ -402,7 +354,7 @@ pub struct AutoTransitionConfig {
     pub play_duration: DurationSpecConfig,
     pub transition_duration: DurationSpecConfig,
 
-    /// Transition shader name (None = opacity fade)
+    /// Transition shader name (`None` = opacity fade).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transition_shader: Option<String>,
 }
@@ -454,9 +406,8 @@ fn default_sequence_name() -> String {
     "Sequence 1".to_string()
 }
 
-/// How a fade step names a channel. Scenes at v5 and later always write a UUID;
-/// `Index` exists only to read v4-and-earlier scenes, where fade steps stored a
-/// positional channel index. `resolve` turns either form into a UUID.
+/// How a fade step names a channel. v5+ scenes write a UUID; v4 and earlier
+/// store a channel index (`Index`). `resolve` turns either into a UUID.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ChannelRef {
@@ -465,8 +416,8 @@ pub enum ChannelRef {
 }
 
 impl ChannelRef {
-    /// Resolve to a channel UUID, using `channel_uuids` (scene channel order) to
-    /// interpret a legacy index. Returns `None` if the index is out of range.
+    /// Resolve to a channel UUID; an index is looked up in `channel_uuids`.
+    /// `None` if out of range.
     pub fn resolve(&self, channel_uuids: &[String]) -> Option<String> {
         match self {
             ChannelRef::Uuid(uuid) => Some(uuid.clone()),
@@ -544,8 +495,7 @@ impl From<EasingConfig> for crate::mixer::CrossfadeEasing {
 
 // ── Source ──────────────────────────────────────────────────────────
 
-/// What generates a deck's base image: a source type id and that type's
-/// fields, decoded by the provider. See /spec/deck-source-providers.md.
+/// A deck's source: a type id and that type's fields, decoded by the provider.
 pub use crate::source::SourceConfig;
 
 // ── Effect ─────────────────────────────────────────────────────────
@@ -556,12 +506,9 @@ pub struct EffectConfig {
     /// Stable UUID (8-char hex)
     #[serde(default = "generate_default_uuid")]
     pub uuid: String,
-    /// Path to the ISF shader file
     pub path: String,
-    /// Whether effect is enabled
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// Parameter values (name -> value)
     #[serde(default)]
     pub params: HashMap<String, ParamValue>,
 }
@@ -572,28 +519,26 @@ fn default_true() -> bool {
 
 // ── Output ─────────────────────────────────────────────────────────
 
-/// Serializable output configuration (unified model).
+/// Serializable output configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutputConfig {
     /// Stable UUID (8-char hex)
     #[serde(default = "generate_default_uuid")]
     pub uuid: String,
     pub name: String,
-    /// Where the output delivers: its sink type and that type's settings,
-    /// saved as `{"type": "<id>", ...}` as it always has been. See
-    /// /spec/output-sink-providers.md.
+    /// Sink type and settings, saved as `{"type": "<id>", ...}`.
     #[serde(default = "default_sink")]
     pub target: crate::output::SinkConfig,
-    /// Legacy field — Display target name. Read only to migrate old files.
+    /// Display target name in older files. Read only.
     #[serde(default, skip_serializing)]
     pub target_display: Option<String>,
-    /// Surface assignments with warp calibration
+    /// Surface assignments.
     #[serde(default)]
     pub surface_assignments: Vec<SurfaceAssignmentConfig>,
-    /// Legacy window position; now saved with a window's sink settings.
+    /// Window position in older files. Read only.
     #[serde(default, skip_serializing)]
     pub window_position: Option<[i32; 2]>,
-    /// Legacy window size; now saved with a window's sink settings.
+    /// Window size in older files. Read only.
     #[serde(default, skip_serializing)]
     pub window_size: Option<[u32; 2]>,
     /// Whether edge blend is auto-computed or manually configured.
@@ -602,21 +547,19 @@ pub struct OutputConfig {
     /// Edge blending configuration for multi-projector overlap zones.
     #[serde(default)]
     pub edge_blend: crate::renderer::edge_blend::EdgeBlendConfig,
-    /// Per-output rotation (0°/90°/180°/270°).
+    /// Per-output rotation (0/90/180/270 degrees).
     #[serde(default)]
     pub rotation: crate::renderer::context::OutputRotation,
     /// Requested SDR precision and deterministic presentation dithering.
     #[serde(default, flatten)]
     pub presentation: crate::engine::value::render::PresentationRequest,
-    /// Per-output tonemap override. Absent means inherit the show-wide curve,
-    /// which is what every stage written before this field did.
+    /// Per-output tonemap override. Absent inherits the show-wide curve.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tonemap_override: Option<crate::engine::value::render::TonemapMode>,
     /// Calibration test cards, on any output. Absent means off.
     #[serde(default, skip_serializing_if = "is_calibration_off")]
     pub calibration_mode: crate::engine::value::render::CalibrationMode,
-    /// What the output shows with nothing assigned. Absent means the sink's
-    /// default. See /spec/output-sink-providers.md Decision 13.
+    /// What the output shows with nothing assigned. Absent means the sink's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unassigned: Option<crate::engine::value::render::Unassigned>,
 }
@@ -659,7 +602,7 @@ impl OutputConfig {
         }
     }
 
-    /// Fold fields older files kept outside the sink config into it: a
+    /// Move fields older files keep outside the sink config into it: a
     /// display's monitor name, and a window's position and size.
     pub fn migrate_legacy(&mut self) {
         use crate::output::window::{DISPLAY, WINDOWED};
@@ -681,14 +624,12 @@ impl OutputConfig {
     }
 }
 
-/// Membership of a surface in an output (persisted). Warp now lives on the
-/// surface (`Surface.warp`); `legacy_warp_mode` exists only to migrate
-/// pre-8i.5 files that stored warp here.
+/// Membership of a surface in an output. Warp lives on `Surface.warp`;
+/// `legacy_warp_mode` reads older files that store warp here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SurfaceAssignmentConfig {
     pub surface_uuid: String,
-    /// LEGACY (pre-8i.5): warp used to live on the assignment. Read at load for
-    /// one-time migration onto `Surface.warp`, then dropped (never re-saved).
+    /// Warp from older files, moved onto `Surface.warp` at load. Never saved.
     #[serde(default, rename = "warp_mode", skip_serializing)]
     pub legacy_warp_mode: Option<crate::surface::warp::WarpMode>,
     #[serde(default = "default_true")]
@@ -820,8 +761,7 @@ impl ChannelConfig {
 // ── I/O ────────────────────────────────────────────────────────────
 
 impl SceneConfig {
-    /// Validate the scene config for semantic correctness. Returns a list of errors.
-    /// An empty list means the config is valid.
+    /// Validate the scene. Returns a list of errors; empty means valid.
     pub fn validate(&self) -> Vec<String> {
         let mut errors = Vec::new();
         if !(0.0..=1.0).contains(&self.crossfader) {
@@ -849,14 +789,12 @@ impl SceneConfig {
         errors
     }
 
-    /// Load from a JSON file
+    /// Load from a JSON file.
     ///
     /// # Errors
     ///
-    /// Returns an error if `path` cannot be read (missing file, permissions) or
-    /// if its contents are not valid JSON for a [`SceneConfig`]. Validation
-    /// problems in an otherwise-parseable scene are logged as warnings, not
-    /// returned as errors.
+    /// Returns an error if `path` cannot be read or is not valid [`SceneConfig`]
+    /// JSON. Validation problems are only logged.
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         let content = std::fs::read_to_string(path.as_ref())
             .with_context(|| format!("Failed to read scene file: {}", path.as_ref().display()))?;
@@ -870,12 +808,11 @@ impl SceneConfig {
         Ok(scene)
     }
 
-    /// Save to a JSON file
+    /// Save to a JSON file.
     ///
     /// # Errors
     ///
-    /// Returns an error if the scene cannot be serialized to JSON, or if the
-    /// atomic write fails (temp file creation, write, or rename).
+    /// Returns an error if serialization or the atomic write fails.
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let errors = self.validate();
         for e in &errors {
@@ -1003,8 +940,7 @@ mod tests {
 
     // ── Migration ────────────────────────────────────────────────────
 
-    /// Every `SceneConfig` field carries a serde default, so a version stamp is
-    /// enough to stand up the same shape `load` parses.
+    /// Every field has a serde default, so a version stamp is a valid scene.
     fn scene_with_sources(
         version: u32,
         sources: Vec<crate::modulation::ModulationSource>,
@@ -1034,8 +970,7 @@ mod tests {
         }
     }
 
-    /// Amplitude 0.5 was the only pre-v6 setting that did not clip. Doubling it
-    /// preserves the patch's motion exactly under the new 0.5 range weight.
+    /// Pre-v6 amplitude 0.5 doubles to 1.0, keeping the same motion.
     #[test]
     fn migration_v6_doubles_unclipped_bipolar_amplitude() {
         let mut scene = scene_with_sources(5, vec![bipolar_lfo(0.5)]);
@@ -1044,8 +979,7 @@ mod tests {
         assert_eq!(scene.version, SceneConfig::CURRENT_VERSION);
     }
 
-    /// Anything above 0.5 was clipping before. Full amplitude is the closest
-    /// honest reading: the whole fader, without the flat spots.
+    /// Pre-v6 amplitude above 0.5 clamps to 1.0.
     #[test]
     fn migration_v6_clamps_overdriven_bipolar_amplitude() {
         let mut scene = scene_with_sources(5, vec![bipolar_lfo(1.0)]);
@@ -1053,7 +987,7 @@ mod tests {
         assert!((amplitude_of(&scene, 0) - 1.0).abs() < 1e-6);
     }
 
-    /// Unipolar sources never had the doubling problem and must be left alone.
+    /// Unipolar sources are unchanged.
     #[test]
     fn migration_v6_leaves_unipolar_sources_untouched() {
         let unipolar = crate::modulation::ModulationSource::LFO {
@@ -1068,8 +1002,7 @@ mod tests {
         assert!((amplitude_of(&scene, 0) - 0.4).abs() < 1e-6);
     }
 
-    /// Migration is idempotent: a scene already at the current version keeps
-    /// its amplitudes, so re-saving and re-loading cannot compound the rescale.
+    /// A current-version scene keeps its amplitudes.
     #[test]
     fn migration_v6_does_not_rerun_on_current_scenes() {
         let mut scene = scene_with_sources(SceneConfig::CURRENT_VERSION, vec![bipolar_lfo(0.25)]);
@@ -1083,8 +1016,7 @@ mod tests {
         keys
     }
 
-    /// v8 gives every modulation target one spelling: the router path. Each
-    /// pre-v8 key form moves to the path that names what it drove.
+    /// Each pre-v8 key form becomes the router path for its target.
     #[test]
     fn migration_v8_rekeys_modulation_by_router_path() {
         let mut scene = scene_with_sources(7, vec![]);
@@ -1118,8 +1050,7 @@ mod tests {
         assert_eq!(scene.version, SceneConfig::CURRENT_VERSION);
     }
 
-    /// A key the migration does not recognize is kept rather than dropped, so a
-    /// scene never silently loses an assignment.
+    /// An unrecognized key is kept.
     #[test]
     fn migration_v8_keeps_unrecognized_keys() {
         let mut scene = scene_with_sources(7, vec![]);
@@ -1179,8 +1110,7 @@ mod tests {
         assert!(!deck.mute);
         assert!(!deck.solo);
         assert_eq!(deck.z_index, 0);
-        // Backward compatibility: scenes saved before the transparency feature
-        // omit `transparent` and must load as opaque (false). See html-source.md §2.
+        // Older scenes omit `transparent` and load opaque.
         assert!(!deck.transparent);
     }
 
@@ -1347,7 +1277,6 @@ mod tests {
         assert_eq!(loaded.channels[0].name, "Test Ch");
         assert!((loaded.crossfader - 0.42).abs() < 1e-5);
 
-        // Cleanup
         std::fs::remove_file(&path).ok();
         std::fs::remove_dir(&dir).ok();
     }
@@ -1515,8 +1444,7 @@ mod tests {
 
     #[test]
     fn an_inheriting_output_writes_no_tonemap_override_key() {
-        // Inherit is the overwhelmingly common case, so it stays absent from
-        // stage.json rather than writing a null on every output.
+        // Inherit is omitted from stage.json.
         let output: OutputConfig = serde_json::from_str(r#"{"name":"Main"}"#).unwrap();
         assert_eq!(output.tonemap_override, None);
         let value = serde_json::to_value(&output).unwrap();
@@ -1554,7 +1482,7 @@ mod tests {
     #[test]
     fn a_pre_hdr_stage_file_loads_as_sdr() {
         use crate::engine::value::render::{PresentationMode, PresentationTransfer};
-        // Exactly what a Phase 49 build wrote: no transfer, no peak.
+        // An older output with no transfer and no peak.
         let json = serde_json::json!({
             "uuid": "out00001",
             "name": "Main",
@@ -1582,8 +1510,7 @@ mod tests {
         assert!(value.get("presentation").is_none());
     }
 
-    /// A saved output's target is its sink config, byte for byte the shape
-    /// every older stage has.
+    /// A saved output's target is its sink config, in the same shape older stages use.
     #[test]
     fn a_saved_output_target_reads_back_unchanged() {
         let json = serde_json::json!({
@@ -1604,8 +1531,8 @@ mod tests {
         );
     }
 
-    /// Older stages kept a display's monitor and a window's placement outside
-    /// the target; they fold into it on load and are written there after.
+    /// Older stages keep a display's monitor and a window's placement outside
+    /// the target; load moves them into it.
     #[test]
     fn legacy_window_fields_migrate_into_the_sink_config() {
         let mut config: OutputConfig = serde_json::from_value(serde_json::json!({
@@ -1639,11 +1566,10 @@ mod tests {
         assert_eq!(config.target.type_id(), "windowed");
     }
 
-    // ── Per-surface warp migration (8i.5) ────────────────────────────
+    // ── Per-surface warp migration ───────────────────────────────────
 
-    /// Pre-8i.5 files stored warp on the assignment under `warp_mode`; it must
-    /// still deserialize (into `legacy_warp_mode`) so load-time migration can
-    /// move it onto the surface.
+    /// Older files store warp on the assignment as `warp_mode`; it reads into
+    /// `legacy_warp_mode`.
     #[test]
     fn assignment_config_reads_legacy_warp_mode() {
         let json = r#"{"surface_uuid":"s1","warp_mode":{"type":"CornerPin","corners":[[0,0],[1,0],[1,1],[0,1]]},"enabled":true}"#;
@@ -1657,7 +1583,7 @@ mod tests {
         );
     }
 
-    /// New files must NOT re-serialize the legacy warp field.
+    /// The legacy warp field is never written.
     #[test]
     fn assignment_config_drops_legacy_warp_on_save() {
         let cfg = SurfaceAssignmentConfig {

@@ -10,32 +10,22 @@ license = "MIT"
 name = "varda"
 path = "src/lib.rs"
 
-# `clippy::pedantic` is a warn-by-default gate for every target (lib, bin, tests,
-# benches, examples). CI runs `cargo clippy --all-targets -- -D warnings`, so these
-# warnings are hard errors on a PR. Every entry in the allow-list below carries a
-# rationale, and adding one requires the same. All but `too_many_lines` are lints
-# whose advice is wrong for this codebase rather than work being deferred. See
+# `clippy::pedantic` warns on every target, and CI runs clippy with `-D warnings`.
+# Each allowed lint below states its reason; a new one needs the same. See
 # CONTRIBUTING.md § Lints.
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 
-# Pixel, sample, and vertex math converts between integer extents and float
-# coordinates constantly (`width as f32`, `f64 as f32` for shader uniforms).
-# The conversions are intentional and the lossless alternatives either do not
-# exist or push `try_from` error handling into the render hot path.
+# Pixel, sample and vertex math casts between integers and floats everywhere;
+# `try_from` would add error handling to the render loop.
 cast_precision_loss = "allow"
 cast_possible_truncation = "allow"
 cast_sign_loss = "allow"
 
-# Fires on essentially every `&self` snapshot/query accessor in the engine trait
-# impls — 478 attributes that catch no bugs, since ignoring an infallible getter
-# is already dead code the compiler flags elsewhere.
+# Fires on hundreds of snapshot accessors and catches no bugs.
 must_use_candidate = "allow"
 
-# The only deferred entry: ~130 functions exceed 100 lines, and splitting them is a
-# real refactor rather than a lint fix. Tracked in spec/roadmap.md § DEBT: Function
-# Decomposition; lower the threshold as offenders are cleared instead of flipping
-# this off at the end.
+# About 130 functions are over 100 lines; they are split as they are worked on.
 too_many_lines = "allow"
 
 [dependencies]
@@ -45,24 +35,22 @@ winit = "0.30"
 bytemuck = { version = "1.25", features = ["derive"] }
 half = "2.6"
 
-# Shader compilation (build-from-source ensures static linking — avoids
-# libshaderc_shared.dylib runtime errors when users have Homebrew shaderc)
+# Shader compilation. Built from source so shaderc links statically and a
+# Homebrew libshaderc_shared.dylib can't be picked up at runtime.
 shaderc = { version = "0.10", features = ["build-from-source"] }
-# `hlsl-out` is here so tests can run the same translation DX12 does, from any
-# platform. It adds a backend, not a crate.
+# `hlsl-out` lets tests run DX12's shader translation on any platform.
 naga = { version = "30.0", features = ["spv-in", "wgsl-out", "hlsl-out"] }
 
 # ISF metadata parsing
 serde = { version = "1.0", features = ["derive", "rc"] }
-# `preserve_order` keeps provider configs (`ProviderConfig`) in the order their
-# fields were written, which saved files and the API show. Asked for here, not
-# left to whichever dependency happens to enable it (servo, only with `html`).
+# `preserve_order` keeps provider config fields in written order in saved files
+# and the API. Set here because otherwise only servo (with `html`) enables it.
 serde_json = { version = "1.0", features = ["preserve_order"] }
 
 # UI
 egui = "0.36"
-# egui's bundled fonts, already built through egui: the text fallback on a
-# machine with no system fonts. See /spec/text-source.md § Fonts.
+# egui's bundled fonts (already built through egui): the text deck's fallback
+# on a machine with no system fonts.
 epaint_default_fonts = "0.36"
 egui-wgpu = "0.36"
 egui-winit = { version = "0.36", features = ["accesskit"] }
@@ -84,12 +72,9 @@ pollster = "0.4"
 cpal = "0.17.3"
 rustfft = "6.4.1"
 crossbeam-channel = "0.5.15"
-# `device` (libavdevice) and `filter` (libavfilter) are default features Varda never
-# uses: FFmpeg is touched only in internal/video/{mod,hap}.rs and internal/stream/mod.rs.
-# Linking them cost 32 of the 76 host libraries the v0.6.0 Linux tarball required,
-# including libSDL2, libjack, libopenal, libplacebo and six Flite voice libraries.
-# `format` is kept deliberately: every stream protocol (SRT, HLS, DASH, RTMP) is
-# libavformat. See spec/release-strategy.md section 4.
+# Default features off: Varda uses neither libavdevice nor libavfilter, and they
+# pull in dozens of host libraries (SDL2, JACK, OpenAL, Flite). `format` is needed
+# for every stream protocol.
 ffmpeg-next = { version = "9.0.0", default-features = false, features = [
     "codec",
     "format",
@@ -105,9 +90,8 @@ midir = "0.11"
 yuvutils-rs = "0.8.3"
 geo = "0.33.1"
 sysinfo = "0.38.4"
-# `time` is here for the Linux screen-cast portal: zbus arms timeouts on the
-# runtime that drives it, and without the time driver those panic at runtime
-# rather than failing to compile. See spec/screen-capture.md § Platform Support.
+# `time` is needed by the Linux screen-cast portal: zbus sets timeouts on this
+# runtime, which panic at runtime without the time driver.
 tokio = { version = "1.52.2", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
 axum = { version = "0.8.9", features = ["ws"] }
 tower-http = { version = "0.6.10", features = ["cors", "fs"] }
@@ -121,60 +105,46 @@ utoipa-swagger-ui = { version = "9.0.2", features = ["axum", "vendored"] }
 clap = { version = "4.6.1", features = ["derive"] }
 ctrlc = "3.5.2"
 imageproc = "0.26.2"
-# SVG. `usvg` parses to a resolved tree (stage plan import walks it for contours);
-# `resvg` rasterizes that same tree for SVG image decks, at whatever size the
-# master resolution calls for. Pinned to one minor so both share a tree type.
-# Default features on: real artwork carries text and embedded rasters.
+# SVG parsing (stage plan import, SVG decks, text deck shaping) and rasterizing.
+# Kept on the same minor so both share a tree type; default features keep text
+# and embedded rasters.
 usvg = "0.47.0"
 resvg = "0.47.0"
 dxf = "0.6.1"
 base64 = "0.22.1"
 dirs = "6.0.0"
 arc-swap = "1.9.1"
-# ONNX Runtime is statically linked via ort's default `download-binaries`
-# feature (CPU build). No dylib to locate, bundle, or version-match.
+# ONNX Runtime links statically through ort's default `download-binaries`
+# feature (CPU build), so there is no dylib to ship.
 ort = { version = "2.0.0-rc.12", optional = true }
 ndarray = { version = "0.17.2", optional = true }
 servo = { version = "0.1.0", optional = true }
 url = { version = "2.5", optional = true }
 euclid = { version = "0.22", optional = true }
 keyboard-types = { version = "0.8", optional = true }
-# Depth sensor backend (Kinect v1 via libfreenect). Native FFI dep; see
-# spec/depth-sensors.md. Gated behind the default-on `depth` feature. Builds
-# without libfreenect installed must pass `--no-default-features` (or drop
-# `depth` from the feature set).
+# Kinect v1 through libfreenect, behind the default-on `depth` feature. Build
+# with `--no-default-features` where libfreenect isn't installed.
 freenectrs = { version = "0.1.0", optional = true }
-# Scratch workspaces for tests (src/testing.rs). Also a dev-dependency, which
-# covers unit tests; this entry is what makes the helper reachable from
-# integration tests, where the lib is built as a plain dependency.
+# Test scratch workspaces (src/testing.rs). Listed here too so the helper is
+# available to integration tests through the `test-fixtures` feature.
 tempfile = { version = "3.27.0", optional = true }
 dashu-float = "0.6.0"
 
-# Syphon client FFI (macOS only). The syphon module is compiled unconditionally
-# on macOS; Syphon.framework itself is dlopen'd at runtime (via libloading), so
-# these crates are the only build-time additions.
+# Syphon (macOS). Syphon.framework is loaded at runtime with libloading, so
+# these crates are its only build-time dependencies.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2            = "0.6"
 objc2-foundation = "0.3"
-# The `objc2-io-surface` feature unlocks `MTLTexture.iosurface` and
-# `newTextureWithDescriptor:iosurface:plane:`, which the zero-copy Syphon receive
-# path is built on (spec/syphon-zero-copy.md). This is a feature flag, not a new
-# crate: objc2-io-surface is already resolved in Cargo.lock through
-# objc2-core-video and objc2-core-graphics, so nothing new compiles and there is
-# nothing new to qualify under Rosetta. It is named directly here rather than
-# inherited, because the syphon module builds on macOS even with
-# --no-default-features, where those two are absent.
+# `objc2-io-surface` provides the IOSurface texture calls zero-copy Syphon
+# receive uses. Named here because Syphon builds with `--no-default-features`,
+# where the crates that would otherwise enable it are absent.
 objc2-metal      = { version = "0.3", features = ["objc2-io-surface"] }
 objc2-io-surface = "0.3"
-# EDR headroom lives on NSScreen, not on the Metal device (spec/hdr-edr-display.md).
-# Already in the tree via winit at the same 0.3 line, so this adds no new code to
-# the build and nothing new to qualify under Rosetta.
+# EDR headroom is read from NSScreen. Already in the tree through winit.
 objc2-app-kit    = "0.3"
 
-# ScreenCaptureKit for the macOS screen/window capture backend (spec/screen-capture.md).
-# These are objc2-family crates from the same maintainer as the three above, so
-# they unify on objc2 0.6 / objc2-foundation 0.3 with no duplicate tree — the
-# same version alignment external-io.md verified for the wgpu-hal Metal interop.
+# ScreenCaptureKit for macOS screen and window capture. Same objc2 family and
+# versions as above, so no duplicate tree.
 objc2-screen-capture-kit = { version = "0.3", optional = true }
 objc2-core-media         = { version = "0.3", optional = true }
 objc2-core-video         = { version = "0.3", optional = true }
@@ -183,28 +153,14 @@ objc2-core-foundation    = { version = "0.3", optional = true }
 dispatch2                = { version = "0.3", optional = true }
 block2                   = { version = "0.6", optional = true }
 
-# Windows Graphics Capture for the Windows screen/window capture backend
-# (spec/screen-capture.md). Microsoft-maintained, so no third-party binding.
+# Windows: Windows Graphics Capture (screen and window capture) and D3D for Spout.
 [target.'cfg(target_os = "windows")'.dependencies]
-# Statically linked DXC, so DX12 never falls back to FXC.
-#
-# `Dx12Compiler::Auto` prefers static DXC when it is compiled in and otherwise
-# looks for `dxcompiler.dll`, falling back to FXC when neither is there. A CI
-# runner has neither, so it gets FXC, which is old, unmaintained and **unrolls
-# loops aggressively**. `oscilloscope.fs` has three 129-iteration loops and a
-# 12x12 nested one full of trig, which is fine as SPIR-V on Metal and Vulkan and
-# far too much once unrolled: its pipeline came back invalid on Windows while
-# naga's HLSL translation of it succeeds locally.
-#
-# Windows only, and static rather than the DLL so there is nothing to ship
-# alongside the binary.
+# Static DXC, so DX12 never falls back to FXC when `dxcompiler.dll` is missing.
+# FXC unrolls loops aggressively and fails on large shaders such as
+# `oscilloscope.fs`. Static, so there is no DLL to ship.
 wgpu = { version = "30.0", features = ["static-dxc"] }
-# Non-optional on Windows, mirroring the objc2 family on macOS: two separate
-# subsystems need it now, screen capture (spec/screen-capture.md) and Spout
-# (spec/spout-output.md), and Spout's module has no reason to inherit the
-# screen-capture feature gate. The Direct3D12, Direct3D11on12 and Memory
-# features are Spout's: the D3D11On12 bridge and the shared-memory sender
-# registry.
+# Not optional: screen capture and Spout both use it, and Spout is not behind the
+# screen-capture feature. Direct3D12, Direct3D11on12 and Memory are Spout's.
 windows = { version = "0.62", features = [
     "Foundation",
     "Graphics",
@@ -230,50 +186,27 @@ windows = { version = "0.62", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
-# Linux screen/window capture (spec/screen-capture.md). Two stacks in one
-# binary, chosen at runtime: the XDG portal + PipeWire under Wayland, X11
-# otherwise. A distro package is built once and has to serve both sessions.
+# Linux screen and window capture: XDG portal + PipeWire under Wayland, X11
+# otherwise, chosen at runtime so one package serves both sessions.
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = { version = "0.14", optional = true, features = ["randr"] }
-# `screencast` gates the portal module this backend is built on; without it
-# ashpd compiles to an empty desktop namespace and the Wayland path fails to
-# resolve. Kept alongside `default-features = false` so the other portals stay out.
+# Only the `screencast` portal; the other portals stay out.
 ashpd = { version = "0.13", optional = true, default-features = false, features = ["tokio", "screencast"] }
 pipewire = { version = "0.10", optional = true }
 
 [features]
 default = ["face-detection", "html", "depth", "screen-capture"]
-# ML-backed analyzers (ONNX Runtime + ndarray). Disabled for the x86_64 macOS
-# slice to keep the Intel build ort-free. See spec/plugin-architecture.md (decision 5).
+# ML analyzers (ONNX Runtime + ndarray). Off for the x86_64 macOS build.
 face-detection = ["dep:ort", "dep:ndarray"]
-# HTML deck source (Servo offscreen render → wgpu). See spec/html-source.md.
-# Only the servo_backend module is gated — the HtmlManager integration surface
-# always compiles, so all integration/persistence/UI/API code and tests build
-# without this feature.
-#
-# ON BY DEFAULT: the backend uses Servo's built-in SoftwareRenderingContext and
-# CPU readback (read_to_image) rather than zero-copy GPU interop. This avoids the
-# grafting/servo-wgpu-interop-adapter dependency (which does not compile on macOS
-# against wgpu 29), so the backend builds cleanly on every target. The tradeoff is
-# software GL rasterization (slower than GPU); zero-copy GPU import is a follow-up.
-# Servo is heavy to build but the feature is stable, so it ships in the default
-# profile. Disable with `--no-default-features` (re-add `face-detection` as needed).
-# See spec/html-source.md "Decision: html on by default".
+# HTML decks through Servo, rendered in software and read back to the CPU. Only
+# the Servo backend is gated; the rest of the HTML integration always compiles.
 html = ["dep:servo", "dep:url", "dep:euclid", "dep:keyboard-types"]
-# Depth sensor / point-cloud input (Kinect v1 via libfreenect). Default-on
-# (opt out with `--no-default-features`): only the FreenectBackend module is
-# gated — the DepthSensorManager integration surface (manager, deck integration,
-# persistence, API, UI, tests) always compiles via a mock backend when the
-# feature is off. See spec/depth-sensors.md.
+# Kinect v1 depth input. Only the libfreenect backend is gated; without it the
+# depth integration compiles against a mock backend.
 depth = ["dep:freenectrs"]
-# Screen / window capture deck source. Default-on: only the platform backend
-# internals are gated — the ScreenCaptureManager integration surface (manager,
-# deck integration, persistence, API, UI, tests) always compiles via the mock
-# backend when the feature is off, mirroring `depth`. macOS uses
-# ScreenCaptureKit, Windows uses Windows.Graphics.Capture, and Linux uses the
-# XDG portal + PipeWire on Wayland or GetImage on X11. The `dep:` entries below
-# are target-scoped, so each platform pulls only its own bindings.
-# See spec/screen-capture.md.
+# Screen and window capture. Only the platform backends are gated; without them
+# the integration compiles against a mock backend. The `dep:` entries are
+# target-scoped, so each platform pulls only its own bindings.
 screen-capture = ["dep:objc2-screen-capture-kit", "dep:objc2-core-media", "dep:objc2-core-video", "dep:objc2-core-graphics", "dep:objc2-core-foundation", "dep:dispatch2", "dep:block2", "dep:x11rb", "dep:ashpd", "dep:pipewire"]
 test-fixtures = ["dep:tempfile"]
 url = ["dep:url"]
@@ -282,25 +215,16 @@ keyboard-types = ["dep:keyboard-types"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
-# Already a normal dependency; repeated here so `tests/gpu_context_stress.rs`
-# can call it directly, underneath `MidiDeviceManager`'s serialization, and so
-# narrow the Windows enumeration crash to a specific midir call for reporting
-# upstream. Same version, so this costs no extra build.
+# So `tests/gpu_context_stress.rs` can call midir directly, without
+# `MidiDeviceManager`'s lock. Same version as the normal dependency.
 midir = "0.11"
 egui_kittest = { version = "0.36", features = ["wgpu", "snapshot"] }
 tempfile = "3.27.0"
 tower = { version = "0.5.3", features = ["util"] }
 proptest = "1.9"
-# `default-features = false` is load-bearing. Without it this self-dependency
-# re-enables the default set, `depth` included, no matter what the command line
-# says, so `cargo test --no-default-features` still links libfreenect. Nothing
-# caught it for a long time: `cargo build` (the release job) does not build
-# dev-dependencies, and `cargo clippy` (the Windows lint job) does not link. The
-# Windows test job is the first thing to do both, and it failed with
-# `LNK1181: cannot open input file 'freenect.lib'`.
-#
-# Dropping the defaults here does not weaken any job: a plain `cargo test` still
-# has them from the primary package, and feature unification carries them over.
+# `default-features = false` keeps `cargo test --no-default-features` from
+# re-enabling the defaults (and linking libfreenect) through this
+# self-dependency. A plain `cargo test` still gets the defaults.
 varda = { path = ".", default-features = false, features = ["test-fixtures"] }
 
 [[bench]]
@@ -373,16 +297,12 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
-# NOTE: panic = "unwind" is required — multiple subsystems use catch_unwind
-# to isolate panics from corrupted media files, third-party imageproc code,
-# and background threads (see src/app/render.rs, src/usecases/api/runner.rs,
-# src/internal/surface/import.rs). Using "abort" makes all of those dead
-# code and any panic on any thread kills the process during a live show.
+# Required: catch_unwind isolates panics from bad media files, imageproc and
+# background threads. With "abort", any panic ends the show.
 panic = "unwind"
 
 [profile.bench]
-# Criterion is a runtime gate, so keep its edit-run cycle practical. Profiling
-# runs can opt back into symbols with `CARGO_PROFILE_BENCH_DEBUG=1`.
+# Fast bench builds. For profiling, add symbols with `CARGO_PROFILE_BENCH_DEBUG=1`.
 debug = false
 strip = "symbols"
 lto = false
@@ -397,10 +317,8 @@ opt-level = 3
 [profile.bench.package.dashu-base]
 opt-level = 3
 
-# Validated deep-zoom arithmetic is unusably slow without optimizing the bignum
-# backend: a 32-tile directional atlas takes over two minutes instead of about
-# fifteen seconds on the development profile. Keep Varda itself debuggable while
-# compiling only the arithmetic kernels as optimized dependencies.
+# The deep-zoom bignum math is unusably slow unoptimized; optimize only these
+# crates so Varda itself stays debuggable.
 [profile.dev.package.dashu-float]
 opt-level = 3
 

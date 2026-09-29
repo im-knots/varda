@@ -1,19 +1,18 @@
 //! Per-surface warp editor: the stage editor's bottom-bar mode.
 //!
-//! Rendered by the bottom-bar dispatcher while the stage editor is open. Lives
-//! beside the stage editor because the two share the surface-selection key in
-//! [`stage_selection_id`], which `stage/mod.rs` publishes and this module reads.
+//! Shares the surface-selection key [`stage_selection_id`] with the stage
+//! editor, which publishes it; this module reads it.
 
 use super::super::super::{SurfaceUI, UIActions, UIData};
 use crate::engine::EngineCommand;
 
-/// Shared context-memory key: the stage editor publishes its current surface
-/// selection here so the bottom detail bar can target it.
+/// Context-memory key where the stage editor publishes its surface selection
+/// for the bottom detail bar.
 pub(crate) fn stage_selection_id() -> egui::Id {
     egui::Id::new("varda_stage_selected_surfaces")
 }
 
-/// Upper bound on grid resolution offered by the steppers (engine clamps to 64).
+/// Maximum grid resolution offered by the steppers (the engine clamps to 64).
 const UI_MAX_WARP_SUBDIVISIONS: u32 = 16;
 
 /// `(cols, rows)` of a surface's warp. `None` or a corner-pin reads as 2×2.
@@ -166,7 +165,7 @@ fn render_surface_warp_editor(
                 ));
             }
             ui.separator();
-            // Curve ↔ grid mode toggle (8i.6).
+            // Curve/grid mode toggle.
             if is_bezier {
                 if ui
                     .small_button("⊞ Grid")
@@ -201,9 +200,8 @@ fn render_surface_warp_editor(
         });
     });
 
-    // Canvas sized to the remaining bottom-bar space, at the render aspect: the
-    // warp cage is in normalised output coordinates, so a 16:9 canvas would put
-    // the control points somewhere other than where they land on the output.
+    // Canvas fills the remaining bottom-bar space at the render aspect, since the
+    // warp cage is in normalized output coordinates.
     let avail = ui.available_size();
     let canvas = crate::usecases::ui::panels::utils::preview_size(
         egui::vec2((avail.x - 8.0).max(64.0), (avail.y - 4.0).max(64.0)),
@@ -229,7 +227,7 @@ fn render_surface_warp_editor(
         ]
     };
 
-    // Bezier warp: dedicated cage editor (anchors + tangent handles).
+    // Bezier warp uses the dedicated cage editor.
     if let Some(WarpMode::Bezier(b)) = &surface.warp {
         render_bezier_canvas(ui, b, &uuid, bound, canvas_rect, &resp, actions);
         return;
@@ -252,8 +250,7 @@ fn render_surface_warp_editor(
                 handles.push((r, c, *corner));
             }
         }
-        // Bezier cage handles are drawn/edited by a dedicated overlay (8i.6);
-        // no mesh-point handles here.
+        // Bezier cage handles are drawn by their own overlay.
         Some(WarpMode::Bezier(_)) => {}
         None => {
             let [x, y, w, h] = surface_bbox(surface);
@@ -374,8 +371,8 @@ fn render_surface_warp_editor(
     ui.memory_mut(|m| m.data.insert_temp(state_id, dragging));
 }
 
-/// Build the subdivision action for the warp steppers: in bezier mode this
-/// resizes the anchor cage, otherwise the mesh grid.
+/// Subdivision command for the warp steppers: resizes the anchor cage in bezier
+/// mode, otherwise the mesh grid.
 fn subdiv_action(is_bezier: bool, uuid: String, cols: u32, rows: u32) -> EngineCommand {
     if is_bezier {
         EngineCommand::SetBezierCageSubdivisions {
@@ -407,7 +404,7 @@ enum BezDrag {
     },
 }
 
-/// Bezier warp cage editor (8i.6): faint tessellated grid + control cage
+/// Bezier warp cage editor: faint tessellated grid plus the control cage
 /// (anchors, tangent handles, connector lines) with drag interaction.
 fn render_bezier_canvas(
     ui: &mut egui::Ui,
@@ -435,7 +432,7 @@ fn render_bezier_canvas(
     let ac = b.anchor_cols as usize;
     let ar = b.anchor_rows as usize;
 
-    // 1. Faint tessellated grid — shows the actual smooth warped surface.
+    // 1. Faint tessellated grid showing the warped surface.
     let mesh = b.tessellate();
     let (cc, rr) = (mesh.cols as usize, mesh.rows as usize);
     let grid = egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(70, 90, 120));
@@ -451,7 +448,7 @@ fn render_bezier_canvas(
         }
     }
 
-    // 2. Handle positions (drawn + hit-tested with priority over anchors).
+    // 2. Handle positions; handles are hit-tested before anchors.
     let mut handles: Vec<(BezDrag, [f32; 2])> = Vec::new();
     for r in 0..ar {
         for c in 0..ac - 1 {
@@ -500,7 +497,7 @@ fn render_bezier_canvas(
         }
     }
 
-    // 3. Connector lines (anchor → its tangent handles).
+    // 3. Connector lines from each anchor to its tangent handles.
     let hstroke = egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(150, 150, 90));
     for r in 0..ar {
         for c in 0..ac - 1 {
@@ -538,7 +535,7 @@ fn render_bezier_canvas(
         }
     }
 
-    // 6. Drag interaction (handles take priority over anchors on tie).
+    // 6. Drag interaction; handles win ties with anchors.
     let state_id = ui.id().with("surface_bezier_warp").with(uuid);
     let mut drag: Option<BezDrag> = ui
         .memory(|m| m.data.get_temp::<Option<BezDrag>>(state_id))

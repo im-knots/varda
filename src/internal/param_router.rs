@@ -1,23 +1,18 @@
 //! Shared parameter path router for external control protocols (MIDI, OSC).
 //!
-//! Maps path strings like `deck/<uuid>/opacity` or `mod/<uuid>/frequency` to
-//! concrete mixer mutations. All values are normalized 0.0–1.0 and scaled
-//! to the target parameter's native range.
+//! Maps paths like `deck/<uuid>/opacity` or `mod/<uuid>/frequency` to mixer
+//! mutations. Values are normalized 0.0–1.0 and scaled to each parameter's
+//! range.
 //!
-//! Entities are addressed by **stable UUID**, never positional index — decks,
-//! channels, effects, and modulation sources all carry 8-char hex UUIDs (see
-//! `/spec/entity-identity.md`). Reordering a chain or rack therefore never
-//! retargets a saved binding. Resolution failures return a structured
-//! [`ParamRouteError`] so callers can log or surface the specific reason
-//! rather than a silent no-op (see `/spec/parameter-routing.md`).
+//! Entities are addressed by UUID, so reordering a chain does not retarget a
+//! saved binding. Failures return a [`ParamRouteError`] with the reason.
 
 use crate::engine::value::param::{DeckTarget, ModulatorTarget, ParamAddress};
 use crate::mixer::Mixer;
 use crate::modulation::ModulationSource;
 use crate::params::{ParamValue, clamp_norm};
 
-/// The class of entity a path segment addresses. Used in [`ParamRouteError`]
-/// to describe *what* failed to resolve.
+/// The kind of entity a path segment addresses, for [`ParamRouteError`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntityKind {
     Deck,
@@ -42,14 +37,12 @@ impl std::fmt::Display for EntityKind {
     }
 }
 
-/// Why a parameter path failed to apply. Replaces the previous bare `bool`
-/// so MIDI/OSC/API callers can log the specific reason instead of silently
-/// dropping the mutation.
+/// Why a parameter path failed to apply.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParamRouteError {
     /// The path did not match any known parameter route.
     UnknownPath { path: String },
-    /// A structurally-valid path referenced an entity UUID that does not exist.
+    /// A valid path named an entity UUID that does not exist.
     UnknownEntity { kind: EntityKind, id: String },
     /// An index (e.g. a step-sequencer step) is out of range for its container.
     IndexOutOfRange {
@@ -57,8 +50,8 @@ pub enum ParamRouteError {
         index: usize,
         len: usize,
     },
-    /// The entity resolved but is in a state that can't accept this mutation
-    /// (e.g. a deck with no auto-transition, or a non-step-sequencer modulator).
+    /// The entity cannot accept this mutation in its current state (a deck
+    /// with no auto-transition, a modulator that is not a step sequencer).
     WrongState { path: String, reason: &'static str },
     /// The entity resolved but the named sub-parameter is unknown.
     UnknownParam { scope: &'static str, name: String },
@@ -95,8 +88,8 @@ impl std::fmt::Display for ParamRouteError {
 
 impl std::error::Error for ParamRouteError {}
 
-/// Convert an inner "did the mixer op succeed" bool into a `Result`, attributing
-/// a `false` to a [`ParamRouteError::WrongState`] with the given reason.
+/// Map a mixer op's success flag to a `Result`; `false` becomes
+/// [`ParamRouteError::WrongState`] with `reason`.
 fn ok_or_state(applied: bool, path: &str, reason: &'static str) -> Result<(), ParamRouteError> {
     if applied {
         Ok(())
@@ -108,15 +101,10 @@ fn ok_or_state(applied: bool, path: &str, reason: &'static str) -> Result<(), Pa
     }
 }
 
-/// The modulation key a live write to `path` takes back from automation: the
-/// canonical path itself. `video/seek` resolves to the playhead,
-/// `video/position`. Returns `None` for routes a live write does not override:
-/// triggers, in and out points (the reference a position offset is scaled
-/// against), and macro and modulator values, which are controls rather than
-/// the parameters they drive.
-///
-/// See /spec/arrangement.md § Live override and
-/// /spec/video-playback-modulation.md § Router and Addressing.
+/// The modulation key a live write to `path` overrides: its canonical path
+/// (`video/seek` becomes `video/position`). `None` for triggers, in and out
+/// points, and macro and modulator values, which a live write does not
+/// override.
 pub fn modulation_key_for_path(path: &str) -> Option<String> {
     let address: ParamAddress = path.parse().ok()?;
     let overridable = address.is_modulatable()
@@ -127,8 +115,8 @@ pub fn modulation_key_for_path(path: &str) -> Option<String> {
     overridable.then(|| address.to_string())
 }
 
-/// The canonical modulation key for a target a client sent: a router path, or
-/// the pre-v8 `deck_<uuid>:<name>` family, which API clients may still send.
+/// The canonical modulation key for a client target: a router path or the
+/// pre-v8 `deck_<uuid>:<name>` form.
 ///
 /// # Errors
 ///
@@ -146,10 +134,9 @@ pub fn canonical_modulation_key(target: &str) -> Result<String, ParamRouteError>
         })
 }
 
-/// The normalized (0.0–1.0) value a write to `address` would take, read back
-/// from the mixer: what a controller's LEDs show. Mute and solo read as 0 or 1.
-/// A shader parameter without a declared range reads as its raw value.
-/// `None` when the address names nothing readable or nothing that exists.
+/// The normalized (0.0–1.0) value at `address`, read from the mixer for
+/// controller feedback. Mute and solo read as 0 or 1; a shader parameter
+/// without a declared range reads raw. `None` when nothing readable exists.
 pub fn read_param(mixer: &Mixer, address: &ParamAddress) -> Option<f32> {
     match address {
         ParamAddress::Crossfader => Some(mixer.crossfader()),
@@ -173,7 +160,7 @@ pub fn read_param(mixer: &Mixer, address: &ParamAddress) -> Option<f32> {
             let location = mixer.find_effect_by_uuid(effect)?;
             read_normalized(&mixer.effect_at(location)?.params, param)
         }
-        // Outputs and surfaces are not mixer state; the app reads them.
+        // Outputs and surfaces are read by the app, not the mixer.
         ParamAddress::Action(_)
         | ParamAddress::CueFire { .. }
         | ParamAddress::Modulator { .. }
@@ -204,9 +191,8 @@ fn read_normalized(params: &crate::ShaderParams, name: &str) -> Option<f32> {
         .or_else(|| params.get_float(name))
 }
 
-/// Write one target of a macro's modulated fan-out, skipping a target that no
-/// longer resolves. The [`crate::mixer::ParamWriter`] the app hands the mixer
-/// each frame.
+/// Write one target of a macro's modulated fan-out, skipping targets that do
+/// not resolve. Used as the per-frame [`crate::mixer::ParamWriter`].
 pub fn write_macro_target(mixer: &mut Mixer, path: &str, value: f32) {
     if let Err(e) = apply_param_by_path(mixer, path, value) {
         log::debug!("macro modulation target '{path}' skipped: {e}");
@@ -232,19 +218,15 @@ fn effect_params_mut<'m>(
     Ok(&mut chain[idx].params)
 }
 
-/// Apply a normalized value (0.0–1.0) to the parameter at the given path.
-/// Returns `Ok(())` if the path resolved and the mutation was applied, or a
-/// [`ParamRouteError`] describing why it did not.
+/// Apply a normalized value (0.0–1.0) to the parameter at `path`.
 ///
 /// # Errors
 ///
 /// Returns [`ParamRouteError::UnknownPath`] if `path` matches no route,
-/// [`ParamRouteError::UnknownEntity`] if a UUID or index in the path does not
-/// resolve to a live channel/deck/effect/macro,
+/// [`ParamRouteError::UnknownEntity`] if a UUID or index does not resolve,
 /// [`ParamRouteError::IndexOutOfRange`] if an index exceeds its container,
-/// [`ParamRouteError::UnknownParam`] if the named sub-parameter does not exist,
-/// and [`ParamRouteError::WrongState`] if the route resolved but the entity is
-/// in a state that cannot accept the mutation.
+/// [`ParamRouteError::UnknownParam`] if the sub-parameter does not exist,
+/// and [`ParamRouteError::WrongState`] if the entity cannot accept the write.
 pub fn apply_param_by_path(
     mixer: &mut Mixer,
     path: &str,
@@ -351,10 +333,8 @@ pub fn apply_param_by_path(
                 .set_value(0.1 + f64::from(value) * (max - 0.1));
             Ok(())
         }
-        // A control of the deck's source, by the route its source type
-        // declares (`video/speed`, `capture/rate`, `scaling_mode`, ...). The
-        // source maps the normalized value onto its own range.
-        // See /spec/deck-source-providers.md.
+        // A source control (`video/speed`, `capture/rate`, ...). The source
+        // maps the normalized value onto its own range.
         ParamAddress::Deck {
             deck: uuid,
             target: DeckTarget::Source(route),
@@ -384,9 +364,8 @@ pub fn apply_param_by_path(
             }
             Ok(())
         }
-        // Depth-sensor *preprocessor* params, distinct from the point-cloud
-        // params above: these configure the fields fed to a shader that declared
-        // `depth_sensor`. See spec/depth-sensor-preprocessor.md.
+        // Depth-sensor preprocessor params for a shader that declares
+        // `depth_sensor`.
         ParamAddress::Deck {
             deck: uuid,
             target: DeckTarget::DepthPreprocess(name),
@@ -465,18 +444,16 @@ pub fn apply_param_by_path(
             apply_mod_param(&mut entry.source, param_name, value)
         }
         ParamAddress::MacroValue { macro_uuid } => {
-            // Feed the macro; it returns the parameter writes to fan out. Global
-            // app actions (undo/save/tap) are queued on the bank for the app layer
-            // to drain (see app/inputs.rs). Targets are never `macro/*` paths
-            // (filtered in the fan-out), so recursion depth is bounded at 1.
+            // The macro returns the writes to fan out. App actions (undo, save,
+            // tap) are queued on the bank for app/inputs.rs. Targets are never
+            // `macro/*` paths, so recursion depth is at most 1.
             let fanout = mixer
                 .macros_mut()
                 .apply_input(macro_uuid, value)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Macro, macro_uuid))?;
             for (target_path, target_value) in fanout {
                 if let Err(e) = apply_param_by_path(mixer, &target_path, target_value) {
-                    // A macro target may reference a deleted/absent entity; log at
-                    // debug rather than failing the whole macro turn.
+                    // A target may name a deleted entity; log and keep going.
                     log::debug!("macro {macro_uuid} target '{target_path}' skipped: {e}");
                 }
             }
@@ -490,19 +467,13 @@ pub fn apply_param_by_path(
 
 /// Apply a typed [`ParamValue`] to the parameter at the given path.
 ///
-/// For the shader/effect **param** paths this preserves the value's type —
-/// `Color`/`Point2D`/`Bool`/`Long` are written intact, and `Float` is
-/// normalized-scaled against the ISF definition exactly as the fader path does.
-/// Every other (inherently scalar) path delegates to [`apply_param_by_path`]
-/// after flattening the value to a normalized f32.
-///
-/// This is the entry point for the engine `set_param` trait; MIDI/OSC continue
-/// to use the normalized-f32 [`apply_param_by_path`].
+/// Shader and effect `param` paths keep the value's type; `Float` is scaled
+/// against the ISF range like a fader. Other paths flatten the value and call
+/// [`apply_param_by_path`]. Used by the engine's `set_param`.
 ///
 /// # Errors
 ///
-/// Same failure modes as [`apply_param_by_path`]: an unknown path, a UUID/index
-/// that no longer resolves, or a resolved route that the mixer refused.
+/// Same as [`apply_param_by_path`].
 pub fn apply_typed_param_by_path(
     mixer: &mut Mixer,
     path: &str,
@@ -526,14 +497,14 @@ pub fn apply_typed_param_by_path(
             effect,
             param: name,
         } => apply_typed_param(effect_params_mut(mixer, effect)?, name, value),
-        // Inherently-scalar paths (opacity, crossfader, video, mod, …): flatten.
+        // Scalar paths (opacity, crossfader, video, mod, ...).
         _ => apply_param_by_path(mixer, path, param_value_to_norm_f32(&value)),
     }
 }
 
 /// Flatten a [`ParamValue`] to the normalized f32 the scalar router expects.
-/// Non-scalar values collapse to their first component (colors → R, points → x);
-/// this is only used for paths that are inherently scalar.
+/// Non-scalar values collapse to their first component (colors to R, points
+/// to x).
 pub fn param_value_to_norm_f32(value: &ParamValue) -> f32 {
     match value {
         ParamValue::Float(v) => *v,
@@ -552,24 +523,19 @@ pub fn param_value_to_norm_f32(value: &ParamValue) -> f32 {
 
 /// Set a typed value on a shader param, coerced to the param's declared ISF type.
 ///
-/// The stored value's variant *is* the declared type, and it decides how the
-/// incoming value applies: a `long` takes a discrete choice index, a `bool` a
-/// flag, a `float` a normalized 0.0–1.0 fraction scaled against the param's
-/// range (matching the fader path). `Color` and `Point2D` keep their full
-/// channel data.
+/// The stored variant is the declared type: a `long` takes a choice index, a
+/// `bool` a flag, a `float` a normalized fraction of its range. `Color` and
+/// `Point2D` keep all channels.
 ///
-/// [`ParamValue`] is `#[serde(untagged)]` with `Float` listed first, so every JSON number an API
-/// client sends deserializes as `Float` whatever the param really is. Writing
-/// that straight into a `long` leaves the shader reading a float's bit pattern
-/// as an integer: `2.0` arrives as 1073741824, no `mode ==` branch matches, and
-/// the effect silently passes its input through. Only index 0 ever worked,
-/// because `0.0f32` and `0i32` share a bit pattern.
+/// [`ParamValue`] is untagged with `Float` first, so every JSON number arrives
+/// as `Float`. It must be converted before writing to a `long`, or the shader
+/// reads the float's bit pattern as an integer.
 ///
 /// # Errors
 ///
 /// Returns [`ParamRouteError::UnknownParam`] if the shader has no param by that
-/// name, and [`ParamRouteError::WrongState`] if a scalar is aimed at a `color`
-/// or `point2D` param, rather than dropping either write silently.
+/// name, and [`ParamRouteError::WrongState`] if a scalar targets a `color` or
+/// `point2D` param.
 fn apply_typed_param(
     params: &mut crate::ShaderParams,
     name: &str,
@@ -587,9 +553,7 @@ fn apply_typed_param(
         ParamValue::Float(_) => {
             apply_float_param_scaled(params, name, param_value_to_norm_f32(&value));
         }
-        // Color and point params carry per-channel data of a fixed width, so
-        // only the matching variant is written: a scalar cannot describe one,
-        // and a 4-channel color is not a 2-channel point.
+        // Color and point params accept only their own variant.
         ParamValue::Color(_) => {
             let ParamValue::Color(c) = value else {
                 return Err(ParamRouteError::WrongState {
@@ -613,7 +577,7 @@ fn apply_typed_param(
 }
 
 /// Flatten a [`ParamValue`] to the discrete index a `long` param stores.
-/// Floats round to nearest so a fader landing on 1.999 still selects variant 2.
+/// Floats round to nearest, so 1.999 selects variant 2.
 fn param_value_to_index(value: &ParamValue) -> i32 {
     match value {
         ParamValue::Long(i) => *i,
@@ -669,7 +633,7 @@ fn apply_mod_param(
             noise_gate,
             ..
         } => match param_name {
-            // Native ranges match the UI sliders (see modulation panel).
+            // Native ranges match the modulation panel sliders.
             "freq_low" => *freq_low = 20.0 + clamp_norm(value) * (20000.0 - 20.0),
             "freq_high" => *freq_high = 20.0 + clamp_norm(value) * (20000.0 - 20.0),
             "gain" => *gain = clamp_norm(value) * 4.0,
@@ -725,10 +689,8 @@ fn apply_mod_param(
                 });
             }
         },
-        // An envelope's shape is its breakpoints, which are edited as a curve
-        // rather than driven as a scalar. Keeping it out of the router is what
-        // keeps envelope parameters unmodulatable, which /spec/automation.md
-        // § Performance relies on.
+        // Envelope breakpoints are edited as a curve, not routed, so envelope
+        // parameters stay unmodulatable.
         ModulationSource::Envelope { .. } => {
             return Err(ParamRouteError::UnknownParam {
                 scope: "Envelope",
@@ -739,7 +701,7 @@ fn apply_mod_param(
     Ok(())
 }
 
-/// Apply a normalized 0.0–1.0 value to a float param, scaling to the param's min/max range.
+/// Apply a normalized 0.0–1.0 value to a float param, scaled to its range.
 fn apply_float_param_scaled(params: &mut crate::ShaderParams, name: &str, normalized: f32) {
     // `tint/r`: one channel of a color or axis of a point.
     if let Some((base, component)) = crate::engine::value::param::Component::split(name)
@@ -758,8 +720,8 @@ fn apply_float_param_scaled(params: &mut crate::ShaderParams, name: &str, normal
     }
 }
 
-/// Clamp a value to 0.0–1.0, treating non-finite input as `1.0` (used for
-/// opacity, where a garbled value should fail safe to fully-visible).
+/// Clamp to 0.0–1.0. Non-finite input becomes `1.0`, so a bad opacity value
+/// leaves the layer visible.
 fn clamp_or_full(value: f32) -> f32 {
     if value.is_finite() {
         value.clamp(0.0, 1.0)
@@ -768,10 +730,10 @@ fn clamp_or_full(value: f32) -> f32 {
     }
 }
 
-/// Toggle a parameter between its two extremes (keyboard shortcut affordance).
+/// Toggle a parameter between its extremes, for keyboard shortcuts.
 ///
-/// Floats snap 0↔1. Bools invert. Mute/solo flip. Trigger forces opacity to 1.0.
-/// Modulation paths are rejected: those values are continuous, not two-state.
+/// Floats snap 0↔1, bools and mute/solo flip, and trigger sets opacity to 1.0.
+/// Modulation paths are rejected.
 ///
 /// # Errors
 ///
@@ -874,7 +836,7 @@ pub fn toggle_param_by_path(mixer: &mut Mixer, path: &str) -> Result<(), ParamRo
             deck: uuid,
             target: DeckTarget::Transparent,
         } => toggle_transparent(mixer, uuid),
-        // A source control snaps between its extremes; an action just fires.
+        // A source control snaps between its extremes; an action fires.
         ParamAddress::Deck {
             deck: uuid,
             target: DeckTarget::Source(route),
@@ -916,9 +878,8 @@ fn toggle_param_value(val: &mut ParamValue) {
 mod tests {
     use super::*;
 
-    /// A control surface writes a path and the modulation graph is keyed by
-    /// something else, so a missing translation here is a fader that silently
-    /// fails to take its parameter back from a curve.
+    /// Every routable path must map to a modulation key, or a fader cannot
+    /// override automation.
     #[test]
     fn a_path_that_names_an_automatable_parameter_finds_its_key() {
         for (path, key) in [
@@ -954,8 +915,8 @@ mod tests {
         }
     }
 
-    /// A video playback key cannot collide with a shader input of the same
-    /// nickname on the same deck: shader inputs live under `param/`.
+    /// Video playback keys do not collide with shader inputs, which live under
+    /// `param/`.
     #[test]
     fn a_shader_param_named_speed_is_not_the_video_speed_target() {
         assert_ne!(
@@ -964,10 +925,8 @@ mod tests {
         );
     }
 
-    /// The crossfader is routable but deliberately not a modulation target,
-    /// and a trigger is an event rather than a value. Which source controls
-    /// are modulatable is the source type's schema, checked by the engine when
-    /// an assignment is made, so a source route always has a key here.
+    /// The crossfader and triggers have no key. Source routes always have one;
+    /// the engine checks the source schema when assigning.
     #[test]
     fn a_path_that_names_nothing_automatable_has_no_key() {
         for path in [
@@ -1008,8 +967,6 @@ mod tests {
 
     #[test]
     fn mod_param_audio_band_params_are_routable() {
-        // Regression: freq_low/freq_high/gain/noise_gate were previously silent
-        // no-ops (only `smoothing` was handled).
         let mut src =
             ModulationSource::audio_from_preset(crate::modulation::AudioBandPreset::Low, None);
         assert!(apply_mod_param(&mut src, "freq_low", 0.0).is_ok());
@@ -1030,7 +987,7 @@ mod tests {
         }
     }
 
-    // ── WS3(a): typed value path preserves non-scalar params ──────────
+    // ── Typed value path preserves non-scalar params ──────────
 
     fn color_params() -> crate::ShaderParams {
         let input: crate::isf::ISFInput = serde_json::from_value(serde_json::json!({
@@ -1106,11 +1063,8 @@ mod tests {
 
     #[test]
     fn long_param_survives_a_json_number_arriving_as_float() {
-        // Regression: `ParamValue` is `#[serde(untagged)]` with `Float` first, so
-        // `{"value": 2}` from the HTTP API deserializes as `Float(2.0)`. Writing
-        // that into a `long` left the shader reading 2.0f32's bit pattern as an
-        // int (1073741824), matching no branch, so mirror/blend/mode-style
-        // effects silently passed their input through for every index but 0.
+        // `{"value": 2}` from the API deserializes as `Float(2.0)` and must
+        // land in a `long` as index 2.
         let mut params = mode_params();
         apply_typed_param(&mut params, "mode", ParamValue::Float(2.0)).unwrap();
         assert!(
@@ -1194,7 +1148,7 @@ mod tests {
             apply_typed_param(&mut params, "tint", ParamValue::Float(0.5)),
             Err(ParamRouteError::WrongState { .. })
         ));
-        // The original colour must survive the refused write.
+        // The original color must survive the refused write.
         assert!(matches!(
             params.values.get("tint"),
             Some(ParamValue::Color([0.0, 0.0, 0.0, 1.0]))

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// ISF shader metadata parsed from JSON header
+/// ISF shader metadata from the JSON header.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ISFMetadata {
     /// Shader description
@@ -32,32 +32,32 @@ pub struct ISFMetadata {
     #[serde(rename = "PERSISTENT_BUFFERS")]
     pub persistent_buffers: Option<Vec<String>>,
 
-    /// VSN (Version) - ISF spec version
+    /// ISF spec version.
     #[serde(rename = "VSN")]
     pub vsn: Option<String>,
 
-    /// Phase input mappings: which params drive which phase accumulators
+    /// Which params drive which phase accumulators.
     #[serde(rename = "PHASE_INPUTS")]
     pub phase_inputs: Option<Vec<PhaseInput>>,
 
-    /// Preprocessor declarations (analyzers whose outputs are bound as textures/uniforms)
+    /// Analyzers whose outputs are bound as textures/uniforms.
     #[serde(rename = "PREPROCESSORS", default)]
     pub preprocessors: Vec<ISFPreprocessor>,
 
-    /// Shader type: None for fragment shaders, Some("compute") for compute shaders
+    /// `None` for fragment shaders, `Some("compute")` for compute shaders.
     #[serde(rename = "TYPE")]
     pub shader_type: Option<String>,
 
-    /// Compute shader configuration (only present for TYPE="compute")
+    /// Only present for `TYPE="compute"`.
     #[serde(rename = "COMPUTE")]
     pub compute: Option<ComputeConfig>,
 
-    /// Storage buffer declarations (only for compute shaders)
+    /// Compute shaders only.
     #[serde(rename = "BUFFERS", default)]
     pub buffers: Vec<StorageBufferDecl>,
 }
 
-/// Compute shader dispatch configuration
+/// Compute shader dispatch config.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComputeConfig {
     /// Workgroup size [x, y, z]
@@ -68,9 +68,8 @@ pub struct ComputeConfig {
     #[serde(rename = "DISPATCH")]
     pub dispatch: String,
 
-    /// Number of compute passes per frame (default 1).
-    /// Each pass dispatches with a different PASSINDEX value (0, 1, ..., num_passes-1).
-    /// Non-persistent storage buffers are cleared before pass 0.
+    /// Compute passes per frame (default 1). Each pass gets its own PASSINDEX
+    /// (`0..num_passes`). Non-persistent storage buffers are cleared before pass 0.
     #[serde(rename = "NUM_PASSES", default = "default_num_passes")]
     pub num_passes: u32,
 }
@@ -79,7 +78,7 @@ fn default_num_passes() -> u32 {
     1
 }
 
-/// Storage buffer declaration in compute shader metadata
+/// Storage buffer declaration for a compute shader.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageBufferDecl {
     /// Binding name in GLSL source
@@ -90,7 +89,7 @@ pub struct StorageBufferDecl {
     #[serde(rename = "TYPE")]
     pub buffer_type: String,
 
-    /// Struct name in GLSL source (informational)
+    /// Struct name in GLSL source (informational).
     #[serde(rename = "STRUCT")]
     pub struct_name: Option<String>,
 
@@ -98,28 +97,28 @@ pub struct StorageBufferDecl {
     #[serde(rename = "COUNT")]
     pub count: u32,
 
-    /// Byte size per element
+    /// Bytes per element.
     #[serde(rename = "STRIDE")]
     pub stride: u32,
 
-    /// Whether buffer persists across frames
+    /// Whether the buffer persists across frames.
     #[serde(rename = "PERSISTENT", default)]
     pub persistent: bool,
 }
 
-/// Declares a preprocessor dependency — an analyzer whose texture/uniform outputs
-/// the shader wants injected as bindings.
+/// A preprocessor dependency: an analyzer whose texture/uniform outputs are
+/// injected into the shader as bindings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ISFPreprocessor {
-    /// Shader-visible name prefix (e.g. "depth" → `depth_depth_map` uniform)
+    /// Shader-visible name prefix (e.g. "depth" → `depth_depth_map` uniform).
     #[serde(rename = "NAME")]
     pub name: String,
 
-    /// Analyzer type to source from (e.g. "`depth_estimate`", "`edge_detect`", "`face_detect`")
+    /// Analyzer type (e.g. "`depth_estimate`", "`edge_detect`", "`face_detect`").
     #[serde(rename = "TYPE")]
     pub preprocessor_type: String,
 
-    /// Options passed to the analyzer when starting it
+    /// Options passed to the analyzer on start.
     #[serde(rename = "OPTIONS", default)]
     pub options: serde_json::Value,
 
@@ -131,13 +130,12 @@ pub struct ISFPreprocessor {
     #[serde(rename = "PHASE_BINDINGS", default)]
     pub phase_bindings: HashMap<String, usize>,
 
-    /// Texture format the shader consumes this preprocessor's payload in.
+    /// Texture format of this preprocessor's payload.
     ///
-    /// `"rgba8unorm"` (the default) binds filterable and suits anything the
-    /// shader samples. `"rgba32float"` binds as a non-filterable data texture
-    /// — one `texelFetch` returns four raw floats with no byte unpacking —
-    /// and is only legal for shaders that read the texture exclusively with
-    /// `texelFetch`/`textureSize`, never `texture()`.
+    /// `"rgba8unorm"` (default) is filterable. `"rgba32float"` is a
+    /// non-filterable data texture (one `texelFetch` returns four raw floats)
+    /// and works only if the shader reads it with `texelFetch`/`textureSize`,
+    /// never `texture()`.
     #[serde(rename = "FORMAT", default = "default_preprocessor_format")]
     pub format: String,
 }
@@ -146,60 +144,55 @@ fn default_preprocessor_format() -> String {
     "rgba8unorm".into()
 }
 
-/// ISF input definition
+/// ISF input definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ISFInput {
-    /// Input name (used as uniform variable name)
+    /// Also the uniform variable name.
     #[serde(rename = "NAME")]
     pub name: String,
 
-    /// Input type: "float", "color", "image", "audio", "audioFFT", "bool", "long", "event", "point2D"
+    /// "float", "color", "image", "audio", "audioFFT", "bool", "long", "event", or "point2D".
     #[serde(rename = "TYPE")]
     pub input_type: String,
 
-    /// Default value (type depends on TYPE)
+    /// Type depends on `TYPE`.
     #[serde(rename = "DEFAULT")]
     pub default: Option<serde_json::Value>,
 
-    /// Minimum value (for numeric types)
+    /// Numeric types only.
     #[serde(rename = "MIN")]
     pub min: Option<f32>,
 
-    /// Maximum value (for numeric types)
+    /// Numeric types only.
     #[serde(rename = "MAX")]
     pub max: Option<f32>,
 
-    /// Label for UI display
+    /// UI label.
     #[serde(rename = "LABEL")]
     pub label: Option<String>,
 
-    /// Values for "long" (enum) type
+    /// Values for the "long" (enum) type.
     #[serde(rename = "VALUES")]
     pub values: Option<Vec<serde_json::Value>>,
 
-    /// Labels for enum values
+    /// Labels for enum values.
     #[serde(rename = "LABELS")]
     pub labels: Option<Vec<String>>,
 
-    /// Identity value (for image inputs)
+    /// Image inputs only.
     #[serde(rename = "IDENTITY")]
     pub identity: Option<bool>,
 
-    /// Inspector section this input belongs to. A Varda extension, optional and
-    /// ignorable: inputs without one form a single unnamed group rendered first,
-    /// which is how every shader behaved before groups existed.
-    /// See /spec/parameter-inspector.md.
+    /// Inspector section, a Varda extension. Inputs without one form a single
+    /// unnamed group shown first.
     #[serde(rename = "GROUP")]
     pub group: Option<String>,
 }
 
 impl ISFInput {
-    /// The selectable options of a `long` input, as `(value, label)` pairs.
-    ///
-    /// Returned as one list so the two halves cannot disagree on length, which
-    /// `VALUES` and `LABELS` are free to do. `LABELS` alone is enough (the index
-    /// becomes the value), and a value with no label falls back to its integer.
-    /// Empty for every other input type.
+    /// The options of a `long` input, as `(value, label)` pairs, so `VALUES` and
+    /// `LABELS` can't disagree on length. `LABELS` alone works (index becomes
+    /// value); a value without a label shows its integer. Empty for other types.
     pub fn choices(&self) -> Vec<(i32, String)> {
         if self.input_type != "long" {
             return Vec::new();
@@ -230,49 +223,48 @@ impl ISFInput {
     }
 }
 
-/// ISF pass definition for multi-pass rendering
+/// Pass definition for multi-pass rendering.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ISFPass {
-    /// Target buffer name (None for final pass that renders to screen)
+    /// Target buffer name; `None` for the final pass to the screen.
     #[serde(rename = "TARGET")]
     pub target: Option<String>,
 
-    /// Persistent flag (buffer persists across frames)
+    /// Buffer persists across frames.
     #[serde(rename = "PERSISTENT")]
     pub persistent: Option<bool>,
 
-    /// Width expression (e.g., "$WIDTH", "$WIDTH/2")
+    /// Width expression (e.g. "$WIDTH", "$WIDTH/2").
     #[serde(rename = "WIDTH")]
     pub width: Option<String>,
 
-    /// Height expression
+    /// Height expression.
     #[serde(rename = "HEIGHT")]
     pub height: Option<String>,
 
-    /// Float flag (use floating-point texture)
+    /// Use a floating-point texture.
     #[serde(rename = "FLOAT")]
     pub float: Option<bool>,
 }
 
-/// Phase input mapping: which user parameter drives which phase accumulator
+/// Which user parameter drives which phase accumulator.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhaseInput {
-    /// Name of the user parameter that drives this accumulator (e.g., "`anim_speed`")
+    /// User parameter driving this accumulator (e.g. "`anim_speed`").
     #[serde(rename = "PARAM")]
     pub param: String,
 
-    /// Accumulator index (0–3)
+    /// Accumulator index (0–3).
     #[serde(rename = "INDEX")]
     pub index: usize,
 
-    /// Constant scale factor applied to `dt * param_value` (default 1.0)
+    /// Scale applied to `dt * param_value` (default 1.0).
     #[serde(rename = "SCALE", default = "default_scale")]
     pub scale: f32,
 
-    /// Additional parameters multiplied into the rate before integration, for the common
-    /// "master speed × per-element rate" shape. Accepts a bare string or an array of
-    /// names; absent means no extra factors.
-    /// See [/spec/phase-accumulators.md](/spec/phase-accumulators.md).
+    /// Extra parameters multiplied into the rate before integration, for
+    /// "master speed × per-element rate". A string or an array of names; absent
+    /// means none.
     #[serde(
         rename = "MULTIPLY_BY",
         default,
@@ -282,8 +274,7 @@ pub struct PhaseInput {
     pub multiply_by: Vec<String>,
 }
 
-/// Accept `"MULTIPLY_BY": "rot_speed"` and `"MULTIPLY_BY": ["a", "b"]` alike, so the
-/// single-factor case stays terse in shader metadata.
+/// Accepts `"MULTIPLY_BY": "rot_speed"` and `"MULTIPLY_BY": ["a", "b"]`.
 fn deserialize_multiply_by<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -306,20 +297,19 @@ fn default_scale() -> f32 {
     1.0
 }
 
-/// ISF imported resource definition
+/// Imported resource definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ISFImported {
-    /// Path to imported file
     #[serde(rename = "PATH")]
     pub path: Option<String>,
 
-    /// Type of import (e.g., "image")
+    /// Import type (e.g. "image").
     #[serde(rename = "TYPE")]
     pub import_type: Option<String>,
 }
 
 impl ISFMetadata {
-    /// Check if this shader is a generator (no image inputs)
+    /// Generator: no image inputs.
     pub fn is_generator(&self) -> bool {
         if let Some(inputs) = &self.inputs {
             !inputs.iter().any(|input| input.input_type == "image")
@@ -328,19 +318,18 @@ impl ISFMetadata {
         }
     }
 
-    /// Check if this shader is a filter (has image inputs)
+    /// Filter: has image inputs.
     pub fn is_filter(&self) -> bool {
         !self.is_generator()
     }
 
-    /// Check if this shader is a transition (has "Transition" category)
+    /// Transition: has the "Transition" category.
     pub fn is_transition(&self) -> bool {
         self.categories
             .as_ref()
             .is_some_and(|cats| cats.iter().any(|c| c.eq_ignore_ascii_case("transition")))
     }
 
-    /// Check if this shader is audio reactive
     pub fn is_audio_reactive(&self) -> bool {
         if let Some(inputs) = &self.inputs {
             inputs
@@ -351,12 +340,11 @@ impl ISFMetadata {
         }
     }
 
-    /// Check if this shader is a compute shader
     pub fn is_compute(&self) -> bool {
         self.shader_type.as_deref() == Some("compute")
     }
 
-    /// Get all categories as a single string
+    /// All categories as one string.
     pub fn categories_string(&self) -> String {
         self.categories
             .as_ref()

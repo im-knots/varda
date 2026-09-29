@@ -1,7 +1,7 @@
 //! egui adapter for the domain keymap.
 //!
-//! `internal/keymap` stores string key names and modifier flags. This module
-//! is the only place that converts those names to and from `egui::Key`.
+//! `internal/keymap` stores string key names; this is the only module that
+//! converts them to and from `egui::Key`.
 
 use crate::keymap::KeyCombo;
 

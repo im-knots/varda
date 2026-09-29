@@ -1,34 +1,23 @@
-//! Scratch workspace allocation for tests.
-//!
-//! Available to unit tests via `cfg(test)` and to integration tests via the
-//! `test-fixtures` feature, which `[dev-dependencies]` turns on for the
-//! self-referential `varda` dependency.
+//! Test helpers. Integration tests get them through the `test-fixtures`
+//! feature, which `[dev-dependencies]` enables.
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// A fresh, isolated workspace root for one `VardaApp`.
+/// A fresh workspace root for one `VardaApp`.
 ///
-/// Every test that constructs a `VardaApp` must pass this to `--workspace`.
-/// Without the flag, [`crate::app::AppConfig`] resolves the workspace from the
-/// current directory when it contains a `.varda/`, and under `cargo test` the
-/// current directory is the crate root — so on a developer machine with a real
-/// workspace checked out beside the source, the engine binds to their live show
-/// data. One test that saves is then enough to overwrite scene, stage, MIDI,
-/// keymap, and OSC config with engine defaults. That has happened; see
-/// spec/persistence.md § Test isolation.
+/// Every test that builds a `VardaApp` must pass this to `--workspace`.
+/// Otherwise [`crate::app::AppConfig`] uses the current directory's `.varda/`,
+/// which under `cargo test` is the crate root and may hold a developer's real
+/// show data.
 ///
-/// Each call returns its own directory, so tests stay independent of each other
-/// and of execution order even when they save. The directories live under a
-/// single per-process temporary root that is intentionally never cleaned up:
-/// the callers hand back only the app, so there is no owner to tie a
-/// [`tempfile::TempDir`] guard to.
+/// Each call returns a new directory under one per-process temp root. The
+/// root is never cleaned up, since no [`tempfile::TempDir`] guard has an owner.
 ///
 /// # Panics
 ///
-/// Panics if the temporary directory cannot be created, or if its path is not
-/// valid UTF-8 — both of which make the calling test unrunnable anyway.
+/// Panics if the directory cannot be created or its path is not UTF-8.
 pub fn temp_workspace() -> String {
     static ROOT: OnceLock<tempfile::TempDir> = OnceLock::new();
     static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -49,21 +38,9 @@ pub fn temp_workspace() -> String {
         .expect("temporary directory path is valid UTF-8")
 }
 
-/// The standard configuration for a test-owned headless engine: no OSC, NDI, or
-/// Syphon, and a scratch workspace of its own from [`temp_workspace`].
-///
-/// Prefer this over hand-rolling the flag list. Every argument is load-bearing —
-/// omitting `--workspace` in particular is the mistake this helper exists to
-/// make impossible.
-///
-/// # Panics
-///
-/// Panics if the scratch workspace cannot be created.
 /// A headless GPU context, or `None` when this machine has no adapter.
 ///
-/// Skipping on `None` makes an absent adapter look like a passing suite, so CI
-/// sets `VARDA_REQUIRE_GPU=1` and a missing adapter fails instead, as in the
-/// integration tests.
+/// Under `VARDA_REQUIRE_GPU=1` (set in CI) a missing adapter panics instead.
 ///
 /// # Panics
 ///
@@ -196,9 +173,7 @@ pub fn render_source_pixels(
     out
 }
 
-/// An engine built with `config` on a headless GPU, or `None` only when there
-/// is no GPU. An engine that fails to build fails the test: that is the
-/// regression a test exists to catch, not a missing adapter.
+/// An engine built with `config` on a headless GPU, or `None` when there is no GPU.
 ///
 /// # Panics
 ///
@@ -208,8 +183,7 @@ pub fn headless_app_with(config: &crate::app::AppConfig) -> Option<crate::app::V
     Some(crate::app::VardaApp::new(gpu, config).expect("the engine builds on a headless GPU"))
 }
 
-/// An engine on a headless GPU with a scratch workspace; see
-/// [`headless_app_with`].
+/// An engine on a headless GPU with a scratch workspace.
 ///
 /// # Panics
 ///
@@ -218,6 +192,12 @@ pub fn headless_app() -> Option<crate::app::VardaApp> {
     headless_app_with(&headless_config())
 }
 
+/// Config for a test-owned headless engine: no OSC, NDI, or Syphon, and a
+/// workspace from [`temp_workspace`]. Use this rather than listing flags by hand.
+///
+/// # Panics
+///
+/// Panics if the scratch workspace cannot be created.
 pub fn headless_config() -> crate::app::AppConfig {
     use clap::Parser;
     crate::app::AppConfig::parse_from([
@@ -231,10 +211,9 @@ pub fn headless_config() -> crate::app::AppConfig {
     ])
 }
 
-/// One 8-bit NDI send per frame, split into the render thread's two steps so a
-/// benchmark can time them without the GPU waits between: `encode` records
-/// and submits the frame's GPU work, `read` collects a finished frame as the
-/// UYVY bytes the sender publishes.
+/// One 8-bit NDI send per frame, split so a benchmark can time the two render
+/// thread steps without GPU waits: `encode` submits the GPU work, `read`
+/// collects the finished UYVY bytes.
 pub struct NdiSendBench {
     context: crate::renderer::context::GpuContext,
     view: wgpu::TextureView,
@@ -304,7 +283,7 @@ impl NdiSendBench {
     ///
     /// # Panics
     ///
-    /// Panics if the frame cannot be converted, which the fixed dimensions rule out.
+    /// Panics if the frame cannot be converted.
     pub fn encode(&mut self) {
         let mut encoder = self
             .context
@@ -342,9 +321,8 @@ impl NdiSendBench {
     }
 }
 
-/// One NDI receiver fed a synthetic 1080p frame in the pixel format the SDK
-/// hands Varda, for benchmarking the receive path. See
-/// /spec/performance-hot-paths.md item B.
+/// One NDI receiver fed a synthetic 1080p frame in the SDK's pixel format, for
+/// benchmarking the receive path.
 pub struct NdiReceiveBench {
     context: crate::renderer::context::GpuContext,
     ndi: crate::ndi::NdiManager,
@@ -355,8 +333,7 @@ pub struct NdiReceiveBench {
 }
 
 impl NdiReceiveBench {
-    /// A receiver and a `width` x `height` UYVY frame, as the SDK hands over
-    /// a source without alpha.
+    /// A receiver and a `width` x `height` UYVY frame (a source without alpha).
     pub fn new(context: crate::renderer::context::GpuContext, width: u32, height: u32) -> Self {
         let mut ndi = crate::ndi::NdiManager::new_disabled();
         let receiver = ndi.add_test_receiver(&context.device);
@@ -418,8 +395,7 @@ impl NdiReceiveBench {
 }
 
 /// The render thread's side of handing a read-back 1080p frame to a
-/// recording's writer queue: one queue with a writer draining it, and one that
-/// is full. See /spec/performance-hot-paths.md item F.
+/// recording's writer queue: one queue being drained, and one that is full.
 pub struct RecordingFeedBench {
     accepting: std::sync::mpsc::SyncSender<Vec<u8>>,
     full: std::sync::mpsc::SyncSender<Vec<u8>>,
@@ -451,7 +427,7 @@ impl RecordingFeedBench {
         }
     }
 
-    /// A freshly read-back frame, as the readback hands one over.
+    /// A read-back frame.
     pub fn frame(&self) -> crate::renderer::ReadbackFrame {
         crate::renderer::ReadbackFrame::rgba8(
             self.width,
@@ -481,9 +457,8 @@ impl RecordingFeedBench {
     }
 }
 
-/// An input source's capture callback with no device behind it, fed one
-/// 256-frame stereo buffer at a time, with the render thread's side drained.
-/// See /spec/performance-hot-paths.md item H.
+/// An input source's capture callback with no device, fed one 256-frame
+/// stereo buffer at a time, with the render thread's side drained.
 pub struct AudioCaptureBench {
     capture: crate::audio::analysis::CaptureState,
     buffer: Vec<f32>,
@@ -526,7 +501,7 @@ impl Default for AudioCaptureBench {
     }
 }
 
-/// One hop of a source's analysis. See /spec/performance-hot-paths.md item H.
+/// One hop of a source's analysis.
 pub struct HopAnalysisBench {
     analyzer: crate::audio::analysis::HopAnalyzer,
     hop: Vec<f32>,
@@ -554,10 +529,9 @@ impl Default for HopAnalysisBench {
     }
 }
 
-/// Build the GUI's view of `app` the way the windowed runner does each frame:
-/// the engine snapshot, then the UI data derived from it, with default layout
-/// and no preview textures. For benchmarking the GUI's per-frame view cost.
-/// Returns the number of outputs in the view, to keep the work observable.
+/// Build the GUI's view of `app` as the windowed runner does each frame, with
+/// default layout and no preview textures. Returns the output count so the
+/// work is observable.
 pub fn gui_view(app: &crate::app::VardaApp) -> usize {
     let engine = app.build_engine_state();
     let layout = crate::usecases::ui::UILayoutState::default();
@@ -579,8 +553,7 @@ pub fn gui_view(app: &crate::app::VardaApp) -> usize {
 mod tests {
     use super::*;
 
-    /// Two apps built in the same process must not share a workspace, or a save
-    /// in one becomes a load in the other.
+    /// Two apps in one process get separate workspaces.
     #[test]
     fn each_call_gets_its_own_directory() {
         let a = temp_workspace();
@@ -590,7 +563,7 @@ mod tests {
         assert!(std::path::Path::new(&b).is_dir());
     }
 
-    /// The whole point: never the crate root, whose `.varda/` may be a real one.
+    /// Never the crate root, whose `.varda/` may be real.
     #[test]
     fn never_resolves_to_the_crate_root() {
         let ws = temp_workspace();
@@ -601,9 +574,7 @@ mod tests {
         );
     }
 
-    /// The config must carry the scratch workspace all the way through
-    /// resolution — an explicit `--workspace` outranks the CWD tier that would
-    /// otherwise find the developer's `.varda/`.
+    /// The explicit `--workspace` wins over the current directory's `.varda/`.
     #[test]
     fn headless_config_resolves_to_a_scratch_workspace() {
         let root = headless_config().effective_workspace_root();

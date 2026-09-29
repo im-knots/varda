@@ -1,4 +1,4 @@
-//! GPU rendering — mixer render, output windows, frame timing.
+//! GPU rendering: mixer, outputs, and frame timing.
 
 use super::VardaApp;
 use crate::mixer::Mixer;
@@ -8,8 +8,8 @@ use crate::surface::ContentMapping;
 /// What a picked file becomes.
 #[derive(Debug, Clone)]
 pub enum FileDialogTarget {
-    /// A new deck per file on a channel (see `LibraryCreate::File`): the
-    /// source type the files become and the config field each path fills.
+    /// A new deck per file on a channel (see `LibraryCreate::File`), with the
+    /// source type and the config field each path fills.
     AddDecks {
         source_type: String,
         field: String,
@@ -27,11 +27,8 @@ pub struct FileDialogRequest {
     pub extensions: Vec<String>,
 }
 
-/// Result from a completed file dialog (sent from background thread).
-///
-/// The target channel or deck is held by UUID, not index: the dialog runs on a
-/// background thread while the UI stays live, so either can move between
-/// opening the dialog and picking a file.
+/// Result from a completed file dialog, sent from a background thread. The
+/// target is held by UUID because it may move while the dialog is open.
 #[derive(Debug)]
 pub struct FileDialogResult {
     pub request: FileDialogRequest,
@@ -39,7 +36,7 @@ pub struct FileDialogResult {
 }
 
 impl FileDialogResult {
-    /// One deck-add per chosen file, or one write of the first file to a
+    /// One deck add per chosen file, or one write of the first file to a
     /// deck's file control.
     pub fn commands(&self) -> Vec<crate::engine::EngineCommand> {
         match &self.request.target {
@@ -80,10 +77,8 @@ pub struct RenderTimes {
 }
 
 impl VardaApp {
-    /// The first half of a frame: timing, notifications, every command queued
-    /// since the last frame, and the control inputs. A consumer then does its
-    /// own work (a GUI applies its commands, a host creates windows it was asked
-    /// for) before [`Self::render_frame`].
+    /// The first half of a frame: timing, notifications, queued commands, and
+    /// control inputs. The consumer does its own work before [`Self::render_frame`].
     pub fn begin_frame(&mut self) {
         self.update_frame_timing();
         self.update_notifications();
@@ -91,10 +86,8 @@ impl VardaApp {
         self.process_inputs();
     }
 
-    /// The second half of a frame: controller feedback for the state the frame
-    /// settled on, then the mixer, the outputs, and the interactive window.
-    /// Returns how long the mixer and the outputs took, for a consumer that
-    /// reports its frame time by stage.
+    /// The second half of a frame: controller feedback, then the mixer, the
+    /// outputs, and the interactive window. Returns per-stage timings.
     pub fn render_frame(&mut self) -> RenderTimes {
         self.update_controller_leds();
         #[cfg(feature = "html")]
@@ -112,16 +105,15 @@ impl VardaApp {
         }
     }
 
-    /// Update frame timing (FPS measurement) and system stats. Call once per frame before any work.
+    /// Update FPS and system stats. Call once per frame before any work.
     pub fn update_frame_timing(&mut self) {
         let now = std::time::Instant::now();
         let dt = now
             .duration_since(self.frame_stats.last_frame_instant)
             .as_secs_f32();
         self.frame_stats.last_frame_instant = now;
-        // Sampled here, at the top of the frame, so the tally covers a whole
-        // previous frame — including the output, preview, and present submits
-        // that happen after the mixer is done.
+        // Sampled at the top of the frame so the count covers all of the
+        // previous frame's submits, including outputs and present.
         self.frame_stats.last_frame_submits = self.render.context.submits.take();
         self.frame_stats.frame_count = self.frame_stats.frame_count.wrapping_add(1);
         if self.frame_stats.frame_count.is_multiple_of(120) {
@@ -143,7 +135,7 @@ impl VardaApp {
         self.frame_stats.system_monitor.update();
     }
 
-    /// Collect all analyzer scalar values from all decks into a flat lookup table.
+    /// Every deck's analyzer scalars in one lookup table.
     fn collect_analyzer_values(&self) -> crate::modulation::AnalyzerValues {
         let mut vals = crate::modulation::AnalyzerValues::default();
         for ch in self.mixer.channels() {
@@ -164,12 +156,11 @@ impl VardaApp {
         vals
     }
 
-    /// Render the mixer frame: update cameras, NDI, Syphon, collect audio, render mixer.
-    /// This performs all GPU work that doesn't need the surface texture.
+    /// Update sources and render the mixer: all GPU work that doesn't need the
+    /// surface texture.
     pub fn render_mixer_frame(&mut self) {
         self.resolve_preview_channels();
-        // Tell the performer once about anything a source flags (a clip whose
-        // reverse cache ran out: the supported path is to transcode to HAP).
+        // Toast each source warning once (e.g. a clip's reverse cache ran out).
         let warnings: Vec<(String, String, String)> = self
             .mixer
             .channels()
@@ -193,7 +184,7 @@ impl VardaApp {
             );
         }
 
-        // Compute effective channel opacities to determine which cameras are needed
+        // Effective channel opacities decide which sources are wanted.
         let channel_count = self.mixer.channel_count();
         let crossfader = self.mixer.crossfader();
         let two_ch_buf: [f32; 2];
@@ -211,13 +202,10 @@ impl VardaApp {
             &n_ch_buf
         };
 
-        // Service every source for this frame: each provider sees which of its
-        // decks are wanted, updates its devices once, then hands each deck what
-        // it reads. Cued (previewed) channels count as wanted even at zero
-        // opacity so their live inputs keep advancing off-air, and the
-        // arrangement knows more than the opacity does: that a deck is about to
-        // be needed, or will not be for forty minutes. See
-        // /spec/channel-preview.md and /spec/deck-residency.md.
+        // Each provider learns which of its decks are wanted, updates its
+        // devices once, then feeds each deck. Cued channels count as wanted at
+        // zero opacity so live inputs keep advancing, and the arrangement can
+        // mark a deck as needed soon or not for a long time.
         {
             let preview = &self.preview_channels;
             let mut decks: Vec<(&mut Box<dyn crate::source::DeckSourceInstance>, bool)> =
@@ -247,11 +235,8 @@ impl VardaApp {
             }
         }
 
-        // Shader decks with a `depth_sensor` preprocessor read the sensor's
-        // shared textures but convert them through their own GPU passes. The
-        // manager lives here, so the views are pushed down once per frame: the
-        // deck layer never reaches up into a device.
-        // See spec/depth-sensor-preprocessor.md.
+        // Push depth sensor texture views to `depth_sensor` shader decks once
+        // per frame, so the deck layer never reaches into a device.
         let depth = self.sources.service::<crate::depth::DepthSensorManager>();
         for channel in self.mixer.channels_mut() {
             for slot in &mut channel.decks {
@@ -277,9 +262,7 @@ impl VardaApp {
             }
         }
 
-        // Runs after the binding loop but still before any deck renders, which
-        // is the window in which a tap can be swapped safely.
-        // See spec/program-tap.md.
+        // After binding and before any deck renders, when taps can be swapped safely.
         self.mixer.prepare_taps(&self.render.context);
 
         let audio_values =
@@ -287,14 +270,13 @@ impl VardaApp {
 
         let mut primary_audio = self.audio.manager.get_primary_data().clone();
 
-        // Override audio BPM/beat with clock-resolved values (MIDI > OSC > Audio)
+        // Clock-resolved BPM/beat overrides audio (MIDI > OSC > audio).
         let clock = self.input.clock_manager.state();
         if clock.active {
             primary_audio.bpm = Some(clock.bpm);
             primary_audio.time_since_beat = clock.beat_phase * (60.0 / clock.bpm);
         }
 
-        // Collect analyzer scalar values from all decks
         let analyzer_values = self.collect_analyzer_values();
 
         let inputs = crate::mixer::FrameInputs {
@@ -303,7 +285,7 @@ impl VardaApp {
             analyzer_values: &analyzer_values,
             beat_time: self.input.clock_manager.beat_time(),
             transport: self.show.transport.sample(),
-            // The wall paces a live show.
+            // Live shows run on wall-clock time.
             free_run_time: None,
             write_param: crate::param_router::write_macro_target,
         };
@@ -322,12 +304,8 @@ impl VardaApp {
         self.report_arrangement_blackout();
     }
 
-    /// Tell the performer when the arrangement is driving the output to nothing.
-    ///
-    /// Correct-and-idle looks exactly like broken on a screen, so the state is
-    /// named rather than left to be inferred. Reported on the transition only:
-    /// a deliberate blackout is legitimate and must not produce a toast every
-    /// frame it lasts. See /spec/transport.md § Black-output detection.
+    /// Notify when the arrangement drives the output to black, so it isn't
+    /// mistaken for a fault. Reported on the transition only.
     fn report_arrangement_blackout(&mut self) {
         let blacked_out = self.mixer.arrangement_blacked_out();
         if blacked_out && !self.show.blackout_reported {
@@ -341,12 +319,8 @@ impl VardaApp {
         self.show.blackout_reported = blacked_out;
     }
 
-    /// Surface quarantined decks to the performer, and drain anything the GPU
-    /// error guard caught that no deck owned.
-    ///
-    /// Toasts are keyed per deck so a shader failing every frame reports once
-    /// rather than burying the notification history.
-    /// See spec/error-handling.md § Shader Errors.
+    /// Report quarantined decks and drain GPU faults no deck owned. Toasts are
+    /// keyed per deck, so a shader failing every frame reports once.
     fn report_gpu_faults(&mut self) {
         let quarantined: Vec<(String, String, String)> = self
             .mixer
@@ -372,8 +346,7 @@ impl VardaApp {
             );
         }
 
-        // Faults raised outside any deck (channel/master effect chains, output
-        // compositing). Nothing to quarantine, but they must not vanish.
+        // Faults outside any deck (effect chains, output compositing).
         for fault in self.render.context.errors.take_faults() {
             if fault.context.is_none() {
                 self.session.notifications.notify_once(
@@ -385,11 +358,11 @@ impl VardaApp {
         }
     }
 
-    /// Render content to all outputs (windowed + headless) using the surface layout.
+    /// Render all outputs, windowed and headless.
     pub fn render_outputs(&mut self) {
         let context = &self.render.context;
 
-        // Prepare sub-mixes for any Channels(...) sources
+        // Sub-mixes for Channels(...) sources.
         {
             let mut seen: std::collections::HashSet<Vec<usize>> = std::collections::HashSet::new();
             let mut sub_mix_sources: Vec<Vec<usize>> = Vec::new();
@@ -404,7 +377,7 @@ impl VardaApp {
             self.mixer.prepare_sub_mixes(&sub_mix_sources, context);
         }
 
-        // Prepare tonemapped copies for any Channel(idx) sources
+        // Tonemapped copies for Channel(idx) sources.
         {
             let mut channel_indices: Vec<usize> = Vec::new();
             let mut seen = std::collections::HashSet::new();
@@ -422,9 +395,8 @@ impl VardaApp {
             }
         }
 
-        // Build the graded master programs the outputs asked for. One pass per
-        // distinct output transform, shared by every output that wants it, so a
-        // single-output show pays exactly what the old global tonemap paid.
+        // One graded master program per distinct output transform, shared by
+        // the outputs that use it.
         {
             let keys = Self::program_keys_for_outputs(&self.output.outputs, &self.mixer);
             self.mixer.prepare_programs(&keys, &self.render.context);
@@ -465,15 +437,13 @@ impl VardaApp {
             let shown = if output.calibration_mode == CalibrationMode::Projector
                 && !calibration.is_empty()
             {
-                // One full-frame test card over the whole output, bypassing
-                // surface geometry and warp: physical projector alignment.
+                // Full-frame test card, bypassing surfaces and warp, for projector alignment.
                 crate::output::Content::Picture {
                     view: &calibration[0].1,
                     fit_aspect: None,
                 }
             } else if surfaces.surfaces.is_empty() {
-                // No stage geometry, so the master's shape is the only thing
-                // that can define the picture.
+                // No stage geometry, so use the master's shape.
                 program()
             } else if output.surface_assignments.is_empty()
                 && output.effective_unassigned()
@@ -507,8 +477,7 @@ impl VardaApp {
         for (uuid, frame) in ended {
             match frame {
                 crate::output::RenderedFrame::Stop(reason) => self.stop_output(&uuid, Some(reason)),
-                // A stream listener whose client left starts again for the
-                // next one, with a fresh audio tap.
+                // A stream listener whose client left restarts with a fresh audio tap.
                 crate::output::RenderedFrame::Restart => {
                     self.stop_output(&uuid, None);
                     if let crate::engine::CommandResult::Err { message, .. } =
@@ -526,10 +495,8 @@ impl VardaApp {
         }
     }
 
-    /// The surfaces `output` shows, in global stacking order (surface-manager
-    /// order, index 0 = bottom; see 8i.12): its enabled assignments, or every
-    /// surface when it has none. Calibration swaps each surface's content for a
-    /// test card through its own warp.
+    /// The surfaces `output` shows, bottom first: its enabled assignments, or
+    /// every surface when it has none. Calibration swaps content for a test card.
     fn surface_infos<'a>(
         output: &crate::output::Output,
         surface_manager: &'a crate::surface::SurfaceManager,
@@ -586,11 +553,8 @@ impl VardaApp {
             .collect()
     }
 
-    /// Output transform this output wants.
-    ///
-    /// The mixer's mode is the show-wide default; an output may override it. An
-    /// output whose contract resolved to HDR grades to its own peak instead of
-    /// to display white.
+    /// Output transform for this output: its override or the mixer's default.
+    /// An HDR output grades to its own peak instead of display white.
     fn program_key_for(output: &crate::output::Output, mixer: &Mixer) -> crate::mixer::ProgramKey {
         let resolved = output.resolved_presentation();
         crate::mixer::ProgramKey::for_output(
@@ -605,14 +569,12 @@ impl VardaApp {
         )
     }
 
-    /// Key for consumers that show the show-wide look rather than one output's:
-    /// the UI previews and the domemaster render.
+    /// Key for the show-wide look, used by UI previews and the domemaster.
     fn master_program_key(mixer: &Mixer) -> crate::mixer::ProgramKey {
         crate::mixer::ProgramKey::sdr(mixer.tonemap_mode())
     }
 
-    /// Every distinct program the active outputs need this frame, plus the
-    /// show-wide one the previews read.
+    /// Every distinct program the active outputs need, plus the show-wide one.
     fn program_keys_for_outputs(
         outputs: &[crate::output::Output],
         mixer: &Mixer,
@@ -666,10 +628,9 @@ impl VardaApp {
         }
     }
 
-    /// Open a native file picker on a background thread.
-    /// Uses rfd's synchronous `FileDialog` which correctly dispatches to the
-    /// main thread on macOS (`NSOpenPanel` requires main-thread presentation
-    /// for proper focus/activation). Results are sent via channel.
+    /// Open a native file picker on a background thread; results arrive on a
+    /// channel. rfd's sync `FileDialog` presents on the main thread on macOS,
+    /// as `NSOpenPanel` requires.
     pub fn open_file_dialog(
         sender: &std::sync::mpsc::Sender<FileDialogResult>,
         request: FileDialogRequest,
@@ -731,7 +692,7 @@ mod tests {
             height: 1.0,
         };
         let (scale, offset) = VardaApp::compute_uv(ContentMapping::Mapped, &bb);
-        // Full canvas mapped should behave like fill
+        // Full canvas behaves like fill.
         assert_eq!(scale, [1.0, 1.0]);
         assert_eq!(offset, [0.0, 0.0]);
     }
@@ -741,7 +702,6 @@ mod tests {
         let Some(mut app) = crate::testing::headless_app() else {
             return;
         };
-        // Seed with 60 identical FPS values
         app.frame_stats.fps_history.clear();
         for _ in 0..60 {
             app.frame_stats.fps_history.push_back(60.0);
@@ -756,7 +716,6 @@ mod tests {
         let Some(mut app) = crate::testing::headless_app() else {
             return;
         };
-        // Push more than 60 entries
         app.frame_stats.fps_history.clear();
         for _ in 0..100 {
             app.frame_stats.fps_history.push_back(30.0);

@@ -1,7 +1,7 @@
 //! Delivering rendered frames to where they are going: ffmpeg for recordings
 //! and network streams. The renderer produces read-back frames; this module
-//! decides what a target can carry and sends each frame on.
-//! The renderer never names it. See /spec/vardapp-decomposition.md.
+//! decides what a target can carry and sends each frame on. The renderer does
+//! not depend on it.
 
 pub mod ffmpeg;
 pub mod presentation;
@@ -10,7 +10,6 @@ pub use ffmpeg::*;
 
 /// A live audio passthrough subscription held by an active output, used to
 /// unsubscribe on stop and to report passthrough health (dropped chunks).
-/// See spec/audio-passthrough.md.
 pub struct AudioPassthrough {
     /// The audio source this output is tee'd from.
     pub source_id: crate::audio::AudioSourceId,

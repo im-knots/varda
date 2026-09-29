@@ -146,10 +146,8 @@ fn pick_index(rng: &mut Rng, len: usize) -> usize {
 
 /// `SplitMix64`.
 ///
-/// Written out rather than pulled from `rand` because /spec/parameter-exploration.md
-/// promises that a seed reproduces a configuration, and `rand`'s generators make no
-/// value-stability guarantee across versions. A performer returning to a seed a year
-/// later should get the same look.
+/// Written out instead of using `rand`, whose generators make no value-stability guarantee
+/// across versions, so a seed keeps reproducing the same configuration.
 struct Rng(u64);
 
 impl Rng {
@@ -171,9 +169,8 @@ impl Rng {
         (self.next_u64() >> 40) as f32 / 16_777_216.0
     }
 
-    /// Approximately standard normal, summing six uniforms. Bounded at three
-    /// sigma, which suits a mutation: an unbounded tail would occasionally throw a
-    /// parameter to its limit and read as a randomize rather than a nudge.
+    /// Approximately standard normal, summing six uniforms. Bounded at three sigma so a mutation
+    /// never throws a parameter to its limit.
     fn normal(&mut self) -> f32 {
         let sum: f32 = (0..6).map(|_| self.unit()).sum();
         (sum - 3.0) * std::f32::consts::SQRT_2
@@ -192,8 +189,8 @@ pub struct ShaderParams {
     buffer: Option<wgpu::Buffer>,
     /// Buffer needs re-upload
     dirty: bool,
-    /// Reusable scratch buffer for serialization (avoids per-frame heap allocation).
-    /// Capacity stabilises after the first frame at `buffer_size()`.
+    /// Reusable scratch buffer for serialization, avoiding per-frame allocation. Capacity settles
+    /// at `buffer_size()` after the first frame.
     scratch: Vec<u8>,
     /// Reusable scratch string for modulation key construction (avoids per-param allocation).
     mod_key_scratch: String,
@@ -242,11 +239,10 @@ impl ShaderParams {
         }
     }
 
-    /// Get a float value with modulation applied — the same value this parameter
-    /// uploads to the GPU this frame.
+    /// Get a float value with modulation applied, as uploaded to the GPU this frame.
     ///
-    /// Takes `&mut self` so it can reuse the modulation-key scratch string; this
-    /// runs on the per-frame path and must not allocate.
+    /// Takes `&mut self` to reuse the modulation-key scratch string; this runs per frame and must
+    /// not allocate.
     pub fn get_float_modulated(
         &mut self,
         name: &str,
@@ -305,10 +301,9 @@ impl ShaderParams {
 
     /// Express a value as a 0.0–1.0 fraction of its declared range.
     ///
-    /// Used by the arrangement's live override, whose re-arm ramp starts from
-    /// the value a performer left behind and has to meet an envelope's output
-    /// in the same normalized space. Returns `None` for parameters with no
-    /// meaningful range to measure against.
+    /// Used by the arrangement's live override, whose re-arm ramp compares the performer's value
+    /// with an envelope's normalized output. Returns `None` for parameters with no meaningful
+    /// range.
     pub fn normalize(&self, name: &str, value: &ParamValue) -> Option<f32> {
         let ParamValue::Float(v) = value else {
             return None;
@@ -414,9 +409,8 @@ impl ShaderParams {
     }
 
     /// Serialize parameter values into the reusable scratch buffer (std140 layout).
-    /// Returns a slice valid until the next `build_*` or mutable call.
-    /// After the first call the scratch capacity stabilises — zero heap allocation
-    /// on subsequent frames.
+    /// Returns a slice valid until the next `build_*` or mutable call. Allocation-free after the
+    /// first call.
     pub fn build_buffer_data(&mut self) -> &[u8] {
         self.scratch.clear();
         self.scratch.reserve(self.buffer_size());
@@ -477,7 +471,7 @@ impl ShaderParams {
         }
     }
 
-    /// Get the buffer reference (panics if not created)
+    /// The GPU buffer, if created.
     pub fn buffer(&self) -> Option<&wgpu::Buffer> {
         self.buffer.as_ref()
     }
@@ -557,9 +551,8 @@ impl ShaderParams {
 
     /// Whether exploration may touch this parameter.
     ///
-    /// A parameter with no declared range has no distribution to draw from, and a
-    /// colour is held back because randomised colour reliably produces mud while
-    /// palette choices are deliberate. See /spec/parameter-exploration.md.
+    /// A parameter with no declared range has nothing to draw from. Colors are excluded because
+    /// random colors look muddy and palettes are deliberate choices.
     fn is_explorable(&self, name: &str) -> bool {
         let Some(def) = self.definitions.get(name) else {
             return false;
@@ -575,9 +568,7 @@ impl ShaderParams {
 
     /// Draw every in-scope parameter afresh from its declared range.
     ///
-    /// For escaping a look entirely. `seed` makes the result reproducible, so a
-    /// configuration can be returned to after being discarded.
-    /// See /spec/parameter-exploration.md.
+    /// `seed` makes the result reproducible, so a discarded configuration can be recovered.
     pub fn randomize(&mut self, scope: Option<&str>, seed: u64) {
         self.explore(scope, seed, |rng, def, current| match current {
             ParamValue::Float(_) => {
@@ -604,10 +595,8 @@ impl ShaderParams {
 
     /// Nudge every in-scope parameter by a fraction of its range.
     ///
-    /// The more useful of the two in practice: it takes small steps away from a
-    /// configuration that already works rather than starting over. `amount` is a
-    /// fraction of each parameter's declared range, clamped to that range.
-    /// See /spec/parameter-exploration.md.
+    /// Takes small steps from a configuration that already works. `amount` is a fraction of each
+    /// parameter's declared range; results are clamped to that range.
     pub fn mutate(&mut self, scope: Option<&str>, amount: f32, seed: u64) {
         let amount = amount.clamp(0.0, 1.0);
         self.explore(scope, seed, |rng, def, current| match current {
@@ -620,8 +609,7 @@ impl ShaderParams {
                 if rng.unit() >= amount {
                     return ParamValue::Long(v);
                 }
-                // A step to a neighbour, not a jump anywhere, so a mutation stays a
-                // small move through formula space the way it does through a range.
+                // Step to a neighbor instead of jumping anywhere, so a mutation stays a small move.
                 let down = rng.unit() < 0.5;
                 let choices = def.choices();
                 if choices.is_empty() {
@@ -748,10 +736,8 @@ impl ShaderParams {
                     (min, max)
                 });
                 let range = max_val - min_val;
-                // An absolute source replaces the base before additive sources
-                // are summed, so an automated curve produces the value it was
-                // drawn at rather than depending on where the fader was saved.
-                // See /spec/automation.md § Absolute vs Additive.
+                // An absolute source replaces the base before additive sources are summed, so an
+                // automated curve produces the value it was drawn at.
                 let effective_base = resolved.absolute.map_or(*base, |v| min_val + v * range);
                 let modulated =
                     (effective_base + resolved.additive * range).clamp(min_val, max_val);
@@ -807,7 +793,7 @@ impl ShaderParams {
         if let Some(buffer) = &self.buffer {
             queue.write_buffer(buffer, 0, &self.scratch);
         }
-        // Note: we don't clear dirty flag here since base values may have changed
+        // The dirty flag stays set: base values may have changed.
     }
 }
 
@@ -831,11 +817,8 @@ pub(crate) fn bucket_index(value: f32, n: usize) -> usize {
     ((clamp_norm(value) * n as f32).floor() as usize).min(n - 1)
 }
 
-/// The normalized value at the centre of bucket `index` of `n`.
-///
-/// Inverse of [`bucket_index`] in the only sense a bucketing has one: it returns
-/// a value that maps back to the same bucket, and picks the centre so rounding
-/// at either edge cannot land in a neighbour.
+/// The normalized value at the center of bucket `index` of `n`. Maps back to the same bucket
+/// under [`bucket_index`]; the center keeps rounding at either edge out of a neighbor.
 pub(crate) fn bucket_center(index: usize, n: usize) -> f32 {
     if n == 0 {
         return 0.0;
@@ -1275,8 +1258,7 @@ mod tests {
 
     #[test]
     fn mutate_stays_nearer_than_randomize() {
-        // The distinction the two operations exist for: a nudge from a working
-        // configuration versus a fresh draw.
+        // A nudge from a working configuration versus a fresh draw.
         let mut nudged = explorable_params();
         let mut redrawn = explorable_params();
         nudged.mutate(None, 0.05, 3);
@@ -1410,13 +1392,9 @@ mod tests {
         assert!((uploaded - value).abs() < 1e-6);
     }
 
-    /// A modulation source pinned to a constant output, standing in for any
-    /// point along a sweep. A step sequencer at rate 0 sits on step 0 forever,
-    /// and a unipolar one passes that step through untouched.
-    ///
-    /// Unipolar deliberately: this stands in for a sweep like
-    /// `AudioReactMode::Increase`, which is unipolar, and bipolar sources carry
-    /// a range-scale weight of 0.5 that would confound the depth being asserted.
+    /// A modulation source pinned to a constant output. A unipolar step sequencer at rate 0 stays
+    /// on step 0. Unipolar because bipolar sources carry a 0.5 range-scale weight that would
+    /// confound the asserted depth.
     fn pinned_source(value: f32) -> crate::modulation::ModulationSource {
         crate::modulation::ModulationSource::StepSequencer {
             steps: vec![value; 2],
@@ -1426,15 +1404,12 @@ mod tests {
         }
     }
 
-    /// A sweep must be able to reach the far end of the fader.
+    /// A sweep must reach the far end of the fader.
     ///
-    /// `AudioReactMode::Increase` ramps its output 0 → 1 and wraps, so with the
-    /// fader parked at its minimum the parameter should climb all the way to the
-    /// maximum before resetting. Assignments used to be created at half depth,
-    /// which capped the climb at the midpoint: the sweep visibly stopped halfway
-    /// up the slider and snapped back. Depth belongs on the source (LFO
-    /// `amplitude`, audio `gain`), not on the assignment — see
-    /// /spec/modulation.md § Range-Scaled Modulation.
+    /// `AudioReactMode::Increase` ramps 0 → 1 and wraps, so with the fader at its minimum the
+    /// parameter must climb to the maximum before resetting. Half-depth assignments would stop the
+    /// sweep at the midpoint. Depth belongs on the source (LFO `amplitude`, audio `gain`), not on
+    /// the assignment.
     #[test]
     fn full_depth_assignment_lets_a_sweep_span_the_whole_range() {
         let inputs = vec![make_float_input("speed", 0.0, 0.0, 5.0)];
@@ -1466,7 +1441,7 @@ mod tests {
             "half a sweep should sit at the midpoint 2.5, got {middle}"
         );
 
-        // The bug, pinned: half depth stalls a full sweep at the midpoint.
+        // Half depth stalls a full sweep at the midpoint.
         let halved = at(0.5, 1.0);
         assert!(
             (halved - 2.5).abs() < 1e-5,
@@ -1474,11 +1449,9 @@ mod tests {
         );
     }
 
-    /// Sample one full LFO cycle over a 0..1 parameter, reporting the fraction
-    /// of it spent pinned against either end plus the extremes it reached.
-    ///
-    /// The extremes matter as much as the pinning: a source that collapsed to a
-    /// constant would never clamp either, and that is not a fix.
+    /// Sample one full LFO cycle over a 0..1 parameter, returning the fraction spent pinned at
+    /// either end and the extremes reached. The extremes catch a source collapsed to a constant,
+    /// which would never clamp either.
     fn sweep_over_one_cycle(bipolar: bool, base: f64) -> (f32, f32, f32) {
         const SAMPLES: usize = 720;
         let inputs = vec![make_float_input("speed", base, 0.0, 1.0)];
@@ -1515,18 +1488,11 @@ mod tests {
         (pinned as f32 / SAMPLES as f32, lo, hi)
     }
 
-    /// A bipolar LFO must sweep the fader, not sit against each end and dash
-    /// between them.
+    /// A bipolar LFO must sweep the fader instead of sitting at each end.
     ///
-    /// Bipolar sources output -1..1 where unipolar output 0..1, but the offset
-    /// is scaled by the *whole* parameter range either way
-    /// (/spec/modulation.md § Range-Scaled Modulation). That gives a bipolar
-    /// source twice the peak-to-peak excursion the fader can hold, so the ends
-    /// of the swing fall outside it and clamp: the value hangs at the top, hangs
-    /// at the bottom, and rushes through the middle where the sine is steepest.
-    ///
-    /// Centred base, full amplitude, full depth — the configuration the UI
-    /// creates by default when you tick "Bipolar".
+    /// A bipolar source outputs -1..1 and its offset is scaled by the whole range, so without the
+    /// 0.5 weight its swing would be twice the fader and clamp at both ends. Uses a centered base
+    /// at full amplitude and depth, the UI's default for "Bipolar".
     #[test]
     fn a_bipolar_lfo_sweeps_the_fader_instead_of_pinning_at_both_ends() {
         let (pinned, lo, hi) = sweep_over_one_cycle(true, 0.5);
@@ -1562,10 +1528,8 @@ mod tests {
 
     /// End-to-end version of the above through a real audio sweep source.
     ///
-    /// With the fader parked at its minimum, both sweep directions must cover
-    /// the fader top to bottom: `Increase` climbs to the maximum before wrapping,
-    /// `Decrease` starts at the maximum and walks down. Anything less than full
-    /// assignment depth truncates the excursion.
+    /// With the fader at its minimum, `Increase` must climb to the maximum before wrapping and
+    /// `Decrease` must start at the maximum and walk down.
     #[test]
     fn audio_sweep_modes_traverse_the_whole_fader_from_the_bottom() {
         use crate::modulation::{AudioReactMode, AudioSourceValues, ModulationSource};

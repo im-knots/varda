@@ -1,9 +1,8 @@
-//! HTTP API consumer — axum-based REST/WS server for remote control of Varda.
+//! HTTP API: an axum REST and WebSocket server for remote control.
 //!
-//! Mirrors the UI consumer pattern:
-//! - **Read**: `EngineState` → projection → response DTOs
-//! - **Write**: HTTP request → validated `EngineCommand` → mpsc channel → engine
-//! - **Consumer state**: WS connection tracking, diff cache (owned by `ApiRunner`)
+//! - Read: `EngineState` → projection → response DTOs
+//! - Write: request → validated `EngineCommand` → mpsc channel → engine
+//! - `ApiRunner` holds WS connection tracking and the diff cache
 
 pub mod projection;
 pub mod routes;
@@ -15,25 +14,23 @@ use crate::engine::{CommandEnvelope, CommandResult, EngineCommand, ErrorCode};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-/// Shared state passed to all route handlers via axum's `State` extractor.
-///
-/// Route handlers never hold the engine — they communicate only through
-/// channels and read-only state snapshots.
+/// Shared state for route handlers. Handlers reach the engine only through
+/// the command channel and read-only snapshots.
 #[derive(Clone)]
 pub struct SharedState {
-    /// Send commands to the engine. The engine processes them once per frame.
+    /// Commands to the engine, processed once per frame.
     pub command_tx: mpsc::UnboundedSender<CommandEnvelope>,
     /// The engine's published snapshot, read without a lock or a copy.
     pub engine_state: Arc<StatePublication>,
 }
 
 impl SharedState {
-    /// Send a command and wait for the engine to process it (with response).
+    /// Send a command and wait for the engine's reply.
     ///
     /// # Errors
     ///
-    /// Returns `"Engine channel closed"` if the engine's command receiver has been
-    /// dropped, or `"Engine dropped reply channel"` if the engine never answered.
+    /// Returns `"Engine channel closed"` if the engine's receiver is gone, or
+    /// `"Engine dropped reply channel"` if it never answered.
     pub async fn send_command(&self, cmd: EngineCommand) -> Result<CommandResult, &'static str> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.command_tx

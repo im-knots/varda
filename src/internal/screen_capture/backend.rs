@@ -1,16 +1,13 @@
-//! Device-agnostic screen/window capture backend abstraction.
+//! Screen and window capture backend trait.
 //!
-//! A `ScreenCaptureBackend` produces RGBA/BGRA frames from an OS display or an
-//! application window. The manager owns one backend per open capture and polls
-//! it on a dedicated capture thread (see [`super::ScreenCaptureManager`]),
-//! mirroring the `DepthBackend` / `CameraManager` split.
+//! A `ScreenCaptureBackend` produces RGBA/BGRA frames from a display or a
+//! window. [`super::ScreenCaptureManager`] holds one backend per open capture
+//! and polls it on a capture thread.
 //!
-//! Concrete backends live in [`super::platform`] and are selected by target OS
-//! behind the default-on `screen-capture` cargo feature. A [`MockBackend`] is
-//! always compiled so the manager, deck integration, persistence, API, and UI
-//! can be built and tested with no display server and no permissions.
-//!
-//! See spec/screen-capture.md.
+//! Real backends live in [`super::platform`], chosen by target OS behind the
+//! default-on `screen-capture` feature. [`MockBackend`] is always compiled so
+//! the manager, decks, persistence, API and UI are testable without a display
+//! server or permissions.
 
 use std::fmt;
 
@@ -30,17 +27,16 @@ impl CaptureTargetKind {
     }
 }
 
-/// A capturable display or window, as reported by a platform enumeration.
+/// A display or window from a platform enumeration.
 ///
 /// `platform_id` is the OS handle (CoreGraphics display id, window number, …).
-/// It is deliberately **not** persisted — handles are ephemeral across restarts,
-/// so scenes match on `label` / `(app, title)` instead. See spec/screen-capture.md
-/// § Configuration and Persistence.
+/// It is not persisted because handles change across restarts; scenes match on
+/// `label` or `(app, title)` instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CaptureTargetInfo {
     pub kind: CaptureTargetKind,
     pub platform_id: u64,
-    /// Human-readable name for UI and for display-target persistence matching.
+    /// Name for the UI and for matching saved display targets.
     pub label: String,
     /// Owning application (bundle id or process name). Windows only.
     pub app: Option<String>,
@@ -48,13 +44,13 @@ pub struct CaptureTargetInfo {
     pub title: Option<String>,
     pub width: u32,
     pub height: u32,
-    /// This target belongs to Varda's own process.
+    /// Belongs to Varda's own process.
     pub is_varda: bool,
 }
 
 impl CaptureTargetInfo {
-    /// Stable-ish identity used to detect "this is the same target" across a
-    /// rescan, and to match a persisted scene back onto a live target.
+    /// Approximate identity for recognizing the same target across a rescan and
+    /// matching a saved scene to a live target.
     pub fn identity(&self) -> TargetIdentity {
         match self.kind {
             CaptureTargetKind::Display => TargetIdentity::Display {
@@ -68,7 +64,7 @@ impl CaptureTargetInfo {
     }
 }
 
-/// The persisted, handle-free identity of a capture target.
+/// Handle-free identity of a capture target, as saved in scenes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TargetIdentity {
     Display { label: String },
@@ -96,9 +92,9 @@ impl Default for CropRect {
 }
 
 impl CropRect {
-    /// Clamp into a valid sub-rectangle: origin in 0..1, extent positive, and
-    /// `x + w <= 1` / `y + h <= 1`. A zero-or-negative extent collapses to the
-    /// full frame rather than producing an empty capture.
+    /// Clamps into a valid sub-rectangle: origin in 0..1, positive extent,
+    /// `x + w <= 1` and `y + h <= 1`. A zero or negative extent becomes the full
+    /// frame.
     #[must_use]
     pub fn clamped(self) -> Self {
         let x = self.x.clamp(0.0, 1.0);
@@ -126,24 +122,24 @@ impl CropRect {
     }
 }
 
-/// Lowest and highest capture rates accepted from the parameter router.
+/// Capture rate bounds accepted from the parameter router.
 pub const MIN_CAPTURE_RATE: f32 = 1.0;
 pub const MAX_CAPTURE_RATE: f32 = 120.0;
-/// Default capture rate. Deliberately below the render rate — see
-/// spec/screen-capture.md § Self-Capture and Feedback Safety.
+/// Default capture rate, kept below the render rate to limit self-capture
+/// feedback.
 pub const DEFAULT_CAPTURE_RATE: f32 = 30.0;
 
-/// Per-capture tunables. Shared with the capture thread and re-read each tick,
-/// so router-driven changes take effect without restarting the session.
+/// Per-capture settings. The capture thread re-reads them each tick, so
+/// router changes apply without restarting the session.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CaptureConfig {
     pub rate: f32,
     pub crop: CropRect,
     pub show_cursor: bool,
-    /// Exclude Varda's own windows from the capture. Display targets only.
+    /// Exclude Varda's own windows. Display targets only.
     pub exclude_varda: bool,
-    /// Ask the OS to scale at capture time. Set to the deck render resolution so
-    /// a 4K display does not move 33 MB per frame.
+    /// Size the OS scales to at capture time. Set to the deck resolution so a 4K
+    /// display does not move 33 MB per frame.
     pub scale_to: Option<(u32, u32)>,
 }
 
@@ -160,7 +156,7 @@ impl Default for CaptureConfig {
 }
 
 impl CaptureConfig {
-    /// Normalize user- or router-supplied values into the accepted ranges.
+    /// Clamps user or router values into the accepted ranges.
     #[must_use]
     pub fn sanitized(mut self) -> Self {
         self.rate = if self.rate.is_finite() {
@@ -172,14 +168,13 @@ impl CaptureConfig {
         self
     }
 
-    /// Frame interval implied by `rate`.
     pub fn frame_interval(&self) -> std::time::Duration {
         std::time::Duration::from_secs_f32(1.0 / self.rate.max(MIN_CAPTURE_RATE))
     }
 }
 
 /// Pixel layout of a delivered frame. Backends report their native layout so
-/// the manager can pick a matching texture format instead of swizzling on CPU.
+/// the manager picks a matching texture format instead of swizzling on the CPU.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapturePixelFormat {
     Rgba8UnormSrgb,
@@ -203,16 +198,15 @@ pub struct CaptureFrame {
     pub format: CapturePixelFormat,
 }
 
-/// Whether the platform will let us capture at all.
+/// Whether the platform allows capture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PermissionState {
-    /// Capture is permitted.
     Granted,
-    /// The user explicitly refused. Requires a trip to system settings.
+    /// The user refused. Needs a change in system settings.
     Denied,
-    /// Never asked. A capture attempt will raise the OS prompt.
+    /// Never asked. A capture attempt raises the OS prompt.
     NotDetermined,
-    /// This platform has no capture permission gate.
+    /// The platform has no capture permission.
     NotRequired,
 }
 
@@ -233,14 +227,14 @@ impl PermissionState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CaptureError {
-    /// The `screen-capture` feature is off, the manager is disabled, or this
+    /// The `screen-capture` feature is off, the manager is disabled, or the
     /// platform has no backend.
     Unavailable(String),
     /// The OS refused; the user must grant Screen Recording access.
     PermissionDenied,
     /// The requested display or window no longer exists.
     TargetNotFound(String),
-    /// The platform backend failed for some other reason.
+    /// Any other platform backend failure.
     Backend(String),
 }
 
@@ -260,43 +254,37 @@ impl fmt::Display for CaptureError {
 
 impl std::error::Error for CaptureError {}
 
-/// A live capture session. Implementations run on the capture thread and are
-/// never touched from the render thread.
+/// A live capture session. Runs on the capture thread only.
 pub trait ScreenCaptureBackend: Send {
-    /// Human-readable label of the captured target (logs / UI).
+    /// Label of the captured target (logs, UI).
     fn label(&self) -> &str;
-    /// Current output resolution `(width, height)`.
+    /// Output resolution `(width, height)`.
     fn resolution(&self) -> (u32, u32);
-    /// Poll the next frame. `None` means no new frame is ready yet — for a
-    /// static desktop that is the common case and is not an error.
+    /// Polls the next frame. `None` means none is ready yet, which is normal for
+    /// a static desktop.
     fn next_frame(&mut self) -> Option<CaptureFrame>;
-    /// Native pixel layout of the frames this backend delivers.
+    /// Native pixel layout of the delivered frames.
     ///
-    /// Declared rather than probed: a push-based backend has nothing ready at
-    /// `open`, so probing there always guesses, allocates the shared texture in
-    /// the wrong format, and throws it away on the first real frame. The
-    /// manager still reallocates if a frame disagrees, so a wrong answer here
-    /// costs a texture, not correctness.
+    /// Declared, not probed: a push-based backend has no frame at `open`. If a
+    /// frame disagrees the manager reallocates the texture, so a wrong answer
+    /// costs an allocation, not correctness.
     fn pixel_format(&self) -> CapturePixelFormat {
         CapturePixelFormat::Rgba8UnormSrgb
     }
     /// Whether the OS already paces delivery at [`CaptureConfig::rate`].
     ///
     /// Push-based backends (`ScreenCaptureKit`, Windows Graphics Capture,
-    /// `PipeWire`) are handed the rate and deliver on the compositor's clock.
-    /// The capture loop must then poll *faster* than the rate rather than
-    /// matching it: two independent clocks of the same nominal frequency drift
-    /// against each other, so ticks periodically find nothing while a delivered
-    /// frame is overwritten before it is taken. The delivered cadence stutters
-    /// even though the average rate looks correct, and in a self-capture
-    /// feedback loop that irregularity is exactly what reads as flicker.
+    /// `PipeWire`) deliver on the compositor's clock. The capture loop must then
+    /// poll faster than the rate: two clocks at the same nominal rate drift, so
+    /// some ticks find nothing while other frames are overwritten before being
+    /// taken. The result stutters, which shows as flicker in self-capture feedback.
     ///
-    /// Polled backends (X11, the mock) produce a frame only when asked, so the
-    /// loop owns their pacing and this stays `false`.
+    /// Polled backends (X11, the mock) produce a frame on request, so the loop
+    /// paces them and this returns `false`.
     fn is_self_paced(&self) -> bool {
         false
     }
-    /// Apply a live config change (rate, crop, cursor).
+    /// Applies a live config change (rate, crop, cursor).
     ///
     /// # Errors
     ///
@@ -304,11 +292,10 @@ pub trait ScreenCaptureBackend: Send {
     fn set_config(&mut self, config: &CaptureConfig) -> Result<(), CaptureError>;
 }
 
-/// A synthetic capture backend, always compiled.
+/// Synthetic capture backend, always compiled.
 ///
-/// Emits a moving diagonal-bar pattern with a distinct solid marker in the
-/// top-left texel so tests can assert *which* target they are looking at after a
-/// scale or crop, not merely that some pixels arrived.
+/// Draws moving diagonal bars plus a solid per-target marker in the top-left
+/// texel, so tests can tell which target they see after a scale or crop.
 pub struct MockBackend {
     label: String,
     width: u32,
@@ -321,8 +308,7 @@ pub struct MockBackend {
 impl MockBackend {
     pub fn new(label: impl Into<String>, width: u32, height: u32, config: CaptureConfig) -> Self {
         let label = label.into();
-        // Derive a stable per-target marker colour from the label so two mock
-        // captures in one test are distinguishable in the readback.
+        // Marker color derived from the label so two mock captures differ.
         let mut h: u32 = 2_166_136_261;
         for b in label.as_bytes() {
             h = (h ^ u32::from(*b)).wrapping_mul(16_777_619);
@@ -342,7 +328,7 @@ impl MockBackend {
         }
     }
 
-    /// Output size after `scale_to`, which is what a real backend would deliver.
+    /// Output size after `scale_to`, as a real backend would deliver.
     fn output_size(&self) -> (u32, u32) {
         self.config
             .scale_to
@@ -371,8 +357,8 @@ impl ScreenCaptureBackend for MockBackend {
         let mut data = vec![0u8; (width as usize) * (height as usize) * 4];
         for y in 0..height {
             for x in 0..width {
-                // Map into the cropped sub-rectangle so a crop visibly changes
-                // the content rather than only the reported size.
+                // Map into the crop rectangle so a crop changes the content, not only the
+                // size.
                 let u = crop.x + (x as f32 / width as f32) * crop.w;
                 let v = crop.y + (y as f32 / height as f32) * crop.h;
                 let bar = ((u + v + phase) * 8.0).fract();
@@ -383,7 +369,7 @@ impl ScreenCaptureBackend for MockBackend {
                 data[texel + 3] = 255;
             }
         }
-        // Identity marker, top-left texel.
+        // Identity marker in the top-left texel.
         data[0] = self.marker[0];
         data[1] = self.marker[1];
         data[2] = self.marker[2];
@@ -402,7 +388,7 @@ impl ScreenCaptureBackend for MockBackend {
     }
 }
 
-/// Synthetic targets reported when the mock provider is in use.
+/// Targets reported by the mock provider.
 pub fn mock_targets() -> Vec<CaptureTargetInfo> {
     vec![
         CaptureTargetInfo {
@@ -552,7 +538,7 @@ mod tests {
 
     #[test]
     fn mock_backend_is_polled_not_self_paced() {
-        // It synthesizes a frame per call, so the capture loop owns its rate.
+        // It makes a frame per call, so the capture loop sets its rate.
         let b = MockBackend::new("Mock", 8, 8, CaptureConfig::default());
         assert!(!b.is_self_paced());
     }
@@ -588,7 +574,7 @@ mod tests {
         .next_frame()
         .expect("frame");
         assert_eq!(full.data.len(), cropped.data.len());
-        // Skip the marker texel (identical by construction) and compare content.
+        // Skip the marker texel (identical by design) and compare content.
         assert_ne!(&full.data[4..], &cropped.data[4..]);
     }
 

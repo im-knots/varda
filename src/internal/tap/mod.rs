@@ -1,7 +1,6 @@
-//! Program tap: Varda's own master program, or one channel's composite,
-//! re-entering as a deck source one frame behind. The broadcast re-entry bus:
-//! feedback loops, picture-in-picture of the live mix, cross-channel reuse.
-//! See spec/program-tap.md.
+//! Program tap: the master program or one channel's composite, fed back in
+//! as a deck source one frame late. Used for feedback loops, picture-in-picture
+//! of the live mix, and cross-channel reuse.
 
 use crate::source::{
     ControlError, ControlSpec, ControlStatus, ControlValue, DeckSourceInstance, DeckSourceProvider,
@@ -50,8 +49,8 @@ struct Config {
     scaling_mode: crate::source::ScalingMode,
 }
 
-/// Display name of a tap point. An unresolvable channel falls back to its
-/// UUID; whether it is genuinely missing is reported separately as `bound`.
+/// Display name of a tap point. An unresolvable channel shows its UUID;
+/// `bound` reports whether it is missing.
 fn point_label(source: &FeedbackSource, channels: &[(String, String)]) -> String {
     match source {
         FeedbackSource::MasterProgram => "Master Program".to_string(),
@@ -62,8 +61,7 @@ fn point_label(source: &FeedbackSource, channels: &[(String, String)]) -> String
     }
 }
 
-/// Taps. They own no device: the mixer resolves every tap's texture before any
-/// deck renders.
+/// Taps. The mixer resolves every tap's texture before any deck renders.
 pub struct TapProvider;
 
 impl DeckSourceProvider for TapProvider {
@@ -83,8 +81,7 @@ impl DeckSourceProvider for TapProvider {
         &PARAMS
     }
 
-    /// Built from the live channel list rather than a device scan, so there is
-    /// nothing to rescan. See spec/program-tap.md § UI.
+    /// Built from the live channel list, so there is nothing to rescan.
     fn library(&self, query: &SourceQuery) -> LibrarySection {
         let mut entries = vec![LibraryEntry::new(
             "Master Program",
@@ -108,7 +105,7 @@ impl DeckSourceProvider for TapProvider {
         }
     }
 
-    /// A tap holds no handle and acquires nothing, so it cannot fail to build.
+    /// A tap acquires nothing, so building it cannot fail.
     fn create(
         &mut self,
         config: &SourceConfig,
@@ -117,8 +114,7 @@ impl DeckSourceProvider for TapProvider {
         let config: Config = decode_config(config)?;
         let source = FeedbackSource::from(&config.source);
         let label = point_label(&source, env.channels);
-        // A tap matches the render resolution, so the default scaling mode is an
-        // exact 1:1 blit until the user changes it.
+        // A tap matches the render resolution, so the default scaling is a 1:1 blit.
         let mut feed = Feed::new(env.gpu, "Tap Blit Pass", (env.width, env.height))?;
         feed.blit.scaling_mode = config.scaling_mode;
         Ok(Box::new(Tap {
@@ -128,8 +124,8 @@ impl DeckSourceProvider for TapProvider {
         }))
     }
 
-    /// Compared by tap point, not by label: renaming a channel must patch the
-    /// deck in place rather than rebuild it.
+    /// Compared by tap point, not label, so renaming a channel patches the deck
+    /// in place instead of rebuilding it.
     fn identity(&self, config: &SourceConfig) -> serde_json::Value {
         config.get("source").cloned().unwrap_or_default()
     }
@@ -159,7 +155,6 @@ impl DeckSourceProvider for TapProvider {
     }
 }
 
-/// One tap deck.
 pub struct Tap {
     source: FeedbackSource,
     label: String,
@@ -197,8 +192,7 @@ impl DeckSourceInstance for Tap {
         )
     }
 
-    /// A source that cannot be resolved renders black until the channel
-    /// comes back.
+    /// An unresolvable source renders black until the channel comes back.
     fn render(&mut self, frame: &mut SourceFrame) -> Result<()> {
         self.feed.render(frame);
         Ok(())
@@ -230,8 +224,7 @@ impl DeckSourceInstance for Tap {
         Some(&self.source)
     }
 
-    /// Renaming a channel has to move the tap's label with it, and this is the
-    /// only place that sees both.
+    /// Moves the tap's label when its channel is renamed.
     fn bind_feedback(&mut self, view: Option<wgpu::TextureView>, label: &str) {
         self.feed.bind(view, None);
         if self.label != label {
@@ -239,8 +232,7 @@ impl DeckSourceInstance for Tap {
         }
     }
 
-    /// A tap names the channel it is watching. That channel is somebody else,
-    /// so only a mapping that renamed *it* moves the tap.
+    /// Only a mapping that renames the tapped channel moves the tap.
     fn remap_ids(&mut self, map: &HashMap<String, String>) {
         if let FeedbackSource::Channel(uuid) = &mut self.source
             && let Some(new) = map.get(uuid)

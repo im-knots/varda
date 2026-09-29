@@ -1,6 +1,5 @@
-//! The one model every text format parses into. Layout, modes, transitions
-//! and chase read cues and never the format. See /spec/text-source.md
-//! Decision 8.
+//! The cue model every text format parses into. Layout, modes, transitions
+//! and chase read cues, never the format.
 
 use super::formats;
 

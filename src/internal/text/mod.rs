@@ -3,7 +3,7 @@
 //! The text is parsed into cues ([`cue`]), laid out for the deck's mode and
 //! transition each frame ([`layout`]), and drawn from coverage masks that are
 //! rasterized only when a string, its style or its size bucket changes
-//! ([`raster`], [`pass`]). See /spec/text-source.md.
+//! ([`raster`], [`pass`]).
 
 pub mod cue;
 pub mod formats {
@@ -336,7 +336,7 @@ impl DeckSourceProvider for TextProvider {
     }
 
     fn identity(&self, _config: &SourceConfig) -> serde_json::Value {
-        // Any text is the same source; new text is a patch, not a rebuild.
+        // Changing the text patches the deck instead of rebuilding it.
         serde_json::Value::Null
     }
 }
@@ -346,7 +346,7 @@ impl DeckSourceProvider for TextProvider {
 struct Doc {
     parsed: Parsed,
     steps: Vec<StepUnit>,
-    /// Whether WebVTT cue settings place the cues (Decision 12).
+    /// Whether WebVTT cue settings place the cues.
     placed: bool,
     /// Index of each cue's first line among all lines, for crawl chase.
     line_starts: Vec<usize>,
@@ -626,8 +626,8 @@ impl TextDeck {
         }
     }
 
-    /// Drop cached masks and extents for text that is no longer present, and
-    /// for styles other than the current and previous one.
+    /// Drop cached masks and extents for text not in the document, and for
+    /// styles other than the current and previous one.
     fn evict(&mut self) {
         let keep = self.doc.strings();
         let current = self.style();
@@ -995,8 +995,7 @@ impl DeckSourceInstance for TextDeck {
                 Some(elapsed) => {
                     self.motion.advance = elapsed * f64::from(self.config.speed);
                 }
-                // Static does not move, so it does not run up a position a
-                // later switch to Crawl or Ticker would start from.
+                // Static doesn't accumulate a position for a later Crawl or Ticker.
                 None if self.config.mode != Mode::Static => {
                     self.motion.advance += f64::from(self.live.speed) * step;
                 }

@@ -32,14 +32,9 @@ pub enum LFOWaveform {
 
 /// Depth given to a modulation assignment created from a parameter's dropdown.
 ///
-/// Full range. The contribution is scaled by the parameter's range before it is
-/// applied, so 1.0 means "this source can traverse the whole slider" — which is
-/// the entire point of a sweep mode like [`AudioReactMode::Increase`]. Anything
-/// less silently caps the sweep partway: at 0.5 an Increase source climbs to the
-/// midpoint and resets, never reaching the top of the fader.
-///
-/// Performers dial depth back on the source (LFO `amplitude`, audio `gain`), not
-/// here — see /spec/modulation.md § Range-Scaled Modulation.
+/// Full range: the contribution is scaled by the parameter's range, so 1.0 lets a source
+/// traverse the whole slider. Anything less caps sweeps like [`AudioReactMode::Increase`]
+/// partway. Performers set depth on the source (LFO `amplitude`, audio `gain`).
 pub const DEFAULT_ASSIGNMENT_AMOUNT: f32 = 1.0;
 
 /// How audio energy drives the modulation value.
@@ -100,10 +95,9 @@ pub enum StepInterpolation {
 }
 
 /// How an assignment's contribution combines with the parameter's base value.
-/// See /spec/automation.md § Absolute vs Additive.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AssignmentMode {
-    /// Contribution is summed onto the base value, range-scaled. Existing behaviour.
+    /// Contribution is summed onto the base value, range-scaled.
     #[default]
     Additive,
     /// Source output replaces the base value before additive sources are summed.
@@ -117,15 +111,11 @@ pub struct ParamModulation {
     pub source_id: String,
     /// Modulation depth/amount (-1.0 to 1.0, negative inverts)
     pub amount: f32,
-    /// Defaults to `Additive`, which is what every assignment did before
-    /// automation existed, so older scenes deserialize unchanged.
+    /// Defaults to `Additive`, so scenes saved before automation load unchanged.
     #[serde(default)]
     pub mode: AssignmentMode,
-    /// A color or point component index saved before scene version 9, when
-    /// components were not part of the key. Read, never written: the app
-    /// rewrites such assignments to their component path once it can see the
-    /// target's type. See /spec/deck-source-providers.md § One component
-    /// vocabulary.
+    /// A color or point component index saved before scene version 9. Read, never written: the
+    /// app rewrites such assignments to their component path once it knows the target's type.
     #[serde(default, rename = "component", skip_serializing)]
     pub legacy_component: Option<usize>,
 }
@@ -135,9 +125,8 @@ pub struct ParamModulation {
 pub struct ModulationSourceEntry {
     pub uuid: String,
     pub source: ModulationSource,
-    /// Which notion of time this source follows. Defaults to `FreeRun`, which
-    /// is the behaviour every scene had before timebases existed, so older
-    /// scenes deserialize unchanged. See /spec/timebase.md.
+    /// Which notion of time this source follows. Defaults to `FreeRun`, so scenes saved before
+    /// timebases load unchanged.
     #[serde(default)]
     pub timebase: Timebase,
 }
@@ -172,7 +161,7 @@ mod tests {
         AnalyzerValues::default()
     }
 
-    // ── Timebase selection (/spec/timebase.md) ───────────────────────
+    // ── Timebase selection ─────────────────────────────────────────
 
     use crate::timebase::{TimeContext, TimebaseInput, TimebaseResolver, TimebaseSet};
 
@@ -185,8 +174,7 @@ mod tests {
         }
     }
 
-    /// Every timebase deliberately disagrees, so a test can tell which one a
-    /// source actually read.
+    /// Every timebase has a different value, so a test can tell which one a source read.
     fn split_timebases(seconds: f32, beats: f32) -> TimebaseSet {
         split_timebases_with(seconds, beats, 0.0)
     }
@@ -254,8 +242,8 @@ mod tests {
         assert!((engine.get_modulation("p") - 1.0).abs() < 1e-3);
     }
 
-    /// The point of measuring in beats: the same LFO settings track the tempo,
-    /// so a performer never re-dials frequency after a BPM change.
+    /// Measured in beats, the same LFO settings track the tempo, so a BPM change needs no
+    /// frequency change.
     #[test]
     fn beat_locked_lfo_retunes_with_bpm() {
         let mut engine = ModulationEngine::new();
@@ -287,8 +275,7 @@ mod tests {
             "half a cycle sits at the same value but travelling the other way"
         );
 
-        // A quarter beat apart is unambiguous: the tempo genuinely changes where
-        // the LFO is.
+        // A quarter beat apart is unambiguous: the tempo changes where the LFO is.
         assert!((sample(0.25) - 1.0).abs() < 1e-3);
         assert!((sample(0.75) - 0.0).abs() < 1e-3);
     }
@@ -323,8 +310,8 @@ mod tests {
         );
     }
 
-    /// The point of a transport-locked LFO: the same show position gives the
-    /// same value, whenever it is played and however it was reached.
+    /// A transport-locked LFO gives the same value at the same show position, however it was
+    /// reached.
     #[test]
     fn transport_locked_source_is_deterministic_from_position() {
         let mut engine = ModulationEngine::new();
@@ -370,7 +357,7 @@ mod tests {
         assert!((frame(30.0) - held).abs() < 1e-6);
     }
 
-    // ── Automation envelopes (/spec/automation.md) ───────────────────
+    // ── Automation envelopes ───────────────────────────────────────
 
     /// Build an engine holding one transport-locked envelope assigned to `param`
     /// in the given mode, and a closure that samples the resolved contribution
@@ -410,8 +397,8 @@ mod tests {
         assert!((resolved.additive - 0.5).abs() < 1e-5);
     }
 
-    /// The combination the two modes exist to produce: a scheduled shape that
-    /// still breathes. Absolute sets the base, additive rides on top of it.
+    /// Absolute sets the base and additive rides on top, giving a scheduled shape that still
+    /// moves.
     #[test]
     fn absolute_and_additive_sources_compose_on_one_parameter() {
         let (mut engine, _) = envelope_engine(
@@ -429,8 +416,8 @@ mod tests {
         );
     }
 
-    /// A lane exists before any point is drawn on it, and overriding the base
-    /// with zero in the meantime would black the parameter out.
+    /// A lane exists before any point is drawn; overriding the base with zero meanwhile would
+    /// black out the parameter.
     #[test]
     fn an_empty_envelope_contributes_nothing_in_absolute_mode() {
         let (mut engine, _) = envelope_engine(vec![], AssignmentMode::Absolute);
@@ -456,8 +443,7 @@ mod tests {
         assert!((resolved.absolute.unwrap() - 0.8).abs() < 1e-5);
     }
 
-    /// The reason automation is a modulation source rather than a parallel
-    /// system: it inherits jump-safety from being a pure function of position.
+    /// Automation inherits jump-safety from being a pure function of position.
     #[test]
     fn locating_to_a_position_matches_playing_to_it() {
         let curve = vec![
@@ -503,7 +489,7 @@ mod tests {
         assert!((frame(60.0) - held).abs() < 1e-6);
     }
 
-    // ── Live override and re-arm (/spec/arrangement.md § Live override) ──
+    // ── Live override and re-arm ───────────────────────────────────
 
     /// A flat curve, so any change in the resolved value comes from the
     /// override rather than from the envelope moving underneath the test.
@@ -535,8 +521,8 @@ mod tests {
         assert_eq!(engine.overridden_params().collect::<Vec<_>>(), vec!["p"]);
     }
 
-    /// An override suspends *arrangement* control, not the parameter. An LFO
-    /// the performer never took is still theirs to run.
+    /// An override suspends arrangement control, not the parameter; an LFO the performer never
+    /// took keeps running.
     #[test]
     fn an_override_leaves_live_modulation_running() {
         let mut engine = flat_envelope_engine(0.8);
@@ -553,8 +539,7 @@ mod tests {
         );
     }
 
-    /// Authority is per lane. Grabbing one fader must not stop the rest of the
-    /// show, which is the whole reason overrides are scoped rather than global.
+    /// Authority is per lane: overriding one fader must not stop the rest of the show.
     #[test]
     fn an_override_is_scoped_to_the_parameter_that_was_touched() {
         let mut engine = flat_envelope_engine(0.8);
@@ -575,8 +560,7 @@ mod tests {
         );
     }
 
-    /// A jump to the automated value is the correct state and the wrong look,
-    /// and this happens live in front of an audience.
+    /// Re-arm ramps to the automated value instead of jumping.
     #[test]
     fn re_arm_ramps_back_rather_than_snapping() {
         let mut engine = flat_envelope_engine(0.8);
@@ -624,7 +608,7 @@ mod tests {
         assert!((sample_at(&mut engine, 5.0).absolute.unwrap() - 0.8).abs() < 1e-5);
     }
 
-    /// The performer has spoken more recently than the re-arm did.
+    /// A new override takes precedence over a running re-arm.
     #[test]
     fn re_taking_a_parameter_mid_ramp_cancels_the_ramp() {
         let mut engine = flat_envelope_engine(0.8);
@@ -668,8 +652,7 @@ mod tests {
         assert!((engine.resolve("q").absolute.unwrap() - 0.3).abs() < 1e-5);
     }
 
-    /// Overrides are session state. A saved override would be an invisible trap
-    /// that silently breaks the show the next time the file is opened.
+    /// Overrides are session state and are never saved.
     #[test]
     fn clearing_overrides_restores_full_authority() {
         let mut engine = flat_envelope_engine(0.8);
@@ -722,9 +705,8 @@ mod tests {
         assert_eq!(engine.followers_of(Timebase::Transport), 1);
     }
 
-    /// The readouts dim when nothing reads them, so the count must reflect what
-    /// would actually stop moving. Signal-driven sources carry a timebase field
-    /// but ignore it, so counting them would keep a readout lit for no reason.
+    /// The count must reflect what would stop moving. Signal-driven sources carry a timebase
+    /// field but ignore it, so they are not counted.
     #[test]
     fn follower_count_ignores_sources_that_do_not_read_their_timebase() {
         let mut engine = ModulationEngine::new();
@@ -781,8 +763,8 @@ mod tests {
         );
     }
 
-    /// The split between time-driven and signal-driven sources decides which
-    /// cards get a selector, so it is asserted per variant rather than inferred.
+    /// The time-driven/signal-driven split decides which cards get a selector, so it is asserted
+    /// per variant.
     #[test]
     fn only_time_driven_sources_follow_a_timebase() {
         let step = ModulationSource::StepSequencer {
@@ -832,7 +814,6 @@ mod tests {
     }
 
     /// Scenes written before timebases existed must load as free-running.
-    /// See /spec/timebase.md § Backwards Compatibility.
     #[test]
     fn entry_without_timebase_deserializes_as_free_run() {
         let json = r#"{"uuid":"abc123","source":{"LFO":{"waveform":"Sine","frequency":1.0,"phase":0.0,"amplitude":1.0,"bipolar":false}}}"#;
@@ -1207,8 +1188,8 @@ mod tests {
 
     #[test]
     fn engine_audio_band_source_ids_lists_only_audio_bands() {
-        // audio_band_source_ids drives the capture reconcile (issue #76): it must
-        // report every AudioBand's device selection and ignore other source kinds.
+        // audio_band_source_ids drives the capture reconcile: it must report every AudioBand's
+        // device selection and ignore other source kinds.
         let mut engine = ModulationEngine::new();
         engine.add_source(ModulationSource::sine_lfo(1.0));
         let band = |source_id| ModulationSource::AudioBand {
@@ -1692,7 +1673,7 @@ mod tests {
         assert!(!engine.has_modulation("some_param"));
     }
 
-    // ── Chaos Tests Round 2: LFO edge values ────────────────────────────
+    // ── LFO edge values ────────────────────────────────────────────
 
     #[test]
     fn chaos_lfo_zero_frequency_does_not_nan() {
@@ -1721,7 +1702,7 @@ mod tests {
         };
         let audio = empty_audio();
         let val = lfo.calculate(1.0, 0.01, &audio, &empty_analyzers(), 0.0);
-        // (Inf * 1.0 + 0.0) % 1.0 = NaN — document this
+        // (Inf * 1.0 + 0.0) % 1.0 = NaN.
         let _ = val; // must not panic
     }
 
@@ -1792,7 +1773,7 @@ mod tests {
         }
     }
 
-    // ── Chaos Tests Round 2: Step Sequencer edge cases ───────────────────
+    // ── Step Sequencer edge cases ──────────────────────────────────
 
     #[test]
     fn chaos_step_sequencer_single_step() {
@@ -1861,7 +1842,7 @@ mod tests {
         }
     }
 
-    // ── Chaos Tests Round 2: ADSR edge cases ────────────────────────────
+    // ── ADSR edge cases ────────────────────────────────────────────
 
     #[test]
     fn chaos_adsr_zero_all_times() {
@@ -1910,7 +1891,7 @@ mod tests {
         for _ in 0..100 {
             val = adsr.calculate(0.0, 0.016, &audio, &empty_analyzers(), val);
         }
-        // Sustain = -1.0 may produce negative values — document, must not panic
+        // Sustain = -1.0 may produce negative values; it must not panic.
     }
 
     #[test]

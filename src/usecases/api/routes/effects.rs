@@ -1,9 +1,8 @@
 //! Effects write routes.
 //!
-//! Effect UUIDs are globally unique, so routes that name an existing effect are
-//! flat (`/api/effects/{effect_uuid}`). Creation and reorder keep the owning
-//! chain in the path: creation has no effect UUID yet, and reorder ordinals are
-//! scoped to a single chain.
+//! Routes for an existing effect are flat (`/api/effects/{effect_uuid}`).
+//! Creation and reorder name the chain in the path, since creation has no UUID
+//! yet and reorder indices are per chain.
 
 use axum::Json;
 use axum::extract::{Path, State};

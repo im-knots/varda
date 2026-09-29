@@ -1,12 +1,8 @@
-//! Surface geometry value types — path authoring, circle hints, content
-//! mapping, output type, and reorder ops.
-//!
-//! Definitions moved from `internal::surface` / `internal::surface::curve`
-//! (see /spec/engine-value-types.md). Inherent impls, `Display` impls, and
-//! the bezier flattening algorithms stay in those modules, applied to these
-//! re-exported types.
+//! Surface geometry value types: paths, circle hints, content mapping, output
+//! type, and reorder ops. Impls and bezier flattening live in
+//! `internal::surface`, which re-exports these types.
 
-// ── Curve authoring (formerly `surface::curve`) ──────────────────────
+// ── Curve authoring ──────────────────────
 
 /// One segment of a [`SurfacePath`]. Each segment ends at `to`; its start is the
 /// previous segment's endpoint (or the path's `start` for the first segment).
@@ -50,54 +46,46 @@ fn default_true() -> bool {
     true
 }
 
-// ── Surface metadata (formerly `internal::surface`) ───────────────────
+// ── Surface metadata ───────────────────
 
-/// Metadata that marks a surface as a "true circle" with editable radius/sides.
-///
-/// When present, the surface's vertices are generated from this hint.
-/// Editing radius or sides regenerates vertices automatically.
-/// Converting to polygon clears the hint, keeping vertices as-is.
+/// Marks a surface as a circle whose vertices are generated from radius and
+/// sides. Converting to a polygon clears the hint and keeps the vertices.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct CircleHint {
     pub center: [f32; 2],
     pub radius: f32,
     pub sides: u32,
-    /// Canvas aspect ratio used when generating vertices (width/height).
-    /// Stored so regeneration produces the same visual shape.
+    /// Canvas aspect ratio (width/height) the vertices were generated for.
     pub aspect_ratio: f32,
 }
 
 /// How content is mapped onto a surface.
 ///
-/// - **Fill**: The entire source texture is scaled to fill this surface. Each surface
-///   with the same source gets an independent full copy.
-/// - **Mapped**: The surface's canvas position determines which region of the source
-///   it displays. The canvas IS the content space — a surface at (0.2, 0.3, 0.1, 0.1)
-///   shows source UVs from (0.2, 0.3) to (0.3, 0.4). Multiple surfaces with the same
-///   source in Mapped mode implicitly form a group, each showing its slice of one
-///   continuous image.
+/// - **Fill**: each surface shows the whole source.
+/// - **Mapped**: the surface's canvas rect is its UV crop of the source, so a
+///   surface at (0.2, 0.3, 0.1, 0.1) shows UVs (0.2, 0.3) to (0.3, 0.4).
 #[derive(
     Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema, Default,
 )]
 pub enum ContentMapping {
-    /// Entire source scaled to fill the surface (independent per surface)
+    /// Whole source scaled to fill the surface.
     #[default]
     Fill,
-    /// Surface position on canvas = UV crop into the source (spatial mapping)
+    /// Canvas position is the UV crop into the source.
     Mapped,
 }
 
-/// How this surface connects to physical output hardware
+/// How a surface connects to output hardware.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub enum SurfaceOutputType {
-    /// Projection — content is warped to match projector position/surface shape
+    /// Content is warped to the projector and surface shape.
     Projection,
-    /// LED Direct — pixel-accurate crop/scale, no perspective warp
+    /// Pixel-accurate crop and scale, no perspective warp.
     LEDDirect,
 }
 
-/// A stacking-order move for a surface (8i.12). The `SurfaceManager.surfaces`
-/// Vec order is authoritative (index 0 = bottom/drawn-first, last = top).
+/// A stacking-order move for a surface. `SurfaceManager.surfaces` order is the
+/// stacking order (index 0 is drawn first).
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
 )]

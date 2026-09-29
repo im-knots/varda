@@ -4,7 +4,7 @@ use wgpu::util::DeviceExt;
 use super::ISFUniforms;
 use crate::isf::StorageBufferDecl;
 
-/// A storage buffer used by compute shaders
+/// A storage buffer used by compute shaders.
 pub struct StorageBuffer {
     pub name: String,
     pub buffer: wgpu::Buffer,
@@ -13,11 +13,11 @@ pub struct StorageBuffer {
     pub stride: u32,
 }
 
-/// How the compute shader should be dispatched
+/// How the compute shader is dispatched.
 pub enum DispatchMode {
-    /// Dispatch based on output resolution divided by workgroup size
+    /// Output resolution divided by workgroup size.
     Resolution,
-    /// Dispatch with custom parameters
+    /// Custom group counts.
     Custom {
         x_param: String,
         y_param: String,
@@ -25,7 +25,7 @@ pub enum DispatchMode {
     },
 }
 
-/// Compute pipeline for GLSL compute shaders compiled to SPIR-V
+/// Compute pipeline for GLSL compute shaders compiled to SPIR-V.
 pub struct ComputePipeline {
     pub compute_pipeline: wgpu::ComputePipeline,
     pub bind_group_layout: wgpu::BindGroupLayout,
@@ -48,7 +48,7 @@ impl ComputePipeline {
     ///
     /// Returns an error if the SPIR-V fails to parse, fails naga validation, or
     /// cannot be transpiled to WGSL.
-    // Pipeline construction takes many distinct GPU descriptors; no shared invariant to bundle.
+    // Takes many distinct GPU descriptors with nothing in common to bundle.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         device: &wgpu::Device,
@@ -60,7 +60,7 @@ impl ComputePipeline {
         dispatch_mode: DispatchMode,
         num_passes: u32,
     ) -> Result<Self> {
-        // Convert SPIR-V to WGSL using naga
+        // SPIR-V to WGSL via naga.
         let spirv_bytes: Vec<u8> = spirv.iter().flat_map(|word| word.to_le_bytes()).collect();
 
         let module =
@@ -79,7 +79,6 @@ impl ComputePipeline {
             source: wgpu::ShaderSource::Wgsl(wgsl.into()),
         });
 
-        // Build bind group layout entries
         let mut layout_entries = vec![];
         let mut next_binding: u32 = 0;
 
@@ -119,8 +118,7 @@ impl ComputePipeline {
             ty: wgpu::BindingType::StorageTexture {
                 access: wgpu::StorageTextureAccess::WriteOnly,
                 // Must match the `.comp` layout qualifier (rgba16f) and the deck
-                // texture it is copied into — copy_texture_to_texture requires
-                // format parity. See spec/unified-color-pipeline.md.
+                // texture: copy_texture_to_texture requires the same format.
                 format: super::context::COLOR_PATH_FORMAT,
                 view_dimension: wgpu::TextureViewDimension::D2,
             },
@@ -149,14 +147,12 @@ impl ComputePipeline {
             entries: &layout_entries,
         });
 
-        // Pipeline layout
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("ISF Compute Pipeline Layout"),
             bind_group_layouts: &[Some(&bind_group_layout)],
             immediate_size: 0,
         });
 
-        // Create compute pipeline
         let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Compute Pipeline"),
             layout: Some(&pipeline_layout),
@@ -166,7 +162,6 @@ impl ComputePipeline {
             cache: None,
         });
 
-        // Create output texture
         let output_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Compute Output Texture"),
             size: wgpu::Extent3d {
@@ -185,7 +180,6 @@ impl ComputePipeline {
         });
         let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Default user params buffer
         let default_user_params = [0u8; 256];
         let default_user_params_buffer =
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -194,7 +188,6 @@ impl ComputePipeline {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             });
 
-        // Create storage buffers
         let storage_buffers: Vec<StorageBuffer> = buffer_decls
             .iter()
             .map(|decl| {
@@ -289,7 +282,6 @@ impl ComputePipeline {
         self.uniforms.write(queue, slot, uniforms);
     }
 
-    /// Get the output texture view
     pub fn output_view(&self) -> &wgpu::TextureView {
         &self.output_view
     }
@@ -309,8 +301,8 @@ impl ComputePipeline {
         }
     }
 
-    /// Zero-fill all non-persistent storage buffers.
-    /// Called before pass 0 each frame so shaders can accumulate into clean buffers.
+    /// Zero-fill all non-persistent storage buffers. Called before pass 0 each
+    /// frame so shaders accumulate into clean buffers.
     pub fn clear_non_persistent_buffers(&self, encoder: &mut wgpu::CommandEncoder) {
         for sb in &self.storage_buffers {
             if !sb.persistent {

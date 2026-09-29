@@ -1,6 +1,5 @@
-//! MIDI wire values: which device a message came from, and the messages Varda
-//! reads. Parsing stays in the MIDI module; clock and timecode read these
-//! without depending on it. See /spec/domain-dependencies.md.
+//! MIDI message values. Parsing lives in the MIDI module; clock and timecode
+//! read these without depending on it.
 
 /// Stable identifier for a MIDI device within a session.
 pub type DeviceId = u32;
@@ -37,8 +36,8 @@ pub enum MidiMessage {
     ClockContinue { device_id: DeviceId },
     /// MIDI Stop (0xFC) — stop clock
     ClockStop { device_id: DeviceId },
-    /// MTC quarter frame (0xF1) — one nibble of a position. Interpreted by
-    /// the timecode module; this layer only carries it.
+    /// MTC quarter frame (0xF1): one nibble of a position, decoded by the
+    /// timecode module.
     MtcQuarterFrame { device_id: DeviceId, data: u8 },
     /// MTC full-frame locate, as `hh mm ss ff` lifted out of its
     /// system-exclusive wrapper.

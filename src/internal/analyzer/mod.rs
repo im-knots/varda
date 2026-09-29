@@ -1,6 +1,4 @@
-//! Analyzer plugin system — frame analysis for modulation and shader preprocessing.
-//!
-//! See `/spec/plugin-architecture.md` for the full design.
+//! Analyzers: frame analysis for modulation and shader preprocessing.
 
 pub(crate) mod brightness;
 #[cfg(feature = "face-detection")]
@@ -22,38 +20,35 @@ use traits::{Analyzer, AnalyzerInput, AnalyzerSchema, AnalyzerSnapshot, Analyzer
 
 type AnalyzerFactory = Box<dyn Fn() -> Box<dyn Analyzer> + Send + Sync>;
 
-/// Execution category of a preprocessor type.
-///
-/// Shaders declare all categories identically in their ISF `PREPROCESSORS` block;
-/// the category tells the engine how to run the thing and whether a shader that
-/// declares it can load without it. See `/spec/effect-preprocessing.md`.
+/// Execution category of a preprocessor type. Shaders declare every category
+/// the same way in `PREPROCESSORS`; the category decides how the engine runs it
+/// and whether the shader can load without it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PreprocessorCategory {
-    /// Worker thread consuming a CPU readback of the deck's own frame, publishing
-    /// `AnalyzerSnapshot`s. Optional — degrades to default outputs.
+    /// Worker thread reading a CPU readback of the deck's frame and publishing
+    /// `AnalyzerSnapshot`s. Optional: falls back to default outputs.
     CpuAnalyzer,
-    /// GPU passes reading textures owned by an external device manager. The device
-    /// is acquired at load time; if it is unavailable the shader does not load.
+    /// GPU passes reading textures from an external device manager. The device
+    /// is acquired at load; if unavailable, the shader does not load.
     GpuDeviceBacked,
-    // A third category — GPU passes reading the deck's own frame (`GpuFrameDerived`,
-    // e.g. edge detect) — is designed in /spec/effect-preprocessing.md but not yet
-    // implemented; it needs a frame-input path no current preprocessor uses.
+    // GPU passes over the deck's own frame (e.g. edge detect) are not
+    // implemented; they need a frame-input path no preprocessor uses yet.
 }
 
 impl PreprocessorCategory {
-    /// Whether this category runs as GPU passes rather than an analyzer thread.
-    /// GPU categories have no factory and must never be handed to `DeckAnalyzers`.
+    /// Whether this category runs as GPU passes instead of an analyzer thread.
+    /// GPU categories have no factory and never go to `DeckAnalyzers`.
     pub(crate) fn is_gpu(self) -> bool {
         !matches!(self, Self::CpuAnalyzer)
     }
 
-    /// Whether a shader declaring this type must fail to load when it is unavailable.
+    /// Whether a shader declaring this type fails to load when it is unavailable.
     pub(crate) fn is_required(self) -> bool {
         matches!(self, Self::GpuDeviceBacked)
     }
 }
 
-/// Registry of available preprocessor types. Built at app startup via builder pattern.
+/// Available preprocessor types, built at startup.
 pub(crate) struct AnalyzerRegistry {
     factories: HashMap<String, AnalyzerFactory>,
     schemas: HashMap<String, AnalyzerSchema>,
@@ -69,7 +64,7 @@ impl AnalyzerRegistry {
         }
     }
 
-    /// Register a CPU-async analyzer type with a factory function.
+    /// Registers a CPU analyzer type with a factory.
     pub(crate) fn register<F>(mut self, analyzer_type: &str, factory: F) -> Self
     where
         F: Fn() -> Box<dyn Analyzer> + Send + Sync + 'static,
@@ -84,9 +79,8 @@ impl AnalyzerRegistry {
         self
     }
 
-    /// Register a GPU-inline preprocessor type. These have no factory and no worker
-    /// thread — the deck render path owns their passes — so the schema is supplied
-    /// directly rather than read off an instance.
+    /// Registers a GPU preprocessor type. It has no factory or worker thread
+    /// (the deck render path runs its passes), so the schema is passed in.
     pub(crate) fn register_gpu(
         mut self,
         preprocessor_type: &str,
@@ -103,23 +97,23 @@ impl AnalyzerRegistry {
         self
     }
 
-    /// Create a new instance of the given analyzer type. Returns `None` for GPU
-    /// categories, which have no factory by construction.
+    /// New instance of `analyzer_type`. `None` for GPU categories, which have
+    /// no factory.
     pub(crate) fn create(&self, analyzer_type: &str) -> Option<Box<dyn Analyzer>> {
         self.factories.get(analyzer_type).map(|f| f())
     }
 
-    /// List all registered preprocessor type names, GPU and CPU alike.
+    /// Every registered preprocessor type name, GPU and CPU.
     pub(crate) fn available_types(&self) -> Vec<&str> {
         self.categories.keys().map(String::as_str).collect()
     }
 
-    /// Get the output schema for a registered preprocessor type.
+    /// Output schema for a registered preprocessor type.
     pub(crate) fn schema_for(&self, analyzer_type: &str) -> Option<&AnalyzerSchema> {
         self.schemas.get(analyzer_type)
     }
 
-    /// Get the execution category for a registered preprocessor type.
+    /// Execution category for a registered preprocessor type.
     pub(crate) fn category_for(&self, preprocessor_type: &str) -> Option<PreprocessorCategory> {
         self.categories.get(preprocessor_type).copied()
     }
@@ -129,29 +123,27 @@ impl AnalyzerRegistry {
 
 struct AnalyzerInstance {
     refcount: usize,
-    /// Whether this analyzer reads the deck's pixels. Captured at creation
-    /// because the analyzer itself moves onto its worker thread.
+    /// Whether this analyzer reads the deck's pixels. Stored here because the
+    /// analyzer moves onto its worker thread.
     needs_frames: bool,
     thread: Option<JoinHandle<()>>,
     latest: Arc<ArcSwap<AnalyzerSnapshot>>,
     stop: Arc<AtomicBool>,
     frame_tx: Sender<AnalyzerInput>,
-    /// Disconnects when the worker thread exits (the matching sender is owned by
-    /// the thread). Used for a bounded, non-blocking stop on shutdown.
+    /// Disconnects when the worker thread exits (the thread holds the sender).
+    /// Lets shutdown stop it with a bounded, non-blocking wait.
     done_rx: Receiver<()>,
 }
 
-/// Grace period to wait for an analyzer worker to exit before detaching it, so a
-/// thread wedged in a blocking FFI call (e.g. ONNX Runtime) can never freeze
-/// application shutdown.
+/// How long to wait for an analyzer worker to exit before detaching it, so a
+/// thread stuck in blocking FFI (e.g. ONNX Runtime) can't freeze shutdown.
 const STOP_GRACE: Duration = Duration::from_secs(2);
 
-/// Manages running analyzer instances for a single deck.
+/// Running analyzer instances for one deck.
 pub(crate) struct DeckAnalyzers {
     instances: HashMap<String, AnalyzerInstance>,
-    /// Lazy GPU readback buffer — created on first `capture_frame` call.
+    /// Created on the first `capture_frame` call.
     readback: Option<crate::renderer::ReadbackBuffer>,
-    /// Cached dimensions of the current readback buffer.
     readback_size: (u32, u32),
 }
 
@@ -164,7 +156,7 @@ impl DeckAnalyzers {
         }
     }
 
-    /// Request an analyzer type. If already running, increments refcount.
+    /// Requests an analyzer type, or increments its refcount if running.
     pub(crate) fn request(
         &mut self,
         analyzer_type: &str,
@@ -179,8 +171,8 @@ impl DeckAnalyzers {
 
         let analyzer = registry.create(analyzer_type)?;
 
-        // Schema is static and does not require init(), so we can build the
-        // initial default snapshot before the worker thread runs.
+        // The schema needs no init(), so the default snapshot can be built
+        // before the worker runs.
         let schema = analyzer.output_schema();
         let needs_frames = analyzer.needs_frame_input();
         let initial = AnalyzerSnapshot::from_defaults(&schema);
@@ -192,15 +184,15 @@ impl DeckAnalyzers {
         let thread_latest = Arc::clone(&latest);
         let thread_stop = Arc::clone(&stop);
         let type_name = analyzer_type.to_owned();
-        // init() can be expensive (e.g. loading + optimizing ONNX models), so it
-        // runs inside the worker thread to keep the UI/render thread responsive.
+        // init() can be slow (e.g. loading ONNX models), so it runs on the
+        // worker thread.
         let options = options.clone();
 
         let thread = std::thread::Builder::new()
             .name(format!("analyzer-{type_name}"))
             .spawn(move || {
-                // Dropped when the thread exits (normally or via panic),
-                // disconnecting `done_rx` so stoppers can wait with a timeout.
+                // Dropped when the thread exits, even by panic, which
+                // disconnects `done_rx`.
                 let _done = done_tx;
                 analyzer_thread(
                     analyzer,
@@ -230,7 +222,7 @@ impl DeckAnalyzers {
         Some(handle)
     }
 
-    /// Release an analyzer reference. Stops when refcount reaches zero.
+    /// Releases a reference. Stops the analyzer at refcount zero.
     pub(crate) fn release(&mut self, analyzer_type: &str) {
         let should_remove = if let Some(inst) = self.instances.get_mut(analyzer_type) {
             inst.refcount = inst.refcount.saturating_sub(1);
@@ -244,7 +236,7 @@ impl DeckAnalyzers {
         }
     }
 
-    /// Get the latest snapshot for a specific analyzer type.
+    /// Latest snapshot for an analyzer type.
     pub(crate) fn latest_snapshot(
         &self,
         analyzer_type: &str,
@@ -254,7 +246,7 @@ impl DeckAnalyzers {
             .map(|inst| inst.latest.load())
     }
 
-    /// Iterate over all active analyzer snapshots: (`analyzer_type`, snapshot).
+    /// All active snapshots as (`analyzer_type`, snapshot).
     pub(crate) fn all_snapshots(
         &self,
     ) -> impl Iterator<Item = (String, arc_swap::Guard<Arc<AnalyzerSnapshot>>)> + '_ {
@@ -263,7 +255,7 @@ impl DeckAnalyzers {
             .map(|(k, inst)| (k.clone(), inst.latest.load()))
     }
 
-    /// Send a frame to all running analyzers (non-blocking, drops if full).
+    /// Sends a frame to every running analyzer. Non-blocking; drops if full.
     pub(crate) fn send_frame(
         &self,
         input: &AnalyzerInput,
@@ -281,12 +273,10 @@ impl DeckAnalyzers {
         }
     }
 
-    /// Remove instances whose worker thread has exited (e.g. `init()` failed
-    /// because a dependency like ONNX Runtime is unavailable). Without this a
-    /// dead instance lingers in the map, causing the render loop to perform a
-    /// per-frame GPU readback and spam "channel disconnected" warnings on the
-    /// hot path. Pruning is cheap: a non-blocking `try_recv` on the rendezvous
-    /// channel that disconnects when the worker drops its sender.
+    /// Removes instances whose worker has exited (e.g. `init()` failed because
+    /// ONNX Runtime is missing). Otherwise the render loop keeps doing a GPU
+    /// readback per frame and logging "channel disconnected". Costs one
+    /// non-blocking `try_recv` per instance.
     fn prune_dead(&mut self) {
         let dead: Vec<String> = self
             .instances
@@ -305,9 +295,9 @@ impl DeckAnalyzers {
         }
     }
 
-    /// Capture the current deck texture for analysis and deliver previous frame's data to analyzers.
-    /// Call this from the render loop after effects are applied.
-    /// Returns a command buffer with the readback copy command, or None if no analyzers are active.
+    /// Copies the deck texture for analysis and delivers the previous frame's
+    /// data to the analyzers. Call from the render loop after effects. Returns
+    /// the readback command buffer, or `None` if no analyzer needs frames.
     pub(crate) fn capture_frame(
         &mut self,
         device: &wgpu::Device,
@@ -319,18 +309,10 @@ impl DeckAnalyzers {
             return None;
         }
 
-        // Analyzers that produce output from their options alone do not want the
-        // frame, and reading it for them is worse than wasteful. The readback
-        // stalls the pipeline for milliseconds, and it assumes eight-bit RGBA
-        // while a deck's texture is in the linear-light colour-path format, so
-        // the copy fails validation. That error is contained by the deck rather
-        // than raised, and the visible result is a black frame with no message,
-        // which is how this went unnoticed: no shader had ever attached a
-        // frameless CPU analyzer to a float deck.
-        //
-        // They still receive source dimensions because geometry-only analyzers
-        // may certify camera packets against the render aspect without reading
-        // pixels.
+        // Skip the readback when no analyzer reads pixels: it stalls the
+        // pipeline, and its RGBA8 assumption fails validation on a float deck.
+        // Analyzers still get source dimensions, since geometry-only analyzers
+        // check camera packets against the render aspect.
         if !self.instances.values().any(|i| i.needs_frames) {
             let placeholder = AnalyzerInput {
                 frame: Vec::new(),
@@ -346,14 +328,8 @@ impl DeckAnalyzers {
         let tex_width = source_texture.width();
         let tex_height = source_texture.height();
 
-        // Read back in the texture's own format.
-        //
-        // This used to be hard-coded to eight-bit RGBA while a deck's texture
-        // is `COLOR_PATH_FORMAT`, four half-floats, so the copy asked for half
-        // the bytes a row actually holds and wgpu rejected the encoder with
-        // "number of bytes per row is less than the number of bytes in a
-        // complete row". The whole deck was then quarantined, which is how a
-        // camera with an analyzer-backed effect on it died outright.
+        // Read back in the texture's own format; a mismatched row size makes
+        // wgpu reject the encoder and the deck gets quarantined.
         let Some(readback_format) = readback_format_for(source_texture.format()) else {
             log::warn!(
                 "no analyzer readback for texture format {:?}; frame-consuming \
@@ -363,7 +339,7 @@ impl DeckAnalyzers {
             return None;
         };
 
-        // Create or recreate readback buffer if dimensions or format changed
+        // Recreate the readback buffer if size or format changed.
         if self.readback.is_none()
             || self.readback_size != (tex_width, tex_height)
             || self
@@ -381,14 +357,12 @@ impl DeckAnalyzers {
             self.readback_size = (tex_width, tex_height);
         }
 
-        // Read the PREVIOUS frame's data (before mutating readback state)
+        // Read the previous frame's data before touching the readback state.
         let prev_frame = self.readback.as_mut().and_then(|rb| rb.try_read(device));
 
-        // Deliver previous frame data to analyzer threads
         if let Some(rgba_data) = prev_frame {
             let input = AnalyzerInput {
-                // Analyzers are promised eight-bit RGBA whatever the deck's
-                // own format is.
+                // Analyzers always get RGBA8, whatever the deck format.
                 frame: frame_to_rgba8(&rgba_data),
                 width: self.readback_size.0,
                 height: self.readback_size.1,
@@ -396,8 +370,8 @@ impl DeckAnalyzers {
                 state: AnalyzerStateSnapshot::default(),
             };
             for (name, inst) in &self.instances {
-                // A frameless analyzer sharing a deck with a frame-consuming one
-                // is still ticked, but with nothing it might mistake for pixels.
+                // A frameless analyzer on the same deck is still ticked, but
+                // gets no pixels.
                 let payload = if inst.needs_frames {
                     input.clone()
                 } else {
@@ -420,7 +394,7 @@ impl DeckAnalyzers {
             }
         }
 
-        // Enqueue copy for THIS frame (will be read next frame)
+        // Queue this frame's copy, read next frame.
         let readback = self.readback.as_mut().unwrap();
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Analyzer readback"),
@@ -429,7 +403,7 @@ impl DeckAnalyzers {
         Some(encoder.finish())
     }
 
-    /// Check if any analyzer instances are currently running.
+    /// Whether any analyzer instance is running.
     pub(crate) fn has_active_instances(&self) -> bool {
         !self.instances.is_empty()
     }
@@ -438,7 +412,7 @@ impl DeckAnalyzers {
         self.instances.keys().cloned().collect()
     }
 
-    /// Stop all running instances.
+    /// Stops every running instance.
     pub(crate) fn shutdown(&mut self) {
         let types: Vec<String> = self.instances.keys().cloned().collect();
         for t in types {
@@ -465,8 +439,7 @@ fn analyzer_thread(
     stop: &AtomicBool,
     type_name: &str,
 ) {
-    // Run potentially-expensive initialization off the caller's thread. On
-    // failure the thread exits and the deck keeps the default snapshot.
+    // On init failure the thread exits and the deck keeps the default snapshot.
     if let Err(e) = analyzer.init(options) {
         log::error!("Failed to init analyzer '{type_name}': {e}");
         return;
@@ -490,10 +463,9 @@ fn analyzer_thread(
     log::info!("Analyzer thread '{type_name}' stopped");
 }
 
-/// Stop a single analyzer instance with a bounded wait. Signals the worker to
-/// stop and waits up to [`STOP_GRACE`] for it to exit; if it does, the handle is
-/// joined (reaped). If it does not — e.g. the thread is wedged in a blocking FFI
-/// call — the handle is detached so application shutdown is never frozen.
+/// Stops one analyzer with a bounded wait. Waits up to [`STOP_GRACE`] for the
+/// worker to exit and joins it; otherwise (e.g. stuck in FFI) detaches it so
+/// shutdown never freezes.
 fn stop_instance(mut inst: AnalyzerInstance, type_name: &str, suffix: &str) {
     inst.stop.store(true, Ordering::Relaxed);
     drop(inst.frame_tx);
@@ -509,7 +481,7 @@ fn stop_instance(mut inst: AnalyzerInstance, type_name: &str, suffix: &str) {
         }
         log::info!("Stopped analyzer '{type_name}'{suffix}");
     } else {
-        // Detach the wedged thread; the OS reclaims it on process exit.
+        // Detach the stuck thread; the OS reclaims it at exit.
         let _ = inst.thread.take();
         log::warn!("Analyzer '{type_name}'{suffix} did not stop within {STOP_GRACE:?}; detaching");
     }
@@ -517,7 +489,7 @@ fn stop_instance(mut inst: AnalyzerInstance, type_name: &str, suffix: &str) {
 
 // ── Default Registry ────────────────────────────────────────────────────────
 
-/// The readback format that matches a deck texture, if analyzers can read it.
+/// Readback format matching a deck texture, if analyzers can read it.
 fn readback_format_for(format: wgpu::TextureFormat) -> Option<crate::renderer::ReadbackFormat> {
     use crate::renderer::ReadbackFormat as R;
     use wgpu::TextureFormat as F;
@@ -531,11 +503,9 @@ fn readback_format_for(format: wgpu::TextureFormat) -> Option<crate::renderer::R
     })
 }
 
-/// One linear-light channel as an eight-bit sRGB sample.
-///
-/// The colour path is linear, and analyzers were written against the
-/// display-encoded frame a deck used to hand them, so handing them linear
-/// values unchanged would silently darken every brightness and face result.
+/// One linear-light channel as an eight-bit sRGB sample. Analyzers expect
+/// display-encoded values; linear input would darken brightness and face
+/// results.
 fn linear_to_srgb8(value: f32) -> u8 {
     let v = value.clamp(0.0, 1.0);
     let encoded = if v <= 0.003_130_8 {
@@ -549,7 +519,7 @@ fn linear_to_srgb8(value: f32) -> u8 {
     }
 }
 
-/// Convert a readback frame to the eight-bit RGBA the analyzer contract states.
+/// Converts a readback frame to the RGBA8 analyzers expect.
 fn frame_to_rgba8(frame: &crate::renderer::ReadbackFrame) -> Vec<u8> {
     use crate::renderer::ReadbackFormat as R;
     let bytes = frame.bytes();
@@ -568,7 +538,7 @@ fn frame_to_rgba8(frame: &crate::renderer::ReadbackFrame) -> Vec<u8> {
                 for channel in 0..4 {
                     let raw = u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]);
                     let value = f32::from(half::f16::from_bits(raw));
-                    // Alpha is already display-linear; only colour is encoded.
+                    // Alpha is linear; only color channels are encoded.
                     out.push(if channel == 3 {
                         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                         {
@@ -603,15 +573,13 @@ fn frame_to_rgba8(frame: &crate::renderer::ReadbackFrame) -> Vec<u8> {
             }
             out
         }
-        // Video layouts never reach a deck texture; the format gate above
-        // refuses them before a buffer is ever built.
-        // Video layouts, plus the content light meter's own readback, which never
-        // reaches the analyzer: it consumes deck frames.
+        // The format gate refuses video layouts before a buffer is built, and
+        // `Rgba32Float` is the content light meter's readback, not a deck's.
         R::Uyvy | R::P216 | R::Rgba32Float => Vec::new(),
     }
 }
 
-/// Build the default analyzer registry with all built-in analyzers.
+/// Default registry with every built-in analyzer.
 pub(crate) fn default_registry() -> AnalyzerRegistry {
     #[allow(unused_mut)]
     let mut registry = AnalyzerRegistry::new().register("brightness", || {
@@ -631,13 +599,8 @@ mod tests {
     use super::*;
     use std::time::Instant;
 
-    /// A frame-consuming analyzer on a colour-path deck must encode a legal copy.
-    ///
-    /// The readback asked for eight-bit rows while the deck texture holds four
-    /// half-floats, so wgpu rejected the encoder and quarantined the whole
-    /// deck: a camera with an analyzer-backed effect on it went black with
-    /// "number of bytes per row is less than the number of bytes in a complete
-    /// row". Submitting the encoder is the assertion, because that is where
+    /// A frame-consuming analyzer on a color-path deck must encode a legal
+    /// copy. Submitting the encoder is the assertion, since that is where
     /// validation runs.
     #[test]
     fn colour_path_deck_readback_encodes_a_legal_copy() {
@@ -682,9 +645,7 @@ mod tests {
             readback_format_for(crate::renderer::context::COLOR_PATH_FORMAT),
             Some(crate::renderer::ReadbackFormat::Rgba16Float)
         );
-        // Linear light is display-encoded on the way out: mid-grey in linear is
-        // well above mid-grey once encoded, and analyzers were written against
-        // the encoded frame.
+        // Output is display-encoded: linear mid-gray encodes well above mid-gray.
         assert_eq!(linear_to_srgb8(0.0), 0);
         assert_eq!(linear_to_srgb8(1.0), 255);
         assert!(linear_to_srgb8(0.5) > 180, "linear 0.5 encodes bright");
@@ -762,10 +723,8 @@ mod tests {
     #[cfg(feature = "face-detection")]
     #[test]
     fn dead_worker_is_pruned() {
-        // Force face_detect's init() to fail by pointing it at a missing model
-        // file. The worker thread then exits; the instance must be pruned so the
-        // render loop stops per-frame GPU readback and "channel disconnected"
-        // log spam. Shutdown must also stay fast (the worker already exited).
+        // A missing model file makes face_detect's init() fail and the worker
+        // exit. The instance must be pruned, and shutdown must stay fast.
         let registry = default_registry();
         let mut deck = DeckAnalyzers::new();
         let opts = serde_json::json!({
@@ -775,11 +734,8 @@ mod tests {
             .request("face_detect", &registry, &opts)
             .expect("should spawn worker");
 
-        // Poll for the worker to run init() (which fails) and exit, then be
-        // pruned. A single fixed sleep is racy: under CPU load the worker may not
-        // have finished the failing ONNX init() and dropped its done_tx yet.
-        // Poll prune_dead() until the dead instance is removed, bounded by a
-        // generous timeout so a genuine hang still fails the test.
+        // Poll prune_dead() instead of one sleep: under load the failing init()
+        // may not have finished. The timeout still fails a real hang.
         let deadline = Instant::now() + Duration::from_secs(10);
         while deck.has_active_instances() && Instant::now() < deadline {
             deck.prune_dead();

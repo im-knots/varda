@@ -1,16 +1,12 @@
-//! Screen/window capture manager — shared capture sessions for N deck consumers.
+//! Screen and window capture manager.
 //!
-//! One `ScreenCaptureManager` owns all capture sessions. Each captured display
-//! or window produces one shared GPU texture that any number of decks read from,
-//! exactly like `CameraManager`: capture runs on a dedicated thread per target,
-//! publishes into an `Arc<Mutex<Option<CaptureFrame>>>`, and the render thread
-//! only does a non-blocking `try_lock` + `write_texture`.
+//! Like `CameraManager`: each captured display or window has one capture
+//! thread and one shared GPU texture that any number of decks read. The thread
+//! publishes into an `Arc<Mutex<Option<CaptureFrame>>>`; the render thread
+//! does a non-blocking `try_lock` and `write_texture`.
 //!
-//! Sessions are keyed by an opaque [`CaptureId`] minted at `open`, **not** by an
-//! index into the enumerated target list — a rescan reorders that list, and an
-//! open capture must survive it.
-//!
-//! See spec/screen-capture.md.
+//! Sessions are keyed by a [`CaptureId`] assigned at `open`, not by an index
+//! into the target list, because a rescan reorders that list.
 
 pub mod backend;
 pub mod platform;
@@ -28,16 +24,14 @@ use std::sync::{Arc, Mutex};
 /// Opaque handle to an open capture session.
 pub type CaptureId = u32;
 
-/// Sentinel for a capture deck that has no live session — the target named by a
-/// restored scene is not currently on screen. The deck keeps its effect chain,
-/// opacity, and MIDI mappings and renders black until repointed, rather than
-/// being dropped. The manager never mints this id, so it can never collide with
-/// a real session. See spec/screen-capture.md § Configuration and Persistence.
+/// Session id of a capture deck whose saved target is not on screen. The deck
+/// keeps its effect chain, opacity and MIDI mappings and renders black until
+/// repointed. The manager never assigns this id.
 pub const UNBOUND_CAPTURE_ID: CaptureId = CaptureId::MAX;
 
-/// An active capture session with its shared GPU texture.
+/// An open capture session and its shared GPU texture.
 struct ActiveCapture {
-    /// Handle-free identity, used to dedupe `open` onto an existing session.
+    /// Handle-free identity, used to reuse an existing session on `open`.
     identity: TargetIdentity,
     label: String,
     texture: wgpu::Texture,
@@ -45,9 +39,9 @@ struct ActiveCapture {
     width: u32,
     height: u32,
     format: CapturePixelFormat,
-    /// How many decks are using this capture.
+    /// Number of decks using this capture.
     ref_count: u32,
-    /// Latest frame — capture thread swaps in, render thread takes.
+    /// Latest frame. The capture thread swaps it in, the render thread takes it.
     frame_data: Arc<Mutex<Option<CaptureFrame>>>,
     /// Live config, re-read by the capture thread each tick.
     config: Arc<Mutex<CaptureConfig>>,
@@ -56,7 +50,7 @@ struct ActiveCapture {
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
-/// Manages capture-target enumeration, capture sessions, and shared textures.
+/// Target enumeration, capture sessions and shared textures.
 pub struct ScreenCaptureManager {
     targets: Vec<CaptureTargetInfo>,
     active: HashMap<CaptureId, ActiveCapture>,
@@ -84,7 +78,7 @@ impl ScreenCaptureManager {
         mgr
     }
 
-    /// Explicit no-op mode for the `--no-screen-capture` CLI flag.
+    /// Disabled manager for the `--no-screen-capture` flag.
     pub fn new_disabled() -> Self {
         Self {
             targets: Vec::new(),
@@ -95,12 +89,11 @@ impl ScreenCaptureManager {
         }
     }
 
-    /// Whether a capture can actually be opened.
+    /// Whether a capture can be opened.
     ///
-    /// Gated on a real backend, not on the cargo feature: the feature is
-    /// default-on everywhere but only macOS has an implementation, so keying
-    /// off the feature would have Linux and Windows advertise capture in the
-    /// library panel and then fail every open.
+    /// Checks for a real backend, not the cargo feature: the feature is on
+    /// everywhere, but a platform without a backend would list capture and then
+    /// fail every open.
     pub fn is_available(&self) -> bool {
         !self.disabled && platform::backend_name() != platform::unsupported::backend_name()
     }
@@ -117,7 +110,7 @@ impl ScreenCaptureManager {
         self.permission
     }
 
-    /// Ask the OS for capture permission and refresh the cached state.
+    /// Asks the OS for capture permission and refreshes the cached state.
     pub fn request_permission(&mut self) {
         if self.disabled {
             return;
@@ -126,8 +119,8 @@ impl ScreenCaptureManager {
         self.permission = platform::permission_state();
     }
 
-    /// Re-enumerate displays and windows. Manual, never polled — window lists
-    /// churn constantly and polling would thrash the library panel.
+    /// Re-enumerates displays and windows. Manual only; window lists change
+    /// constantly and polling would churn the library panel.
     pub fn scan_targets(&mut self) {
         if self.disabled {
             self.targets.clear();
@@ -154,13 +147,12 @@ impl ScreenCaptureManager {
         &self.targets
     }
 
-    /// Find an enumerated target by its handle-free identity. This is how a
-    /// restored scene rebinds onto a live target.
+    /// Finds an enumerated target by its handle-free identity, so a restored
+    /// scene can rebind to a live target.
     ///
-    /// Windows match on `(app, title)` first, then fall back to a **unique**
-    /// match on `app` alone — an editor or browser that was retitled is the
-    /// common case, but if two windows of the same app are open there is no
-    /// principled way to choose, so the fallback declines.
+    /// Windows match on `(app, title)` first, then on `app` alone if exactly one
+    /// window of that app exists. Retitled windows are common; with two windows of
+    /// one app there is no way to choose, so the fallback fails.
     pub fn find_target(&self, identity: &TargetIdentity) -> Option<&CaptureTargetInfo> {
         if let Some(exact) = self.targets.iter().find(|t| &t.identity() == identity) {
             return Some(exact);
@@ -183,8 +175,8 @@ impl ScreenCaptureManager {
         }
     }
 
-    /// Open a capture and start its thread. If an identical target is already
-    /// captured, increments the ref count and returns the existing session.
+    /// Opens a capture and starts its thread. An identical target already open
+    /// gets its ref count incremented and its session reused.
     ///
     /// Returns `(id, width, height)` of the shared texture.
     ///
@@ -205,9 +197,8 @@ impl ScreenCaptureManager {
             ));
         }
         if !self.permission.allows_capture() {
-            // Re-check rather than trusting a state cached at startup: the user
-            // may have granted access since, and on macOS that is exactly the
-            // flow (prompt → System Settings → return).
+            // Re-check instead of using the startup state: on macOS the user may
+            // have granted access in System Settings since.
             self.permission = platform::permission_state();
             if !self.permission.allows_capture() {
                 return Err(CaptureError::PermissionDenied);
@@ -230,8 +221,8 @@ impl ScreenCaptureManager {
         self.start_session(target, session, config, device)
     }
 
-    /// Open a synthetic capture. Always available — used by tests, benches, and
-    /// the headless CI path, where no display server or permission exists.
+    /// Opens a synthetic capture. Always available; used by tests, benches and
+    /// headless CI, which have no display server or permission.
     ///
     /// # Errors
     ///
@@ -273,18 +264,16 @@ impl ScreenCaptureManager {
             let (w, h) = session.resolution();
             (w.max(1), h.max(1))
         };
-        // The texture is allocated in the backend's own layout so no CPU
-        // swizzle is ever needed. A frame that has already arrived is
-        // authoritative; otherwise take the backend's declared format, which is
-        // the only answer a push-based backend can give at `open`.
+        // Allocate the texture in the backend's layout so no CPU swizzle is
+        // needed. Use an arrived frame's format if there is one, otherwise the
+        // backend's declared format.
         let first = session.next_frame();
         let format = first
             .as_ref()
             .map_or_else(|| session.pixel_format(), |f| f.format);
 
         let id = self.next_id;
-        // Skip the unbound sentinel so a restored-but-unbound deck can never be
-        // mistaken for a live session.
+        // Skip the unbound sentinel so an unbound deck never matches a live session.
         self.next_id = self.next_id.wrapping_add(1);
         if self.next_id == UNBOUND_CAPTURE_ID {
             self.next_id = 0;
@@ -371,7 +360,7 @@ impl ScreenCaptureManager {
         (texture, view)
     }
 
-    /// Release a capture reference. Stops the thread when the count hits zero.
+    /// Releases a capture reference. Stops the thread when the count hits zero.
     pub fn release(&mut self, id: CaptureId) {
         let Some(active) = self.active.get_mut(&id) else {
             return;
@@ -390,23 +379,18 @@ impl ScreenCaptureManager {
         }
     }
 
-    /// Reconcile the live sessions against the decks that actually hold them.
+    /// Reconciles live sessions with the decks that hold them.
     ///
-    /// `holders` maps a capture id to the number of decks referencing it right
-    /// now. Any session no deck holds is stopped, and surviving sessions have
-    /// their ref count reset to the real holder count.
+    /// `holders` maps each capture id to the number of decks using it now.
+    /// Sessions no deck holds are stopped, and the rest get their ref count reset
+    /// to the holder count.
     ///
-    /// Ref counting alone is not enough: `open`/`release` are only paired on the
-    /// explicit remove-deck path, but a deck can be dropped without passing
-    /// through it — a scene diff rebuilding a slot, an undo, a truncated
-    /// channel, a removed channel, a whole mixer replaced on scene load. Each of
-    /// those left the capture thread grabbing and downscaling frames for the
-    /// rest of the session, off-screen and invisible in the UI. Deriving the
-    /// count from the decks that exist makes it correct by construction instead
-    /// of relying on every future call site to release.
+    /// Needed because `open`/`release` pair only on the explicit remove-deck path.
+    /// Decks also disappear through scene diffs, undo, removed or truncated
+    /// channels and scene loads, which would leave capture threads running.
     ///
-    /// Safe to call once per frame: capture sessions are opened and attached to
-    /// a deck within a single command, never across a frame boundary.
+    /// Safe to call every frame: a session is opened and attached to its deck
+    /// within one command.
     pub fn reconcile_holders(&mut self, holders: &HashMap<CaptureId, u32>) {
         let orphans: Vec<CaptureId> = self
             .active
@@ -434,7 +418,7 @@ impl ScreenCaptureManager {
         }
     }
 
-    /// Shared texture view for a capture (decks read from this).
+    /// Shared texture view that decks read.
     pub fn texture_view(&self, id: CaptureId) -> Option<&wgpu::TextureView> {
         self.active.get(&id).map(|a| &a.texture_view)
     }
@@ -455,7 +439,7 @@ impl ScreenCaptureManager {
         self.active.contains_key(&id)
     }
 
-    /// Whether the capture has delivered at least one frame and is still healthy.
+    /// Whether the capture has delivered a frame and is still healthy.
     pub fn is_connected(&self, id: CaptureId) -> bool {
         self.active
             .get(&id)
@@ -473,8 +457,8 @@ impl ScreenCaptureManager {
         active.config.lock().ok().map(|c| c.clone())
     }
 
-    /// Update a live capture's config. The capture thread picks it up on its
-    /// next tick; no session restart.
+    /// Updates a live capture's config. The capture thread applies it on its
+    /// next tick without restarting.
     pub fn set_config(&mut self, id: CaptureId, config: CaptureConfig) {
         let Some(active) = self.active.get_mut(&id) else {
             return;
@@ -484,7 +468,7 @@ impl ScreenCaptureManager {
         }
     }
 
-    /// Mutate one field of a live capture's config.
+    /// Changes one field of a live capture's config.
     pub fn update_config(&mut self, id: CaptureId, f: impl FnOnce(&mut CaptureConfig)) {
         let Some(active) = self.active.get_mut(&id) else {
             return;
@@ -495,8 +479,7 @@ impl ScreenCaptureManager {
         }
     }
 
-    /// Upload frames only for captures whose IDs are in the set. Captures not
-    /// in the set skip the GPU upload entirely, so an invisible capture deck
+    /// Uploads frames only for captures in `needed`, so an invisible capture deck
     /// costs nothing.
     pub fn update_selective(
         &mut self,
@@ -511,7 +494,7 @@ impl ScreenCaptureManager {
         }
     }
 
-    /// Upload frames for every active capture.
+    /// Uploads frames for every active capture.
     pub fn update(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         for (id, active) in &mut self.active {
             Self::upload_frame(*id, active, device, queue);
@@ -533,8 +516,8 @@ impl ScreenCaptureManager {
             return;
         };
 
-        // A crop or a target resize changes the delivered size mid-session.
-        // Reallocate rather than dropping the frame, so crop is usable live.
+        // A crop or target resize changes the frame size mid-session. Reallocate
+        // instead of dropping the frame, so crop works live.
         if frame.width != active.width
             || frame.height != active.height
             || frame.format != active.format
@@ -587,18 +570,16 @@ impl Drop for ScreenCaptureManager {
     }
 }
 
-/// Shortest and longest gap between polls of a self-paced backend. The OS owns
-/// the delivery rate there, so this only bounds how long a delivered frame sits
-/// unclaimed; it is oversampling, not capturing.
+/// Poll gap bounds for a self-paced backend. The OS sets the delivery rate, so
+/// this only limits how long a delivered frame waits to be taken.
 const SELF_PACED_MIN_POLL: std::time::Duration = std::time::Duration::from_millis(1);
 const SELF_PACED_MAX_POLL: std::time::Duration = std::time::Duration::from_millis(4);
 
-/// How long the capture thread sleeps between polls.
+/// Sleep between capture-thread polls.
 ///
-/// A polled backend produces a frame per call, so the loop *is* the clock and
-/// sleeps a full frame interval. A self-paced backend already delivers at the
-/// requested rate, so the loop must oversample it: polling at the same nominal
-/// rate on a second, drifting clock silently drops and doubles frames. See
+/// A polled backend makes a frame per call, so the loop sleeps a full frame
+/// interval. A self-paced backend is oversampled, because polling at the same
+/// nominal rate on a second clock drops and doubles frames. See
 /// [`ScreenCaptureBackend::is_self_paced`].
 fn poll_interval(frame_interval: std::time::Duration, self_paced: bool) -> std::time::Duration {
     if !self_paced {
@@ -607,11 +588,10 @@ fn poll_interval(frame_interval: std::time::Duration, self_paced: bool) -> std::
     (frame_interval / 8).clamp(SELF_PACED_MIN_POLL, SELF_PACED_MAX_POLL)
 }
 
-/// Background capture loop — one per active target.
+/// Capture loop, one per open target.
 ///
-/// Delivery is paced by `config.rate`, which is deliberately decoupled from the
-/// render rate: a self-capture at 60 fps would compound render cost every frame.
-/// See spec/screen-capture.md § Self-Capture and Feedback Safety.
+/// Paced by `config.rate`, independent of the render rate, so a self-capture
+/// does not add render cost every frame.
 fn capture_loop(
     session: &mut dyn ScreenCaptureBackend,
     id: CaptureId,
@@ -644,14 +624,14 @@ fn capture_loop(
 
         if let Some(frame) = session.next_frame() {
             connected.store(true, Ordering::SeqCst);
-            // Latest-wins: overwrite whatever the render thread has not taken.
+            // Latest wins: overwrite any frame the render thread has not taken.
             if let Ok(mut slot) = frame_data.lock() {
                 *slot = Some(frame);
             }
         }
 
-        // A backend that blocks internally until a frame is ready will already
-        // have consumed the budget, in which case this is a no-op.
+        // No-op when the backend blocked until a frame was ready and used up the
+        // interval.
         if let Some(rest) = interval.checked_sub(tick.elapsed()) {
             std::thread::sleep(rest);
         }
@@ -675,9 +655,8 @@ mod tests {
         assert_eq!(poll_interval(interval, false), interval);
     }
 
-    /// The bug this pins: polling a self-paced backend at its own rate puts two
-    /// independent clocks of the same frequency in series, which drops and
-    /// doubles frames as they drift. Oversampling is the fix.
+    /// Polling a self-paced backend at its own rate drops and doubles frames as
+    /// the two clocks drift, so it must be oversampled.
     #[test]
     fn self_paced_backend_is_oversampled_not_matched() {
         for fps in [1.0_f32, 15.0, 30.0, 60.0, 120.0] {
@@ -696,8 +675,7 @@ mod tests {
 
     #[test]
     fn self_paced_poll_never_busy_spins() {
-        // A degenerate interval must still sleep, or the capture thread would
-        // burn a core.
+        // A degenerate interval must still sleep, or the thread spins a core.
         assert!(poll_interval(Duration::ZERO, true) >= SELF_PACED_MIN_POLL);
     }
 
@@ -740,7 +718,7 @@ mod tests {
             title: "Untitled".into(),
         };
         assert!(mgr.find_target(&exact).is_some());
-        // Retitled window still resolves via the unique-app fallback.
+        // A retitled window resolves through the unique-app fallback.
         let retitled = TargetIdentity::Window {
             app: "com.example.mock".into(),
             title: "Something Else".into(),
@@ -752,7 +730,7 @@ mod tests {
     fn find_target_declines_ambiguous_app_fallback() {
         let mut mgr = ScreenCaptureManager::new_disabled();
         let mut targets = mock_targets();
-        // Two windows of the same app — no principled way to pick one.
+        // Two windows of the same app: no way to pick one.
         let mut second = targets[2].clone();
         second.platform_id = 200;
         second.title = Some("Second".into());
@@ -782,7 +760,7 @@ mod tests {
     #[test]
     fn disabled_manager_refuses_to_open() {
         let Some(gpu) = crate::testing::headless_gpu() else {
-            return; // No adapter in this environment — skip, per project convention.
+            return; // No adapter: skip.
         };
         let mut mgr = ScreenCaptureManager::new_disabled();
         let target = mock_targets().remove(0);
@@ -805,14 +783,14 @@ mod tests {
             .expect("mock open");
         assert_eq!((w, h), (1920, 1080));
 
-        // Second deck on the same target reuses the session.
+        // A second deck on the same target reuses the session.
         let (id2, _, _) = mgr
             .open_mock(&target, CaptureConfig::default(), &gpu.device)
             .expect("mock reopen");
         assert_eq!(id, id2, "same target must share one capture session");
         assert_eq!(mgr.active_ids().len(), 1);
 
-        // One holder leaving must not tear down the shared session.
+        // One holder leaving must not stop the shared session.
         mgr.release(id);
         assert!(
             mgr.is_active(id),
@@ -851,10 +829,8 @@ mod tests {
 
     #[test]
     fn a_window_shaped_unlike_the_deck_leaves_the_scaling_mode_something_to_do() {
-        // Regression: the deck size was passed straight through as scale_to, so
-        // a 4:3 window arrived as a 16:9 texture (letterboxed by the OS) and the
-        // deck's Scale control did nothing — source and target dimensions were
-        // identical, which every mode resolves to identity UVs.
+        // Passing the deck size as scale_to made a 4:3 window arrive as a 16:9
+        // texture (letterboxed by the OS), so the deck's Scale control did nothing.
         let Some(gpu) = crate::testing::headless_gpu() else {
             return;
         };
@@ -897,14 +873,14 @@ mod tests {
             .open_mock(&target, CaptureConfig::default(), &gpu.device)
             .expect("mock open");
 
-        // Empty set: no upload, and crucially no panic on the absent entry.
+        // Empty set: no upload and no panic on the missing entry.
         mgr.update_selective(&gpu.device, &gpu.queue, &std::collections::HashSet::new());
         assert!(mgr.is_active(id));
         mgr.release(id);
     }
 
-    /// The leak this pins: a deck dropped without going through `remove_deck`
-    /// left its capture thread running for the rest of the session.
+    /// A deck dropped without `remove_deck` must not leave its capture thread
+    /// running.
     #[test]
     fn reconcile_stops_a_session_no_deck_holds_any_more() {
         let Some(gpu) = crate::testing::headless_gpu() else {
@@ -916,7 +892,7 @@ mod tests {
             .open_mock(&target, CaptureConfig::default(), &gpu.device)
             .expect("mock open");
 
-        // Still held: reconciling must leave it alone.
+        // Still held, so reconciling leaves it alone.
         mgr.reconcile_holders(&std::collections::HashMap::from([(id, 1)]));
         assert!(mgr.is_active(id));
 
@@ -943,9 +919,8 @@ mod tests {
             .expect("mock reopen");
         assert_eq!(id, id2);
 
-        // One of the two decks vanished without releasing, so the count is
-        // stale at 2. After reconciling, the one remaining release must be
-        // enough to close the session.
+        // One of two decks vanished without releasing, so the count is stale at 2.
+        // After reconciling, one release closes the session.
         mgr.reconcile_holders(&std::collections::HashMap::from([(id, 1)]));
         mgr.release(id);
         assert!(

@@ -1,4 +1,4 @@
-// Blit shader - copies a texture with opacity, UV transform, and output rotation
+// Blit shader: copies a texture with opacity, UV transform, and output rotation.
 // BlitParams is 48 bytes and follows WGSL's 16-byte struct alignment.
 
 struct BlitParams {
@@ -8,14 +8,12 @@ struct BlitParams {
     uv_offset: vec2<f32>,
     // 1 = source is premultiplied-alpha (scale rgb+a by opacity); 0 = straight (scale alpha only).
     premultiplied: u32,
-    // 1 = apply the sRGB transfer function on output. Used when blitting
-    // linear-light content into a NON-sRGB target that will be sampled by a
-    // consumer expecting gamma-encoded data (egui previews). Leave 0 for sRGB
-    // targets, where the hardware does the encode on write.
+    // 1 = apply the sRGB transfer on output, for non-sRGB targets read as
+    // gamma-encoded (egui previews). 0 for sRGB targets, which encode in hardware.
     srgb_encode: u32,
     // Number of destination code intervals (255 or 1023).
     quantization_levels: f32,
-    // Static destination-aware dither toggle.
+    // 1 enables destination-aware dither.
     dither_enabled: u32,
     // Transfer at this boundary: 0 = SDR (sRGB), 1 = HDR10 (ST 2084 PQ),
     // 2 = HLG, 3 = EDR (linear, no encode).
@@ -25,10 +23,9 @@ struct BlitParams {
     _padding: vec2<u32>,
 }
 
-// ── HDR encode (see /spec/hdr-color-management.md, mirrored from hdr.rs) ──
+// ── HDR encode, mirrored from hdr.rs ──
 
-// ITU-R BT.2408 HDR Reference White. Linear 1.0 maps here, so existing content
-// keeps its brightness and the range above 1.0 becomes the HDR gain.
+// ITU-R BT.2408 HDR Reference White. Linear 1.0 maps here.
 const HDR_REFERENCE_WHITE_NITS: f32 = 203.0;
 const PQ_MAX_NITS: f32 = 10000.0;
 const PQ_M1: f32 = 0.1593017578125;
@@ -44,8 +41,7 @@ fn pq_from_nits(nits: vec3<f32>) -> vec3<f32> {
     return pow((PQ_C1 + PQ_C2 * ym) / (1.0 + PQ_C3 * ym), vec3<f32>(PQ_M2));
 }
 
-// Linear BT.709 to linear BT.2020 primaries. Applied to linear values before the
-// transfer encode, never after it.
+// Linear BT.709 to linear BT.2020 primaries. Apply before the transfer encode.
 fn bt2020_from_rec709(rgb: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(
         dot(rgb, vec3<f32>(0.6274039, 0.32928304, 0.04331306)),
@@ -55,8 +51,7 @@ fn bt2020_from_rec709(rgb: vec3<f32>) -> vec3<f32> {
 }
 
 // Scene-linear Rec.709 to a PQ-encoded BT.2020 code, anchored at reference white
-// and clamped to the output's configured peak so declared mastering metadata
-// stays true by construction.
+// and clamped to the output's configured peak (which the mastering metadata declares).
 fn hdr10_from_linear(rgb: vec3<f32>, peak_nits: f32) -> vec3<f32> {
     let wide = bt2020_from_rec709(max(rgb, vec3<f32>(0.0)));
     let nits = min(wide * HDR_REFERENCE_WHITE_NITS, vec3<f32>(peak_nits));
@@ -68,8 +63,8 @@ fn hdr10_from_linear(rgb: vec3<f32>, peak_nits: f32) -> vec3<f32> {
 const HLG_A: f32 = 0.17883277;
 const HLG_B: f32 = 0.28466892;
 const HLG_C: f32 = 0.55991073;
-// Scene-linear value that encodes to 75% signal, which BT.2408 defines as HDR
-// Reference White. Varda's linear 1.0 lands here, the same anchor PQ uses.
+// Scene-linear value that encodes to 75% signal (BT.2408 HDR Reference White).
+// Linear 1.0 maps here.
 const HLG_REFERENCE_WHITE_SIGNAL: f32 = 0.2649631;
 
 fn hlg_oetf(e_in: vec3<f32>) -> vec3<f32> {
@@ -79,16 +74,14 @@ fn hlg_oetf(e_in: vec3<f32>) -> vec3<f32> {
     return select(hi, lo, e <= vec3<f32>(1.0 / 12.0));
 }
 
-// Scene-linear Rec.709 to an HLG-encoded BT.2020 signal. Relative rather than
-// absolute, so there is no peak: 1.0 is the display's nominal peak, and values
-// past the top of the range clamp.
+// Scene-linear Rec.709 to an HLG-encoded BT.2020 signal. Relative: 1.0 is the
+// display's nominal peak; values past the range clamp.
 fn hlg_from_linear(rgb: vec3<f32>) -> vec3<f32> {
     let wide = bt2020_from_rec709(max(rgb, vec3<f32>(0.0)));
     return hlg_oetf(wide * HLG_REFERENCE_WHITE_SIGNAL);
 }
 
-// Linear → sRGB (IEC 61966-2-1). Mirrors what an *UnormSrgb render target does
-// in hardware, for the cases where we must do it explicitly.
+// Linear to sRGB (IEC 61966-2-1), as an *UnormSrgb target does in hardware.
 fn gamma_from_linear_rgb(rgb: vec3<f32>) -> vec3<f32> {
     let c = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0));
     let lower = c * 12.92;
@@ -103,8 +96,7 @@ fn linear_from_gamma_rgb(rgb: vec3<f32>) -> vec3<f32> {
     return select(higher, lower, c < vec3<f32>(0.04045));
 }
 
-// Deterministic integer hash. It is anchored to destination pixels, so a
-// stationary image receives a stationary dither pattern.
+// Integer hash on destination pixels, so a still image gets a still dither.
 fn dither_hash(pixel: vec2<u32>, salt: u32) -> f32 {
     var value = pixel.x * 0x9e3779b9u;
     value = value ^ (pixel.y * 0x85ebca6bu);
@@ -131,7 +123,7 @@ fn fs_main(
     @location(0) uv: vec2<f32>,
     @builtin(position) position: vec4<f32>,
 ) -> @location(0) vec4<f32> {
-    // Apply rotation to UVs before sampling
+    // Rotate UVs before sampling.
     var rotated_uv = uv;
     switch (params.rotation) {
         case 1u: {
@@ -151,34 +143,30 @@ fn fs_main(
         }
     }
 
-    // Apply UV transform for scaling modes
+    // UV transform for scaling modes.
     let source_uv = rotated_uv * params.uv_scale + params.uv_offset;
 
-    // Clamp to [0,1] — pixels outside the source are black (for Fit/Center modes)
+    // Pixels outside the source are black (Fit/Center modes).
     if (source_uv.x < 0.0 || source_uv.x > 1.0 || source_uv.y < 0.0 || source_uv.y > 1.0) {
         return vec4<f32>(0.0, 0.0, 0.0, params.opacity);
     }
 
     var color = textureSample(source_texture, texture_sampler, source_uv);
     if (params.premultiplied == 1u) {
-        // Premultiplied source: scale rgb and alpha together so opacity dims the
-        // channel uniformly. Paired with PREMULTIPLIED_ALPHA_BLENDING on the target.
+        // Premultiplied source: opacity scales rgb and alpha. Paired with
+        // PREMULTIPLIED_ALPHA_BLENDING on the target.
         color *= params.opacity;
     } else {
-        // Straight source: scale coverage only (rgb is the un-premultiplied colour).
+        // Straight source: opacity scales alpha only.
         color.a *= params.opacity;
     }
-    // EDR writes linear values to an extended-range surface: no transfer, no
-    // gamut matrix, no quantization. `1.0` is the display's SDR white, which is
-    // what Varda's linear 1.0 already means, so the output transform's result
-    // goes out untouched and the compositor clips at its own headroom.
-    // See /spec/hdr-edr-display.md.
+    // EDR writes linear values unchanged: no transfer, gamut matrix, or
+    // quantization. 1.0 is SDR white; the compositor clips at its headroom.
     if (params.transfer == 3u) {
         return color;
     }
     if (params.transfer != 0u) {
-        // The HDR curves already distribute codes perceptually, so the dither
-        // amplitude is one destination LSB of the encoded signal.
+        // HDR curves are already perceptual, so dither is one LSB of the encoded signal.
         var encoded: vec3<f32>;
         if (params.transfer == 2u) {
             encoded = hlg_from_linear(color.rgb);

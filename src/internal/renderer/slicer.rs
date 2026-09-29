@@ -1,13 +1,9 @@
-//! Dome slicer — auto-computes per-projector warp meshes from dome geometry
-//! and projector placement. Generates `WarpMesh` instances that map each
-//! projector's output rectangle onto the correct region of the domemaster.
+//! Dome slicer: computes per-projector warp meshes from dome geometry and
+//! projector placement.
 //!
-//! The algorithm:
-//!   1. For each projector, define a grid of output pixels
-//!   2. For each grid point, cast a ray from the projector through that pixel
-//!   3. Intersect the ray with the dome hemisphere
-//!   4. Convert the dome-surface hit point to equidistant azimuthal (domemaster) UV
-//!   5. Store as `WarpMesh` { position = output grid, uv = domemaster coords }
+//! For each point of a projector's output grid, a ray is cast through that
+//! pixel and converted to equidistant azimuthal (domemaster) UV. The mesh
+//! stores `position` = output grid, `uv` = domemaster coordinates.
 
 use crate::surface::warp::{MeshPoint, WarpMesh};
 
@@ -56,13 +52,8 @@ const SLICER_GRID_ROWS: u32 = 17;
 
 /// Compute the warp mesh for a single projector aimed at a dome.
 ///
-/// Returns a `WarpMesh` where:
-/// - `position` = uniform grid in projector output space [0..1]²
-/// - `uv` = corresponding domemaster texture coordinates [0..1]²
-///
-/// The domemaster is an equidistant azimuthal projection where the center
-/// of the texture is the dome zenith and the edge of the inscribed circle
-/// is the horizon.
+/// `position` is a uniform grid in projector output space [0..1]²; `uv` is the
+/// domemaster coordinate [0..1]² (center = zenith, inscribed circle edge = horizon).
 pub fn compute_projector_mesh(
     geometry: &DomeGeometry,
     projector: &ProjectorConfig,
@@ -75,8 +66,8 @@ pub fn compute_projector_mesh(
     let el = projector.elevation_degrees.to_radians();
     let dome_trunc = geometry.truncation_degrees.to_radians();
     let dome_tilt = geometry.tilt_degrees.to_radians();
-    // Content rotation is NOT baked into warp meshes — it is applied
-    // in the domemaster shader in real-time so slices stay fixed.
+    // Content rotation is applied in the domemaster shader, not baked in, so
+    // slices stay fixed.
     let content_az = 0.0_f32;
     let content_el = 0.0_f32;
     let content_roll = 0.0_f32;
@@ -91,15 +82,12 @@ pub fn compute_projector_mesh(
             let u = col as f32 / (cols - 1) as f32;
             let angle_h = half_fov_h * (2.0 * u - 1.0);
 
-            // Ray direction in projector-local space (forward = +Z)
+            // Projector-local ray direction (forward = +Z).
             let local_dir = normalize([angle_h.tan(), angle_v.tan(), 1.0]);
 
-            // Rotate by projector elevation (around X axis)
             let after_el = rotate_x(local_dir, el);
-            // Rotate by projector azimuth (around Y axis)
             let world_dir = rotate_y(after_el, az);
 
-            // Convert ray direction to dome-surface polar coordinates
             let uv = ray_to_domemaster_uv(
                 world_dir,
                 dome_trunc,
@@ -119,7 +107,7 @@ pub fn compute_projector_mesh(
     WarpMesh { cols, rows, points }
 }
 
-/// Convenience: compute meshes for all projectors in a dome setup.
+/// Meshes for all projectors in a dome setup.
 pub fn compute_dome_meshes(setup: &DomeSetup) -> Vec<WarpMesh> {
     setup
         .projectors
@@ -158,15 +146,11 @@ fn rotate_z(v: [f32; 3], angle: f32) -> [f32; 3] {
 
 /// Convert a world-space ray direction to domemaster UV coordinates.
 ///
-/// Uses equidistant azimuthal projection:
-///   - Center of texture (0.5, 0.5) = dome zenith (+Y)
-///   - Edge of inscribed circle = horizon
-///   - Radius proportional to polar angle from zenith
+/// Equidistant azimuthal: (0.5, 0.5) is the zenith (+Y), the inscribed circle
+/// edge is the horizon, and radius is proportional to polar angle.
 ///
-/// `content_az` / `content_el` / `content_roll` rotate the content sphere so
-/// that what was at the zenith can be aimed at any point on the dome.
-///
-/// Rays pointing below the dome truncation boundary are clamped to the edge.
+/// `content_az` / `content_el` / `content_roll` rotate the content sphere.
+/// Rays below the truncation boundary clamp to the edge.
 fn ray_to_domemaster_uv(
     dir: [f32; 3],
     trunc_angle: f32,
@@ -175,25 +159,21 @@ fn ray_to_domemaster_uv(
     content_el: f32,
     content_roll: f32,
 ) -> [f32; 2] {
-    // Apply dome tilt (rotate the ray in the opposite direction)
+    // Undo dome tilt.
     let dir = rotate_x(dir, -dome_tilt);
 
-    // Apply content rotation: rotate the sampling ray in the *opposite*
-    // direction of the desired content shift.
-    // Order: roll (Z) → elevation (X) → azimuth (Y)
+    // Rotate the sampling ray opposite to the content rotation.
+    // Order: roll (Z), elevation (X), azimuth (Y).
     let dir = rotate_z(dir, -content_roll);
     let dir = rotate_x(dir, -content_el);
     let dir = rotate_y(dir, -content_az);
 
-    // Compute polar angle from zenith (+Y axis)
-    // Y is up: polar angle = acos(y)
+    // Polar angle from zenith (+Y).
     let polar = dir[1].clamp(-1.0, 1.0).acos();
 
-    // Compute azimuthal angle in XZ plane
     let azimuth = dir[2].atan2(dir[0]);
 
-    // Equidistant azimuthal: radius = polar / max_angle
-    // Normalized so that truncation angle maps to the edge of the circle
+    // Radius = polar / max_angle, so the truncation angle maps to the circle edge.
     let max_angle = trunc_angle.min(std::f32::consts::PI);
     let r = if max_angle > 1e-6 {
         (polar / max_angle).min(1.0)
@@ -201,8 +181,7 @@ fn ray_to_domemaster_uv(
         0.0
     };
 
-    // Convert polar to Cartesian UV (centered at 0.5, 0.5)
-    // Scale by 0.5 so the circle inscribes the [0,1]² square
+    // Scale by 0.5 so the circle inscribes the [0,1]² square.
     let uv_x = 0.5 + r * 0.5 * azimuth.cos();
     let uv_y = 0.5 + r * 0.5 * azimuth.sin();
 
@@ -235,7 +214,7 @@ impl DomePreset {
         let n = self.count();
 
         if n == 1 {
-            // Single projector: aimed straight up (zenith), wide FOV
+            // Single projector: aimed at the zenith, wide FOV.
             return DomeSetup {
                 geometry,
                 projectors: vec![ProjectorConfig {
@@ -249,7 +228,7 @@ impl DomePreset {
             };
         }
 
-        // Multi-projector: evenly spaced around the dome at moderate elevation
+        // Multiple projectors: evenly spaced around the dome at moderate elevation.
         let angle_step = 360.0 / n as f32;
         let fov = angle_step + angle_step * 0.15; // 15% overlap default
         let overlap = 0.15;
@@ -447,9 +426,8 @@ mod tests {
             std::f32::consts::FRAC_PI_2, // 90° content elevation
             0.0,
         );
-        // The zenith content (center of domemaster) should now map near center
-        // because we rotated the content sphere 90° so what was at zenith is now at horizon
-        // and the horizon ray should now sample near the domemaster center
+        // Zenith content is now at the horizon, so the horizon ray samples near
+        // the domemaster center.
         assert!(
             (uv[0] - 0.5).abs() < 0.05,
             "Expected near center x, got {}",

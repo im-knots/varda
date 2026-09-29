@@ -1,22 +1,13 @@
-//! Guard: every shipped shader must translate to HLSL.
+//! Every shipped shader must translate to HLSL.
 //!
-//! Varda compiles ISF GLSL to SPIR-V with shaderc, and wgpu then lowers that to
-//! the backend's own language: MSL on Metal, HLSL on DX12. naga's HLSL backend
-//! does not implement everything its SPIR-V frontend accepts, so a shader can
-//! compile and run perfectly on macOS and Linux and produce an **invalid
-//! pipeline** on Windows, where the only symptom is a validation error at
-//! `set_pipeline` naming no shader at all.
+//! ISF GLSL compiles to SPIR-V with shaderc, then wgpu lowers it to MSL on
+//! Metal or HLSL on DX12. naga's HLSL backend lacks parts of what its SPIR-V
+//! frontend accepts, so a shader can work on macOS and Linux yet produce an
+//! invalid pipeline on Windows, reported only as a `set_pipeline` validation
+//! error that names no shader. `inverse()`, for example, is unimplemented.
 //!
-//! Varda's tests only started running on Windows recently, so this class had
-//! never been checked. Adding this found `warped_grid.fs` calling `inverse()`,
-//! for which naga reports `Unimplemented("write_expr_math Inverse")`. It had
-//! been shipping broken on DX12.
-//!
-//! The point of running the translation here is that it needs no Windows and no
-//! GPU: it is the same lowering DX12 performs, run on whatever machine is to
-//! hand. It does **not** cover what happens after, when FXC or DXC compiles the
-//! HLSL, which has its own limits. A pass here means the shader is expressible
-//! in HLSL, not that every DX12 driver will accept it.
+//! The translation needs no Windows and no GPU. It does not cover FXC or DXC
+//! compiling the HLSL afterward, which has its own limits.
 
 use std::path::Path;
 

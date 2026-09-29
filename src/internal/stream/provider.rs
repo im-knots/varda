@@ -1,5 +1,5 @@
-//! SRT, HLS, DASH and RTMP receive as deck sources: four source types, one
-//! implementation, differing only in protocol and in what a user fills in.
+//! SRT, HLS, DASH and RTMP receive as deck sources. The four source types
+//! share one implementation and differ in protocol and config fields.
 
 use super::{RtmpMode, SrtMode, StreamManager, StreamProtocol};
 use crate::source::{
@@ -73,8 +73,8 @@ impl StreamKind {
         }
     }
 
-    /// The protocol a config asks for. Modes read case-insensitively, since
-    /// scenes and API clients have written both spellings.
+    /// The protocol a config asks for. Modes match case-insensitively because
+    /// saved scenes and API clients use both spellings.
     fn protocol(self, mode: Option<&str>) -> StreamProtocol {
         let mode = mode.map(str::to_ascii_lowercase);
         match self {
@@ -109,8 +109,8 @@ struct Config {
     scaling_mode: crate::source::ScalingMode,
 }
 
-/// One stream protocol's deck source, with the URLs the user has saved to
-/// its library this session.
+/// One stream protocol's deck source, plus the URLs saved to its library
+/// this session.
 pub struct StreamProvider {
     kind: StreamKind,
     library: Vec<Config>,
@@ -322,7 +322,6 @@ impl DeckSourceProvider for StreamProvider {
     }
 }
 
-/// One stream deck.
 pub struct StreamFeed {
     kind: StreamKind,
     url: String,

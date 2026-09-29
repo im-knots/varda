@@ -1,7 +1,6 @@
 //! GPU conversion and asynchronous readback for NDI frames: ten-bit P216 and
 //! eight-bit UYVY, both BT.709 limited range with Rec.709 transfer, matching
-//! what the sender declares. See /spec/sdr-ndi-output.md and
-//! /spec/performance-hot-paths.md item A.
+//! what the sender declares.
 
 use std::sync::mpsc::{Receiver, TryRecvError};
 

@@ -1,11 +1,8 @@
-//! Camera capture manager — shared camera sessions for N deck consumers.
+//! Camera capture. Each physical camera has one capture thread and one shared
+//! GPU texture that any number of decks read.
 //!
-//! One `CameraManager` owns all camera capture sessions. Each physical camera
-//! produces one shared GPU texture that any number of decks can read from.
-//!
-//! Capture runs on a dedicated thread per camera. YUV→RGBA conversion uses
-//! SIMD-accelerated yuvutils-rs for NV12 (macOS) and YUYV (macOS/Linux).
-//! MJPEG frames (common on Linux V4L2) use nokhwa's built-in mozjpeg decoder.
+//! NV12 (macOS) and YUYV (macOS/Linux) convert to RGBA with yuvutils-rs.
+//! MJPEG frames (common on Linux V4L2) use nokhwa's mozjpeg decoder.
 
 pub mod provider;
 
@@ -21,10 +18,9 @@ use yuvutils_rs::{
     yuv_nv12_to_rgba, yuyv422_to_rgba,
 };
 
-/// Opaque camera identifier (matches the OS-assigned index).
+/// Camera identifier; matches the OS-assigned index.
 pub type CameraId = u32;
 
-/// Information about a detected camera device.
 #[derive(Debug, Clone)]
 pub struct CameraDeviceInfo {
     pub id: CameraId,
@@ -32,32 +28,26 @@ pub struct CameraDeviceInfo {
     pub index: CameraIndex,
 }
 
-/// An active camera capture session with its shared GPU texture.
+/// An open capture session and its shared GPU texture.
 struct ActiveCamera {
-    /// Shared GPU texture that decks read from.
     texture: wgpu::Texture,
     texture_view: wgpu::TextureView,
     width: u32,
     height: u32,
-    /// How many decks are using this camera.
+    /// Number of decks using this camera.
     ref_count: u32,
-    /// Latest decoded RGBA frame — capture thread swaps in, main thread takes.
+    /// Latest decoded RGBA frame. The capture thread swaps it in, the main thread takes it.
     frame_data: Arc<Mutex<Option<Vec<u8>>>>,
-    /// Signal to stop the capture thread.
     stop_flag: Arc<AtomicBool>,
-    /// Whether the camera is actively producing frames.
     connected: Arc<AtomicBool>,
-    /// Capture thread handle.
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
-/// Manages camera device enumeration, capture sessions, and shared textures.
+/// Camera enumeration, capture sessions and shared textures.
 pub struct CameraManager {
-    /// Detected camera devices (refreshed periodically).
+    /// Detected devices, refreshed periodically.
     devices: Vec<CameraDeviceInfo>,
-    /// Active camera sessions keyed by `CameraId`.
     active: HashMap<CameraId, ActiveCamera>,
-    /// Whether nokhwa has been initialized.
     initialized: bool,
 }
 
@@ -83,8 +73,7 @@ impl CameraManager {
         if self.initialized {
             return;
         }
-        // On macOS, requests AVFoundation camera permission.
-        // On Linux, this is a no-op (V4L2 doesn't need explicit permission).
+        // Requests AVFoundation camera permission on macOS; no-op on Linux.
         nokhwa::nokhwa_initialize(|granted| {
             if granted {
                 log::info!("Camera access granted");
@@ -95,7 +84,6 @@ impl CameraManager {
         self.initialized = true;
     }
 
-    /// Scan for available camera devices.
     pub fn scan_devices(&mut self) {
         match nokhwa::query(nokhwa::utils::ApiBackend::Auto) {
             Ok(cameras) => {
@@ -120,19 +108,17 @@ impl CameraManager {
         }
     }
 
-    /// Get the list of detected camera devices.
     pub fn devices(&self) -> &[CameraDeviceInfo] {
         &self.devices
     }
 
-    /// Open a camera and start capturing on a dedicated thread.
-    /// Returns the camera's resolution. If already open, just increments the ref count.
+    /// Opens a camera and starts its capture thread, returning its resolution.
+    /// If already open, increments the ref count.
     ///
     /// # Errors
     ///
-    /// Returns an error if no enumerated device matches `id`, if the underlying
-    /// capture backend fails to open the device or start its stream, or if the
-    /// dedicated capture thread cannot be spawned.
+    /// Returns an error if no device matches `id`, the backend cannot open or
+    /// start the stream, or the capture thread cannot be spawned.
     pub fn open_camera(&mut self, id: CameraId, device: &wgpu::Device) -> Result<(u32, u32)> {
         if let Some(active) = self.active.get_mut(&id) {
             active.ref_count += 1;
@@ -185,7 +171,7 @@ impl CameraManager {
         });
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Shared frame slot — capture thread swaps in decoded RGBA, main thread takes it
+        // Capture thread swaps in decoded RGBA; main thread takes it.
         let frame_data: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
         let frame_data_tx = Arc::clone(&frame_data);
         let stop_flag = Arc::new(AtomicBool::new(false));
@@ -229,7 +215,7 @@ impl CameraManager {
         Ok((width, height))
     }
 
-    /// Background capture loop — runs on a dedicated thread per camera.
+    /// Capture loop, one thread per camera.
     fn capture_loop(
         mut camera: Camera,
         cam_id: CameraId,
@@ -243,7 +229,7 @@ impl CameraManager {
         const ERROR_THRESHOLD: u64 = 100;
 
         let expected_rgba = (w * h * 4) as usize;
-        // Pre-allocated decode buffer — never freed, reused every frame
+        // Reused for every frame.
         let mut rgba_buf = vec![0u8; expected_rgba];
         let mut frame_count: u64 = 0;
         let mut consecutive_errors: u64 = 0;
@@ -271,7 +257,6 @@ impl CameraManager {
 
             let ok = match fmt {
                 FrameFormat::NV12 => {
-                    // SIMD NV12→RGBA via yuvutils-rs
                     let y_size = (w * h) as usize;
                     if raw.len() >= y_size + y_size / 2 {
                         let bi = YuvBiPlanarImage {
@@ -296,7 +281,6 @@ impl CameraManager {
                     }
                 }
                 FrameFormat::YUYV => {
-                    // SIMD YUYV→RGBA via yuvutils-rs
                     let expected_yuyv = (w * h * 2) as usize;
                     if raw.len() >= expected_yuyv {
                         let packed = YuvPackedImage {
@@ -318,7 +302,7 @@ impl CameraManager {
                     }
                 }
                 _ => {
-                    // Fallback for MJPEG/GRAY/etc
+                    // MJPEG, GRAY, etc.
                     buf.decode_image_to_buffer::<RgbAFormat>(&mut rgba_buf)
                         .is_ok()
                 }
@@ -329,11 +313,10 @@ impl CameraManager {
                 backoff_us = 500;
                 connected.store(true, Ordering::SeqCst);
 
-                // Swap decoded frame into shared slot (fast — just pointer swap)
                 if let Ok(mut lock) = frame_data.lock() {
                     let new_buf = std::mem::take(&mut rgba_buf);
                     let old = lock.replace(new_buf);
-                    // Reclaim the old buffer for reuse (avoids allocation)
+                    // Reuse the old buffer to avoid an allocation.
                     rgba_buf = old.unwrap_or_else(|| vec![0u8; expected_rgba]);
                     if rgba_buf.len() < expected_rgba {
                         rgba_buf.resize(expected_rgba, 0);
@@ -365,7 +348,7 @@ impl CameraManager {
         log::info!("Camera {cam_id} capture thread stopped");
     }
 
-    /// Release a camera reference. Stops capture thread when `ref_count` hits 0.
+    /// Releases a camera reference. Stops the capture thread when `ref_count` hits 0.
     pub fn release_camera(&mut self, id: CameraId) {
         if let Some(active) = self.active.get_mut(&id) {
             active.ref_count = active.ref_count.saturating_sub(1);
@@ -383,40 +366,35 @@ impl CameraManager {
         }
     }
 
-    /// Get the shared texture view for a camera (decks read from this).
+    /// Shared texture view that decks read.
     pub fn texture_view(&self, id: CameraId) -> Option<&wgpu::TextureView> {
         self.active.get(&id).map(|a| &a.texture_view)
     }
 
-    /// Get the resolution of an active camera.
     pub fn resolution(&self, id: CameraId) -> Option<(u32, u32)> {
         self.active.get(&id).map(|a| (a.width, a.height))
     }
 
-    /// Check if a camera is currently connected and producing frames.
-    /// Returns `false` if the camera is not active or is experiencing errors.
+    /// Whether the camera is open and producing frames.
     pub fn is_connected(&self, id: CameraId) -> bool {
         self.active
             .get(&id)
             .is_some_and(|a| a.connected.load(Ordering::SeqCst))
     }
 
-    /// Upload latest camera frames to GPU. Non-blocking — just grabs whatever
-    /// the background capture threads have produced since the last call.
-    /// Call once per frame from the main loop.
+    /// Uploads frames the capture threads produced since the last call.
+    /// Non-blocking; call once per frame.
     pub fn update(&mut self, queue: &wgpu::Queue) {
         self.update_all(queue);
     }
 
-    /// Upload frames for all active cameras.
     fn update_all(&mut self, queue: &wgpu::Queue) {
         for active in self.active.values_mut() {
             Self::upload_frame(active, queue);
         }
     }
 
-    /// Upload frames only for cameras whose IDs are in the provided set.
-    /// Cameras not in the set skip the GPU upload, saving bandwidth.
+    /// Uploads frames only for cameras in `needed_ids`.
     pub fn update_selective(
         &mut self,
         queue: &wgpu::Queue,
@@ -430,7 +408,6 @@ impl CameraManager {
     }
 
     fn upload_frame(active: &mut ActiveCamera, queue: &wgpu::Queue) {
-        // Take the latest frame from the shared buffer (non-blocking)
         let frame = if let Ok(mut lock) = active.frame_data.try_lock() {
             lock.take()
         } else {
@@ -463,14 +440,12 @@ impl CameraManager {
         }
     }
 
-    /// Check if a camera is currently active (has an open capture session).
     pub fn is_active(&self, id: CameraId) -> bool {
         self.active.contains_key(&id)
     }
 
-    /// Snapshot the current frame from an active camera without consuming it.
-    /// Uses `try_lock()` for non-blocking access so we don't stall the render thread.
-    /// Returns `Some((data, width, height))` if a frame is available, `None` otherwise.
+    /// Copies the current frame without consuming it, as `(data, width, height)`.
+    /// Uses `try_lock()` so the render thread never stalls.
     pub fn snapshot_frame(&self, id: CameraId) -> Option<(Vec<u8>, u32, u32)> {
         let cam = self.active.get(&id)?;
         let guard = cam.frame_data.try_lock().ok()?;
@@ -478,12 +453,11 @@ impl CameraManager {
         Some((data, cam.width, cam.height))
     }
 
-    /// Returns the first active camera ID, if any.
     pub fn first_active_id(&self) -> Option<CameraId> {
         self.active.keys().next().copied()
     }
 
-    /// Returns all active camera IDs as a sorted vec.
+    /// Active camera IDs, sorted.
     pub fn active_ids(&self) -> Vec<CameraId> {
         let mut ids: Vec<CameraId> = self.active.keys().copied().collect();
         ids.sort_unstable();

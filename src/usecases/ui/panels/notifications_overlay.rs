@@ -30,14 +30,12 @@ pub(super) fn render_notifications(
             egui::LayerId::new(egui::Order::Foreground, egui::Id::new(format!("notif_{i}")));
         let painter = ctx.layer_painter(layer_id);
 
-        // Background
         painter.rect_filled(
             toast_rect,
             6.0,
             egui::Color32::from_rgba_unmultiplied(20, 20, 30, 230),
         );
 
-        // Left accent bar
         let accent_color = notification_color(notif.level);
         let bar_rect = egui::Rect::from_min_size(toast_rect.min, egui::vec2(4.0, toast_height));
         painter.rect_filled(
@@ -51,7 +49,6 @@ pub(super) fn render_notifications(
             accent_color,
         );
 
-        // Level label
         painter.text(
             egui::pos2(toast_rect.left() + 12.0, toast_rect.top() + 8.0),
             egui::Align2::LEFT_TOP,
@@ -60,7 +57,6 @@ pub(super) fn render_notifications(
             accent_color,
         );
 
-        // Message text (truncated)
         let msg = super::utils::truncate_chars(&notif.message, 60);
         painter.text(
             egui::pos2(toast_rect.left() + 12.0, toast_rect.top() + 22.0),
@@ -70,7 +66,7 @@ pub(super) fn render_notifications(
             egui::Color32::from_gray(220),
         );
 
-        // Progress bar (fade out indicator)
+        // Progress bar shows time until fade-out.
         let progress_width = toast_width * (1.0 - notif.progress);
         let progress_rect = egui::Rect::from_min_size(
             egui::pos2(toast_rect.left(), toast_rect.bottom() - 2.0),
@@ -78,7 +74,7 @@ pub(super) fn render_notifications(
         );
         painter.rect_filled(progress_rect, 0.0, accent_color.linear_multiply(0.5));
 
-        // Dismiss button ("x") — use an Area so it's clickable
+        // Dismiss button in an Area so it receives clicks.
         let dismiss_id = egui::Id::new(("dismiss_notif", notif.id));
         egui::Area::new(dismiss_id)
             .fixed_pos(egui::pos2(
@@ -105,6 +101,5 @@ pub(super) fn render_notifications(
             });
     }
 
-    // Request repaint to animate progress bars
     ctx.request_repaint();
 }

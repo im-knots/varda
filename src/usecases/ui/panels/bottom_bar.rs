@@ -1,8 +1,7 @@
 //! Bottom-bar mode dispatch.
 //!
-//! The bottom detail bar is context-sensitive: which mode renders depends on
-//! what is currently selected. Each mode lives with the feature it belongs to —
-//! this module only routes between them.
+//! The mode depends on the current selection. Each mode lives with its feature;
+//! this module only routes.
 
 use super::super::{UIActions, UIData};
 use super::deck_detail::render_selected_deck_detail;
@@ -10,7 +9,6 @@ use super::effects::{render_channel_effect_detail, render_master_effect_detail};
 use crate::engine::EngineCommand;
 
 pub(super) fn render_bottom_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
-    // MIDI learn status indicator
     if data.midi_learn_active {
         egui::Frame::default()
             .inner_margin(4.0)
@@ -42,14 +40,14 @@ pub(super) fn render_bottom_panel(ui: &mut egui::Ui, data: &UIData, actions: &mu
             });
     }
 
-    // While the stage editor is open the bottom bar hosts the per-surface warp
-    // editor for the selected surface (8i.5).
+    // With the stage editor open, the bottom bar hosts the warp editor for the
+    // selected surface.
     if data.stage_editor_open {
         super::stage::render_stage_bottom_bar(ui, data, actions);
         return;
     }
 
-    // Context-sensitive bottom bar: master effects, channel effects, sequence, macro, or deck detail
+    // Otherwise: master effects, channel effects, sequence, macro, or deck detail.
     if data.selected_master {
         render_master_effect_detail(ui, data, actions);
     } else if let Some(ch_idx) = data.selected_channel {
@@ -106,7 +104,7 @@ mod tests {
     #[test]
     fn render_bottom_panel_smoke_stage_editor_multi_selection() {
         let (data, uuid) = fixture_with_surface(None, false);
-        // Two entries, only one of which resolves — still not a single selection.
+        // Two entries, only one of which resolves: still not a single selection.
         harness_with_selection(&data, &[uuid, "surf0002".to_string()]);
     }
 
@@ -148,7 +146,7 @@ mod tests {
         harness_with_selection(&data, &[uuid]);
     }
 
-    /// `warp_bound` locks the controls read-only — a distinct render path.
+    /// `warp_bound` makes the controls read-only, a separate render path.
     #[test]
     fn render_bottom_panel_smoke_stage_editor_warp_bound() {
         let warp = crate::surface::warp::WarpMode::corner_pin([
@@ -165,14 +163,13 @@ mod tests {
     #[derive(Default)]
     struct WarpProbe {
         commands: Vec<EngineCommand>,
-        /// `ui.min_rect()` after rendering. The warp canvas is the last thing
-        /// allocated and spans the full width, so its bottom-left corner is this
-        /// rect's bottom-left — which is exactly where the BL handle is drawn.
+        /// `ui.min_rect()` after rendering. The warp canvas is allocated last and spans
+        /// the full width, so this rect's bottom-left corner is the BL handle.
         content: Option<egui::Rect>,
     }
 
-    /// Primary-button drag from `start` to `end`, stepped so egui registers a
-    /// drag (rather than a click) and captures the press origin near `start`.
+    /// Primary-button drag from `start` to `end`, stepped so egui registers a drag
+    /// with the press origin near `start`.
     fn drag_probe(
         harness: &mut egui_kittest::Harness<'static, WarpProbe>,
         start: egui::Pos2,
@@ -202,10 +199,8 @@ mod tests {
 
     /// Dragging a corner handle emits `SetWarpCorner` for that corner.
     ///
-    /// This guards the drag state machine in `render_surface_warp_editor`, whose
-    /// in-progress handle lives in egui memory under an `ui.id()`-derived key.
-    /// A regression there (or a change to that key) silently breaks warp editing
-    /// with no compile error, so assert the whole gesture end to end.
+    /// The in-progress handle lives in egui memory under a `ui.id()`-derived key,
+    /// so a change there breaks warp editing without a compile error.
     #[test]
     fn warp_corner_drag_emits_set_warp_corner() {
         let warp = crate::surface::warp::WarpMode::corner_pin([

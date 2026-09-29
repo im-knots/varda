@@ -1,5 +1,5 @@
 use super::edge_blend::SurfaceOverlapZones;
-/// Simple blit pipeline for copying textures to the screen
+/// Blit pipelines: texture copy, shader compositing, and polygon surfaces.
 use crate::surface::mask::{DEFAULT_MASK_RES, bake_hole_mask};
 use anyhow::Result;
 use std::cell::{Cell, RefCell};
@@ -7,8 +7,7 @@ use std::collections::HashMap;
 use std::num::NonZeroU64;
 use wgpu::util::DeviceExt;
 
-/// Maximum number of per-draw parameter slots in the ring buffer.
-/// Supports batching up to 16 composites in a single `queue.submit()`.
+/// Initial and minimum per-draw parameter slots in a ring buffer.
 const MAX_DRAW_SLOTS: u64 = 16;
 
 /// Uniform buffer for blit and final presentation parameters.
@@ -17,28 +16,25 @@ const MAX_DRAW_SLOTS: u64 = 16;
 struct BlitParams {
     opacity: f32,
     rotation: u32,
-    /// UV scale factor (default 1.0, 1.0 = no scaling)
+    /// UV scale (1.0, 1.0 = none).
     uv_scale: [f32; 2],
-    /// UV offset (default 0.0, 0.0 = no offset)
+    /// UV offset (0.0, 0.0 = none).
     uv_offset: [f32; 2],
-    /// 1 = source is premultiplied-alpha (scale rgb+a by opacity); 0 = straight
-    /// (scale alpha only). See composite.wgsl / spec/linear-light-compositing.md.
+    /// 1 = premultiplied source (opacity scales rgb and a); 0 = straight
+    /// (opacity scales alpha only).
     premultiplied: u32,
-    /// 1 = apply the sRGB transfer function on output (linear → gamma). Used when
-    /// blitting linear content into a non-sRGB target whose consumer expects
-    /// gamma-encoded samples. See `BlitPipeline::set_srgb_encode`.
+    /// 1 = apply the sRGB transfer on output. See `BlitPipeline::set_srgb_encode`.
     srgb_encode: u32,
     /// Number of integer code intervals at the destination (255 or 1023).
     quantization_levels: f32,
     /// 1 enables deterministic destination-aware RGB dithering.
     dither_enabled: u32,
-    /// Transfer: 0 = SDR (sRGB), 1 = HDR10 (ST 2084 PQ), 2 = HLG. Mirrors the
-    /// branch in `blit.wgsl`.
+    /// Transfer: 0 = SDR (sRGB), 1 = HDR10 (PQ), 2 = HLG, 3 = EDR linear.
+    /// Matches `blit.wgsl`.
     transfer: u32,
-    /// Peak luminance in cd/m² for the PQ path. Unused for SDR and for HLG,
-    /// which is relative and has no peak.
+    /// Peak luminance in cd/m² for PQ. Unused otherwise.
     peak_nits: f32,
-    /// Uniform structs are padded to a 16-byte multiple for WGSL layout.
+    /// Pads to a 16-byte multiple for WGSL.
     _padding: [u32; 2],
 }
 
@@ -47,12 +43,10 @@ pub struct BlitPipeline {
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     params_buffer: wgpu::Buffer,
-    /// Pre-allocated ring buffer for per-draw params (avoids per-frame allocation).
-    /// Grows on demand via [`Self::ensure_ring_slots`].
+    /// Per-draw params, grown by [`Self::ensure_ring_slots`].
     ring_buffer: RefCell<wgpu::Buffer>,
-    /// Slots currently allocated in `ring_buffer`.
     ring_slots: Cell<usize>,
-    /// Byte stride between slots (aligned to device minimum).
+    /// Byte stride between slots, aligned to the device minimum.
     ring_stride: u64,
 }
 
@@ -67,14 +61,11 @@ fn presentation_encoding(
         PresentationDepth::Sdr8 => 255.0,
         PresentationDepth::Sdr10 => 1023.0,
     };
-    // The PQ path always encodes in the shader: an HDR surface is never an
-    // `*Srgb` format, so there is no hardware transfer to defer to.
+    // HDR surfaces are never `*Srgb`, so the shader always encodes them.
     let explicit_srgb_encode = !presentation.transfer.is_hdr()
         && presentation.resolved == PresentationDepth::Sdr10
         && !adapter_encodes_after_the_blit;
-    // EDR targets a float surface, so there is no integer quantization for a
-    // dither pattern to sit in front of. Dithering it would add noise for
-    // nothing.
+    // EDR is a float surface with no quantization to dither.
     let dither = presentation.dither
         && presentation.transfer.encodes_a_transfer()
         && !adapter_encodes_after_the_blit;
@@ -82,7 +73,7 @@ fn presentation_encoding(
 }
 
 impl BlitPipeline {
-    /// Create a new blit pipeline with REPLACE blend (for final screen output)
+    /// Create a blit pipeline with REPLACE blend, for final output.
     ///
     /// # Errors
     ///
@@ -91,20 +82,17 @@ impl BlitPipeline {
         Self::with_blend(device, target_format, wgpu::BlendState::REPLACE)
     }
 
-    /// Create a blit pipeline with a specific blend state
+    /// Create a blit pipeline with a specific blend state.
     ///
     /// # Errors
     ///
-    /// Never returns `Err` today: every wgpu resource here is created
-    /// infallibly (device validation failures surface on the device's error
-    /// scope instead). The `Result` keeps the constructor signature uniform
-    /// with the other pipelines so callers can `?` it.
+    /// Never returns `Err`; validation failures surface on the device's error
+    /// scope. The `Result` matches the other pipeline constructors.
     pub fn with_blend(
         device: &wgpu::Device,
         target_format: wgpu::TextureFormat,
         blend_state: wgpu::BlendState,
     ) -> Result<Self> {
-        // Create bind group layout
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Blit Bind Group Layout"),
             entries: &[
@@ -126,7 +114,7 @@ impl BlitPipeline {
                     },
                     count: None,
                 },
-                // Params uniform buffer (opacity)
+                // Params uniform buffer
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -140,7 +128,7 @@ impl BlitPipeline {
             ],
         });
 
-        // Create params buffer with default opacity of 1.0
+        // Default opacity 1.0.
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Blit Params Buffer"),
             contents: bytemuck::cast_slice(&[BlitParams {
@@ -159,14 +147,12 @@ impl BlitPipeline {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        // Create pipeline layout
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Blit Pipeline Layout"),
             bind_group_layouts: &[Some(&bind_group_layout)],
             immediate_size: 0,
         });
 
-        // Load shaders
         let vertex_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Blit Vertex Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/fullscreen.wgsl").into()),
@@ -177,7 +163,6 @@ impl BlitPipeline {
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/blit.wgsl").into()),
         });
 
-        // Create render pipeline
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Blit Pipeline"),
             layout: Some(&pipeline_layout),
@@ -216,7 +201,6 @@ impl BlitPipeline {
             cache: None,
         });
 
-        // Create sampler
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("Blit Sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -254,8 +238,7 @@ impl BlitPipeline {
     ///
     /// # Panics
     ///
-    /// Panics if `size_of::<BlitParams>()` is zero, which cannot happen for a
-    /// non-empty `#[repr(C)]` struct.
+    /// Panics if `size_of::<BlitParams>()` is zero, which cannot happen.
     pub fn create_bind_group(
         &self,
         device: &wgpu::Device,
@@ -286,7 +269,7 @@ impl BlitPipeline {
         })
     }
 
-    /// Update the opacity value (call before render)
+    /// Set the opacity. Call before render.
     pub fn set_opacity(&self, queue: &wgpu::Queue, opacity: f32) {
         queue.write_buffer(
             &self.params_buffer,
@@ -307,7 +290,7 @@ impl BlitPipeline {
         );
     }
 
-    /// Set UV transform parameters for scaling modes
+    /// Set the UV transform for scaling modes.
     pub fn set_uv_transform(
         &self,
         queue: &wgpu::Queue,
@@ -334,17 +317,11 @@ impl BlitPipeline {
         );
     }
 
-    /// Blit with an explicit linear → sRGB encode on output.
+    /// Encode linear to sRGB on output.
     ///
-    /// For previews: egui assumes any texture handed to it is already
-    /// gamma-encoded ("We expect 'normal' textures that are NOT sRGB-aware" —
-    /// egui-wgpu's `egui.wgsl`). Handing it a linear texture makes it apply the
-    /// inverse transfer function, which the sRGB framebuffer then undoes, so the
-    /// raw linear values reach the screen and everything looks too dark. Encoding
-    /// here, into a plain `Rgba8Unorm` target, gives egui what it expects.
-    ///
-    /// Note the target must NOT be `*UnormSrgb`, or the hardware would decode on
-    /// sample and cancel this out.
+    /// For egui previews, which expect gamma-encoded textures; linear ones show
+    /// too dark. The target must be plain `Rgba8Unorm`, not `*UnormSrgb`, or
+    /// the hardware decode cancels the encode.
     pub fn set_srgb_encode(&self, queue: &wgpu::Queue, encode: bool) {
         queue.write_buffer(
             &self.params_buffer,
@@ -406,15 +383,13 @@ impl BlitPipeline {
                 premultiplied: 0,
                 srgb_encode: u32::from(explicit_srgb_encode),
                 quantization_levels,
-                // NDI P216 dithers Y, U and V immediately before ten-bit
-                // quantization in its dedicated GPU conversion pass.
+                // NDI P216 dithers Y, U and V in its own conversion pass.
                 dither_enabled: u32::from(dither_enabled),
                 transfer: match presentation.transfer {
                     crate::engine::value::render::PresentationTransfer::Sdr => 0,
                     crate::engine::value::render::PresentationTransfer::Hdr10Pq => 1,
                     crate::engine::value::render::PresentationTransfer::Hlg => 2,
-                    // EDR encodes nothing: the shader passes linear values
-                    // through to an extended-range surface.
+                    // EDR passes linear values through unencoded.
                     crate::engine::value::render::PresentationTransfer::EdrLinear => 3,
                 },
                 peak_nits: presentation.peak_nits.map_or(0.0, f32::from),
@@ -434,7 +409,7 @@ impl BlitPipeline {
         render_pass.draw(0..3, 0..1);
     }
 
-    /// Render with specific opacity (updates buffer and renders)
+    /// Set the opacity and render.
     pub fn render_with_opacity<'a>(
         &'a self,
         queue: &wgpu::Queue,
@@ -446,10 +421,8 @@ impl BlitPipeline {
         self.render(render_pass, bind_group);
     }
 
-    /// Grow the params ring buffer so it holds at least `needed` slots.
-    ///
-    /// Call once before a batch, not per draw: growing mid-batch would leave
-    /// already-created bind groups pointing at the old buffer.
+    /// Grow the params ring buffer to at least `needed` slots. Call once before
+    /// a batch: growing mid-batch invalidates earlier bind groups.
     pub fn ensure_ring_slots(&self, device: &wgpu::Device, needed: usize) {
         if needed <= self.ring_slots.get() {
             return;
@@ -495,12 +468,11 @@ impl BlitPipeline {
     }
 
     /// Create a bind group for a specific ring buffer slot.
-    /// The slot offset is baked into the bind group — no dynamic offset overhead.
+    /// The slot offset is baked in; no dynamic offset.
     ///
     /// # Panics
     ///
-    /// Panics if `size_of::<BlitParams>()` is zero, which cannot happen for a
-    /// non-empty `#[repr(C)]` struct.
+    /// Panics if `size_of::<BlitParams>()` is zero, which cannot happen.
     pub fn create_ring_bind_group(
         &self,
         device: &wgpu::Device,
@@ -549,8 +521,7 @@ impl BlitPipeline {
 
 // === Composite blend pipeline ===
 
-/// Uniform buffer for composite blend parameters - 32 bytes (8 x f32).
-/// Must match `CompositeParams` in composite.wgsl.
+/// Composite blend parameters, 32 bytes. Matches `CompositeParams` in composite.wgsl.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct CompositeParams {
@@ -558,38 +529,32 @@ struct CompositeParams {
     blend_mode: u32,
     uv_scale: [f32; 2],
     uv_offset: [f32; 2],
-    /// 1 = source texture is premultiplied-alpha (un-premultiply before the
-    /// blend-mode math so the straight-over result stays correct); 0 = straight.
+    /// 1 = premultiplied source, un-premultiplied before the blend math; 0 = straight.
     premultiplied: u32,
     _pad: f32,
 }
 
-/// Shader-based composite pipeline that reads both source and destination textures
-/// and computes the blend per-pixel. Supports all blend modes via a uniform integer.
-/// Replaces the fixed-function `BlitPipeline` `HashMap` for compositing.
+/// Shader compositing: reads source and destination and blends per pixel. The
+/// blend mode is a uniform integer.
 pub struct CompositeBlitPipeline {
     pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     params_buffer: wgpu::Buffer,
-    /// Pre-allocated ring buffer for per-draw params (avoids per-frame allocation).
-    /// Grows on demand via [`Self::ensure_ring_slots`].
+    /// Per-draw params, grown by [`Self::ensure_ring_slots`].
     ring_buffer: RefCell<wgpu::Buffer>,
-    /// Slots currently allocated in `ring_buffer`.
     ring_slots: Cell<usize>,
-    /// Byte stride between slots (aligned to device minimum).
+    /// Byte stride between slots, aligned to the device minimum.
     ring_stride: u64,
 }
 
 impl CompositeBlitPipeline {
-    /// Create a new composite blend pipeline.
+    /// Create a composite blend pipeline.
     ///
     /// # Errors
     ///
-    /// Never returns `Err` today: every wgpu resource here is created
-    /// infallibly (device validation failures surface on the device's error
-    /// scope instead). The `Result` keeps the constructor signature uniform
-    /// with the other pipelines so callers can `?` it.
+    /// Never returns `Err`; validation failures surface on the device's error
+    /// scope. The `Result` matches the other pipeline constructors.
     pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Result<Self> {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Composite Bind Group Layout"),
@@ -766,8 +731,7 @@ impl CompositeBlitPipeline {
     ///
     /// # Panics
     ///
-    /// Panics if `size_of::<CompositeParams>()` is zero, which cannot happen
-    /// for a non-empty `#[repr(C)]` struct.
+    /// Panics if `size_of::<CompositeParams>()` is zero, which cannot happen.
     pub fn create_bind_group(
         &self,
         device: &wgpu::Device,
@@ -803,7 +767,7 @@ impl CompositeBlitPipeline {
         })
     }
 
-    /// Render: draw fullscreen quad with composite shader.
+    /// Draw a fullscreen quad with the composite shader.
     pub fn render<'a>(
         &'a self,
         render_pass: &mut wgpu::RenderPass<'a>,
@@ -814,10 +778,8 @@ impl CompositeBlitPipeline {
         render_pass.draw(0..3, 0..1);
     }
 
-    /// Grow the params ring buffer so it holds at least `needed` slots.
-    ///
-    /// Call once before a batch, not per draw: growing mid-batch would leave
-    /// already-created bind groups pointing at the old buffer.
+    /// Grow the params ring buffer to at least `needed` slots. Call once before
+    /// a batch: growing mid-batch invalidates earlier bind groups.
     pub fn ensure_ring_slots(&self, device: &wgpu::Device, needed: usize) {
         if needed <= self.ring_slots.get() {
             return;
@@ -860,12 +822,11 @@ impl CompositeBlitPipeline {
     }
 
     /// Create a bind group for a specific ring buffer slot.
-    /// The slot offset is baked into the bind group — no dynamic offset overhead.
+    /// The slot offset is baked in; no dynamic offset.
     ///
     /// # Panics
     ///
-    /// Panics if `size_of::<CompositeParams>()` is zero, which cannot happen
-    /// for a non-empty `#[repr(C)]` struct.
+    /// Panics if `size_of::<CompositeParams>()` is zero, which cannot happen.
     pub fn create_ring_bind_group(
         &self,
         device: &wgpu::Device,
@@ -919,9 +880,8 @@ impl CompositeBlitPipeline {
 
 // === Polygon rendering pipeline ===
 
-/// Extended params for polygon pipeline — includes homography matrix for warp
-/// and per-surface overlap zone blending parameters.
-/// Must match the `PolygonParams` struct in polygon.wgsl.
+/// Polygon pipeline params: UV transform, warp homography, and overlap zones.
+/// Matches `PolygonParams` in polygon.wgsl.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct PolygonParams {
@@ -930,14 +890,14 @@ struct PolygonParams {
     uv_scale: [f32; 2],
     uv_offset: [f32; 2],
     _pad2: [f32; 2],
-    // 3x3 homography matrix stored as 3 × vec4 (xyz used, w = 0 padding)
+    // 3x3 homography as 3 × vec4 (w = 0 padding).
     h_row0: [f32; 4],
     h_row1: [f32; 4],
     h_row2: [f32; 4],
-    // Overlap zone count (as f32 for alignment) + padding
+    // Overlap zone count (f32 for alignment) + padding.
     zone_count: f32,
     _zone_pad: [f32; 3],
-    // Up to 4 overlap zones, each: [u_min, v_min, u_max, v_max] + [gamma, _pad, _pad, _pad]
+    // Up to 4 zones: [u_min, v_min, u_max, v_max] + [gamma, _pad, _pad, _pad].
     zone0_rect: [f32; 4],
     zone0_cfg: [f32; 4],
     zone1_rect: [f32; 4],
@@ -949,7 +909,6 @@ struct PolygonParams {
 }
 
 impl PolygonParams {
-    /// Identity homography (no warp)
     fn identity_homography() -> [[f32; 4]; 3] {
         [
             [1.0, 0.0, 0.0, 0.0],
@@ -1010,7 +969,7 @@ impl PolygonParams {
     }
 }
 
-/// Vertex for polygon rendering — position + UV
+/// Polygon vertex: position and UV.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PolygonVertex {
@@ -1040,17 +999,12 @@ impl PolygonVertex {
 /// Initial vertex-pool capacity in bytes (≈1024 polygon vertices).
 const POLYGON_INITIAL_VERTEX_BYTES: u64 = 1024 * std::mem::size_of::<PolygonVertex>() as u64;
 
-/// Number of frames the persistent pools rotate through. The renderer runs the
-/// CPU ahead of the GPU, so rewriting one pool at offset 0 every frame creates a
-/// write-after-read stall (frame N+1's upload waits on frame N's draw still
-/// reading the same bytes). Rotating through N independent pools lets the next
-/// frame write while the GPU reads the previous one — restoring CPU/GPU overlap
-/// while keeping the per-frame allocation elimination from issue #42.
+/// Frames the persistent pools rotate through, so the CPU writes the next frame
+/// while the GPU still reads the previous one (no write-after-read stall).
 const POLYGON_FRAMES_IN_FLIGHT: usize = 3;
 
-/// A surface ready to be drawn from the pipeline's shared pools.
-/// Produced by [`PolygonBlitPipeline::prepare`], consumed by
-/// [`PolygonBlitPipeline::draw`].
+/// A surface ready to draw from the shared pools. Produced by
+/// [`PolygonBlitPipeline::prepare`], consumed by [`PolygonBlitPipeline::draw`].
 pub struct PreparedPolygon {
     bind_group: wgpu::BindGroup,
     /// Byte offset of this surface's vertices within the shared vertex pool.
@@ -1060,9 +1014,8 @@ pub struct PreparedPolygon {
     num_triangles: u32,
 }
 
-/// Per-surface draw description fed to [`PolygonBlitPipeline::prepare`].
-/// `vertices` are CPU-side triangulated vertices from [`PolygonBlitPipeline::triangulate_verts`]
-/// or [`PolygonBlitPipeline::mesh_verts`] — no GPU buffer is allocated per surface.
+/// Per-surface input to [`PolygonBlitPipeline::prepare`]. `vertices` come from
+/// [`PolygonBlitPipeline::triangulate_verts`] or [`PolygonBlitPipeline::mesh_verts`].
 pub struct PolygonDrawDesc<'a> {
     pub content_view: &'a wgpu::TextureView,
     pub uv_scale: [f32; 2],
@@ -1070,27 +1023,15 @@ pub struct PolygonDrawDesc<'a> {
     pub homography: Option<[f32; 12]>,
     pub overlap_zones: &'a SurfaceOverlapZones,
     pub vertices: Vec<PolygonVertex>,
-    /// Surface uuid — cache key for its baked hole mask.
+    /// Surface uuid; cache key for its baked hole mask.
     pub mask_uuid: &'a str,
-    /// Flattened hole contours in surface uv space (`[0..1]²`). Empty = no
-    /// holes (the 1×1 white default mask is bound).
+    /// Hole contours in surface UV space (`[0..1]²`). Empty binds the 1×1
+    /// white default mask.
     pub mask_uv_contours: Vec<Vec<[f32; 2]>>,
 }
 
-/// Pipeline for rendering textured polygon surfaces using vertex buffers.
-///
-/// Per-surface uniform params and triangulated vertices are written into
-/// persistent, growable pools rather than freshly allocated each frame. This
-/// eliminates the unbounded per-frame GPU buffer churn that caused resource
-/// exhaustion on low-VRAM Metal devices (issue #42).
-///
-/// The pools are triple-buffered ([`POLYGON_FRAMES_IN_FLIGHT`]): each `prepare`
-/// rotates to the next set so the CPU writes the upcoming frame while the GPU
-/// still reads the previous one, avoiding the cross-frame write-after-read stall
-/// that a single rewritten-at-offset-0 pool would impose on pipelined frames.
-/// A baked hole coverage mask cached on the polygon pipeline. `hash` fingerprints
-/// the surface's uv-space hole contours; the texture rebakes only when it
-/// changes. `_texture` is retained so `view` stays valid.
+/// A baked hole coverage mask. `hash` fingerprints the surface's UV-space hole
+/// contours; the mask rebakes only when it changes. `_texture` keeps `view` alive.
 struct CachedMask {
     hash: u64,
     _texture: wgpu::Texture,
@@ -1152,34 +1093,34 @@ fn upload_mask_texture(
     (texture, view)
 }
 
+/// Renders textured polygon surfaces.
+///
+/// Per-surface params and vertices go into persistent, growable pools instead
+/// of per-frame buffers, which exhausted memory on low-VRAM Metal devices. The
+/// pools rotate over [`POLYGON_FRAMES_IN_FLIGHT`] frames.
 pub struct PolygonBlitPipeline {
     pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
-    /// Persistent uniform params ring buffers (one per frame in flight); each
-    /// grows independently to fit the surface count.
+    /// Params ring buffers, one per frame in flight, each grown to fit.
     ring_buffers: [RefCell<wgpu::Buffer>; POLYGON_FRAMES_IN_FLIGHT],
-    /// Byte stride between ring slots (aligned to device minimum).
+    /// Byte stride between ring slots, aligned to the device minimum.
     ring_stride: u64,
     /// Slots currently allocated in each `ring_buffers` entry.
     ring_slots: [Cell<usize>; POLYGON_FRAMES_IN_FLIGHT],
-    /// Persistent vertex pools (one per frame in flight); each grows to fit a
-    /// frame's total vertices.
+    /// Vertex pools, one per frame in flight, each grown to fit.
     vertex_buffers: [RefCell<wgpu::Buffer>; POLYGON_FRAMES_IN_FLIGHT],
     /// Capacity in bytes of each `vertex_buffers` entry.
     vertex_capacity: [Cell<u64>; POLYGON_FRAMES_IN_FLIGHT],
     /// Index of the pool set the next `prepare` will write, advanced each frame.
     frame_cursor: Cell<usize>,
-    /// Reusable CPU staging for a frame's packed params — coalesces all slot
-    /// writes into a single `queue.write_buffer` (avoids per-frame allocation).
+    /// Reused staging for a frame's params, uploaded with one `write_buffer`.
     scratch_params: RefCell<Vec<u8>>,
-    /// Reusable CPU staging for a frame's concatenated vertices — coalesces all
-    /// surface uploads into a single `queue.write_buffer`.
+    /// Reused staging for a frame's vertices, uploaded with one `write_buffer`.
     scratch_verts: RefCell<Vec<PolygonVertex>>,
-    /// Per-surface baked hole coverage masks, keyed by surface uuid. Rebaked
-    /// only when the uv-contour hash changes (8i.7).
+    /// Baked hole masks keyed by surface uuid.
     mask_cache: RefCell<HashMap<String, CachedMask>>,
-    /// Lazily-built 1×1 white mask bound for hole-less surfaces (coverage 1.0).
+    /// Lazily built 1×1 white mask for surfaces without holes.
     default_mask: RefCell<Option<(wgpu::Texture, wgpu::TextureView)>>,
 }
 
@@ -1188,10 +1129,8 @@ impl PolygonBlitPipeline {
     ///
     /// # Errors
     ///
-    /// Never returns `Err` today: every wgpu resource here is created
-    /// infallibly (device validation failures surface on the device's error
-    /// scope instead). The `Result` keeps the constructor signature uniform
-    /// with the other pipelines so callers can `?` it.
+    /// Never returns `Err`; validation failures surface on the device's error
+    /// scope. The `Result` matches the other pipeline constructors.
     pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Result<Self> {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Polygon Blit Bind Group Layout"),
@@ -1222,7 +1161,7 @@ impl PolygonBlitPipeline {
                     },
                     count: None,
                 },
-                // Hole coverage mask (8i.7).
+                // Hole coverage mask.
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -1242,7 +1181,7 @@ impl PolygonBlitPipeline {
             immediate_size: 0,
         });
 
-        // Combined vertex + fragment shader with homography support
+        // Vertex + fragment shader with homography.
         let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Polygon Warp Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/polygon.wgsl").into()),
@@ -1291,9 +1230,7 @@ impl PolygonBlitPipeline {
             ..Default::default()
         });
 
-        // Pre-allocate triple-buffered persistent pools (grow on demand). Each
-        // frame in flight gets its own ring + vertex pool so consecutive frames
-        // never write the buffer the GPU is still reading.
+        // One ring and vertex pool per frame in flight, grown on demand.
         let align = u64::from(device.limits().min_uniform_buffer_offset_alignment);
         let param_size = std::mem::size_of::<PolygonParams>() as u64;
         let ring_stride = param_size.div_ceil(align) * align;
@@ -1364,8 +1301,7 @@ impl PolygonBlitPipeline {
         }
     }
 
-    /// Lazily build the 1×1 white default mask (coverage 1.0) bound to hole-less
-    /// surfaces.
+    /// Lazily build the 1×1 white mask for surfaces without holes.
     fn ensure_default_mask(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
         let mut slot = self.default_mask.borrow_mut();
         if slot.is_none() {
@@ -1407,20 +1343,16 @@ impl PolygonBlitPipeline {
 
     /// Prepare a batch of surfaces for drawing this frame.
     ///
-    /// Writes each surface's params into the persistent ring buffer and its
-    /// vertices into the persistent vertex pool (growing both once up front if
-    /// needed), then builds per-surface bind groups bound to their ring slot.
-    /// No per-surface GPU buffer is allocated in steady state.
-    ///
-    /// Returns the prepared surfaces plus a handle to the vertex pool to bind;
-    /// the caller holds the handle across the render pass and passes it to
+    /// Writes params and vertices into this frame's pools and builds a bind
+    /// group per surface. Returns the prepared surfaces and the vertex pool
+    /// handle, which the caller holds across the render pass and passes to
     /// [`Self::draw`].
     ///
     /// # Panics
     ///
     /// Panics if the 1×1 default coverage mask is missing after
-    /// `ensure_default_mask`, or if `size_of::<PolygonParams>()` is zero —
-    /// neither is reachable.
+    /// `ensure_default_mask`, or if `size_of::<PolygonParams>()` is zero.
+    /// Neither is reachable.
     pub fn prepare(
         &self,
         device: &wgpu::Device,
@@ -1428,8 +1360,7 @@ impl PolygonBlitPipeline {
         draws: &[PolygonDrawDesc<'_>],
     ) -> (Vec<PreparedPolygon>, wgpu::Buffer) {
         let n = draws.len();
-        // Rotate to the next pool set so this frame writes buffers the GPU is no
-        // longer reading from a previous in-flight frame.
+        // Rotate to the next pool set.
         let idx = self.frame_cursor.get();
         self.frame_cursor.set((idx + 1) % POLYGON_FRAMES_IN_FLIGHT);
         self.ensure_ring_slots(device, idx, n);
@@ -1440,10 +1371,8 @@ impl PolygonBlitPipeline {
         let param_size = std::mem::size_of::<PolygonParams>();
         let stride = self.ring_stride as usize;
 
-        // Pack all slot params into one reusable staging blob, and concatenate
-        // all surface vertices into another, so the whole frame uploads with a
-        // single write_buffer each instead of two per surface. write_buffer
-        // staging overhead dominated the per-surface path at high surface counts.
+        // Stage all params and all vertices so the frame uploads with one
+        // write_buffer each, not two per surface.
         let mut params_blob = self.scratch_params.borrow_mut();
         let mut verts_blob = self.scratch_verts.borrow_mut();
         params_blob.clear();
@@ -1478,7 +1407,7 @@ impl PolygonBlitPipeline {
             queue.write_buffer(&vpool, 0, bytemuck::cast_slice(&verts_blob));
         }
 
-        // Bake/refresh per-surface hole masks (rebakes only on contour change).
+        // Rebakes only on contour change.
         self.ensure_masks(device, queue, draws);
         self.ensure_default_mask(device, queue);
         let mask_cache = self.mask_cache.borrow();
@@ -1558,13 +1487,10 @@ impl PolygonBlitPipeline {
         }
     }
 
-    /// Ear-clip triangulate polygon vertices into CPU-side vertices.
+    /// Ear-clip triangulate a polygon (concave allowed) into vertices.
     ///
-    /// Handles concave polygons correctly (fan triangulation only works for
-    /// convex). UVs map the bounding box to [0..1] (for Fill mode, the shader's
-    /// `uv_scale/uv_offset` handle the rest). Returns an empty vec for degenerate
-    /// input (< 3 vertices). The vertices are written into the pipeline's shared
-    /// pool by [`Self::prepare`] — no GPU buffer is allocated here.
+    /// UVs map the bounding box to [0..1]; the shader's `uv_scale/uv_offset`
+    /// do the rest. Returns an empty vec for fewer than 3 vertices.
     pub fn triangulate_verts(
         canvas_verts: &[[f32; 2]],
         bb_x: f32,
@@ -1602,13 +1528,9 @@ impl PolygonBlitPipeline {
         verts
     }
 
-    /// Triangulate a combined (multi-contour) surface: ear-clip the primary
-    /// contour plus every extra contour against the *shared* bounding box, then
-    /// concatenate into a single triangle-list vertex buffer. This lets one draw
-    /// render all disjoint pieces of a combined surface (each contour showing the
-    /// content that falls over its area), matching the stage editor. A single
-    /// warp mesh cannot represent disjoint contours, so callers use this for
-    /// multi-contour surfaces instead of the warp path.
+    /// Triangulate a combined (multi-contour) surface against its shared
+    /// bounding box into one triangle list, so one draw renders every piece.
+    /// Used instead of the warp path, which can't represent disjoint contours.
     pub fn triangulate_multi(
         primary: &[[f32; 2]],
         extras: &[Vec<[f32; 2]>],
@@ -1626,11 +1548,9 @@ impl PolygonBlitPipeline {
 
     /// Build CPU-side vertices from a UV warp mesh grid.
     ///
-    /// Each cell in the mesh grid (cols-1 × rows-1) becomes 2 triangles.
-    /// Vertex positions come from `mesh.points[].position` (output space),
-    /// UVs come from `mesh.points[].uv` (source texture space).
-    /// The homography should be set to identity when using mesh warp.
-    /// Returns an empty vec for an invalid mesh.
+    /// Each grid cell becomes 2 triangles; positions are output space, UVs
+    /// source space. Use an identity homography with mesh warp. Returns an
+    /// empty vec for an invalid mesh.
     pub fn mesh_verts(mesh: &crate::surface::warp::WarpMesh) -> Vec<PolygonVertex> {
         let cols = mesh.cols as usize;
         let rows = mesh.rows as usize;
@@ -1654,8 +1574,7 @@ impl PolygonBlitPipeline {
                 let br = &mesh.points[(r + 1) * cols + c + 1];
 
                 // Positions stay in output space [0..1]; the vertex shader
-                // (with identity homography for mesh warp) converts to NDC,
-                // matching the corner-pin path in `triangulate_verts`.
+                // converts to NDC, as for `triangulate_verts`.
                 let to_vert = |p: &crate::surface::warp::MeshPoint| -> PolygonVertex {
                     PolygonVertex {
                         position: p.position,
@@ -1680,8 +1599,7 @@ impl PolygonBlitPipeline {
 
 // === Ear-clipping triangulation for concave polygons ===
 
-/// Ear-clipping triangulation for a simple (non-self-intersecting) polygon.
-/// Returns triangle indices into the vertex array.
+/// Triangle indices for a simple (non-self-intersecting) polygon.
 fn ear_clip_triangulate(verts: &[[f32; 2]]) -> Vec<u32> {
     let n = verts.len();
     if n < 3 {
@@ -1691,7 +1609,7 @@ fn ear_clip_triangulate(verts: &[[f32; 2]]) -> Vec<u32> {
     let mut idx: Vec<usize> = (0..n).collect();
     let mut result = Vec::with_capacity((n - 2) * 3);
 
-    // Determine winding via signed area (y-down coords: negative = CCW)
+    // Winding from signed area (y-down: negative = CCW).
     let signed_area: f32 = (0..n)
         .map(|i| {
             let a = verts[i];
@@ -2407,8 +2325,7 @@ mod tests {
 
     #[test]
     fn ear_clip_triangulate_concave_polygon_is_fully_triangulated() {
-        // Concave L-shape (one reflex vertex): ear-clipping must still emit
-        // n-2 triangles with valid indices, not degenerate on the concavity.
+        // Concave L-shape: still n-2 valid triangles.
         let l_shape = [
             [0.0, 0.0],
             [2.0, 0.0],
@@ -2454,8 +2371,7 @@ mod tests {
         assert!(!ear_clip_is_ear(&concave, &cidx, 3, 0, 1, true));
     }
 
-    /// UVs must be the vertex position normalized within the bounding box, so a
-    /// quad offset into the lower-right BB quadrant maps into [0..1] UV space.
+    /// UVs are the vertex position normalized within the bounding box.
     #[test]
     fn triangulate_verts_maps_uv_within_bounding_box() {
         let verts = PolygonBlitPipeline::triangulate_verts(&QUAD, 0.0, 0.0, 2.0, 2.0);
@@ -2489,9 +2405,7 @@ mod tests {
 
     #[test]
     fn triangulate_multi_covers_all_contours() {
-        // A combined surface: primary quad + two extra quads. All three contours
-        // must be triangulated (2 triangles = 6 verts each = 18 total), so a
-        // combined surface renders every disjoint piece, not just the primary.
+        // Primary quad + two extra quads: 6 verts each, 18 total.
         let primary = QUAD;
         let extras = vec![QUAD.to_vec(), QUAD.to_vec()];
         let verts = PolygonBlitPipeline::triangulate_multi(&primary, &extras, 0.0, 0.0, 1.0, 1.0);
@@ -2512,10 +2426,7 @@ mod tests {
         assert!(PolygonBlitPipeline::mesh_verts(&mesh).is_empty());
     }
 
-    /// Mesh positions must be emitted in output space [0..1] (NOT pre-converted
-    /// to NDC): the shader does the single [0..1]→NDC conversion, so an identity
-    /// mesh must produce positions within [0..1], matching the corner-pin path.
-    /// Regression guard against the double-NDC bug that clipped surfaces.
+    /// Mesh positions are in output space [0..1], not NDC; the shader converts once.
     #[test]
     fn mesh_verts_positions_stay_in_output_space() {
         let mesh = crate::surface::warp::WarpMesh::identity(2, 2);
@@ -2533,9 +2444,8 @@ mod tests {
         assert!(verts.iter().any(|v| v.position == [1.0, 1.0]));
     }
 
-    /// prepare must reuse persistent pools and grow them when the surface count
-    /// exceeds the initial ring capacity, without allocating per surface. The
-    /// returned offsets must be contiguous and non-overlapping.
+    /// `prepare` grows the pools past the initial capacity and packs offsets
+    /// contiguously without overlap.
     #[test]
     fn prepare_grows_pools_and_packs_vertices() {
         let Some(ctx) = crate::testing::headless_gpu() else {
@@ -2581,9 +2491,8 @@ mod tests {
         assert!(pipeline.ring_slots.iter().any(|s| s.get() >= big));
     }
 
-    /// Each prepare must advance to the next pool set and wrap after
-    /// `POLYGON_FRAMES_IN_FLIGHT` frames, so consecutive frames never reuse the
-    /// buffer the GPU may still be reading (the cross-frame WAR hazard).
+    /// Each `prepare` advances to the next pool set, wrapping after
+    /// `POLYGON_FRAMES_IN_FLIGHT` frames.
     #[test]
     fn prepare_rotates_frame_pools() {
         let Some(ctx) = crate::testing::headless_gpu() else {
@@ -2623,8 +2532,7 @@ mod tests {
             AlphaMode, PresentationColorProfile, PresentationDepth, PresentationPixelFormat,
             PresentationTransfer, ResolvedPresentation,
         };
-        // An HDR surface is never an `*Srgb` format, so there is no hardware
-        // transfer to defer to and the shader must own the encode.
+        // HDR surfaces are never `*Srgb`, so the shader encodes.
         let presentation = ResolvedPresentation {
             requested: PresentationDepth::Sdr10,
             resolved: PresentationDepth::Sdr10,
@@ -2651,14 +2559,11 @@ mod tests {
         use crate::renderer::hdr;
 
         const PEAK: u16 = 1000;
-        // `copy_texture_to_buffer` needs a row pitch that is a multiple of
-        // `COPY_BYTES_PER_ROW_ALIGNMENT`. At four bytes per texel that means a
-        // width divisible by 64; the probes occupy the first few texels and the
-        // rest of the row is padding.
+        // Row pitch must be a multiple of `COPY_BYTES_PER_ROW_ALIGNMENT`: 64
+        // texels at 4 bytes. Probes fill the first few texels.
         const WIDTH: u32 = 64;
-        // Neutral greys: the BT.2020 matrix rows are normalized, so a neutral
-        // stays neutral and the shader result must equal the scalar reference
-        // exactly. Any drift is a transposed matrix or a wrong constant.
+        // Neutral grays stay neutral through the BT.2020 matrix, so the shader
+        // must match the scalar reference exactly.
         let probes: [f32; 6] = [
             0.0,
             0.5,
@@ -2824,8 +2729,7 @@ mod tests {
             );
         }
 
-        // The anchor from /spec/hdr-color-management.md Decision 2: linear 1.0 is
-        // BT.2408 reference white, 203 cd/m², PQ 10-bit code 594.
+        // Linear 1.0 is BT.2408 reference white: 203 cd/m², PQ 10-bit code 594.
         assert!(
             codes[2].abs_diff(594) <= 1,
             "reference white encoded to {} instead of 594",
@@ -2846,8 +2750,7 @@ mod tests {
             AlphaMode, PresentationColorProfile, PresentationDepth, PresentationPixelFormat,
             PresentationTransfer, ResolvedPresentation,
         };
-        // EDR targets a float surface: there is no transfer to apply and no
-        // integer quantization for a dither pattern to sit in front of.
+        // EDR is a float surface: no transfer, no quantization to dither.
         let presentation = ResolvedPresentation {
             requested: PresentationDepth::Sdr10,
             resolved: PresentationDepth::Sdr10,
@@ -2858,7 +2761,7 @@ mod tests {
             pixel_format: PresentationPixelFormat::Rgba16,
             color_profile: PresentationColorProfile::SrgbFull,
             alpha_mode: AlphaMode::Opaque,
-            // Dithering is requested and must still be refused.
+            // Requested, but must be refused.
             dither: true,
             fallback_reason: None,
         };

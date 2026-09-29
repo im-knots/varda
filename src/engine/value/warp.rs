@@ -1,8 +1,5 @@
-//! Warp value types — corner-pin, mesh, and bezier patch-grid warp data.
-//!
-//! Only the plain data shapes live here. The mesh and tessellation algorithms
-//! are inherent impls in `surface::warp`, which re-exports these types (see
-//! /spec/engine-value-types.md).
+//! Warp data: corner-pin, mesh, and bezier patch grid. The mesh and
+//! tessellation code lives in `surface::warp`, which re-exports these types.
 
 /// A single point in a UV warp mesh: output-space position + source-space UV.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
@@ -36,8 +33,8 @@ pub enum WarpMode {
     CornerPin { corners: [[f32; 2]; 4] },
     /// Arbitrary XYUV mesh warp grid.
     Mesh(WarpMesh),
-    /// Smooth bezier patch grid (8i.6). Editable control cage; tessellated into
-    /// a `WarpMesh` for the GPU via [`WarpMode::render_mesh`].
+    /// Bezier patch grid, tessellated into a `WarpMesh` by
+    /// [`WarpMode::render_mesh`].
     Bezier(BezierWarp),
 }
 

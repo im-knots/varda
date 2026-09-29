@@ -1,11 +1,10 @@
-//! Workspace persistence — save/load from `.varda/` directory.
+//! Saving and loading the `.varda/` workspace.
 
 use super::VardaApp;
 use crate::engine::value::editor::EditorPrefs;
 
-/// Outcome of loading `.varda/`. Hard failures are listed so the command
-/// bus cannot report `Ok` when a file that exists could not be restored.
-/// Editor prefs are still returned when stage.json loaded, even if scene.json failed.
+/// Outcome of loading `.varda/`. Hard failures are listed so a partial load
+/// isn't reported as `Ok`. Editor prefs are returned if stage.json loaded.
 pub struct WorkspaceLoad {
     pub editor_prefs: Option<EditorPrefs>,
     errors: Vec<String>,
@@ -53,14 +52,12 @@ fn duration_config_to_spec(
 }
 
 impl VardaApp {
-    /// Save the entire workspace to `.varda/`, including the editor prefs the
-    /// GUI last sent.
+    /// Save the workspace to `.varda/`, including the GUI's last editor prefs.
     ///
     /// # Errors
     ///
-    /// Returns an error if `.varda/` cannot be created or if any workspace
-    /// file fails to write. Files that succeeded stay on disk; the error
-    /// lists every failure. The operator is toasted on failure.
+    /// Returns an error listing every file that failed to write, or if `.varda/`
+    /// cannot be created. Successful writes are kept.
     pub fn save_workspace(&mut self) -> anyhow::Result<()> {
         if let Err(e) = self.session.workspace.ensure_dir() {
             let msg = format!("Failed to create .varda directory: {e}");
@@ -155,10 +152,8 @@ impl VardaApp {
         }
     }
 
-    /// Load workspace from `.varda/` if it exists.
-    /// If a scene is found, replaces the default mixer with the restored one.
-    /// Returns editor prefs loaded from stage.json (if any), plus any
-    /// hard failures so the command bus cannot report success on a partial load.
+    /// Load the workspace from `.varda/` if it exists, replacing the mixer when
+    /// a scene is found. Returns stage.json editor prefs and any hard failures.
     pub fn load_workspace(&mut self) -> WorkspaceLoad {
         if !self.session.workspace.exists() {
             log::info!("No .varda/ directory found, starting fresh");
@@ -167,8 +162,7 @@ impl VardaApp {
                 errors: Vec::new(),
             };
         }
-        // Loading a workspace replaces the live scene/stage, so the undo/redo
-        // timeline (which references the previous state) must be cleared.
+        // History refers to the replaced state.
         self.session.history.clear();
         let mut loaded_prefs: Option<EditorPrefs> = None;
         let mut errors: Vec<String> = Vec::new();
@@ -179,8 +173,7 @@ impl VardaApp {
                     self.output.dome = prefs.dome_config();
                     self.apply_timecode_config(&prefs.timecode);
                     self.output.surface_manager = prefs.surfaces;
-                    // Set before `ensure_domemaster` below, which builds at
-                    // whatever this says.
+                    // Set before `ensure_domemaster`, which reads it.
                     self.output.domemaster_resolution = prefs.domemaster_resolution;
                     errors.extend(self.reconcile_outputs(&prefs.outputs));
                     log::info!(
@@ -189,7 +182,6 @@ impl VardaApp {
                         prefs.outputs.len()
                     );
 
-                    // If any surface uses Domemaster source, ensure the renderer exists
                     let has_dome_surfaces = self.output.surface_manager.surfaces.iter().any(|s| {
                         matches!(s.source, crate::renderer::context::OutputSource::Domemaster)
                     });
@@ -206,7 +198,6 @@ impl VardaApp {
         if self.session.workspace.has_scene() {
             match crate::scene::SceneConfig::load(self.session.workspace.scene_path()) {
                 Ok(scene_config) => {
-                    // Apply render resolution from scene if present
                     if let (Some(w), Some(h)) =
                         (scene_config.render_width, scene_config.render_height)
                         && w > 0
@@ -225,10 +216,7 @@ impl VardaApp {
                     match restored {
                         Ok(result) => {
                             self.mixer = result.mixer;
-                            // How the show counts frames and where it loops are
-                            // authored; where it was stopped is not, so the
-                            // position stays at zero and the arrangement stays
-                            // inert until someone starts it.
+                            // Only frame rate and loop are saved; position starts at zero.
                             self.show
                                 .transport
                                 .set_timecode_rate(scene_config.transport.timecode_rate);
@@ -238,8 +226,7 @@ impl VardaApp {
                             for warn in &result.warnings {
                                 self.session.notifications.warn(warn.clone());
                             }
-                            // Start preprocessor analyzers for active decks restored from save.
-                            // A deck is "active" when it is not muted and has non-zero opacity.
+                            // Start analyzers for active (unmuted, nonzero opacity) decks.
                             for ch in self.mixer.channels_mut() {
                                 let any_solo = ch.decks.iter().any(|s| s.solo);
                                 for slot in &mut ch.decks {
@@ -271,8 +258,7 @@ impl VardaApp {
                 }
             }
         }
-        // A stage saved before surfaces named channels by UUID is resolved
-        // against the scene it was saved with, which is now loaded.
+        // Older stages name channels by index; resolve them against the loaded scene.
         {
             let channels = self.mixer.channels();
             let channel_uuids: Vec<String> =
@@ -310,7 +296,6 @@ impl VardaApp {
                 }
             }
         }
-        // Load keyboard shortcuts
         if self.session.workspace.has_keymap() {
             match crate::keymap::KeymapConfig::load(self.session.workspace.keymap_path()) {
                 Ok(keymap_config) => {
@@ -323,11 +308,10 @@ impl VardaApp {
                 }
             }
         }
-        // Load OSC config (already loaded in new(), but refresh feedback targets on workspace load)
+        // OSC config loads in new(); this refreshes feedback targets.
         if self.session.workspace.has_osc() {
             match crate::osc::OscConfig::load(self.session.workspace.osc_path()) {
                 Ok(config) => {
-                    // Update feedback targets
                     if let Some(ref mut sender) = self.input.osc_feedback {
                         for target in &config.feedback_targets {
                             if let Err(e) = sender.add_target(target) {
@@ -362,8 +346,8 @@ impl VardaApp {
         }
     }
 
-    /// Apply a scene diff: compare current mixer state to a target `SceneConfig`
-    /// and patch only what changed. Returns restore warnings.
+    /// Patch the mixer to match `target`, changing only what differs. Returns
+    /// restore warnings.
     pub fn apply_scene_diff(
         &mut self,
         target: &crate::scene::SceneConfig,
@@ -372,18 +356,16 @@ impl VardaApp {
     ) -> Vec<String> {
         let mut warnings = Vec::new();
 
-        // (a) Crossfader — always cheap
+        // (a) Crossfader
         self.mixer.set_crossfader(target.crossfader);
 
-        // (b) Modulation — cheap clone
+        // (b) Modulation
         self.mixer.set_modulation(target.modulation.clone());
 
-        // (b2) Macros — cheap clone (config changes are undoable; live turns are not)
+        // (b2) Macros
         self.mixer.set_macros(target.macros.clone());
 
-        // (b3) Arrangement — cheap clone. Regions and lanes are edited through
-        // the undo stack like any other scene data; the transport's *position*
-        // is not, since undoing an edit must not also rewind the show.
+        // (b3) Arrangement. Transport position is not part of undo.
         self.mixer.set_arrangement(target.arrangement.clone());
         self.show
             .transport
@@ -392,7 +374,7 @@ impl VardaApp {
             .transport
             .set_loop_region(target.transport.loop_region);
 
-        // (c) Transition shader — compare names, only recreate if changed
+        // (c) Transition shader, recreated only if the name changed
         {
             let current_name = self.mixer.active_transition().map(|t| t.name.clone());
             let target_name = target.active_transition.as_deref();
@@ -422,16 +404,12 @@ impl VardaApp {
             }
         }
 
-        // (d) Channels and decks, matched by UUID so each keeps its identity
-        // across undo: whatever names a channel or deck (MIDI, modulation, the
-        // arrangement, surfaces) finds the same one again. Every current
-        // channel and deck is taken out, then the target is rebuilt in order,
-        // reusing an entity whose UUID matches and building the rest with
-        // their saved UUIDs.
+        // (d) Channels and decks, matched by UUID so references survive undo.
+        // All are taken out, then the target is rebuilt in order, reusing UUID
+        // matches and building the rest with their saved UUIDs.
         let labels = self.mixer.channel_labels();
         let (providers, mut env) = self.sources.env(&self.render.context, rw, rh, &labels);
-        // Sources the diff drops, released through their providers once the
-        // channels are settled.
+        // Released through their providers once channels are settled.
         let mut dropped: Vec<crate::deck::Deck> = Vec::new();
         let mut spare_channels = std::mem::take(self.mixer.channels_mut());
         let mut spare_decks: Vec<crate::channel::DeckSlot> = spare_channels
@@ -474,7 +452,7 @@ impl VardaApp {
                 let reused =
                     take_by_uuid(&mut spare_decks, &deck_config.uuid, |slot| slot.deck.uuid());
                 let mut slot = match reused {
-                    // Same deck, same source: patch in place (no GPU cost).
+                    // Same deck and source: patch in place.
                     Some(slot)
                         if crate::persistence::source_configs_match(
                             &slot.deck,
@@ -508,8 +486,7 @@ impl VardaApp {
         dropped.extend(spare_decks.into_iter().map(|slot| slot.deck));
         *self.mixer.channels_mut() = channels;
 
-        // Release what the dropped decks held on devices, so a camera or a
-        // stream a diff replaced does not keep running for nobody.
+        // Release devices held by dropped decks.
         for mut deck in dropped {
             providers.release(deck.source_mut(), &mut env);
             if let (Some(sensor), Some(depth)) = (
@@ -520,7 +497,6 @@ impl VardaApp {
             }
         }
 
-        // Update next_channel_index
         let max_idx = self
             .mixer
             .channels()
@@ -534,7 +510,7 @@ impl VardaApp {
             .map_or(self.mixer.channels().len(), |n| n + 1);
         self.mixer.set_next_channel_index(max_idx);
 
-        // (e) Master effects — diff
+        // (e) Master effects
         Self::diff_effects(
             self.mixer.master_effects_mut(),
             &target.master_effects,
@@ -543,7 +519,7 @@ impl VardaApp {
             &mut warnings,
         );
 
-        // (f) Transition sequences — cheap clone
+        // (f) Transition sequences
         let channel_uuids: Vec<String> = self
             .mixer
             .channels()
@@ -572,8 +548,7 @@ impl VardaApp {
         warnings
     }
 
-    /// The persisted half of the transport: how this show counts frames and
-    /// where it loops, without its position or run state.
+    /// The saved part of the transport: frame rate and loop, not position or run state.
     pub fn transport_config(&self) -> crate::scene::TransportConfig {
         crate::scene::TransportConfig {
             timecode_rate: self.show.transport.timecode_rate(),
@@ -602,8 +577,8 @@ impl VardaApp {
         )
     }
 
-    /// Restore a saved timecode patch against the devices present now,
-    /// reporting anything the rig no longer has.
+    /// Restore a saved timecode patch against present devices, warning about
+    /// missing ones.
     pub fn apply_timecode_config(&mut self, config: &crate::timecode::TimecodeConfig) {
         let audio: Vec<(crate::audio::AudioSourceId, String)> = self
             .audio
@@ -638,9 +613,8 @@ impl VardaApp {
         }
     }
 
-    /// Build a combined history snapshot (scene + stage) of current engine
-    /// state. Restores leave the editor prefs alone, so capturing them is only
-    /// for completeness of the stage file shape.
+    /// Snapshot scene and stage for history. Editor prefs are captured but
+    /// not restored.
     pub fn history_snapshot(&self) -> super::history::HistorySnapshot {
         let scene = crate::persistence::snapshot_scene(
             &self.mixer,
@@ -658,31 +632,23 @@ impl VardaApp {
         super::history::HistorySnapshot { scene, stage }
     }
 
-    // ── Unified undo/redo timeline ─────────────────────────────────────────
+    // ── Undo/redo ──────────────────────────────────────────────────────────
     //
-    // The engine owns the single `HistoryManager` (on `SessionState`). Both
-    // consumers push into and restore from it through these methods, so the
-    // windowed UI and the HTTP/headless command bus share one timeline. See
-    // [undo-redo.md](/spec/undo-redo.md) → "Recording Points".
+    // One `HistoryManager` (on `SessionState`) shared by the GUI and the
+    // command bus.
 
-    /// True if there is an undoable action on the shared timeline.
     pub fn history_can_undo(&self) -> bool {
         self.session.history.can_undo()
     }
 
-    /// True if there is a redoable action on the shared timeline.
     pub fn history_can_redo(&self) -> bool {
         self.session.history.can_redo()
     }
 
-    /// Restore a history snapshot onto live state (scene + stage).
     fn restore_history_snapshot(&mut self, snapshot: &super::history::HistorySnapshot) {
         let rw = self.render.width;
         let rh = self.render.height;
-        // Scene half — diff-apply (patches only what changed).
         let warnings = self.apply_scene_diff(&snapshot.scene, rw, rh);
-        // Stage half — restore surfaces, assignments, and dome config (no
-        // window lifecycle). Cosmetic editor prefs are intentionally left alone.
         self.apply_stage_diff(&snapshot.stage);
         self.mixer.clear_sub_mix_cache();
         for w in &warnings {
@@ -690,8 +656,7 @@ impl VardaApp {
         }
     }
 
-    /// Undo the most recent undoable action. `current` is the live state to
-    /// place on the redo stack. Returns false when the undo stack is empty.
+    /// Undo, pushing `current` onto the redo stack. Returns false if nothing to undo.
     pub fn history_undo(&mut self, current: super::history::HistorySnapshot) -> bool {
         let Some(snapshot) = self.session.history.undo(current) else {
             return false;
@@ -700,8 +665,7 @@ impl VardaApp {
         true
     }
 
-    /// Redo the most recently undone action. `current` is the live state to
-    /// place on the undo stack. Returns false when the redo stack is empty.
+    /// Redo, pushing `current` onto the undo stack. Returns false if nothing to redo.
     pub fn history_redo(&mut self, current: super::history::HistorySnapshot) -> bool {
         let Some(snapshot) = self.session.history.redo(current) else {
             return false;
@@ -710,27 +674,19 @@ impl VardaApp {
         true
     }
 
-    /// Apply a stage diff: restore the authored stage state from a `StagePrefs`
-    /// snapshot onto live state for undo/redo.
+    /// Restore authored stage state for undo/redo: surfaces, per-output surface
+    /// assignments, and the dome config. Output windows and editor prefs are
+    /// left alone.
     ///
-    /// Restores surfaces (geometry, warp, holes, combine, stacking, `dome_setup`),
-    /// per-output surface assignments, and the dome config. Deliberately does NOT
-    /// recreate, remove, move, or resize output windows/monitors, and does NOT
-    /// touch cosmetic editor prefs (grid size, snap, panel-open flags), which are
-    /// not authored content.
-    ///
-    /// GPU-derived caches rebuild automatically from the restored surface data:
-    /// hole masks are content-hash keyed and warp meshes are tessellated per
-    /// frame, so no explicit cache invalidation is needed here.
+    /// GPU caches need no invalidation: hole masks are keyed by content hash
+    /// and warp meshes are tessellated per frame.
     pub fn apply_stage_diff(&mut self, target: &crate::persistence::StagePrefs) {
-        // (a) Surfaces and dome config — plain data, swap wholesale.
+        // (a) Surfaces and dome config, replaced wholesale.
         self.output.surface_manager = target.surfaces.clone();
         self.output.dome = target.dome_config();
 
-        // (b) Per-output surface assignments — patch by matching uuid to the
-        //     snapshot's OutputConfig. Never create/destroy/reposition windows;
-        //     outputs present in the snapshot but not live (or vice versa) are
-        //     ignored for lifecycle.
+        // (b) Surface assignments, patched on outputs matched by UUID. Outputs
+        //     are never created or removed here.
         let mut restored_output_indices = Vec::new();
         for (idx, output) in self.output.outputs.iter_mut().enumerate() {
             let Some(cfg) = target.outputs.iter().find(|c| c.uuid == output.uuid) else {
@@ -762,8 +718,7 @@ impl VardaApp {
             self.refresh_presentation_notification(idx);
         }
 
-        // (c) Recompute Auto-mode edge-blend overlap zones for the restored
-        //     surface topology.
+        // (c) Auto-mode edge blend.
         self.output.recompute_auto_edge_blend();
     }
 
@@ -780,8 +735,7 @@ impl VardaApp {
         slot.solo = config.solo;
         slot.z_index = config.z_index;
 
-        // The source takes its own settings; the deck takes the generator
-        // parameter values every ISF-style source stores under `params`.
+        // The deck takes the ISF values stored under `params`.
         slot.deck.source_mut().patch(&config.source);
         if let Some(params) = config.source.get("params").and_then(|v| {
             serde_json::from_value::<std::collections::HashMap<String, crate::params::ParamValue>>(
@@ -792,7 +746,6 @@ impl VardaApp {
             slot.deck.generator_params.values = params;
         }
 
-        // Patch deck effects
         Self::diff_effects(
             &mut slot.deck.effects,
             &config.effects,
@@ -801,7 +754,6 @@ impl VardaApp {
             &mut Vec::new(),
         );
 
-        // Patch auto-transition config
         if let Some(at_config) = &config.auto_transition {
             use crate::channel::TransitionTrigger;
             let mut at = slot.auto_transition.take().unwrap_or_default();
@@ -816,9 +768,7 @@ impl VardaApp {
                 .clone_from(&at_config.transition_shader);
             slot.auto_transition = Some(at);
 
-            // Compile transition shader if specified
             if let Some(shader_name) = &at_config.transition_shader {
-                // Only recompile if the shader name changed
                 let needs_compile = slot
                     .transition_effect
                     .as_ref()
@@ -841,7 +791,7 @@ impl VardaApp {
         }
     }
 
-    /// Diff an effect chain: patch params for matching effects, rebuild for mismatches.
+    /// Diff an effect chain: patch matching effects, rebuild the rest.
     fn diff_effects(
         effects: &mut Vec<crate::deck::Effect>,
         target: &[crate::scene::EffectConfig],
@@ -849,9 +799,8 @@ impl VardaApp {
         target_format: wgpu::TextureFormat,
         warnings: &mut Vec<String>,
     ) {
-        // Matched by UUID, like channels and decks, since modulation is keyed
-        // on an effect's UUID. A match running the same shader is patched in
-        // place; anything else is rebuilt with its saved UUID.
+        // Matched by UUID, since modulation keys use it. Same shader patches
+        // in place; anything else is rebuilt with its saved UUID.
         let mut spare = std::mem::take(effects);
         for cfg in target {
             let reused = take_by_uuid(&mut spare, &cfg.uuid, |eff| eff.uuid())
@@ -870,8 +819,7 @@ impl VardaApp {
     }
 }
 
-/// Take the item whose UUID is `uuid` out of `items`. An empty UUID (a file
-/// saved before entities had one) matches nothing.
+/// Remove and return the item with `uuid`. An empty UUID (older files) matches nothing.
 fn take_by_uuid<T>(items: &mut Vec<T>, uuid: &str, uuid_of: impl Fn(&T) -> &str) -> Option<T> {
     if uuid.is_empty() {
         return None;
@@ -909,7 +857,6 @@ mod tests {
         let Some(mut app) = headless_app_in(tmp.path()) else {
             return;
         };
-        // No .varda/ exists → load_workspace returns None
         let result = app.load_workspace();
         assert!(result.editor_prefs.is_none());
         assert!(result.is_ok());
@@ -1010,7 +957,6 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let varda_dir = tmp.path().join(".varda");
         std::fs::create_dir_all(&varda_dir).unwrap();
-        // Write corrupt JSON
         std::fs::write(varda_dir.join("scene.json"), "not valid json {{{").unwrap();
 
         let Some(mut app) = headless_app_in(tmp.path()) else {
@@ -1040,7 +986,6 @@ mod tests {
             return;
         };
         let _ = app.load_workspace();
-        // Should skip scene loading gracefully
         let snap = crate::app::snapshot::build_mixer_snapshot(&app);
         assert_eq!(snap.channels.len(), 2);
     }
@@ -1120,8 +1065,7 @@ mod tests {
         assert!(loaded.library_panel_open);
     }
 
-    /// A save from a consumer that never sent editor prefs must reuse the ones
-    /// loaded from disk instead of writing defaults over the user's panels.
+    /// Saving without GUI editor prefs keeps the ones loaded from disk.
     #[test]
     fn command_save_preserves_loaded_editor_prefs() {
         let tmp = TempDir::new().unwrap();
@@ -1184,9 +1128,8 @@ mod tests {
         assert_eq!(output_uuids(&app), vec![saved]);
     }
 
-    /// A running output whose saved settings match keeps running through a
-    /// reload, so reloading does not cut a recording or a stream. One whose
-    /// settings changed is stopped before its sink is rebuilt.
+    /// A running output with matching saved settings keeps running through a
+    /// reload; one with changed settings is stopped and rebuilt.
     #[test]
     fn reloading_keeps_running_outputs_whose_settings_match() {
         let tmp = TempDir::new().unwrap();
@@ -1226,7 +1169,6 @@ mod tests {
         let Some(mut app) = headless_app_in(tmp.path()) else {
             return;
         };
-        // Build a minimal SceneConfig with different crossfader
         let scene = crate::scene::SceneConfig {
             version: 3,
             channels: vec![
@@ -1273,7 +1215,7 @@ mod tests {
 
     // ── The timecode patch in stage.json ────────────────────────
 
-    /// Warnings the load raised, as the performer would read them.
+    /// Warnings the load raised.
     fn warnings(app: &super::super::VardaApp) -> Vec<String> {
         app.session
             .notifications
@@ -1284,10 +1226,7 @@ mod tests {
             .collect()
     }
 
-    /// The patch is written down as the name of a box, not the slot it happened
-    /// to enumerate in. Ids are handed out at enumeration and shift whenever the
-    /// rig changes between load-ins, so a saved id would point at whatever
-    /// interface came up in that slot the next night.
+    /// The patch saves device names, since ids shift when the rig changes.
     #[test]
     fn a_saved_ltc_patch_names_the_interface_rather_than_its_slot() {
         let tmp = TempDir::new().unwrap();
@@ -1319,8 +1258,7 @@ mod tests {
         );
     }
 
-    /// The same patch coming back finds the interface by name, whatever id it
-    /// holds tonight.
+    /// A restored patch finds the interface by name.
     #[test]
     fn a_saved_ltc_patch_is_restored_against_the_interface_of_that_name() {
         let tmp = TempDir::new().unwrap();
@@ -1330,7 +1268,7 @@ mod tests {
         let Some(device) = app.audio.manager.devices().last().cloned() else {
             return;
         };
-        // Written by a previous load-in, when nobody recorded an id at all.
+        // Saved with no id.
         let config = crate::timecode::TimecodeConfig {
             preference: crate::timecode::PreferenceConfig::Auto,
             ltc_input: Some(crate::timecode::LtcInputConfig {
@@ -1353,9 +1291,7 @@ mod tests {
         assert!(warnings(&app).is_empty(), "the interface is right there");
     }
 
-    /// A rig one interface short has to say so. Pointing the patch at whatever
-    /// box now holds that slot would read timecode off the wrong cable, and
-    /// saying nothing looks identical to a show that has not started.
+    /// A missing interface is reported, not replaced by whatever holds its slot.
     #[test]
     fn an_ltc_patch_naming_an_absent_interface_is_reported_and_left_unset() {
         let tmp = TempDir::new().unwrap();
@@ -1387,8 +1323,7 @@ mod tests {
         );
     }
 
-    /// Same for the MIDI port a forced MTC patch names: it falls back to
-    /// following whatever arrives, and says that it did.
+    /// A missing forced MTC port falls back to any input, with a warning.
     #[test]
     fn a_forced_mtc_port_that_is_absent_is_reported_and_falls_back() {
         let tmp = TempDir::new().unwrap();
@@ -1417,8 +1352,7 @@ mod tests {
         );
     }
 
-    /// A MIDI port that is present is found by name and forced by id, which is
-    /// the whole reason `midi.json` and the timecode patch both store names.
+    /// A present MIDI port is found by name and forced by id.
     #[test]
     fn a_forced_mtc_port_that_is_present_is_restored_by_name() {
         let tmp = TempDir::new().unwrap();

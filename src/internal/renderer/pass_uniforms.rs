@@ -1,7 +1,5 @@
-//! A shader's per-pass uniforms: one slot per pass in a single buffer, so a
-//! frame writes every pass's uniforms up front and encodes all its passes into
-//! one command buffer. Each bind group bakes in its slot's offset.
-//! See /spec/performance-hot-paths.md item D.
+//! A shader's per-pass uniforms: one slot per pass in a single buffer, so all
+//! passes encode into one command buffer. Each bind group bakes in its slot's offset.
 
 use std::cell::{Cell, RefCell};
 
@@ -44,8 +42,7 @@ impl PassUniforms {
     }
 
     /// Make room for `slots` passes. Call before writing or binding any slot
-    /// this frame: growing replaces the buffer, which bind groups made earlier
-    /// still refer to.
+    /// this frame: growing replaces the buffer, invalidating earlier bind groups.
     pub fn ensure_slots(&self, device: &wgpu::Device, slots: usize) {
         if slots > self.slots.get() {
             *self.buffer.borrow_mut() = Self::allocate(device, self.stride, slots);

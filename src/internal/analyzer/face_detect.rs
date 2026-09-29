@@ -1,11 +1,9 @@
-//! Two-stage face analyzer: `BlazeFace` detection → Face Landmarks (478 points).
+//! Two-stage face analyzer: `BlazeFace` detection (128×128, bboxes plus 6
+//! keypoints), then Face Landmarks (256×256, 478 points per face).
 //!
-//! Stage 1 (BlazeFace): fast 128×128 face detector producing bboxes + 6 keypoints.
-//! Stage 2 (Face Landmarks): 256×256 face mesh producing 478 landmark points per face.
-//!
-//! Produces:
+//! Outputs:
 //! - Scalars: `face_count`, `face_x`, `face_y`, `face_size`, `face_rotation`
-//! - Textures: `landmarks` (RGBA8 texture with mesh contours rendered)
+//! - Textures: `landmarks` (RGBA8 with the mesh contours drawn)
 
 use std::collections::HashMap;
 
@@ -20,27 +18,27 @@ use super::traits::{
 const MODEL_SIZE: u32 = 128;
 /// Face landmarks mesh model input resolution.
 const MESH_MODEL_SIZE: u32 = 256;
-/// Number of mesh landmarks produced by the face landmarks model.
+/// Landmarks produced by the face mesh model.
 const NUM_MESH_LANDMARKS: usize = 478;
 /// Default confidence threshold for face detection.
 const DEFAULT_CONFIDENCE: f32 = 0.5;
 /// Default IOU threshold for non-maximum suppression.
 const DEFAULT_IOU_THRESHOLD: f32 = 0.3;
-/// Maximum detections the model will return.
+/// Max detections the model returns.
 const DEFAULT_MAX_DETECTIONS: i64 = 10;
-/// Number of `BlazeFace` facial landmarks per detection.
+/// `BlazeFace` keypoints per detection.
 const NUM_BLAZE_LANDMARKS: usize = 6;
-/// Resolution of the rendered wireframe overlay texture.
+/// Wireframe overlay texture resolution.
 const OVERLAY_SIZE: u32 = 512;
-/// Maximum number of faces encoded in data textures.
+/// Max faces encoded in the data textures.
 const MAX_FACES: usize = 10;
-/// Width of the face data texture (pixels per row).
+/// Face data texture width in pixels.
 const FACE_DATA_W: usize = 480;
-/// Width of the dossier text texture (pixels per row).
+/// Dossier text texture width in pixels.
 const DOSSIER_TEX_W: usize = 48;
-/// End-of-text sentinel value in dossier text texture.
+/// End-of-text sentinel in the dossier text texture.
 const END_SENTINEL: u8 = 255;
-/// Line-break sentinel value in dossier text texture.
+/// Line-break sentinel in the dossier text texture.
 const LINE_BREAK_SENTINEL: u8 = 254;
 
 // ── MediaPipe face mesh contour connections ──────────────────────────────────
@@ -232,7 +230,7 @@ const NOSE: &[(u16, u16)] = &[
     (64, 98),
 ];
 
-/// Dossier profile options — assigned randomly per face.
+/// Dossier profiles, picked per face.
 const PROFILES: &[&str] = &[
     "WOOK",
     "PROTO-WOOK",
@@ -266,7 +264,6 @@ const PROFILES: &[&str] = &[
     "SOUND CAMP INTERN",
 ];
 
-/// Status options.
 const STATUSES: &[&str] = &[
     "IN A K HOLE",
     "PEAKING",
@@ -298,7 +295,6 @@ const STATUSES: &[&str] = &[
     "FINDING THIRD EYE",
 ];
 
-/// Confidence level descriptions.
 const CONFIDENCES: &[&str] = &[
     "VIBES CONFIRMED",
     "JUST LOOK MAN",
@@ -314,7 +310,7 @@ const CONFIDENCES: &[&str] = &[
     "SPIRITUALLY VERIFIED",
 ];
 
-/// Pre-assigned dossier for a tracked face. Indices into the content arrays.
+/// Dossier for a tracked face, as indices into the content arrays.
 #[derive(Debug, Clone)]
 struct Dossier {
     profile_idx: usize,
@@ -326,9 +322,9 @@ struct Dossier {
 }
 
 impl Dossier {
-    /// Generate a deterministic dossier from a seed value.
+    /// Deterministic dossier from a seed.
     fn from_seed(seed: u64) -> Self {
-        // Simple LCG-style hash to spread the seed
+        // LCG-style hash to spread the seed.
         let h = seed
             .wrapping_mul(6_364_136_223_846_793_005)
             .wrapping_add(1_442_695_040_888_963_407);
@@ -349,7 +345,7 @@ impl Dossier {
     }
 }
 
-/// Map a character to its MSDF atlas index. Atlas is sorted by Unicode codepoint.
+/// MSDF atlas index for a character. The atlas is sorted by codepoint.
 fn char_to_atlas_index(ch: char) -> u8 {
     match ch {
         '!' => 1,
@@ -372,36 +368,33 @@ fn char_to_atlas_index(ch: char) -> u8 {
 struct FaceDetection {
     /// Bounding box [`x_min`, `y_min`, `x_max`, `y_max`] normalized to [0, 1].
     bbox: [f32; 4],
-    /// Landmark keypoints as (x, y) pairs, normalized to [0, 1].
-    /// Contains 478 mesh landmarks when face mesh succeeds, or 6 `BlazeFace` landmarks as fallback.
+    /// Keypoints as (x, y), normalized to [0, 1]: 478 mesh landmarks, or the 6
+    /// `BlazeFace` ones if the mesh failed.
     landmarks: Vec<(f32, f32)>,
 }
 
-/// EMA smoothing factor for face detections. Lower = smoother but more lag.
+/// EMA factor for face detections. Lower is smoother but lags more.
 const SMOOTHING_ALPHA: f32 = 0.15;
 
 pub(crate) struct FaceDetectAnalyzer {
     session: Option<ort::session::Session>,
     /// Face landmarks mesh ONNX session (stage 2).
     mesh_session: Option<ort::session::Session>,
-    /// Run options with log level set to Error to suppress per-frame shape warnings.
+    /// Log level Error, to silence per-frame shape warnings.
     run_options: Option<ort::session::RunOptions>,
     confidence_threshold: f32,
     iou_threshold: f32,
     max_detections: i64,
-    /// Pre-allocated buffer for RGB input (128*128*3 floats, CHW).
+    /// RGB input, 128*128*3 floats, CHW.
     rgb_buffer: Vec<f32>,
-    /// Pre-allocated buffer for mesh model input (256*256*3 floats, NHWC).
+    /// Mesh model input, 256*256*3 floats, NHWC.
     mesh_rgb_buffer: Vec<f32>,
-    /// Pre-allocated buffer for the landmarks texture output.
     landmark_tex_buffer: Vec<u8>,
-    /// Pre-allocated buffer for encoded face data texture.
     face_data_buffer: Vec<u8>,
-    /// Pre-allocated buffer for encoded dossier text texture.
     dossier_text_buffer: Vec<u8>,
-    /// Previous frame's smoothed detections for EMA filtering.
+    /// Previous frame's smoothed detections, for the EMA.
     prev_detections: Vec<FaceDetection>,
-    /// Assigned dossiers for tracked faces, keyed by a stable hash of face position.
+    /// Dossiers for tracked faces, seeded from each face's bbox center.
     dossiers: Vec<Dossier>,
 }
 
@@ -424,7 +417,7 @@ impl FaceDetectAnalyzer {
         }
     }
 
-    /// Smooth detections using exponential moving average against previous frame.
+    /// EMA-smooths detections against the previous frame.
     fn smooth_detections(&mut self, raw: Vec<FaceDetection>) -> Vec<FaceDetection> {
         if self.prev_detections.is_empty() {
             self.prev_detections.clone_from(&raw);
@@ -434,7 +427,7 @@ impl FaceDetectAnalyzer {
         let alpha = SMOOTHING_ALPHA;
         let one_minus = 1.0 - alpha;
 
-        // Match detections by index (simple pairing — works well for stable single-face)
+        // Pair detections by index; fine for a stable single face.
         let mut smoothed = Vec::with_capacity(raw.len());
         for (i, det) in raw.iter().enumerate() {
             if let Some(prev) = self.prev_detections.get(i) {
@@ -452,7 +445,7 @@ impl FaceDetectAnalyzer {
                         alpha * det.landmarks[k].1 + one_minus * prev.landmarks[k].1,
                     ));
                 }
-                // If current has more landmarks than prev, append unsmoothed
+                // Extra landmarks beyond the previous count are appended unsmoothed.
                 for k in count..det.landmarks.len() {
                     landmarks.push(det.landmarks[k]);
                 }
@@ -466,7 +459,7 @@ impl FaceDetectAnalyzer {
         smoothed
     }
 
-    /// Downsample and convert RGBA frame to CHW RGB float32 normalized [0, 1].
+    /// Downsamples an RGBA frame to CHW RGB f32 in [0, 1].
     fn preprocess(&mut self, input: &AnalyzerInput) -> Array4<f32> {
         let src_w = input.width as usize;
         let src_h = input.height as usize;
@@ -474,7 +467,7 @@ impl FaceDetectAnalyzer {
 
         for dy in 0..dst {
             for dx in 0..dst {
-                // Nearest-neighbor downsample (fast, sufficient at 128x128)
+                // Nearest-neighbor is enough at 128x128.
                 let sx = ((dx as f32 * src_w as f32) / dst as f32) as usize;
                 let sy = ((dy as f32 * src_h as f32) / dst as f32) as usize;
                 let sx = sx.min(src_w - 1);
@@ -497,14 +490,11 @@ impl FaceDetectAnalyzer {
             .expect("shape mismatch in preprocess")
     }
 
-    /// Parse model output into face detections from raw shape + data.
+    /// Parses model output into face detections. Each detection is 16 floats:
+    ///   [0..4] = bbox as **[ymin, xmin, ymax, xmax]** (normalized 0–1)
+    ///   [4..16] = 6 keypoints as (x, y) pairs (normalized 0–1)
     ///
-    /// `BlazeFace` output layout per detection (16 floats):
-    ///   [0..4] = bounding box as **[ymin, xmin, ymax, xmax]** (normalized 0–1)
-    ///   [4..16] = 6 landmark keypoints as (x, y) pairs (normalized 0–1)
-    ///
-    /// Handles both 3D output `[1, N, 16]` and 2D output `[1, 16]` (ONNX Runtime
-    /// squeezes the middle dimension when N=1).
+    /// Accepts `[1, N, 16]` and `[1, 16]` (ONNX Runtime squeezes N=1).
     fn postprocess_raw(shape: &[i64], data: &[f32]) -> Vec<FaceDetection> {
         let (n_faces, cols) = if shape.len() == 3 {
             if shape[1] == 0 {
@@ -523,7 +513,7 @@ impl FaceDetectAnalyzer {
                 break;
             }
             let row = &data[offset..offset + 16];
-            // BlazeFace bbox order: [ymin, xmin, ymax, xmax] → we store [xmin, ymin, xmax, ymax]
+            // BlazeFace order is [ymin, xmin, ymax, xmax]; stored as [xmin, ymin, xmax, ymax].
             let bbox = [
                 row[1].clamp(0.0, 1.0), // xmin
                 row[0].clamp(0.0, 1.0), // ymin
@@ -542,7 +532,7 @@ impl FaceDetectAnalyzer {
         detections
     }
 
-    /// Render landmark wireframe contours into an RGBA texture for shader consumption.
+    /// Draws the landmark wireframe into an RGBA texture for shaders.
     fn render_landmarks_texture(&mut self, detections: &[FaceDetection]) -> TextureData {
         let size = OVERLAY_SIZE as f32;
         self.landmark_tex_buffer.fill(0);
@@ -551,7 +541,6 @@ impl FaceDetectAnalyzer {
         let line_color: [u8; 4] = [255, 255, 255, 140];
 
         for det in detections {
-            // Convert landmarks to pixel coords
             let pts: Vec<(i32, i32)> = det
                 .landmarks
                 .iter()
@@ -559,7 +548,7 @@ impl FaceDetectAnalyzer {
                 .collect();
 
             if pts.len() >= NUM_MESH_LANDMARKS {
-                // Full 478-point mesh: draw contour connections
+                // Full 478-point mesh: draw the contours.
                 let all_contours: &[&[(u16, u16)]] = &[
                     FACE_OVAL,
                     LIPS_OUTER,
@@ -581,7 +570,7 @@ impl FaceDetectAnalyzer {
                     }
                 }
 
-                // Dots at key feature points: eyes, nose tip, mouth corners, iris centers
+                // Dots at eyes, nose tip, mouth corners, and iris centers.
                 let key_points: &[usize] = &[
                     33, 263, // eye centers
                     1,   // nose tip
@@ -595,7 +584,7 @@ impl FaceDetectAnalyzer {
                     }
                 }
             } else {
-                // Fallback: 6-point BlazeFace wireframe
+                // Fallback: 6-point BlazeFace wireframe.
                 let connections: &[(usize, usize)] = &[
                     (0, 1),
                     (0, 2),
@@ -626,7 +615,7 @@ impl FaceDetectAnalyzer {
         }
     }
 
-    /// Encode face bounding boxes and dossier scores into a `FACE_DATA_W` × `MAX_FACES` RGBA8 texture.
+    /// Encodes face bboxes and dossier scores into a `FACE_DATA_W` × `MAX_FACES` RGBA8 texture.
     fn encode_face_data_texture(
         &mut self,
         detections: &[FaceDetection],
@@ -639,18 +628,18 @@ impl FaceDetectAnalyzer {
         for (f, det) in detections.iter().enumerate().take(MAX_FACES) {
             let row_offset = f * FACE_DATA_W * 4;
 
-            // Pixel 0: bbox
+            // Pixel 0: bbox.
             let px0 = row_offset;
             self.face_data_buffer[px0] = (det.bbox[0].clamp(0.0, 1.0) * 255.0) as u8;
             self.face_data_buffer[px0 + 1] = (det.bbox[1].clamp(0.0, 1.0) * 255.0) as u8;
             self.face_data_buffer[px0 + 2] = (det.bbox[2].clamp(0.0, 1.0) * 255.0) as u8;
             self.face_data_buffer[px0 + 3] = (det.bbox[3].clamp(0.0, 1.0) * 255.0) as u8;
 
-            // Pixel 1: face_count in R channel
+            // Pixel 1: face_count in R.
             let px1 = row_offset + 4;
             self.face_data_buffer[px1] = face_count as u8;
 
-            // Pixel 2: dossier scores
+            // Pixel 2: dossier scores.
             if let Some(dossier) = dossiers.get(f) {
                 let px2 = row_offset + 8;
                 self.face_data_buffer[px2] = dossier.threat_score.min(10) * 25;
@@ -669,7 +658,7 @@ impl FaceDetectAnalyzer {
         }
     }
 
-    /// Encode dossier text as atlas indices into a `DOSSIER_TEX_W` × `MAX_FACES` RGBA8 texture.
+    /// Encodes dossier text as atlas indices into a `DOSSIER_TEX_W` × `MAX_FACES` RGBA8 texture.
     fn encode_dossier_text_texture(&mut self, dossiers: &[Dossier]) -> TextureData {
         self.dossier_text_buffer.fill(END_SENTINEL);
 
@@ -700,13 +689,13 @@ impl FaceDetectAnalyzer {
                     self.dossier_text_buffer[row_offset + byte_idx] = char_to_atlas_index(ch);
                     byte_idx += 1;
                 }
-                // Add line break sentinel (except after last line)
+                // Line-break sentinel between lines.
                 if line_idx < lines.len() - 1 && byte_idx < max_bytes {
                     self.dossier_text_buffer[row_offset + byte_idx] = LINE_BREAK_SENTINEL;
                     byte_idx += 1;
                 }
             }
-            // Remaining bytes stay as END_SENTINEL (255) from the fill
+            // Remaining bytes keep the END_SENTINEL fill.
         }
 
         TextureData {
@@ -718,7 +707,7 @@ impl FaceDetectAnalyzer {
         }
     }
 
-    /// Draw a 1px anti-aliased line between two points (Bresenham's algorithm).
+    /// Draws a 1px anti-aliased line (Bresenham).
     fn draw_line(&mut self, x0: i32, y0: i32, x1: i32, y1: i32, color: [u8; 4]) {
         let dx = (x1 - x0).abs();
         let dy = -(y1 - y0).abs();
@@ -867,8 +856,8 @@ impl Analyzer for FaceDetectAnalyzer {
             .map_err(|e| anyhow::anyhow!("ort load model '{model_path}': {e}"))?;
         self.session = Some(session);
 
-        // Suppress per-frame ORT shape mismatch warnings from the NMS output layer.
-        // The model declares {1,896,16} but NMS dynamically produces {1,N,16}.
+        // Silence per-frame ORT shape warnings: the model declares {1,896,16}
+        // but NMS produces {1,N,16}.
         let mut run_opts =
             ort::session::RunOptions::new().map_err(|e| anyhow::anyhow!("ort run options: {e}"))?;
         run_opts
@@ -878,7 +867,7 @@ impl Analyzer for FaceDetectAnalyzer {
 
         log::info!("FaceDetectAnalyzer: BlazeFace session created successfully");
 
-        // Stage 2: load face landmarks mesh model
+        // Stage 2 face landmarks model.
         let mesh_model_path = options
             .get("mesh_model_path")
             .and_then(|v| v.as_str())
@@ -922,7 +911,7 @@ impl Analyzer for FaceDetectAnalyzer {
     }
 
     fn analyze(&mut self, input: &AnalyzerInput) -> anyhow::Result<AnalyzerSnapshot> {
-        // Extract config values and preprocess before borrowing session
+        // Read config and preprocess before borrowing the session.
         let input_tensor = self.preprocess(input);
         let conf_threshold = self.confidence_threshold;
         let max_detections = self.max_detections;
@@ -948,7 +937,7 @@ impl Analyzer for FaceDetectAnalyzer {
             "iou_threshold" => iou_ref,
         ];
 
-        // Borrow session + run_options, run inference, extract results, then drop
+        // Borrow the session and run options, run, extract results, then drop.
         let session = self
             .session
             .as_mut()
@@ -967,15 +956,15 @@ impl Analyzer for FaceDetectAnalyzer {
             .try_extract_tensor::<f32>()
             .map_err(|e| anyhow::anyhow!("ort extract: {e}"))?;
 
-        // Clone detection data so we can drop the outputs borrow
+        // Copy the detection data so the outputs borrow can end.
         let shape_vec: Vec<i64> = shape.iter().copied().collect();
         let data_vec: Vec<f32> = data.to_vec();
         drop(outputs);
 
         let mut raw_detections = Self::postprocess_raw(&shape_vec, &data_vec);
 
-        // Stage 2: run face mesh on each detected face to get 478 landmarks.
-        // If mesh fails (e.g. extreme angle), the detection keeps its 6 BlazeFace landmarks.
+        // Stage 2: face mesh per detection. If it fails (e.g. extreme angle),
+        // the detection keeps its 6 BlazeFace landmarks.
         if self.mesh_session.is_some() {
             for det in &mut raw_detections {
                 if let Some(mesh_landmarks) = self.run_face_mesh(input, &det.bbox) {
@@ -986,8 +975,7 @@ impl Analyzer for FaceDetectAnalyzer {
 
         let detections = self.smooth_detections(raw_detections);
 
-        // Assign stable dossiers: grow or shrink the dossier vec to match detection count.
-        // Each face gets a deterministic dossier seeded from its bbox center position.
+        // One dossier per detection, seeded from the bbox center.
         while self.dossiers.len() < detections.len() {
             let det = &detections[self.dossiers.len()];
             let cx = ((det.bbox[0] + det.bbox[2]) * 5000.0) as u64;
@@ -1014,10 +1002,9 @@ impl Analyzer for FaceDetectAnalyzer {
             let h = primary.bbox[3] - primary.bbox[1];
             let area = (w * h).sqrt();
 
-            // Use mesh landmark indices for eye positions if we have 478 points,
-            // otherwise fall back to BlazeFace 6-point indices.
+            // Eye indices differ between the 478-point mesh and BlazeFace's 6.
             let (le, re) = if primary.landmarks.len() >= NUM_MESH_LANDMARKS {
-                // Mesh: index 33 = right eye center, index 263 = left eye center
+                // Mesh: 33 = right eye center, 263 = left eye center.
                 (primary.landmarks[263], primary.landmarks[33])
             } else if primary.landmarks.len() >= 2 {
                 (primary.landmarks[0], primary.landmarks[1])
@@ -1063,7 +1050,7 @@ impl Analyzer for FaceDetectAnalyzer {
 }
 
 impl FaceDetectAnalyzer {
-    /// Search for the `BlazeFace` model file in standard locations.
+    /// Finds the `BlazeFace` model file in the standard locations.
     fn find_model_path() -> String {
         if let Ok(exe_path) = std::env::current_exe() {
             // macOS .app bundle: Contents/Resources/models/blaze.onnx
@@ -1083,7 +1070,7 @@ impl FaceDetectAnalyzer {
         "models/blaze.onnx".into()
     }
 
-    /// Search for the face landmarks mesh model file in standard locations.
+    /// Finds the face landmarks model file in the standard locations.
     fn find_mesh_model_path() -> String {
         let filename = "face_landmarks_detector.onnx";
         if let Ok(exe_path) = std::env::current_exe() {
@@ -1104,9 +1091,9 @@ impl FaceDetectAnalyzer {
         format!("models/{filename}")
     }
 
-    /// Crop a square face region from input frame with margin, resize to 256×256 NHWC float32.
-    /// Uses max(w, h) so the crop is always square — avoids aspect-ratio distortion that
-    /// confuses the mesh model on bearded/tall faces.
+    /// Crops a square face region with margin and resizes it to 256×256 NHWC
+    /// f32. Square (max of w, h) because aspect distortion confuses the mesh
+    /// model on bearded or tall faces.
     // crop_x0/crop_y0 and crop_x1/crop_y1 are the clearest names for crop-rect math.
     #[allow(clippy::similar_names)]
     fn preprocess_face_crop(&mut self, input: &AnalyzerInput, bbox: &[f32; 4]) -> Array4<f32> {
@@ -1146,7 +1133,7 @@ impl FaceDetectAnalyzer {
             .expect("shape mismatch in face crop")
     }
 
-    /// Run face mesh inference and extract 478 landmarks mapped to global normalized coords.
+    /// Runs face mesh inference and maps the 478 landmarks to global normalized coords.
     // crop_x0/crop_y0 and crop_x1/crop_y1 are the clearest names for crop-rect math.
     #[allow(clippy::similar_names)]
     fn run_face_mesh(&mut self, input: &AnalyzerInput, bbox: &[f32; 4]) -> Option<Vec<(f32, f32)>> {
@@ -1171,19 +1158,18 @@ impl FaceDetectAnalyzer {
 
         let tensor_ref = ort::value::TensorRef::from_array_view(input_tensor.view()).ok()?;
 
-        // Use the first input name from the model
         let input_name = session.inputs().first()?.name().to_string();
         let inputs = ort::inputs![input_name.as_str() => tensor_ref];
 
         let outputs = session.run_with_options(inputs, run_options).ok()?;
 
-        // First output = landmarks tensor, flatten to f32 slice
+        // First output: landmarks tensor.
         let landmarks_value = &outputs[0];
         let (_, landmarks_raw) = landmarks_value.try_extract_tensor::<f32>().ok()?;
         let landmarks_data: Vec<f32> = landmarks_raw.to_vec();
 
-        // Score check if available (second output), apply sigmoid.
-        // Use a very low threshold (0.1) so side-facing / tilted faces still get mesh landmarks.
+        // Second output, if present, is a score (sigmoid). The low 0.1
+        // threshold keeps mesh landmarks on side-facing and tilted faces.
         if outputs.len() > 1 {
             let score_value = &outputs[1];
             if let Ok((_, score_raw)) = score_value.try_extract_tensor::<f32>() {
@@ -1205,8 +1191,8 @@ impl FaceDetectAnalyzer {
             if idx + 1 >= landmarks_data.len() {
                 break;
             }
-            // Landmark coords are in model pixel space (0-256)
-            // Convert to global normalized: pixel / model_size * crop_extent + crop_origin
+            // Model pixel space (0-256) → global normalized:
+            // pixel / model_size * crop_extent + crop_origin
             let lx = (landmarks_data[idx] / mesh_size) * crop_w + crop_x0;
             let ly = (landmarks_data[idx + 1] / mesh_size) * crop_h + crop_y0;
             landmarks.push((lx.clamp(0.0, 1.0), ly.clamp(0.0, 1.0)));
@@ -1341,7 +1327,7 @@ mod tests {
     #[test]
     fn landmarks_texture_correct_size_mesh() {
         let mut analyzer = FaceDetectAnalyzer::new();
-        // Create 478 fake mesh landmarks spread across the face region
+        // 478 fake mesh landmarks spread across the face region.
         let landmarks: Vec<(f32, f32)> = (0..NUM_MESH_LANDMARKS)
             .map(|i| {
                 let t = i as f32 / NUM_MESH_LANDMARKS as f32;
@@ -1416,13 +1402,12 @@ mod tests {
         assert_eq!(tex.width, FACE_DATA_W as u32);
         assert_eq!(tex.height, MAX_FACES as u32);
 
-        // Decode bbox from pixel 0, row 0
         let x0 = f32::from(tex.data[0]) / 255.0;
         let y0 = f32::from(tex.data[1]) / 255.0;
         let x1 = f32::from(tex.data[2]) / 255.0;
         let y1 = f32::from(tex.data[3]) / 255.0;
 
-        // Byte precision: ~0.004 tolerance
+        // Byte precision is ~0.004.
         assert!((x0 - 0.2).abs() < 0.005, "x0={x0}");
         assert!((y0 - 0.3).abs() < 0.005, "y0={y0}");
         assert!((x1 - 0.7).abs() < 0.005, "x1={x1}");
@@ -1448,14 +1433,12 @@ mod tests {
         assert_eq!(tex.data[2], char_to_atlas_index(' '));
         assert_eq!(tex.data[3], char_to_atlas_index('S'));
 
-        // Verify line break sentinel exists somewhere
         let row_data = &tex.data[0..DOSSIER_TEX_W * 4];
         assert!(
             row_data.contains(&LINE_BREAK_SENTINEL),
             "Expected line break sentinel in dossier text"
         );
 
-        // Verify end sentinel exists
         assert!(
             row_data.contains(&END_SENTINEL),
             "Expected end sentinel in dossier text"

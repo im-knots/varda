@@ -1,14 +1,12 @@
 //! Real-hardware screen capture smoke tests.
 //!
-//! `#[ignore]` by design: these need a display server and, on macOS, an
-//! interactively granted Screen Recording permission. Run locally per platform:
+//! `#[ignore]`d: these need a display server and, on macOS, Screen Recording
+//! permission. Run locally per platform:
 //!
 //! ```sh
 //! LIBRARY_PATH="/opt/homebrew/lib:${LIBRARY_PATH:-}" \
 //!   cargo test --test screen_capture_smoke -- --ignored --nocapture
 //! ```
-//!
-//! See spec/screen-capture.md § Testing Strategy.
 
 use std::time::{Duration, Instant};
 
@@ -16,7 +14,7 @@ use varda::screen_capture::backend::{CaptureConfig, DEFAULT_CAPTURE_RATE};
 use varda::screen_capture::platform;
 
 /// Enumerate real targets and open the first display, asserting a frame lands
-/// quickly. This is the "does the backend work at all" gate.
+/// quickly.
 #[test]
 #[ignore = "requires a display server and capture permission"]
 fn platform_backend_delivers_a_frame() {
@@ -54,12 +52,11 @@ fn platform_backend_delivers_a_frame() {
     panic!("no frame within 2s from '{}'", target.label);
 }
 
-/// Measure the delivered frame cadence two ways: polling far faster than the
-/// capture rate (which reveals what the backend actually produces) and polling
-/// at exactly the capture rate (what `capture_loop` used to do). A push-based
-/// backend paces itself, so the second sampler aliases against it and produces
-/// dropped and doubled intervals — the judder that reads as flicker in a
-/// self-capture feedback loop.
+/// Measure frame cadence two ways: polling much faster than the capture rate
+/// (shows what the backend produces) and polling at exactly the capture rate.
+/// A push-based backend paces itself, so the second sampler aliases against
+/// it, dropping and doubling intervals, which flickers in a self-capture
+/// feedback loop.
 #[test]
 #[ignore = "requires a display server and capture permission"]
 fn capture_cadence_is_regular_when_polled_faster_than_the_rate() {

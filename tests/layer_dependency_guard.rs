@@ -1,7 +1,5 @@
-//! Guards the dependency rule in /spec/clean-architecture.md (Decision #11):
-//! engine-owned code (`src/engine`, `src/internal`, `src/app`) never names a
-//! `usecases` type. Consumers depend on the engine, never the reverse. Doc
-//! comments may mention the consumers.
+//! Engine code (`src/engine`, `src/internal`, `src/app`) never names a
+//! `usecases` type. Doc comments may mention the consumers.
 
 use std::path::Path;
 
@@ -45,16 +43,14 @@ fn engine_owned_code_does_not_name_consumer_types() {
     }
     assert!(
         violations.is_empty(),
-        "engine-owned code must not name usecases types \
-         (/spec/clean-architecture.md Decision #11); found:\n{}",
+        "engine-owned code must not name usecases types; found:\n{}",
         violations.join("\n")
     );
 }
 
-/// Consumers change engine state with commands, never through `&mut` access to
-/// a subsystem (/spec/clean-architecture.md Decision #12). The accessors are
-/// `pub(crate)`, which the compiler still lets `usecases` call, so this guards
-/// the rest.
+/// Consumers change engine state with commands, not `&mut` subsystem access.
+/// The accessors are `pub(crate)`, which `usecases` can still call, so this
+/// test covers that gap.
 #[test]
 fn consumers_do_not_take_mutable_engine_access() {
     const MUTATORS: [&str; 5] = [
@@ -69,8 +65,7 @@ fn consumers_do_not_take_mutable_engine_access() {
     collect_calls(&root.join("usecases"), &MUTATORS, &mut violations);
     assert!(
         violations.is_empty(),
-        "consumers must send commands instead of mutating engine subsystems \
-         (/spec/clean-architecture.md Decision #12); found:\n{}",
+        "consumers must send commands instead of mutating engine subsystems; found:\n{}",
         violations.join("\n")
     );
 }

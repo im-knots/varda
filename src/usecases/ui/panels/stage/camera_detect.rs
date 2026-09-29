@@ -1,18 +1,16 @@
 //! Camera-based surface auto-detection: live capture and frozen-frame preview.
 //!
-//! Two full-canvas modes that take over the stage editor while detection is
-//! running. See spec/2d-projection-mapping.md.
+//! Both are full-canvas modes that replace the stage editor while detection runs.
 
 use super::super::super::{CameraDetectAction, CameraDetectMode, UIActions, UIData};
 use crate::surface::detect::{DetectionMethod, HullMode};
 
-/// Live camera detection mode: camera feed with contour overlay and parameter sliders.
+/// Live mode: camera feed with contour overlay and parameter sliders.
 pub(super) fn render_camera_detect_live(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     let CameraDetectMode::Live { params, camera_id } = &data.camera_detect_mode else {
         return;
     };
 
-    // Detection param toolbar
     ui.add_space(2.0);
     let mut new_params = params.clone();
     let mut params_changed = false;
@@ -21,7 +19,6 @@ pub(super) fn render_camera_detect_live(ui: &mut egui::Ui, data: &UIData, action
         ui.label(egui::RichText::new("📷 Camera Detection").strong());
         ui.separator();
 
-        // Detection method toggle
         ui.label("Method:");
         if ui
             .selectable_label(
@@ -46,7 +43,6 @@ pub(super) fn render_camera_detect_live(ui: &mut egui::Ui, data: &UIData, action
 
         ui.separator();
 
-        // Conditional controls based on detection method
         match new_params.detection_method {
             DetectionMethod::Canny => {
                 ui.label("Canny Lo:");
@@ -162,7 +158,6 @@ pub(super) fn render_camera_detect_live(ui: &mut egui::Ui, data: &UIData, action
 
         ui.separator();
 
-        // Hull mode toggle
         ui.label("Hull:");
         if ui
             .selectable_label(matches!(new_params.hull_mode, HullMode::None), "None")
@@ -184,7 +179,7 @@ pub(super) fn render_camera_detect_live(ui: &mut egui::Ui, data: &UIData, action
 
         ui.separator();
 
-        // Camera picker (if multiple cameras)
+        // Camera picker, shown only with more than one camera.
         if data.cameras.len() > 1 {
             let current_name = data
                 .cameras
@@ -242,7 +237,6 @@ pub(super) fn render_camera_detect_live(ui: &mut egui::Ui, data: &UIData, action
 
     ui.add_space(4.0);
 
-    // Canvas: camera feed + contour overlay
     let canvas_width = ui.available_width();
     let canvas_height = (canvas_width * 9.0 / 16.0).min(ui.available_height().max(200.0));
     let (canvas_rect, _canvas_response) = ui.allocate_exact_size(
@@ -252,7 +246,6 @@ pub(super) fn render_camera_detect_live(ui: &mut egui::Ui, data: &UIData, action
 
     let painter = ui.painter_at(canvas_rect);
 
-    // Draw camera feed texture
     if let Some(tex_id) = data.camera_detect_texture {
         painter.image(
             tex_id,
@@ -271,7 +264,6 @@ pub(super) fn render_camera_detect_live(ui: &mut egui::Ui, data: &UIData, action
         );
     }
 
-    // Overlay contours
     let contour_colors = [
         egui::Color32::from_rgb(0, 255, 128),
         egui::Color32::from_rgb(255, 200, 0),
@@ -301,7 +293,6 @@ pub(super) fn render_camera_detect_live(ui: &mut egui::Ui, data: &UIData, action
         }
     }
 
-    // Info bar
     ui.horizontal(|ui| {
         ui.label(format!(
             "{} contours detected",
@@ -326,7 +317,6 @@ pub(super) fn render_camera_detect_preview(
     let selected_count = selected.iter().filter(|&&s| s).count();
     let total = contours.len();
 
-    // Toolbar
     ui.add_space(2.0);
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("📷 Preview — Select Contours").strong());
@@ -372,7 +362,6 @@ pub(super) fn render_camera_detect_preview(
 
     ui.add_space(4.0);
 
-    // Canvas: frozen frame + contour overlay
     let canvas_width = ui.available_width();
     let list_height = 120.0_f32; // reserve for contour list
     let canvas_height =
@@ -384,7 +373,6 @@ pub(super) fn render_camera_detect_preview(
 
     let painter = ui.painter_at(canvas_rect);
 
-    // Draw frozen frame texture
     if let Some(tex_id) = data.camera_detect_texture {
         painter.image(
             tex_id,
@@ -396,7 +384,7 @@ pub(super) fn render_camera_detect_preview(
         painter.rect_filled(canvas_rect, 0.0, egui::Color32::from_gray(30));
     }
 
-    // Overlay contours: green=selected, gray=deselected
+    // Selected contours are green, deselected gray.
     for (i, contour) in contours.iter().enumerate() {
         let is_selected = selected.get(i).copied().unwrap_or(false);
         let color = if is_selected {
@@ -425,7 +413,6 @@ pub(super) fn render_camera_detect_preview(
         }
     }
 
-    // Contour list with checkboxes
     ui.add_space(4.0);
     egui::ScrollArea::vertical()
         .max_height(list_height)

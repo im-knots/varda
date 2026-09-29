@@ -1,9 +1,9 @@
-//! Video playback support for Varda
+//! Video playback.
 //!
 //! Two codec paths:
-//! - **HAP path**: GPU-native `BCn` compressed textures — near-zero CPU decode cost.
+//! - HAP: `BCn` compressed textures decoded on the GPU, near-zero CPU cost.
 //!   Supports Hap (BC1), Hap Alpha (BC3), Hap R (BC7).
-//! - **ffmpeg path**: CPU decode for H.264, `ProRes`, VP9, etc. — fallback for all other codecs.
+//! - ffmpeg: CPU decode for H.264, `ProRes`, VP9 and every other codec.
 
 pub mod chase;
 pub mod hap;
@@ -23,9 +23,8 @@ use ffmpeg::media::Type;
 use ffmpeg::software::scaling::{context::Context as Scaler, flag::Flags};
 use ffmpeg::util::frame::video::Video;
 
-/// Loop mode for video playback. Definition lives in `engine::value::video`
-/// (see /spec/engine-value-types.md); re-exported here so existing
-/// `crate::video::LoopMode` call sites keep working.
+/// Playback value types defined in `engine::value`, re-exported for
+/// `crate::video` callers.
 pub use crate::engine::value::source::{DeckTransportSync, TransportSyncMode};
 pub use crate::engine::value::video::LoopMode;
 pub use chase::{ChaseInbox, VideoChaseBroadcast};
@@ -34,7 +33,7 @@ pub use modulation::{
 };
 
 impl LoopMode {
-    /// The mode a fader at `value` (0.0–1.0) selects: four equal buckets.
+    /// The mode a fader at `value` (0.0–1.0) selects, in four equal buckets.
     pub fn from_value(value: f32) -> Self {
         match crate::params::bucket_index(value, 4) {
             0 => LoopMode::Loop,
@@ -44,7 +43,7 @@ impl LoopMode {
         }
     }
 
-    /// The value at the centre of this mode's bucket. Inverse of [`Self::from_value`].
+    /// The center of this mode's bucket. Inverse of [`Self::from_value`].
     pub fn to_value(self) -> f32 {
         let index = match self {
             LoopMode::Loop => 0,
@@ -56,80 +55,73 @@ impl LoopMode {
     }
 }
 
-/// Result of advancing playback state.
+/// Result of advancing playback.
 pub struct AdvanceResult {
     /// Whether a seek is needed (loop restart, etc.).
     pub needs_seek: bool,
-    /// Number of video frames to decode (0 = hold current frame, 1+ = decode new frames).
+    /// Frames to decode (0 = hold the current frame).
     pub frames_to_decode: u32,
 }
 
-/// One tick's playhead movement, split into the clip's own advance and the part
-/// modulation asked for. See [`PlaybackState::modulated_position_step`].
+/// One tick's playhead movement: the clip's own advance and the modulated
+/// part. See [`PlaybackState::modulated_position_step`].
 struct ModulatedPositionStep {
     /// Total change to apply to `position`.
     delta: f64,
     /// Forward clip time from the clip's own advance, for the frame accumulator.
     natural_secs: f64,
-    /// What the decoder must do about the modulated part.
+    /// What the decoder must do for the modulated part.
     decode: modulation::OffsetStep,
 }
 
-/// Shared playback state for all video sources (ffmpeg and HAP).
-// The four flags are independent facts about a decoder, not states of one
-// machine: a clip can be playing, suspended, reversing, and at its out-point in
-// any combination, and folding them together would lose that.
+/// Playback state shared by the ffmpeg and HAP paths.
+// The flags are independent: any combination of playing, suspended, reversing
+// and at-out-point is valid.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 pub struct PlaybackState {
-    /// Whether the video is currently playing.
     pub playing: bool,
-    /// Whether decoding is suspended because nothing is going to show this
-    /// deck soon. Orthogonal to `playing`: the performer's transport is
-    /// untouched, and neither position nor decode advances while set.
-    /// See /spec/deck-residency.md.
+    /// Decoding paused because nothing will show this deck soon. Independent of
+    /// `playing`: position and decode stop while set, and the performer's
+    /// play state is untouched.
     pub suspended: bool,
-    /// Loop mode.
     pub loop_mode: LoopMode,
     /// Speed multiplier (1.0 = normal, 0.5 = half, 2.0 = double, negative = reverse).
     pub speed: f64,
-    /// In-point in seconds (start of playback range). 0.0 = beginning.
+    /// In-point in seconds. 0.0 = start.
     pub in_point: f64,
-    /// Out-point in seconds (end of playback range). 0.0 = use duration.
+    /// Out-point in seconds. 0.0 = duration.
     pub out_point: f64,
-    /// Current playback position in seconds.
+    /// Playback position in seconds.
     pub position: f64,
-    /// Whether we're currently playing in reverse (for ping-pong).
+    /// Playing in reverse (ping-pong).
     pub reverse: bool,
-    /// Video duration in seconds.
+    /// Duration in seconds.
     pub duration: f64,
-    /// Video frame rate.
     pub frame_rate: f64,
-    /// Set to true for one frame when playback reaches the out-point/EOF.
-    /// Used by auto-transition `ClipEnd` trigger. Cleared each frame before advance.
+    /// True for one frame when playback reaches the out-point or EOF. Drives the
+    /// `ClipEnd` auto-transition trigger; cleared each frame before advance.
     pub reached_end: bool,
-    /// Last wall-clock time `advance_frame` was called (for real-time delta).
+    /// Wall-clock time of the last `advance_frame` call.
     last_advance: std::time::Instant,
-    /// Fractional frame accumulator — tracks sub-frame position for pacing.
+    /// Fractional frame accumulator for pacing.
     frame_accumulator: f64,
-    /// Per-clip transport mapping. Default Auto.
+    /// Transport mapping for this clip. Default Auto.
     pub transport_sync: DeckTransportSync,
     /// Latest transport sample, written by the decode thread each tick.
     chase_transport: Option<chase::ChaseTransport>,
     /// Previous transport position, for `transport_dt` while chasing.
     last_transport_position: Option<f64>,
-    /// True for the duration of a chase tick. Decode EOS paths hold instead of wrapping.
+    /// True during a chase tick. EOS paths hold instead of wrapping.
     pub chasing: bool,
-    /// This frame's resolved playback modulation. Held rather than consumed, so
-    /// a decode tick that arrives between render frames keeps the last level.
-    /// See /spec/video-playback-modulation.md.
+    /// This frame's resolved modulation. Kept, not consumed, so a decode tick
+    /// between render frames reuses the last value.
     modulation: modulation::PlaybackModulation,
-    /// How much modulated offset is already baked into `position`.
+    /// Modulated offset already applied to `position`.
     ///
-    /// Offsets are held as "how far from where the clip would be", so the
-    /// playhead only has to move when the offset *changes*. A steady offset
-    /// therefore costs nothing after it has been reached, which is what keeps a
-    /// slow LFO on the playhead from seeking on every frame.
+    /// Offsets are relative to where the clip would be, so the playhead moves only
+    /// when the offset changes. A slow LFO on the playhead then does not seek every
+    /// frame.
     applied_position_offset: f64,
 }
 
@@ -159,7 +151,7 @@ impl PlaybackState {
         }
     }
 
-    /// Effective out-point (uses duration if `out_point` is 0).
+    /// Out-point, or the duration when `out_point` is 0.
     pub fn effective_out(&self) -> f64 {
         if self.out_point > 0.0 {
             self.out_point
@@ -168,25 +160,24 @@ impl PlaybackState {
         }
     }
 
-    /// Bind this tick's transport snapshot before [`Self::advance_frame`].
+    /// Sets this tick's transport snapshot. Call before [`Self::advance_frame`].
     pub fn set_chase_transport(&mut self, sample: chase::ChaseTransport) {
         self.chase_transport = Some(sample);
     }
 
-    /// Bind this frame's resolved modulation before [`Self::advance_frame`].
+    /// Sets this frame's resolved modulation. Call before [`Self::advance_frame`].
     pub fn set_modulation(&mut self, value: modulation::PlaybackModulation) {
         self.modulation = value;
     }
 
-    /// The rate playback actually runs at: the stored speed unless a modulator
-    /// is holding it. `speed` stays the performer's set point either way, which
-    /// is what lets the UI slider keep showing where they left it.
+    /// The rate playback runs at: `speed`, unless a modulator holds it. `speed`
+    /// stays the performer's set point so the UI slider shows it.
     pub fn effective_speed(&self) -> f64 {
         self.modulation.speed.unwrap_or(self.speed)
     }
 
-    /// Advance playback position using real wall-clock time.
-    /// Returns how many video frames to decode and whether a seek is needed.
+    /// Advances the position by wall-clock time. Returns how many frames to
+    /// decode and whether to seek.
     pub fn advance_frame(&mut self) -> AdvanceResult {
         self.reached_end = false;
         if !self.playing {
@@ -206,7 +197,7 @@ impl PlaybackState {
         let now = std::time::Instant::now();
         let wall_dt = now.duration_since(self.last_advance).as_secs_f64();
         self.last_advance = now;
-        // Clamp dt to avoid huge jumps after pauses/stalls
+        // Clamp dt to avoid jumps after pauses or stalls.
         let dt = wall_dt.min(0.1);
 
         let frame_time = 1.0 / self.frame_rate;
@@ -214,20 +205,16 @@ impl PlaybackState {
         let step = self.modulated_position_step(dt, speed, frame_time);
         self.position += step.delta;
 
-        // Accumulate frames: how many video frames does this time step cover?
-        // The clip's own advance plus whatever forward travel modulation asked
-        // for, since both are frames the decoder has to walk through.
+        // Frames this step covers: the clip's own advance plus forward modulated
+        // travel, since the decoder walks through both.
         self.frame_accumulator += step.natural_secs + step.decode.walk_secs;
         let frames_to_decode = (self.frame_accumulator / frame_time).floor() as u32;
         self.frame_accumulator -= f64::from(frames_to_decode) * frame_time;
 
-        // An absolute source is the authority on position, so the loop region
-        // does not fence it in and the boundary transitions stand down. They are
-        // part of the clip's own marching, which an absolute value replaces; left
-        // active they would yank the playhead to the in-point every frame the
-        // curve reads past the out-point, and the curve would put it straight
-        // back. The clip's bounds still apply, because there is no picture
-        // outside them.
+        // An absolute source sets the position, so the loop region and boundary
+        // transitions do not apply; otherwise they would snap the playhead to the
+        // in-point whenever the curve passes the out-point. The clip bounds still
+        // apply.
         if let modulation::PositionTarget::Absolute(_) = self.modulation.position {
             self.position = self.position.clamp(0.0, self.duration.max(0.0));
             if step.decode.needs_seek {
@@ -298,14 +285,10 @@ impl PlaybackState {
         }
     }
 
-    /// Move a paused clip's playhead if (and only if) modulation asks for it.
+    /// Moves a paused clip's playhead when modulation asks for it.
     ///
-    /// Pause means the clip does not advance on its own, not that it refuses to
-    /// be moved: scrubbing a paused clip by hand already works, and a modulator
-    /// bound to the playhead is a scrub. This is also the case where an offset
-    /// reads most clearly, because with no natural advance underneath it the
-    /// playhead swings around where it was parked instead of drifting through
-    /// the clip. Suspension is a separate matter and still freezes everything.
+    /// A modulator on the playhead acts like a manual scrub, which already works
+    /// on a paused clip. Suspension still freezes everything.
     fn paused_modulation_step(&mut self) -> AdvanceResult {
         let frame_time = 1.0 / self.frame_rate;
         let step = self.modulated_position_step(0.0, 0.0, frame_time);
@@ -316,11 +299,9 @@ impl PlaybackState {
             };
         }
 
-        // Clamp instead of looping: a paused clip has not reached its out-point,
-        // it was carried there, so wrapping would be an event nobody asked for.
-        // Which span it clamps against follows the span the movement was
-        // measured in, so an absolute curve can park the playhead anywhere in
-        // the clip while an offset stays inside the loop region.
+        // Clamp instead of looping: the clip was moved there, it did not play to
+        // the end. The clamp span matches the modulation span: the whole clip for
+        // absolute values, the loop region for offsets.
         let (floor, ceiling) =
             if let modulation::PositionTarget::Absolute(_) = self.modulation.position {
                 (0.0, self.duration.max(0.0))
@@ -346,13 +327,11 @@ impl PlaybackState {
         }
     }
 
-    /// This tick's playhead movement, and what the decoder must do to take it.
+    /// This tick's playhead movement and what the decoder must do for it.
     ///
-    /// The clip's own advance and the modulated offset are separated because the
-    /// decoder treats them differently: ordinary advance walks forward through
-    /// the stream, while an offset that moves backward can only be reached by
-    /// seeking. Keeping them apart is also what stops ping-pong's reverse from
-    /// being mistaken for a modulated backward step.
+    /// The clip's own advance and the modulated offset stay separate because the
+    /// decoder walks forward for the first but must seek for a backward offset.
+    /// This also keeps ping-pong reverse from counting as a backward offset.
     fn modulated_position_step(
         &mut self,
         dt: f64,
@@ -363,9 +342,8 @@ impl PlaybackState {
         let signed_natural = natural * if self.reverse { -1.0 } else { 1.0 };
 
         let offset_delta = match self.modulation.position {
-            // An absolute source replaces the value rather than nudging it (the
-            // same rule automation envelopes follow elsewhere), so the clip's
-            // own advance stands down for the frame.
+            // An absolute source replaces the value, so the clip's own advance is
+            // skipped this frame.
             modulation::PositionTarget::Absolute(target) => {
                 self.applied_position_offset = 0.0;
                 return ModulatedPositionStep {
@@ -379,8 +357,8 @@ impl PlaybackState {
                 self.applied_position_offset = offset;
                 delta
             }
-            // Letting go hands back whatever offset is still applied, so the
-            // playhead lands where the clip would have been all along.
+            // Releasing removes any applied offset, so the playhead lands where the
+            // clip would have been.
             modulation::PositionTarget::Free => {
                 let delta = -self.applied_position_offset;
                 self.applied_position_offset = 0.0;
@@ -399,11 +377,9 @@ impl PlaybackState {
         self.chasing = true;
         self.reverse = false;
         self.last_advance = std::time::Instant::now();
-        // The servo owns the whole timeline while chasing, so a modulated offset
-        // has no authority here and must not be left half-applied for the tick
-        // the clip stops chasing. Modulated speed has none either; see the
-        // `base_speed` note below.
-        // See /spec/video-playback-modulation.md § Authority.
+        // The chase servo controls the timeline while chasing, so drop any
+        // modulated offset instead of leaving it half-applied when chasing stops.
+        // Modulated speed is ignored too; see `base_speed` below.
         self.applied_position_offset = 0.0;
 
         let transport_dt = if transport.running {
@@ -420,16 +396,12 @@ impl PlaybackState {
             in_point: self.in_point,
             out_point: self.effective_out(),
             frame_rate: self.frame_rate,
-            // The performer's stored speed, never the modulated one. This is a
-            // coefficient on absolute elapsed transport time
-            // (`desired = in_point + elapsed * base_speed`), not an incremental
-            // rate, so a value that moves rewrites where the clip should have
-            // been for the whole show up to now. A wobble of 0.01 a minute in
-            // moves the target 0.6 s, past `SEEK_THRESHOLD_SECS`, and the error
-            // grows with elapsed time without bound. The render pass suppresses
-            // speed modulation while chasing; this keeps the servo's map stable
-            // even for the frame after a chase engages, when the inbox may still
-            // hold a modulated level.
+            // The stored speed, never the modulated one. It multiplies total elapsed
+            // transport time (`desired = in_point + elapsed * base_speed`), so any
+            // change moves the target for the whole show so far: a 0.01 change a
+            // minute in moves it 0.6 s, past `SEEK_THRESHOLD_SECS`. The render pass
+            // drops speed modulation while chasing; this covers the first chase frame,
+            // when the inbox may still hold a modulated value.
             base_speed: self.speed,
             transport_position: transport.position,
             transport_dt,
@@ -463,23 +435,23 @@ impl PlaybackState {
     }
 }
 
-/// GPU-compressed texture format for HAP video frames.
+/// GPU-compressed texture format of HAP frames.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HapTextureFormat {
-    /// BC1 / DXT1 — RGB, no alpha (Hap)
+    /// BC1 / DXT1: RGB, no alpha (Hap).
     Bc1,
-    /// BC3 / DXT5 — RGBA with interpolated alpha (Hap Alpha)
+    /// BC3 / DXT5: RGBA with interpolated alpha (Hap Alpha).
     Bc3,
-    /// BC3 / DXT5 storing Scaled `YCoCg` color (Hap Q) — needs shader conversion to RGB
+    /// BC3 / DXT5 holding scaled `YCoCg` (Hap Q); converted to RGB in a shader.
     Bc3YCoCg,
-    /// BC4 / RGTC1 — single-channel alpha (Hap Alpha-Only, or alpha plane of Hap Q Alpha)
+    /// BC4 / RGTC1: single-channel alpha (Hap Alpha-Only, or Hap Q Alpha's alpha plane).
     Bc4,
-    /// BC7 / BPTC — RGBA, best quality (Hap R)
+    /// BC7 / BPTC: RGBA, best quality (Hap R).
     Bc7,
 }
 
 impl HapTextureFormat {
-    /// Bytes per 4×4 block for this format.
+    /// Bytes per 4×4 block.
     pub fn block_bytes(self) -> u32 {
         match self {
             Self::Bc1 | Self::Bc4 => 8,
@@ -487,7 +459,6 @@ impl HapTextureFormat {
         }
     }
 
-    /// Corresponding wgpu texture format.
     pub fn wgpu_format(self) -> wgpu::TextureFormat {
         match self {
             Self::Bc1 => wgpu::TextureFormat::Bc1RgbaUnorm,
@@ -497,12 +468,12 @@ impl HapTextureFormat {
         }
     }
 
-    /// Whether this format requires YCoCg→RGB conversion in a shader.
+    /// Whether a shader must convert `YCoCg` to RGB.
     pub fn needs_ycocg_convert(self) -> bool {
         matches!(self, Self::Bc3YCoCg)
     }
 
-    /// Calculate the byte size of a full frame in this compressed format.
+    /// Byte size of a full frame in this format.
     pub fn frame_byte_size(self, width: u32, height: u32) -> usize {
         let blocks_x = width.div_ceil(4);
         let blocks_y = height.div_ceil(4);
@@ -510,11 +481,11 @@ impl HapTextureFormat {
     }
 }
 
-/// A decoded video frame — either CPU-decoded RGBA or GPU-compressed `BCn`.
+/// A decoded frame: CPU-decoded RGBA or compressed `BCn`.
 pub enum VideoFrame<'a> {
-    /// Standard RGBA pixel data (from ffmpeg CPU decode).
+    /// RGBA pixels from ffmpeg.
     Rgba(&'a [u8]),
-    /// GPU-compressed `BCn` texture data (from HAP decode).
+    /// Compressed `BCn` data from HAP.
     Compressed {
         data: &'a [u8],
         format: HapTextureFormat,
@@ -523,17 +494,14 @@ pub enum VideoFrame<'a> {
 
 // ── Background decode thread types ───────────────────────────────────
 
-/// Commands sent from the main thread to the decode thread.
+/// Commands from the main thread to the decode thread.
 pub enum VideoCommand {
     Play,
     Pause,
-    /// Stop producing frames without touching the deck's play/pause state.
+    /// Stops producing frames without changing the deck's play state.
     ///
-    /// Kept separate from `Pause` because that is the performer's control and
-    /// is reported to the UI and the API. A deck the arrangement has put to
-    /// sleep must still read as playing, and must not be woken by residency
-    /// into a state the performer did not ask for.
-    /// See /spec/deck-residency.md.
+    /// Separate from `Pause`, which is the performer's control and is reported to
+    /// the UI and API. A deck put to sleep must still read as playing.
     SetSuspended(bool),
     Seek(f64),
     SetSpeed(f64),
@@ -545,7 +513,7 @@ pub enum VideoCommand {
     Stop,
 }
 
-/// A decoded frame ready for GPU upload — owned data copied from the player.
+/// A decoded frame copied out of the player, ready for upload.
 pub struct DecodedFrame {
     pub color_data: Vec<u8>,
     pub alpha_data: Option<Vec<u8>>,
@@ -553,24 +521,22 @@ pub struct DecodedFrame {
     pub alpha_format: Option<HapTextureFormat>,
 }
 
-/// Read-only snapshot of playback state for the main thread.
-// Mirrors PlaybackState's independent flags one-for-one; collapsing them into an
-// enum would misrepresent the state they snapshot.
+/// Read-only playback state for the main thread.
+// Mirrors PlaybackState's independent flags.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 pub struct PlaybackSnapshot {
     pub playing: bool,
     pub position: f64,
     pub duration: f64,
-    /// The performer's set point, untouched by modulation, so the UI slider
-    /// keeps showing where they left it.
+    /// The performer's set point, without modulation, shown by the UI slider.
     pub speed: f64,
-    /// The rate playback is actually running at. Equals `speed` unless a
-    /// modulator is holding it, which is what the ghost indicator draws.
+    /// The rate playback runs at. Differs from `speed` when a modulator holds
+    /// it; drawn as the ghost indicator.
     pub effective_speed: f64,
-    /// How far a modulator has carried the playhead from where the clip would
-    /// otherwise be. Subtracting it from `position` gives the point the
-    /// modulator is swinging around, which is what the scrub bar's ghost marks.
+    /// Modulated offset from where the clip would otherwise be. `position` minus
+    /// this is the center the modulator swings around, marked by the scrub bar's
+    /// ghost.
     pub position_offset: f64,
     pub loop_mode: LoopMode,
     pub in_point: f64,
@@ -578,14 +544,14 @@ pub struct PlaybackSnapshot {
     pub reverse: bool,
     pub reached_end: bool,
     pub frame_rate: f64,
-    /// Whether the ping-pong RAM cache was truncated (hit the memory cap).
-    /// Always false for HAP sources (they reverse via seek, no cache).
+    /// Whether the ping-pong RAM cache hit its memory cap. Always false for HAP,
+    /// which reverses by seeking.
     pub pingpong_cache_truncated: bool,
 }
 
 impl PlaybackSnapshot {
-    /// Effective out-point (uses duration if `out_point` is 0), mirroring
-    /// [`PlaybackState::effective_out`] for readers that only have a snapshot.
+    /// Out-point, or the duration when `out_point` is 0. Mirrors
+    /// [`PlaybackState::effective_out`].
     pub fn effective_out(&self) -> f64 {
         if self.out_point > 0.0 {
             self.out_point
@@ -594,8 +560,8 @@ impl PlaybackSnapshot {
         }
     }
 
-    /// Create a snapshot from a `PlaybackState`. The `pingpong_cache_truncated`
-    /// flag defaults to false here and is set by the ffmpeg decode thread.
+    /// Snapshot of a `PlaybackState`. `pingpong_cache_truncated` starts false;
+    /// the ffmpeg decode thread sets it.
     pub fn from_state(ps: &PlaybackState) -> Self {
         Self {
             playing: ps.playing,
@@ -615,53 +581,48 @@ impl PlaybackSnapshot {
     }
 }
 
-/// The render thread's mailboxes into a decode thread.
-///
-/// Both hold levels rather than events: the newest value wins, and a value the
-/// decode thread never got round to reading is simply superseded. That is why
-/// they are cells rather than queues, and why they are bundled: they are read
-/// together at the top of every decode tick.
+/// The render thread's mailboxes into a decode thread. Both are latest-value
+/// cells read together at the start of each decode tick.
 #[derive(Default)]
 pub struct DecodeInboxes {
     pub chase: ChaseInbox,
     pub modulation: modulation::PlaybackModulationInbox,
 }
 
-/// Main-thread handle to a background video decode thread.
+/// Main-thread handle to a video decode thread.
 pub struct VideoDecodeHandle {
     cmd_tx: mpsc::Sender<VideoCommand>,
     frame_data: Arc<Mutex<Option<DecodedFrame>>>,
     snapshot: Arc<Mutex<PlaybackSnapshot>>,
     stop_flag: Arc<AtomicBool>,
-    /// Bounded pool of reusable frame buffers returned by the renderer via
-    /// [`Self::recycle`] and reused by the decode thread (avoids a fresh ~4 MB
-    /// allocation per frame — issue #42).
+    /// Bounded pool of frame buffers returned by the renderer through
+    /// [`Self::recycle`] and reused by the decode thread, saving a ~4 MB
+    /// allocation per frame.
     frame_pool: Arc<Mutex<Vec<Vec<u8>>>>,
-    /// Rate the renderer can actually present at, in whole frames per second
-    /// (0 = uncapped). Written by the render thread every frame and read by the
-    /// decode thread to bound its own rate — see [`Self::set_output_fps`].
+    /// Frames per second the renderer can present (0 = uncapped). Written by the
+    /// render thread each frame; see [`Self::set_output_fps`].
     output_fps: Arc<AtomicU32>,
-    /// Last suspension state sent to the decode thread, so the per-frame call
-    /// from the renderer only sends on a change. See [`Self::set_suspended`].
+    /// Last suspension state sent, so only changes are sent. See
+    /// [`Self::set_suspended`].
     suspended: AtomicBool,
-    /// Render-thread publish / decode-thread consume of the show transport and
-    /// this frame's resolved playback modulation.
+    /// Show transport and resolved modulation, written by the render thread and
+    /// read by the decode thread.
     inboxes: Arc<DecodeInboxes>,
-    /// Last sync config applied from the main thread (for save/UI).
+    /// Last sync config set from the main thread (for save and UI).
     transport_sync: Mutex<DeckTransportSync>,
     thread: Option<std::thread::JoinHandle<()>>,
     pub width: u32,
     pub height: u32,
-    /// Whether this is a dual-plane HAP source (for render pass alpha detection).
+    /// Dual-plane HAP source (for alpha detection in the render pass).
     pub is_dual_plane: bool,
 }
 
 impl VideoDecodeHandle {
-    /// Spawn a background decode thread for a standard (ffmpeg) `VideoPlayer`.
+    /// Spawns a decode thread for an ffmpeg `VideoPlayer`.
     ///
     /// # Panics
     ///
-    /// Panics if the OS refuses to spawn the decode thread.
+    /// Panics if the OS refuses to spawn the thread.
     pub fn spawn_video(player: VideoPlayer) -> Self {
         let width = player.width();
         let height = player.height();
@@ -708,11 +669,11 @@ impl VideoDecodeHandle {
         }
     }
 
-    /// Spawn a background decode thread for a HAP video player.
+    /// Spawns a decode thread for a HAP player.
     ///
     /// # Panics
     ///
-    /// Panics if the OS refuses to spawn the decode thread.
+    /// Panics if the OS refuses to spawn the thread.
     pub fn spawn_hap(player: hap::HapPlayer) -> Self {
         let width = player.width();
         let height = player.height();
@@ -760,25 +721,22 @@ impl VideoDecodeHandle {
         }
     }
 
-    /// Tell the decode thread how fast the renderer can actually present, so a
-    /// source faster than the output does not decode frames that can never be
-    /// shown. Pass 0 to leave the source uncapped.
+    /// Sets the renderer's presentation rate so the decode thread skips frames
+    /// that would never be shown. 0 = uncapped.
     ///
-    /// The renderer takes at most one frame per rendered frame and the decode
-    /// thread's mailbox holds one, so everything a faster source produces in
-    /// between is overwritten. Decoding it anyway spends CPU and disk bandwidth
-    /// for nothing, and leaves the surviving frames landing on an irregular
-    /// beat against the render clock, which reads as judder.
+    /// The mailbox holds one frame, so frames decoded faster than the renderer
+    /// takes them are overwritten. Decoding them wastes CPU and disk, and the
+    /// surviving frames land unevenly against the render clock (judder).
     pub fn set_output_fps(&self, fps: u32) {
         self.output_fps.store(fps, Ordering::Relaxed);
     }
 
-    /// Publish this frame's transport to the decode thread.
+    /// Publishes this frame's transport to the decode thread.
     pub fn publish_chase(&self, sample: VideoChaseBroadcast, discontinuity: bool) {
         self.inboxes.chase.publish(sample, discontinuity);
     }
 
-    /// Publish this frame's resolved playback modulation to the decode thread.
+    /// Publishes this frame's resolved modulation to the decode thread.
     pub fn publish_modulation(&self, value: modulation::PlaybackModulation) {
         self.inboxes.modulation.publish(value);
     }
@@ -794,33 +752,28 @@ impl VideoDecodeHandle {
         self.transport_sync.lock().map(|g| *g).unwrap_or_default()
     }
 
-    /// Stop or resume decoding without touching the deck's play/pause state.
+    /// Stops or resumes decoding without changing the deck's play state.
     ///
-    /// Called every frame for every deck, so it sends only on a change: the
-    /// command channel is unbounded and a suspended thread wakes rarely, which
-    /// would otherwise leave a queue of identical commands to drain on resume.
-    ///
-    /// See /spec/deck-residency.md.
+    /// Called every frame per deck, so it sends only on a change: the command
+    /// channel is unbounded and a suspended thread rarely wakes, so repeats would
+    /// pile up.
     pub fn set_suspended(&self, suspended: bool) {
         if self.suspended.swap(suspended, Ordering::Relaxed) != suspended {
             self.send(VideoCommand::SetSuspended(suspended));
         }
     }
 
-    /// Whether decoding is currently suspended.
     pub fn is_suspended(&self) -> bool {
         self.suspended.load(Ordering::Relaxed)
     }
 
-    /// Take the latest decoded frame (returns None if no new frame available).
-    /// Return the frame to the decode thread via [`Self::recycle`] after upload
-    /// so its buffer is reused instead of freed.
+    /// Takes the latest decoded frame, or None if there is no new one. Pass it
+    /// to [`Self::recycle`] after upload so its buffer is reused.
     pub fn take_frame(&self) -> Option<DecodedFrame> {
         self.frame_data.lock().ok()?.take()
     }
 
-    /// Return a consumed frame's buffers to the pool for reuse by the decode
-    /// thread. Call after the frame's data has been uploaded to the GPU.
+    /// Returns a frame's buffers to the decode thread's pool. Call after upload.
     pub fn recycle(&self, frame: DecodedFrame) {
         pool_return(&self.frame_pool, frame.color_data);
         if let Some(alpha) = frame.alpha_data {
@@ -828,12 +781,11 @@ impl VideoDecodeHandle {
         }
     }
 
-    /// Send a command to the decode thread.
     pub fn send(&self, cmd: VideoCommand) {
         let _ = self.cmd_tx.send(cmd);
     }
 
-    /// Get the current playback snapshot (read-only copy).
+    /// Copy of the current playback state.
     pub fn playback_snapshot(&self) -> PlaybackSnapshot {
         self.snapshot.lock().map_or_else(
             |_| PlaybackSnapshot {
@@ -859,7 +811,7 @@ impl VideoDecodeHandle {
 impl Drop for VideoDecodeHandle {
     fn drop(&mut self) {
         self.stop_flag.store(true, Ordering::Release);
-        // Send Stop to unblock recv_timeout
+        // Stop unblocks recv_timeout.
         let _ = self.cmd_tx.send(VideoCommand::Stop);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
@@ -873,7 +825,7 @@ fn apply_command(ps: &mut PlaybackState, cmd: &VideoCommand) {
         VideoCommand::Play => ps.playing = true,
         VideoCommand::Pause => ps.playing = false,
         VideoCommand::SetSuspended(s) => ps.suspended = *s,
-        // Seek is handled specially by the thread loop (calls seek_and_reset / seek)
+        // The thread loop handles Seek (seek_and_reset / seek).
         VideoCommand::Seek(_) | VideoCommand::Stop => {}
         VideoCommand::SetSpeed(s) => ps.speed = *s,
         VideoCommand::SetLoopMode(m) => ps.loop_mode = *m,
@@ -887,13 +839,11 @@ fn apply_command(ps: &mut PlaybackState, cmd: &VideoCommand) {
     }
 }
 
-/// Background decode loop for standard (ffmpeg) video.
-/// Maximum number of reusable frame buffers held in a decode handle's pool.
-/// Enough to cover the in-flight frame plus a displaced frame; bounded so the
-/// pool itself can never grow unbounded.
+/// Maximum buffers in a decode handle's pool: the in-flight frame plus a
+/// displaced one.
 const FRAME_POOL_CAP: usize = 4;
 
-/// Take a reusable buffer from the pool, or a fresh empty one if it is empty.
+/// Takes a pooled buffer, or a new empty one if the pool is empty.
 fn pool_take(pool: &Mutex<Vec<Vec<u8>>>) -> Vec<u8> {
     pool.lock()
         .ok()
@@ -901,7 +851,7 @@ fn pool_take(pool: &Mutex<Vec<Vec<u8>>>) -> Vec<u8> {
         .unwrap_or_default()
 }
 
-/// Return a buffer to the pool for reuse, dropping it if the pool is at capacity.
+/// Returns a buffer to the pool, dropping it if the pool is full.
 fn pool_return(pool: &Mutex<Vec<Vec<u8>>>, buf: Vec<u8>) {
     if let Ok(mut p) = pool.lock()
         && p.len() < FRAME_POOL_CAP
@@ -910,25 +860,9 @@ fn pool_return(pool: &Mutex<Vec<Vec<u8>>>, buf: Vec<u8>) {
     }
 }
 
-/// Advance a fixed-rate frame schedule and return how long to wait for the
-/// next frame to fall due.
-///
-/// The deadline moves in fixed `interval` steps so the time spent decoding is
-/// absorbed by the wait instead of being added to it. Waiting a whole interval
-/// *after* each decode paces frames at `1/(interval + decode)`, which silently
-/// drops frames on every source — the shortfall grows with decode cost and is
-/// worst on high frame-rate or high-resolution media.
-///
-/// If a decode overruns its slot the schedule restarts from now rather than
-/// accumulating a backlog of already-late deadlines, which would burn through
-/// several frames at full speed to "catch up".
-/// The interval a decode thread should run at: the source's own rate, bounded
-/// by the rate the renderer can present (0 = uncapped).
-///
-/// Decoding faster than the output can present buys nothing — the extra frames
-/// are overwritten in the mailbox before anyone reads them — while costing CPU
-/// and disk bandwidth that the rest of the frame needs, and scattering the
-/// frames that do survive across an irregular beat.
+/// The decode interval: the source's frame rate, capped at the renderer's
+/// presentation rate (0 = uncapped). Frames beyond that are overwritten in the
+/// mailbox unread.
 fn decode_interval(video_fps: f64, output_fps: &AtomicU32) -> std::time::Duration {
     let cap = output_fps.load(Ordering::Relaxed);
     let rate = if cap > 0 {
@@ -939,15 +873,11 @@ fn decode_interval(video_fps: f64, output_fps: &AtomicU32) -> std::time::Duratio
     std::time::Duration::from_secs_f64((1.0 / rate).max(0.001))
 }
 
-/// How long a suspended decode thread sleeps between wakes.
-///
-/// A suspended thread decodes nothing, so this only bounds how long it takes to
-/// notice a stop flag; a resume arrives as a command and wakes it immediately.
-/// Long enough that sixty sleeping decks cost nothing measurable.
+/// Sleep between wakes of a suspended decode thread. Bounds how long it takes
+/// to see a stop flag; a resume command wakes it at once.
 const SUSPENDED_WAKE: std::time::Duration = std::time::Duration::from_millis(250);
 
-/// The interval to wait for, which is the frame schedule while running and a
-/// slow idle poll while suspended.
+/// Frame interval while running, slow idle poll while suspended.
 fn wake_interval(suspended: bool, video_fps: f64, output_fps: &AtomicU32) -> std::time::Duration {
     if suspended {
         SUSPENDED_WAKE
@@ -956,6 +886,12 @@ fn wake_interval(suspended: bool, video_fps: f64, output_fps: &AtomicU32) -> std
     }
 }
 
+/// Advances a fixed-rate frame schedule and returns how long to wait for the
+/// next frame.
+///
+/// The deadline moves in fixed `interval` steps so decode time comes out of
+/// the wait instead of adding to it. If a decode overruns, the schedule
+/// restarts from now instead of firing late frames back to back.
 fn wait_for_next_frame(
     next_frame_at: &mut std::time::Instant,
     interval: std::time::Duration,
@@ -969,8 +905,8 @@ fn wait_for_next_frame(
     wait
 }
 
-// Decode-thread plumbing: each arg is a distinct channel to the render thread,
-// with no shared invariant that a struct would express.
+/// Background decode loop for ffmpeg video.
+// Each argument is a separate channel to the render thread.
 #[allow(clippy::too_many_arguments)]
 fn video_decode_thread(
     mut player: VideoPlayer,
@@ -988,7 +924,7 @@ fn video_decode_thread(
     let mut was_suspended = false;
 
     while !stop_flag.load(Ordering::Acquire) {
-        // Drain all pending commands
+        // Drain pending commands.
         let mut had_seek = None;
         while let Ok(cmd) = cmd_rx.try_recv() {
             if let VideoCommand::Stop = &cmd {
@@ -1000,16 +936,14 @@ fn video_decode_thread(
             apply_command(&mut player.playback, &cmd);
         }
 
-        // Process seek if any
         if let Some(t) = had_seek
             && let Err(e) = player.seek_and_reset(t)
         {
             log::warn!("Video seek error: {e}");
         }
 
-        // Waking from suspension restarts the frame schedule, so the first
-        // frames after a resume are not paced against a deadline set while the
-        // thread was idling.
+        // Restart the frame schedule on resume so frames are not paced against a
+        // deadline set while idle.
         if was_suspended && !player.playback.suspended {
             next_frame_at = std::time::Instant::now();
         }
@@ -1020,7 +954,6 @@ fn video_decode_thread(
             .set_chase_transport(inboxes.chase.take(woke));
         player.playback.set_modulation(inboxes.modulation.take());
 
-        // Decode next frame
         match player.next_frame() {
             Ok(Some(data)) => {
                 let mut buf = pool_take(frame_pool);
@@ -1033,8 +966,7 @@ fn video_decode_thread(
                     alpha_format: None,
                 };
                 if let Ok(mut slot) = frame_data.lock() {
-                    // Recycle a frame the renderer never consumed (happens when
-                    // it falls behind — exactly the #42 scenario) instead of
+                    // Recycle a frame the renderer never took (it fell behind) instead of
                     // dropping its buffer.
                     if let Some(old) = slot.take() {
                         pool_return(frame_pool, old.color_data);
@@ -1051,14 +983,13 @@ fn video_decode_thread(
             }
         }
 
-        // Publish snapshot
         if let Ok(mut ss) = snapshot.lock() {
             let mut snap = PlaybackSnapshot::from_state(&player.playback);
             snap.pingpong_cache_truncated = player.pingpong_cache_truncated();
             *ss = snap;
         }
 
-        // Sleep until the next frame falls due, or wake early on a command.
+        // Sleep until the next frame is due, or wake early on a command.
         interval = wake_interval(player.playback.suspended, fps, output_fps);
         match cmd_rx.recv_timeout(wait_for_next_frame(&mut next_frame_at, interval)) {
             Ok(cmd) => {
@@ -1080,8 +1011,7 @@ fn video_decode_thread(
 }
 
 /// Background decode loop for HAP video.
-// Decode-thread plumbing: each arg is a distinct channel to the render thread,
-// with no shared invariant that a struct would express.
+// Each argument is a separate channel to the render thread.
 #[allow(clippy::too_many_arguments)]
 fn hap_decode_thread(
     mut player: hap::HapPlayer,
@@ -1099,7 +1029,7 @@ fn hap_decode_thread(
     let mut was_suspended = false;
 
     while !stop_flag.load(Ordering::Acquire) {
-        // Drain all pending commands
+        // Drain pending commands.
         let mut had_seek = None;
         while let Ok(cmd) = cmd_rx.try_recv() {
             if let VideoCommand::Stop = &cmd {
@@ -1111,16 +1041,14 @@ fn hap_decode_thread(
             apply_command(&mut player.playback, &cmd);
         }
 
-        // Process seek if any
         if let Some(t) = had_seek
             && let Err(e) = player.seek(t)
         {
             log::warn!("HAP seek error: {e}");
         }
 
-        // Waking from suspension restarts the frame schedule, so the first
-        // frames after a resume are not paced against a deadline set while the
-        // thread was idling.
+        // Restart the frame schedule on resume so frames are not paced against a
+        // deadline set while idle.
         if was_suspended && !player.playback.suspended {
             next_frame_at = std::time::Instant::now();
         }
@@ -1131,7 +1059,6 @@ fn hap_decode_thread(
             .set_chase_transport(inboxes.chase.take(woke));
         player.playback.set_modulation(inboxes.modulation.take());
 
-        // Decode next frame
         match player.next_frame() {
             Ok(Some(result)) => {
                 let mut color = pool_take(frame_pool);
@@ -1165,12 +1092,11 @@ fn hap_decode_thread(
             }
         }
 
-        // Publish snapshot
         if let Ok(mut ss) = snapshot.lock() {
             *ss = PlaybackSnapshot::from_state(&player.playback);
         }
 
-        // Sleep until the next frame falls due, or wake early on a command.
+        // Sleep until the next frame is due, or wake early on a command.
         interval = wake_interval(player.playback.suspended, fps, output_fps);
         match cmd_rx.recv_timeout(wait_for_next_frame(&mut next_frame_at, interval)) {
             Ok(cmd) => {
@@ -1191,19 +1117,18 @@ fn hap_decode_thread(
     }
 }
 
-/// Detect whether a video file uses a HAP codec.
-/// Returns the HAP texture format if it is HAP, or None for standard codecs.
+/// Returns the HAP texture format if the file is HAP, or None for other codecs.
 ///
 /// # Errors
 ///
-/// Returns an error if FFmpeg cannot be initialised, if the file cannot be
-/// opened, or if it contains no video stream.
+/// Returns an error if FFmpeg cannot be initialized, the file cannot be
+/// opened, or it has no video stream.
 pub fn detect_hap_codec<P: AsRef<Path>>(path: P) -> Result<Option<HapTextureFormat>> {
     ffmpeg::init().context("Failed to initialize FFmpeg")?;
     let mut ictx = input(&path).context("Failed to open video file for codec detection")?;
 
-    // ffmpeg maps every HAP variant to one codec id, so confirm it's HAP here
-    // and then read the real texture format from the first frame's section header.
+    // ffmpeg maps every HAP variant to one codec id; the real texture format
+    // comes from the first frame's section header.
     let (video_stream_index, is_hap) = {
         let video_stream = ictx
             .streams()
@@ -1218,9 +1143,8 @@ pub fn detect_hap_codec<P: AsRef<Path>>(path: P) -> Result<Option<HapTextureForm
         return Ok(None);
     }
 
-    // Probe the first video packet for the exact variant (BC1/BC3/BC7/YCoCg).
-    // The texture and staging buffers are sized from this, so a wrong format
-    // overruns the staging copy (issue: Hap1/BC1 misdetected as Bc7).
+    // The texture and staging buffers are sized from this format, so a wrong
+    // one overruns the staging copy.
     for (stream, packet) in ictx.packets() {
         if stream.index() != video_stream_index {
             continue;
@@ -1240,19 +1164,17 @@ pub fn detect_hap_codec<P: AsRef<Path>>(path: P) -> Result<Option<HapTextureForm
     Ok(None)
 }
 
-/// Maximum frame cache memory in bytes (2 GB).
-/// Frames are cached during forward playback and served in reverse for ping-pong.
-/// At 1080p (~2.5 MB/frame) this holds ~800 frames (~13s at 60fps).
+/// Frame cache limit (2 GB) for ping-pong reverse playback. At 1080p
+/// (~2.5 MB/frame) this holds ~800 frames (~13s at 60fps).
 const MAX_CACHE_BYTES: usize = 2 * 1024 * 1024 * 1024;
 
-/// A video player that decodes frames from a video file using ffmpeg (CPU decode).
+/// Decodes video frames on the CPU with ffmpeg.
 ///
-/// # Safety: Send
-/// The ffmpeg types (`Input`, `Video` decoder, `Scaler`) contain raw pointers to C-allocated
-/// state. These pointers represent exclusive ownership of heap allocations — there is no
-/// shared mutable state across instances. Transferring a `VideoPlayer` between threads is
-/// safe because Rust's ownership system guarantees exclusive access (no concurrent use).
-/// The player is always used from a single thread at a time.
+/// # Safety
+///
+/// `Send` because the ffmpeg types (`Input`, `Video` decoder, `Scaler`) hold
+/// raw pointers that the player exclusively owns, and a player is used from
+/// one thread at a time.
 pub struct VideoPlayer {
     ictx: ffmpeg::format::context::Input,
     decoder: ffmpeg::decoder::Video,
@@ -1260,42 +1182,39 @@ pub struct VideoPlayer {
     video_stream_index: usize,
     width: u32,
     height: u32,
-    /// Shared playback state (loop mode, speed, in/out points, position).
+    /// Loop mode, speed, in/out points and position.
     pub playback: PlaybackState,
-    /// Current frame data (RGBA).
+    /// Current RGBA frame.
     frame_data: Vec<u8>,
-    /// Frame cache for reverse playback (ping-pong).
-    /// Filled during forward play, drained in reverse order.
+    /// Ping-pong reverse cache, filled going forward and read backward.
     frame_cache: Vec<Vec<u8>>,
-    /// Current read index into `frame_cache` during reverse playback.
+    /// Read index into `frame_cache` during reverse playback.
     cache_read_idx: usize,
-    /// Whether we're actively caching frames (disabled when memory cap hit this pass).
+    /// Cleared when the memory cap is hit this pass.
     caching_enabled: bool,
-    /// Set when cache overflows this pass — reset each new forward pass.
+    /// Set when the cache overflows this pass; reset each forward pass.
     cache_overflowed: bool,
-    /// Permanent latch set on the first cache overflow. Suppresses repeated log
-    /// warnings and drives the one-time "transcode to HAP" UI notice (exposed
-    /// via [`VideoPlayer::pingpong_cache_truncated`]).
+    /// Set on the first overflow and never cleared. Suppresses repeat warnings
+    /// and drives the "transcode to HAP" notice via
+    /// [`VideoPlayer::pingpong_cache_truncated`].
     cache_overflow_warned: bool,
-    /// Bytes per frame for cache budget calculation.
     frame_byte_size: usize,
-    /// Reused decoder output frame (avoids a per-frame ffmpeg frame allocation).
+    /// Reused decoder output frame.
     decoded: Video,
-    /// Reused scaler output frame (RGBA), avoids a per-frame allocation.
+    /// Reused RGBA scaler output frame.
     rgb_frame: Video,
 }
 
-// SAFETY: See doc comment on VideoPlayer. Exclusive ownership of C allocations, no concurrent use.
+// SAFETY: the player exclusively owns its ffmpeg allocations and is never used concurrently.
 unsafe impl Send for VideoPlayer {}
 
 impl VideoPlayer {
-    /// Create a new video player from a file path.
+    /// Opens a video file.
     ///
     /// # Errors
     ///
-    /// Returns an error if FFmpeg cannot be initialised, if the file cannot be
-    /// opened, if it contains no video stream, or if a decoder or scaler cannot
-    /// be created for it.
+    /// Returns an error if FFmpeg cannot be initialized, the file cannot be
+    /// opened, it has no video stream, or a decoder or scaler cannot be created.
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         ffmpeg::init().context("Failed to initialize FFmpeg")?;
         let ictx = input(&path).context("Failed to open video file")?;
@@ -1351,60 +1270,50 @@ impl VideoPlayer {
         })
     }
 
-    /// Get the next frame as RGBA data.
-    /// Uses wall-clock time pacing: only decodes new frames when enough real
-    /// time has elapsed (respecting speed multiplier). At speed < 1.0, frames
-    /// are held longer; at speed > 1.0, frames are skipped.
+    /// Returns the next RGBA frame, paced by wall-clock time and speed: frames
+    /// repeat at speed < 1.0 and are skipped at speed > 1.0.
     ///
     /// # Errors
     ///
-    /// Returns an error if seeking, packet demuxing, decoding, or colour-space
-    /// conversion fails.
+    /// Returns an error if seeking, demuxing, decoding or color conversion fails.
     pub fn next_frame(&mut self) -> Result<Option<&[u8]>> {
-        // Suspension freezes position as well as decode: a clip nobody can see
-        // must not drift on wall-clock time, or the same show position shows a
-        // different frame depending on when the app was launched. Pause is not a
-        // hard stop in the same way, because a modulator bound to the playhead
-        // can move a parked clip; unmodulated, `advance_frame` reports nothing
-        // to do and we hold the current frame just below.
+        // Suspension freezes position too, so a hidden clip does not drift on
+        // wall-clock time. Pause does not stop here: a modulator on the playhead
+        // can move a paused clip.
         if self.playback.suspended {
             return Ok(None);
         }
         let was_reverse = self.playback.reverse;
         let result = self.playback.advance_frame();
 
-        // No frames to decode this tick — hold current frame.
-        // Return None so the caller skips the GPU texture upload;
-        // the texture already contains the current frame from the last upload.
+        // Nothing to decode this tick. None skips the upload; the texture already
+        // holds the current frame.
         if result.frames_to_decode == 0 && !result.needs_seek {
             return Ok(None);
         }
 
-        // Detect ping-pong boundary flips from advance_frame:
+        // Ping-pong direction flips from advance_frame.
         if !was_reverse && self.playback.reverse {
-            // Forward→reverse flip (hit out-point). Serve from cache.
+            // Forward to reverse at the out-point: serve from the cache.
             if self.frame_cache.is_empty() {
-                // No cache available (overflow or very short video).
-                // Hold the current frame at the boundary and stay in reverse —
-                // advance_frame will walk the position backward and eventually
-                // hit in_point, triggering the reverse→forward flip below.
+                // No cache (overflow or very short clip). Hold the boundary frame;
+                // advance_frame walks back to in_point and flips forward below.
                 return Ok(Some(&self.frame_data));
             }
             self.cache_read_idx = self.frame_cache.len() - 1;
         } else if was_reverse && !self.playback.reverse {
-            // Reverse→forward flip (hit in-point). Clear cache, seek to in-point.
-            // Reset overflow so the new forward pass gets a fresh caching budget.
+            // Reverse to forward at the in-point: clear the cache and its overflow
+            // flag, then seek.
             self.frame_cache.clear();
             self.cache_overflowed = false;
             self.caching_enabled = true;
             self.seek(self.playback.position)?;
         }
 
-        // Reverse playback: serve frames from cache. Cache walking tracks the
-        // clip's own backward march, so it cannot land on a position modulation
-        // put us at; a clip parked mid-ping-pong seeks instead.
+        // Reverse playback reads the cache, which follows the clip's own backward
+        // motion. A clip moved by modulation mid-ping-pong seeks instead.
         if self.playback.reverse && self.playback.playing {
-            // Skip frames for speed > 1.0 in reverse
+            // Skip frames when speed > 1.0.
             let skip = result.frames_to_decode.max(1) as usize;
             if self.cache_read_idx >= skip {
                 self.cache_read_idx -= skip;
@@ -1412,9 +1321,7 @@ impl VideoPlayer {
                     .copy_from_slice(&self.frame_cache[self.cache_read_idx]);
                 return Ok(Some(&self.frame_data));
             }
-            // Cache exhausted before position reached in_point.
-            // Flip back to forward, seek to in_point, start a new forward pass.
-            // Reset overflow so the new forward pass gets a fresh caching budget.
+            // Cache ran out before in_point: start a new forward pass from in_point.
             self.playback.reverse = false;
             self.playback.position = self.playback.in_point;
             self.frame_cache.clear();
@@ -1422,20 +1329,20 @@ impl VideoPlayer {
             self.caching_enabled = true;
             self.seek(self.playback.position)?;
         } else if result.needs_seek {
-            // Forward seek (loop restart, etc.)
+            // Forward seek (loop restart, etc.).
             self.frame_cache.clear();
             self.cache_overflowed = false;
             self.caching_enabled = true;
             self.seek(self.playback.position)?;
         }
 
-        // Forward playback — decode frames_to_decode frames (skip intermediate ones)
+        // Forward playback: decode frames_to_decode frames.
         let target_frames = result.frames_to_decode.max(1);
         let mut decoded_count = 0u32;
         loop {
             if self.decoder.receive_frame(&mut self.decoded).is_ok() {
                 decoded_count += 1;
-                // Only convert the last frame we need (skip intermediate for speed > 1)
+                // Convert only the last frame; intermediate ones are skipped at speed > 1.
                 if decoded_count >= target_frames {
                     self.scaler.run(&self.decoded, &mut self.rgb_frame)?;
                     let data = self.rgb_frame.data(0);
@@ -1447,7 +1354,7 @@ impl VideoPlayer {
                         self.frame_data[dst_offset..dst_offset + row_bytes]
                             .copy_from_slice(&data[src_offset..src_offset + row_bytes]);
                     }
-                    // Cache frame for potential reverse playback
+                    // Cache for ping-pong reverse.
                     if self.caching_enabled && self.playback.loop_mode == LoopMode::PingPong {
                         if self.frame_cache.len() * self.frame_byte_size < MAX_CACHE_BYTES {
                             self.frame_cache.push(self.frame_data.clone());
@@ -1466,9 +1373,8 @@ impl VideoPlayer {
                     }
                     return Ok(Some(&self.frame_data));
                 }
-                // Intermediate frame at speed > 1: still cache for ping-pong
+                // Intermediate frame at speed > 1: still cache it for ping-pong.
                 if self.caching_enabled && self.playback.loop_mode == LoopMode::PingPong {
-                    // Lightweight: decode into scaler for cache but skip if over budget
                     self.scaler.run(&self.decoded, &mut self.rgb_frame)?;
                     let data = self.rgb_frame.data(0);
                     let stride = self.rgb_frame.stride(0);
@@ -1491,7 +1397,7 @@ impl VideoPlayer {
                     self.decoder.send_packet(&packet)?;
                 }
             } else {
-                // End of stream
+                // End of stream.
                 if self.playback.chasing {
                     return Ok(Some(&self.frame_data));
                 }
@@ -1506,9 +1412,8 @@ impl VideoPlayer {
                             self.cache_read_idx = self.frame_cache.len() - 1;
                             return self.next_frame();
                         }
-                        // No cache: hold current frame at boundary.
-                        // advance_frame will walk position backward until in_point,
-                        // then flip back to forward on the next pass.
+                        // No cache: hold the boundary frame. advance_frame walks back to
+                        // in_point, then flips forward.
                         self.playback.position =
                             self.playback.effective_out() - (1.0 / self.playback.frame_rate);
                         return Ok(Some(&self.frame_data));
@@ -1525,7 +1430,7 @@ impl VideoPlayer {
         }
     }
 
-    /// Seek to a specific time in seconds (internal — does not clear cache).
+    /// Seeks to `time_secs` without clearing the cache.
     fn seek(&mut self, time_secs: f64) -> Result<()> {
         let timestamp = (time_secs * f64::from(ffmpeg::ffi::AV_TIME_BASE)) as i64;
         self.ictx.seek(timestamp, ..timestamp)?;
@@ -1534,12 +1439,11 @@ impl VideoPlayer {
         Ok(())
     }
 
-    /// Seek to a specific time and reset the frame cache.
-    /// Use this for user-initiated seeks (scrub bar, etc.).
+    /// Seeks and clears the frame cache. Use for user seeks (scrub bar, etc.).
     ///
     /// # Errors
     ///
-    /// Returns an error if the underlying FFmpeg seek fails.
+    /// Returns an error if the FFmpeg seek fails.
     pub fn seek_and_reset(&mut self, time_secs: f64) -> Result<()> {
         self.frame_cache.clear();
         self.cache_read_idx = 0;
@@ -1549,9 +1453,8 @@ impl VideoPlayer {
         self.seek(time_secs)
     }
 
-    /// Whether this player's ping-pong RAM cache has ever been truncated (hit
-    /// the memory cap). Permanent latch — once true, stays true for the
-    /// player's lifetime. Drives the one-time "transcode to HAP" UI notice.
+    /// Whether the ping-pong cache has ever hit its memory cap. Stays true once
+    /// set. Drives the one-time "transcode to HAP" notice.
     pub fn pingpong_cache_truncated(&self) -> bool {
         self.cache_overflow_warned
     }
@@ -1610,9 +1513,7 @@ mod tests {
         }
     }
 
-    /// Decode time must come out of the wait, not be added to it. Waiting a
-    /// full interval after each decode paced frames at `1/(interval + decode)`,
-    /// which lost 4-18% of the frames of every source.
+    /// Decode time comes out of the wait instead of adding to it.
     #[test]
     fn frame_schedule_absorbs_decode_time_instead_of_adding_to_it() {
         let interval = std::time::Duration::from_millis(10);
@@ -1626,8 +1527,7 @@ mod tests {
         for _ in 0..3 {
             let mut at = start + elapsed;
             let wait = {
-                // Same arithmetic as `wait_for_next_frame`, driven off a
-                // simulated clock so the test does not have to sleep.
+                // Same arithmetic as `wait_for_next_frame` on a simulated clock.
                 let w = next_frame_at.saturating_duration_since(at);
                 next_frame_at += interval;
                 if next_frame_at <= at {
@@ -1640,8 +1540,8 @@ mod tests {
             elapsed = at.duration_since(start) + decode;
         }
 
-        // Each wait covers the interval minus the decode that preceded it, so
-        // the frame period stays at `interval`.
+        // Each wait is the interval minus the preceding decode, so the period
+        // stays at `interval`.
         for wait in &waits {
             assert_eq!(
                 *wait,
@@ -1651,9 +1551,8 @@ mod tests {
         }
     }
 
-    /// A source faster than the renderer must decode at the renderer's rate:
-    /// the mailbox holds one frame and the renderer takes one per rendered
-    /// frame, so the surplus is decoded only to be overwritten.
+    /// A source faster than the renderer decodes at the renderer's rate; the
+    /// surplus would only be overwritten.
     #[test]
     fn decode_rate_is_bounded_by_what_the_renderer_can_present() {
         let cap = AtomicU32::new(60);
@@ -1663,15 +1562,14 @@ mod tests {
             "a 75 fps source on a 60 fps output must decode at 60"
         );
 
-        // A source slower than the output keeps its own rate — capping there
-        // would slow the video down rather than save work.
+        // A slower source keeps its own rate; capping would slow the video.
         assert_eq!(
             decode_interval(15.0, &cap),
             std::time::Duration::from_secs_f64(1.0 / 15.0),
             "a 15 fps source must not be sped up to the output rate"
         );
 
-        // Uncapped output (offline render, no target) leaves the source alone.
+        // Uncapped output (offline render) leaves the source rate alone.
         let uncapped = AtomicU32::new(0);
         assert_eq!(
             decode_interval(75.0, &uncapped),
@@ -1680,8 +1578,8 @@ mod tests {
         );
     }
 
-    /// A decode that overruns its slot must not build a backlog of already-late
-    /// deadlines, or the next frames would fire back-to-back at full speed.
+    /// A decode that overruns its slot must not queue late deadlines that then
+    /// fire back to back.
     #[test]
     fn frame_schedule_resyncs_after_an_overrun_instead_of_bursting() {
         let interval = std::time::Duration::from_millis(10);
@@ -1701,10 +1599,9 @@ mod tests {
         );
     }
 
-    /// Regression: the birds HAP fixture is Hap1/BC1, not Bc7. `detect_hap_codec`
-    /// must report the real format so the deck sizes its texture/staging
-    /// correctly (a wrong format overran the staging copy and panicked).
-    /// Skips when the local-only fixture is absent (tests/media/ is gitignored).
+    /// The birds HAP fixture is Hap1/BC1. `detect_hap_codec` must report that so
+    /// the texture and staging buffers are sized correctly. Skips without the
+    /// local-only fixture (tests/media/ is gitignored).
     #[test]
     fn detect_hap_codec_birds_fixture_is_bc1() {
         let path = "tests/media/birds_combined_hap.mov";
@@ -1719,9 +1616,8 @@ mod tests {
         );
     }
 
-    /// The demux loop must actually yield decoded frames, and must keep
-    /// yielding them across the loop wrap at end of stream.
-    /// Skips when the local-only fixture is absent (tests/media/ is gitignored).
+    /// The demux loop yields frames, including across the loop wrap at end of
+    /// stream. Skips without the local-only fixture (tests/media/ is gitignored).
     #[test]
     fn hap_player_decodes_frames_and_survives_the_loop_wrap() {
         let path = "tests/media/birds_combined_hap.mov";
@@ -1733,8 +1629,7 @@ mod tests {
         let mut player = hap::HapPlayer::new(path, fmt).expect("open fixture");
         let expected = fmt.frame_byte_size(player.width(), player.height());
 
-        // Drive the player from a simulated clock instead of real time so the
-        // test neither sleeps nor depends on how fast the machine decodes.
+        // A simulated clock keeps the test from sleeping or depending on decode speed.
         let mut decoded = 0;
         for _ in 0..200 {
             player.playback.frame_accumulator = 1.0 / player.playback.frame_rate;
@@ -1749,8 +1644,7 @@ mod tests {
         }
         assert!(decoded > 100, "expected a frame per tick, got {decoded}");
 
-        // Wrap past the end and confirm the demuxer still produces frames
-        // rather than reporting a permanent end of stream.
+        // Wrap past the end; the demuxer must keep producing frames.
         player.playback.position = player.playback.effective_out() + 1.0;
         player.playback.frame_accumulator = 1.0 / player.playback.frame_rate;
         player.next_frame().expect("wrap");
@@ -1775,7 +1669,7 @@ mod tests {
         let buf = pool_take(&pool);
         assert!(buf.is_empty());
 
-        // A returned buffer is handed back out (reuse, not realloc).
+        // A returned buffer is handed back out.
         let mut b = Vec::with_capacity(4096);
         b.extend_from_slice(&[1u8, 2, 3]);
         pool_return(&pool, b);
@@ -1808,8 +1702,7 @@ mod tests {
 
     #[test]
     fn test_decode_handle_take_frame_returns_none_initially() {
-        // Cannot construct a full handle without a player, but we can test the
-        // shared frame_data path directly.
+        // A full handle needs a player, so test the shared frame_data path directly.
         let frame_data: Arc<Mutex<Option<DecodedFrame>>> = Arc::new(Mutex::new(None));
         assert!(frame_data.lock().unwrap().is_none());
     }
@@ -1830,11 +1723,11 @@ mod tests {
     #[test]
     fn test_playback_state_advance_moves_position() {
         let mut ps = PlaybackState::new(10.0, 30.0);
-        // Sleep briefly so wall-clock dt > 0
+        // Sleep so wall-clock dt > 0.
         std::thread::sleep(std::time::Duration::from_millis(20));
         let result = ps.advance_frame();
         assert!(!result.needs_seek);
-        // Position should have advanced by ~20ms worth
+        // Advanced by about 20ms.
         assert!(ps.position > 0.0);
         assert!(ps.position < 0.1); // sanity: not more than 100ms
     }
@@ -1843,7 +1736,7 @@ mod tests {
     fn test_playback_state_loop_restart() {
         let mut ps = PlaybackState::new(1.0, 30.0);
         ps.position = 1.1; // already past out-point
-        // Ensure some dt elapses
+        // Let some dt elapse.
         std::thread::sleep(std::time::Duration::from_millis(5));
         let result = ps.advance_frame();
         assert!(result.needs_seek);
@@ -1896,14 +1789,13 @@ mod tests {
 
     #[test]
     fn test_playback_state_speed_affects_position() {
-        // Two states: one at speed 1, one at speed 3
         let mut ps_slow = PlaybackState::new(10.0, 30.0);
         let mut ps_fast = PlaybackState::new(10.0, 30.0);
         ps_fast.speed = 3.0;
         std::thread::sleep(std::time::Duration::from_millis(30));
         ps_slow.advance_frame();
         ps_fast.advance_frame();
-        // Fast should advance ~3x further
+        // Fast advances about 3x further.
         assert!(
             ps_fast.position > ps_slow.position * 2.0,
             "fast={} should be > 2x slow={}",
@@ -1925,8 +1817,7 @@ mod tests {
 
     #[test]
     fn test_playback_frame_pacing_slow_speed() {
-        // At speed 0.1 with 30fps video, each frame should last ~333ms.
-        // A 10ms advance should produce 0 frames to decode.
+        // At speed 0.1 and 30fps each frame lasts ~333ms, so 10ms decodes nothing.
         let mut ps = PlaybackState::new(10.0, 30.0);
         ps.speed = 0.1;
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -2110,8 +2001,8 @@ mod tests {
         });
         let _ = ps.advance_frame();
 
-        // Simulate a decoder lag just beyond the deadband while the next
-        // transport tick itself is sub-frame.
+        // Decoder lag just past the deadband while the next transport tick is
+        // sub-frame.
         ps.position = 0.96;
         ps.set_chase_transport(chase::ChaseTransport {
             position: 1.01,
@@ -2180,9 +2071,8 @@ mod tests {
     }
 
     // ── playback modulation ────────────────────────────────────────────
-    // See /spec/video-playback-modulation.md.
 
-    /// Wall-clock advance needs a real elapsed interval to measure.
+    /// Wall-clock advance needs a real elapsed interval.
     fn tick(ps: &mut PlaybackState) -> AdvanceResult {
         std::thread::sleep(std::time::Duration::from_millis(5));
         ps.advance_frame()
@@ -2218,8 +2108,7 @@ mod tests {
 
     #[test]
     fn modulated_speed_leaves_the_stored_set_point_alone() {
-        // The slider has to keep showing where the performer left it, which is
-        // what makes the ghost indicator meaningful.
+        // The slider keeps showing the performer's set point.
         let mut ps = free_running_clip();
         ps.speed = 1.0;
         ps.set_modulation(PlaybackModulation {
@@ -2271,9 +2160,8 @@ mod tests {
 
     #[test]
     fn a_steady_offset_costs_nothing_after_it_has_been_reached() {
-        // The offset is held as a distance from where the clip would be, so a
-        // modulator sitting still must not seek on every frame. This is what
-        // keeps a slow LFO on the playhead cheap.
+        // The offset is relative to where the clip would be, so a still modulator
+        // does not seek every frame.
         let mut ps = free_running_clip();
         ps.position = 2.0;
         let held = PlaybackModulation {
@@ -2299,8 +2187,8 @@ mod tests {
             speed: None,
             position: ModulatedPosition::Offset(0.4),
         });
-        // No sleep between ticks, so the clip's own advance stays far below the
-        // tolerance and what is left is the offset being applied and released.
+        // No sleep between ticks, so the clip's own advance stays under the
+        // tolerance and only the offset remains.
         let _ = ps.advance_frame();
         assert!(
             (ps.position - 5.4).abs() < 0.01,
@@ -2319,8 +2207,8 @@ mod tests {
 
     #[test]
     fn an_absolute_position_replaces_rather_than_nudges() {
-        // Matches how automation envelopes behave on every other parameter: an
-        // absolute source sets the value, so the clip's own advance stands down.
+        // An absolute source sets the value, as automation envelopes do elsewhere,
+        // so the clip's own advance is skipped.
         let mut ps = free_running_clip();
         ps.position = 1.0;
         ps.set_modulation(PlaybackModulation {
@@ -2337,9 +2225,9 @@ mod tests {
 
     #[test]
     fn an_absolute_position_past_the_out_point_does_not_trip_the_loop() {
-        // The boundary transitions are part of the clip's own marching, which an
-        // absolute value replaces. Left active they would pull the playhead to
-        // the in-point and the curve would put it straight back, every frame.
+        // Boundary transitions do not apply to an absolute value; otherwise they
+        // would snap the playhead to the in-point and the curve would move it back
+        // every frame.
         let mut ps = free_running_clip();
         ps.loop_mode = LoopMode::Loop;
         ps.in_point = 2.0;
@@ -2389,10 +2277,8 @@ mod tests {
 
     #[test]
     fn a_modulated_speed_cannot_move_the_chase_map() {
-        // The servo maps transport time onto clip time with base_speed as the
-        // coefficient on *absolute elapsed* transport time, so a speed that
-        // moves rewrites where the clip should have been for the whole show up
-        // to now. The stored speed is used instead, and the map stays put.
+        // base_speed multiplies total elapsed transport time, so a changing speed
+        // moves the target for the whole show. The stored speed is used instead.
         let mut ps = PlaybackState::new(100.0, 30.0);
         ps.transport_sync.mode = TransportSyncMode::Always;
         ps.speed = 1.0;
@@ -2417,8 +2303,8 @@ mod tests {
 
     #[test]
     fn the_stored_speed_still_scales_the_chase_map() {
-        // Suppressing the modulator must not cost the setting. A clip set to 2x
-        // is still a clip running at twice show rate, which is a stable map.
+        // Suppressing the modulator keeps the stored speed; 2x chases at twice
+        // show rate.
         let mut ps = PlaybackState::new(100.0, 30.0);
         ps.transport_sync.mode = TransportSyncMode::Always;
         ps.speed = 2.0;
@@ -2437,7 +2323,7 @@ mod tests {
         );
     }
 
-    /// The artifact this rule exists to prevent, at the scale a show hits it.
+    /// The failure at show scale.
     #[test]
     fn a_speed_wobble_a_minute_into_a_show_does_not_throw_the_playhead() {
         let mut ps = PlaybackState::new(600.0, 30.0);
@@ -2452,8 +2338,8 @@ mod tests {
         let _ = ps.advance_frame();
         let settled = ps.position;
 
-        // An audio band nudging the rate by a hundredth would have moved the
-        // mapped target by 0.6 s, past the servo's half-second seek threshold.
+        // A 0.01 rate change would have moved the target 0.6 s, past the
+        // half-second seek threshold.
         for speed in [1.01, 0.99, 1.4, 0.6] {
             ps.set_modulation(PlaybackModulation {
                 speed: Some(speed),
@@ -2476,9 +2362,8 @@ mod tests {
 
     #[test]
     fn a_modulated_playhead_has_no_authority_while_chasing() {
-        // The servo's whole job is to make position a function of transport
-        // position. Two authorities on one value is the seek storm this design
-        // exists to avoid, so the offset is dropped rather than fought.
+        // While chasing, position follows transport position only, so the offset
+        // is dropped.
         let mut ps = PlaybackState::new(100.0, 30.0);
         ps.transport_sync.mode = TransportSyncMode::Always;
         ps.set_modulation(PlaybackModulation {
@@ -2512,7 +2397,7 @@ mod tests {
         });
         let _ = ps.advance_frame();
 
-        // Now the transport starts and the clip begins chasing.
+        // The transport starts and the clip begins chasing.
         ps.set_chase_transport(chase::ChaseTransport {
             position: 10.0,
             running: true,
@@ -2523,7 +2408,7 @@ mod tests {
         assert!(ps.chasing);
         assert!((ps.position - 10.0).abs() < 1e-9);
 
-        // And when it stops chasing, the stale offset is not handed back.
+        // When chasing stops, the stale offset is not reapplied.
         ps.set_modulation(PlaybackModulation::default());
         ps.set_chase_transport(chase::ChaseTransport {
             position: 10.0,
@@ -2542,8 +2427,8 @@ mod tests {
 
     #[test]
     fn a_paused_clip_still_follows_a_modulated_playhead() {
-        // Pause stops the clip advancing on its own; it does not make the clip
-        // refuse to be moved. Scrubbing a paused clip by hand already works.
+        // Pause stops the clip's own advance but it can still be moved, as with a
+        // manual scrub.
         let mut ps = free_running_clip();
         ps.playing = false;
         ps.position = 3.0;
@@ -2565,10 +2450,9 @@ mod tests {
 
     #[test]
     fn a_paused_clip_swings_around_where_it_was_parked() {
-        // The bipolar case. With no natural advance underneath it the offset is
-        // measured from a fixed point, so the playhead ping-pongs about the
-        // parked position instead of drifting through the clip -- and the anchor
-        // stays recoverable for the scrub bar's ghost to mark.
+        // Bipolar offset. With no advance underneath, the playhead swings around
+        // the paused position, and that anchor stays available for the scrub bar's
+        // ghost.
         let mut ps = free_running_clip();
         ps.playing = false;
         ps.position = 5.0;
@@ -2593,7 +2477,7 @@ mod tests {
 
     #[test]
     fn a_paused_clip_ignores_modulated_speed() {
-        // Speed scales the clip's own advance, and a paused clip has none.
+        // Speed scales the clip's own advance, which a paused clip does not have.
         let mut ps = free_running_clip();
         ps.playing = false;
         ps.position = 3.0;
@@ -2609,8 +2493,7 @@ mod tests {
 
     #[test]
     fn a_paused_clip_carried_to_the_out_point_clamps_instead_of_looping() {
-        // It did not reach the end, it was carried there, so wrapping would fire
-        // a loop nobody asked for.
+        // The clip was moved there, not played there, so no loop wrap.
         let mut ps = free_running_clip();
         ps.playing = false;
         ps.loop_mode = LoopMode::Loop;
@@ -2633,8 +2516,8 @@ mod tests {
 
     #[test]
     fn a_playing_clip_offsets_from_its_own_march() {
-        // The other half of the design: playing, the clip marches under its loop
-        // and shot rules and the modulator offsets from wherever that took it.
+        // While playing, the clip follows its loop and one-shot rules and the
+        // modulator offsets from that position.
         let mut ps = free_running_clip();
         ps.position = 1.0;
         let _ = tick(&mut ps);
@@ -2693,7 +2576,7 @@ mod tests {
         assert!(!HapTextureFormat::Bc7.needs_ycocg_convert());
     }
 
-    // ── Offensive: frame rate div-by-zero prevention ─────────────────
+    // ── frame rate division by zero ──────────────────────────────────
 
     #[test]
     fn playback_state_zero_frame_rate_clamped() {
@@ -2732,14 +2615,14 @@ mod tests {
     fn playback_state_advance_with_clamped_rate_does_not_divide_by_zero() {
         let mut ps = PlaybackState::new(10.0, 0.0);
         std::thread::sleep(std::time::Duration::from_millis(20));
-        // Must not panic or produce NaN/Inf
+        // Must not panic or produce NaN/Inf.
         let result = ps.advance_frame();
         assert!(!ps.position.is_nan(), "position must not be NaN");
         assert!(!ps.position.is_infinite(), "position must not be Inf");
         assert!(!result.needs_seek || ps.position >= 0.0);
     }
 
-    // ── Chaos Tests Round 2: Speed extremes ──────────────────────────────
+    // ── speed extremes ───────────────────────────────────────────────
 
     #[test]
     fn chaos_extreme_speed_1e6_does_not_overflow() {
@@ -2749,7 +2632,7 @@ mod tests {
         let result = ps.advance_frame();
         assert!(!ps.position.is_nan(), "position NaN at extreme speed");
         assert!(!ps.position.is_infinite(), "position Inf at extreme speed");
-        // frames_to_decode should be finite (even if large)
+        // frames_to_decode stays finite, even if large.
         assert!(
             result.frames_to_decode < u32::MAX,
             "frames_to_decode wrapped"
@@ -2771,7 +2654,7 @@ mod tests {
             !ps.position.is_infinite(),
             "position Inf at negative extreme speed"
         );
-        // Should trigger loop/clamp logic
+        // Triggers loop or clamp.
         assert!(result.frames_to_decode < u32::MAX);
     }
 
@@ -2781,8 +2664,7 @@ mod tests {
         ps.speed = f64::NAN;
         std::thread::sleep(std::time::Duration::from_millis(10));
         let _result = ps.advance_frame();
-        // NaN speed causes NaN position — document the behavior
-        // The key is it doesn't panic
+        // NaN speed gives a NaN position; it must not panic.
     }
 
     #[test]
@@ -2791,10 +2673,10 @@ mod tests {
         ps.speed = f64::INFINITY;
         std::thread::sleep(std::time::Duration::from_millis(10));
         let _result = ps.advance_frame();
-        // Must not panic
+        // Must not panic.
     }
 
-    // ── Chaos Tests Round 2: Corrupted playback state ────────────────────
+    // ── corrupted playback state ─────────────────────────────────────
 
     #[test]
     fn chaos_in_point_greater_than_out_point() {
@@ -2803,7 +2685,7 @@ mod tests {
         ps.out_point = 3.0; // inverted
         std::thread::sleep(std::time::Duration::from_millis(10));
         let _result = ps.advance_frame();
-        // Must not panic — position may clamp or loop oddly
+        // Must not panic; position may clamp or loop oddly.
     }
 
     #[test]
@@ -2811,7 +2693,7 @@ mod tests {
         let mut ps = PlaybackState::new(0.0, 30.0);
         std::thread::sleep(std::time::Duration::from_millis(10));
         let _result = ps.advance_frame();
-        // effective_out() with duration=0 — must not panic
+        // effective_out() with duration=0 must not panic.
     }
 
     #[test]
@@ -2820,7 +2702,7 @@ mod tests {
         ps.position = f64::NAN;
         std::thread::sleep(std::time::Duration::from_millis(10));
         let _result = ps.advance_frame();
-        // NaN comparisons are always false, so no branch fires — must not panic
+        // NaN comparisons are false, so no branch fires; must not panic.
     }
 
     #[test]
@@ -2844,7 +2726,7 @@ mod tests {
         ps.position = 1e15;
         std::thread::sleep(std::time::Duration::from_millis(10));
         let result = ps.advance_frame();
-        // Should trigger loop/clamp since position > out_point
+        // position > out_point triggers loop or clamp.
         assert!(ps.reached_end || result.needs_seek || ps.position <= 1e15);
     }
 }

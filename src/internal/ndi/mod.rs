@@ -24,9 +24,8 @@ use crate::engine::value::render::{
     ResolvedPresentation,
 };
 
-/// Frame rate declared to receivers when the caller's rate will not fit the
-/// SDK's signed field. Only reachable for absurd rates; NDI has no way to say
-/// "unspecified", so it needs some honest-looking number.
+/// Frame rate declared when the caller's rate does not fit the SDK's signed
+/// field. NDI has no "unspecified" value.
 const DEFAULT_NDI_FPS: i32 = 60;
 
 /// Discovered NDI source on the network.
@@ -154,10 +153,8 @@ impl NdiManager {
     /// Every mode with the reason this sender cannot deliver it, from the live
     /// send capability.
     ///
-    /// NDI is the one headless target whose capability is not derivable from the
-    /// target alone: it depends on the runtime the SDK loaded. So this comes from
-    /// here, exactly as `resolved_presentation` already does.
-    /// See /spec/presentation-mode-offering.md.
+    /// Depends on the loaded NDI runtime, not just the target, as with
+    /// `resolved_presentation`.
     #[must_use]
     pub fn mode_availability(&self) -> Vec<crate::engine::value::render::ModeAvailability> {
         Self::capabilities_for(self.send_capability).mode_availability()
@@ -218,7 +215,6 @@ impl NdiManager {
                 return;
             }
 
-            // Wait up to 2 seconds for sources to appear
             (sdk.find_wait_for_sources)(finder, 2000);
 
             let mut count: std::os::raw::c_uint = 0;
@@ -257,7 +253,6 @@ impl NdiManager {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let (width, height) = (1920u32, 1080u32);
 
-        // Create the NDI source struct
         let name_c = std::ffi::CString::new(source_name).ok()?;
         let ndi_source = ffi::NDIlib_source_t {
             p_ndi_name: name_c.as_ptr(),
@@ -288,12 +283,11 @@ impl NdiManager {
 
         let connected = Arc::new(AtomicBool::new(false));
 
-        // Spawn background receive thread
         let frame_clone = Arc::clone(&frame_data);
         let stop_clone = Arc::clone(&stop_flag);
         let connected_clone = Arc::clone(&connected);
-        // Note: recv_instance is a raw pointer, sent across thread boundary.
-        // Safe because NDI SDK guarantees thread safety for recv instances.
+        // recv_instance crosses threads as a raw pointer; the NDI SDK allows
+        // using a recv instance from any thread.
         let recv_ptr = recv_instance as usize;
         let recv_destroy_fn = sdk.recv_destroy as usize;
         let recv_capture_fn = sdk.recv_capture_v3 as usize;
@@ -621,9 +615,8 @@ fn submit_with(
             actual: data.len(),
         });
     }
-    // The NDI C ABI takes signed dimensions; frame sizes come from GPU
-    // textures and are orders of magnitude below i32::MAX, so clamp rather
-    // than let an implausible value wrap into a negative extent.
+    // The NDI C ABI takes signed dimensions; clamp so an implausible value
+    // cannot wrap negative.
     let frame = ffi::NDIlib_video_frame_v2_t {
         xres: i32::try_from(width).unwrap_or(i32::MAX),
         yres: i32::try_from(height).unwrap_or(i32::MAX),
@@ -647,19 +640,17 @@ fn submit_with(
 
 impl Drop for NdiManager {
     fn drop(&mut self) {
-        // Stop all receivers and join their threads before SDK cleanup
+        // Join receive threads before SDK cleanup.
         for r in &mut self.receivers {
             r.stop_flag.store(true, Ordering::SeqCst);
             if let Some(t) = r.thread.take() {
                 let _ = t.join();
             }
         }
-        // Destroy all senders
         let sender_names: Vec<String> = self.senders.keys().cloned().collect();
         for name in sender_names {
             self.destroy_sender(&name);
         }
-        // Destroy NDI SDK
         if let Some(ref sdk) = self.sdk {
             unsafe { (sdk.destroy)() };
         }
@@ -673,10 +664,8 @@ mod tests {
 
     #[test]
     fn ndi_manager_new_no_crash() {
-        // NdiManager::new() attempts to load SDK dynamically.
-        // On machines without NDI SDK, it gracefully returns with sdk=None.
+        // Without the NDI SDK installed, `new` returns with sdk=None.
         let mgr = NdiManager::new();
-        // is_available depends on whether SDK is installed — just verify no panic
         let _ = mgr.is_available();
     }
 

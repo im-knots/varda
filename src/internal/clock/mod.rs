@@ -1,10 +1,8 @@
-//! Unified clock system for Varda.
+//! Clock: BPM and beat from MIDI clock (24 PPQ), OSC, and audio detection,
+//! resolved into one `ClockState` for beat-synced features.
 //!
-//! Receives BPM/beat from MIDI clock (24 PPQ), OSC messages, and audio detection.
-//! Exposes a single `ClockState` consumed by all beat-synced features.
-//!
-//! Priority: MIDI Clock > OSC Clock > Audio Detection
-//! Fallback: When external clock goes stale (>2s), reverts to audio BPM.
+//! Priority is MIDI > OSC > audio. An external clock silent for over 2 s falls
+//! back to audio BPM.
 
 use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
@@ -14,13 +12,13 @@ use crate::engine::value::midi::DeviceId;
 /// Ticks per quarter note in the MIDI clock protocol.
 const MIDI_PPQ: usize = 24;
 
-/// Duration after which a clock source is considered stale.
+/// Seconds of silence after which a clock source is stale.
 const STALE_TIMEOUT_SECS: f32 = 2.0;
 
 /// EMA smoothing factor for BPM values.
 const EMA_ALPHA: f32 = 0.3;
 
-/// Identifies the active clock source.
+/// The active clock source.
 #[derive(Debug, Clone)]
 pub enum ClockSource {
     /// BPM derived from audio beat detection (lowest priority).
@@ -36,25 +34,25 @@ pub enum ClockSource {
     Manual,
 }
 
-/// User preference for which clock source to use.
+/// User's clock source preference.
 #[derive(
     Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema, Default,
 )]
 pub enum ClockPreference {
-    /// Auto-detect: use priority resolution (MIDI > OSC > Audio).
+    /// Priority resolution (MIDI > OSC > Audio).
     #[default]
     Auto,
     /// Force a specific MIDI device's clock.
     ForceMidi { device_id: DeviceId },
     /// Force OSC clock.
     ForceOsc,
-    /// Force audio-only (ignore external clocks).
+    /// Audio only; ignore external clocks.
     ForceAudio,
-    /// Force a manually set BPM (user beatmatches by ear).
+    /// Manual BPM (user beatmatches by ear).
     ForceManual { bpm: f32 },
 }
 
-/// A MIDI device that has been detected as sending clock ticks.
+/// A MIDI device detected sending clock ticks.
 #[derive(Debug, Clone)]
 pub struct DetectedClockSource {
     pub device_id: DeviceId,
@@ -66,15 +64,15 @@ pub struct DetectedClockSource {
 /// Resolved clock state for the current frame.
 #[derive(Debug, Clone)]
 pub struct ClockState {
-    /// Current BPM (smoothed).
+    /// Smoothed BPM.
     pub bpm: f32,
     /// Beat phase 0.0–1.0 (0.0 = on the beat).
     pub beat_phase: f32,
-    /// Monotonic beat count since the last MIDI Start, accumulated from BPM
-    /// rather than derived from `beat_phase` so tempo drift does not produce
-    /// jumps. Advances only while `active`. See /spec/timebase.md § Unit choice.
+    /// Beats since the last MIDI Start. Accumulated from BPM, not derived from
+    /// `beat_phase`, so tempo drift doesn't cause jumps. Advances only while
+    /// `active`.
     pub beat_time: f64,
-    /// Which source is providing the clock.
+    /// Source providing the clock.
     pub source: ClockSource,
     /// Whether any valid clock source is active.
     pub active: bool,
@@ -92,7 +90,7 @@ impl Default for ClockState {
     }
 }
 
-/// Per-device MIDI clock tracking state.
+/// MIDI clock tracking for one device.
 struct MidiDeviceClock {
     ticks: VecDeque<Instant>,
     bpm: Option<f32>,
@@ -103,7 +101,7 @@ struct MidiDeviceClock {
     smoothed_bpm: Option<f32>,
 }
 
-/// Manages clock sources and resolves priority.
+/// Clock sources and priority resolution.
 pub struct ClockManager {
     // ── Per-device MIDI clock tracking ──────────────────────────
     midi_devices: HashMap<DeviceId, MidiDeviceClock>,
@@ -121,9 +119,9 @@ pub struct ClockManager {
     manual_start_time: Option<Instant>,
 
     // ── Musical time ────────────────────────────────────────────
-    /// Monotonic beat count, advanced each frame while a source is active.
+    /// Beats, advanced each frame while a source is active.
     beat_time: f64,
-    /// Frame time of the previous `update`, for the beat accumulator's dt.
+    /// Previous `update` time, for the beat accumulator's dt.
     last_update: Option<Instant>,
 
     // ── User preference ─────────────────────────────────────────
@@ -158,9 +156,7 @@ impl ClockManager {
 
     // ── Preference ──────────────────────────────────────────────
 
-    /// Set the user's clock source preference.
     pub fn set_preference(&mut self, pref: ClockPreference) {
-        // Initialize manual start time when entering manual mode.
         if matches!(pref, ClockPreference::ForceManual { .. }) && self.manual_start_time.is_none() {
             self.manual_start_time = Some(Instant::now());
         } else if !matches!(pref, ClockPreference::ForceManual { .. }) {
@@ -169,14 +165,13 @@ impl ClockManager {
         self.preference = pref;
     }
 
-    /// Get the current clock preference.
     pub fn preference(&self) -> &ClockPreference {
         &self.preference
     }
 
     // ── Manual BPM methods ──────────────────────────────────────
 
-    /// Update the manual BPM value (clamped 20–300). Only effective in `ForceManual` mode.
+    /// Sets the manual BPM, clamped to 20–300. Only affects `ForceManual` mode.
     pub fn set_manual_bpm(&mut self, bpm: f32) {
         let bpm = bpm.clamp(20.0, 300.0);
         if let ClockPreference::ForceManual {
@@ -187,7 +182,7 @@ impl ClockManager {
         }
     }
 
-    /// Get the current manual BPM (if in `ForceManual` mode).
+    /// Manual BPM, if in `ForceManual` mode.
     pub fn manual_bpm(&self) -> Option<f32> {
         match &self.preference {
             ClockPreference::ForceManual { bpm } => Some(*bpm),
@@ -197,7 +192,7 @@ impl ClockManager {
 
     // ── MIDI clock methods ──────────────────────────────────────
 
-    /// Process a MIDI clock tick (0xF8). Called 24 times per quarter note.
+    /// Handles a MIDI clock tick (0xF8), sent 24 times per quarter note.
     pub fn process_midi_tick(&mut self, device_id: DeviceId, device_name: &str) {
         let now = Instant::now();
         let dev = self
@@ -220,13 +215,12 @@ impl ClockManager {
             dev.ticks.pop_front();
         }
 
-        // Need at least 24 ticks to calculate one quarter note duration
+        // One quarter note needs at least 24 ticks.
         if dev.ticks.len() > MIDI_PPQ {
             let oldest = dev.ticks[0];
             let elapsed = now.duration_since(oldest).as_secs_f32();
             if elapsed > 0.0 {
                 let raw_bpm = 60.0 / elapsed;
-                // Per-device EMA smoothing
                 let smoothed = match dev.smoothed_bpm {
                     Some(prev) => EMA_ALPHA * raw_bpm + (1.0 - EMA_ALPHA) * prev,
                     None => raw_bpm,
@@ -236,15 +230,14 @@ impl ClockManager {
             }
         }
 
-        // Advance beat phase: each tick = 1/24 of a quarter note.
-        // Always advance — free-running clocks (no 0xFA) should still track phase.
+        // Each tick is 1/24 of a quarter note. Advance even without 0xFA so
+        // free-running clocks track phase.
         dev.beat_phase = (dev.beat_phase + 1.0 / MIDI_PPQ as f32) % 1.0;
     }
 
-    /// Process MIDI Start (0xFA).
+    /// Handles MIDI Start (0xFA).
     pub fn process_midi_start(&mut self) {
-        // Start is the musical zero, so beat-locked modulators re-align with
-        // the track rather than carrying the previous take's offset.
+        // Start is musical zero, so beat-locked modulators realign with the track.
         self.beat_time = 0.0;
         self.state.beat_time = 0.0;
         for dev in self.midi_devices.values_mut() {
@@ -254,14 +247,14 @@ impl ClockManager {
         }
     }
 
-    /// Process MIDI Continue (0xFB).
+    /// Handles MIDI Continue (0xFB).
     pub fn process_midi_continue(&mut self) {
         for dev in self.midi_devices.values_mut() {
             dev.running = true;
         }
     }
 
-    /// Process MIDI Stop (0xFC).
+    /// Handles MIDI Stop (0xFC).
     pub fn process_midi_stop(&mut self) {
         for dev in self.midi_devices.values_mut() {
             dev.running = false;
@@ -270,13 +263,13 @@ impl ClockManager {
 
     // ── OSC clock methods ───────────────────────────────────────
 
-    /// Process an OSC /clock/bpm message.
+    /// Handles an OSC /clock/bpm message.
     pub fn process_osc_bpm(&mut self, bpm: f32) {
         self.osc_bpm = Some(bpm);
         self.osc_last_message = Some(Instant::now());
     }
 
-    /// Process an OSC /clock/beat message (beat phase 0.0–1.0).
+    /// Handles an OSC /clock/beat message (phase 0.0–1.0).
     pub fn process_osc_beat(&mut self, phase: f32) {
         self.osc_beat_phase = Some(phase.clamp(0.0, 1.0));
         self.osc_last_message = Some(Instant::now());
@@ -284,7 +277,7 @@ impl ClockManager {
 
     // ── Audio fallback ──────────────────────────────────────────
 
-    /// Update audio-detected BPM and beat phase (called each frame).
+    /// Updates audio-detected BPM and beat phase. Call each frame.
     pub fn update_audio(&mut self, bpm: Option<f32>, beat_phase: f32) {
         self.audio_bpm = bpm;
         self.audio_beat_phase = beat_phase;
@@ -292,7 +285,7 @@ impl ClockManager {
 
     // ── Detected sources ────────────────────────────────────────
 
-    /// Get all MIDI devices currently detected as sending clock ticks (not stale).
+    /// MIDI devices sending fresh clock ticks.
     pub fn detected_midi_sources(&self) -> Vec<DetectedClockSource> {
         let now = Instant::now();
         self.midi_devices
@@ -307,13 +300,13 @@ impl ClockManager {
             .collect()
     }
 
-    /// Whether OSC clock is currently active (not stale).
+    /// Whether OSC clock is fresh.
     pub fn osc_active(&self) -> bool {
         self.osc_last_message
             .is_some_and(|t| Instant::now().duration_since(t).as_secs_f32() < STALE_TIMEOUT_SECS)
     }
 
-    /// Get the current OSC BPM (if active).
+    /// OSC BPM, if active.
     pub fn osc_bpm(&self) -> Option<f32> {
         if self.osc_active() {
             self.osc_bpm
@@ -324,23 +317,20 @@ impl ClockManager {
 
     // ── Resolution ──────────────────────────────────────────────
 
-    /// Resolve clock priority and update state. Call once per frame.
+    /// Resolves clock priority and updates state. Call once per frame.
     pub fn update(&mut self) {
         self.update_at(Instant::now());
     }
 
-    /// [`Self::update`] with an injectable frame time, so beat accumulation can
-    /// be tested without sleeping.
+    /// [`Self::update`] with an injected frame time, for tests.
     pub fn update_at(&mut self, now: Instant) {
         self.resolve(now);
         self.advance_beat_time(now);
     }
 
-    /// Advance the monotonic beat counter for this frame.
-    ///
-    /// Runs after resolution so it uses the BPM that actually won, and stalls
-    /// while no source is active rather than coasting at the last tempo: a
-    /// beat-locked modulator should freeze when the clock goes away, not drift.
+    /// Advances the beat counter. Runs after resolution to use the winning BPM.
+    /// Stalls while no source is active, so beat-locked modulators freeze
+    /// instead of drifting at the last tempo.
     fn advance_beat_time(&mut self, now: Instant) {
         let dt = self.last_update.map_or(0.0, |prev| {
             now.saturating_duration_since(prev).as_secs_f64()
@@ -375,7 +365,7 @@ impl ClockManager {
                 if self.resolve_osc(now) {
                     return;
                 }
-                // OSC not available, fall back to audio
+                // OSC unavailable; fall back to audio.
                 self.resolve_audio();
             }
             ClockPreference::ForceMidi { device_id } => {
@@ -383,15 +373,13 @@ impl ClockManager {
                 if self.resolve_midi_device(now, dev_id) {
                     return;
                 }
-                // Forced device not available, fall back to audio
+                // Forced device unavailable; fall back to audio.
                 self.resolve_audio();
             }
             ClockPreference::Auto => {
-                // Priority resolution: MIDI > OSC > Audio
-                // Find the best MIDI device (first fresh one with running + bpm)
-                // Select any device with fresh ticks and a valid BPM.
-                // Don't require `running` — many devices (e.g. Tascam Model 12)
-                // free-run clock ticks without sending MIDI Start (0xFA).
+                // Priority: MIDI > OSC > Audio. Pick any device with fresh ticks
+                // and a BPM. `running` is not required: many devices (e.g.
+                // Tascam Model 12) send ticks without MIDI Start (0xFA).
                 let best_midi = self
                     .midi_devices
                     .iter()
@@ -416,16 +404,14 @@ impl ClockManager {
         }
     }
 
-    /// Get the current resolved clock state.
+    /// Resolved clock state for this frame.
     pub fn state(&self) -> &ClockState {
         &self.state
     }
 
-    /// Monotonic beat position, or `None` when no source is active.
-    ///
-    /// This is the input to the `Beat` timebase: `None` freezes beat-locked
-    /// consumers rather than letting them fall back to wall time.
-    /// See /spec/timebase.md § Fallback.
+    /// Beat position, or `None` when no source is active. Feeds the `Beat`
+    /// timebase; `None` freezes beat-locked consumers instead of falling back
+    /// to wall time.
     pub fn beat_time(&self) -> Option<f64> {
         self.state.active.then_some(self.state.beat_time)
     }
@@ -434,7 +420,7 @@ impl ClockManager {
 
     fn resolve_midi_device(&mut self, now: Instant, device_id: DeviceId) -> bool {
         if let Some(dev) = self.midi_devices.get(&device_id) {
-            // Don't require `running` — free-running clocks send ticks without 0xFA.
+            // `running` is not required: free-running clocks send ticks without 0xFA.
             let fresh = now.duration_since(dev.last_tick).as_secs_f32() < STALE_TIMEOUT_SECS;
             if fresh && let Some(bpm) = dev.bpm {
                 self.state = ClockState {
@@ -496,7 +482,7 @@ mod tests {
         assert!(!mgr.state().active);
     }
 
-    // ── Beat accumulator (/spec/timebase.md § Unit choice for Beat) ──
+    // ── Beat accumulator ──
 
     #[test]
     fn test_beat_time_accumulates_at_bpm() {
@@ -564,8 +550,8 @@ mod tests {
         );
     }
 
-    /// `beat_time()` is what the timebase reads, and `None` is what freezes a
-    /// beat-locked modulator, so the gate matters more than the value.
+    /// `None` from `beat_time()` freezes beat-locked modulators, so the gate
+    /// matters more than the value.
     #[test]
     fn test_beat_time_accessor_gates_on_active() {
         let mut mgr = ClockManager::new();
@@ -621,7 +607,7 @@ mod tests {
         let mut mgr = ClockManager::new();
         mgr.process_midi_start();
 
-        // Simulate 25 ticks at 120 BPM (0.5s per quarter note, ~20.83ms per tick)
+        // 25 ticks at 120 BPM (0.5 s per quarter note).
         let tick_interval = Duration::from_secs_f64(0.5 / 24.0);
         let base = Instant::now();
         let dev = mgr
@@ -642,7 +628,6 @@ mod tests {
         }
         dev.last_tick = base + tick_interval * MIDI_PPQ as u32;
 
-        // Calculate BPM from ticks manually
         let oldest = dev.ticks[0];
         let newest = *dev.ticks.back().unwrap();
         let elapsed = newest.duration_since(oldest).as_secs_f32();
@@ -677,7 +662,6 @@ mod tests {
     #[test]
     fn test_midi_start_resets_phase() {
         let mut mgr = ClockManager::new();
-        // Add a device first
         mgr.process_midi_tick(0, "Test");
         mgr.process_midi_start();
         let dev = mgr.midi_devices.get(&0).unwrap();
@@ -754,9 +738,8 @@ mod tests {
     #[test]
     fn test_manual_beat_phase_advances() {
         let mut mgr = ClockManager::new();
-        // 120 BPM = 2 beats/sec, so after some time phase should be non-zero
+        // 120 BPM is 2 beats/s, so phase is non-zero after a short wait.
         mgr.set_preference(ClockPreference::ForceManual { bpm: 120.0 });
-        // Sleep briefly so elapsed > 0
         std::thread::sleep(Duration::from_millis(50));
         mgr.update();
         assert!(mgr.state().active);
@@ -771,7 +754,7 @@ mod tests {
     fn test_manual_ignores_other_sources() {
         let mut mgr = ClockManager::new();
         mgr.set_preference(ClockPreference::ForceManual { bpm: 100.0 });
-        // Feed audio and OSC — they should be ignored
+        // Audio and OSC are ignored.
         mgr.update_audio(Some(140.0), 0.5);
         mgr.process_osc_bpm(160.0);
         mgr.update();
@@ -782,7 +765,7 @@ mod tests {
     #[test]
     fn test_set_manual_bpm_noop_when_not_manual() {
         let mut mgr = ClockManager::new();
-        // Default is Auto — set_manual_bpm should be a no-op
+        // Default is Auto, so set_manual_bpm is a no-op.
         mgr.set_manual_bpm(140.0);
         assert_eq!(mgr.manual_bpm(), None);
     }
@@ -815,12 +798,12 @@ mod tests {
         let phase1 = mgr.state().beat_phase;
         assert!(phase1 > 0.0);
 
-        // Switch away and back — start time should reset
+        // Switching away and back resets the start time.
         mgr.set_preference(ClockPreference::Auto);
         mgr.set_preference(ClockPreference::ForceManual { bpm: 120.0 });
         mgr.update();
         let phase2 = mgr.state().beat_phase;
-        // phase2 should be very close to 0 since we just re-entered
+        // so phase2 is near 0.
         assert!(
             phase2 < phase1,
             "phase should reset when re-entering manual mode"

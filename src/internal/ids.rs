@@ -1,7 +1,7 @@
-//! Entity identity: the short UUIDs every channel, deck, effect, surface,
-//! output, and modulator carries for its whole life.
+//! Short UUIDs that identify channels, decks, effects, surfaces, outputs, and
+//! modulators.
 
-/// Generate a short 8-character hex UUID for entity identity.
+/// Generates an 8-character hex id.
 pub fn generate_short_uuid() -> String {
     uuid::Uuid::new_v4().simple().to_string()[..8].to_string()
 }

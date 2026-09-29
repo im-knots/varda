@@ -1,8 +1,8 @@
 //! Configurable keyboard shortcut system.
 //!
-//! Mirrors the MIDI mapping architecture: a data-driven keymap with learn mode,
-//! persistence to `.varda/keymap.json`, and default bindings that can be overridden.
-//! This module is framework-free. egui conversion lives in `usecases::ui::keyboard`.
+//! Like MIDI mapping: bindings with learn mode, saved to `.varda/keymap.json`
+//! over overridable defaults. No egui here; conversion lives in
+//! `usecases::ui::keyboard`.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -83,7 +83,7 @@ pub fn is_supported_key_name(name: &str) -> bool {
 
 pub use crate::engine::value::keymap::{ActionId, KeyCombo, KeyTarget};
 
-/// Persistent keymap store. Mirrors `MidiMappingStore` pattern.
+/// Persistent keymap store, shaped like `MidiMappingStore`.
 #[derive(Debug, Clone)]
 pub struct KeymapStore {
     pub bindings: HashMap<KeyCombo, KeyTarget>,
@@ -98,7 +98,6 @@ impl Default for KeymapStore {
 }
 
 impl KeymapStore {
-    /// Create an empty keymap store.
     pub fn new() -> Self {
         Self {
             bindings: HashMap::new(),
@@ -276,18 +275,15 @@ impl KeymapStore {
         m
     }
 
-    /// Add or replace a binding.
     pub fn set(&mut self, combo: KeyCombo, target: KeyTarget) {
         log::info!("Keyboard mapped {combo:?} → {target:?}");
         self.bindings.insert(combo, target);
     }
 
-    /// Remove a binding.
     pub fn remove(&mut self, combo: &KeyCombo) {
         self.bindings.remove(combo);
     }
 
-    /// Look up a binding.
     pub fn get(&self, combo: &KeyCombo) -> Option<&KeyTarget> {
         self.bindings.get(combo)
     }
@@ -318,8 +314,8 @@ impl KeymapStore {
         self.learn_target = None;
     }
 
-    /// Process a key press in learn mode. Binds combo to current target.
-    /// Returns true if a mapping was created. Stays in learn mode.
+    /// Bind `combo` to the current learn target. Returns true if a binding
+    /// was created. Stays in learn mode.
     pub fn process_learn(&mut self, combo: KeyCombo) -> bool {
         if let Some(target) = self.learn_target.take() {
             self.set(combo, target);
@@ -350,7 +346,6 @@ impl KeymapStore {
 
     /// Load bindings from config, merging over defaults.
     pub fn load_config(&mut self, config: &KeymapConfig) {
-        // Start from defaults, then overlay custom bindings
         self.bindings = Self::defaults();
         for binding in &config.bindings {
             let combo = KeyCombo {
@@ -418,8 +413,7 @@ impl KeyBinding {
 }
 
 impl KeymapConfig {
-    /// Validate the keymap config for semantic correctness. Returns a list of errors.
-    /// An empty list means the config is valid.
+    /// Validate the keymap config. An empty list means valid.
     pub fn validate(&self) -> Vec<String> {
         let mut errors = Vec::new();
         for (i, binding) in self.bindings.iter().enumerate() {
@@ -432,9 +426,8 @@ impl KeymapConfig {
     ///
     /// # Errors
     ///
-    /// Returns an error if the file cannot be read or if its contents are not
-    /// valid keymap JSON. Semantic validation issues are logged as warnings and
-    /// do not fail the load.
+    /// Returns an error if the file cannot be read or is not valid keymap JSON.
+    /// Validation issues are logged as warnings.
     pub fn load<P: AsRef<std::path::Path>>(path: P) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path.as_ref())
             .map_err(|e| anyhow::anyhow!("Failed to read keymap config: {e}"))?;
@@ -451,8 +444,7 @@ impl KeymapConfig {
     ///
     /// # Errors
     ///
-    /// Returns an error if the config cannot be serialized to JSON or if the
-    /// atomic write to `path` fails (missing directory, permissions, disk full).
+    /// Returns an error if serialization or the atomic write to `path` fails.
     pub fn save<P: AsRef<std::path::Path>>(&self, path: P) -> anyhow::Result<()> {
         let errors = self.validate();
         for e in &errors {

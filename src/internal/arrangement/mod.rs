@@ -1,13 +1,7 @@
-//! Arrangement mode: deck activity and parameter values positioned against
-//! transport time rather than performed live.
+//! Arrangement mode: deck activity and parameter values positioned against transport time.
 //!
-//! The arrangement is the mixer rotated ninety degrees. A lane *is* a deck, a
-//! group *is* a channel, and a region compiles to breakpoints on that deck's
-//! opacity envelope, so almost nothing new enters the engine: evaluation,
-//! stacking, and persistence all come from the modulation graph that Phase 33
-//! already built.
-//!
-//! See /spec/arrangement.md.
+//! A lane is a deck, a group is a channel, and a region compiles to breakpoints on the deck's
+//! opacity envelope, so evaluation, stacking, and persistence come from the modulation graph.
 
 pub mod authority;
 pub mod residency;
@@ -22,11 +16,8 @@ pub use residency::SourceDemand;
 /// How close to the playhead a cue counts as the one already reached.
 const CUE_EPSILON: f64 = 1e-3;
 
-/// What renders while the arrangement is not driving anything.
-///
-/// "Run this loop until the schedule starts" is a normal installation
-/// requirement, so the pre-show state needs something to *be* rather than
-/// something to fail at. See /spec/transport.md § Idle behaviour.
+/// What renders while the arrangement is not driving anything, such as a loop shown until
+/// the schedule starts.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum IdleBehaviour {
     /// Performance mode holds; the arrangement stays inert.
@@ -36,10 +27,8 @@ pub enum IdleBehaviour {
     ShowDeck { deck_uuid: String },
 }
 
-/// A span during which a deck is visible.
-///
-/// Not a container for content: the deck exists in the scene whether or not any
-/// region covers it, and a region only says *when*.
+/// A span during which a deck is visible. The deck exists whether or not a region covers it;
+/// a region only says when.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RegionConfig {
     /// Transport position, in seconds, where the region begins.
@@ -75,18 +64,15 @@ impl RegionConfig {
         self.end - self.start
     }
 
-    /// Whether the region carries any time at all. Zero-length and inverted
-    /// regions are dropped at compile time rather than rejected at edit time,
-    /// so a drag that collapses on itself is harmless.
+    /// Whether the region has positive length. Zero-length and inverted regions are dropped at
+    /// compile time instead of rejected at edit time, so a drag that collapses on itself is
+    /// harmless.
     pub fn is_valid(self) -> bool {
         self.span() > 0.0 && self.start.is_finite() && self.end.is_finite()
     }
 
-    /// Fade durations clamped so they cannot overlap each other.
-    ///
-    /// Two fades longer than the region together become a triangle rather than
-    /// crossing over, which is what every DAW does when you drag handles past
-    /// each other.
+    /// Fade durations clamped so they cannot overlap. Fades longer than the region together form a
+    /// triangle, as in a DAW.
     pub fn clamped_fades(self) -> (f64, f64) {
         let span = self.span();
         let fade_in = self.fade_in.max(0.0);
@@ -104,7 +90,7 @@ impl RegionConfig {
 /// One deck's row in the arrangement.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct LaneConfig {
-    /// The deck this lane *is*. Not a copy, and not a reference to a copy.
+    /// UUID of the deck this lane shows.
     pub deck_uuid: String,
     /// Visibility spans, compiled to the deck's opacity envelope.
     #[serde(default)]
@@ -133,10 +119,8 @@ impl LaneConfig {
         }
     }
 
-    /// Whether this lane has anything for the arrangement to drive.
-    ///
-    /// A lane with neither regions nor envelopes is a row in the UI and nothing
-    /// more, so it must not take authority away from Performance mode.
+    /// Whether this lane has anything for the arrangement to drive. An empty lane must not take
+    /// authority from Performance mode.
     pub fn drives_anything(&self) -> bool {
         self.regions.iter().any(|r| r.is_valid()) || !self.envelopes.is_empty()
     }
@@ -148,16 +132,12 @@ impl LaneConfig {
     }
 }
 
-/// A named instant on the timeline, and the thing the transport's arrows walk.
-///
-/// Marks only. The show runner adds a command to this same struct rather than a
-/// second list, so a cue dropped to navigate by can later be given something to
-/// fire. See /spec/arrangement.md § Cue points.
+/// A named instant on the timeline, stepped through by the transport's arrows.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Cue {
     pub uuid: String,
     pub name: String,
-    /// Absolute seconds, the axis regions and envelopes are already on.
+    /// Absolute seconds, the same axis as regions and envelopes.
     pub at: f64,
 }
 
@@ -169,7 +149,7 @@ pub struct ArrangementConfig {
     pub lanes: Vec<LaneConfig>,
     #[serde(default)]
     pub idle: IdleBehaviour,
-    /// Sorted by position, so navigation is a scan rather than a sort per press.
+    /// Sorted by position, so navigation scans instead of sorting per press.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cues: Vec<Cue>,
 }
@@ -200,22 +180,18 @@ impl ArrangementConfig {
 
     /// The first cue after `position`, for the transport's forward arrow.
     ///
-    /// A cue level with the playhead is skipped, or holding the arrow would
-    /// stick on it rather than walking the list. The tolerance is a millisecond
-    /// because positions are continuous and a cue authored at a snapped instant
-    /// is rarely bit-identical to the position a locate produced.
+    /// A cue within a millisecond of the playhead is skipped, so holding the arrow walks the list
+    /// instead of sticking. Positions from a locate are rarely bit-identical to a snapped cue.
     pub fn cue_after(&self, position: f64) -> Option<&Cue> {
         self.cues.iter().find(|c| c.at > position + CUE_EPSILON)
     }
 
     /// Where an arrow press steps from, given where the last press landed.
     ///
-    /// The live position is the wrong answer while the show is running:
-    /// playback carries the playhead off the cue between presses, so every
-    /// press back would return to the same cue. A press therefore steps from
-    /// where the last one landed, for as long as the playhead is still inside
-    /// the stretch that jump reached. Once playback crosses into the next cue's
-    /// stretch the anchor is stale, and the position is honest again.
+    /// During playback the playhead moves off the cue between presses, so stepping from the live
+    /// position would return to the same cue. A press steps from the last landing while the
+    /// playhead is still within that cue's stretch, and from the live position once playback
+    /// crosses into the next one.
     pub fn cue_walk_origin(&self, anchor: Option<f64>, position: f64) -> f64 {
         let Some(anchor) = anchor else {
             return position;
@@ -236,18 +212,17 @@ impl ArrangementConfig {
             .find(|c| c.at < position - CUE_EPSILON)
     }
 
-    /// Whether any lane has something to drive. An arrangement of empty lanes
-    /// must not engage, or adding a row would black the decks it names.
+    /// Whether any lane has something to drive. Empty lanes must not engage, or adding a row
+    /// would black the decks it names.
     pub fn drives_anything(&self) -> bool {
         self.lanes.iter().any(LaneConfig::drives_anything)
     }
 
-    /// The span from the earliest region start to the latest region end, or
-    /// `None` when nothing is authored.
+    /// The span from the earliest region start to the latest region end, or `None` when nothing
+    /// is authored.
     ///
-    /// A gap *inside* this span is authored silence and stays dark. Outside it
-    /// the arrangement has said nothing at all, which is what idle behaviour is
-    /// for. See /spec/transport.md § Idle behaviour.
+    /// A gap inside this span is authored silence and stays dark. Outside it, idle behavior
+    /// applies.
     pub fn range(&self) -> Option<(f64, f64)> {
         let mut regions = self
             .lanes
@@ -293,11 +268,8 @@ pub fn write_opacity_param_key(buf: &mut String, deck_uuid: &str) {
     buf.push_str("/opacity");
 }
 
-/// The parameter key the modulation engine addresses a channel's fader by.
-///
-/// A channel has no lane of its own, so unlike a deck's opacity this key is
-/// never compiled from regions: it carries only curves someone drew or recorded.
-/// See /spec/automation-recording.md § What can be recorded.
+/// The parameter key the modulation engine addresses a channel's fader by. A channel has no
+/// lane, so this key carries only drawn or recorded curves, never compiled regions.
 pub fn channel_opacity_param_key(channel_uuid: &str) -> String {
     let mut key = String::with_capacity(channel_uuid.len() + 11);
     key.push_str("ch/");
@@ -308,14 +280,9 @@ pub fn channel_opacity_param_key(channel_uuid: &str) -> String {
 
 /// Compile a lane's regions into breakpoints on its opacity envelope.
 ///
-/// This is the whole region mechanism. Because the result is an ordinary
-/// envelope, a region survives locates and loop wraps for free: opacity becomes
-/// a pure function of position with no accumulated state to resync.
-///
-/// Overlapping regions in one lane are clipped rather than rejected, since
-/// breakpoints must come out strictly ordered for evaluation to bracket them.
-/// Overlap *between sibling lanes* is untouched and is how a crossfade is
-/// expressed.
+/// The result is an ordinary envelope, so opacity is a pure function of position and survives
+/// locates and loop wraps. Overlapping regions in one lane are clipped, since breakpoints must
+/// be strictly ordered. Overlap between sibling lanes is left alone; it expresses a crossfade.
 pub fn compile_regions(regions: &[RegionConfig]) -> Vec<Breakpoint> {
     let mut ordered: Vec<RegionConfig> = regions.iter().copied().filter(|r| r.is_valid()).collect();
     ordered.sort_by(|a, b| a.start.total_cmp(&b.start));
@@ -359,9 +326,8 @@ pub fn compile_regions(regions: &[RegionConfig]) -> Vec<Breakpoint> {
         previous_end = region.end;
     }
 
-    // An envelope holds its first value backwards forever, so a lane whose
-    // first region starts hard-on (no fade) would show the deck from the
-    // beginning of time without an explicit zero in front of it.
+    // An envelope holds its first value backwards, so a lane whose first region starts without a
+    // fade needs a leading zero or the deck shows from the start.
     if let Some(first) = out.first()
         && first.value > 0.0
         && first.position > 0.0
@@ -407,9 +373,8 @@ mod tests {
         assert_close(value_at(&bps, 1000.0), 0.0, "long after");
     }
 
-    /// The failure this guards is specific: an envelope holds its first value
-    /// backwards, so without a leading zero a deck whose first region starts at
-    /// hour one would be visible from a cold start at position zero.
+    /// An envelope holds its first value backwards, so without a leading zero a deck whose first
+    /// region starts at hour one would show at position zero.
     #[test]
     fn a_late_first_region_does_not_leak_backwards() {
         let bps = compile_regions(&[RegionConfig::new(3600.0, 3700.0)]);
@@ -509,8 +474,7 @@ mod tests {
         assert!(compile_regions(&[RegionConfig::new(f64::NAN, 1.0)]).is_empty());
     }
 
-    /// The property automation is built on: how you reached a position cannot
-    /// change what is on screen there.
+    /// How a position was reached must not change what is on screen there.
     #[test]
     fn opacity_is_a_pure_function_of_position() {
         let bps = compile_regions(&[
@@ -586,8 +550,7 @@ mod tests {
         assert_close(end as f32, 40.0, "range end");
     }
 
-    /// The distinction the idle rule turns on: a gap between regions is inside
-    /// the range and therefore authored, while the stretches on either side of
+    /// A gap between regions is inside the range and authored; the stretches before and after
     /// everything are not.
     #[test]
     fn a_gap_between_regions_is_inside_the_range() {
@@ -639,8 +602,8 @@ mod tests {
         arrangement
     }
 
-    /// The rule that makes an arrow walk the list while the show runs, rather
-    /// than returning to the cue playback just carried the playhead off.
+    /// During playback an arrow walks the list instead of returning to the cue the playhead just
+    /// left.
     #[test]
     fn a_walk_steps_from_where_the_last_press_landed() {
         let arrangement = cued(&[10.0, 20.0, 30.0]);
@@ -657,8 +620,8 @@ mod tests {
         );
     }
 
-    /// Letting it play into the next stretch ends the walk, or the forward
-    /// arrow would send the playhead backwards to a cue already passed.
+    /// Playing into the next stretch ends the walk, or the forward arrow would jump back to a
+    /// passed cue.
     #[test]
     fn a_walk_ends_when_playback_leaves_its_stretch() {
         let arrangement = cued(&[10.0, 20.0, 30.0]);
@@ -687,9 +650,8 @@ mod tests {
         );
     }
 
-    /// A press from a standing start on a cue has to move, or the arrows do
-    /// nothing at the one position a performer is most likely to press them
-    /// from: the cue they just landed on.
+    /// A press from a standstill on a cue must move, since that is where a performer most often
+    /// presses.
     #[test]
     fn the_cue_under_the_playhead_is_skipped_in_both_directions() {
         let arrangement = cued(&[10.0, 20.0, 30.0]);
@@ -704,9 +666,8 @@ mod tests {
         );
     }
 
-    /// The skip is a millisecond wide rather than exact, because a position
-    /// that arrived through a locate, a frame of playback, and a snap is never
-    /// bit-identical to the cue it came from.
+    /// The skip is a millisecond wide, since a position reached through a locate, playback, and a
+    /// snap is never bit-identical to its cue.
     #[test]
     fn a_cue_a_hair_from_the_playhead_is_skipped_too() {
         let arrangement = cued(&[10.0, 20.0]);
@@ -728,8 +689,8 @@ mod tests {
         );
     }
 
-    /// Two cues at one instant are legal, because an import can produce them
-    /// and refusing them would lose data. Navigation has to stay finite there.
+    /// Two cues at one instant are legal, since an import can produce them. Navigation must stay
+    /// finite.
     #[test]
     fn cues_at_the_same_instant_are_kept_and_walked_past() {
         let arrangement = cued(&[10.0, 10.0, 20.0]);

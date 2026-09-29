@@ -1,5 +1,4 @@
-//! Drawing a texture of its own size onto the deck: the one thing most
-//! sources do last.
+//! Scaled blit of a source texture onto the deck, shared by most sources.
 
 use super::{
     ControlError, ControlSpec, ControlValue, SourceControl, SourceFrame, choice_index,
@@ -34,7 +33,7 @@ impl ScalingMode {
         }
     }
 
-    /// The value at the centre of this mode's bucket. Inverse of [`Self::from_value`].
+    /// The value at the center of this mode's bucket. Inverse of [`Self::from_value`].
     pub fn to_value(self) -> f32 {
         let index = match self {
             ScalingMode::Fill => 0,
@@ -45,8 +44,7 @@ impl ScalingMode {
         choice_value(index, 4)
     }
 
-    /// Compute UV scale and offset for blitting source into target
-    /// Returns (`uv_scale`, `uv_offset`) to transform target UVs to source UVs
+    /// Returns (`uv_scale`, `uv_offset`) mapping target UVs to source UVs.
     pub fn compute_uv_transform(
         &self,
         source_w: u32,
@@ -95,12 +93,12 @@ impl ScalingMode {
 /// How a blit treats the source's alpha.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AlphaPolicy {
-    /// Write the source verbatim over a black clear, whatever the deck's
-    /// transparency: files carry the alpha they were authored with.
+    /// Write the source verbatim over a black clear, ignoring the deck's
+    /// transparency. Files carry their own alpha.
     Verbatim,
     /// Follow the deck's `transparent` flag: verbatim over a transparent clear
     /// when set, otherwise flattened over black so a translucent live source
-    /// does not punch holes in the mix. See /spec/html-source.md §2.
+    /// does not punch holes in the mix.
     FollowDeck,
 }
 
@@ -202,8 +200,8 @@ impl ScaledBlit {
         clear_target(frame, clear, self.label);
     }
 
-    /// Let modulation drive the scaling mode. Discrete, so it is written only
-    /// when the mode the modulator points at differs from the one in force.
+    /// Let modulation drive the scaling mode. Written only when the modulated
+    /// mode differs from the current one.
     pub fn control(&mut self, ctx: &mut SourceControl) {
         if let Some(resolved) = ctx.resolve(SCALING_MODE) {
             let next = ScalingMode::from_value(super::discrete_value(&resolved));
@@ -272,9 +270,8 @@ mod tests {
 
     #[test]
     fn scaling_modes_round_trip_through_their_buckets() {
-        // Both directions are written out by hand, so a reordering of either
-        // match has to show up here rather than as a mode that silently becomes
-        // its neighbour when a live gesture is recorded.
+        // Both directions are spelled out so reordering either match fails
+        // here instead of silently shifting a recorded mode to its neighbor.
         for mode in ScalingMode::ALL {
             assert_eq!(ScalingMode::from_value(mode.to_value()), mode);
         }

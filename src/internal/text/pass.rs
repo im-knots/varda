@@ -1,11 +1,10 @@
 //! The GPU pass that draws a text deck: cached coverage masks as quads over
-//! the background. See /spec/text-source.md § Rendering.
+//! the background.
 //!
-//! With an opaque background (the default) the quads blend premultiplied
-//! straight onto a background clear, which is exact even where units overlap.
-//! With a background that is not opaque, the deck's target holds straight
-//! alpha, which blending cannot produce, so the quads go into a layer of the
-//! deck's size and a resolve pass composites it over the background.
+//! With an opaque background the quads blend premultiplied onto a clear. With
+//! a translucent one the target needs straight alpha, which blending can't
+//! produce, so quads go into a deck-sized layer that a resolve pass composites
+//! over the background.
 
 use super::raster::Raster;
 use crate::renderer::GpuContext;

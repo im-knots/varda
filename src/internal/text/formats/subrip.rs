@@ -1,4 +1,4 @@
-//! `.srt` subtitle files. See /spec/text-source.md § Timed text parsing.
+//! `.srt` subtitle files.
 
 use crate::text::cue::{Cue, Parsed, Problem};
 

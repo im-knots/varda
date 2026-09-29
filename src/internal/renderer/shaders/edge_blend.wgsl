@@ -1,5 +1,4 @@
-// Edge blend post-process shader — smoothstep alpha ramps on edges
-// for seamless multi-projector overlap zones.
+// Edge blend post-process: smoothstep alpha ramps on edges for multi-projector overlap.
 //
 // EdgeBlendParams layout: 32 floats = 128 bytes
 // Per-edge: [enabled (as f32), width, gamma, _pad] × 4 edges (left, right, top, bottom)
@@ -70,6 +69,6 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
         alpha *= pow(s, params.bottom_gamma);
     }
 
-    // Multiply RGB by alpha for pre-multiplied blending
+    // Premultiply RGB for premultiplied blending.
     return vec4<f32>(color.rgb * alpha, color.a);
 }

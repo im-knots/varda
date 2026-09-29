@@ -1,16 +1,12 @@
-//! Cross-thread command dispatch for `VardaApp`.
-//!
-//! Houses `execute_command`, the exhaustive match over every `EngineCommand`
-//! variant that cross-thread consumers (HTTP API, WebSocket, CLI) drive through
-//! the command channel.
+//! Command dispatch for `VardaApp`: `execute_command` matches every
+//! `EngineCommand` variant.
 
 use super::VardaApp;
 use super::resolve::UnknownEntity;
 use crate::engine::{CommandOutcome, CommandResult, EngineCommand, ErrorCode};
 
-/// The canonical modulation key for a target a client sent, or the wire error
-/// for one that names nothing modulation can drive. Accepts the pre-v8
-/// `deck_<uuid>:<name>` spelling too, so existing API scripts keep working.
+/// The canonical modulation key for a client's target, or the wire error if
+/// nothing modulatable matches. Also accepts the pre-v8 `deck_<uuid>:<name>` form.
 fn modulation_target(target: &str) -> Result<String, CommandResult> {
     crate::param_router::canonical_modulation_key(target).map_err(|e| CommandResult::Err {
         code: ErrorCode::InvalidInput,
@@ -18,9 +14,8 @@ fn modulation_target(target: &str) -> Result<String, CommandResult> {
     })
 }
 
-/// Classify an engine error for the wire. An unresolvable UUID is `NotFound` —
-/// the caller's view of the world is stale, which is distinct from a malformed
-/// request. See [`/spec/api-addressing.md`].
+/// Classify an engine error for the wire: an unresolvable UUID is `NotFound`,
+/// anything else `InvalidInput`.
 fn classify(err: &anyhow::Error) -> ErrorCode {
     if err.downcast_ref::<UnknownEntity>().is_some()
         || err.downcast_ref::<crate::mixer::NoSuchStep>().is_some()
@@ -69,9 +64,8 @@ fn not_found(err: &UnknownEntity) -> CommandResult {
     }
 }
 
-/// Classify a parameter-routing failure for the wire. A path, entity, or param
-/// name that does not resolve is `NotFound` (the caller's view is stale); a
-/// value the resolved parameter cannot accept is `InvalidInput`.
+/// Classify a parameter-routing failure: an unresolved path, entity or param
+/// is `NotFound`; an unacceptable value is `InvalidInput`.
 fn param_route_error_code(err: &crate::param_router::ParamRouteError) -> ErrorCode {
     use crate::param_router::ParamRouteError as E;
     match err {
@@ -82,9 +76,7 @@ fn param_route_error_code(err: &crate::param_router::ParamRouteError) -> ErrorCo
     }
 }
 
-/// Wire result for a transport operation the current source disallows, so a
-/// caller learns why rather than watching nothing happen.
-/// See /spec/transport.md § Legibility.
+/// Wire result for a transport operation the current source disallows, with the reason.
 fn transport_rejected(err: crate::transport::TransportError) -> CommandResult {
     CommandResult::Err {
         code: ErrorCode::InvalidInput,
@@ -93,16 +85,12 @@ fn transport_rejected(err: crate::transport::TransportError) -> CommandResult {
 }
 
 impl VardaApp {
-    /// Execute a command on behalf of the windowed GUI, returning a typed,
-    /// in-process [`CommandOutcome`] instead of the serializable wire
-    /// [`CommandResult`]. Deck-creating commands surface their location + UUID
-    /// so the runner can register a preview texture; everything else is
-    /// delegated verbatim to [`Self::execute_command`]. See
-    /// [`/spec/ui-engine-boundary.md`] WS1/Decision #9.
+    /// Execute a command for the GUI, returning a typed [`CommandOutcome`]
+    /// instead of the wire [`CommandResult`]. Deck-creating commands report
+    /// location and UUID so the runner can register a preview texture; the rest
+    /// go to [`Self::execute_command`].
     pub(crate) fn execute_command_gui(&mut self, cmd: EngineCommand) -> CommandOutcome {
-        // A preset load can create several decks at once (a channel preset fills
-        // a whole channel), and the count isn't known up front, so diff the deck
-        // set across execution rather than reading a single reported id.
+        // A preset load can create any number of decks, so diff the deck set.
         let is_preset_load = matches!(
             &cmd,
             EngineCommand::LoadDeckPreset { .. } | EngineCommand::LoadChannelPreset { .. }
@@ -136,8 +124,7 @@ impl VardaApp {
         CommandOutcome::Plain(result)
     }
 
-    /// Every live deck UUID. Used to diff deck creation across a command whose
-    /// effect on the deck set isn't known in advance.
+    /// Every live deck UUID.
     fn deck_uuid_set(&self) -> std::collections::HashSet<String> {
         self.mixer
             .channels()
@@ -147,23 +134,16 @@ impl VardaApp {
             .collect()
     }
 
-    /// True if any command in the batch is undoable. Used by the windowed
-    /// runner to make one snapshot decision over the GUI's command stream,
-    /// sharing the single [`VardaApp::is_undoable`] predicate with the bus
-    /// consumers.
+    /// True if any command in the batch is undoable, per [`VardaApp::is_undoable`].
     pub(crate) fn batch_has_undoable(&self, cmds: &[EngineCommand]) -> bool {
         cmds.iter().any(|cmd| self.is_undoable(cmd))
     }
 
-    /// Execute a single command and return the result.
-    ///
-    /// A command that writes a parameter as a live gesture is noted here,
-    /// once, after it succeeds: the recorder captures it and the arrangement
-    /// hands that parameter back to the performer.
+    /// Execute a single command. A successful live parameter write is passed to
+    /// the recorder and overrides the arrangement.
     pub(crate) fn execute_command(&mut self, cmd: EngineCommand) -> CommandResult {
         let live = self.live_writes(&cmd);
-        // A live parameter write (a fader sweep) cannot change what a library
-        // lists; anything else might, so the next snapshot lists afresh.
+        // Any command but a live parameter write may change a library listing.
         if live.is_empty() {
             self.sources.type_cache.invalidate();
             self.output.sink_type_cache.invalidate();
@@ -368,8 +348,7 @@ impl VardaApp {
                 CommandResult::Ok
             }
             EngineCommand::AddAudioBand { preset, source_id } => {
-                // Capture is reconciled per-frame from modulator demand
-                // (see /spec/audio-capture-lifecycle.md); adding the band is enough.
+                // Capture opens per frame from modulator demand.
                 self.mixer
                     .modulation_mut()
                     .add_source(ModulationSource::audio_from_preset(preset, source_id));
@@ -397,8 +376,7 @@ impl VardaApp {
                     Ok(target) => target,
                     Err(e) => return e,
                 };
-                // Returns the UUID because the caller needs it to reveal the
-                // new lane and to push breakpoints into it.
+                // The caller needs the UUID to show the lane and add breakpoints.
                 CommandResult::OkWithId {
                     uuid: self
                         .mixer
@@ -1074,8 +1052,7 @@ impl VardaApp {
             },
             EngineCommand::TransportStop => {
                 self.show.transport.stop();
-                // A second stop returns to zero, which is a move the cue walk
-                // did not make and must not keep stepping from.
+                // A second stop returns to zero, so cue stepping restarts.
                 self.show.cue_anchor = None;
                 CommandResult::Ok
             }
@@ -1094,8 +1071,7 @@ impl VardaApp {
                 CommandResult::Ok
             }
             EngineCommand::SetTransportLoop { region } => {
-                // Re-checked here rather than trusted: the command arrives from
-                // the API as plain JSON, which cannot enforce the invariant.
+                // API JSON can't enforce the invariant, so check it here.
                 let checked = match region {
                     Some(r) => match crate::transport::LoopRegion::new(r.start, r.end) {
                         Ok(r) => Some(r),
@@ -1366,9 +1342,7 @@ impl VardaApp {
                 })
             }
             EngineCommand::UpdateAudioSource { uuid, source_id } => {
-                // Switching device just updates the modulator; the per-frame
-                // reconcile opens the new device and closes the old one when it is
-                // no longer referenced (see /spec/audio-capture-lifecycle.md).
+                // The per-frame reconcile opens and closes the devices.
                 self.exec_modulation_update(&uuid, |s| {
                     if let ModulationSource::AudioBand { source_id: sid, .. } = s {
                         *sid = source_id;
@@ -1779,8 +1753,7 @@ impl VardaApp {
             },
 
             // ── History ───────────────────────────────────────────
-            // One timeline for every consumer; "current" goes onto the opposite
-            // stack so the step can be walked back.
+            // The current state goes onto the opposite stack.
             EngineCommand::Undo => {
                 let current = self.history_snapshot();
                 if self.history_undo(current) {
@@ -1818,12 +1791,9 @@ mod tests {
     use crate::app::classify::command_is_undoable;
     use crate::engine::EngineCommand as C;
 
-    // ── Error → wire mapping (classify / wire / wire_id / not_found) ───
+    // ── Error to wire mapping ──────────────────────────────────────────
     //
-    // These are pure functions with no GPU dependency: they translate engine
-    // `anyhow::Result`s into the serializable `CommandResult`. The key contract
-    // (api-addressing.md) is that an unresolvable UUID becomes `NotFound`, while
-    // any other error is `InvalidInput`.
+    // An unresolvable UUID becomes `NotFound`; any other error `InvalidInput`.
 
     use super::{UnknownEntity, classify, not_found, wire, wire_id};
     use crate::engine::ErrorCode;
@@ -1843,7 +1813,7 @@ mod tests {
 
     #[test]
     fn classify_unknown_entity_survives_context_wrapping() {
-        // Downcast must still find the UnknownEntity through an anyhow context.
+        // The downcast finds UnknownEntity through an anyhow context.
         let err = anyhow::Error::from(unknown()).context("while applying command");
         assert_eq!(classify(&err), ErrorCode::NotFound);
     }
@@ -1864,7 +1834,7 @@ mod tests {
 
     #[test]
     fn wire_err_classifies_and_carries_message() {
-        // Unresolvable UUID → NotFound, message preserved.
+        // Unresolvable UUID: NotFound, message preserved.
         match wire(Err::<(), _>(unknown())) {
             CommandResult::Err { code, message } => {
                 assert_eq!(code, ErrorCode::NotFound);
@@ -1872,7 +1842,7 @@ mod tests {
             }
             other => panic!("expected Err, got {other:?}"),
         }
-        // Generic error → InvalidInput.
+        // Other errors: InvalidInput.
         match wire(Err(anyhow::anyhow!("nope"))) {
             CommandResult::Err { code, message } => {
                 assert_eq!(code, ErrorCode::InvalidInput);
@@ -1909,10 +1879,9 @@ mod tests {
         }
     }
 
-    // ── WS1: typed return channel (ui-engine-boundary.md) ──────────────
+    // ── Typed GUI results ──────────────────────────────────────────────
     //
-    // These need a GPU adapter to build a real deck; they early-return when
-    // none is available (CI / sandbox), matching the engine_impl.rs tests.
+    // These need a GPU and return early without one.
 
     use crate::engine::{CommandOutcome, CommandResult};
 
@@ -2030,8 +1999,7 @@ mod tests {
         );
     }
 
-    /// Undo brings a removed channel back as itself, so everything that
-    /// names it (MIDI, modulation, arrangement, surfaces) finds it again.
+    /// Undo restores a removed channel with its UUID.
     #[test]
     fn undoing_a_channel_removal_restores_its_identity() {
         let Some(mut app) = headless_app() else {
@@ -2057,9 +2025,8 @@ mod tests {
         assert_eq!(deck_uuids(&app, 0), decks);
     }
 
-    /// Two decks with the same source swap places and swap back: each keeps
-    /// its own identity and settings rather than the settings landing on
-    /// whichever deck now sits in that position.
+    /// Two decks with the same source swap and swap back, each keeping its
+    /// own UUID and settings.
     #[test]
     fn undoing_a_reorder_restores_each_decks_identity_and_settings() {
         let Some(mut app) = headless_app() else {
@@ -2094,7 +2061,7 @@ mod tests {
         assert!((first.opacity - 0.25).abs() < f32::EPSILON);
     }
 
-    /// The same holds for effects, whose modulation is keyed on their UUID.
+    /// The same for effects, whose modulation is keyed on their UUID.
     #[test]
     fn undoing_an_effect_removal_restores_effect_identities() {
         let Some(mut app) = headless_app() else {
@@ -2144,8 +2111,7 @@ mod tests {
         }
     }
 
-    /// A rejected write from the API (a stale UUID, say) changes nothing, so
-    /// it must not cost the redo it would have forked away.
+    /// A rejected API write keeps the redo stack.
     #[test]
     fn a_rejected_bus_command_keeps_the_redo_history() {
         let Some(mut app) = app_with_a_redo() else {
@@ -2178,8 +2144,7 @@ mod tests {
         assert_eq!(app.mixer_ref().channels()[0].decks.len(), 1);
     }
 
-    /// Only a frame that starts an undo step records one; a held drag's later
-    /// frames must not.
+    /// Only a frame that starts an undo step records one.
     #[test]
     fn gui_drain_records_history_only_when_a_step_starts() {
         let Some(mut app) = headless_app() else {
@@ -2209,8 +2174,7 @@ mod tests {
 
     // ── Parameter exploration ───────────────────────────────────
 
-    /// Exploring is what the find-then-name loop does most of, and the "if it is
-    /// not good" half of that loop is undo. See /spec/parameter-exploration.md.
+    /// Parameter exploration is undoable.
     #[test]
     fn exploring_a_deck_is_an_undoable_edit() {
         for cmd in [
@@ -2230,9 +2194,8 @@ mod tests {
         }
     }
 
-    /// And the whole loop over the bus: randomize moves the shader, undo puts it
-    /// back. `plasma` declares one ranged float and two colours, so this also
-    /// pins the colour exclusion — a randomize must not repaint the palette.
+    /// Over the bus, randomize changes the shader and undo restores it.
+    /// `plasma` has one ranged float and two colors; randomize skips colors.
     #[test]
     fn randomizing_over_the_bus_is_one_undo_from_the_prior_look() {
         let Some(mut app) = headless_app() else {
@@ -2247,7 +2210,7 @@ mod tests {
         };
         app.settle_deck_loads();
 
-        // Speed and the palette, the ranged float and an excluded colour.
+        // The ranged float and an excluded color.
         let look = |app: &super::VardaApp| {
             let (ch, dk) = app.mixer_ref().find_deck_by_uuid(&uuid).expect("the deck");
             let params = &app.mixer_ref().channels()[ch].decks[dk]
@@ -2295,8 +2258,7 @@ mod tests {
 
     // ── Timecode ────────────────────────────────────────────────
 
-    /// Which signal to follow is a decision a headless rig makes over the bus,
-    /// so the command has to land on the reader rather than only be accepted.
+    /// The timecode preference sent over the bus reaches the reader.
     #[test]
     fn choosing_a_timecode_signal_reaches_the_reader() {
         let Some(mut app) = headless_app() else {
@@ -2318,8 +2280,7 @@ mod tests {
         assert!(!app.input.timecode.wants_mtc(3), "and only that port");
     }
 
-    /// Patching LTC is the same journey, and unpatching it has to be a real
-    /// value rather than a no-op, because that is what releases the interface.
+    /// Patching and unpatching LTC over the bus reaches the reader.
     #[test]
     fn patching_and_unpatching_ltc_reaches_the_reader() {
         let Some(mut app) = headless_app() else {
@@ -2343,8 +2304,7 @@ mod tests {
         assert!(!app.input.timecode.wants_ltc());
     }
 
-    /// Which cable the show follows is live rig config, like the clock's.
-    /// Undoing a deck edit must not silently re-patch the room mid-show.
+    /// The timecode patch is not undoable, like the clock.
     #[test]
     fn choosing_a_timecode_signal_is_not_undoable() {
         assert!(!command_is_undoable(&C::SetTimecodePreference {
@@ -2356,8 +2316,7 @@ mod tests {
         }));
     }
 
-    /// And the engine agrees: a patch sent over the bus leaves the undo timeline
-    /// exactly as it found it.
+    /// A patch sent over the bus leaves the undo stack unchanged.
     #[test]
     fn a_timecode_patch_over_the_bus_leaves_the_undo_stack_alone() {
         let Some(mut app) = headless_app() else {
@@ -2391,10 +2350,9 @@ mod tests {
         );
     }
 
-    // ── Learn modes and notifications (spec/ui-engine-boundary.md WS7) ──
+    // ── Learn modes and notifications ──────────────────────────────────
 
-    /// MIDI learn is a command, so the API can run it too. Entering it leaves
-    /// keyboard learn, since one control cannot be bound by two learn modes.
+    /// MIDI learn is a command. Entering it leaves keyboard learn.
     #[test]
     fn midi_learn_runs_over_the_bus_and_excludes_keyboard_learn() {
         let Some(mut app) = headless_app() else {
@@ -2439,8 +2397,7 @@ mod tests {
         assert_eq!(app.input.keymap.get(&combo), Some(&target));
     }
 
-    /// Notifications are dismissed by id: an index would name a different toast
-    /// once an older one expires.
+    /// Notifications are dismissed by id, which stays stable as others expire.
     #[test]
     fn notifications_are_dismissed_by_id() {
         let Some(mut app) = headless_app() else {

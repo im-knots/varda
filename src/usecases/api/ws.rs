@@ -1,8 +1,6 @@
-//! WebSocket handler — full state on connect, JSON Patch (RFC 6902) deltas.
-//!
-//! Each connection caches its last-sent state and only sends diffs.
-//! Client → Server messages are treated as `EngineCommand` JSON with
-//! an optional `id` field for request/response correlation.
+//! WebSocket handler: full state on connect, then JSON Patch (RFC 6902) deltas
+//! against the last state sent. Client messages are `EngineCommand` JSON with
+//! an optional `id` for matching the response.
 
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
@@ -14,7 +12,7 @@ use tokio::sync::mpsc;
 use crate::engine::{CommandResult, EngineCommand};
 use crate::usecases::api::SharedState;
 
-/// Target delta rate — roughly 30 fps.
+/// Delta rate, about 30 fps.
 const DELTA_INTERVAL_MS: u64 = 33;
 
 /// Envelope for client → server commands with optional correlation id.
@@ -84,8 +82,7 @@ pub async fn ws_upgrade(
 async fn handle_ws(socket: WebSocket, state: SharedState) {
     let (mut sink, mut stream) = socket.split();
 
-    // Send full state snapshot on connect. Deltas are diffed against the last
-    // publication this client was sent, which it shares with every reader.
+    // Full snapshot on connect; later deltas diff against the last one sent.
     let Some(mut last) = state.engine_state.latest() else {
         let _ = sink.send(Message::Close(None)).await;
         return;
@@ -171,9 +168,8 @@ async fn handle_ws(socket: WebSocket, state: SharedState) {
     until_either_ends(read_handle, write_handle).await;
 }
 
-/// Wait for either half of a connection to end, then cancel the other and
-/// wait for it to stop, so neither outlives the connection. Dropping a
-/// `JoinHandle` would only detach its task.
+/// When either half of a connection ends, cancel the other and wait for it.
+/// Dropping a `JoinHandle` would only detach its task.
 async fn until_either_ends(
     mut reader: tokio::task::JoinHandle<()>,
     mut writer: tokio::task::JoinHandle<()>,

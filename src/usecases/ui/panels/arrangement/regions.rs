@@ -1,14 +1,12 @@
 //! Region drawing and editing.
 //!
-//! A region is a span during which a deck is visible, and every edit here is an
-//! `EngineCommand` against the lane that owns it. The panel never touches the
-//! compiled opacity envelope: that is the engine's business, and it recompiles
-//! from the regions on every write. See /spec/arrangement.md § Regions.
+//! A region is a span during which a deck is visible. Every edit is an
+//! `EngineCommand` against the owning lane; the engine recompiles the opacity
+//! envelope from the regions on each write.
 //!
-//! Drag state lives in egui memory rather than in `UIData`, because a drag is
-//! between two frames of the same gesture and has no business round-tripping
-//! through the engine snapshot. What *is* pushed every frame is the resulting
-//! region, so the drag is visible in the output while it is happening.
+//! Drag state lives in egui memory, not `UIData`, since it only spans frames of
+//! one gesture. The resulting region is pushed every frame so the drag shows in
+//! the output.
 
 use super::super::super::{UIActions, UIData};
 use super::super::utils::channel_color;
@@ -16,17 +14,15 @@ use super::{LaneRow, RowGeometry, TimeAxis, min_span, selection, snap_seconds};
 use crate::arrangement::RegionConfig;
 use crate::engine::EngineCommand;
 
-/// Grab zone for a region edge, in pixels. Applies on both sides of the edge:
-/// aiming at a one-pixel line and landing just outside it is the normal way to
-/// miss, and the thing just outside a region's edge is empty track, which would
-/// otherwise start authoring a new region on top of the one being edited.
+/// Grab zone on both sides of a region edge, in pixels. A press just outside
+/// the edge would otherwise land on empty track and start a new region.
 const EDGE_GRAB: f32 = 5.0;
 /// Grab zone for a fade handle, in pixels.
 const FADE_GRAB: f32 = 6.0;
-/// Length of a region created by a double click rather than by a drag.
+/// Length of a region created by double-click.
 const DEFAULT_REGION_SECONDS: f64 = 4.0;
 
-/// Which part of a region a drag has hold of.
+/// Which part of a region a drag holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DragKind {
     Move,
@@ -36,13 +32,13 @@ enum DragKind {
     FadeOut,
 }
 
-/// A held region edit, carried across the frames of one gesture.
+/// A region edit in progress, carried across the frames of one gesture.
 #[derive(Clone)]
 struct RegionDrag {
     kind: DragKind,
     origin: RegionConfig,
-    /// Show position the pointer was over when the drag started, so the edit is
-    /// computed from an absolute offset rather than from accumulated deltas.
+    /// Show position under the pointer at drag start, so the edit is an absolute
+    /// offset rather than accumulated deltas.
     grab: f64,
 }
 
@@ -53,8 +49,8 @@ pub(super) fn render_lane_track(
     geom: RowGeometry,
     lane: &LaneRow<'_>,
 ) {
-    // The background is registered first so a region drawn on top of it takes
-    // the pointer: egui gives the press to the last widget registered.
+    // Background registered first so a region on top takes the press; egui gives
+    // it to the last widget registered.
     handle_create(ui, data, actions, geom, lane);
 
     let clip = ui.painter().with_clip_rect(geom.track);
@@ -64,7 +60,7 @@ pub(super) fn render_lane_track(
     }
 }
 
-/// Drag across empty track to author a span; click to drop a default one.
+/// Drag across empty track to create a span; double-click creates a default one.
 fn handle_create(
     ui: &mut egui::Ui,
     data: &UIData,
@@ -82,9 +78,7 @@ fn handle_create(
         )
     });
 
-    // Shift is the marquee's disambiguator, so a Shift+drag on empty track
-    // selects rather than authoring a region. See
-    // /spec/arrangement-selection.md § Building the selection.
+    // Shift+drag on empty track draws a selection marquee instead of a region.
     let shift = ui.ctx().input(|i| i.modifiers.shift);
 
     let anchor_id = id.with("anchor");
@@ -93,9 +87,8 @@ fn handle_create(
         && let Some(pos) = press_origin(&response)
     {
         let at = geom.axis.seconds(pos.x);
-        // Empty track inside an armed selection belongs to the selection's
-        // own move, so a drag there rearranges rather than authoring a
-        // region on top of what is being dragged.
+        // Empty track inside an armed selection moves the selection instead of
+        // creating a region.
         if !selection::owns_deck_press(ui.ctx(), lane.uuid, at) {
             let anchor = snap_seconds(data, at);
             ui.ctx()
@@ -130,13 +123,11 @@ fn handle_create(
 
     if response.clicked() {
         actions.session.select_deck = Some((lane.ch_idx, lane.deck_idx));
-        // A bare click on empty track clears any armed selection, matching the
-        // "click elsewhere clears" rule.
+        // A bare click on empty track clears any armed selection.
         selection::clear(ui.ctx());
     }
 
-    // Creating on a single click would put a region under every attempt to
-    // select a lane, so the bare click selects and the double click authors.
+    // A single click selects the lane; a double-click creates a region.
     if !shift
         && response.double_clicked()
         && let Some(pos) = response.interact_pointer_pos()
@@ -148,9 +139,8 @@ fn handle_create(
         });
     }
 
-    // Paste a copied slice's regions onto this lane, landing at the time the
-    // menu was opened over. Frozen at open so the anchor does not chase the
-    // pointer while the menu is up. See /spec/arrangement-selection.md § Paste.
+    // Paste a copied slice's regions onto this lane at the time the menu was
+    // opened over. Fixed at open so the anchor doesn't follow the pointer.
     let paste_anchor_id = id.with("paste_anchor");
     if response.secondary_clicked()
         && let Some(pos) = response.interact_pointer_pos()
@@ -196,9 +186,8 @@ fn handle_region_edit(
         return;
     }
 
-    // Registered over the grab rect rather than the body, so a press aimed at an
-    // edge and landing just outside it belongs to this region instead of to the
-    // empty track behind it.
+    // Registered over the grab rect, not the body, so a press just outside an
+    // edge belongs to this region instead of the empty track.
     let id = ui.id().with(("arrangement_region", lane.uuid, index));
     let response = ui.interact(
         grab_rect(body, index, lane.regions, geom),
@@ -220,8 +209,7 @@ fn handle_region_edit(
             .set_cursor_icon(cursor_for(hit_kind(region, geom.axis, pos, body)));
     }
 
-    // A Shift+drag over a region is a marquee, not a move, so the region under
-    // the press stays put while the selection is drawn.
+    // Shift+drag over a region draws a marquee instead of moving it.
     let shift = ui.ctx().input(|i| i.modifiers.shift);
     if !shift
         && response.drag_started()
@@ -229,10 +217,8 @@ fn handle_region_edit(
     {
         let kind = hit_kind(region, geom.axis, pos, body);
         let at = geom.axis.seconds(pos.x);
-        // Inside an armed selection the body's move gives way to the
-        // selection's own move. The edge and fade handles keep their grab
-        // zones, so a single clicked region still resizes and fades exactly
-        // as it does with nothing selected.
+        // Inside an armed selection, a body drag moves the selection. Edge and fade
+        // handles keep their grab zones, so a single region still resizes and fades.
         let owned_by_selection =
             kind == DragKind::Move && selection::owns_deck_press(ui.ctx(), lane.uuid, at);
         if !owned_by_selection {
@@ -272,9 +258,8 @@ fn handle_region_edit(
     }
 
     if response.clicked() {
-        // Clicking a region selects that region as the arrangement selection,
-        // ready for Copy or Delete, and still selects its deck for the bottom
-        // bar. See /spec/arrangement-selection.md § Building the selection.
+        // Clicking a region makes it the arrangement selection (for Copy or Delete)
+        // and selects its deck for the bottom bar.
         actions.session.select_deck = Some((lane.ch_idx, lane.deck_idx));
         selection::store(
             ui.ctx(),
@@ -310,12 +295,11 @@ fn handle_region_edit(
     });
 }
 
-/// Where the pointer went down, rather than where it has reached.
+/// Where the pointer went down, not where it is now.
 ///
-/// A drag is only recognised once the pointer has travelled a few pixels, so by
-/// the time `drag_started` fires the pointer has already left the handle it was
-/// aimed at. Grabbing by the press origin is what makes a five-pixel edge zone
-/// hittable at all.
+/// egui recognizes a drag only after a few pixels of travel, so by
+/// `drag_started` the pointer has left the handle it aimed at. Grabbing by the
+/// press origin makes a five-pixel edge zone hittable.
 pub(super) fn press_origin(response: &egui::Response) -> Option<egui::Pos2> {
     response
         .ctx
@@ -323,20 +307,19 @@ pub(super) fn press_origin(response: &egui::Response) -> Option<egui::Pos2> {
         .or_else(|| response.interact_pointer_pos())
 }
 
-/// The rect this region takes presses on: its body, plus the outside half of
-/// each edge's grab zone.
+/// The rect this region takes presses on: its body plus the outer half of each
+/// edge's grab zone.
 ///
-/// The expansion stops at the midpoint of the gap to a neighbour, so two regions
-/// a few pixels apart split the space between them instead of one swallowing the
-/// other's edge. Regions that touch or overlap therefore claim only their own
-/// body, which keeps a shared boundary predictable.
+/// The expansion stops at the midpoint of the gap to a neighbor, so nearby
+/// regions split the space between them. Touching or overlapping regions claim
+/// only their own body.
 fn grab_rect(
     body: egui::Rect,
     index: usize,
     siblings: &[RegionConfig],
     geom: RowGeometry,
 ) -> egui::Rect {
-    // Half of whatever daylight there is, capped at the full grab zone.
+    // Half the gap, capped at the full grab zone.
     let share = |gap_px: f32| EDGE_GRAB.min((gap_px / 2.0).max(0.0));
 
     let before = index.checked_sub(1).and_then(|i| siblings.get(i));
@@ -350,20 +333,19 @@ fn grab_rect(
     )
 }
 
-/// Which handle a press at `pointer` has hold of.
+/// Which handle a press at `pointer` holds.
 ///
-/// Fade handles sit in the top half so that the far more common move and resize
-/// gestures are not shadowed by them along the whole height of the region, and
-/// only inside the body: a press past an edge is someone reaching for that edge,
-/// and on a region with no fade the handle sits exactly on top of it.
+/// Fade handles are in the top half, so they don't shadow move and resize
+/// along the whole height, and only inside the body, since a press past an
+/// edge is aimed at the edge and a zero-length fade sits on top of it.
 fn hit_kind(
     region: &RegionConfig,
     axis: TimeAxis,
     pointer: egui::Pos2,
     body: egui::Rect,
 ) -> DragKind {
-    // Inside a narrow region the two edge zones would meet and leave nowhere to
-    // grab for a move, so they never take more than a third of the body each.
+    // In a narrow region, edge zones take at most a third of the body each so
+    // there is still room to grab for a move.
     let inner = EDGE_GRAB.min(body.width() / 3.0);
 
     if pointer.y < body.center().y && body.x_range().contains(pointer.x) {
@@ -392,10 +374,9 @@ fn cursor_for(kind: DragKind) -> egui::CursorIcon {
     }
 }
 
-/// The region a gesture has produced, given how far the pointer has travelled.
+/// The region a gesture produces, given how far the pointer has moved.
 ///
-/// Pure so the arithmetic can be tested without a pointer: the drag itself is
-/// only the source of `delta`.
+/// Pure, so it can be tested without a pointer.
 fn apply_drag(
     kind: DragKind,
     origin: &RegionConfig,
@@ -444,8 +425,7 @@ fn body_rect(region: &RegionConfig, geom: RowGeometry) -> egui::Rect {
     )
 }
 
-/// A region drawn as its opacity envelope: the fades are the shape, not a
-/// decoration on it.
+/// A region drawn as its opacity envelope, with fades as the shape.
 fn draw_region(
     painter: &egui::Painter,
     visuals: &egui::Visuals,
@@ -495,8 +475,7 @@ fn draw_region(
         ));
     }
 
-    // Fade handles, drawn last so they read as grabbable rather than as part of
-    // the shading.
+    // Fade handles, drawn last so they stand out from the shading.
     for x in [
         geom.axis.x(region.start + fade_in),
         geom.axis.x(region.end - fade_out),
@@ -569,8 +548,8 @@ mod tests {
         assert!((end.end - 23.0).abs() < 1e-9);
     }
 
-    /// A resize that overshoots must not invert the region, which would make it
-    /// invalid and be rejected by the engine mid-gesture.
+    /// An overshooting resize must not invert the region, which the engine would
+    /// reject mid-gesture.
     #[test]
     fn a_resize_cannot_turn_a_region_inside_out() {
         let collapsed = apply_drag(DragKind::ResizeStart, &region(), 100.0, no_snap, 0.04);
@@ -600,8 +579,8 @@ mod tests {
         let clamped = apply_drag(DragKind::FadeIn, &region(), 100.0, no_snap, 0.04);
         assert!((clamped.fade_in - region().span()).abs() < 1e-9);
 
-        // The out handle is grabbed from the right, so a rightward drag shortens
-        // the fade rather than lengthening it.
+        // The out handle is grabbed from the right, so a rightward drag shortens the
+        // fade.
         let out = apply_drag(DragKind::FadeOut, &region(), 1.0, no_snap, 0.04);
         assert!((out.fade_out - 1.0).abs() < 1e-9);
     }
@@ -617,8 +596,8 @@ mod tests {
         );
     }
 
-    /// The failure this exists to prevent: aiming at an edge, landing a pixel
-    /// past it, and authoring a second region on top of the one being resized.
+    /// A press a pixel past an edge resizes that region instead of creating a
+    /// second one on top of it.
     #[test]
     fn an_edge_claims_the_track_just_outside_it() {
         let region = region();
@@ -644,15 +623,14 @@ mod tests {
         );
     }
 
-    /// Two regions a few pixels apart split the gap rather than one swallowing
-    /// the other's edge, so which one a press near the boundary edits is
-    /// predictable from where it landed.
+    /// Two regions a few pixels apart split the gap, so which one a press near the
+    /// boundary edits depends on where it landed.
     #[test]
     fn neighbours_split_the_gap_between_them() {
         let siblings = vec![
             RegionConfig::new(10.0, 20.0),
-            // 0.4 s later, which is 4 px at this zoom: narrower than two grab
-            // zones, so both have to give way.
+            // 0.4 s later, 4 px at this zoom: narrower than two grab zones, so both
+            // shrink.
             RegionConfig::new(20.4, 30.0),
         ];
         let first = grab_rect(body_rect(&siblings[0], geom()), 0, &siblings, geom());
@@ -669,7 +647,7 @@ mod tests {
     }
 
     /// Touching regions claim nothing outside themselves, so the shared boundary
-    /// belongs to whichever body the pointer is actually inside.
+    /// belongs to whichever body contains the pointer.
     #[test]
     fn touching_regions_do_not_reach_past_each_other() {
         let siblings = vec![RegionConfig::new(10.0, 20.0), RegionConfig::new(20.0, 30.0)];
@@ -680,8 +658,8 @@ mod tests {
         assert!((second.left() - axis().x(20.0)).abs() < 1e-6);
     }
 
-    /// Zoomed out, a region can be narrower than two grab zones. Both edges must
-    /// stay reachable and there must still be somewhere to grab for a move.
+    /// Zoomed out, a region can be narrower than two grab zones. Both edges stay
+    /// reachable and there is still room to grab for a move.
     #[test]
     fn a_narrow_region_keeps_all_three_gestures() {
         // 0.9 s at 10 px/s: 9 px wide, against a 5 px edge zone.
@@ -731,17 +709,15 @@ mod tests {
             hit_kind(&region, axis(), at(18.0, top), body),
             DragKind::FadeOut
         );
-        // Below the midline the fade handle gives way to the move gesture, which
-        // is the one a performer reaches for far more often.
+        // Below the midline the move gesture wins over the fade handle.
         assert_eq!(
             hit_kind(&region, axis(), at(11.0, middle), body),
             DragKind::Move
         );
     }
 
-    /// A fade handle sits exactly on the edge when its fade is zero, so letting
-    /// it claim the track outside the region would make every near miss a drag
-    /// that clamps at zero and appears to do nothing.
+    /// A zero fade's handle sits on the edge, so it must not claim track outside
+    /// the region; near misses would drag a fade that clamps at zero.
     #[test]
     fn a_fade_handle_does_not_claim_track_outside_the_region() {
         let region = RegionConfig::new(10.0, 20.0);
@@ -756,8 +732,8 @@ mod tests {
             hit_kind(&region, axis(), at(20.3, top), body),
             DragKind::ResizeEnd
         );
-        // Inside, the handle still wins the top half, which is how a fade is
-        // pulled out of an edge that has none yet.
+        // Inside, the handle wins the top half, so a fade can be pulled out of an
+        // edge that has none.
         assert_eq!(
             hit_kind(&region, axis(), at(10.2, top), body),
             DragKind::FadeIn

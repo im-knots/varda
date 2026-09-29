@@ -2,9 +2,7 @@ use anyhow::{Context, Result};
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
-// Plain, framework-free output value types live in `config` so the engine
-// contract layer can name them without importing this wgpu/winit file. Kept
-// re-exported here so existing `crate::renderer::context::…` paths still work.
+// Re-exported so `crate::renderer::context::…` paths resolve.
 pub use super::config::{
     AlphaMode, CalibrationMode, ModeAvailability, OutputRotation, OutputSource,
     PresentationCapabilities, PresentationColorProfile, PresentationDepth, PresentationFormat,
@@ -12,15 +10,12 @@ pub use super::config::{
     RecordingCodec, ResolvedPresentation, RtmpCodecContract, SrtCodec, StreamingCodec, TonemapMode,
 };
 
-/// Linear-light format used by the entire color path: deck render targets, all
-/// three effect tiers, ISF pass buffers, compute output, channel/mixer
-/// composites, and the dome/edge-blend intermediates.
+/// Linear-light format for the whole color path: decks, effects, ISF pass
+/// buffers, compute output, channel/mixer composites, and dome/edge-blend
+/// intermediates.
 ///
-/// Single source of truth — see spec/unified-color-pipeline.md. 8-bit appears
-/// only at the two boundaries where it is correct: sRGB-tagged source ingest
-/// (hardware EOTF on sample) and sRGB output encode (hardware OETF on write).
-/// Non-color data textures (analyzer, audio, calibration, MSDF atlases) keep
-/// their own formats and are deliberately excluded.
+/// 8-bit appears only at sRGB source ingest and sRGB output encode. Non-color
+/// data textures (analyzer, audio, calibration, MSDF atlases) use their own formats.
 pub const COLOR_PATH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 fn surface_pixel_format(format: wgpu::TextureFormat) -> PresentationPixelFormat {
@@ -36,10 +31,8 @@ pub(crate) struct SurfacePresentationSelection {
     pub(crate) format: wgpu::TextureFormat,
     pub(crate) color_space: wgpu::SurfaceColorSpace,
     pub(crate) resolved: ResolvedPresentation,
-    /// Every mode with the reason this surface cannot deliver it. Computed here
-    /// because the capabilities are already in hand; re-deriving it later would
-    /// mean re-querying the surface every frame.
-    /// See /spec/presentation-mode-offering.md.
+    /// Every mode with the reason this surface cannot deliver it, computed once
+    /// so the surface isn't re-queried every frame.
     pub(crate) mode_availability: Vec<ModeAvailability>,
 }
 
@@ -54,21 +47,19 @@ pub(crate) fn select_surface_presentation(
         .find(wgpu::TextureFormat::is_srgb)
         .or_else(|| capabilities.formats.first().copied())
         .context("output surface exposes no SDR presentation format")?;
-    // EDR is a float surface, unlike every other contract here. Requested
-    // explicitly rather than relying on `Auto`, which resolves to
-    // `ExtendedSrgbLinear` for `Rgba16Float` and would make an HDR contract an
-    // accident of format choice. See /spec/hdr-edr-display.md.
+    // EDR is a float surface. Requested explicitly: `Auto` would resolve to
+    // `ExtendedSrgbLinear` for `Rgba16Float` only by format choice.
     let supports_edr = capabilities
         .color_spaces(wgpu::TextureFormat::Rgba16Float)
         .contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR);
     let rgb10_color_spaces = capabilities.color_spaces(wgpu::TextureFormat::Rgb10a2Unorm);
     let supports_rgb10_srgb = rgb10_color_spaces.contains(wgpu::SurfaceColorSpaces::SRGB);
-    // HDR10 on a display needs the PQ colour space on the same format. Selecting
-    // RGB10A2 alone proves nothing about the transfer the compositor will apply.
+    // HDR10 needs the PQ color space on RGB10A2; the format alone doesn't fix
+    // the transfer.
     let supports_rgb10_pq = rgb10_color_spaces.contains(wgpu::SurfaceColorSpaces::BT2100_PQ);
 
-    // Adapter preference order: the resolver reads this top down when it has to
-    // degrade, so HDR first, then the widest SDR result.
+    // Preference order, read top down when degrading: HDR first, then the
+    // widest SDR.
     let mut formats = Vec::with_capacity(4);
     if supports_edr {
         formats.push(PresentationFormat {
@@ -162,17 +153,10 @@ pub(crate) fn select_surface_presentation(
     })
 }
 
-/// GPU rendering context — device, queue, and adapter.
+/// GPU device, queue, and adapter. Holds no window surface; see
+/// `WindowSurface` and `crate::output::window`.
 ///
-/// Owns the GPU resources needed for rendering (mixer, deck, channel, effects).
-/// Does NOT own any window surface — that's a presentation concern owned by
-/// the UI consumer (`WindowSurface`) or output windows (`crate::output::window`).
-///
-/// Can be created with a window hint (for adapter compatibility) or headless.
-///
-/// `Clone` is cheap — wgpu types are internally `Arc`-wrapped.
-/// Cloning produces a handle to the same GPU resources, useful for
-/// background thread deck creation.
+/// Clones are cheap handles to the same GPU resources, used by loader threads.
 #[derive(Clone)]
 pub struct GpuContext {
     pub instance: wgpu::Instance,
@@ -184,47 +168,25 @@ pub struct GpuContext {
     /// `texture_format`, which is the surface/presentation format.
     pub compositing_format: wgpu::TextureFormat,
     pub timestamp_supported: bool,
-    /// Catches GPU errors that would otherwise abort the process, and attributes
-    /// them to whatever was being drawn. See spec/error-handling.md.
+    /// Catches GPU errors that would otherwise abort the process.
     pub errors: super::gpu_guard::GpuErrorGuard,
-    /// Counts command buffer commits. Read once per frame by the frame loop.
+    /// Counts command buffer commits; read once per frame.
     pub submits: super::submit_stats::SubmitCounter,
 }
 
-/// Window surface for presentation — surface, swapchain config, and size.
-///
-/// Owned by the UI consumer. Handles surface acquisition, resize, and present.
-/// The engine never touches this directly.
+/// Window surface, swapchain config, and size. Used by the UI, not the engine.
 pub struct WindowSurface {
     pub surface: wgpu::Surface<'static>,
     pub surface_config: wgpu::SurfaceConfiguration,
     pub size: winit::dpi::PhysicalSize<u32>,
 }
 
-/// Which backends to ask wgpu for, in the order that decides ties.
+/// Which backends to ask wgpu for.
 ///
-/// **Windows gets DX12 alone, on purpose.** With `Backends::all()`, wgpu
-/// registers Vulkan before DX12 and then sorts adapters by device type with a
-/// *stable* sort. A discrete GPU reports `DiscreteGpu` on both backends, so the
-/// keys tie and enumeration order wins: Vulkan, on essentially every machine
-/// with normal drivers.
-///
-/// That silently disables Spout. The bridge needs a real `ID3D12Device` through
-/// `as_hal::<Dx12>`, which returns `None` on a Vulkan device, so
-/// `SpoutManager` marks itself unavailable and the feature is dead for the users
-/// it was built for. `WGPU_BACKEND` cannot rescue it either, since that is only
-/// read by `InstanceDescriptor::from_env_or_default`, which this does not call.
-///
-/// Requiring D3D is what every Spout implementation does. `KlakSpout`, the Unity
-/// plugin, states it outright: "currently supports only Direct3D 11 and 12;
-/// other graphics APIs such as OpenGL or Vulkan aren't available", and makes
-/// users change Unity's graphics API by hand. Notch says the same. The Rust
-/// `spout2-rs` crate exposes `dx`, `dx12` and `gl` and no Vulkan. Spout itself
-/// has never had a Vulkan path: the request has been open since 2021. Choosing
-/// the backend here means a Varda user never has to know any of that.
-///
-/// Everywhere else keeps `all()`, so macOS still gets Metal and Linux still gets
-/// Vulkan. See [`fallback_backends`] for what happens if DX12 is absent.
+/// Windows requests DX12 only. With `Backends::all()` wgpu picks Vulkan on
+/// most machines, and Spout needs a real `ID3D12Device` via `as_hal::<Dx12>`
+/// (Spout has no Vulkan path). Other platforms use `all()`. See
+/// [`fallback_backends`] for machines without DX12.
 fn preferred_backends() -> wgpu::Backends {
     if cfg!(target_os = "windows") {
         wgpu::Backends::DX12
@@ -235,9 +197,8 @@ fn preferred_backends() -> wgpu::Backends {
 
 /// What to try when [`preferred_backends`] finds no adapter at all.
 ///
-/// A Windows machine with no D3D12 is unusual but not impossible: a very old
-/// GPU, a stripped container, a remote session. Losing Spout there is much
-/// better than refusing to start, so the second attempt asks for everything.
+/// Asks for every backend, so a Windows machine without D3D12 still starts,
+/// without Spout.
 fn fallback_backends() -> wgpu::Backends {
     wgpu::Backends::all()
 }
@@ -246,7 +207,7 @@ impl GpuContext {
     /// Create a GPU context + window surface from a window.
     ///
     /// The adapter is selected for compatibility with the window's surface.
-    /// Returns both the GPU context (for the engine) and the window surface (for the UI).
+    /// Returns the GPU context (for the engine) and the window surface (for the UI).
     ///
     /// # Errors
     ///
@@ -257,10 +218,8 @@ impl GpuContext {
         Self::new_with_surface(instance, surface, size).await
     }
 
-    /// Create the wgpu instance and surface on the current (main) thread.
-    /// On macOS, `create_surface` accesses `NSView`/`CAMetalLayer` which must
-    /// happen on the main thread.  The returned objects are `Send` and can be
-    /// passed to a background thread for adapter/device creation.
+    /// Create the wgpu instance and surface on the main thread, as macOS
+    /// requires. The results are `Send`, for adapter/device creation elsewhere.
     ///
     /// # Errors
     ///
@@ -290,10 +249,8 @@ impl GpuContext {
         let (instance, surface) =
             build(preferred_backends()).context("Failed to create surface")?;
 
-        // Probe for an adapter that can actually drive this surface before
-        // committing. A backend can exist and still present nothing usable, and
-        // finding that out here means one honest fallback rather than a failure
-        // later that looks like a driver problem. See `fallback_backends`.
+        // Probe for an adapter that can drive this surface, and fall back to
+        // `fallback_backends` now rather than fail later.
         if preferred_backends() != fallback_backends() {
             let usable =
                 pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -318,9 +275,8 @@ impl GpuContext {
         Ok((instance, surface, size))
     }
 
-    /// Complete GPU initialization given a pre-created instance and surface.
-    /// Safe to call from a background thread — all Metal dispatch work is
-    /// resolved through the pre-created surface.
+    /// Complete GPU initialization from a pre-created instance and surface.
+    /// Safe to call from a background thread.
     ///
     /// # Errors
     ///
@@ -369,9 +325,8 @@ impl GpuContext {
             .find(wgpu::TextureFormat::is_srgb)
             .unwrap_or(surface_caps.formats[0]);
 
-        // Prefer Immediate to avoid macOS ProMotion throttling the render loop.
-        // The UI event loop drives frame pacing via request_redraw().
-        // Fallback: Mailbox (non-blocking vsync) > Fifo (blocking vsync, last resort).
+        // Prefer Immediate so macOS ProMotion doesn't throttle the render loop;
+        // the UI paces frames via request_redraw(). Then Mailbox, then Fifo.
         let present_mode = if surface_caps
             .present_modes
             .contains(&wgpu::PresentMode::Immediate)
@@ -405,8 +360,7 @@ impl GpuContext {
 
         surface.configure(&device, &surface_config);
 
-        // Installed before anything renders: wgpu's default handler panics, and
-        // a panic on the render thread ends the performance.
+        // Installed before anything renders; wgpu's default handler panics.
         let errors = super::gpu_guard::GpuErrorGuard::new();
         errors.install(&device);
 
@@ -432,10 +386,8 @@ impl GpuContext {
 
     /// Select the optional device features to request from an adapter.
     ///
-    /// Shared by the windowed and headless paths so HAP (BC texture
-    /// compression) and GPU timing behave identically regardless of whether a
-    /// window surface exists. Returns the feature set to request and whether
-    /// timestamp queries are usable for GPU timing.
+    /// Shared by the windowed and headless paths. Returns the features to
+    /// request and whether timestamp queries are usable for GPU timing.
     fn select_optional_features(adapter: &wgpu::Adapter) -> (wgpu::Features, bool) {
         let mut required_features = wgpu::Features::empty();
         if adapter
@@ -493,10 +445,9 @@ impl GpuContext {
 
     /// Create a headless GPU context (no window surface).
     ///
-    /// Requests the same optional features as the windowed path (notably
-    /// `TEXTURE_COMPRESSION_BC`) so HAP video uses the GPU-native `BCn` path in
-    /// headless installations. Falls back to software adapter if no hardware
-    /// GPU is available. Used for headless mode and tests.
+    /// Requests the same optional features as the windowed path (including
+    /// `TEXTURE_COMPRESSION_BC` for HAP). Falls back to a software adapter
+    /// without a hardware GPU.
     ///
     /// # Errors
     ///
@@ -520,8 +471,7 @@ impl GpuContext {
             }))
         };
 
-        // Second attempt on the widest set, so a machine without the preferred
-        // backend still starts. See `fallback_backends`.
+        // Retry with `fallback_backends`.
         let (instance, adapter) = match headless_adapter(&instance) {
             Ok(adapter) => (instance, adapter),
             Err(_) if preferred_backends() != fallback_backends() => {
@@ -583,8 +533,8 @@ impl GpuContext {
 
     /// Submit command buffers, counting the commit.
     ///
-    /// Prefer this over `context.queue.submit()` anywhere on the per-frame path
-    /// so the submit tally stays accurate. See `submit_stats`.
+    /// Use this instead of `context.queue.submit()` on the per-frame path so
+    /// the tally stays accurate.
     pub fn submit<I>(&self, command_buffers: I) -> wgpu::SubmissionIndex
     where
         I: IntoIterator<Item = wgpu::CommandBuffer>,
@@ -593,7 +543,6 @@ impl GpuContext {
         self.queue.submit(command_buffers)
     }
 
-    /// Create a texture for rendering
     pub fn create_render_texture(&self, width: u32, height: u32) -> wgpu::Texture {
         self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Render Texture"),
@@ -614,8 +563,8 @@ impl GpuContext {
         })
     }
 
-    /// Create a texture for compositing in linear-light space (`Rgba16Float`).
-    /// Used for channel composites, mixer composites, effect ping-pong, and sub-mixes.
+    /// Linear-light (`Rgba16Float`) texture for composites, effect ping-pong,
+    /// and sub-mixes.
     pub fn create_compositing_texture(&self, width: u32, height: u32) -> wgpu::Texture {
         self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Compositing Texture (Rgba16Float)"),
@@ -636,7 +585,6 @@ impl GpuContext {
         })
     }
 
-    /// Create a uniform buffer
     pub fn create_uniform_buffer<T: bytemuck::Pod>(&self, data: &T) -> wgpu::Buffer {
         self.device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -646,7 +594,6 @@ impl GpuContext {
             })
     }
 
-    /// Update a uniform buffer
     pub fn update_uniform_buffer<T: bytemuck::Pod>(&self, buffer: &wgpu::Buffer, data: &T) {
         self.queue
             .write_buffer(buffer, 0, bytemuck::cast_slice(&[*data]));
@@ -655,15 +602,10 @@ impl GpuContext {
 
 /// Whether `CommandEncoder::write_timestamp` produces usable results here.
 ///
-/// Apple GPUs are tile-based deferred renderers: Metal only permits counter
-/// sampling at stage boundaries (via a pass descriptor's
-/// `sampleBufferAttachments`), so there is no `sampleCountersInBuffer` for an
-/// encoder-level timestamp to lower to. wgpu 29 still advertises
-/// `TIMESTAMP_QUERY_INSIDE_ENCODERS` on this hardware and emulates it with a
-/// dummy blit pass, but that emulation drops the render work submitted
-/// alongside it — decks composite from never-written textures and the frame
-/// fills with NaN. Upstream has since stopped advertising the feature here
-/// (gfx-rs/wgpu ef9974f); until we take that release, refuse it ourselves.
+/// Not on Apple GPUs: Metal only samples counters at stage boundaries, and
+/// wgpu 29's emulation of `TIMESTAMP_QUERY_INSIDE_ENCODERS` drops the render
+/// work submitted with it (frames fill with NaN). Upstream wgpu stops
+/// advertising it in gfx-rs/wgpu ef9974f.
 fn encoder_timestamps_are_trustworthy(adapter: &wgpu::Adapter) -> bool {
     /// Apple's PCI vendor ID, as reported for Metal adapters.
     const APPLE_VENDOR: u32 = 0x106B;
@@ -674,7 +616,6 @@ fn encoder_timestamps_are_trustworthy(adapter: &wgpu::Adapter) -> bool {
 }
 
 impl WindowSurface {
-    /// Resize the window surface
     pub fn resize(&mut self, device: &wgpu::Device, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
             self.size = new_size;
@@ -687,52 +628,46 @@ impl WindowSurface {
 
 /// Info for rendering one surface into an output window.
 pub struct SurfaceRenderInfo<'a> {
-    /// Surface uuid — cache key for its baked hole mask.
+    /// Surface uuid; cache key for its baked hole mask.
     pub uuid: &'a str,
-    /// The content texture to sample from
+    /// The content texture to sample from.
     pub content_view: &'a wgpu::TextureView,
-    /// Polygon vertices in normalized canvas coords [0..1] (primary contour)
+    /// Primary contour vertices in normalized canvas coords [0..1].
     pub vertices: &'a [[f32; 2]],
     /// Additional disjoint contours for combined surfaces. Empty for simple
     /// surfaces. When non-empty, the surface renders every contour (no warp).
     pub extra_contours: &'a [Vec<[f32; 2]>],
-    /// Bounding box: [x, y, width, height] in [0..1]
+    /// Bounding box: [x, y, width, height] in [0..1].
     pub bounding_box: [f32; 4],
-    /// UV scale for content sampling (Fill=[1,1], Mapped=[`bb_w`, `bb_h`])
+    /// UV scale for content sampling (Fill=[1,1], Mapped=[`bb_w`, `bb_h`]).
     pub uv_scale: [f32; 2],
-    /// UV offset for content sampling (Fill=[0,0], Mapped=[`bb_x`, `bb_y`])
+    /// UV offset for content sampling (Fill=[0,0], Mapped=[`bb_x`, `bb_y`]).
     pub uv_offset: [f32; 2],
-    /// Warp mode: `CornerPin` or Mesh. None = no warp (render at polygon's native position).
+    /// `CornerPin` or Mesh. `None` renders at the polygon's own position.
     pub warp_mode: Option<crate::surface::warp::WarpMode>,
-    /// Per-surface overlap zones (Auto mode). Default = no zones.
+    /// Per-surface overlap zones (Auto mode).
     pub overlap_zones: super::edge_blend::SurfaceOverlapZones,
-    /// Flattened subtractive hole contours in surface uv space (8i.7). Empty =
-    /// no holes.
+    /// Hole contours in surface UV space.
     pub hole_uv_contours: Vec<Vec<[f32; 2]>>,
 }
 
-/// Membership of a surface in an output. Warp now lives on the `Surface`
-/// itself (`Surface.warp`); an assignment only records inclusion and the
-/// per-output overlap zones used for edge blending.
+/// Membership of a surface in an output: inclusion and the per-output overlap
+/// zones for edge blending. Warp is on the `Surface`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SurfaceAssignment {
-    /// UUID of the assigned surface
     pub surface_uuid: String,
-    /// Whether this assignment is enabled
     pub enabled: bool,
     /// Per-surface overlap zones (set by Auto mode detection).
     #[serde(default)]
     pub overlap_zones: super::edge_blend::SurfaceOverlapZones,
 }
 
-/// The largest centred `[x, y, w, h]` of `content_aspect` (width ÷ height) that
-/// fits a `canvas_width` × `canvas_height` canvas, in normalised coordinates.
+/// The largest centered `[x, y, w, h]` of `content_aspect` (width ÷ height)
+/// that fits a `canvas_width` × `canvas_height` canvas, in normalized
+/// coordinates.
 ///
-/// Content narrower than the canvas gets bars on the left and right, wider gets
-/// them above and below, and an exact match returns the full unit square so the
-/// usual case costs nothing. Degenerate inputs — a zero-sized canvas, or an
-/// aspect that is zero, negative, infinite or NaN — also return the full square,
-/// which stretches rather than producing a NaN-sized quad.
+/// A matching aspect, a zero-sized canvas, or a non-finite or non-positive
+/// aspect returns the full unit square.
 pub fn aspect_fit_rect(content_aspect: f32, canvas_width: u32, canvas_height: u32) -> [f32; 4] {
     if canvas_width == 0
         || canvas_height == 0
@@ -750,8 +685,7 @@ pub fn aspect_fit_rect(content_aspect: f32, canvas_width: u32, canvas_height: u3
     [(1.0 - w) * 0.5, (1.0 - h) * 0.5, w, h]
 }
 
-/// Calibration card colors for distinct surface identification.
-/// Each surface gets a different accent color for its test card.
+/// Per-surface accent colors for calibration cards.
 const CALIBRATION_COLORS: [[u8; 3]; 8] = [
     [255, 80, 80],   // Red
     [80, 200, 120],  // Green
@@ -765,11 +699,8 @@ const CALIBRATION_COLORS: [[u8; 3]; 8] = [
 
 /// Generate a calibration test card as RGBA pixel data.
 ///
-/// Everything lives inside the border/corner brackets:
-/// - **Grid + crosshair + circle** (upper ~70% of interior)
-/// - **Gradient bars** (lower ~30% of interior): grayscale, R, G, B, stepped gray
-///
-/// Each surface gets a distinct accent color border for identification.
+/// Inside an accent-colored border: a grid with crosshair and circle (upper
+/// ~70%) and gradient bars (lower ~30%: gray, R, G, B, stepped gray).
 // gx/gy, grid_h/grad_h and at_tl/at_tr/at_bl/at_br are the clearest names for this 2D geometry.
 #[allow(clippy::similar_names)]
 pub fn generate_calibration_card(width: u32, height: u32, color_index: usize) -> Vec<u8> {
@@ -797,13 +728,13 @@ pub fn generate_calibration_card(width: u32, height: u32, color_index: usize) ->
     let bar_h = grad_h / 5; // 5 bars
     let grid_zone_bottom = inset + grid_h;
 
-    // Crosshair centered on FULL card (not just grid zone)
+    // Crosshair centered on the full card, not the grid zone.
     let cx = width / 2;
     let cy = height / 2;
     let cross_len = height.min(inner_w) / 4;
     let cross_thick = (width.min(height) / 200).max(1);
 
-    // Corner brackets sit at the very edge of the output (pixel 0)
+    // Corner brackets sit at the edge of the output (pixel 0).
     let bracket_len = (width.min(height) / 6).max(10);
     let bracket_thick = (width.min(height) / 80).max(2);
 
@@ -853,7 +784,7 @@ pub fn generate_calibration_card(width: u32, height: u32, color_index: usize) ->
                 }
             }
 
-            // Center crosshair — spans full card, drawn on top of everything except corners
+            // Center crosshair, drawn over everything except the corners.
             if (x.abs_diff(cx) <= cross_thick && y.abs_diff(cy) <= cross_len)
                 || (y.abs_diff(cy) <= cross_thick && x.abs_diff(cx) <= cross_len)
             {
@@ -888,7 +819,7 @@ pub fn generate_calibration_card(width: u32, height: u32, color_index: usize) ->
                 color = border_color;
             }
 
-            // Corner brackets at the very edge (pixel 0) — drawn LAST, on top of border
+            // Corner brackets, drawn last, over the border.
             let at_tl = x < bracket_len && y < bracket_len;
             let at_tr = x >= width - bracket_len && y < bracket_len;
             let at_br = x >= width - bracket_len && y >= height - bracket_len;
@@ -966,7 +897,7 @@ mod tests {
         PresentationDepth, PresentationRequest, PresentationTransfer,
     };
 
-    // ── offered modes per target (/spec/presentation-mode-offering.md) ──
+    // ── offered modes per target ──
 
     fn surface_capabilities(
         format_capabilities: Vec<wgpu::SurfaceFormatCapabilities>,
@@ -1057,8 +988,7 @@ mod tests {
 
     #[test]
     fn an_sdr_request_is_never_answered_with_an_edr_surface() {
-        // EDR is listed first in adapter preference order, so this guards the
-        // same way the PQ test does: preference must not override the request.
+        // EDR is first in preference order; it must not override the request.
         let capabilities = surface_capabilities(vec![
             wgpu::SurfaceFormatCapabilities {
                 format: wgpu::TextureFormat::Rgba16Float,
@@ -1105,8 +1035,7 @@ mod tests {
 
     #[test]
     fn hdr10_falls_back_to_ten_bit_sdr_when_only_srgb_is_offered() {
-        // RGB10A2 alone proves nothing about the transfer the compositor applies,
-        // so the PQ colour space is required, not merely the format.
+        // RGB10A2 without the PQ color space is not HDR10.
         let capabilities = surface_capabilities(vec![wgpu::SurfaceFormatCapabilities {
             format: wgpu::TextureFormat::Rgb10a2Unorm,
             color_spaces: wgpu::SurfaceColorSpaces::SRGB,
@@ -1192,8 +1121,7 @@ mod tests {
         assert_eq!(selected.resolved.resolved, PresentationDepth::Sdr8);
     }
 
-    /// Content and canvas agree, so nothing is inset — the case every 16:9
-    /// project has always been in, and the one that must not change.
+    /// Content and canvas aspects match, so nothing is inset.
     #[test]
     fn matching_aspect_fills_the_canvas() {
         assert_eq!(
@@ -1214,8 +1142,7 @@ mod tests {
         assert_eq!(y, 0.0);
     }
 
-    /// The inverse, which is what a 16:9 project sent to a phone-shaped output
-    /// gets: full width, bars above and below.
+    /// A landscape project in a portrait output: full width, letterboxed.
     #[test]
     fn landscape_content_in_a_portrait_canvas_is_letterboxed() {
         let [x, y, w, h] = aspect_fit_rect(16.0 / 9.0, 1080, 1920);
@@ -1225,8 +1152,7 @@ mod tests {
         assert!((y - (1.0 - h) / 2.0).abs() < 1e-6, "not centred: {y}");
     }
 
-    /// The fitted rectangle must stay inside the canvas whatever it is handed,
-    /// or content spills off the edge of the projector.
+    /// The fitted rectangle always stays inside the canvas.
     #[test]
     fn the_fitted_rect_never_leaves_the_unit_square() {
         for aspect in [0.1_f32, 0.5, 1.0, 1.777, 4.0, 32.0] {
@@ -1241,7 +1167,7 @@ mod tests {
         }
     }
 
-    /// A malformed scene or a window mid-minimise must not produce a NaN quad.
+    /// Degenerate input (a malformed scene, a minimized window) gives no NaN quad.
     #[test]
     fn degenerate_inputs_fall_back_to_filling() {
         assert_eq!(aspect_fit_rect(16.0 / 9.0, 0, 0), [0.0, 0.0, 1.0, 1.0]);
@@ -1330,9 +1256,8 @@ mod tests {
 
     #[test]
     fn headless_context_enables_bc_when_adapter_supports() {
-        // Headless installations must take the HAP GPU path, so the headless
-        // device has to request TEXTURE_COMPRESSION_BC whenever the adapter
-        // exposes it. Skips gracefully when no GPU adapter is available.
+        // The headless device requests TEXTURE_COMPRESSION_BC when the adapter
+        // has it, so HAP uses the GPU path.
         let Some(gpu) = crate::testing::headless_gpu() else {
             return;
         };

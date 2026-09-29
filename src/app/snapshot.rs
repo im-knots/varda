@@ -1,13 +1,8 @@
-//! Snapshot builder — constructs the framework-free `EngineState` from live
-//! `VardaApp` state. Presentation mapping (`UIData`, which names `egui::TextureId`)
-//! lives in `usecases::ui::snapshot` — see `/spec/app-presentation-boundary.md`.
+//! Builds the framework-free `EngineState` from live `VardaApp` state. The
+//! egui mapping (`UIData`) lives in `usecases::ui::snapshot`.
 //!
-//! PERF: Every frame clones the full `EngineState` (params, effects, FFT data,
-//! modulation assignments). At 8+ decks with effects, this is dozens of heap
-//! allocations per frame. Not a bottleneck at 60fps with current deck counts,
-//! but worth profiling if deck/effect counts grow significantly (16+ decks).
-//! Mitigation options: dirty-flag retained snapshots, arena allocation, or
-//! COW wrappers on heavy fields.
+//! PERF: each snapshot clones the full state (dozens of allocations at 8+
+//! decks). Fine today; profile if deck counts pass ~16.
 
 use super::VardaApp;
 use crate::channel::{DeckTransitionPhase, DurationSpec, TransitionTrigger};
@@ -489,9 +484,8 @@ pub(crate) fn build_clock_snapshot(app: &VardaApp) -> ClockSnapshot {
     }
 }
 
-/// Build the transport snapshot, adding what the `From` impl cannot see: the
-/// follower count, which lives in the modulation engine, and the record state,
-/// which is the session's.
+/// Build the transport snapshot, adding the follower count (from the
+/// modulation engine) and the record state, which the `From` impl can't see.
 pub(crate) fn build_transport_snapshot(app: &VardaApp) -> crate::engine::types::TransportSnapshot {
     let mut snapshot: crate::engine::types::TransportSnapshot = (&app.show.transport).into();
     snapshot.followers = app
@@ -726,8 +720,7 @@ pub(crate) fn build_output_snapshot(app: &VardaApp) -> OutputSnapshot {
                     })
                     .collect();
                 let sink = o.sink();
-                // Audio health combines the encoder's counts with the drops
-                // the output's own subscription saw.
+                // Encoder counts plus drops seen by the output's own subscription.
                 let audio_passthrough = o.audio.as_ref().and_then(|pass| {
                     let health = sink.audio_health()?;
                     Some(AudioPassthroughSnapshot {
@@ -939,9 +932,8 @@ mod tests {
         crate::testing::headless_app()
     }
 
-    /// What the GUI reads, the published state carries: source libraries with their
-    /// live state, key bindings, presets, render size, and the GPU adapter
-    /// (/spec/ui-engine-boundary.md § WS9).
+    /// The published state carries what the GUI reads: source libraries, key
+    /// bindings, presets, render size, and the GPU adapter.
     #[test]
     fn the_published_state_carries_what_the_gui_shows() {
         let Some(mut app) = headless_app() else {
@@ -999,7 +991,7 @@ mod tests {
         let snap = build_mixer_snapshot(&app);
         let deck = &snap.channels[0].decks[0];
         assert!((deck.opacity - 0.5).abs() < 1e-5);
-        // No transition → effective == opacity
+        // No transition, so effective equals opacity.
         assert!((deck.effective_opacity - 0.5).abs() < 1e-5);
     }
 
@@ -1035,17 +1027,16 @@ mod tests {
 
     #[test]
     fn build_shader_params_filters_missing() {
-        // param_order has "brightness" but values doesn't → filtered out
+        // A param in param_order with no value is filtered out.
         let mut params = crate::params::ShaderParams::from_inputs(&[]);
         params.param_order.push("brightness".into());
-        // values map is empty, so "brightness" has no value → should be filtered
         let snap = build_shader_params("test_shader", &params);
         assert!(snap.params.is_empty());
     }
 
     #[test]
     fn build_shader_params_missing_definition() {
-        // Value exists but no definition → label/min/max are None
+        // A value with no definition has no label/min/max.
         let mut params = crate::params::ShaderParams::from_inputs(&[]);
         params.param_order.push("mystery".into());
         params
@@ -1065,7 +1056,7 @@ mod tests {
             return;
         };
         let snap = build_registry_snapshot(&app);
-        // Verify generators are sorted case-insensitively
+        // Sorted case-insensitively.
         for pair in snap.generators.windows(2) {
             assert!(
                 pair[0].0.to_lowercase() <= pair[1].0.to_lowercase(),
@@ -1090,7 +1081,6 @@ mod tests {
             return;
         };
         let snap = build_clock_snapshot(&app);
-        // Default clock is inactive → bpm is None
         assert!(snap.bpm.is_none() || !snap.active);
     }
 
@@ -1100,7 +1090,6 @@ mod tests {
             return;
         };
         let snap = build_clock_snapshot(&app);
-        // Source label should be one of the known values
         let valid = ["Audio", "MIDI", "OSC", "Manual"];
         assert!(
             valid.contains(&snap.source_label.as_str()),
@@ -1109,10 +1098,8 @@ mod tests {
         );
     }
 
-    /// The diagnostics panel and the API both read this snapshot and nothing
-    /// else, so every input the reader is listening to has to appear in it with
-    /// its own position and run state. A performer chasing a bad cable is
-    /// looking for the input that is *not* resolving.
+    /// Every timecode input heard appears with its own position and run state,
+    /// including ones that are not resolving.
     #[test]
     fn build_timecode_snapshot_lists_every_input_it_heard() {
         let Some(mut app) = headless_app() else {
@@ -1180,9 +1167,7 @@ mod tests {
         assert!(stopped.inputs.iter().all(|i| !i.freewheeling));
     }
 
-    /// The patch is read back out of the same snapshot the positions come from,
-    /// so the popover cannot show one interface while the reader listens to
-    /// another.
+    /// The patch comes from the same snapshot as the positions.
     #[test]
     fn build_timecode_snapshot_reports_the_patch_it_is_reading() {
         let Some(mut app) = headless_app() else {

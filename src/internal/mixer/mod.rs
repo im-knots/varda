@@ -1,4 +1,4 @@
-//! Mixer - Top-level compositor that owns channels, crossfader, master effects, and modulation
+//! Mixer: top-level compositor that owns channels, crossfader, master effects, and modulation.
 
 mod arrangement_edit;
 mod ops;
@@ -24,11 +24,10 @@ pub use arrangement_edit::ArrangementError;
 pub use resolve::EffectChain;
 pub use sequences::NoSuchStep;
 
-/// Where an effect lives, resolved from its globally-unique UUID.
+/// Where an effect lives, resolved from its globally unique UUID.
 ///
-/// The indices are transient — valid only until the owning chain is mutated.
-/// Resolve immediately before use; never store or hand one to a client. See
-/// [`/spec/api-addressing.md`].
+/// The indices are valid only until the owning chain is mutated: resolve immediately before
+/// use, and never store them or send them to a client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EffectLocation {
     Deck {
@@ -56,12 +55,8 @@ impl EffectLocation {
     }
 }
 
-/// Everything sampled from outside the mixer that a single frame's rendering
-/// depends on.
-///
-/// Grouped rather than passed positionally because the set grows as the engine
-/// gains clocks: the transport joins it without touching every call site.
-/// See /spec/timebase.md.
+/// Everything sampled from outside the mixer that one frame's rendering depends on. Grouped so
+/// new clocks can join without touching every call site.
 #[derive(Clone, Copy)]
 pub struct FrameInputs<'a> {
     /// Primary audio source, used for beat-synced crossfades and sequences.
@@ -76,32 +71,24 @@ pub struct FrameInputs<'a> {
     /// Show position from the transport, or `None` until it has run, which
     /// freezes transport-locked modulators.
     pub transport: Option<crate::timebase::TransportSample>,
-    /// Seconds on the free-running clock, which is what `TIME` reaches every
-    /// shader as. `None` reads the mixer's own wall clock, which is what a live
-    /// show wants.
+    /// Seconds on the free-running clock, which every shader reads as `TIME`. `None` reads the
+    /// mixer's wall clock, as a live show does.
     ///
-    /// A caller supplies it when frames are not paced by the wall: a test
-    /// measuring how a picture changes between frames would otherwise be
-    /// measuring how fast the machine renders, and rendering a show to disk
-    /// faster (or slower) than real time needs the same handle.
+    /// Set it when frames are not paced by the wall clock, such as a test comparing frames or an
+    /// offline render.
     pub free_run_time: Option<f32>,
-    /// How a macro's modulated value reaches each of its targets: the parameter
-    /// router's write, which sits above the mixer and so is handed in
-    /// (/spec/domain-dependencies.md).
+    /// How a macro's modulated value reaches its targets: the parameter router's write, passed in
+    /// because the router sits above the mixer.
     pub write_param: ParamWriter,
 }
 
 /// Writes one normalized value to the parameter at a path.
 pub type ParamWriter = fn(&mut Mixer, &str, f32);
 
-/// Mixer - Top-level compositor
 /// Which graded master program an output wants.
 ///
-/// Outputs sharing a key share one grading pass, so a single-output show
-/// materializes exactly one graded program. `hdr_peak` is `None` for an SDR
-/// contract and `Some(nits)` for HDR10, because an HDR output transform targets
-/// `[0, peak/203]` rather than the `[0, 1]` every SDR operator targets.
-/// See /spec/hdr-per-output-encode.md and /spec/hdr-color-management.md.
+/// Outputs sharing a key share one grading pass. `hdr_peak` is `None` for SDR and `Some(nits)`
+/// for HDR10, since an HDR output transform targets `[0, peak/203]` instead of `[0, 1]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ProgramKey {
     /// Output transform curve for this program.
@@ -121,12 +108,9 @@ impl ProgramKey {
         }
     }
 
-    /// Build a key for an output, substituting a safe curve when the contract is
-    /// HDR and the selected curve has no HDR form.
-    ///
-    /// This is the single place a curve meets a contract, so gating here means no
-    /// caller can construct a key that would run an SDR-fitted shoulder against an
-    /// HDR range.
+    /// Build a key for an output, substituting a safe curve when the contract is HDR and the
+    /// selected curve has no HDR form. Every key is built here, so no caller can pair an
+    /// SDR-fitted shoulder with an HDR range.
     #[must_use]
     pub fn for_output(tonemap: TonemapMode, hdr_peak: Option<u16>) -> Self {
         Self {
@@ -147,17 +131,15 @@ impl ProgramKey {
         })
     }
 
-    /// Whether the display-referred calibration LUT applies to this program.
-    ///
-    /// It does not apply to HDR: a `.cube` authored against the SDR output
-    /// transform puts its midtones in the wrong place under any other one
-    /// (/spec/hdr-color-management.md Decision 4).
+    /// Whether the display-referred calibration LUT applies to this program. Not for HDR: a `.cube`
+    /// authored against the SDR output transform misplaces midtones under any other.
     #[must_use]
     pub const fn takes_calibration_lut(self) -> bool {
         self.hdr_peak.is_none()
     }
 }
 
+/// Top-level compositor.
 pub struct Mixer {
     /// Channels (default 2: A and B)
     channels: Vec<Channel>,
@@ -180,21 +162,18 @@ pub struct Mixer {
     /// User-defined macro controls (one control → many parameter targets).
     macros: MacroBank,
 
-    /// Arrangement mode data, when this scene has one. Held beside the
-    /// modulation graph it references so a snapshot captures both together.
-    /// See /spec/arrangement.md.
+    /// Arrangement data, when this scene has one. Held beside the modulation graph it references
+    /// so a snapshot captures both.
     arrangement: Option<crate::arrangement::ArrangementConfig>,
 
-    /// True while the arrangement is driving every deck it owns to zero with
-    /// the transport running. Read once per frame by the app, which raises a
-    /// dismissible notification. See /spec/transport.md § Black-output detection.
+    /// True while the arrangement drives every deck it owns to zero with the transport running.
+    /// The app reads it each frame and shows a dismissible notification.
     arrangement_blacked_out: bool,
 
     /// Start time for TIME-based modulation
     start_time: std::time::Instant,
 
     /// Resolves every timebase once per frame for the modulation engine.
-    /// See /spec/timebase.md.
     timebases: crate::timebase::TimebaseResolver,
 
     /// Last render time for dt calculation
@@ -208,21 +187,17 @@ pub struct Mixer {
     effect_ping_texture: wgpu::Texture,
     effect_ping_view: wgpu::TextureView,
 
-    /// Holds the master program *before* tonemap and LUT, kept only while some
-    /// deck taps it. Every deck renders before the master composite, so a
-    /// single buffer already gives uniform N-1 semantics with no copy.
-    /// See spec/program-tap.md.
+    /// The master program before tonemap and LUT, kept only while a deck taps it. Every deck
+    /// renders before the master composite, so one buffer gives N-1 semantics with no copy.
     master_tap: Option<(wgpu::Texture, wgpu::TextureView)>,
 
     /// Master effect chain (applied to final composite)
     master_effects: Vec<Effect>,
 
-    /// Frame counter
     frame_count: u32,
 
-    /// Smoothed GPU load ratio (EMA): `actual_frame_time` / `cpu_render_time`.
-    /// When > 1.0, GPU execution takes longer than CPU encoding — shaders are
-    /// GPU-bound and `render_cost_us` underestimates true cost by this factor.
+    /// Smoothed GPU load ratio (EMA): `actual_frame_time` / `cpu_render_time`. Above 1.0, shaders
+    /// are GPU-bound and `render_cost_us` underestimates by this factor.
     gpu_load_ratio: f32,
 
     /// Smoothed GPU utilization % (0–100): sum of per-deck GPU render costs
@@ -245,16 +220,12 @@ pub struct Mixer {
     /// LUT pipeline for applying 3D LUTs after tonemapping
     lut_pipeline: LutPipeline,
 
-    /// Display-referred calibration LUT, applied after the output transform.
-    ///
-    /// Calibrated against one output transform, so it is not applied to HDR
-    /// outputs. See /spec/hdr-color-management.md Decision 4.
+    /// Display-referred calibration LUT, applied after the output transform. Not applied to HDR
+    /// outputs, since it is calibrated against one output transform.
     active_lut: Option<LoadedLut>,
 
-    /// Scene-referred look LUT, applied to the linear program before any output
-    /// transform, so one grade reaches every output including HDR ones.
-    ///
-    /// Authored against `ACEScct`. See /spec/hdr-color-management.md Decision 5.
+    /// Scene-referred look LUT, applied to the linear program before any output transform, so the
+    /// grade reaches HDR outputs too. Authored against `ACEScct`.
     look_lut: Option<LoadedLut>,
 
     /// Graded linear program, materialized only while a look LUT is loaded.
@@ -269,19 +240,14 @@ pub struct Mixer {
     /// Cached sub-mix textures for multi-channel surface assignments.
     /// Key: sorted channel indices, Value: (texture, view).
     sub_mix_cache: std::collections::HashMap<Vec<usize>, (wgpu::Texture, wgpu::TextureView)>,
-    /// Cached tonemapped copies of individual channel composites.
-    /// Used when surfaces source from Channel(idx) — the raw channel composite
-    /// can't be tonemapped in-place since it feeds into the mixer composite.
+    /// Cached tonemapped copies of channel composites, for surfaces sourcing `Channel(idx)`. The
+    /// raw composite can't be tonemapped in place because it feeds the mixer composite.
     tonemapped_channel_cache: std::collections::HashMap<usize, (wgpu::Texture, wgpu::TextureView)>,
 
     /// Graded master programs, one per distinct output transform in use.
     ///
-    /// `composite_texture` holds the *linear* scene-referred program; the output
-    /// transform is per output (/spec/hdr-per-output-encode.md), so outputs that
-    /// share a curve and range share one graded result and a single-output show
-    /// materializes exactly one. A key whose grade is a no-op is never inserted:
-    /// [`Self::program_view`] hands back the linear composite instead, so a
-    /// Bypass show with no LUT still runs zero grading passes.
+    /// `composite_texture` holds the linear scene-referred program. A key whose grade is a no-op
+    /// is never inserted; [`Self::program_view`] returns the linear composite instead.
     program_cache: std::collections::HashMap<ProgramKey, (wgpu::Texture, wgpu::TextureView)>,
 
     /// GPU performance profiling: when > 0, insert device.poll(Wait) between
@@ -306,12 +272,9 @@ pub struct Mixer {
     /// Index of the staging buffer whose `map_async` has completed (ready to read).
     /// `usize::MAX` means no buffer is pending/ready. Set by the `map_async` callback.
     staging_mapped_idx: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    /// True while a timing-staging `map_async` is outstanding — from the moment it
-    /// is *issued* until the read path consumes and unmaps the buffer. Gates the
-    /// resolve/readback path so at most one map is ever in flight. The callback
-    /// only sets `staging_mapped_idx` later, so relying on that alone would let a
-    /// second `map_async` be issued during the pending window, leaving a buffer
-    /// permanently mapped and crashing the next submit with "still mapped".
+    /// True while a timing-staging `map_async` is outstanding, from issue until the read path
+    /// unmaps the buffer, so at most one map is in flight. `staging_mapped_idx` is only set by
+    /// the later callback, so it cannot gate this alone.
     timing_map_inflight: bool,
 }
 
@@ -332,12 +295,9 @@ impl Mixer {
 
         let composite_pipeline =
             CompositeBlitPipeline::new(&context.device, context.compositing_format)?;
-        // Channel composites are premultiplied-alpha (coverage baked into RGB by
-        // the channel's straight-over deck compositing). Blending them into the
-        // mixer therefore uses PREMULTIPLIED_ALPHA_BLENDING (src factor One), not
-        // ALPHA_BLENDING (src factor SrcAlpha) which would re-apply coverage and
-        // darken partial-opacity channels by an extra factor of their own alpha.
-        // See /spec/linear-light-compositing.md.
+        // Channel composites are premultiplied alpha, so blending them uses
+        // PREMULTIPLIED_ALPHA_BLENDING (src factor One). ALPHA_BLENDING would apply coverage again
+        // and darken partial-opacity channels.
         let blit_pipeline = BlitPipeline::with_blend(
             &context.device,
             context.compositing_format,
@@ -346,7 +306,6 @@ impl Mixer {
         let tonemap_pipeline = TonemapPipeline::new(&context.device, context.compositing_format)?;
         let lut_pipeline = LutPipeline::new(&context.device, context.compositing_format)?;
 
-        // Create two default channels
         let channel_0 = Channel::new("Ch 0".to_string(), context, width, height)?;
         let channel_1 = Channel::new("Ch 1".to_string(), context, width, height)?;
 
@@ -462,15 +421,11 @@ impl Mixer {
         self.look_texture = None;
     }
 
-    /// Resolve every source that re-enters Varda's own output (a tap) for this
-    /// frame.
+    /// Resolve every source that re-enters Varda's own output (a tap) for this frame.
     ///
-    /// Allocates the targets that are actually read, exchanges each one with
-    /// the live composite so reads and writes never collide, and binds the
-    /// resulting views onto the decks that asked. Must run before any deck
-    /// renders — that ordering is what makes feedback uniformly one frame old
-    /// instead of depending on where the reading deck sits.
-    /// See spec/program-tap.md.
+    /// Allocates the targets that are read, swaps each with the live composite so reads and writes
+    /// never collide, and binds the views onto the requesting decks. Must run before any deck
+    /// renders so feedback is always one frame old.
     pub fn prepare_taps(&mut self, context: &GpuContext) {
         use crate::source::FeedbackSource;
         let mut master_tapped = false;
@@ -492,8 +447,7 @@ impl Mixer {
             channel.swap_tap();
         }
 
-        // Cloned up front because binding borrows the channels mutably and so
-        // cannot also read the channel that is being tapped.
+        // Cloned first because binding borrows the channels mutably.
         let master_view = self.master_tap.as_ref().map(|(_, v)| v.clone());
         let channel_views: std::collections::HashMap<String, wgpu::TextureView> = self
             .channels
@@ -524,8 +478,8 @@ impl Mixer {
                     ),
                 };
                 slot.deck.source_mut().bind_feedback(view, &label);
-                // Renaming a channel has to move the tapping deck's label with
-                // it, and this is the only place that sees both.
+                // Renaming a channel must update the tapping deck's label, and only this code sees
+                // both.
                 let name = slot.deck.source().label();
                 if slot.deck.source_name() != name {
                     slot.deck.set_source_name(name);
@@ -564,8 +518,7 @@ impl Mixer {
         }
     }
 
-    /// True when no tap target is allocated anywhere. Used by tests to pin the
-    /// "free when unused" guarantee.
+    /// True when no tap target is allocated anywhere. Tests use it to check unused taps are freed.
     pub fn has_no_tap_targets(&self) -> bool {
         self.master_tap.is_none() && self.channels.iter().all(|c| c.tap_view().is_none())
     }
@@ -657,14 +610,10 @@ impl Mixer {
         self.channels.len()
     }
 
-    /// A channel's fader as the frame sees it: the stored position with any
-    /// modulation on `ch_<uuid>:opacity` applied.
-    ///
-    /// The stored value is left alone, the way every other modulated parameter
-    /// works. A deck's opacity is the exception rather than the model here: the
-    /// arrangement overwrites it because regions compile into that same field
-    /// and residency reads it back. See /spec/modulation.md § Parameter
-    /// Addressing.
+    /// A channel's fader as the frame sees it: the stored position with modulation on
+    /// `ch/<uuid>/opacity` applied. The stored value is unchanged, as for other modulated
+    /// parameters. Deck opacity differs: the arrangement overwrites it because regions compile
+    /// into that field.
     pub fn channel_opacity(&self, index: usize) -> f32 {
         let Some(channel) = self.channels.get(index) else {
             return 0.0;
@@ -697,12 +646,8 @@ impl Mixer {
         &mut self.master_effects
     }
 
-    /// Every UUID currently answering to something: channels, decks, effects on
-    /// all three tiers, and modulation sources.
-    ///
-    /// Restoring a config that names one of these would put two entities behind
-    /// one address, since resolution takes the first match. See
-    /// /spec/clipboard.md § Paste reidentifies.
+    /// Every UUID in use: channels, decks, effects on all three chains, and modulation sources.
+    /// Restoring a config that reuses one would put two entities behind one address.
     pub fn uuids_in_use(&self) -> std::collections::HashSet<String> {
         let mut live = std::collections::HashSet::new();
         for channel in &self.channels {
@@ -768,10 +713,8 @@ impl Mixer {
 
     /// The composited output texture (post-crossfade, post-master-effects, post-tonemap).
     ///
-    /// Same target as [`Self::composite_view`], exposed as the `Texture` so
-    /// callers can `copy_texture_to_buffer` for GPU readback. The texture is
-    /// created with `COPY_SRC` (see `GpuContext::create_compositing_texture`).
-    /// Used by render-correctness tests (see /spec/render-testing.md).
+    /// Same target as [`Self::composite_view`], exposed as the `Texture` for
+    /// `copy_texture_to_buffer` readback in render tests. Created with `COPY_SRC`.
     pub fn composite_texture(&self) -> &wgpu::Texture {
         &self.composite_texture
     }
@@ -805,7 +748,6 @@ impl Mixer {
         self.active_lut = None;
     }
 
-    /// Get the active LUT filename (if any).
     /// Load a scene-referred look LUT, replacing any current one.
     pub fn set_look_lut(
         &mut self,
@@ -831,6 +773,7 @@ impl Mixer {
         self.look_lut.as_ref().map(|l| l.filename.as_str())
     }
 
+    /// Filename of the active calibration LUT.
     pub fn active_lut_filename(&self) -> Option<&str> {
         self.active_lut.as_ref().map(|l| l.filename.as_str())
     }
@@ -848,7 +791,7 @@ impl Mixer {
 
     // ── UUID lookup helpers ────────────────────────────────────────────
 
-    /// Find a mutable deck slot by deck UUID. Returns (`channel_index`, `deck_index`) if found.
+    /// Find a deck by UUID. Returns (`channel_index`, `deck_index`).
     pub fn find_deck_by_uuid(&self, uuid: &str) -> Option<(usize, usize)> {
         for (ch_idx, ch) in self.channels.iter().enumerate() {
             for (dk_idx, slot) in ch.decks.iter().enumerate() {
@@ -865,9 +808,8 @@ impl Mixer {
         self.channels.iter().position(|ch| ch.uuid() == uuid)
     }
 
-    /// Locate an effect by UUID anywhere in the mixer — deck chains, channel
-    /// chains, or the master chain. Effect UUIDs are globally unique, so the
-    /// UUID alone determines both the owner and the position.
+    /// Locate an effect by UUID in any deck, channel, or master chain. Effect UUIDs are globally
+    /// unique, so the UUID alone gives owner and position.
     pub fn find_effect_by_uuid(&self, uuid: &str) -> Option<EffectLocation> {
         for (ch_idx, ch) in self.channels.iter().enumerate() {
             for (dk_idx, slot) in ch.decks.iter().enumerate() {
@@ -1027,13 +969,11 @@ impl Mixer {
         self.arrangement.get_or_insert_with(Default::default)
     }
 
-    /// Recompile one lane's regions onto its opacity envelope, creating the
-    /// envelope and its absolute assignment the first time a region appears.
+    /// Recompile one lane's regions onto its opacity envelope, creating the envelope and its
+    /// absolute assignment on the first region.
     ///
-    /// Regions are the authored form and the envelope is derived, so this must
-    /// run after any region edit. Deriving one from the other in the opposite
-    /// direction would mean reading regions back out of an arbitrary curve,
-    /// which a hand-edited envelope need not resemble.
+    /// Regions are the authored form and the envelope is derived from them, so this must run
+    /// after any region edit.
     ///
     /// Returns the envelope's UUID while the lane has any regions.
     pub fn sync_lane_opacity_envelope(&mut self, deck_uuid: &str) -> Option<String> {
@@ -1042,9 +982,8 @@ impl Mixer {
         let breakpoints = crate::arrangement::compile_regions(&lane.regions);
 
         if breakpoints.is_empty() {
-            // The last region was deleted. Dropping the source rather than
-            // leaving an empty one behind keeps a Performance-only deck out of
-            // the modulation graph entirely.
+            // The last region was deleted. Drop the source instead of leaving it empty, so a
+            // Performance-only deck stays out of the modulation graph.
             if let Some(uuid) = lane.envelopes.remove(&key) {
                 self.modulation.remove_source(&uuid);
             }
@@ -1070,8 +1009,7 @@ impl Mixer {
             .add_source(crate::modulation::ModulationSource::envelope(breakpoints));
         self.modulation
             .set_timebase(&uuid, crate::timebase::Timebase::Transport);
-        // Absolute: a region *is* the deck's opacity for that span, rather than
-        // an offset riding on whatever the fader happened to be left at.
+        // Absolute: a region sets the deck's opacity for that span instead of offsetting the fader.
         self.modulation.assign_with_mode(
             &key,
             &uuid,
@@ -1086,11 +1024,8 @@ impl Mixer {
         Some(uuid)
     }
 
-    /// Replace the arrangement (used by persistence restore and undo).
-    ///
-    /// Clears live overrides, because they are session state: reloading a scene
-    /// restores full arrangement authority rather than reviving whichever
-    /// faders someone had grabbed.
+    /// Replace the arrangement (used by persistence restore and undo). Clears live overrides,
+    /// since they are session state.
     pub fn set_arrangement(&mut self, arrangement: Option<crate::arrangement::ArrangementConfig>) {
         self.arrangement = arrangement;
         self.modulation.clear_overrides();
@@ -1271,9 +1206,7 @@ mod tests {
     }
 
     // ── Mixer-level DnD data model tests ─────────────────────────────
-    //
-    // Tests for cross-channel deck moves and master effect reordering,
-    // matching the logic in apply_deck_and_effect_actions.
+    // Cross-channel deck moves and master effect reordering, as in apply_deck_and_effect_actions.
 
     use crate::renderer::GpuContext;
 
@@ -1322,8 +1255,7 @@ mod tests {
 
     #[test]
     fn mixer_master_effect_reorder() {
-        // Master effects are Vec<Effect> — test the vec reorder pattern
-        // used in apply_deck_and_effect_actions
+        // Master effects are a Vec<Effect>; test the reorder used in apply_deck_and_effect_actions.
         let mut effects = vec!["master_blur", "master_color", "master_feedback"];
         // Move last to first (from=2, to=0)
         let e = effects.remove(2);
@@ -1334,7 +1266,7 @@ mod tests {
         );
     }
 
-    // ── Chaos Tests Round 2: Crossfader/opacity arithmetic ──────────────
+    // ── Crossfader/opacity arithmetic ──────────────────────────────
 
     #[test]
     fn chaos_crossfader_opacity_arithmetic_oob() {
@@ -1351,7 +1283,7 @@ mod tests {
         let crossfader = f32::NAN;
         let opacity = 0.8_f32;
         let result = (1.0 - crossfader) * opacity;
-        // NaN propagates — document this behavior
+        // NaN propagates.
         assert!(result.is_nan(), "NaN crossfader should propagate NaN");
     }
 
@@ -1371,7 +1303,7 @@ mod tests {
         assert!(result.is_nan());
     }
 
-    // ── Channel preview / cue tests (issue #72) ──────────────────────
+    // ── Channel preview / cue tests ─────────────────────────────
 
     fn add_solid_deck_to(mixer: &mut Mixer, gpu: &GpuContext, ch_idx: usize, color: [f32; 4]) {
         let deck = crate::deck::Deck::solid_color(gpu, color, 64, 64);
@@ -1446,11 +1378,9 @@ mod tests {
         assert_eq!(mixer.channel(1).unwrap().active_deck_count, 0);
     }
 
-    // ── Parameter router: UUID addressing survives reorder (WS2) ─────
-    //
-    // Regression guard for /spec/parameter-routing.md: modulators are
-    // addressed by stable UUID, so removing an earlier source (which shifts
-    // positional indices) must not retarget a saved binding.
+    // ── Parameter router: UUID addressing survives reorder ─────
+    // Modulators are addressed by UUID, so removing an earlier source (shifting positional
+    // indices) must not retarget a saved binding.
 
     #[test]
     fn param_router_addresses_modulator_by_uuid_after_reorder() {
@@ -1468,9 +1398,7 @@ mod tests {
             .modulation_mut()
             .add_source(ModulationSource::sine_lfo(1.0));
 
-        // Remove `a` → `b` shifts to positional index 0. Under the old
-        // index-based router, `mod/<b>` would have missed or hit the wrong
-        // source; under UUID addressing it still resolves to `b`.
+        // Remove `a`, shifting `b` to positional index 0; `mod/<b>` must still resolve to `b`.
         mixer.modulation_mut().remove_source(&a);
 
         let path = format!("mod/{b}/frequency");

@@ -1,6 +1,5 @@
-//! One input source's capture callback and the analysis of its audio: FFT,
-//! level, spectral-flux onsets, and BPM, one 256-sample hop at a time.
-//! See /spec/performance-hot-paths.md item H.
+//! One input source's capture callback and audio analysis: FFT, level,
+//! spectral-flux onsets, and BPM, one 256-sample hop at a time.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -15,7 +14,7 @@ use super::{
     ONSET_MEDIAN_WINDOW, PcmSubscriber, compute_onset_threshold, estimate_bpm, fan_out_pcm,
 };
 
-/// The analysis state carried from hop to hop.
+/// Analysis state carried between hops.
 pub(crate) struct HopAnalyzer {
     fft: Arc<dyn Fft<f32>>,
     hann_window: Vec<f32>,
@@ -55,27 +54,26 @@ impl HopAnalyzer {
         }
     }
 
-    /// Analyze one hop of `FFT_HOP` mono samples.
+    /// Analyzes one hop of `FFT_HOP` mono samples.
     pub(crate) fn analyze(&mut self, hop: &[f32]) -> AudioData {
         const NOISE_FLOOR: f32 = 1e-4;
 
         let waveform: Arc<[f32]> = hop.into();
         let level = (waveform.iter().map(|s| s * s).sum::<f32>() / FFT_HOP as f32).sqrt();
 
-        // Write hop into ring buffer (wrapping)
         for (i, &s) in waveform.iter().enumerate() {
             self.ring_buffer[(self.ring_write_pos + i) % FFT_SIZE] = s;
         }
         self.ring_write_pos = (self.ring_write_pos + FFT_HOP) % FFT_SIZE;
 
-        // Extract the linearized 2048-sample frame and apply the window.
+        // Linearize the 2048-sample frame and apply the window.
         for i in 0..FFT_SIZE {
             let idx = (self.ring_write_pos + i) % FFT_SIZE;
             self.fft_input[i] = Complex::new(self.ring_buffer[idx] * self.hann_window[i], 0.0);
         }
         self.fft.process(&mut self.fft_input);
 
-        // Magnitude scaling with noise floor
+        // Magnitude scaling with a noise floor.
         let scale = 2.0 / FFT_SIZE as f32;
         let fft_magnitudes: Arc<[f32]> = self.fft_input[..FFT_SIZE / 2]
             .iter()
@@ -85,7 +83,7 @@ impl HopAnalyzer {
             })
             .collect();
 
-        // Spectral flux onset detection
+        // Spectral-flux onset detection.
         let spectral_flux: f32 = fft_magnitudes
             .iter()
             .zip(self.prev_fft_magnitudes.iter())
@@ -103,7 +101,7 @@ impl HopAnalyzer {
         let is_onset = spectral_flux > onset_threshold && elapsed > MIN_BEAT_INTERVAL;
         self.prev_fft_magnitudes = Arc::clone(&fft_magnitudes);
 
-        // BPM estimation with outlier rejection
+        // BPM estimate with outlier rejection.
         if is_onset {
             if elapsed < MAX_BEAT_INTERVAL {
                 self.beat_intervals.push(elapsed);
@@ -131,15 +129,13 @@ impl HopAnalyzer {
     }
 }
 
-/// Hops the capture callback may queue ahead of the analysis thread, about
-/// 170 ms at 48 kHz. Past that the analysis is falling behind and a hop is
-/// dropped rather than blocking the callback.
+/// Hops the capture callback may queue ahead of the analysis thread (about
+/// 170 ms at 48 kHz). When full, hops are dropped so the callback never blocks.
 const HOP_QUEUE: usize = 32;
 
-/// What the capture callback does with each buffer the device delivers: tee
-/// the raw PCM to passthrough subscribers, mix to mono, and hand each full hop
-/// to the source's analysis thread. It allocates nothing unless a passthrough
-/// is subscribed, and never waits.
+/// Capture callback state: tees raw PCM to passthrough subscribers, mixes to
+/// mono, and sends each full hop to the analysis thread. Never waits, and
+/// allocates only when a passthrough is subscribed.
 pub(crate) struct CaptureState {
     channels: usize,
     hop: [f32; FFT_HOP],
@@ -149,8 +145,8 @@ pub(crate) struct CaptureState {
 }
 
 impl CaptureState {
-    /// Start the source's analysis thread, which publishes to `sender` and
-    /// ends when this is dropped along with the stream.
+    /// Starts the analysis thread, which publishes to `sender` and exits when
+    /// this is dropped with the stream.
     ///
     /// # Errors
     ///
@@ -179,15 +175,14 @@ impl CaptureState {
         })
     }
 
-    /// Handle one buffer of interleaved samples from the device.
+    /// Handles one buffer of interleaved device samples.
     pub(crate) fn process<T>(&mut self, data: &[T])
     where
         T: cpal::Sample,
         f32: cpal::FromSample<T>,
     {
-        // Passthrough tee: forward raw interleaved PCM, untouched by the
-        // analysis, to every subscriber. Skipped entirely when there are no
-        // subscribers so the video-only path pays nothing.
+        // Forward raw interleaved PCM to every passthrough subscriber. Skipped
+        // when there are none, so the video-only path costs nothing.
         let subs = self.pcm_subs.load();
         if !subs.is_empty() {
             let pcm: Vec<f32> = data
@@ -218,10 +213,9 @@ impl CaptureState {
 mod tests {
     use super::{CaptureState, FFT_HOP, HopAnalyzer};
 
-    /// Moving the analysis off the callback changes where it runs, not what it
-    /// finds: each published hop carries the waveform, spectrum and level that
-    /// analyzing the same hop directly gives. The device buffers here do not
-    /// line up with hops, so hop assembly across buffers is exercised too.
+    /// Each published hop carries the same waveform, spectrum, and level as
+    /// analyzing that hop directly. Device buffers don't align with hops, so
+    /// this also covers hop assembly across buffers.
     #[test]
     fn the_analysis_thread_publishes_what_direct_analysis_gives() {
         const HOPS: usize = 24;

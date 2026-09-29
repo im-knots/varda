@@ -1,4 +1,4 @@
-//! `.vtt` caption files. See /spec/text-source.md § Timed text parsing.
+//! `.vtt` caption files.
 
 use crate::text::cue::{
     Cue, CueAlign, LineAlign, LineValue, Parsed, Placement, PositionAlign, Problem, Word,

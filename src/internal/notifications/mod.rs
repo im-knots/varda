@@ -13,11 +13,11 @@ impl NotificationLevel {
     }
 }
 
-/// A single notification message
+/// A notification message.
 #[derive(Debug, Clone)]
 pub struct Notification {
-    /// Stable for the life of the session. Consumers dismiss by id because a
-    /// position shifts as older notifications expire.
+    /// Stable for the session. Dismiss by id, since positions shift as older
+    /// notifications expire.
     pub id: u64,
     pub level: NotificationLevel,
     pub message: String,
@@ -38,17 +38,15 @@ impl Notification {
     }
 }
 
-/// Non-modal notification system for displaying messages to the user
+/// Non-modal notifications shown to the user.
 pub struct NotificationSystem {
-    /// Active notifications (newest first)
+    /// Newest first.
     active: Vec<Notification>,
-    /// History of all notifications (for log panel)
+    /// Every notification, for the log panel.
     history: Vec<Notification>,
-    /// Maximum number of visible notifications
     max_visible: usize,
     /// Keys for which a one-shot notification has already been emitted.
     once_keys: HashSet<String>,
-    /// Id for the next notification.
     next_id: u64,
 }
 
@@ -63,7 +61,7 @@ impl NotificationSystem {
         }
     }
 
-    /// Push a notification with default duration based on severity
+    /// Pushes a notification with the default duration for its severity.
     pub fn notify(&mut self, level: NotificationLevel, message: impl Into<String>) {
         let duration = match level {
             NotificationLevel::Info => Duration::from_secs(3),
@@ -110,9 +108,8 @@ impl NotificationSystem {
         self.notify(NotificationLevel::Error, message);
     }
 
-    /// Emit a notification at most once per unique `key` for the lifetime of the
-    /// system. Returns true if the notification was emitted (first time for the
-    /// key), false if it was deduplicated.
+    /// Emits a notification at most once per `key` for the system's lifetime.
+    /// Returns false if `key` was already used.
     pub fn notify_once(
         &mut self,
         key: impl Into<String>,
@@ -127,31 +124,26 @@ impl NotificationSystem {
         }
     }
 
-    /// Forget `notify_once` keys beginning with `prefix`, so the same condition
-    /// can report again.
-    ///
-    /// Used when the underlying cause may have been resolved — a shader
-    /// hot-reload lifts GPU quarantines, and a deck that fails again afterwards
-    /// is new information the performer needs.
+    /// Forgets `notify_once` keys starting with `prefix`, so the condition can
+    /// report again. Used when the cause may be fixed, e.g. a shader hot-reload
+    /// lifts GPU quarantines.
     pub fn clear_once_key_prefix(&mut self, prefix: &str) -> bool {
         let previous_len = self.once_keys.len();
         self.once_keys.retain(|k| !k.starts_with(prefix));
         self.once_keys.len() != previous_len
     }
 
-    /// Remove expired notifications
     pub fn update(&mut self) {
         self.active.retain(|n| !n.is_expired());
     }
 
-    /// Get active notifications (up to `max_visible`)
+    /// Active notifications, up to `max_visible`.
     pub fn visible(&self) -> &[Notification] {
         let end = self.active.len().min(self.max_visible);
         &self.active[..end]
     }
 
-    /// Dismiss the notification with `id`. Unknown ids (already expired or
-    /// dismissed) are ignored.
+    /// Dismisses notification `id`. Unknown ids are ignored.
     pub fn dismiss(&mut self, id: u64) {
         self.active.retain(|n| n.id != id);
     }
@@ -352,7 +344,7 @@ mod tests {
         assert_eq!(ns3.visible()[0].duration, Duration::from_secs(8));
     }
 
-    // ── Offensive: history must be capped at 1000 ────────────────────
+    // ── History is capped at 1000 ──
 
     #[test]
     fn notification_history_capped_at_1000() {
@@ -365,7 +357,6 @@ mod tests {
             "history should be capped at 1000, got {}",
             ns.history.len()
         );
-        // Oldest messages should have been evicted
         assert!(
             ns.history[0].message != "msg 0",
             "oldest message should have been evicted"
@@ -379,7 +370,6 @@ mod tests {
             ns.info(format!("msg {i}"));
         }
         assert_eq!(ns.history.len(), 1000);
-        // Adding one more should still cap at 1000
         ns.info("overflow");
         assert_eq!(ns.history.len(), 1000);
         assert_eq!(ns.history.last().unwrap().message, "overflow");

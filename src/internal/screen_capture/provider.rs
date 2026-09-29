@@ -1,4 +1,4 @@
-//! Screen and window capture as a deck source. See /spec/screen-capture.md.
+//! Screen and window capture as a deck source.
 
 use super::backend::{
     CaptureConfig, CropRect, DEFAULT_CAPTURE_RATE, MAX_CAPTURE_RATE, MIN_CAPTURE_RATE,
@@ -17,8 +17,8 @@ use std::sync::LazyLock;
 
 pub const SOURCE_TYPE: &str = "ScreenCapture";
 
-/// Every capture control is MIDI-learnable, OSC-addressable and macro-drivable,
-/// but none is a modulation target: see spec/video-playback-modulation.md.
+/// Capture controls. All are MIDI-learnable, OSC-addressable and
+/// macro-drivable; none is a modulation target.
 static PARAMS: LazyLock<Vec<ControlSpec>> = LazyLock::new(|| {
     vec![
         ControlSpec::float("rate", "Rate", MIN_CAPTURE_RATE, MAX_CAPTURE_RATE)
@@ -106,8 +106,8 @@ fn default_rate() -> f32 {
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Config {
-    /// Matched by **name** on restore, never by platform handle: display ids
-    /// and window numbers do not survive a reboot.
+    /// Matched by name on restore, not by platform handle: display ids and window
+    /// numbers do not survive a reboot.
     target: TargetConfig,
     #[serde(default = "default_rate")]
     rate: f32,
@@ -116,8 +116,8 @@ struct Config {
     crop: Option<CropConfig>,
     #[serde(default)]
     show_cursor: bool,
-    /// `None` means the per-target default: exclude Varda from a display
-    /// capture, include it when the target is a Varda window.
+    /// `None` uses the per-target default: exclude Varda from a display capture,
+    /// include it when the target is a Varda window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     exclude_varda: Option<bool>,
     #[serde(default)]
@@ -144,10 +144,9 @@ impl Config {
     }
 }
 
-/// Screen and window capture.
 #[derive(Default)]
 pub struct ScreenCaptureProvider {
-    /// Decks referencing each session, counted over every deck each frame.
+    /// Decks using each session, recounted over every deck each frame.
     holders: HashMap<CaptureId, u32>,
     /// Sessions a visible or cued deck shows. Only these upload.
     wanted: HashSet<CaptureId>,
@@ -158,7 +157,7 @@ impl ScreenCaptureProvider {
         Self::default()
     }
 
-    /// Open `config`'s target. With `keep_unbound`, a missing target yields an
+    /// Opens `config`'s target. With `keep_unbound`, a missing target gives an
     /// unbound deck instead of an error.
     fn open(
         config: &SourceConfig,
@@ -178,10 +177,9 @@ impl ScreenCaptureProvider {
                 config.target.label()
             );
         }
-        // Capped to the deck but kept in the target's own shape, so the deck's
-        // scaling mode still has an aspect mismatch to resolve. Without a cap a
-        // 4K display would move 33 MB per frame only to be scaled down after.
-        // See spec/screen-capture.md § Performance.
+        // Capped to the deck size but kept in the target's shape, so the deck's
+        // scaling mode still resolves the aspect. Uncapped, a 4K display moves
+        // 33 MB per frame.
         let scale_to = found.as_ref().map_or((env.width, env.height), |info| {
             super::resample::fit_within(info.width, info.height, env.width, env.height)
         });
@@ -257,9 +255,8 @@ impl DeckSourceProvider for ScreenCaptureProvider {
         }
     }
 
-    /// Targets split into displays and windows, with Varda's own windows
-    /// marked so self-capture is an informed choice rather than an accidental
-    /// mirror. See spec/screen-capture.md § UI.
+    /// Targets split into displays and windows, with Varda's own windows marked
+    /// so self-capture is deliberate.
     fn library(&self, query: &SourceQuery) -> LibrarySection {
         let Some(captures) = query.services.get::<ScreenCaptureManager>() else {
             return LibrarySection::default();
@@ -283,9 +280,8 @@ impl DeckSourceProvider for ScreenCaptureProvider {
             })
             .collect();
 
-        // macOS grants do not apply to the running process, so the copy says
-        // so: a user who grants access and sees nothing change would otherwise
-        // conclude the feature is broken. See spec/screen-capture.md § Permissions.
+        // macOS grants do not apply to the running process, so the text says so;
+        // otherwise the feature looks broken after granting access.
         let notices = match captures.permission_state().as_str() {
             "granted" | "not_required" => Vec::new(),
             "denied" => vec![LibraryNotice {
@@ -334,10 +330,9 @@ impl DeckSourceProvider for ScreenCaptureProvider {
         Self::open(config, env, false)
     }
 
-    /// Unlike a camera, a missing capture target does **not** drop the deck.
-    /// Windows come and go constantly, and silently losing a deck with its
-    /// effect chain, opacity and mappings because an app was closed would be a
-    /// bad live failure. The deck comes back unbound and shows black.
+    /// Unlike a camera, a missing capture target keeps the deck. Windows close
+    /// often, and dropping the deck would lose its effect chain, opacity and
+    /// mappings. The deck restores unbound and shows black.
     fn restore(
         &mut self,
         config: &SourceConfig,
@@ -346,8 +341,8 @@ impl DeckSourceProvider for ScreenCaptureProvider {
         Self::open(config, env, true)
     }
 
-    /// The stored identity rather than the display label: a window whose title
-    /// changed is still the same source and must be patched in place.
+    /// The stored target, not the display label, so a window whose title changed
+    /// is patched in place.
     fn identity(&self, config: &SourceConfig) -> serde_json::Value {
         config.get("target").cloned().unwrap_or_default()
     }
@@ -361,11 +356,9 @@ impl DeckSourceProvider for ScreenCaptureProvider {
         }
     }
 
-    /// Stop any session whose last deck is gone: a deck dropped outside
-    /// `release` (a scene diff, an undo, a removed channel) never released its
-    /// session, which would otherwise keep grabbing frames for nothing. Then
-    /// upload only what is on screen, which makes an invisible capture deck
-    /// (including a self-capture) free.
+    /// Stops sessions with no decks left. A deck dropped outside `release` (scene
+    /// diff, undo, removed channel) never released its session. Then uploads only
+    /// what is on screen, so an invisible capture deck costs nothing.
     fn tick(&mut self, env: &mut SourceEnv, _submit: &mut Vec<wgpu::CommandBuffer>) {
         if let Some(captures) = env.services.get_mut::<ScreenCaptureManager>() {
             captures.reconcile_holders(&self.holders);
@@ -382,8 +375,8 @@ impl DeckSourceProvider for ScreenCaptureProvider {
         ) else {
             return;
         };
-        // Router and UI edits land on the deck; they travel down to the capture
-        // thread here, once, when they change.
+        // Router and UI edits change the deck config; push changes to the capture
+        // thread here.
         if std::mem::take(&mut deck.config_dirty) {
             captures.set_config(deck.id, deck.config.clone());
         }
@@ -418,7 +411,6 @@ impl DeckSourceProvider for ScreenCaptureProvider {
     }
 }
 
-/// One capture deck.
 pub struct ScreenCapture {
     id: CaptureId,
     identity: TargetIdentity,

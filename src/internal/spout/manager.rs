@@ -1,10 +1,8 @@
-//! Discovery, receive, and publish for Spout, behind one cross-platform surface.
+//! Discovery, receive, and publish for Spout.
 //!
-//! The surface compiles everywhere and reports unavailable off Windows, the same
-//! shape the HTML deck source uses, so persistence, API and UI code and their
-//! tests build and run on every platform. Only the bodies are Windows gated.
-//!
-//! See /spec/spout-output.md.
+//! The API compiles everywhere and reports unavailable off Windows, so
+//! persistence, API and UI code build and test on every platform. Only the
+//! bodies are Windows-gated.
 
 #[cfg(target_os = "windows")]
 use std::collections::HashMap;
@@ -17,8 +15,7 @@ pub struct SpoutSource {
 
 /// Discovery, receivers, and publishers.
 ///
-/// Render-thread only, like the Syphon manager: every graphics handle it owns
-/// belongs to one thread and nothing is shared across them.
+/// Render-thread only, like the Syphon manager.
 pub struct SpoutManager {
     available: bool,
     sources: Vec<SpoutSource>,
@@ -36,9 +33,8 @@ pub struct SpoutManager {
 /// One receiver: which sender, and what it last published.
 struct Receiver {
     name: String,
-    /// The shared handle currently bound. Zero until the first frame. A change
-    /// means the sender restarted or resized, and is the only trigger for
-    /// rebuilding the destination texture.
+    /// The shared handle currently bound; zero until the first frame. A change
+    /// (sender restarted or resized) rebuilds the destination texture.
     handle: u32,
     width: u32,
     height: u32,
@@ -48,20 +44,17 @@ struct Receiver {
 /// One publisher: the shared texture receivers read, plus the registry entries
 /// keeping it discoverable.
 ///
-/// The two `SharedMemory` handles are held rather than used: Windows frees a
-/// mapping when its last handle closes, so dropping either takes the sender off
-/// the machine.
+/// The two `SharedMemory` handles are only held: Windows frees a mapping when its
+/// last handle closes, so dropping either unregisters the sender.
 #[cfg(target_os = "windows")]
 struct Sender {
     shared: windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
     /// Where the conversion blit lands before the bridge copies it across.
-    /// Single rather than a ring: the blit is submitted to wgpu's queue first and
-    /// the bridge's copy goes to that same underlying D3D12 queue, so the two are
-    /// ordered without a fence. That ordering is an assumption this machine
-    /// cannot test and is called out in /spec/spout-output.md.
+    /// One texture, no ring: the blit and the bridge copy go to the same D3D12
+    /// queue, so they are ordered without a fence (assumed, untested).
     staging: wgpu::Texture,
-    /// An sRGB view of `staging`, so the hardware performs the transfer. Same
-    /// reasoning as the Syphon publish path in /spec/syphon-zero-copy.md.
+    /// An sRGB view of `staging`, so the hardware applies the transfer function,
+    /// as on the Syphon publish path.
     staging_view: wgpu::TextureView,
     width: u32,
     height: u32,
@@ -139,9 +132,8 @@ impl SpoutManager {
 
     /// Begin receiving from a sender, returning its index.
     ///
-    /// Succeeds before the sender publishes anything: a deck bound to a producer
-    /// that has not started yet shows the placeholder and picks the frames up
-    /// when they arrive, which is what makes start order not matter.
+    /// Succeeds before the sender publishes anything: the deck shows a
+    /// placeholder until frames arrive, so start order does not matter.
     pub fn start_receive(&mut self, name: &str, device: &wgpu::Device) -> Option<usize> {
         if !self.available {
             return None;
@@ -174,8 +166,8 @@ impl SpoutManager {
 
     /// Which sender a receiver is bound to.
     ///
-    /// The engine needs this to late-bind decks whose producer had not started
-    /// when the scene loaded, the same way the Syphon path reconciles by name.
+    /// Used to late-bind decks whose producer was not running when the scene
+    /// loaded, as the Syphon path does by name.
     #[must_use]
     pub fn source_name(&self, idx: usize) -> Option<&str> {
         self.receivers.get(idx).map(|r| r.name.as_str())
@@ -194,8 +186,7 @@ impl SpoutManager {
     /// Pull the current frame from every sender being received.
     ///
     /// Render thread. The destination is rebuilt only when the sender's handle or
-    /// size changes, which is when it restarted or resized; every other frame is
-    /// one GPU copy across the bridge.
+    /// size changes; otherwise each frame is one GPU copy across the bridge.
     #[cfg(target_os = "windows")]
     pub fn update(&mut self, device: &wgpu::Device) {
         if !self.available || self.receivers.is_empty() {
@@ -214,8 +205,7 @@ impl SpoutManager {
             };
             let format = super::protocol::DxgiFormat::from_u32_or_default(info.format);
             let Some(format) = format else {
-                // An unknown layout sampled anyway produces a plausible wrong
-                // picture, which is worse than declining the source.
+                // Sampling an unknown layout gives a plausible wrong picture.
                 log::warn!(
                     "Spout '{name}': sender publishes unsupported format {}",
                     info.format
@@ -250,9 +240,9 @@ impl SpoutManager {
 
     /// Publish a composited frame as a Spout sender.
     ///
-    /// Converts into a `BGRA8` staging texture through an sRGB view, then hands
-    /// it across the bridge into the shared texture receivers read. The blit is
-    /// submitted before the bridge copy so the two are ordered on one queue.
+    /// Blits into a `BGRA8` staging texture through an sRGB view, then copies it
+    /// across the bridge into the shared texture. The blit is submitted first so
+    /// both are ordered on one queue.
     #[cfg(target_os = "windows")]
     pub fn publish_frame_gpu(
         &mut self,
@@ -325,8 +315,8 @@ impl SpoutManager {
 
     /// Build the bridge once, and remember when it cannot be built.
     ///
-    /// A machine where wgpu chose Vulkan has no bridge and never will, so
-    /// `available` is cleared rather than retried every frame.
+    /// If wgpu chose Vulkan the bridge can never be built, so `available` is
+    /// cleared instead of retrying every frame.
     #[cfg(target_os = "windows")]
     fn ensure_bridge(&mut self, device: &wgpu::Device) {
         if self.bridge.is_some() || !self.available {
@@ -406,8 +396,8 @@ impl SpoutManager {
 
 /// A black stand-in bound until a sender publishes.
 ///
-/// Decks bind the moment they are added, which can be long before the producer
-/// starts, so `texture_view` always has something to return.
+/// Decks bind when added, possibly before the producer starts, so
+/// `texture_view` always has something to return.
 fn make_placeholder(
     device: &wgpu::Device,
     name: &str,
@@ -461,10 +451,9 @@ fn make_receive_texture(
 
 /// The staging texture the conversion blit renders into.
 ///
-/// `Bgra8Unorm` with an `Bgra8UnormSrgb` view: the shared texture Spout
-/// receivers read is `DXGI_FORMAT_B8G8R8A8_UNORM`, and the copy across the
-/// bridge is byte for byte, so the transfer has to be applied by the blit. The
-/// view does that in hardware rather than in a shader.
+/// `Bgra8Unorm` with a `Bgra8UnormSrgb` view. The shared texture is
+/// `DXGI_FORMAT_B8G8R8A8_UNORM` and the bridge copies bytes as-is, so the blit
+/// applies the transfer function, in hardware via the view.
 #[cfg(target_os = "windows")]
 fn make_publish_texture(
     device: &wgpu::Device,
@@ -524,8 +513,7 @@ impl crate::source::ShareReceiver for SpoutManager {
     }
 }
 
-/// Spout senders as a deck source. The Windows counterpart to Syphon; off
-/// Windows the manager reports unavailable and the type is not listed.
+/// Spout senders as a deck source. Not listed off Windows.
 pub fn provider() -> crate::source::ShareProvider<SpoutManager> {
     crate::source::ShareProvider::new(crate::source::ShareProtocol {
         id: "Spout",
@@ -570,9 +558,8 @@ pub fn sink_provider() -> crate::output::share::ShareSinkProvider<SpoutManager> 
 mod tests {
     use super::*;
 
-    // The surface is what integration, persistence and UI code binds against, so
-    // it has to behave sanely on a platform where Spout cannot exist at all.
-    // These run on the development machine.
+    // Integration, persistence and UI code bind against this API, so it must
+    // behave on platforms without Spout.
 
     #[test]
     fn spout_is_unavailable_off_windows() {
@@ -605,8 +592,7 @@ mod tests {
 
     #[test]
     fn a_receiver_remembers_which_sender_it_wants() {
-        // Late binding depends on this: a deck bound to a producer that has not
-        // started keeps the name so it can be reconciled when it appears.
+        // Late binding needs the name kept until the producer appears.
         let Some(context) = crate::testing::headless_gpu() else {
             return;
         };

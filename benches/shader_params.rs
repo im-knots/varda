@@ -2,14 +2,13 @@
 ///
 /// Three variants per param count:
 ///   `no_mod`     — std140 byte buffer serialization only.
-///   `empty_mod`  — modulation engine present but no assignments.
-///                Isolates the cost of the per-param key construction
-///                (currently a `format!` allocation).
+///   `empty_mod`  — modulation engine present but no assignments; isolates
+///                the per-param key construction.
 ///   `active_lfo` — full modulation path: lookup, LFO read, clamp, write.
 ///
-/// The (`empty_mod` − `no_mod`) gap is the per-param allocation cost paid even
-/// when nothing is modulated. Multiply by params × decks × effects to
-/// estimate the per-frame floor for a full scene.
+/// The (`empty_mod` − `no_mod`) gap is the per-param cost paid even when
+/// nothing is modulated. Multiply by params × decks × effects for a full
+/// scene's per-frame floor.
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use varda::{
     isf::ISFInput,
@@ -127,16 +126,13 @@ fn bench_shader_params_buffer(c: &mut Criterion) {
     g.finish();
 }
 
-/// Measures the combined cost of prefix construction + modulated buffer build.
-///
-/// In the render loop, each deck/effect creates its prefix via format!() then
-/// passes it to `build_modulated_buffer_data`. This benchmark captures both
-/// steps together so we can measure the effect of caching the prefix.
+/// Combined cost of prefix construction and modulated buffer build, as the
+/// render loop does per deck/effect, against a cached prefix.
 fn bench_prefix_construction(c: &mut Criterion) {
     let mut g = c.benchmark_group("prefix_construction");
     g.sample_size(500);
 
-    // Simulate the deck render path: the deck param prefix + modulated buffer build
+    // The deck render path: param prefix plus modulated buffer build.
     let deck_uuid = "a1b2c3d4";
     let fx_uuid = "e5f6a7b8";
 
@@ -164,7 +160,7 @@ fn bench_prefix_construction(c: &mut Criterion) {
             });
         });
 
-        // Cached: prefix already exists, just pass &str (no allocation)
+        // Cached: prefix already exists (no allocation)
         let cached_deck_prefix = format!("deck/{deck_uuid}/param");
         let cached_fx_prefix = format!("effect/{fx_uuid}/param");
         let mut params_deck_cached = make_params(n_floats);
@@ -188,10 +184,9 @@ fn bench_prefix_construction(c: &mut Criterion) {
 
 /// Per-frame cost of reading the values that drive phase accumulators.
 ///
-/// `base` is `get_float` — what the accumulator used before it respected
-/// modulation. `empty_mod` and `active_lfo` are `get_float_modulated` with and
-/// without an assignment on the parameter. The gap between `base` and the others
-/// is the price of making phase accumulation audio-reactive, paid at most four
+/// `base` is `get_float`. `empty_mod` and `active_lfo` are
+/// `get_float_modulated` without and with an assignment on the parameter. The
+/// gap is the cost of audio-reactive phase accumulation, paid at most four
 /// times per deck and per effect.
 fn bench_phase_accumulator_reads(c: &mut Criterion) {
     const PHASE_PARAMS: [&str; 4] = ["p0", "p1", "p2", "p3"];

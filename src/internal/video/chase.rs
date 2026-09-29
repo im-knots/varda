@@ -1,9 +1,9 @@
-//! Video-deck chase servo. See /spec/timecode.md § Consumer 2.
+//! Chase servo that keeps a video deck locked to timecode.
 
 use crate::engine::value::source::DeckTransportSync;
 
 /// Result of one chase step: the clip position to take, and whether the
-/// decoder must seek rather than walk sequentially.
+/// decoder must seek instead of decoding forward.
 #[derive(Debug, Clone, Copy)]
 pub struct ChaseStep {
     pub position: f64,
@@ -13,11 +13,11 @@ pub struct ChaseStep {
 
 /// One-frame deadband, in clip frames.
 pub const DEADBAND_FRAMES: f64 = 1.0;
-/// Seek rather than trim once error reaches this many seconds.
+/// Seek instead of trimming once the error reaches this many seconds.
 pub const SEEK_THRESHOLD_SECS: f64 = 0.5;
 /// Maximum relative trim around `base` (±20%).
 pub const TRIM_CLAMP: f64 = 0.2;
-/// P-gain (per second) so a 0.5 s error sits on the clamp.
+/// P-gain (per second); a 0.5 s error hits the clamp.
 pub const GAIN: f64 = 0.4;
 
 /// Transport snapshot written once per render frame and read by decode threads.
@@ -47,8 +47,8 @@ pub struct ChaseTransport {
     pub fps: f64,
 }
 
-/// Shared inbox: render thread publishes, decode thread consumes.
-/// Discontinuity is sticky so a one-frame locate cannot be missed.
+/// Written by the render thread, read by the decode thread. The
+/// discontinuity flag is sticky so a one-frame locate is never missed.
 pub struct ChaseInbox {
     sample: std::sync::Mutex<VideoChaseBroadcast>,
     discontinuity: std::sync::atomic::AtomicBool,
@@ -135,7 +135,7 @@ pub fn desired_position(
     if mapped.is_nan() { in_point } else { mapped }
 }
 
-/// One servo step. Loop mode is not consulted: hold the in/out bounds.
+/// One servo step. Ignores loop mode and holds the in/out bounds.
 #[must_use]
 pub fn step_chase(input: ChaseInput) -> ChaseStep {
     let ChaseInput {
@@ -162,9 +162,8 @@ pub fn step_chase(input: ChaseInput) -> ChaseStep {
     let frame_time = 1.0 / positive_rate_or_default(frame_rate);
     let base_speed = finite_or(base_speed, 1.0);
 
-    // A transport position that is not a place cannot move the clip. The
-    // transport rejects this upstream too, but the decode thread is a
-    // show-critical boundary and must remain safe if called directly.
+    // A non-finite transport position cannot move the clip. The transport
+    // rejects it too, but the decode thread must stay safe if called directly.
     if !transport_position.is_finite() {
         return ChaseStep {
             needs_seek: false,
@@ -260,7 +259,7 @@ mod tests {
 
     #[test]
     fn delay_frames_use_transport_fps_not_clip_fps() {
-        // 30 transport frames = 1 s, clip in-point stays put relative to that.
+        // 30 transport frames = 1 s; the clip in-point stays fixed relative to that.
         let with_delay = desired_position(10.0, 0.0, 1.0, 0.0, 30, 30.0);
         assert!((with_delay - 9.0).abs() < 1e-9);
     }
@@ -348,7 +347,7 @@ mod tests {
         let mut tick = input(2.50, 1.49);
         tick.transport_dt = 0.1;
         tick.base_speed = 2.0;
-        // desired = 2.98, error = 0.48, and the gain produces a 1.192 factor.
+        // desired = 2.98, error = 0.48; the gain gives a 1.192 factor.
         let out = step_chase(tick);
         assert!(!out.needs_seek);
         assert!((out.position - 2.7384).abs() < 1e-9);

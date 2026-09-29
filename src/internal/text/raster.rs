@@ -1,11 +1,9 @@
 //! Shaping and rasterizing one line or word into a coverage mask.
 //!
-//! A unit is drawn by building a one-element SVG `<text>` document and letting
-//! usvg shape it against the shared font database (kerning, ligatures,
-//! combining marks and per-glyph font fallback come from rustybuzz, the same
-//! path SVG decks use), then rendering it with resvg. The mask is cropped to
-//! the ink, and the measurements needed to place it are kept with it.
-//! See /spec/text-source.md § Rendering.
+//! Each unit becomes a one-element SVG `<text>` document, shaped by usvg
+//! against the shared font database (rustybuzz handles kerning, ligatures and
+//! font fallback) and rendered with resvg. The mask is cropped to the ink and
+//! stored with its placement measurements.
 
 use anyhow::{Context, Result};
 use std::sync::Arc;

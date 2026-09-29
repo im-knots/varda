@@ -1,9 +1,8 @@
 //! Stage canvas painting: background, grid, surfaces, the transform gizmo, and
 //! in-progress shape previews.
 //!
-//! Read-only with respect to editor state — every gesture that mutates state
-//! lives in [`super::interaction`]. Takes the frame's [`CanvasGeometry`] rather
-//! than recomputing the screen mapping.
+//! Paints only; gestures that mutate state live in [`super::interaction`].
+//! Takes the frame's [`CanvasGeometry`] for the screen mapping.
 
 use super::super::super::UIData;
 use super::geometry::polygon_shape;
@@ -22,10 +21,8 @@ pub(super) fn paint(
     state: &StageEditorState,
     geom: CanvasGeometry,
 ) {
-    // Canvas background
     painter.rect_filled(geom.rect, 0.0, egui::Color32::from_rgb(10, 10, 18));
 
-    // Grid lines
     if geom.grid_size > 0.001 {
         let steps = (1.0 / geom.grid_size).round() as usize;
         for i in 1..steps {
@@ -53,7 +50,6 @@ pub(super) fn paint(
         }
     }
 
-    // Draw surfaces
     let surface_colors = [
         egui::Color32::from_rgb(80, 140, 220),
         egui::Color32::from_rgb(220, 120, 80),
@@ -93,7 +89,7 @@ pub(super) fn paint(
                 egui::Stroke::new(stroke_width, color),
             ));
         }
-        // Draw extra contours (combined non-overlapping surfaces)
+        // Extra contours of combined non-overlapping surfaces.
         for ec in &surface.extra_contours {
             let ec_verts: Vec<egui::Pos2> = ec
                 .iter()
@@ -113,7 +109,6 @@ pub(super) fn paint(
             }
         }
 
-        // Label
         let n = surface.vertices.len().max(1) as f32;
         let center = surface.vertices.iter().fold([0.0f32, 0.0], |acc, v| {
             [acc[0] + v[0] / n, acc[1] + v[1] / n]
@@ -130,8 +125,8 @@ pub(super) fn paint(
             egui::Color32::WHITE,
         );
 
-        // For path-backed (bezier) surfaces: draw the anchor/handle overlay
-        // instead of the dense flattened-vertex handles.
+        // Path-backed (bezier) surfaces draw anchors and handles instead of the
+        // flattened vertices.
         if let Some(path) = &surface.path {
             let anchor_color = egui::Color32::from_rgb(90, 220, 220);
             let handle_color = egui::Color32::from_rgb(255, 180, 60);
@@ -175,19 +170,17 @@ pub(super) fn paint(
             let cx_px = geom.rect.left() + hint.center[0] * geom.width;
             let cy_px = geom.rect.top() + hint.center[1] * geom.height;
             let center_pos = egui::pos2(cx_px, cy_px);
-            // Radius ring — compute the pixel radius at angle=0
+            // Pixel radius at angle 0.
             let radius_px_x = hint.radius * geom.width;
             let radius_px_y = hint.radius * hint.aspect_ratio * geom.height;
             let avg_radius_px = f32::midpoint(radius_px_x, radius_px_y);
-            // Center dot (white)
             painter.circle_filled(center_pos, 4.0, egui::Color32::WHITE);
-            // Radius ring (yellow, dashed look via stroke)
             painter.circle_stroke(
                 center_pos,
                 avg_radius_px,
                 egui::Stroke::new(1.0_f32, egui::Color32::YELLOW),
             );
-            // Radius handle at angle=0 (yellow dot on the right)
+            // Radius handle at angle 0, on the right.
             let handle_pos = egui::pos2(cx_px + radius_px_x, cy_px);
             painter.circle_filled(handle_pos, 6.0, egui::Color32::YELLOW);
             painter.circle_stroke(
@@ -196,7 +189,7 @@ pub(super) fn paint(
                 egui::Stroke::new(1.0_f32, egui::Color32::BLACK),
             );
         } else {
-            // Regular vertex handles (primary + extra contours)
+            // Vertex handles for the primary and extra contours.
             let handle_size = if is_selected { 10.0 } else { 7.0 };
             let handle_color = if is_selected {
                 egui::Color32::WHITE
@@ -232,7 +225,7 @@ pub(super) fn paint(
         }
     }
 
-    // ── Transform gizmo (Select tool, non-empty selection) ───────────
+    // Transform gizmo: Select tool with a non-empty selection.
     if state.tool == DrawingTool::Select
         && let Some((bx, by, bw, bh)) = selection_bounds(&data.surfaces, &state.selected_surfaces)
     {
@@ -265,7 +258,7 @@ pub(super) fn paint(
         painter.circle_stroke(knob, 5.0, egui::Stroke::new(1.0_f32, egui::Color32::BLACK));
     }
 
-    // Draw in-progress polygon
+    // In-progress polygon.
     if !state.polygon_verts.is_empty() && state.tool == DrawingTool::Polygon {
         let pixel_verts: Vec<egui::Pos2> = state
             .polygon_verts
@@ -283,7 +276,7 @@ pub(super) fn paint(
                 egui::Stroke::new(2.0_f32, egui::Color32::YELLOW),
             );
         }
-        // Draw line from last vertex to cursor
+        // Line from the last vertex to the cursor.
         if let Some(pos) = resp.hover_pos()
             && let Some(last) = pixel_verts.last()
         {
@@ -301,7 +294,7 @@ pub(super) fn paint(
         }
     }
 
-    // Draw subtractive holes (8i.7) as red outlines on every surface.
+    // Subtractive holes as red outlines on every surface.
     let hole_color = egui::Color32::from_rgb(255, 80, 80);
     for surface in &data.surfaces {
         for contour in &surface.hole_contours {
@@ -326,7 +319,7 @@ pub(super) fn paint(
         }
     }
 
-    // Draw in-progress rectangle preview
+    // In-progress rectangle preview.
     if let Some(start) = state.rect_start
         && state.tool == DrawingTool::Rectangle
         && let Some(pos) = resp.hover_pos()
@@ -352,7 +345,7 @@ pub(super) fn paint(
         );
     }
 
-    // Draw in-progress circle preview
+    // In-progress circle preview.
     if let Some(center) = state.circle_center
         && state.tool == DrawingTool::Circle
         && let Some(pos) = resp.hover_pos()

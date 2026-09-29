@@ -1,19 +1,14 @@
 //! HDR transfer and gamut math shared by the presentation encoders and the
 //! FFmpeg metadata builders.
 //!
-//! The luminance model comes from /spec/hdr-color-management.md: linear 1.0 is
-//! BT.2408 HDR Reference White at 203 cd/m², so existing SDR content keeps the
-//! apparent brightness it has today and the range above 1.0 that the mixer
-//! tonemap used to discard becomes the HDR gain.
+//! Linear 1.0 is BT.2408 HDR Reference White (203 cd/m²), so SDR content keeps
+//! its brightness and values above 1.0 become HDR range.
 //!
-//! The functions here are the CPU reference. `blit.wgsl` carries the WGSL
-//! mirror, and the shader is held to these values by code-value tests rather
-//! than by inspection.
+//! This is the CPU reference; `blit.wgsl` mirrors it, checked by code-value tests.
 
 use crate::engine::value::render::HDR_REFERENCE_WHITE_NITS;
 
-// ST 2084 (PQ) constants. Named as in the standard rather than descriptively so
-// they can be checked against it directly.
+// ST 2084 (PQ) constants, named as in the standard.
 const M1: f32 = 2610.0 / 16384.0;
 const M2: f32 = 2523.0 / 4096.0 * 128.0;
 const C1: f32 = 3424.0 / 4096.0;
@@ -33,7 +28,7 @@ pub fn pq_from_nits(nits: f32) -> f32 {
 
 /// SMPTE ST 2084 EOTF: a `[0, 1]` PQ code back to absolute luminance in cd/m².
 ///
-/// Only used by tests and diagnostics. The render path never decodes PQ.
+/// Only used by tests and diagnostics.
 #[must_use]
 pub fn nits_from_pq(code: f32) -> f32 {
     let c = code.clamp(0.0, 1.0).powf(1.0 / M2);
@@ -48,9 +43,8 @@ pub fn nits_from_pq(code: f32) -> f32 {
 /// Encode a scene-linear value to a PQ code, anchored at reference white and
 /// clamped to the output's configured peak.
 ///
-/// `peak_nits` is the per-output setting. Values beyond it clamp rather than
-/// rolling off, so the mastering metadata declared from the same setting stays
-/// true by construction.
+/// `peak_nits` is the per-output setting. Values beyond it clamp instead of
+/// rolling off, so mastering metadata built from the same setting stays accurate.
 #[must_use]
 pub fn pq_from_linear(linear: f32, peak_nits: f32) -> f32 {
     let nits = (linear.max(0.0) * HDR_REFERENCE_WHITE_NITS).min(peak_nits);
@@ -59,10 +53,8 @@ pub fn pq_from_linear(linear: f32, peak_nits: f32) -> f32 {
 
 /// Largest scene-linear value an output can carry before clamping.
 ///
-/// This is the range an HDR output transform targets, in place of the `[0, 1]`
-/// every SDR operator targets. Always greater than 1.0 for a requestable peak,
-/// because [`HDR_PEAK_NITS_MIN`] sits above reference white: an output with no
-/// headroom over display white is not an HDR contract.
+/// The range an HDR output transform targets, in place of SDR's `[0, 1]`.
+/// Always greater than 1.0, since [`HDR_PEAK_NITS_MIN`] is above reference white.
 ///
 /// [`HDR_PEAK_NITS_MIN`]: crate::engine::value::render::HDR_PEAK_NITS_MIN
 #[must_use]
@@ -79,10 +71,8 @@ const HLG_C: f32 = 0.559_910_7;
 
 /// Scene-linear HLG value that encodes to 75% signal.
 ///
-/// ITU-R BT.2408 puts HDR Reference White at 75% HLG signal, the same reference
-/// white PQ is anchored to, so Varda's linear 1.0 maps here. Inverting the OETF
-/// at `E' = 0.75` gives this; it is a derived constant, held by a test rather
-/// than trusted.
+/// BT.2408 puts HDR Reference White at 75% HLG signal, so linear 1.0 maps here.
+/// Derived by inverting the OETF at `E' = 0.75`; checked by a test.
 pub const HLG_REFERENCE_WHITE_SIGNAL: f32 = 0.264_963_1;
 
 /// BT.2100 HLG OETF: scene light in `[0, 1]` to a signal in `[0, 1]`.
@@ -99,7 +89,7 @@ pub fn hlg_from_scene(e: f32) -> f32 {
 /// Encode a scene-linear value to an HLG signal, anchored at reference white.
 ///
 /// HLG is relative, so there is no peak setting: `1.0` is the display's nominal
-/// peak, whatever that display is. Values past the top of the range clamp.
+/// peak. Values past the top of the range clamp.
 #[must_use]
 pub fn hlg_from_linear(linear: f32) -> f32 {
     hlg_from_scene(linear.max(0.0) * HLG_REFERENCE_WHITE_SIGNAL)
@@ -113,7 +103,7 @@ pub fn hlg_linear_headroom() -> f32 {
 
 /// Linear BT.709 to linear BT.2020 primaries, row-major.
 ///
-/// Applied to linear values before the transfer encode, never after it.
+/// Apply to linear values, before the transfer encode.
 pub const BT2020_FROM_REC709: [[f32; 3]; 3] = [
     [0.627_403_9, 0.329_283_04, 0.043_313_06],
     [0.069_097_29, 0.919_540_1, 0.011_362_63],
@@ -134,8 +124,7 @@ pub fn bt2020_from_rec709(rgb: [f32; 3]) -> [f32; 3] {
 /// `x265` `master-display` string for BT.2020 primaries with a D65 white point.
 ///
 /// Chromaticity is in 0.00002 units and luminance in 0.0001 cd/m², per ST 2086.
-/// The luminance term is derived from the output's configured peak, never
-/// hardcoded.
+/// Luminance comes from the output's configured peak.
 #[must_use]
 pub fn master_display_string(peak_nits: u16) -> String {
     let max = u32::from(peak_nits) * 10_000;
@@ -146,15 +135,14 @@ pub fn master_display_string(peak_nits: u16) -> String {
 mod tests {
     use super::*;
 
-    /// Rounded to the 10-bit code an encoder would actually write.
+    /// Rounded to the 10-bit code an encoder writes.
     fn code10(pq: f32) -> u32 {
         (pq * 1023.0).round() as u32
     }
 
     #[test]
     fn pq_matches_the_reference_luminance_table() {
-        // The table in /spec/hdr-color-management.md. If these move, the spec is
-        // wrong or the constants are, and either way the picture is wrong.
+        // Reference PQ code values.
         for (nits, expected) in [
             (100.0, 520),
             (203.0, 594),
@@ -169,8 +157,7 @@ mod tests {
 
     #[test]
     fn linear_one_is_reference_white_at_every_peak() {
-        // The anchor that keeps existing content correct: display white stays
-        // display white no matter what peak the output is configured for.
+        // Display white stays display white at any configured peak.
         for peak in [600.0, 1000.0, 1500.0, 4000.0] {
             assert_eq!(code10(pq_from_linear(1.0, peak)), 594, "peak {peak}");
         }
@@ -212,8 +199,8 @@ mod tests {
 
     #[test]
     fn rec709_white_maps_to_bt2020_white() {
-        // The one property that catches a transposed or mis-scaled matrix: both
-        // spaces share a D65 white point, so white must be a fixed point.
+        // Both spaces share a D65 white point, so white is a fixed point. Catches
+        // a transposed or mis-scaled matrix.
         let white = bt2020_from_rec709([1.0, 1.0, 1.0]);
         for channel in white {
             assert!((channel - 1.0).abs() < 1e-4, "white drifted to {white:?}");
@@ -230,9 +217,7 @@ mod tests {
 
     #[test]
     fn rec709_primaries_land_inside_the_wider_gamut() {
-        // Rec.709 content does not fill BT.2020. A red primary must stay short of
-        // the BT.2020 red, which is the measurable form of "HDR range, not wide
-        // gamut" from /spec/hdr-color-management.md Decision 1.
+        // Rec.709 content does not fill BT.2020: its red stays short of BT.2020 red.
         let red = bt2020_from_rec709([1.0, 0.0, 0.0]);
         assert!(red[0] < 1.0, "Rec.709 red should not saturate BT.2020 red");
         assert!(red[1] > 0.0 && red[2] > 0.0, "expected positive crosstalk");
@@ -247,9 +232,7 @@ mod tests {
 
     #[test]
     fn hlg_puts_reference_white_at_seventy_five_percent() {
-        // ITU-R BT.2408: HDR Reference White is 75% HLG signal. This is the anchor
-        // that keeps existing content at the brightness it already has, and it is
-        // the same reference white PQ uses.
+        // ITU-R BT.2408: HDR Reference White is 75% HLG signal, as for PQ.
         assert!(
             (hlg_from_linear(1.0) - 0.75).abs() < 1e-4,
             "{}",
@@ -261,7 +244,7 @@ mod tests {
     fn hlg_headroom_reaches_full_signal_and_clamps_past_it() {
         let top = hlg_linear_headroom();
         assert!((hlg_from_linear(top) - 1.0).abs() < 1e-4);
-        // Relative transfer, so the top of the range is a clamp, not a rollover.
+        // Relative transfer, so the top of the range clamps.
         assert!((hlg_from_linear(top * 4.0) - 1.0).abs() < 1e-6);
         assert!((top - 3.774).abs() < 0.01, "headroom drifted to {top}");
     }
@@ -285,17 +268,14 @@ mod tests {
 
     #[test]
     fn hlg_gives_less_headroom_than_pq_at_a_thousand_nits() {
-        // Inherent to the relative model: HLG spends part of its range on the
-        // display-side OOTF. Recorded so a future change that "fixes" this is
-        // recognised as changing the contract.
+        // Expected: HLG spends part of its range on the display-side OOTF.
         assert!(hlg_linear_headroom() < linear_headroom(1000.0));
     }
 
     #[test]
     fn every_requestable_peak_leaves_headroom_over_display_white() {
-        // A peak at or below reference white would make an HDR output dimmer
-        // than the SDR one it replaced, and would put the shader (which clamps
-        // headroom at 1.0) at odds with this function.
+        // A peak at or below reference white would make HDR dimmer than SDR and
+        // disagree with the shader, which clamps headroom at 1.0.
         use crate::engine::value::render::{HDR_PEAK_NITS_MAX, HDR_PEAK_NITS_MIN};
         for peak in [HDR_PEAK_NITS_MIN, 600, 1000, 4000, HDR_PEAK_NITS_MAX] {
             let headroom = linear_headroom(f32::from(peak));

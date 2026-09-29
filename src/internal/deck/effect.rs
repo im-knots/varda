@@ -11,11 +11,8 @@ use crate::renderer::{GpuContext, ISFUniforms, UnifiedPipeline};
 use anyhow::{Context, Result};
 
 impl Effect {
-    /// Create a new effect from an ISF filter shader.
-    ///
-    /// Targets `compositing_format`, the same as channel and master effects, so
-    /// an effect behaves identically at any of the three tiers. See
-    /// spec/unified-color-pipeline.md.
+    /// Create a new effect from an ISF filter shader, targeting `compositing_format` like channel
+    /// and master effects.
     ///
     /// # Errors
     ///
@@ -60,9 +57,7 @@ impl Effect {
         )
         .context("Failed to create effect pipeline")?;
 
-        // Pass buffers follow the effect's own target format so a deck, channel,
-        // and master instance of the same shader behave identically. Sized at
-        // the internal resolution.
+        // Pass buffers use the effect's target format, sized at the internal resolution.
         let pass_buffers = create_pass_buffers(
             context,
             &passes,
@@ -72,7 +67,6 @@ impl Effect {
             "Effect Pass Buffer",
         );
 
-        // Initialize parameters from shader inputs
         let inputs = shader.metadata.inputs.as_deref().unwrap_or(&[]);
         let params = ShaderParams::from_inputs(inputs);
         let phase_inputs_config = shader.metadata.phase_inputs.clone();
@@ -107,23 +101,19 @@ impl Effect {
         &self.param_prefix
     }
 
-    /// Set the UUID, used during scene restore to preserve identity.
-    ///
-    /// Rebuilds the modulation prefix in step. Assignments are stored as
-    /// `effect/<uuid>/param/<param>`, so an effect that comes back under a different
-    /// prefix than it was saved with loses every modulation routed at it.
+    /// Set the UUID during scene restore. Also rebuilds the modulation prefix, since assignments
+    /// are keyed by `effect/<uuid>/param/<param>`.
     pub fn set_uuid(&mut self, uuid: String) {
         self.param_prefix = crate::engine::value::param::effect_param_prefix(&uuid);
         self.uuid = uuid;
     }
 
-    /// Apply this effect to an input texture, outputting to target texture
-    /// Optionally applies modulation to effect parameters using the given prefix
+    /// Apply this effect to an input texture, writing to the target texture. Optionally modulates
+    /// parameters under the given prefix.
     ///
     /// # Errors
     ///
-    /// Propagates any error from [`Effect::apply_with_modulation`], which is
-    /// currently infallible.
+    /// Propagates errors from [`Effect::apply_with_modulation`], which currently never fails.
     pub fn apply(
         &mut self,
         context: &GpuContext,
@@ -196,9 +186,7 @@ impl Effect {
     ///
     /// # Errors
     ///
-    /// Never fails today — recording the render passes is infallible. The
-    /// `Result` is kept so callers stay source-compatible if a fallible step
-    /// (pipeline recreation, pass-buffer reallocation) is added later.
+    /// Never fails; the `Result` leaves room for a fallible step such as pipeline recreation.
     ///
     /// # Panics
     ///
@@ -217,7 +205,7 @@ impl Effect {
             return Ok(());
         }
 
-        // Ensure user params buffer exists and update it (with modulation if available)
+        // Upload user params, modulated when available.
         self.params.ensure_buffer(&context.device);
         if let Some(mod_engine) = modulation {
             self.params.update_buffer_with_modulation(
@@ -244,9 +232,8 @@ impl Effect {
         let has_targeted_passes = self.passes.iter().any(|p| p.target.is_some());
 
         if has_targeted_passes {
-            // Multi-pass effect: targeted passes, then the final pass to the
-            // output. Each pass has its own uniform slot, so all of them are
-            // written up front and encoded into one command buffer.
+            // Multi-pass: targeted passes, then the final pass to the output. Each pass has its own
+            // uniform slot, so all are written first and encoded into one command buffer.
             let targeted = self.passes.iter().filter(|p| p.target.is_some()).count();
             self.pipeline
                 .ensure_pass_slots(&context.device, targeted + 1);

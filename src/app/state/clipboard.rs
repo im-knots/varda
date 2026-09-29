@@ -1,11 +1,8 @@
 //! Copy and paste of scene objects.
 //!
-//! A copy is not a clone: a live deck owns GPU textures, a decode thread, and
-//! sometimes a device, none of which can be shared. What is captured is the
-//! recipe (the same `DeckConfig` / `ChannelConfig` / `EffectConfig` a preset
-//! saves), and paste rebuilds from it through the same restore path, with every
-//! UUID reidentified so the copy is a second entity rather than a second name
-//! for the first. See /spec/clipboard.md.
+//! Live decks hold GPU textures, threads and devices, so copy captures the
+//! config a preset would save. Paste rebuilds through the preset restore path
+//! with every UUID reidentified.
 
 use super::presets::{Identity, apply_modulation_recipes, extract_modulation_recipes};
 use crate::app::VardaApp;
@@ -23,9 +20,7 @@ pub(crate) enum ClipboardPayload {
         config: Box<EffectConfig>,
         modulation: Vec<ModulationRecipe>,
     },
-    /// Regions ride alongside the config because they belong to the
-    /// arrangement, not the deck, and are captured only when the copy was made
-    /// on the timeline.
+    /// Arrangement regions, captured only when copying on the timeline.
     Deck {
         config: Box<DeckConfig>,
         regions: Vec<RegionConfig>,
@@ -88,11 +83,9 @@ impl VardaApp {
         self.place(payload, target)
     }
 
-    /// Copy and paste beside the original in one step, leaving the clipboard
-    /// alone: `Cmd+D` must not destroy what was copied a minute ago.
+    /// Copy and paste beside the original without touching the clipboard.
     pub(crate) fn cmd_duplicate(&mut self, source: &ClipboardSource) -> CommandResult {
-        // A duplicate is the object as it stands, which on the timeline includes
-        // where it plays.
+        // Includes timeline regions.
         let payload = match self.capture(source, true) {
             Ok(payload) => payload,
             Err(result) => return result,
@@ -176,11 +169,8 @@ impl VardaApp {
         Ok(ClipboardPayload::Channel(Box::new(config)))
     }
 
-    /// A channel as a portable config: the scene's own snapshot, plus the
-    /// modulation recipes that a scene keeps in the engine instead.
-    ///
-    /// Shared with channel-preset saving, which is where the gap showed: only
-    /// decks carried recipes, so a channel's own effects arrived unmodulated.
+    /// A channel as a portable config, including the modulation recipes for
+    /// its own effects. Also used by channel preset saving.
     pub(crate) fn channel_config(&self, channel_idx: usize) -> Option<ChannelConfig> {
         let scene = crate::persistence::snapshot_scene(
             &self.mixer,
@@ -285,8 +275,8 @@ impl VardaApp {
 
         match self.restore_deck_at(config, channel_idx, at, Identity::Fresh) {
             Ok(deck_uuid) => {
-                // Through the region command, so the lane is created and the
-                // opacity envelope recompiled the one way they ever are.
+                // Via the region command, which creates the lane and recompiles
+                // the opacity envelope.
                 for region in regions {
                     if let Err(e) = self.mixer.add_region(&deck_uuid, *region) {
                         log::warn!("Pasted deck {deck_uuid} lost a region: {e}");
@@ -356,9 +346,7 @@ impl VardaApp {
         if !matches!(target, PasteTarget::NewChannel) {
             return wrong_target("A channel lands in the mixer as a new channel");
         }
-        // One reidentification for the whole tree, before anything is built, so
-        // the recipes it carries already name the effects that are about to
-        // exist. The restores below then find every UUID free.
+        // Reidentify the whole tree first so recipes name the new effects.
         let mut config = config;
         let taken = self.mixer.uuids_in_use();
         crate::scene::reidentify::channel(&mut config, &|uuid| taken.contains(uuid));
@@ -386,7 +374,7 @@ impl VardaApp {
     }
 
     /// Build a channel's decks, effects, and modulation from a config whose
-    /// UUIDs are already free. Shared with channel-preset loading.
+    /// UUIDs are already free. Also used by channel preset loading.
     pub(crate) fn fill_channel(&mut self, channel_idx: usize, config: &ChannelConfig) -> bool {
         let mut ok = true;
         for deck_config in &config.decks {
@@ -419,7 +407,7 @@ impl VardaApp {
                 }
             }
         }
-        // After the effects exist, since the recipes name them.
+        // After the effects exist, since recipes name them.
         if !config.modulation.is_empty() {
             apply_modulation_recipes(&config.modulation, "", self.mixer.modulation_mut());
             self.mixer.rekey_legacy_modulation();
@@ -553,8 +541,7 @@ mod tests {
         );
     }
 
-    /// Copying a deck to build up a second channel is the reason the mixer's
-    /// menu exists, so the target channel is usually not the source's.
+    /// Paste into a different channel than the source.
     #[test]
     fn a_deck_pastes_into_a_channel_it_did_not_come_from() {
         let Some(mut app) = headless_app() else {
@@ -635,9 +622,7 @@ mod tests {
         ));
     }
 
-    /// A menu can outlive the thing it was opened on: delete the deck, then
-    /// press the copy that was already on screen. Nothing should be captured,
-    /// and whatever was on the clipboard before must survive the miss.
+    /// Copying a deleted deck captures nothing and keeps the old clipboard.
     #[test]
     fn copying_something_that_is_gone_leaves_the_clipboard_alone() {
         let Some(mut app) = headless_app() else {
@@ -705,8 +690,7 @@ mod tests {
         assert_eq!(app.mixer_ref().master_effects().len(), 0);
     }
 
-    /// One LFO, two decks moving together. That is what a performer means by
-    /// copying something that is being modulated.
+    /// A pasted deck follows the same LFO as the original.
     #[test]
     fn a_live_modulator_drives_both_copies() {
         let Some(mut app) = headless_app() else {
@@ -819,7 +803,7 @@ mod tests {
         assert!((lane.regions[0].end - 4.0).abs() < f64::EPSILON);
     }
 
-    /// `Cmd+D` must not destroy what was copied a minute ago.
+    /// Duplicate leaves the clipboard unchanged.
     #[test]
     fn duplicating_leaves_the_clipboard_alone() {
         let Some(mut app) = headless_app() else {
@@ -840,8 +824,7 @@ mod tests {
         assert_eq!(app.clipboard_summary(), Some(held));
     }
 
-    /// Order is the whole point of a chain, so a pasted effect lands directly
-    /// after the one whose menu was open rather than at the end.
+    /// A pasted effect lands right after the one whose menu was open.
     #[test]
     fn a_pasted_effect_lands_after_the_one_it_was_taken_from() {
         let Some(mut app) = headless_app() else {
@@ -884,8 +867,7 @@ mod tests {
         assert_ne!(chain[2], pasted, "the copy is its own effect");
     }
 
-    /// A channel's own effects had no way to carry their modulation: only decks
-    /// held recipes, so a copied channel arrived with its effects unmodulated.
+    /// A copied channel's own effects keep their modulation.
     #[test]
     fn a_channels_own_effect_modulation_travels_with_it() {
         let Some(mut app) = headless_app() else {
@@ -950,8 +932,7 @@ mod tests {
         );
     }
 
-    /// Loading one deck preset twice used to put two decks behind one UUID, so
-    /// every command, mapping, and API route reached only the first.
+    /// Loading one deck preset twice gives two distinct UUIDs.
     #[test]
     fn the_same_preset_loaded_twice_makes_two_decks() {
         let Some(mut app) = headless_app() else {

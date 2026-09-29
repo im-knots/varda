@@ -1,32 +1,27 @@
-//! Shared ISF plumbing: pass buffers, imported textures, and the size
-//! expressions and date uniform every ISF shader pass reads. Used by shader
-//! decks and by effects alike.
+//! Shared ISF plumbing for shader decks and effects: pass buffers, imported
+//! textures, size expressions, and the date uniform.
 
 use crate::isf::ISFMetadata;
 use crate::renderer::GpuContext;
 use std::time::Instant;
 
-/// Multi-pass buffer for ISF PASSES array
-/// Uses ping-pong buffers for persistent passes to allow read/write in same frame
+/// A buffer from an ISF `PASSES` entry, double-buffered so a pass can read
+/// and write it in one frame.
 pub struct PassBuffer {
-    /// Buffer name (from ISF PASSES TARGET field)
+    /// The ISF `PASSES` `TARGET` name.
     pub name: String,
-    /// Primary texture (read source for persistent buffers)
     pub texture_a: wgpu::Texture,
-    /// Primary texture view
     pub view_a: wgpu::TextureView,
-    /// Secondary texture (write target for persistent buffers) - only for persistent
     pub texture_b: Option<wgpu::Texture>,
-    /// Secondary texture view
     pub view_b: Option<wgpu::TextureView>,
-    /// Whether this buffer persists across frames
+    /// Whether the contents carry across frames.
     pub persistent: bool,
-    /// Current read index (0 = read from A, 1 = read from B)
+    /// 0 = read from A, 1 = read from B.
     pub read_idx: usize,
 }
 
 impl PassBuffer {
-    /// Get the current read texture view
+    /// The current read view.
     pub fn read_view(&self) -> &wgpu::TextureView {
         if self.read_idx == 0 {
             &self.view_a
@@ -35,7 +30,7 @@ impl PassBuffer {
         }
     }
 
-    /// Get the current write texture view — always the one not being read.
+    /// The current write view, always the one not being read.
     pub fn write_view(&self) -> &wgpu::TextureView {
         if self.read_idx == 0 {
             self.view_b.as_ref().unwrap_or(&self.view_a)
@@ -44,14 +39,11 @@ impl PassBuffer {
         }
     }
 
-    /// Swap read/write buffers. Call after rendering the pass that targets this
-    /// buffer, so later passes (and the next frame) read what was just written.
+    /// Swap read and write. Call after the pass that targets this buffer, so
+    /// later passes read what it wrote.
     ///
-    /// Unconditional, including for non-persistent buffers: the read and write
-    /// views must never be the same texture, or the pass that targets it binds
-    /// it as both a colour attachment and a sampled resource. `persistent` now
-    /// governs only whether the contents carry meaning across frames — which is
-    /// what the ISF key actually means — not the buffering strategy.
+    /// Swaps non-persistent buffers too: the read and write views must differ,
+    /// or the pass binds one texture as both attachment and sampled resource.
     pub fn swap(&mut self) {
         self.read_idx = 1 - self.read_idx;
     }
@@ -60,10 +52,9 @@ impl PassBuffer {
 /// Allocate the pass buffers an ISF shader's `PASSES` declare, sized against
 /// `width × height`.
 ///
-/// Every pass buffer is double-buffered, persistent or not. The bind group
-/// binds *all* pass buffers as sampled textures on every pass, so a
-/// single-textured target would be `COLOR_TARGET` and `RESOURCE` at once in its
-/// own pass, which wgpu rejects outright.
+/// Every pass buffer is double-buffered: each pass samples all pass buffers,
+/// so a single texture would be both target and resource in its own pass,
+/// which wgpu rejects.
 pub fn create_pass_buffers(
     gpu: &GpuContext,
     passes: &[crate::isf::ISFPass],
@@ -118,8 +109,8 @@ pub fn create_pass_buffers(
 }
 
 /// Placeholder slots for an ISF shader's `PREPROCESSORS`: 1×1 data textures
-/// until an analyzer publishes. Data, not colour: the declared `FORMAT` is the
-/// encoding contract.
+/// until an analyzer publishes. They hold data, not color, in the declared
+/// `FORMAT`.
 pub fn create_preprocessor_slots(
     gpu: &GpuContext,
     metadata: &ISFMetadata,
@@ -223,10 +214,9 @@ pub fn parse_size_expression(expr: Option<&str>, base_size: u32) -> u32 {
     }
 }
 
-/// Load ISF IMPORTED images from metadata and create GPU textures.
-/// Returns (name, texture, view) sorted alphabetically by name for deterministic binding order.
-///
-/// PNG decoding runs in parallel across threads; GPU uploads are sequential.
+/// Load ISF `IMPORTED` images as GPU textures, as (name, texture, view) sorted
+/// by name for a stable binding order. Decoding is parallel; uploads are
+/// sequential.
 pub fn load_imported_textures(
     metadata: &ISFMetadata,
     shader_file_path: Option<&str>,
@@ -246,7 +236,6 @@ pub fn load_imported_textures(
     let mut entries: Vec<_> = imported.iter().collect();
     entries.sort_by_key(|(name, _)| (*name).clone());
 
-    // Collect paths for parallel decode
     let load_list: Vec<_> = entries
         .iter()
         .filter_map(|(name, import_def)| {
@@ -261,7 +250,6 @@ pub fn load_imported_textures(
 
     let t0 = Instant::now();
 
-    // Parallel PNG decode on threads, sequential GPU upload
     let decoded: Vec<_> = std::thread::scope(|s| {
         let handles: Vec<_> = load_list
             .iter()
@@ -288,7 +276,6 @@ pub fn load_imported_textures(
             .collect()
     });
 
-    // GPU upload (fast, sequential)
     let mut result = Vec::with_capacity(decoded.len());
     for (name, img) in &decoded {
         let (w, h) = img.dimensions();
@@ -331,7 +318,7 @@ pub fn load_imported_textures(
         result.push((name.clone(), texture, view));
     }
 
-    // Sort by name for deterministic binding order (threads may complete out of order)
+    // Sort for a stable binding order.
     result.sort_by(|a, b| a.0.cmp(&b.0));
 
     let elapsed = t0.elapsed();
@@ -344,7 +331,7 @@ pub fn load_imported_textures(
     result
 }
 
-/// Get current date as [year, month, day, `seconds_in_day`]
+/// Current date as [year, month, day, `seconds_in_day`].
 pub fn get_current_date() -> [f32; 4] {
     use std::time::SystemTime;
 

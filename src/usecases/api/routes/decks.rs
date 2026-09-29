@@ -1,9 +1,8 @@
 //! Deck CRUD and property routes.
 //!
-//! Deck UUIDs are globally unique, so routes that name an existing deck are flat
-//! (`/api/decks/{deck_uuid}`). The owning channel stays in the path only for
-//! creation (no deck UUID exists yet) and for reorder (the ordinals are scoped
-//! to one channel).
+//! Routes for an existing deck are flat (`/api/decks/{deck_uuid}`). Creation
+//! and reorder name the channel in the path, since creation has no UUID yet
+//! and reorder indices are per channel.
 
 use axum::Json;
 use axum::extract::{Path, State};
@@ -17,8 +16,7 @@ use crate::usecases::api::{SharedState, command_response};
 
 /// Remove every `..` component, joining what remains.
 ///
-/// Pure: no filesystem access, so it behaves identically on every platform and
-/// can be tested exhaustively without touching disk.
+/// No filesystem access, so it behaves the same on every platform.
 fn strip_parent_dirs(p: &std::path::Path) -> std::path::PathBuf {
     p.components()
         .filter(|c| !matches!(c, std::path::Component::ParentDir))
@@ -27,9 +25,8 @@ fn strip_parent_dirs(p: &std::path::Path) -> std::path::PathBuf {
 
 /// Resolve a caller-supplied media path.
 ///
-/// If the path resolves on disk, `canonicalize` gives the real target. If it
-/// does not, fall back to [`strip_parent_dirs`] so a request naming a missing
-/// file cannot walk upward through the tree on its way to the error.
+/// Uses `canonicalize` when the path exists, otherwise [`strip_parent_dirs`],
+/// so a missing file cannot walk up the tree.
 pub(crate) fn sanitize_path(p: &std::path::Path) -> std::path::PathBuf {
     p.canonicalize().unwrap_or_else(|_| strip_parent_dirs(p))
 }
@@ -43,18 +40,9 @@ mod sanitize_path_tests {
         p.components().any(|c| matches!(c, Component::ParentDir))
     }
 
-    // The stripping half is pure, so these assert on it directly rather than
-    // going through `sanitize_path` and hoping the filesystem declines to
-    // resolve the input.
-    //
-    // These tests used to do exactly that, via a helper that asserted its input
-    // did not exist. It passed everywhere for as long as Varda's tests only ran
-    // on macOS and Linux, and failed the first time they ran on Windows:
-    // `nope_zzz/..` does not exist on POSIX, which resolves `..` against real
-    // directories and so needs `nope_zzz` to be there, but Win32 collapses `..`
-    // textually before the filesystem sees the path, leaving the current
-    // directory, which certainly does exist. The precondition was never a fact
-    // about the input; it was a fact about POSIX.
+    // These test `strip_parent_dirs` directly. Going through `sanitize_path`
+    // with a missing path is not portable: Win32 collapses `..` textually, so
+    // `nope_zzz/..` resolves on Windows but not on POSIX.
 
     #[test]
     fn strips_all_parent_dir_components() {
@@ -77,8 +65,6 @@ mod sanitize_path_tests {
 
     #[test]
     fn a_trailing_parent_dir_leaves_the_preceding_component() {
-        // Named for what it does. The old name claimed "reduces to empty" while
-        // asserting the opposite.
         assert_eq!(strip_parent_dirs(Path::new("foo/..")), PathBuf::from("foo"));
     }
 
@@ -89,42 +75,26 @@ mod sanitize_path_tests {
 
     #[test]
     fn stripping_is_not_resolving() {
-        // Worth pinning down, because the difference is easy to misread.
         // Dropping `..` does not cancel the component before it: `/etc/../var`
-        // becomes `/etc/var`, a third path that is neither the input nor its
-        // normalized form. That is what "strip" means here, and it is the safe
-        // direction (it can only ever move *down* the tree), but it does mean a
-        // caller's legitimate relative path can come back naming something else
-        // when the original does not resolve.
+        // becomes `/etc/var`, not `/var`. It can only move down the tree.
         let cleaned = strip_parent_dirs(Path::new("/etc/../var/log"));
         assert_eq!(cleaned, PathBuf::from("/etc/var/log"));
 
-        // The root itself has to survive, or a rooted path would quietly turn
-        // into a relative one.
-        //
-        // `has_root`, not `is_absolute`. On Windows a leading separator with no
-        // drive letter is rooted but *not* absolute: `\etc\var\log` needs a
-        // `C:` prefix to qualify. `is_absolute` here was a POSIX assumption that
-        // failed on Windows, which is precisely the bug these tests were
-        // rewritten to remove.
+        // The root must survive. Check `has_root`, not `is_absolute`: on
+        // Windows `\etc\var\log` is rooted but not absolute.
         assert!(cleaned.has_root(), "lost the root: {cleaned:?}");
     }
 
-    // And one test for the branch that does touch disk, on a path built to
-    // exist rather than one hoped not to.
+    // The branch that touches disk, on a path that exists.
 
     #[test]
     fn an_existing_path_is_resolved_rather_than_stripped() {
-        // The input has to be one where resolving and stripping *disagree*, or
-        // the test cannot tell whether `canonicalize` ran at all. A tempdir path
-        // is already canonical, so `<tmp>/clip.png` passes either way.
-        //
-        // `<tmp>/sub/../clip.png` does not: resolving gives `<tmp>/clip.png`,
-        // which is the real file, while stripping gives `<tmp>/sub/clip.png`,
-        // which is not.
+        // Resolving and stripping must disagree to show `canonicalize` ran:
+        // `<tmp>/sub/../clip.png` resolves to `<tmp>/clip.png` but strips to
+        // `<tmp>/sub/clip.png`.
         let dir = tempfile::tempdir().expect("tempdir");
-        // macOS puts tempdirs under a symlinked `/var`, so canonicalize the root
-        // too and compare like with like.
+        // macOS tempdirs are under a symlinked `/var`, so canonicalize the root
+        // too.
         let root = dir.path().canonicalize().expect("canonicalize tempdir");
         std::fs::create_dir(root.join("sub")).expect("create sub");
         let real = root.join("clip.png");
@@ -143,10 +113,8 @@ mod sanitize_path_tests {
     #[test]
     fn a_missing_path_falls_back_to_stripping() {
         let dir = tempfile::tempdir().expect("tempdir");
-        // `<tmp>/sub/../gone.png`: `sub` does not exist, so POSIX cannot resolve
-        // it; Win32 collapses it to `<tmp>/gone.png`, which does not exist
-        // either. Neither platform can canonicalize this, so both take the
-        // stripping branch.
+        // `<tmp>/sub/../gone.png` cannot be canonicalized on POSIX (no `sub`)
+        // or Win32 (no `gone.png`), so both platforms strip.
         let missing = dir.path().join("sub").join("..").join("gone.png");
 
         let resolved = sanitize_path(&missing);
@@ -286,18 +254,16 @@ pub struct SetTransitionBody {
 #[derive(Deserialize, ToSchema)]
 pub struct SetParamBody {
     /// Slash-separated path identifying the parameter, e.g.
-    /// `deck/<deck_uuid>/param/<name>`,
-    /// `deck/<deck_uuid>/effect/<fx_uuid>/param/<name>`, or `deck/<uuid>/opacity`.
+    /// `deck/<deck_uuid>/param/<name>`, `effect/<fx_uuid>/param/<name>`, or
+    /// `deck/<uuid>/opacity`.
     pub path: String,
     /// New value, interpreted against the parameter's declared ISF type.
     ///
-    /// A `float` parameter takes a **normalized 0.0-1.0 fraction**, scaled to the
-    /// parameter's declared MIN/MAX range: on a param with `MIN 0.0, MAX 3.0`,
-    /// send `0.5` to get `1.5`. This matches the MIDI, OSC, and fader paths, and
-    /// is why `GET /api/scene` reports a raw value while this route takes a
-    /// normalized one. A `long` takes a **discrete choice index** (`2` selects the
-    /// third entry in its VALUES list, not 2% of a range), a `bool` takes a flag,
-    /// and `color` / `point2D` take their full arrays.
+    /// A `float` takes a normalized 0.0-1.0 fraction of its MIN/MAX range
+    /// (`0.5` on `MIN 0.0, MAX 3.0` gives `1.5`), like MIDI and OSC;
+    /// `GET /api/scene` reports the raw value. A `long` takes a choice index
+    /// (`2` selects the third VALUES entry), a `bool` a flag, and `color` /
+    /// `point2D` their full arrays.
     pub value: crate::internal::params::ParamValue,
 }
 
@@ -414,10 +380,9 @@ pub async fn set_param(
 
 /// Applies any `EngineCommand` sent as JSON and returns its `CommandResult`.
 ///
-/// The body is an externally-tagged `EngineCommand`, documented as unconstrained
-/// JSON: the enum has no `ToSchema` derive, and a hand-written approximation of
-/// several hundred variants would drift from the real vocabulary. Use the typed
-/// routes for a documented body.
+/// The body is an externally tagged `EngineCommand`, documented as free-form
+/// JSON because the enum has no schema. Use the typed routes for a documented
+/// body.
 #[utoipa::path(post, path = "/api/command",
     request_body = serde_json::Value,
     responses((status = 200, body = CommandResult)),
@@ -557,7 +522,7 @@ pub async fn reset_generator_params(
     }
 }
 
-/// Body for randomize and mutate. See /spec/parameter-exploration.md.
+/// Body for randomize and mutate.
 #[derive(Deserialize, ToSchema)]
 pub struct ExploreParamsBody {
     /// Inspector group to scope to. Omit to cover every eligible parameter.
@@ -581,8 +546,8 @@ impl ExploreParamsBody {
     }
 }
 
-/// Draw a deck's generator parameters afresh from their declared ranges. A given seed always
-/// produces the same values, so a look found this way can be reproduced rather than only saved.
+/// Draw a deck's generator parameters afresh from their declared ranges. The
+/// same seed gives the same values.
 #[utoipa::path(post, path = "/api/decks/{deck_uuid}/params/randomize", params(("deck_uuid" = String, Path, description = "Deck UUID")), request_body = ExploreParamsBody, responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Params")]
 pub async fn randomize_generator_params(
     State(s): State<SharedState>,
@@ -600,8 +565,8 @@ pub async fn randomize_generator_params(
     }
 }
 
-/// Nudge a deck's generator parameters by `amount` as a fraction of each declared range, keeping the
-/// current look. The small step of the find-then-name loop, where randomize is the large one.
+/// Nudge a deck's generator parameters by `amount`, a fraction of each
+/// declared range.
 #[utoipa::path(post, path = "/api/decks/{deck_uuid}/params/mutate", params(("deck_uuid" = String, Path, description = "Deck UUID")), request_body = ExploreParamsBody, responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Params")]
 pub async fn mutate_generator_params(
     State(s): State<SharedState>,

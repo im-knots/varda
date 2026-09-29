@@ -36,10 +36,8 @@ impl Outputs {
         result
     }
 
-    /// "Make Hole" (8i.7): convert `source_uuid` into a cut-out hole in the
-    /// topmost *other* surface under its centroid, then remove the source
-    /// surface (purging its output assignments). Atomic — target resolution,
-    /// hole add, and source removal happen in one command.
+    /// "Make Hole": turn `source_uuid` into a hole in the topmost other surface
+    /// under its centroid, then remove the source surface, in one command.
     pub fn cmd_punch_surface_hole(&mut self, source_uuid: &str) -> CommandResult {
         let hole = match self.surface_manager.find_by_uuid(source_uuid) {
             Some((_, s)) => s.outline_as_path(),
@@ -71,7 +69,6 @@ impl Outputs {
 
     pub fn cmd_remove_surface(&mut self, uuid: &str) -> CommandResult {
         self.surface_manager.remove_surface(uuid);
-        // Purge dangling surface assignments from all outputs
         for output in &mut self.outputs {
             output
                 .surface_assignments
@@ -112,8 +109,8 @@ impl Outputs {
         }
     }
 
-    /// Change a surface's stacking order (8i.12). Geometry is unchanged, so no
-    /// edge-blend recompute is needed.
+    /// Change a surface's stacking order. Geometry is unchanged, so edge
+    /// blending is not recomputed.
     pub fn cmd_reorder_surface(&mut self, uuid: &str, op: SurfaceReorderOp) -> CommandResult {
         if self.surface_manager.reorder_surface(uuid, op) {
             CommandResult::Ok

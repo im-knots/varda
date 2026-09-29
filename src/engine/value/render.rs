@@ -1,10 +1,6 @@
-//! Render/output configuration value types — plain, serializable data (no
-//! `wgpu` / `winit` / `egui`) that describes *what* to render and *where* to
-//! send it. Formerly `internal::renderer::config`; relocated here per
-//! /spec/engine-value-types.md so the engine contract layer names these types
-//! directly instead of reaching into `internal::renderer`. The GPU modules
-//! (`context`, `tonemap`, `edge_blend`) `pub use` these to keep their existing
-//! call paths working, and attach any framework-specific inherent impls there.
+//! Render and output configuration values, with no `wgpu`, `winit` or `egui`
+//! types. The GPU modules (`context`, `tonemap`, `edge_blend`) re-export them
+//! and add framework-specific impls.
 
 // ── SDR presentation precision ──────────────────────────────────────
 
@@ -44,9 +40,8 @@ impl PresentationDepth {
 
 /// ITU-R BT.2408 HDR Reference White, in cd/m².
 ///
-/// Linear 1.0 maps here, so existing SDR content keeps the apparent brightness it
-/// has today and the range above 1.0 that the mixer tonemap used to discard becomes
-/// the HDR gain. See /spec/hdr-color-management.md Decision 2.
+/// Linear 1.0 maps here, so SDR content keeps its brightness and values above
+/// 1.0 become HDR headroom.
 pub const HDR_REFERENCE_WHITE_NITS: f32 = 203.0;
 
 /// Default per-output peak luminance for HDR presentation, in cd/m².
@@ -54,25 +49,17 @@ pub const HDR_DEFAULT_PEAK_NITS: u16 = 1000;
 
 /// Lowest peak luminance an output may request, in cd/m².
 ///
-/// Must exceed [`HDR_REFERENCE_WHITE_NITS`], or the contract stops meaning
-/// anything: a peak at or below reference white leaves no headroom above display
-/// white, so an "HDR" output could not reach the brightness an SDR one already
-/// shows. This floor was 100, which put headroom at 0.49 and had the CPU and the
-/// shader disagreeing, because `tonemap.wgsl` clamps headroom at 1.0 and
-/// `linear_headroom` did not. Found by `tests/presentation_chaos.rs`.
-///
-/// 400 is about one stop over reference white and matches the lowest commonly
-/// cited HDR display tier.
+/// Must exceed [`HDR_REFERENCE_WHITE_NITS`] so there is headroom above SDR
+/// white; `tonemap.wgsl` clamps headroom at 1.0. 400 is about one stop over
+/// reference white, the lowest common HDR display tier.
 pub const HDR_PEAK_NITS_MIN: u16 = 400;
 /// Upper bound of requestable peak luminance, in cd/m² (the PQ signal ceiling).
 pub const HDR_PEAK_NITS_MAX: u16 = 10_000;
 
 /// Transfer and dynamic-range contract requested at an output boundary.
 ///
-/// Deliberately a sibling of [`PresentationDepth`] rather than a widening of it:
-/// bit depth is integer precision, dynamic range is a different axis, and
-/// conflating them is the mistake /spec/sdr-presentation-precision.md was written
-/// to avoid.
+/// Separate from [`PresentationDepth`]: bit depth and dynamic range are
+/// independent axes, and 10-bit SDR is not HDR.
 #[derive(
     Debug,
     Clone,
@@ -93,18 +80,14 @@ pub enum PresentationTransfer {
     Hdr10Pq,
     /// HLG: ARIB STD-B67 transfer, BT.2020 primaries, no mastering metadata.
     ///
-    /// Relative rather than absolute, so it carries no peak and needs no content
-    /// light level. That is why it is the default for live paths, which have no
-    /// finalize step in which `MaxCLL` could be measured.
+    /// Relative, so it needs no peak or content light level. The default for
+    /// live paths, which cannot measure `MaxCLL`.
     Hlg,
     /// Apple EDR: linear scRGB, Rec.709 primaries, no transfer encode at all.
     ///
-    /// The one HDR contract where Varda stops encoding rather than encoding
-    /// differently. `1.0` is the display's SDR white, which is what Varda's
-    /// linear 1.0 already means, so values are written unchanged and the
-    /// compositor clips at whatever headroom it currently allows.
-    ///
-    /// A monitoring contract, never delivery. See /spec/hdr-edr-display.md.
+    /// `1.0` is the display's SDR white, so linear values are written
+    /// unchanged and the compositor clips at its current headroom. Monitoring
+    /// only, never delivery.
     EdrLinear,
 }
 
@@ -131,8 +114,7 @@ impl PresentationTransfer {
 
     /// Whether this contract encodes a transfer function at all.
     ///
-    /// EDR does not: it writes linear values to an extended-range surface. Every
-    /// other contract, SDR included, encodes something.
+    /// False only for EDR, which writes linear values.
     #[must_use]
     pub const fn encodes_a_transfer(self) -> bool {
         !matches!(self, Self::EdrLinear)
@@ -140,14 +122,8 @@ impl PresentationTransfer {
 
     /// Whether this contract can be carried by a file or a network stream.
     ///
-    /// EDR cannot. It is a monitoring contract that writes linear values to an
-    /// extended-range display surface, and no container, codec, or stream carries
-    /// it: there is nothing to signal and nothing that would read the signal.
-    ///
-    /// Deliberately not the negation of [`is_hdr`](Self::is_hdr), which EDR does
-    /// satisfy. Treating "is HDR" as "is deliverable" is what let an EDR request
-    /// resolve cleanly on an HEVC recording and then be written out as plain
-    /// Rec.709, with the output card still claiming EDR.
+    /// False for EDR, which no container, codec or stream carries. Not the
+    /// negation of [`is_hdr`](Self::is_hdr): EDR is HDR but not deliverable.
     #[must_use]
     pub const fn is_deliverable(self) -> bool {
         !matches!(self, Self::EdrLinear)
@@ -155,8 +131,7 @@ impl PresentationTransfer {
 
     /// Whether this contract carries ST 2086 and CTA-861.3 mastering metadata.
     ///
-    /// PQ is absolute and needs it. HLG is relative and needs none, which is what
-    /// removes the declared-versus-measured `MaxCLL` problem on live paths.
+    /// PQ is absolute and needs it; HLG is relative and does not.
     #[must_use]
     pub const fn carries_mastering_metadata(self) -> bool {
         matches!(self, Self::Hdr10Pq)
@@ -165,8 +140,7 @@ impl PresentationTransfer {
     /// Whether the peak-luminance setting means anything for this contract.
     #[must_use]
     pub const fn uses_peak_nits(self) -> bool {
-        // EDR's peak is not a display property; it names the deliverable being
-        // monitored, which is what makes the preview comparable to the file.
+        // EDR's peak names the deliverable being monitored, not the display.
         matches!(self, Self::Hdr10Pq | Self::EdrLinear)
     }
 }
@@ -239,11 +213,8 @@ pub enum AlphaMode {
 
 /// The presentation contract a user picks, as one choice.
 ///
-/// Depth and transfer are separate axes in the domain, but not every pairing is
-/// meaningful: HDR10 is a ten-bit contract by definition, and an eight-bit PQ
-/// signal is not a picture anyone would ship. Offering the combinations as one
-/// list keeps the meaningless ones unreachable from the UI and the API instead
-/// of relying on validation to reject them afterwards.
+/// Lists only meaningful depth and transfer pairs (no eight-bit PQ), so the UI
+/// and API cannot request the others.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PresentationMode {
@@ -296,12 +267,8 @@ impl PresentationMode {
 
 /// One entry in an output's format picker: a mode, and why it is unavailable.
 ///
-/// The picker lists every mode and disables the blocked ones with their reason,
-/// rather than hiding them. Hiding is honest but silent, and a user who knows
-/// their protocol carries HDR is owed the actual obstacle, which is usually a
-/// codec set elsewhere on the same card.
-///
-/// See /spec/presentation-mode-offering.md.
+/// The picker lists every mode and disables blocked ones with their reason,
+/// which is often a codec set elsewhere on the same card.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ModeAvailability {
     pub mode: PresentationMode,
@@ -320,17 +287,14 @@ impl ModeAvailability {
 
 /// Peak luminance values offered in the picker, in cd/m².
 ///
-/// Deliverable targets and common LED-processor ceilings, not a continuous
-/// range: a peak nobody masters to is not a useful choice.
+/// Common mastering targets and LED-processor ceilings.
 pub const HDR_PEAK_NITS_PRESETS: [u16; 4] = [600, 1000, 1500, 4000];
 
 /// Where an HDR output's content light level metadata came from.
 ///
-/// CTA-861.3 expects `MaxCLL` and `MaxFALL` to describe the *content*, measured
-/// across the programme. Declaring them from the configured peak is true by
-/// construction only because the encoder clamps the signal to that peak, and it
-/// is still not what the standard asks for, so which one is in force is reported
-/// rather than assumed. See /spec/hdr-recording-output.md.
+/// CTA-861.3 expects `MaxCLL` and `MaxFALL` measured from the content. A
+/// declared value is valid only because the encoder clamps to the peak, so the
+/// source is reported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum HdrMetadataSource {
@@ -390,14 +354,7 @@ impl Default for PresentationRequest {
 }
 
 impl PresentationRequest {
-    /// Coerce a request into a self-consistent one before resolution.
-    ///
-    /// HDR10 is a ten-bit contract: PQ quantized to eight bits bands severely, so
-    /// an eight-bit HDR request is upgraded rather than resolved into a picture no
-    /// one would ship. Peak luminance is clamped to the representable range. This
-    /// runs inside [`PresentationCapabilities::resolve`], so a hand-edited
-    /// `stage.json` cannot produce an incoherent runtime contract.
-    /// The single user-facing contract this request represents.
+    /// The user-facing contract this request represents.
     #[must_use]
     pub fn mode(self) -> PresentationMode {
         if self.transfer == PresentationTransfer::Hlg {
@@ -421,8 +378,8 @@ impl PresentationRequest {
             PresentationMode::Sdr10 => (PresentationDepth::Sdr10, PresentationTransfer::Sdr),
             PresentationMode::Hdr10 => (PresentationDepth::Sdr10, PresentationTransfer::Hdr10Pq),
             PresentationMode::Hlg => (PresentationDepth::Sdr10, PresentationTransfer::Hlg),
-            // The surface is `Rgba16Float`, so integer depth does not apply; the
-            // ten-bit request keeps the contract coherent for the resolver.
+            // The surface is `Rgba16Float`; ten-bit keeps the resolver input
+            // coherent.
             PresentationMode::Edr => (PresentationDepth::Sdr10, PresentationTransfer::EdrLinear),
         };
         Self {
@@ -432,6 +389,9 @@ impl PresentationRequest {
         }
     }
 
+    /// Coerce a request to a consistent one: HDR requests become ten-bit (PQ
+    /// at eight bits bands) and the peak is clamped. Called by
+    /// [`PresentationCapabilities::resolve`].
     #[must_use]
     pub fn normalized(mut self) -> Self {
         if self.transfer.is_hdr() {
@@ -475,10 +435,8 @@ impl PresentationCapabilities {
 
     /// Best result this path can carry when the exact request is unavailable.
     ///
-    /// An HDR request degrades to the best SDR format the adapter advertised, in
-    /// adapter preference order, rather than erroring: an HDR10 recording request
-    /// on an eight-bit codec is a capability answer, not a configuration error. An
-    /// SDR ten-bit request keeps the existing eight-bit ladder.
+    /// An HDR request degrades to the adapter's preferred SDR format instead of
+    /// erroring. A ten-bit SDR request falls back to eight-bit.
     fn fallback_for(&self, request: PresentationRequest) -> Option<&PresentationFormat> {
         if request.transfer.is_hdr() {
             return self.formats.iter().find(|format| !format.transfer.is_hdr());
@@ -493,15 +451,9 @@ impl PresentationCapabilities {
 
     /// Every mode, each with the reason this path cannot deliver it.
     ///
-    /// Derived by asking [`resolve`](Self::resolve) rather than from a parallel
-    /// capability table, so what the picker says cannot disagree with what the
-    /// output then does. A mode is deliverable exactly when resolving it produces
-    /// no fallback reason, and `fallback_reason` is set at the single point where
-    /// degradation is decided, which is also where the wording comes from.
-    ///
-    /// Every mode is returned rather than only the deliverable ones, because a
-    /// mode that is silently absent teaches nothing: the picker shows the rest
-    /// disabled, with the reason. See /spec/presentation-mode-offering.md.
+    /// Derived from [`resolve`](Self::resolve), so the picker always agrees
+    /// with what the output does. A mode is deliverable when resolving it gives
+    /// no fallback reason.
     #[must_use]
     pub fn mode_availability(&self) -> Vec<ModeAvailability> {
         PresentationMode::ALL
@@ -555,8 +507,7 @@ impl PresentationCapabilities {
                 .transfer
                 .uses_peak_nits()
                 .then_some(request.peak_nits),
-            // Adapters that write mastering metadata set this; the pure resolver
-            // has no way to know whether one does.
+            // Set by adapters that write mastering metadata.
             hdr_metadata: None,
             pixel_format: selected.pixel_format.clone(),
             color_profile: selected.color_profile,
@@ -596,12 +547,8 @@ pub struct ResolvedPresentation {
 }
 
 impl ResolvedPresentation {
-    /// The user-facing contract this output is actually delivering.
-    ///
-    /// The counterpart to [`PresentationRequest::mode`], read from the resolved
-    /// fields rather than the requested ones. The picker shows this when a stored
-    /// request is not deliverable, so the control never displays a mode the output
-    /// is not producing. See /spec/presentation-mode-offering.md.
+    /// The user-facing contract this output delivers, read from the resolved
+    /// fields. The picker shows this when the stored request is not deliverable.
     #[must_use]
     pub fn mode(&self) -> PresentationMode {
         if self.transfer == PresentationTransfer::Hlg {
@@ -655,9 +602,8 @@ impl std::error::Error for PresentationResolveError {}
 
 // ── Output rotation ──────────────────────────────────────────────────
 
-/// Per-output rotation applied at the final blit stage.
-/// For 90°/270°, intermediate textures are created at swapped dimensions
-/// (portrait content for landscape projectors and vice versa).
+/// Per-output rotation applied at the final blit. For 90° and 270°,
+/// intermediate textures use swapped dimensions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum OutputRotation {
     #[default]
@@ -691,8 +637,7 @@ impl OutputRotation {
         matches!(self, OutputRotation::Deg90 | OutputRotation::Deg270)
     }
 
-    /// Effective texture dimensions after rotation.
-    /// For 0°/180° returns (w, h); for 90°/270° returns (h, w).
+    /// Texture dimensions after rotation.
     pub fn effective_dimensions(&self, w: u32, h: u32) -> (u32, u32) {
         if self.swaps_dimensions() {
             (h, w)
@@ -716,17 +661,15 @@ impl OutputRotation {
 
 /// What a surface shows: the master, one channel, a sub-mix of channels, one
 /// deck, or the domemaster. Channels and decks are named by UUID, so
-/// reordering the mixer never re-routes a surface. See
-/// /spec/output-sink-providers.md Decision 12.
+/// reordering the mixer does not re-route a surface.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, utoipa::ToSchema)]
 pub enum OutputSource {
     /// The master mix (final composited output)
     Master,
     /// One channel's composited output, by channel UUID.
     Channel(String),
-    /// A subset of channels composited together (sub-mix), by channel UUID.
-    /// Each channel contributes with its own opacity and blend mode.
-    /// Master effects are NOT applied to sub-mixes.
+    /// A sub-mix of channels, by channel UUID, each with its own opacity and
+    /// blend mode. Master effects are not applied.
     Channels(Vec<String>),
     /// One deck's raw output, by deck UUID.
     Deck(String),
@@ -734,10 +677,9 @@ pub enum OutputSource {
     Domemaster,
 }
 
-/// Marks a reference read from a `stage.json` written before surfaces named
-/// channels and decks by UUID: `#2` is channel index 2, `#0/1` is deck 1 of
-/// channel 0. [`OutputSource::resolve_legacy`] rewrites it once the scene is
-/// loaded. No UUID starts with `#`.
+/// Marks an index reference from an older `stage.json`: `#2` is channel 2,
+/// `#0/1` is deck 1 of channel 0. [`OutputSource::resolve_legacy`] rewrites it
+/// after the scene loads. No UUID starts with `#`.
 const LEGACY_INDEX: char = '#';
 
 impl<'de> serde::Deserialize<'de> for OutputSource {
@@ -788,8 +730,8 @@ impl OutputSource {
     }
 
     /// Rewrite references read from an index-based `stage.json` against the
-    /// channel and deck order that file was written with. A reference that no
-    /// longer resolves falls back to the master; the returned reason says so.
+    /// channel and deck order that file was written with. An unresolvable
+    /// reference falls back to the master and returns a reason.
     /// `channels[i]` is channel `i`'s UUID and `decks[i]` its deck UUIDs.
     pub fn resolve_legacy(&mut self, channels: &[String], decks: &[Vec<String>]) -> Option<String> {
         let legacy = |r: &str| r.strip_prefix(LEGACY_INDEX).map(str::to_string);
@@ -900,28 +842,26 @@ pub enum CalibrationMode {
     /// Normal content rendering.
     #[default]
     Off,
-    /// A single full-frame test card fills the whole output, bypassing surface
-    /// geometry and warp — for physical projector alignment.
+    /// A full-frame test card, bypassing surfaces and warp, for projector
+    /// alignment.
     Projector,
-    /// Each surface shows a colored per-surface test card through its own warp —
-    /// for verifying surface mapping and warp.
+    /// A colored test card per surface through its own warp, for checking
+    /// mapping.
     Surfaces,
 }
 
 // ── Unassigned content ───────────────────────────────────────────────
 
 /// What an output shows when no surfaces are assigned to it.
-/// See /spec/output-sink-providers.md Decision 13.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum Unassigned {
     /// Every surface on the stage, or the master fitted to the output when the
-    /// stage has none. What a projector expects.
+    /// stage has none. For projectors.
     Stage,
-    /// The master program over the whole output. What a recording or a stream
-    /// expects.
+    /// The master over the whole output. For recordings and streams.
     Program,
 }
 
@@ -971,8 +911,8 @@ impl RecordingCodec {
         Self::HapQ,
     ];
 
-    /// Read a codec as `stage.json` saves it: its label, or the older short
-    /// spellings. Anything unknown is H.264.
+    /// Parse a codec from `stage.json`: its label or an older short spelling.
+    /// Anything unknown is H.264.
     pub fn from_saved(saved: &str) -> Self {
         match saved {
             "prores" | "ProRes" | "ProRes 422" => Self::ProRes,
@@ -1074,8 +1014,8 @@ impl std::fmt::Display for StreamingCodec {
 
 /// Codec signaling contract declared by an RTMP/RTMPS endpoint.
 ///
-/// URL scheme alone cannot establish Enhanced RTMP support, so this value is
-/// explicit and persisted with the target.
+/// The URL scheme does not show Enhanced RTMP support, so this is persisted
+/// with the target.
 #[derive(
     Debug,
     Clone,
@@ -1123,42 +1063,28 @@ impl RtmpCodecContract {
     utoipa::ToSchema,
 )]
 pub enum TonemapMode {
-    /// Clamp to [0, 1] — equivalent to pre-tonemap behavior.
+    /// Clamp to [0, 1].
     Bypass = 0,
-    /// ACES filmic curve — smooth highlight rolloff, preserves saturation.
+    /// ACES filmic curve: smooth highlight rolloff, preserves saturation.
     #[default]
     Aces = 1,
     /// Simple Reinhard: x/(x+1) per channel.
     Reinhard = 2,
     /// Reinhard with white point control, uses full SDR range.
     ReinhardExtended = 3,
-    /// Hable/Uncharted 2 filmic curve — nice toe and shoulder.
+    /// Hable (Uncharted 2) filmic curve.
     HableFilmic = 4,
-    /// Gran Turismo style (Uchimura) — tunable shoulder and toe.
+    /// Gran Turismo (Uchimura): tunable shoulder and toe.
     Uchimura = 5,
-    /// AMD Lottes — fast, invertible, high contrast.
+    /// AMD Lottes: fast, invertible, high contrast.
     Lottes = 6,
-    /// `AgX` — neutral, minimal hue shift, modern ACES alternative.
+    /// `AgX`: neutral, minimal hue shift.
     AgX = 7,
-    /// Khronos PBR Neutral — color-accurate, minimal look.
+    /// Khronos PBR Neutral: color-accurate, minimal look.
     KhronosPbrNeutral = 8,
 }
 
 impl TonemapMode {
-    /// Whether this curve has a defined form for an HDR output transform.
-    ///
-    /// An HDR output transform targets `[0, peak/203]` instead of `[0, 1]`.
-    /// `Bypass` extends by clamping to the wider range, and Reinhard Extended
-    /// already carries a white point that becomes the headroom. The rest
-    /// (`Aces`, `Reinhard`, `HableFilmic`, `Uchimura`, `Lottes`, `AgX`,
-    /// `KhronosPbrNeutral`) have shoulder constants fitted against an SDR target
-    /// and do **not** extend by rescaling their output: rescaling a curve outside
-    /// the range it was fitted for produces a plausible wrong picture, which is
-    /// the failure this phase family exists to prevent.
-    ///
-    /// ACES has a published HDR output-transform family. Adopting it is a
-    /// separate piece of work, not a rescale of the SDR curve already here.
-    /// See /spec/hdr-per-output-encode.md § Output transform range.
     /// Every curve, in the order the tonemap panel lists them.
     pub const ALL: [Self; 9] = [
         Self::Bypass,
@@ -1188,6 +1114,9 @@ impl TonemapMode {
         }
     }
 
+    /// Whether this curve extends to an HDR target of `[0, peak/203]`.
+    /// `Bypass` clamps to the wider range and Reinhard Extended uses its white
+    /// point. The other curves are fitted to SDR and do not rescale correctly.
     #[must_use]
     pub const fn has_hdr_form(self) -> bool {
         matches!(self, Self::Bypass | Self::ReinhardExtended)
@@ -1196,9 +1125,8 @@ impl TonemapMode {
     /// The curve an HDR output actually runs, substituting a safe one when the
     /// selected curve has no HDR form.
     ///
-    /// Substituting rather than refusing keeps the transfer contract and the
-    /// creative curve independent: a look choice must not silently decide whether
-    /// a delivery is HDR. The substitution is reported, never silent.
+    /// Substituting keeps the curve choice from deciding whether a delivery is
+    /// HDR. The substitution is reported.
     #[must_use]
     pub const fn for_hdr(self) -> Self {
         if self.has_hdr_form() {
@@ -1211,8 +1139,8 @@ impl TonemapMode {
 
 // ── Edge blend ───────────────────────────────────────────────────────
 
-/// A single overlap zone in surface-local UV space [0..1].
-/// Defines a rectangle where this surface overlaps with a surface on another output.
+/// Where this surface overlaps a surface on another output, in surface UV
+/// space [0..1].
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct OverlapZone {
     /// Overlap rectangle in surface UV: [`u_min`, `v_min`, `u_max`, `v_max`].
@@ -1232,7 +1160,7 @@ pub struct SurfaceOverlapZones {
     pub zones: Vec<OverlapZone>,
 }
 
-/// Controls whether edge blend config is user-set or auto-computed from surface topology.
+/// Whether edge blend config is user-set or computed from surface overlaps.
 #[derive(
     Debug,
     Clone,
@@ -1245,10 +1173,10 @@ pub struct SurfaceOverlapZones {
     Default,
 )]
 pub enum EdgeBlendMode {
-    /// User sets each edge manually (default — preserves existing behavior).
+    /// User sets each edge.
     #[default]
     Manual,
-    /// Blend config is auto-derived from overlapping surfaces across outputs.
+    /// Derived from overlapping surfaces across outputs.
     Auto,
 }
 
@@ -1272,7 +1200,7 @@ impl Default for EdgeBlendEdge {
     }
 }
 
-/// Edge blending configuration for an output — four independent edges.
+/// Edge blending for an output's four edges.
 #[derive(
     Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, utoipa::ToSchema, Default,
 )]
@@ -1385,8 +1313,8 @@ mod tests {
         }
     }
 
-    /// A stage saved before Decision 12 names channels and decks by position.
-    /// Those positions are resolved against the scene they were saved with.
+    /// Older stages name channels and decks by position, resolved against the
+    /// scene they were saved with.
     #[test]
     fn index_based_sources_migrate_against_the_scene_order() {
         let channels = vec!["c0".to_string(), "c1".to_string()];
@@ -1629,8 +1557,7 @@ mod tests {
 
     #[test]
     fn legacy_stage_json_loads_as_sdr_at_the_default_peak() {
-        // A `.varda/` written before Phase 50 carries neither field. It must land on
-        // the SDR contract it was written for, not on an HDR one.
+        // Older `.varda/` files have neither field and must load as SDR.
         let request: PresentationRequest =
             serde_json::from_str(r#"{"presentation_depth":"sdr10","dither":false}"#).unwrap();
         assert_eq!(request.depth, PresentationDepth::Sdr10);
@@ -1657,8 +1584,7 @@ mod tests {
 
     #[test]
     fn normalization_upgrades_eight_bit_hdr_to_ten_bit() {
-        // PQ quantized to eight bits bands severely. An incoherent hand-edited
-        // request is coerced rather than resolved into a picture no one would ship.
+        // PQ at eight bits bands, so an eight-bit HDR request is coerced.
         let normalized = PresentationRequest {
             depth: PresentationDepth::Sdr8,
             transfer: PresentationTransfer::Hdr10Pq,
@@ -1718,8 +1644,7 @@ mod tests {
 
     #[test]
     fn resolver_degrades_hdr_to_the_best_sdr_the_path_can_carry() {
-        // An HDR10 request on an SDR-only path is a capability answer, not an error.
-        // Adapter preference order decides which SDR result is "best".
+        // HDR10 on an SDR-only path falls back in adapter preference order.
         let capabilities = PresentationCapabilities::new(vec![sdr10_format(), sdr8_format()], None);
         let resolved = capabilities
             .resolve(PresentationRequest {
@@ -1811,8 +1736,7 @@ mod tests {
 
     #[test]
     fn switching_modes_preserves_dither_and_peak() {
-        // Changing the contract must not silently discard the operator's other
-        // settings, so a round trip through HDR and back is lossless.
+        // A round trip through HDR and back keeps the other settings.
         let original = PresentationRequest {
             dither: false,
             peak_nits: 4000,
@@ -1833,16 +1757,14 @@ mod tests {
             labels,
             ["8-bit SDR", "10-bit SDR", "HDR10", "HLG", "EDR (monitor)"]
         );
-        // The naming rule from /spec/sdr-presentation-precision.md § Naming and
-        // Boundary: 10-bit SDR is not HDR and must never be labelled as such.
+        // 10-bit SDR is not HDR and must not be labeled as such.
         assert!(!PresentationMode::Sdr10.label().contains("HDR"));
         assert!(!PresentationMode::Sdr10.description().contains("HDR"));
     }
 
     #[test]
     fn edr_is_hdr_but_encodes_nothing_and_keeps_a_peak() {
-        // EDR is the one HDR contract that writes linear values, and the one
-        // whose peak names a deliverable rather than the display.
+        // EDR writes linear values and its peak names the deliverable.
         assert!(PresentationTransfer::EdrLinear.is_hdr());
         assert!(!PresentationTransfer::EdrLinear.encodes_a_transfer());
         assert!(!PresentationTransfer::EdrLinear.carries_mastering_metadata());
@@ -1851,8 +1773,7 @@ mod tests {
 
     #[test]
     fn hlg_is_hdr_but_carries_no_mastering_metadata() {
-        // The property that makes HLG the right live default: nothing to declare,
-        // so nothing to report as declared rather than measured.
+        // HLG carries no mastering metadata.
         assert!(PresentationTransfer::Hlg.is_hdr());
         assert!(!PresentationTransfer::Hlg.carries_mastering_metadata());
         assert!(!PresentationTransfer::Hlg.uses_peak_nits());
@@ -1887,10 +1808,9 @@ mod tests {
         );
     }
 
-    // ── offered_modes (/spec/presentation-mode-offering.md) ──────────
+    // ── offered_modes ──────────
 
-    /// Every capability set used by the tests below, so the property test and the
-    /// specific cases cannot drift onto different fixtures.
+    /// Every capability set used by the tests below.
     fn caps(formats: Vec<PresentationFormat>) -> PresentationCapabilities {
         PresentationCapabilities::new(formats, Some("test capability set".into()))
     }
@@ -1920,10 +1840,8 @@ mod tests {
         fmt(PresentationDepth::Sdr8, PresentationTransfer::Sdr)
     }
 
-    /// The contract that makes a derived menu safe: whatever `offered_modes`
-    /// lists, `resolve` must deliver unchanged, and whatever it omits must
-    /// degrade. Stated as a property over capability sets rather than a table,
-    /// because a table would be the very thing this design rejects.
+    /// Whatever `offered_modes` marks deliverable, `resolve` delivers unchanged;
+    /// everything else degrades.
     #[test]
     fn the_offered_set_and_the_resolver_always_agree() {
         let sets = [
@@ -1967,8 +1885,7 @@ mod tests {
         }
     }
 
-    /// An empty picker would be a worse failure than an over-full one, and any
-    /// path that can present at all can present eight-bit SDR.
+    /// Any path that presents at all can present eight-bit SDR.
     #[test]
     fn eight_bit_is_always_offered() {
         for formats in [
@@ -1984,8 +1901,7 @@ mod tests {
         }
     }
 
-    /// The case that motivated this phase: an adapter with one fixed format
-    /// offers exactly one mode, rather than five with four warnings behind them.
+    /// An adapter with one fixed format offers exactly one mode.
     #[test]
     fn a_single_format_adapter_offers_exactly_one_mode() {
         assert_eq!(available(&caps(vec![sdr8()])), vec![PresentationMode::Sdr8]);
@@ -2003,8 +1919,7 @@ mod tests {
         );
     }
 
-    /// Hiding a mode teaches nothing, so every blocked entry has to say why. The
-    /// picker renders this text, and an empty reason would be a blank tooltip.
+    /// Every blocked entry has a non-empty reason for the picker tooltip.
     #[test]
     fn every_blocked_mode_carries_a_reason() {
         for entry in caps(vec![sdr8()]).mode_availability() {
@@ -2020,8 +1935,8 @@ mod tests {
         }
     }
 
-    /// A display surface exposing PQ but no HLG format, which is every display
-    /// surface: `select_surface_presentation` has no HLG branch to build one from.
+    /// Display surfaces expose PQ but never HLG: `select_surface_presentation`
+    /// has no HLG branch.
     #[test]
     fn a_pq_surface_offers_hdr10_but_not_hlg() {
         let offered = available(&caps(vec![

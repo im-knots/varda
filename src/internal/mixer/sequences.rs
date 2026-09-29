@@ -1,8 +1,5 @@
-//! Editing and running transition sequences, addressed by UUID.
-//!
-//! Sequences are addressed by UUID; steps are positional within their sequence,
-//! so `step_idx` is an ordinal rather than an address. See
-//! [`/spec/api-addressing.md`].
+//! Editing and running transition sequences, addressed by UUID. Steps are positional, so
+//! `step_idx` is an ordinal, not an address.
 
 use anyhow::Result;
 
@@ -122,8 +119,7 @@ impl Mixer {
         from_channel_uuid: &str,
         to_channel_uuid: &str,
     ) -> Resolved<()> {
-        // Validate both channels up front so a step can never be created
-        // pointing at a channel that does not exist.
+        // Validate both channels first so a step never points at a missing channel.
         self.resolve_channel(from_channel_uuid)?;
         self.resolve_channel(to_channel_uuid)?;
         self.push_step(

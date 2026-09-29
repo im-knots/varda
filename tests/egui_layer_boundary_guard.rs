@@ -1,5 +1,5 @@
-//! Guards CONTRIBUTING.md: egui stays in `src/usecases/`. `src/internal/` and
-//! `src/app/` must not name egui types in code. Doc comments may mention egui.
+//! egui stays in `src/usecases/`: `src/internal/` and `src/app/` must not name
+//! egui types in code. Doc comments may mention egui.
 
 use std::path::Path;
 
@@ -48,7 +48,7 @@ fn internal_and_app_do_not_use_egui_types() {
     assert!(
         violations.is_empty(),
         "src/internal and src/app must not name egui types \
-         (CONTRIBUTING.md, /spec/app-presentation-boundary.md); found:\n{}",
+         (see CONTRIBUTING.md); found:\n{}",
         violations.join("\n")
     );
 }

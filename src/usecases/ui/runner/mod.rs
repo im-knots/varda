@@ -1,8 +1,8 @@
-//! `UIRunner` — windowed delivery layer for the Varda engine.
+//! `UIRunner`: the windowed delivery layer for the Varda engine.
 //!
-//! Owns the window, egui state, blit pipeline, texture registrations, and `WindowSurface`.
-//! The engine (`VardaApp`) is owned here and driven each frame.
-//! For headless operation (HTTP API, CLI), this module is simply not used.
+//! Owns the window, egui state, blit pipeline, texture registrations,
+//! `WindowSurface`, and the engine (`VardaApp`), which it drives each frame.
+//! Headless runs (HTTP API, CLI) don't use it.
 
 use crate::app::render::FileDialogResult;
 use crate::app::{AppConfig, VardaApp};
@@ -29,10 +29,10 @@ use preview::PreviewEncoder;
 use detect::{DetectRequest, DetectResponse, spawn_detect_thread};
 
 pub struct UIRunner {
-    // ── Session config (CLI flags + workspace defaults) ──────────────
+    // Session config: CLI flags and workspace defaults.
     config: AppConfig,
 
-    // ── Window / egui state (delivery layer) ────────────────────────
+    // Window and egui state.
     window: Option<&'static Window>,
     window_surface: Option<WindowSurface>,
     blit_pipeline: Option<BlitPipeline>,
@@ -57,60 +57,49 @@ pub struct UIRunner {
     /// Cued preview channels last sent to the engine.
     sent_preview_channels: Vec<String>,
     camera_detect_contours: Vec<crate::surface::detect::DetectedContour>,
-    // Background detection thread channels
+    // Background detection thread channels.
     detect_req_tx: std::sync::mpsc::Sender<DetectRequest>,
     detect_res_rx: std::sync::mpsc::Receiver<DetectResponse>,
     detect_in_flight: bool,
     main_window_id: Option<WindowId>,
 
-    // ── UI-consumer-owned layout/selection state ─────────────────────
+    // UI-owned layout and selection state.
     layout: super::UILayoutState,
 
-    // ── File dialog channel (async, non-blocking) ─────────────────────
+    // File dialog results (async).
     file_dialog_tx: std::sync::mpsc::Sender<FileDialogResult>,
     file_dialog_rx: std::sync::mpsc::Receiver<FileDialogResult>,
 
-    // ── Background deck loading channel (async, non-blocking) ────────
-
-    // ── Engine (created after GPU init in resumed()) ─────────────────
+    // Engine, created after GPU init.
     varda: Option<VardaApp>,
 
-    // ── Deferred GPU init (avoids Metal dispatch-queue deadlock on Rosetta/Intel) ──
+    // Deferred GPU init (avoids a Metal dispatch-queue deadlock on Rosetta/Intel).
     gpu_init_handle: Option<std::thread::JoinHandle<anyhow::Result<(GpuContext, WindowSurface)>>>,
     startup_t0: Option<std::time::Instant>,
 
-    // ── Undo/redo ─────────────────────────────────────────────────────
-    // The undo/redo timeline itself lives on `VardaApp` (shared with the
-    // HTTP/headless command bus). The runner only tracks gesture edges so a
-    // continuous stage/warp drag collapses into one undo step.
-    /// Previous frame's `gesture_active` flag, for detecting drag start vs.
-    /// continuation so a continuous stage/warp drag collapses into one undo step.
+    /// Previous frame's `gesture_active`, to tell drag start from continuation so
+    /// a continuous drag is one undo step. The undo history lives on `VardaApp`.
     prev_gesture_active: bool,
     /// Editor prefs last sent to the engine; `None` until the first frame sends them.
     sent_editor_prefs: Option<EditorPrefs>,
 
-    // ── Performance: gate publish_state to reduce snapshot overhead ──
+    // Gates publish_state to reduce snapshot overhead.
     publish_counter: u32,
 
-    // ── HTTP API server (background thread) ──────────────────────────
+    // HTTP API server (background thread).
     api_handle: Option<crate::usecases::api::runner::ApiServerHandle>,
 
-    // ── Adaptive frame pacing (windowed + headless) ────────────────
-    /// The ideal start time for the next frame. Advances by `frame_budget`
-    /// each frame to maintain a steady cadence. When a frame overshoots its
-    /// budget, the anchor snaps forward to `now + budget` to avoid catch-up
-    /// bursts.
+    /// Ideal start time of the next frame. Advances by `frame_budget` each frame;
+    /// after an overshoot it snaps to `now + budget` to avoid catch-up bursts.
     cadence_anchor: Option<std::time::Instant>,
 
-    // ── Signal-driven shutdown (SIGINT/SIGTERM) ─────────────────────
+    // Set by SIGINT/SIGTERM.
     shutdown_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
 
-    // ── Cached window geometry (avoids XGetGeometry round-trip per frame) ──
-    // winit 0.30's Window::inner_size() on X11 issues a synchronous XGetGeometry
-    // request every call. egui_winit::State::take_egui_input() calls inner_size()
-    // unconditionally, causing a blocking X11 round-trip each frame. We cache
-    // the size here, updated from Resized/ScaleFactorChanged events, and bypass
-    // take_egui_input() to avoid the stall.
+    // Cached window geometry. winit 0.30's Window::inner_size() on X11 makes a
+    // blocking XGetGeometry request, and egui_winit's take_egui_input() calls it
+    // every frame. The size is cached from Resized/ScaleFactorChanged events and
+    // take_egui_input() is bypassed.
     egui_start_time: std::time::Instant,
     cached_screen_size: winit::dpi::PhysicalSize<u32>,
     cached_scale_factor: f32,
@@ -171,10 +160,9 @@ impl UIRunner {
     /// # Errors
     ///
     /// Returns an error if the winit event loop cannot be created (no display
-    /// server, or one already exists on this thread), or if the event loop
-    /// itself terminates with an error.
+    /// server, or one already exists on this thread) or exits with an error.
     pub fn run(mut self) -> anyhow::Result<()> {
-        // Install Ctrl-C handler for graceful shutdown (especially useful in headless)
+        // Ctrl-C handler for graceful shutdown, mainly for headless.
         let flag = self.shutdown_flag.clone();
         let _ = ctrlc::set_handler(move || {
             log::info!("Received interrupt signal, shutting down...");
@@ -189,12 +177,10 @@ impl UIRunner {
     }
 }
 
-/// Whether this frame's mutations deserve their own undo entry.
+/// Whether this frame's mutations get their own undo entry.
 ///
-/// A held drag reports a mutation on every frame it moves, so only the frame
-/// that *starts* the gesture takes a snapshot. Without this a single region drag
-/// would fill the fifty-deep history by itself and undo would rewind the show a
-/// pixel at a time.
+/// A held drag mutates every frame it moves, so only the frame that starts the
+/// gesture takes a snapshot; otherwise one drag would fill the history.
 fn wants_history_snapshot(
     prev_gesture_active: &mut bool,
     dirty: bool,
@@ -206,8 +192,8 @@ fn wants_history_snapshot(
 }
 
 impl UIRunner {
-    /// Complete initialization once GPU context is available.
-    /// Called from `resumed()` for headless or from `about_to_wait()` for windowed.
+    /// Finish initialization once the GPU context is ready. Called from
+    /// `resumed()` when headless, or from `about_to_wait()` when windowed.
     fn finish_init(
         &mut self,
         gpu: GpuContext,
@@ -215,7 +201,7 @@ impl UIRunner {
         startup_t0: std::time::Instant,
         event_loop: &ActiveEventLoop,
     ) {
-        // Set up egui + blit pipeline for windowed mode
+        // egui and blit pipeline, windowed only.
         if let (Some(window_static), Some(ws)) = (self.window, &win_surface) {
             self.cached_screen_size = window_static.inner_size();
             self.cached_scale_factor = window_static.scale_factor() as f32;
@@ -235,7 +221,7 @@ impl UIRunner {
                 egui_wgpu::RendererOptions::default(),
             ));
 
-            // Set the application icon on egui's viewport (controls dock/taskbar icon)
+            // Application icon on egui's viewport (dock/taskbar icon).
             {
                 static ICON_BYTES: &[u8] = include_bytes!("../../../../assets/icon.png");
                 if let Ok(img) = image::load_from_memory(ICON_BYTES) {
@@ -256,7 +242,6 @@ impl UIRunner {
             self.window_surface = Some(ws);
         }
 
-        // Create engine now that GPU is ready
         log::info!("[STARTUP] Creating engine (audio, MIDI, shaders, mixer)...");
         let mut varda = match VardaApp::new(gpu, &self.config) {
             Ok(v) => v,
@@ -272,7 +257,7 @@ impl UIRunner {
             startup_t0.elapsed()
         );
 
-        // Load workspace (may replace default mixer with saved scene)
+        // Load the workspace; may replace the default mixer with a saved scene.
         log::info!("[STARTUP] Loading workspace...");
         let loaded = varda.load_workspace();
         if let Some(prefs) = loaded.editor_prefs {
@@ -281,7 +266,7 @@ impl UIRunner {
         // `load_workspace` clears the engine-owned undo/redo timeline.
         log::info!("[STARTUP] Workspace loaded ({:.0?})", startup_t0.elapsed());
 
-        // Start HTTP API server on background thread
+        // HTTP API server on a background thread.
         if self.api_handle.is_none() {
             self.api_handle = crate::usecases::api::runner::start(
                 self.config.api_port,
@@ -292,7 +277,7 @@ impl UIRunner {
 
         self.varda = Some(varda);
 
-        // Register GPU textures with egui for previews (windowed only)
+        // Register preview textures with egui (windowed only).
         if !self.config.headless {
             self.register_preview_textures();
         }
@@ -302,14 +287,12 @@ impl UIRunner {
         );
     }
 
-    /// Advance the cadence anchor after a frame completes (render or headless).
+    /// Advance the cadence anchor after a frame (rendered or headless).
     ///
-    /// The anchor represents the ideal start time for the next frame. Each call
-    /// advances it by one frame budget to maintain a steady cadence. If the
-    /// frame overshot its budget (anchor is already in the past), the anchor
-    /// snaps forward to `now + budget` instead of trying to catch up — this
-    /// prevents the burst-pause pattern where multiple short frames fire in
-    /// rapid succession after one long frame.
+    /// The anchor is the ideal start of the next frame and advances by one budget
+    /// per call. If the frame overshot (the anchor is already past), it snaps to
+    /// `now + budget` instead of catching up, which would fire a burst of short
+    /// frames.
     fn advance_cadence_anchor(&mut self, target_fps: u32) {
         if target_fps == 0 {
             self.cadence_anchor = None;
@@ -321,10 +304,10 @@ impl UIRunner {
             Some(anchor) => {
                 let ideal_next = anchor + budget;
                 if ideal_next > now {
-                    // Frame finished before deadline — cadence maintained
+                    // Finished before the deadline; cadence kept.
                     ideal_next
                 } else {
-                    // Frame overshot — restart cadence from now
+                    // Overshot; restart the cadence from now.
                     now + budget
                 }
             }
@@ -332,13 +315,13 @@ impl UIRunner {
         });
     }
 
-    /// Headless render loop — engine processing without UI/egui.
+    /// Headless render loop: engine processing without egui.
     fn render_headless(&mut self, host: &dyn WindowHost) {
         let Some(varda) = self.varda.as_mut() else {
             return;
         };
 
-        // Check for shutdown request (from API or SIGINT/SIGTERM)
+        // Shutdown requested by the API or SIGINT/SIGTERM.
         if varda.shutdown_requested()
             || self
                 .shutdown_flag
@@ -358,7 +341,7 @@ impl UIRunner {
         varda.begin_frame();
         varda.run_pending_global_actions();
 
-        // Create pending output windows (API-driven in headless)
+        // Create pending output windows (API-driven when headless).
         host.create_pending_outputs(varda);
         host.refresh_monitors(varda);
         #[cfg(feature = "html")]
@@ -371,9 +354,9 @@ impl UIRunner {
         }
     }
 
-    /// Main render loop — delegates all logic to `VardaApp`.
+    /// Main render loop; the logic lives in `VardaApp`.
     fn render(&mut self, event_loop: &ActiveEventLoop) {
-        // 1. Frame timing + notifications + inputs
+        // 1. Frame timing, notifications, inputs.
         {
             let Some(varda) = self.varda.as_mut() else {
                 return;
@@ -381,12 +364,12 @@ impl UIRunner {
             varda.begin_frame();
         }
 
-        // 2. Sync egui texture registrations
+        // 2. Sync egui texture registrations.
         self.refresh_textures();
 
         let Some(window) = self.window else { return };
 
-        // 3. Create pending output windows + refresh monitors
+        // 3. Create pending output windows and refresh monitors.
         {
             let Some(varda) = self.varda.as_mut() else {
                 return;
@@ -397,14 +380,14 @@ impl UIRunner {
             varda.create_pending_interactive(event_loop);
         }
 
-        // 3b. Render dome preview if open (either dome_preview_open or dome_mode_active)
+        // 3b. Render the dome preview when the preview or dome mode is open.
         if (self.layout.dome_preview_open || self.layout.dome_mode_active)
             && let (Some(renderer), Some(varda)) = (&mut self.dome_preview_renderer, &self.varda)
         {
             let context = varda.gpu_context();
             let dome = varda.dome_config();
 
-            // Update slice overlays when in dome mode
+            // Slice overlays in dome mode.
             if self.layout.dome_mode_active {
                 let setup = dome.preset.to_setup_with_geometry(dome.geometry);
                 renderer.set_slice_overlays(&context.device, &setup);
@@ -412,7 +395,7 @@ impl UIRunner {
                 renderer.clear_slice_overlays();
             }
 
-            // Use domemaster output if available, otherwise fall back to mixer composite
+            // Domemaster output if available, else the mixer composite.
             let source_view = varda
                 .domemaster_view()
                 .unwrap_or_else(|| varda.mixer_ref().composite_view());
@@ -422,12 +405,12 @@ impl UIRunner {
 
         self.sync_camera_detect_capture();
 
-        // 4. Collect UI data snapshot (engine → UI, with UI-owned layout state)
+        // 4. UI data snapshot: engine state plus UI-owned layout state.
         let Some(varda_ref) = self.varda.as_ref() else {
             return;
         };
-        // One snapshot per frame: the GUI's view borrows it, and every tenth
-        // frame the API gets the same build instead of a second one.
+        // One snapshot per frame: the GUI view borrows it, and every tenth frame the
+        // API gets the same build.
         let engine = varda_ref.build_engine_state();
         let mut ui_data = crate::usecases::ui::build_ui_data(
             &engine,
@@ -452,11 +435,11 @@ impl UIRunner {
         ui_data.camera_detect_texture = self.camera_detect_texture;
         ui_data.camera_detect_mode = self.layout.camera_detect_mode.clone();
 
-        // Poll background detection results (non-blocking)
+        // Poll background detection results.
         while let Ok(response) = self.detect_res_rx.try_recv() {
             self.detect_in_flight = false;
             if response.is_capture {
-                // Capture complete — transition to Preview mode
+                // Capture complete: switch to Preview mode.
                 let n = response.contours.len();
                 self.camera_detect_contours = response.contours.clone();
                 self.layout.camera_detect_mode = ui::CameraDetectMode::Preview {
@@ -464,7 +447,7 @@ impl UIRunner {
                     contours: response.contours,
                     selected: vec![true; n],
                 };
-                // Re-snapshot UIData mode since we just changed it
+                // Refresh UIData's mode after the change above.
                 ui_data.camera_detect_mode = self.layout.camera_detect_mode.clone();
             } else {
                 // Live overlay update
@@ -472,7 +455,7 @@ impl UIRunner {
             }
         }
 
-        // Submit new detection work if in Live mode and no work in flight
+        // In Live mode with no work in flight, submit new detection work.
         if let ui::CameraDetectMode::Live {
             camera_id,
             ref params,
@@ -495,12 +478,10 @@ impl UIRunner {
             .camera_detect_contours
             .clone_from(&self.camera_detect_contours);
 
-        // 5. Run egui frame
+        // 5. Run the egui frame.
         let t_egui = std::time::Instant::now();
-        // Bypass take_egui_input() to avoid an XGetGeometry round-trip every frame.
-        // winit 0.30's Window::inner_size() on X11 is a synchronous xcb request;
-        // take_egui_input() calls it unconditionally. We replicate what it does
-        // using cached values updated from Resized/ScaleFactorChanged events.
+        // Build the input by hand instead of take_egui_input(), using the cached size,
+        // to avoid a blocking X11 round-trip every frame.
         let raw_input = {
             let Some(egui_state) = &mut self.egui_state else {
                 return;
@@ -536,11 +517,11 @@ impl UIRunner {
             egui_state.handle_platform_output(window, full_output.platform_output);
         }
 
-        // 6. Apply all UI actions
-        // 6a. UI-consumer-owned selection/layout state
+        // 6. Apply UI actions.
+        // 6a. UI-owned selection and layout state.
         self.layout.apply_selections(&ui_actions);
 
-        // 6a2. Dome camera actions — apply to renderer (not layout state)
+        // 6a2. Dome camera actions go to the renderer, not layout state.
         {
             for action in &ui_actions.session.dome_actions {
                 match action {
@@ -566,7 +547,7 @@ impl UIRunner {
 
         self.apply_camera_detect_actions(&mut ui_actions);
 
-        // 6b. Engine actions (delegated to VardaApp)
+        // 6b. Engine actions, via VardaApp.
         {
             let Some(varda) = self.varda.as_mut() else {
                 return;
@@ -574,37 +555,29 @@ impl UIRunner {
 
             ui_actions.commands.append(&mut self.queued_commands);
 
-            // Files picked in a dialog become deck-adds on this frame's command
-            // stream. The dialog carries a channel UUID rather than an index:
-            // the user may have spent minutes browsing while the UI stayed live.
+            // Files picked in a dialog become deck-adds on this frame's command stream.
+            // The dialog carries a channel UUID, since the UI stayed live while it was open.
             while let Ok(result) = self.file_dialog_rx.try_recv() {
                 ui_actions.commands.extend(result.commands());
             }
 
-            // ── Undo/redo: snapshot before undoable mutations ──
-            // Unified scene+stage timeline with general gesture coalescing
-            // (ui-engine-boundary.md WS3). A snapshot is pushed when the frame
-            // carries any undoable mutation AND it is not the *continuation* of a
-            // held drag — so a continuous gesture of any kind (warp drag, param
-            // slider) collapses into a single undo step (snapshot on the first
-            // frame). Undoability is decided by the single, compiler-checked
-            // `command_is_undoable` predicate (via `batch_has_undoable`). The
-            // engine takes the snapshot inside the drain.
+            // Undo: a snapshot is taken when the frame has an undoable mutation and is
+            // not the continuation of a held drag, so a continuous gesture is one undo
+            // step. `command_is_undoable` (via `batch_has_undoable`) decides
+            // undoability; the engine takes the snapshot inside the drain.
             let dirty = varda.batch_has_undoable(&ui_actions.commands);
-            // A recording pass is one long gesture: it pushed its own entry
-            // when the first parameter was touched, and every write until it
-            // ends belongs to that entry.
+            // A recording pass is one gesture: its entry was pushed when the first
+            // parameter was touched.
             let starts_undo_step = wants_history_snapshot(
                 &mut self.prev_gesture_active,
                 dirty,
                 ui_actions.session.gesture_active || varda.is_recording(),
             );
 
-            // ── Editor prefs, undo/redo, and save ride the same command stream,
-            // after this frame's edits, in that order. Control-surface requests
-            // join the UI's own.
+            // Editor prefs, undo/redo, and save go on the same command stream, after this
+            // frame's edits, in that order. Control-surface requests are merged in.
             let pending = varda.take_pending_global_actions();
-            // Compared in place so a frame that changes nothing allocates nothing.
+            // Compared in place so an unchanged frame allocates nothing.
             let cued = self.layout.preview_channels();
             let channels = varda.mixer_ref().channels();
             let unchanged = cued.len() == self.sent_preview_channels.len()
@@ -639,8 +612,8 @@ impl UIRunner {
                 ui_actions.commands.push(EngineCommand::SaveWorkspace);
             }
 
-            // Where each channel this frame removes sits now, so selection can
-            // follow once the engine confirms it is gone.
+            // Current position of each channel this frame removes, so selection can
+            // follow once the engine confirms the removal.
             let mut removals: Vec<(usize, String)> = ui_actions
                 .commands
                 .iter()
@@ -663,7 +636,7 @@ impl UIRunner {
                 }
             }
 
-            // Spawn file dialogs on background threads (non-blocking)
+            // File dialogs run on background threads.
             if let Some(request) = ui_actions.session.open_file_dialog.take() {
                 VardaApp::open_file_dialog(&self.file_dialog_tx, request);
             }
@@ -671,9 +644,8 @@ impl UIRunner {
 
         let egui_us = t_egui.elapsed().as_micros();
 
-        // 7. GPU sync: drain the previous frame's GPU work BEFORE submitting new work.
-        // This prevents GPU queue buildup that causes get_current_texture()/present()
-        // to block for multiple frames worth of GPU time.
+        // 7. Drain the previous frame's GPU work before submitting new work, so the
+        // queue doesn't build up and block get_current_texture()/present().
         let t_poll = std::time::Instant::now();
         {
             let Some(varda) = self.varda.as_ref() else {
@@ -686,9 +658,9 @@ impl UIRunner {
         }
         let poll_us = t_poll.elapsed().as_micros();
 
-        // 8–9. The engine's render: the mixer, then output windows before the
-        // UI, because projectors and displays are latency-critical and must not
-        // be gated behind the UI surface's get_current_texture()/present() cycle.
+        // 8-9. Engine render: the mixer, then output windows before the UI, so
+        // latency-critical projectors and displays don't wait on the UI surface's
+        // get_current_texture()/present().
         let times = {
             let Some(varda) = self.varda.as_mut() else {
                 return;
@@ -698,14 +670,12 @@ impl UIRunner {
         let mixer_us = times.mixer.as_micros();
         let outputs_us = times.outputs.as_micros();
 
-        // 9b. Gamma-encode previews. After the mixer render (8) and output
-        // windows (9) — window previews source their intermediate texture — and
-        // before egui paints (10), so thumbnails show this frame and match what
-        // the output window displays.
+        // 9b. Gamma-encode previews after the mixer (8) and output windows (9),
+        // since window previews read their intermediate texture, and before egui
+        // paints (10), so thumbnails show this frame.
         self.encode_previews();
 
-        // 10. UI surface last — operator control surface, latency-tolerant.
-        // The UI blit + egui overlay + present can safely happen after outputs.
+        // 10. UI surface last: blit, egui overlay and present are latency-tolerant.
         let t_submit = std::time::Instant::now();
         self.submit_frame(
             window,
@@ -715,14 +685,13 @@ impl UIRunner {
         );
         let submit_us = t_submit.elapsed().as_micros();
 
-        // Advance the cadence anchor for adaptive frame pacing.
         let target_fps = self
             .varda
             .as_ref()
             .map_or(self.config.target_fps, crate::app::VardaApp::target_fps);
         self.advance_cadence_anchor(target_fps);
 
-        // Frame loop timing (log every 120 frames)
+        // Frame loop timing, logged every 120 frames.
         self.frame_loop_counter += 1;
         if self.frame_loop_counter.is_multiple_of(120) {
             let total_us = mixer_us + submit_us + outputs_us + poll_us;
@@ -739,7 +708,7 @@ impl UIRunner {
         }
     }
 
-    /// Blit mixer output to screen, overlay egui, and present.
+    /// Blit the mixer output to screen, overlay egui, and present.
     fn submit_frame(
         &mut self,
         window: &Window,
@@ -755,8 +724,8 @@ impl UIRunner {
 
         let paint_jobs = self.egui_ctx.tessellate(shapes, pixels_per_point);
 
-        // Always apply texture updates so the egui renderer stays in sync,
-        // even when the surface is unavailable (e.g. Occluded at startup).
+        // Apply texture updates even when the surface is unavailable (e.g. Occluded
+        // at startup), so the egui renderer stays in sync.
         let Some(egui_renderer) = &mut self.egui_renderer else {
             return;
         };
@@ -865,10 +834,8 @@ mod tests {
     use super::*;
     use clap::Parser;
 
-    // ── Frame pacing ────────────────────────────────────────────────
-    //
-    // `UIRunner::new` needs no window, GPU, or event loop — every such field is
-    // `None` — so the pacing logic is directly exercisable.
+    // Frame pacing. `UIRunner::new` needs no window, GPU, or event loop, so the
+    // pacing logic can be tested directly.
 
     fn runner() -> UIRunner {
         UIRunner::new(AppConfig::parse_from(["varda", "--headless"]))
@@ -900,14 +867,13 @@ mod tests {
         );
     }
 
-    /// A frame that finishes inside its budget keeps the existing cadence: the
-    /// anchor advances by exactly one budget rather than resetting to `now`.
-    /// This is what stops frame times from drifting.
+    /// A frame inside its budget advances the anchor by exactly one budget instead
+    /// of resetting to `now`, so frame times don't drift.
     #[test]
     fn cadence_anchor_advances_by_one_budget_when_on_time() {
         let mut runner = runner();
         let budget = std::time::Duration::from_secs_f64(1.0 / 60.0);
-        // Far enough ahead that `now` is comfortably before the deadline.
+        // Far enough ahead that `now` is well before the deadline.
         let anchor = std::time::Instant::now() + budget * 10;
         runner.cadence_anchor = Some(anchor);
         runner.advance_cadence_anchor(60);
@@ -918,9 +884,8 @@ mod tests {
         );
     }
 
-    /// A frame that overshot its deadline restarts the cadence from `now` rather
-    /// than chasing the stale anchor, which would emit a burst of zero-budget
-    /// catch-up frames.
+    /// A frame past its deadline restarts the cadence from `now` instead of
+    /// chasing the stale anchor with zero-budget catch-up frames.
     #[test]
     fn cadence_anchor_snaps_forward_after_an_overshoot() {
         let mut runner = runner();
@@ -953,10 +918,8 @@ mod tests {
         );
     }
 
-    // ── Detection worker thread ─────────────────────────────────────
-
-    /// The worker echoes `is_capture` and `camera_id` back untouched, which is how
-    /// the runner tells a freeze-frame capture from a live overlay refresh.
+    /// The worker returns `is_capture` and `camera_id` unchanged; the runner uses
+    /// them to tell a capture from a live overlay refresh.
     #[test]
     fn detect_worker_round_trips_request_metadata() {
         let (req_tx, req_rx) = std::sync::mpsc::channel();
@@ -980,8 +943,7 @@ mod tests {
         assert_eq!(res.camera_id, 7);
     }
 
-    /// A blank frame yields no contours rather than letting the error escape the
-    /// thread — the worker must survive undetectable input and stay available.
+    /// A blank frame yields no contours and the worker stays available.
     #[test]
     fn detect_worker_survives_undetectable_input_and_keeps_serving() {
         let (req_tx, req_rx) = std::sync::mpsc::channel();
@@ -1005,11 +967,8 @@ mod tests {
         }
     }
 
-    // ── render_headless ─────────────────────────────────────────────
-    //
-    // A real `ActiveEventLoop` cannot be constructed in a test, so `WindowHost`
-    // stands in for it. Everything else is real: a headless `GpuContext` and a
-    // genuine `VardaApp`, driven frame by frame.
+    // render_headless. A real `ActiveEventLoop` cannot be constructed in a test,
+    // so `WindowHost` stands in for it; the `GpuContext` and `VardaApp` are real.
 
     #[derive(Default)]
     struct FakeHost {
@@ -1036,14 +995,11 @@ mod tests {
         fn create_pending_interactive(&self, _varda: &mut VardaApp) {}
     }
 
-    /// A runner with a real headless engine attached, or `None` when the machine
-    /// has no GPU adapter — matching the skip-without-adapter pattern used by the
-    /// other GPU tests.
+    /// A runner with a real headless engine, or `None` without a GPU adapter.
     fn headless_runner() -> Option<UIRunner> {
         let gpu = crate::testing::headless_gpu()?;
-        // One config for both halves, so the engine and the runner agree on
-        // which scratch workspace a shutdown save writes to. The scratch
-        // workspace is not optional: `render_headless` saves on shutdown.
+        // One config for both, so the engine and runner use the same scratch
+        // workspace. `render_headless` saves on shutdown, so one is required.
         let config = crate::testing::headless_config();
         let varda = VardaApp::new(gpu, &config).expect("VardaApp::new");
         let mut runner = UIRunner::new(config);
@@ -1073,8 +1029,8 @@ mod tests {
         assert_eq!(runner.publish_counter, 1);
     }
 
-    /// State publishing is gated to every tenth frame to keep snapshot cost off
-    /// the per-frame path. Observed through the shared reader the HTTP API uses.
+    /// State is published every tenth frame, observed through the shared reader
+    /// the HTTP API uses.
     #[test]
     fn render_headless_publishes_state_every_tenth_frame() {
         let Some(mut runner) = headless_runner() else {
@@ -1103,8 +1059,7 @@ mod tests {
         );
     }
 
-    /// A flagged shutdown exits and skips the frame's work entirely, so nothing
-    /// is rendered or reconciled after the signal.
+    /// A flagged shutdown exits and skips the frame's work.
     #[test]
     fn render_headless_exits_and_skips_work_when_shutdown_flagged() {
         let Some(mut runner) = headless_runner() else {
@@ -1122,8 +1077,8 @@ mod tests {
         let host = FakeHost::default();
         runner.render_headless(&host);
 
-        // This test writes a default scene to disk. Pin where, so the isolation
-        // is enforced rather than merely conventional.
+        // This test writes a default scene to disk; check it goes to the scratch
+        // workspace.
         assert!(
             workspace.join(".varda").join("scene.json").is_file(),
             "the shutdown save must land in the scratch workspace"
@@ -1140,9 +1095,8 @@ mod tests {
         );
     }
 
-    /// A timeline drag pushes a mutation every frame it moves. Exactly one of
-    /// them may become an undo entry, or a two-second drag would bury the rest
-    /// of the session's history.
+    /// A timeline drag mutates every frame it moves; exactly one frame becomes an
+    /// undo entry.
     #[test]
     fn a_held_drag_is_one_undo_entry() {
         let mut prev = false;
@@ -1153,8 +1107,7 @@ mod tests {
         assert!(frames[0], "the entry belongs to the frame that started it");
     }
 
-    /// Releasing and grabbing again is a second edit, and undo has to be able to
-    /// step between them.
+    /// Releasing and grabbing again is a second undo step.
     #[test]
     fn a_second_drag_gets_its_own_entry() {
         let mut prev = false;
@@ -1167,7 +1120,7 @@ mod tests {
         assert_eq!(pushes, 3, "two drags and the release between them");
     }
 
-    /// Discrete edits are unaffected: every click is still its own step.
+    /// Every discrete edit is its own undo step.
     #[test]
     fn clicks_are_not_coalesced() {
         let mut prev = false;
@@ -1177,7 +1130,7 @@ mod tests {
         assert_eq!(pushes, 5);
     }
 
-    /// A frame that changed nothing never takes a snapshot, gesture or not.
+    /// A frame with no changes never takes a snapshot.
     #[test]
     fn a_quiet_frame_records_nothing() {
         let mut prev = false;

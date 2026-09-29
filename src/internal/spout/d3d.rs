@@ -1,18 +1,9 @@
-//! The `D3D11On12` bridge Spout's textures have to cross.
+//! The `D3D11On12` bridge between wgpu's D3D12 device and Spout's textures.
 //!
-//! Spout shares a DirectX 11 texture created with `D3D11_RESOURCE_MISC_SHARED`,
-//! whose handle is a **legacy** shared handle. `ID3D12Device::OpenSharedHandle`
-//! takes NT handles only, so wgpu's D3D12 device cannot open one, and the Syphon
-//! approach of wrapping the shared primitive directly is unavailable.
-//!
-//! What works is the route Spout's own DX12 support uses: a `D3D11On12` device
-//! built on wgpu's existing device and queue. One device, one bridge, one GPU
-//! copy in each direction, and no CPU readback. That is not zero-copy and is not
-//! described as such.
-//!
-//! Verified to work end to end on a GitHub Actions runner whose only adapter is
-//! `Microsoft Basic Render Driver`, which is WARP. See
-//! [`super::capability`] and /spec/spout-output.md.
+//! Spout shares D3D11 textures with **legacy** shared handles, which
+//! `ID3D12Device::OpenSharedHandle` cannot open (it takes NT handles only). A
+//! `D3D11On12` device on wgpu's device and queue does one GPU copy in each
+//! direction, with no CPU readback. Works on WARP; see [`super::capability`].
 
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Graphics::Direct3D11::{
@@ -44,10 +35,7 @@ pub struct Bridge {
 impl Bridge {
     /// Build the bridge on wgpu's own device and queue.
     ///
-    /// `None` when wgpu is not on the Dx12 backend. Varda builds its instance
-    /// with `Backends::all()`, so a machine that prefers Vulkan is a legitimate
-    /// configuration in which Spout simply cannot run, and the manager reports
-    /// unavailable rather than failing.
+    /// `None` when wgpu is not on the Dx12 backend (e.g. it picked Vulkan).
     #[must_use]
     pub fn new(device: &wgpu::Device) -> Option<Self> {
         let (d3d12, queue) = raw_handles(device)?;
@@ -82,12 +70,9 @@ impl Bridge {
 
     /// Copy a sender's shared texture into a texture Varda owns.
     ///
-    /// `handle` is the 32-bit legacy handle read from the sender's shared-memory
-    /// record. The destination is a wgpu texture, wrapped for D3D11 so the copy
-    /// happens on one device.
-    ///
-    /// Returns whether the copy was issued. A sender that vanished between the
-    /// registry read and this call is an ordinary race, not an error.
+    /// `handle` is the 32-bit legacy handle from the sender's shared-memory
+    /// record. Returns whether the copy was issued; `false` usually means the
+    /// sender vanished after the registry read.
     pub fn copy_from_sender(&self, handle: u32, destination: &wgpu::Texture) -> bool {
         let mut source: Option<ID3D11Texture2D> = None;
         if unsafe {
@@ -109,9 +94,6 @@ impl Bridge {
     }
 
     /// Copy a texture Varda owns into the shared texture a receiver reads.
-    ///
-    /// The reverse of [`Self::copy_from_sender`], and the only other thing the
-    /// bridge does.
     pub fn copy_to_shared(&self, source: &wgpu::Texture, shared: &ID3D11Texture2D) -> bool {
         let Some(wrapped) = self.wrap(source) else {
             return false;
@@ -122,10 +104,9 @@ impl Bridge {
 
     /// Present a wgpu texture to D3D11 as a wrapped resource.
     ///
-    /// `COMMON` for both states rather than a specific one: wgpu owns this
-    /// texture's state tracking, and D3D12 promotes out of `COMMON` implicitly
-    /// for the copies here, so handing it back in the state it was lent avoids
-    /// telling wgpu's tracker something untrue.
+    /// Uses `COMMON` for both states: wgpu tracks this texture's state, and
+    /// D3D12 promotes out of `COMMON` implicitly for these copies, so the
+    /// texture comes back in the state wgpu expects.
     fn wrap(&self, texture: &wgpu::Texture) -> Option<ID3D11Texture2D> {
         let raw = unsafe {
             texture
@@ -152,13 +133,10 @@ impl Bridge {
         wrapped
     }
 
-    /// Copy on the D3D11 side, bracketed by the acquire and release the wrapped
-    /// resource requires, and flushed.
+    /// Copy on the D3D11 side between acquire and release of the wrapped
+    /// resource, then flush.
     ///
-    /// The flush is not optional: Spout's own notes record that a shared texture
-    /// updated on one device needs `Flush` before another device sees it, and
-    /// omitting it produces a receiver that shows a stale frame rather than an
-    /// error.
+    /// Without `Flush` the receiver shows a stale frame and reports no error.
     fn copy(&self, destination: &ID3D11Texture2D, source: &ID3D11Texture2D) {
         let wrapped: [Option<ID3D11Resource>; 1] = [destination.cast().ok()];
         unsafe {
@@ -171,9 +149,8 @@ impl Bridge {
 
     /// Create the shared texture a Spout receiver will open.
     ///
-    /// Legacy `MISC_SHARED` rather than an NT handle, because that is what every
-    /// existing Spout receiver expects and what the 32-bit `shareHandle` field in
-    /// the wire protocol can carry.
+    /// Legacy `MISC_SHARED`, because Spout receivers expect it and the protocol's
+    /// `shareHandle` field is 32-bit.
     #[must_use]
     pub fn create_shared(
         &self,
@@ -208,8 +185,7 @@ impl Bridge {
         let texture = texture?;
         let resource: IDXGIResource = texture.cast().ok()?;
         let handle = unsafe { resource.GetSharedHandle() }.ok()?;
-        // Truncation is the protocol, not a bug: Spout's record carries this as a
-        // u32 and legacy handles fit by construction.
+        // Spout's record stores this as a u32; legacy handles always fit.
         Some((texture, handle.0 as usize as u32))
     }
 }

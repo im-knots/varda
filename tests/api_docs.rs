@@ -1,10 +1,8 @@
-//! Generates the route reference in `docs/13-api.md` from `api_doc()`
-//! and fails when the committed file has drifted.
+//! Generates the route reference in `docs/13-api.md` from `api_doc()` and
+//! fails when the committed file differs.
 //!
-//! Hand-maintained route docs cannot be kept honest — see
-//! `/spec/api-addressing.md` § Documentation generation. The generated block
-//! lives between the `BEGIN GENERATED ROUTES` / `END GENERATED ROUTES` markers;
-//! prose outside them is preserved.
+//! The generated block sits between the `BEGIN GENERATED ROUTES` /
+//! `END GENERATED ROUTES` markers; prose outside them is preserved.
 //!
 //! To regenerate after changing routes:
 //!
@@ -102,7 +100,7 @@ fn render_reference() -> String {
     );
     out.push_str(
         "Writes address entities by UUID. Positional integers appear only as reorder\n\
-         ordinals and sequence step indices; see [/spec/api-addressing.md].\n",
+         ordinals and sequence step indices.\n",
     );
 
     for (tag, group) in operations_by_tag() {
@@ -129,14 +127,9 @@ fn splice(existing: &str, generated: &str) -> String {
     format!("{}{}{}", &existing[..begin], generated, &existing[end..])
 }
 
-/// Compare on content, not on how the file happened to be checked out.
-///
-/// `render_reference` emits `\n`, and `read_to_string` returns the file's bytes
-/// untranslated. On a Windows checkout with `core.autocrlf=true` the file has
-/// `\r\n`, so a byte comparison fails there and only there, reporting the docs
-/// as stale when they are identical. `.gitattributes` now pins LF everywhere,
-/// which is the real fix; this keeps the test honest in a clone made before it
-/// existed.
+/// Normalize line endings so a Windows checkout with `core.autocrlf=true`
+/// (`\r\n`) compares equal. `.gitattributes` pins LF, but older clones may
+/// predate it.
 fn normalize(s: &str) -> String {
     s.replace("\r\n", "\n")
 }
@@ -171,7 +164,7 @@ fn registered_routes(src: &str) -> Vec<String> {
         // The path is the next string literal, possibly after a line break.
         let Some(open) = rest.find('"') else { break };
         if rest[..open].contains(';') {
-            continue; // not a route registration after all
+            continue; // not a route registration
         }
         let after = &rest[open + 1..];
         let Some(close) = after.find('"') else { break };
@@ -181,9 +174,8 @@ fn registered_routes(src: &str) -> Vec<String> {
     routes
 }
 
-/// The generated reference is only honest if every registered route is actually
-/// documented. A route present in `runner.rs` but absent from the `utoipa`
-/// derive would silently never appear in the docs.
+/// Every route registered in `runner.rs` must appear in the `utoipa` derive, or
+/// it never shows up in the docs.
 #[test]
 fn every_registered_route_is_documented() {
     let runner = std::fs::read_to_string(manifest_path("src/usecases/api/runner.rs"))
@@ -195,9 +187,8 @@ fn every_registered_route_is_documented() {
         .map(|op| op.path)
         .collect();
 
-    // Served for reasons other than the documented command surface: the Swagger
-    // UI itself, the WebSocket upgrade, and the static control panel. None of
-    // these are OpenAPI operations.
+    // Not OpenAPI operations: the Swagger UI, the WebSocket upgrade, and the
+    // static control panel.
     let exempt = ["/api/ws", "/api/docs", "/api/openapi.json", "/"];
 
     let mut undocumented = Vec::new();
@@ -216,7 +207,7 @@ fn every_registered_route_is_documented() {
     assert!(
         undocumented.is_empty(),
         "every registered route needs a documented utoipa operation so the \
-         generated reference stays complete (/spec/api-addressing.md); found:\n{}",
+         generated reference stays complete; found:\n{}",
         undocumented.join("\n")
     );
 }

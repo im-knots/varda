@@ -7,17 +7,13 @@ use crate::engine::{CommandOutcome, CommandResult, EngineCommand};
 impl VardaApp {
     /// Run the GUI's commands for this frame, in order.
     ///
-    /// When `starts_undo_step` is set, the state before anything runs becomes
-    /// one undo step, kept only if at least one undoable command succeeds: a
-    /// frame whose edits were all rejected changed nothing, and recording it
-    /// would clear the redo history. The consumer decides when a step starts,
-    /// because only it knows whether a drag is continuing.
+    /// With `starts_undo_step`, the prior state becomes one undo step, kept only
+    /// if an undoable command succeeds (so rejected edits don't clear redo). The
+    /// caller decides, since only it knows whether a drag is continuing.
     pub fn apply_engine_actions(&mut self, commands: Vec<EngineCommand>, starts_undo_step: bool) {
         let before = starts_undo_step.then(|| self.history_snapshot());
         let mut edited = false;
-        // Ordering within the vec is preserved, so a new-channel library drop
-        // enqueues `AddChannel` before its `Add*Deck` and the deck resolves
-        // against the freshly created channel.
+        // Order matters: a new-channel drop sends `AddChannel` before its `Add*Deck`.
         for cmd in commands {
             let is_deck_add = command_is_deck_add(&cmd);
             let success_toast = gui_success_toast(&cmd);
@@ -41,8 +37,7 @@ impl VardaApp {
         }
     }
 
-    /// Toast a deck-creating command's outcome. The engine logic lives in the
-    /// command; this only reports success or failure.
+    /// Toast a deck-creating command's outcome.
     fn notify_deck_add_outcome(&mut self, outcome: &CommandOutcome) {
         match outcome {
             CommandOutcome::DecksCreated { uuids } => {
@@ -69,7 +64,6 @@ impl VardaApp {
         }
     }
 
-    /// Update controller LEDs based on current state.
     pub fn update_controller_leds(&mut self) {
         if let Some(mgr) = &self.input.midi_devices {
             self.input.controller_led_mgr.update_leds(

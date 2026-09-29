@@ -1,16 +1,15 @@
-/// Per-frame cost of a scene holding one deck of each source kind that needs
-/// no hardware: solid color, raster image, ISF generator, program tap, and HAP
-/// video. What it isolates is the per-deck source dispatch in the render path,
-/// on top of the fixed frame sequence `headless_frame` measures.
-/// See /spec/deck-source-providers.md § Performance.
+/// Per-frame cost of a scene holding one deck of each hardware-free source
+/// kind: solid color, raster image, ISF generator, program tap, and HAP video.
+/// Measures per-deck source dispatch on top of the fixed frame cost
+/// `headless_frame` measures.
 ///
 ///   `mixed_frame` — one full headless frame with all five decks visible.
 ///   `text_static`, `text_crawl_40`, `text_step_fade`, `text_step_modulated` —
 ///   one frame with a single text deck: one line, a 40-line crawl, stepping
 ///   with a fade, and stepping with size and weight modulated across raster
-///   buckets. See /spec/text-source.md § Performance.
+///   buckets.
 ///
-/// Skipped when no GPU adapter is available.
+/// Skipped without a GPU adapter.
 use criterion::{Criterion, criterion_group, criterion_main};
 use varda::app::VardaApp;
 use varda::engine::EngineCommand;

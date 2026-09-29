@@ -12,8 +12,8 @@ mod surface_editor;
 mod toolbar;
 mod warp_editor;
 
-// The bottom-bar warp editor is a stage-editor mode; `panels` reaches it through
-// this orchestrator rather than into the submodule.
+// The bottom-bar warp editor is a stage-editor mode; `panels` reaches it
+// through this module.
 pub(super) use surface_editor::render_surface_editor;
 pub(super) use warp_editor::{render_stage_bottom_bar, stage_selection_id};
 
@@ -24,8 +24,8 @@ use crate::renderer::slicer::DomePreset;
 use hit_test::CanvasGeometry;
 use state::{StageEditorMode, StageEditorState};
 
-/// Full-screen stage editor — replaces the deck view
-// cx_px/cy_px, raw_sx/raw_sy and friends are the clearest names for this canvas geometry.
+/// Full-screen stage editor; replaces the deck view.
+// cx_px/cy_px, raw_sx/raw_sy and similar are the clearest names for canvas geometry.
 #[allow(clippy::similar_names)]
 pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     let state_id = ui.id().with("stage_editor_state");
@@ -37,7 +37,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
 
     toolbar::render(ui, data, actions, &mut state);
 
-    // ── Camera detection mode: takes over the entire canvas ──
+    // Camera detection mode takes over the whole canvas.
     match &data.camera_detect_mode {
         CameraDetectMode::Live { .. } => {
             camera_detect::render_camera_detect_live(ui, data, actions);
@@ -58,13 +58,12 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
         StageEditorMode::Polygon2D
     };
 
-    // Dome config toolbar (second row, only in Dome3D mode)
+    // Dome config toolbar, Dome3D mode only.
     if mode == StageEditorMode::Dome3D {
         ui.add_space(2.0);
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("🔮 Dome:").strong());
 
-            // Preset dropdown
             let presets = [
                 DomePreset::Single,
                 DomePreset::Dual,
@@ -93,7 +92,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
 
             ui.separator();
 
-            // Geometry: every field edits one copy, sent once if anything moved.
+            // Every geometry field edits one copy, sent once if anything changed.
             let mut geometry = data.dome_geometry;
             let mut changed = false;
             let mut held = false;
@@ -167,9 +166,8 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
 
             ui.separator();
 
-            // Domemaster output size. Square by definition, so it does not
-            // follow the master render resolution — it is sized by the dome's
-            // projectors.
+            // Domemaster output size. Square, so it follows the dome's projectors rather
+            // than the master render resolution.
             ui.label("Res:");
             let mut current_res = data.domemaster_resolution;
             egui::ComboBox::from_id_salt("domemaster_resolution")
@@ -194,7 +192,6 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
 
             ui.separator();
 
-            // Generate Slices button
             if ui
                 .button("🎯 Generate Slices")
                 .on_hover_text("Create per-projector surfaces with warp meshes")
@@ -210,15 +207,13 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
 
     ui.add_space(4.0);
 
-    // ── Dome 3D mode: full-canvas interactive dome view ──
     if mode == StageEditorMode::Dome3D {
         dome::render_dome_canvas(ui, data, actions);
         ui.memory_mut(|mem| mem.data.insert_temp(state_id, state));
         return;
     }
 
-    // ── 2D Polygon mode: original canvas ──
-    // Main canvas — fill available space
+    // 2D polygon mode: the canvas fills the available space.
     let canvas_width = ui.available_width();
     let canvas_height = ui.available_height().max(200.0);
     let (canvas_rect, canvas_response) = ui.allocate_exact_size(
@@ -232,7 +227,6 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
 
     canvas::paint(&painter, &canvas_response, data, &state, geom);
 
-    // --- Interaction handling ---
     interaction::handle_canvas(
         ui,
         &painter,
@@ -244,13 +238,11 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
     );
     interaction::handle_keyboard(ui, data, actions, &mut state);
 
-    // Publish the current selection so the bottom detail bar can edit the
-    // selected surface's warp (8i.5).
+    // Publish the selection so the bottom bar can edit the selected surface's warp.
     let published: Vec<String> = state.selected_surfaces.iter().cloned().collect();
     ui.ctx()
         .memory_mut(|mem| mem.data.insert_temp(stage_selection_id(), published));
 
-    // Persist state
     ui.memory_mut(|mem| mem.data.insert_temp(state_id, state));
 }
 
@@ -260,15 +252,12 @@ mod tests {
     use super::state::DrawingTool;
     use super::*;
 
-    // ── Tool state-machine characterization ─────────────────────────
-    //
-    // These drive `render_stage_editor` through a real `egui_kittest` harness and
-    // pin down, per tool, both the `EngineCommand`s emitted and the resulting
-    // `StageEditorState`. The canvas is allocated with `ui.available_width()` /
-    // `available_height().max(200.0)` as the *last* item in the vertical layout,
-    // so it always ends flush with `ui.min_rect()`'s bottom and spans full width.
-    // Points are therefore taken relative to that bottom edge (within 200px of it)
-    // rather than hard-coded, which keeps them valid if the toolbars change height.
+    // Tool state-machine tests. They drive `render_stage_editor` through
+    // `egui_kittest` and check, per tool, the emitted `EngineCommand`s and the
+    // resulting `StageEditorState`. The canvas is the last item in the layout, at
+    // full width and at least 200px tall, so it ends flush with `ui.min_rect()`'s
+    // bottom. Points are taken relative to that edge so toolbar height changes
+    // don't move them.
 
     #[derive(Default)]
     struct StageProbe {
@@ -301,8 +290,8 @@ mod tests {
             )
     }
 
-    /// A point inside the canvas, `up` pixels above its bottom edge. `up` must
-    /// stay under 200 — the canvas's guaranteed minimum height.
+    /// A point inside the canvas, `up` pixels above its bottom edge. `up` must be
+    /// under 200, the canvas's minimum height.
     fn canvas_pt(content: egui::Rect, right: f32, up: f32) -> egui::Pos2 {
         assert!(
             up < 200.0,
@@ -397,13 +386,11 @@ mod tests {
         );
     }
 
-    /// A rectangle thinner than 0.01 on either axis is discarded, so a near-flat
-    /// drag never creates a degenerate surface.
+    /// A rectangle thinner than 0.01 on either axis is discarded.
     ///
-    /// The drag is deliberately *wide* (200px) so egui registers a drag at all —
-    /// a few-pixel drag stays below the click-vs-drag threshold and would never
-    /// reach this guard, making the test vacuous. Snapping is off so the height
-    /// stays a raw sub-threshold fraction rather than quantising to zero.
+    /// The drag is 200px wide so egui registers it as a drag instead of a click.
+    /// Snapping is off so the height stays a sub-threshold fraction instead of
+    /// snapping to zero.
     #[test]
     fn rectangle_tool_rejects_drag_thinner_than_one_percent() {
         let mut data = UIData::test_fixture();
@@ -456,7 +443,7 @@ mod tests {
     }
 
     /// Dragging from inside an existing surface moves it instead of drawing, and
-    /// the tool flips to Select. Easy to break when this arm is refactored.
+    /// switches the tool to Select.
     #[test]
     fn rectangle_tool_drag_inside_surface_moves_it_and_switches_to_select() {
         let mut data = UIData::test_fixture();
@@ -507,8 +494,8 @@ mod tests {
         assert_eq!(circles, 1, "commands: {:?}", harness.state().commands);
     }
 
-    /// Selecting is published to the shared memory key the bottom-bar warp editor
-    /// reads, so this pins the stage editor's half of that contract.
+    /// Selection is published to the shared memory key the bottom-bar warp editor
+    /// reads.
     #[test]
     fn select_tool_click_selects_surface_and_publishes_it() {
         let mut data = UIData::test_fixture();
@@ -535,9 +522,8 @@ mod tests {
         );
     }
 
-    /// Companion to the negative case below: proves the marquee machinery works,
-    /// so "selects nothing" there is a real result rather than a gesture that
-    /// never landed. Selection is by bounding-box intersection, not containment.
+    /// Positive counterpart of the test below, so its "selects nothing" is a real
+    /// result. Selection is by bounding-box intersection, not containment.
     #[test]
     fn select_tool_marquee_selects_intersecting_surface() {
         let mut data = UIData::test_fixture();

@@ -165,9 +165,7 @@ fn transition_trigger_equality() {
 
 // ── Deck slot management tests (DnD data model) ─────────────────
 //
-// These test the Channel-level operations that back drag-and-drop
-// actions: add_deck, remove_deck, remove_deck_slot, add_deck_slot.
-// They require a headless GPU to construct real Channel + Deck instances.
+// Channel operations behind drag-and-drop. They need a headless GPU.
 
 use crate::renderer::GpuContext;
 
@@ -249,7 +247,6 @@ fn move_deck_between_channels_preserves_data() {
     let mut src = test_channel(&gpu, "Src");
     let mut dst = test_channel(&gpu, "Dst");
 
-    // Add two decks to src
     add_solid_deck(&mut src, &gpu, [1.0, 0.0, 0.0, 1.0]); // Red
     add_solid_deck(&mut src, &gpu, [0.0, 1.0, 0.0, 1.0]); // Green
     src.decks[0].opacity = 0.5;
@@ -274,13 +271,10 @@ fn effect_reorder_within_deck() {
     let mut ch = test_channel(&gpu, "Test");
     add_solid_deck(&mut ch, &gpu, [1.0, 0.0, 0.0, 1.0]);
 
-    // Manually push named effects (requires ISF shader + GPU pipeline)
-    // Since Effect::new requires real shaders, test the vec operation directly
-    // which is what apply_deck_and_effect_actions does
+    // Effect::new needs a real ISF shader, so this tests the vec operation that
+    // apply_deck_and_effect_actions performs: remove(from), then insert(to).
     let _deck = &mut ch.decks[0].deck;
 
-    // Simulate 3 effects by checking vec operations match action processing logic
-    // The action processing code does: effects.remove(from); effects.insert(to, effect);
     let mut names = vec!["blur", "glow", "invert"];
     // Move index 2 → index 0
     let removed = names.remove(2);
@@ -432,7 +426,6 @@ fn render_time_smooths_over_frames() {
     }
     let time_after_10 = ch.render_time_ms;
 
-    // Render more frames
     for _ in 0..10 {
         ch.render(
             &gpu,
@@ -452,7 +445,6 @@ fn render_time_smooths_over_frames() {
     }
     let time_after_20 = ch.render_time_ms;
 
-    // Both should be positive
     assert!(time_after_10 > 0.0);
     assert!(time_after_20 > 0.0);
 }
@@ -593,7 +585,6 @@ fn multiple_decks_have_independent_fps() {
         .unwrap();
     }
 
-    // Both decks should have positive FPS
     let fps0 = ch.decks[0].deck.fps();
     let fps1 = ch.decks[1].deck.fps();
     assert!(fps0 > 0.0);

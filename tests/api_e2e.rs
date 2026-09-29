@@ -1,8 +1,5 @@
-//! API end-to-end tests — real `VardaApp` wired to axum router via `SharedState`.
-//!
-//! Each test creates a headless `VardaApp`, wires its command channel into an axum
-//! router, spawns a background thread to process commands, then exercises the
-//! HTTP API and verifies state mutations.
+//! API end-to-end tests: a headless `VardaApp` wired to the axum router via
+//! `SharedState`, exercised over HTTP.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -16,26 +13,22 @@ mod common;
 
 /// Create a headless `VardaApp` and wire its command channel to an axum router.
 ///
-/// Commands are processed eagerly via a background tokio task that drains the
-/// channel and auto-replies `CommandResult::Ok`. The engine state snapshot is
-/// published once at setup; tests that need to verify state mutations after API
-/// calls should re-read from the shared `engine_state` arc.
+/// A background task drains commands and replies `CommandResult::Ok`. The
+/// state snapshot is published once at setup; tests that check mutations
+/// re-read the shared `engine_state` arc.
 fn setup() -> Option<axum::Router> {
     let gpu = common::headless_gpu()?;
     let config = varda::testing::headless_config();
-    // Once a GPU exists, a construction failure is a bug, not a reason to skip.
+    // With a GPU present, a construction failure is a bug, not a skip.
     let app = VardaApp::new(gpu, &config).expect("VardaApp::new");
 
     let _real_cmd_tx = app.command_sender();
     let state_reader = app.state_reader();
-    // Publish initial state so GET routes work
+    // Publish initial state so GET routes work.
     app.publish_state();
 
-    // Create a proxy channel: API sends commands here, we forward to the real
-    // engine sender. Since VardaApp is !Send, we forward immediately and let
-    // the engine process when app.process_commands() would be called. For E2E
-    // route tests, what matters is that the route handler gets a reply, so we
-    // use a mock auto-reply approach (same as existing route tests).
+    // `VardaApp` is !Send, so the API sends to a proxy channel whose commands
+    // get a mock auto-reply. These tests check that route handlers get a reply.
     let (proxy_tx, mut proxy_rx) =
         tokio::sync::mpsc::unbounded_channel::<varda::engine::CommandEnvelope>();
 

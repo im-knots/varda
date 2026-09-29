@@ -1,24 +1,22 @@
-//! Cue points: the marks the transport's arrows walk between.
+//! Cue points: the marks the transport's arrows step between.
 //!
-//! Drawn on the ruler as a dot with its name, and down the lanes as a dashed
-//! line, so a cue reads as an instant across every deck rather than as a mark on
-//! the ruler alone. See /spec/arrangement.md § Cue points.
+//! Drawn as a named dot on the ruler and a dashed line down the lanes.
 
 use super::{TimeAxis, snap_seconds};
 use crate::engine::EngineCommand;
 use crate::usecases::ui::{UIActions, UIData};
 
-/// Not the transport's status colour: a cue is not the transport.
+/// Distinct from the transport's status color.
 pub(super) const COLOR: egui::Color32 = egui::Color32::from_rgb(240, 200, 60);
 
 const DOT_RADIUS: f32 = 4.0;
-/// Wide enough to grab without covering the ruler either side of it.
+/// Wide enough to grab without covering the ruler around it.
 const HANDLE_WIDTH: f32 = 11.0;
 
 /// Draw and edit every cue in view.
 ///
-/// Registered after the ruler's own interaction so a press on a handle belongs
-/// to the cue rather than scrubbing the show out from under the drag.
+/// Registered after the ruler's interaction so a press on a handle drags the
+/// cue instead of scrubbing.
 pub(super) fn render(
     ui: &mut egui::Ui,
     data: &UIData,
@@ -114,8 +112,8 @@ fn handle(
     response.context_menu(|ui| menu(ui, actions, cue));
 }
 
-/// Rename and delete. The name commits on Enter or when the field loses focus,
-/// rather than per keystroke, so a rename is one undo entry.
+/// Rename and delete. The name commits on Enter or focus loss, so a rename is
+/// one undo entry.
 fn menu(ui: &mut egui::Ui, actions: &mut UIActions, cue: &crate::arrangement::Cue) {
     let id = ui.id().with(("cue_name", &cue.uuid));
     let mut name: String = ui.data_mut(|d| {

@@ -1,9 +1,8 @@
 //! Deck source routes: every source type, through one set of routes.
 //!
-//! A deck's source is described by a `SourceConfig` (`{"type": "<id>", ...}`)
-//! and controlled by the names its type declares. `GET /api/library/sources` lists the
-//! types, their controls, and what their libraries offer. No route here names
-//! a source type. See /spec/deck-source-providers.md Decision 6.
+//! A source is a `SourceConfig` (`{"type": "<id>", ...}`) controlled by the
+//! names its type declares. `GET /api/library/sources` lists the types, their
+//! controls, and their library entries.
 
 use super::read_or_error;
 use axum::Json;
@@ -42,11 +41,10 @@ pub async fn list(State(state): State<SharedState>) -> impl IntoResponse {
 
 /// Add a deck of any kind to a channel.
 ///
-/// The body names the kind of source in `type` and gives its settings, for
-/// example `{"type": "Image", "path": "/art/logo.svg"}`; a library entry's
-/// `config` is exactly this body. Answers with the new deck's UUID. A source
-/// that builds in the background (a shader, a clip) appears on a later frame;
-/// `GET /api/state/deck-loads` reports it until then.
+/// The body gives the kind in `type` plus its settings, for example
+/// `{"type": "Image", "path": "/art/logo.svg"}`; a library entry's `config` is
+/// this body. Returns the new deck's UUID. Sources that build in the
+/// background appear later; `GET /api/state/deck-loads` reports them.
 #[utoipa::path(post, path = "/api/channels/{channel_uuid}/decks",
     params(("channel_uuid" = String, Path, description = "Channel UUID")),
     request_body = SourceConfig,
@@ -67,8 +65,8 @@ pub async fn add_deck(
     .await
 }
 
-/// Swap a deck's source for another, keeping the deck's identity, effects,
-/// opacity and modulation: repoint a tap, switch to another camera.
+/// Swap a deck's source, keeping the deck's identity, effects, opacity and
+/// modulation.
 #[utoipa::path(put, path = "/api/decks/{deck_uuid}/source",
     params(("deck_uuid" = String, Path, description = "Deck UUID")),
     request_body = SourceConfig,
@@ -180,8 +178,8 @@ pub async fn remove_library_entry(
 
 /// Run an action a source kind offers, such as `rescan`.
 ///
-/// The action is `rescan` or one a Library notice names. Answers with the type's fresh entries, so a probe that
-/// rescans is one call rather than a rescan and a read that may race it.
+/// The action is `rescan` or one a Library notice names. Returns the type's
+/// entries, so no separate read is needed.
 #[utoipa::path(post, path = "/api/sources/{source_type}/actions/{action}",
     params(("source_type" = String, Path, description = "Source type id"), ("action" = String, Path, description = "Library action")),
     responses((status = 200, body = CommandResult), (status = 404, description = "Unknown source type")),

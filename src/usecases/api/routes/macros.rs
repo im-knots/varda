@@ -1,11 +1,8 @@
-//! Macro control write routes — full parity with the GUI macro strip.
+//! Macro control write routes.
 //!
-//! Config mutations (add/remove/rename/kind/target edits/button config) are
-//! undoable via the scene snapshot. `PUT /api/macros/{uuid}/value` is a live
-//! performance turn that fans out to targets and is intentionally not undoable
-//! (mirrors crossfader/opacity/MIDI live control). Macros are also reachable
-//! through the shared parameter router as `macro/<uuid>/value` via
-//! `PUT /api/params`.
+//! Config edits are undoable. `PUT /api/macros/{uuid}/value` is a live turn
+//! and is not undoable, like other live controls. The value is also
+//! `macro/<uuid>/value` on `PUT /api/params`.
 
 use axum::Json;
 use axum::extract::{Path, State};
@@ -43,8 +40,8 @@ pub struct MacroValueBody {
 
 #[derive(Deserialize, ToSchema)]
 pub struct AddMacroTargetBody {
-    /// Parameter-router path to drive, e.g. `deck/<uuid>/effect/<uuid>/param/scale`.
-    /// May not be a `macro/*` path (loop prevention).
+    /// Parameter-router path to drive, e.g. `effect/<uuid>/param/scale`.
+    /// May not be a `macro/*` path.
     pub path: String,
 }
 
@@ -56,7 +53,7 @@ pub struct UpdateMacroTargetBody {
     pub max: f32,
     /// Response curve applied before mapping into `[min, max]`.
     pub curve: MacroCurve,
-    /// Flip the response (equivalent to swapping min/max).
+    /// Flip the response (same as swapping min and max).
     pub invert: bool,
 }
 
@@ -74,7 +71,7 @@ pub struct TriggersBody {
 
 #[derive(Deserialize, ToSchema)]
 pub struct MacroModulationBody {
-    /// UUID of the modulation source (LFO/ADSR/etc.) that drives this macro's value.
+    /// UUID of the modulation source driving this macro's value.
     pub source_id: String,
     /// Modulation depth (0.0–1.0), added as an offset to the macro's manual set point.
     pub amount: f32,
@@ -216,9 +213,8 @@ pub async fn update_target(
     }
 }
 
-/// Drive a Knob/Fader macro's value from a modulation source. The source adds a
-/// signed offset to the macro's manual set point each frame, re-fanning to all
-/// targets. Mirrors the modulation control in the macro detail panel.
+/// Drive a knob or fader macro from a modulation source, which adds a signed
+/// offset to the manual value each frame.
 #[utoipa::path(put, path = "/api/macros/{uuid}/modulation", params(("uuid" = String, Path, description = "Macro UUID")), request_body = MacroModulationBody, responses((status = 200, body = CommandResult)), tag = "Macros")]
 pub async fn assign_modulation(
     State(state): State<SharedState>,
@@ -255,8 +251,7 @@ pub async fn clear_modulation(
     }
 }
 
-/// Remove only one modulation source from this macro's value, leaving any other
-/// sources intact. Mirrors the per-assignment delete in the macro detail panel.
+/// Remove one modulation source from this macro's value, keeping the others.
 #[utoipa::path(delete, path = "/api/macros/{uuid}/modulation/{source_id}", params(("uuid" = String, Path, description = "Macro UUID"), ("source_id" = String, Path, description = "Modulation source UUID")), responses((status = 200, body = CommandResult)), tag = "Macros")]
 pub async fn clear_modulation_source(
     State(state): State<SharedState>,

@@ -1,8 +1,7 @@
 //! Route handlers for the HTTP API.
 //!
-//! Each sub-module groups routes by domain (mixer, channels, decks, etc.).
-//! Route handlers are thin: validate input, read state or send commands,
-//! map results to HTTP responses.
+//! One sub-module per domain. Handlers validate input, read state or send a
+//! command, and map the result to an HTTP response.
 
 pub mod arrangement;
 pub mod audio;

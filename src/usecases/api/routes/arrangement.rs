@@ -1,8 +1,7 @@
 //! Arrangement authoring routes.
 //!
-//! A lane is addressed by the deck it drives, because a lane *is* a deck's row
-//! rather than an object with its own identity. Regions are addressed by
-//! position within their lane. See `/spec/arrangement.md`.
+//! A lane is addressed by its deck's UUID; each deck has at most one lane.
+//! Regions are addressed by position within their lane.
 
 use axum::Json;
 use axum::extract::{Path, State};
@@ -180,7 +179,7 @@ pub async fn rearm_all(
 pub struct AddCueBody {
     /// Absolute show seconds.
     pub at: f64,
-    /// Omit to be named by how many cues exist.
+    /// Omit to name the cue by the cue count.
     #[serde(default)]
     pub name: String,
 }

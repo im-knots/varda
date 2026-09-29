@@ -1,17 +1,9 @@
-//! `ACEScct`, the log encoding a scene-referred look LUT is authored against.
+//! `ACEScct`, the log encoding scene-referred look LUTs are authored against.
 //!
-//! A creative grade cannot be applied to scene-linear values directly. Linear
-//! light spends most of its code range on highlights, so a 3D LUT indexed by it
-//! would resolve shadows into almost no lattice points. ACES specifies `ACEScct`
-//! for exactly this: a log curve with a linear toe near black, which is what
-//! look transforms (LMTs) are authored in.
-//!
-//! This is not a Varda invention and must not become one. The constants are from
-//! the ACES specification so a `.cube` authored in Resolve or Nuke against
-//! `ACEScct` lands where its author intended.
-//!
-//! See /spec/hdr-color-management.md Decision 5. `lut.wgsl` carries the WGSL
-//! mirror, held to these values by tests rather than by inspection.
+//! A 3D LUT indexed by linear light would leave few lattice points for shadows;
+//! `ACEScct` is a log curve with a linear toe near black. Constants are from the
+//! ACES specification so `.cube` files from Resolve or Nuke match. `lut.wgsl`
+//! mirrors these values, checked by tests.
 
 /// Slope of the linear toe.
 const A: f32 = 10.540_237;
@@ -30,9 +22,8 @@ pub const MAX_LINEAR: f32 = 65504.0;
 
 /// Scene-linear to `ACEScct`.
 ///
-/// Values at or below the break use the linear toe, which is what keeps shadow
-/// detail addressable by a LUT lattice. Negatives clamp to the toe rather than
-/// producing NaN from `log2`.
+/// Values at or below the break use the linear toe. Negatives clamp to the toe
+/// instead of producing NaN from `log2`.
 #[must_use]
 pub fn from_linear(linear: f32) -> f32 {
     if linear <= LINEAR_BREAK {
@@ -60,8 +51,7 @@ mod tests {
 
     #[test]
     fn the_toe_and_the_log_segment_meet_without_a_step() {
-        // A discontinuity here shows as a visible band in shadows, exactly where
-        // the toe exists to help.
+        // A discontinuity here shows as a visible band in shadows.
         let below = from_linear(LINEAR_BREAK - 1e-6);
         let above = from_linear(LINEAR_BREAK + 1e-6);
         assert!(
@@ -73,8 +63,7 @@ mod tests {
 
     #[test]
     fn encoding_round_trips_across_the_whole_range() {
-        // Both segments, and the values a VJ pipeline actually produces: deep
-        // shadows, display white, and the highlights above it that HDR keeps.
+        // Both segments: deep shadows, display white, and HDR highlights.
         for linear in [
             0.0,
             0.0001,
@@ -98,8 +87,7 @@ mod tests {
 
     #[test]
     fn eighteen_percent_grey_lands_where_aces_says() {
-        // The anchor a colorist checks first. ACEScct puts scene-linear 0.18 at
-        // roughly 0.4135.
+        // ACEScct puts scene-linear 0.18 at roughly 0.4135.
         let mid = from_linear(0.18);
         assert!((mid - 0.413_6).abs() < 1e-3, "mid grey encoded to {mid}");
     }
@@ -132,9 +120,8 @@ mod tests {
 
     #[test]
     fn shadow_detail_gets_far_more_lattice_than_linear_indexing_would() {
-        // The reason a shaper exists at all. Across the darkest 1% of a [0,1]
-        // signal, ACEScct spends a large share of its output range where linear
-        // indexing would spend 1%.
+        // ACEScct gives the darkest 1% of a [0,1] signal far more than 1% of
+        // its output range.
         let shadow_span = from_linear(0.01) - from_linear(0.0);
         assert!(
             shadow_span > 0.1,

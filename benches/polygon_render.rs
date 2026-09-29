@@ -1,31 +1,21 @@
-//! Polygon surface render hot path (issue #42).
+//! Polygon surface render hot path.
 //!
-//! `PolygonBlitPipeline` runs once per surface, per output, per frame — and the
-//! default fullscreen output is itself modeled as a single quad surface, so this
-//! path is always live. Each draw allocated a fresh uniform params buffer
-//! (`create_bind_group`) and a fresh vertex buffer (`triangulate`). On low-VRAM
-//! Metal devices these transient buffers accumulate faster than the driver
-//! reclaims them, producing the 60→3 FPS cliff reported on Intel Macs.
+//! `PolygonBlitPipeline` runs once per surface, per output, per frame, and the
+//! default fullscreen output is a single quad surface, so this path is always
+//! live. Per-draw buffer allocations here pile up faster than low-VRAM Metal
+//! drivers reclaim them.
 //!
-//! Three groups isolate the cost:
-//!   `polygon_surface_prepare`   — per-surface triangulate + `create_bind_group` only.
-//!                               This is where the per-frame allocations live, so
-//!                               the ring-buffer fix should move the needle here.
-//!   `polygon_surface_render`    — full encode → submit → poll for N surfaces, with
-//!                               a poll(Wait) every frame. Because it drains the
-//!                               GPU each iteration, frames never pipeline, so this
-//!                               group structurally CANNOT see a cross-frame
-//!                               write-after-read (WAR) hazard on the persistent
-//!                               vertex/param pools.
-//!   `polygon_surface_pipelined` — submits several frames back-to-back and polls
-//!                               ONCE at the end. This reproduces the real
-//!                               renderer's CPU-ahead-of-GPU pipelining, so a
-//!                               persistent single-buffer pool that is rewritten
-//!                               at offset 0 every frame exposes its WAR stall
-//!                               here (the regression triple-buffering fixes).
-//!
-//! Two more groups measure what /spec/performance-hot-paths.md item E would
-//! cache, per surface per output per frame:
+//!   `polygon_surface_prepare`   — per-surface triangulate + `create_bind_group`
+//!                               only: the per-frame allocations.
+//!   `polygon_surface_render`    — full encode → submit → poll for N surfaces,
+//!                               polling every frame. Frames never overlap, so
+//!                               this group cannot see a cross-frame
+//!                               write-after-read (WAR) hazard on the vertex
+//!                               and param pools.
+//!   `polygon_surface_pipelined` — submits several frames and polls once, as
+//!                               the renderer's CPU runs ahead of the GPU. A
+//!                               single-buffer pool rewritten at offset 0 each
+//!                               frame shows its WAR stall here.
 //!   `surface_geometry`          — the CPU geometry each warp mode rebuilds:
 //!                               a 12-point polygon's ear clip, a corner pin's
 //!                               homography and clip, and a Bézier cage's
@@ -43,11 +33,11 @@ use varda::renderer::{
 const W: u32 = 1920;
 const H: u32 = 1080;
 
-/// Surface counts: 1 is the fullscreen/default path; higher counts model
-/// multi-projector / multi-surface stages where the leak compounds.
+/// Surface counts: 1 is the fullscreen default; higher counts model
+/// multi-projector stages.
 const SURFACE_COUNTS: [usize; 4] = [1, 4, 16, 64];
 
-/// Unit quad in normalized canvas space [0..1] — the fullscreen default surface.
+/// Unit quad in normalized canvas space [0..1], the fullscreen default surface.
 const QUAD: [[f32; 2]; 4] = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
 
 fn make_context() -> Option<GpuContext> {
@@ -160,18 +150,15 @@ fn bench_render(c: &mut Criterion) {
     group.finish();
 }
 
-/// Frames submitted back-to-back before a single poll. Models the renderer's
-/// CPU running ahead of the GPU; deep enough that a persistent single-buffer
-/// pool's write-after-read stall compounds across frames.
+/// Frames submitted before a single poll, deep enough that a single-buffer
+/// pool's WAR stall compounds.
 const PIPELINE_DEPTH: usize = 4;
 
 /// Pipelined surface render: submit `PIPELINE_DEPTH` frames before one poll.
 ///
-/// Unlike `bench_render` (which polls every frame and so serializes CPU↔GPU),
-/// this keeps several frames in flight. A persistent vertex/param pool written
-/// at offset 0 every frame forces frame N+1's `queue.write_buffer` to wait on
-/// frame N's draw still reading the same bytes — the WAR hazard that surfaces as
-/// periodic stutter in the live renderer. Triple-buffering the pools removes it.
+/// Unlike `bench_render`, several frames are in flight. A pool written at
+/// offset 0 every frame makes frame N+1's `queue.write_buffer` wait on frame
+/// N's draw, which shows as periodic stutter. Triple-buffered pools avoid it.
 fn bench_render_pipelined(c: &mut Criterion) {
     let Some(ctx) = make_context() else {
         eprintln!("no GPU adapter — skipping");
@@ -189,8 +176,7 @@ fn bench_render_pipelined(c: &mut Criterion) {
     for n in SURFACE_COUNTS {
         group.bench_with_input(BenchmarkId::new("surfaces", n), &n, |b, &n| {
             b.iter(|| {
-                // Submit several frames before polling, so frames overlap and
-                // the cross-frame buffer hazard (if any) is exercised.
+                // Submit several frames before polling so they overlap.
                 for _ in 0..PIPELINE_DEPTH {
                     let mut encoder =
                         ctx.device

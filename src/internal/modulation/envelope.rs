@@ -1,8 +1,7 @@
 //! Automation envelopes: a parameter value as a pure function of timebase position.
 //!
-//! See /spec/automation.md. The property that matters here is that evaluation
-//! carries no accumulated state, which is what lets automation survive locates,
-//! loops, and timecode jumps with no resync logic.
+//! Evaluation carries no accumulated state, so automation survives locates, loops, and
+//! timecode jumps without resync.
 
 use serde::{Deserialize, Serialize};
 
@@ -71,10 +70,9 @@ fn shape(curve: CurveKind, t: f32) -> f32 {
 
 /// Locate the segment containing `position`, starting from a cached index.
 ///
-/// Position is monotonic on almost every frame, so the cached segment and its
-/// successor are checked before falling back to a binary search. The cache is
-/// an optimization only: a stale index can never produce a wrong value, because
-/// every path re-verifies the bracket before using it.
+/// Position is monotonic on most frames, so the cached segment and its successor are checked
+/// before a binary search. Every path re-verifies the bracket, so a stale cursor cannot
+/// produce a wrong value.
 fn segment_index(breakpoints: &[Breakpoint], position: f64, cursor: &mut usize) -> usize {
     let last = breakpoints.len() - 2;
     let brackets =
@@ -101,9 +99,8 @@ fn segment_index(breakpoints: &[Breakpoint], position: f64, cursor: &mut usize) 
 
 /// Value of the curve at `position`.
 ///
-/// Outside the drawn range the first and last values are held rather than
-/// falling to zero: an envelope that collapsed at its edges would black out
-/// every automated parameter before and after the arranged section.
+/// Outside the drawn range the first and last values are held, so automated parameters do not
+/// drop to zero before and after the arranged section.
 #[doc(alias = "evaluate_envelope")]
 pub fn evaluate(breakpoints: &[Breakpoint], position: f64, cursor: &mut usize) -> f32 {
     match breakpoints {
@@ -135,12 +132,9 @@ pub fn evaluate(breakpoints: &[Breakpoint], position: f64, cursor: &mut usize) -
 
 /// Whether the curve is non-zero anywhere in `[from, to]`.
 ///
-/// The question residency asks: "will this deck be visible at any point in this
-/// window", answered without sampling, so a region shorter than any sample
-/// interval cannot be missed. Conservative by construction, since a false
-/// negative would black out a deck that was supposed to appear.
-///
-/// Edge values are held outside the drawn range, matching [`evaluate`].
+/// Checked per segment instead of by sampling, so a region shorter than any sample interval is
+/// still found. Errs toward `true`, since a false negative blacks out a deck. Edge values are
+/// held outside the drawn range, matching [`evaluate`].
 pub fn active_between(breakpoints: &[Breakpoint], from: f64, to: f64) -> bool {
     match breakpoints {
         [] => false,
@@ -152,9 +146,8 @@ pub fn active_between(breakpoints: &[Breakpoint], from: f64, to: f64) -> bool {
             if to > last.position && last.value > 0.0 {
                 return true;
             }
-            // A segment counts when it overlaps the window at all and either end
-            // carries value. A Step segment holds its left value throughout, so
-            // its right end says nothing about it.
+            // A segment counts when it overlaps the window and either end is non-zero. A Step
+            // segment holds its left value, so its right end is ignored.
             breakpoints.windows(2).any(|pair| {
                 let (a, b) = (pair[0], pair[1]);
                 let overlaps = a.position <= to && b.position >= from;
@@ -257,8 +250,8 @@ mod tests {
         }
     }
 
-    /// The whole point of a pure function of position: how you arrived does not
-    /// matter. This is what makes automation survive a locate or a loop wrap.
+    /// The value depends only on position, not on how it was reached, so automation survives a
+    /// locate or loop wrap.
     #[test]
     fn arriving_at_a_position_by_any_path_gives_the_same_value() {
         let bps = vec![
@@ -289,8 +282,7 @@ mod tests {
         assert!((after_playing - after_rewind).abs() < 1e-6);
     }
 
-    /// The cursor is an optimization, so any value it could hold (including one
-    /// left over from a longer envelope) must still resolve correctly.
+    /// Any cursor value, including one left over from a longer envelope, must resolve correctly.
     #[test]
     fn a_stale_cursor_cannot_produce_a_wrong_value() {
         let bps = vec![
@@ -312,9 +304,8 @@ mod tests {
         }
     }
 
-    /// The residency predicate must agree with what the curve actually
-    /// evaluates to. A window the predicate calls quiet, but that evaluates
-    /// non-zero anywhere inside, is a deck that goes black on stage.
+    /// The residency predicate must agree with evaluation: a window it calls quiet that evaluates
+    /// non-zero is a deck going black on stage.
     #[test]
     fn active_between_never_disagrees_with_evaluation() {
         // A region-shaped curve: dark, up at 10, down at 14, dark again.

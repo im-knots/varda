@@ -1,23 +1,14 @@
-//! When the arrangement is allowed to drive, and what a performer's hand does
-//! to that.
+//! When the arrangement drives decks, and how a performer's override interacts with it.
 //!
-//! The rule that matters is negative: authority does **not** engage until the
-//! transport has actually advanced. An arrangement whose regions begin at hour
-//! one, sitting at position zero with every deck off, is behaving perfectly and
-//! produces exactly the same black output as an unplugged timecode cable. Since
-//! correct-and-idle is indistinguishable from broken on the output, engagement
-//! is gated on evidence that the show has started rather than on the
-//! arrangement merely existing.
-//!
-//! See /spec/transport.md § Engagement and /spec/arrangement.md § Authority.
+//! Authority engages only after the transport has advanced. An arrangement at position zero
+//! with every deck off outputs black, the same as an unplugged timecode cable, so engagement
+//! waits for evidence that the show has started.
 
 use super::ArrangementConfig;
 use crate::timebase::TransportSample;
 
-/// How long a re-armed lane takes to reach the automated value.
-///
-/// A jump to the envelope's value is the correct *state* and the wrong *look*,
-/// and this happens live in front of an audience.
+/// How long a re-armed lane takes to reach the automated value, so the output fades instead
+/// of jumping.
 pub const DEFAULT_REARM_SECONDS: f64 = 0.5;
 
 /// Whether the arrangement is driving this frame.
@@ -36,10 +27,8 @@ impl Authority {
 
     /// Resolve authority for this frame.
     ///
-    /// `transport` is `None` until the transport has advanced at least once,
-    /// which is the whole engagement gate: a cold start with no timecode shows
-    /// the saved scene, live and visible, and nothing about a missing cable or
-    /// a wrong input can black the output.
+    /// `transport` is `None` until the transport has advanced once. A cold start with no timecode
+    /// therefore shows the saved scene, and a missing cable or wrong input cannot black the output.
     pub fn resolve(
         arrangement: Option<&ArrangementConfig>,
         transport: Option<&TransportSample>,
@@ -52,13 +41,12 @@ impl Authority {
 }
 
 impl ArrangementConfig {
-    /// Decks the arrangement drives, whose per-deck auto-transition must be
-    /// suspended while authority holds.
+    /// Decks the arrangement drives, whose per-deck auto-transition is suspended while authority
+    /// holds.
     ///
-    /// Auto-transitions are *relative*: their phase depends on when a deck
-    /// became active rather than on transport position, so they cannot be
-    /// resolved from an arbitrary position and would fight the regions. They
-    /// partition cleanly per deck, so a deck with no lane keeps its own.
+    /// Auto-transition phase depends on when a deck became active, not on transport position, so
+    /// it cannot be resolved from an arbitrary position and would fight the regions. Decks with
+    /// no lane keep their own.
     pub fn arranged_decks(&self) -> impl Iterator<Item = &str> {
         self.lanes
             .iter()
@@ -96,8 +84,8 @@ mod tests {
         }
     }
 
-    /// The cold-start rule, stated as a test because it is the one failure that
-    /// looks identical to correct behaviour on the output.
+    /// A cold start shows the saved scene, since black output here looks the same as a broken
+    /// input.
     #[test]
     fn authority_stays_inert_until_the_transport_has_run() {
         let arrangement = arrangement_with_content();
@@ -117,9 +105,8 @@ mod tests {
         );
     }
 
-    /// Engagement survives a stop: envelopes freeze at their last value rather
-    /// than releasing, because releasing would cut the look the instant someone
-    /// trips over a cable.
+    /// Engagement survives a stop: envelopes hold their last value instead of releasing, so a
+    /// pulled cable does not cut the look.
     #[test]
     fn authority_holds_while_the_transport_is_stopped_after_running() {
         let arrangement = arrangement_with_content();

@@ -1,6 +1,4 @@
-//! Workspace persistence — save/load `.varda/` directory.
-//!
-//! The workspace is the current working directory. All state lives in `.varda/`:
+//! Workspace persistence in `.varda/`:
 //! - `scene.json` — channels, decks, effects, modulation (show-specific, shareable)
 //! - `stage.json` — surfaces, outputs, warp, editor prefs (venue-specific)
 //! - `midi.json`  — MIDI controller mappings (device-name-keyed)
@@ -12,10 +10,9 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// Stage configuration persisted in `.varda/stage.json`.
-/// Contains venue-specific data: surfaces, outputs, and editor preferences.
-/// Kept separate from scene.json so users can share deck layouts without stage geometry.
-// Flags are independent persisted UI toggles; bundling them would change scene/stage JSON.
+/// Venue data in `.varda/stage.json`: surfaces, outputs, and editor
+/// preferences. Separate from scene.json so scenes can be shared without stage geometry.
+// Independent persisted toggles; bundling them would change the JSON.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StagePrefs {
@@ -31,27 +28,25 @@ pub struct StagePrefs {
     pub stage_editor_open: bool,
     #[serde(default)]
     pub dome_preview_open: bool,
-    /// Whether the stage editor is in 3D Dome mode
+    /// Whether the stage editor is in 3D Dome mode.
     #[serde(default)]
     pub dome_mode_active: bool,
-    /// Active dome preset
+    /// Active dome preset.
     #[serde(default = "default_dome_preset")]
     pub dome_preset: crate::renderer::slicer::DomePreset,
-    /// Active dome geometry
+    /// Active dome geometry.
     #[serde(default)]
     pub dome_geometry: crate::renderer::slicer::DomeGeometry,
-    /// Size the domemaster is rendered at. Stage-level because it belongs to the
-    /// dome being projected onto, not to the scene playing on it.
+    /// Domemaster render size. Belongs to the dome, so it is stage data.
     #[serde(default)]
     pub domemaster_resolution: crate::renderer::dome::DomemasterResolution,
-    /// 2D stage surface layout
+    /// 2D stage surface layout.
     #[serde(default)]
     pub surfaces: crate::surface::SurfaceManager,
-    /// Output window configurations (surface assignments, warp calibration)
+    /// Output configurations.
     #[serde(default)]
     pub outputs: Vec<crate::scene::OutputConfig>,
-    /// Which incoming SMPTE signal the transport follows, and where LTC is
-    /// patched. Venue data: the cable belongs to the room, not to the show.
+    /// Which SMPTE input the transport follows, and where LTC is patched.
     #[serde(default)]
     pub timecode: crate::timecode::TimecodeConfig,
 }
@@ -108,8 +103,7 @@ impl StagePrefs {
         }
     }
 
-    /// Validate stage prefs for semantic correctness. Returns a list of errors.
-    /// An empty list means the config is valid.
+    /// Validate stage prefs. Returns a list of errors; empty means valid.
     pub fn validate(&self) -> Vec<String> {
         let mut errors = Vec::new();
         if !self.grid_size.is_finite() || self.grid_size <= 0.0 {
@@ -124,7 +118,7 @@ impl StagePrefs {
                 errors.push(format!("{prefix}: name is empty"));
             }
         }
-        // Warp now lives on surfaces — validate their corner-pin finiteness.
+        // Surface warp corner pins must be finite.
         for (i, surface) in self.surfaces.surfaces.iter().enumerate() {
             if let Some(crate::surface::warp::WarpMode::CornerPin { corners }) = &surface.warp {
                 for (c, corner) in corners.iter().enumerate() {
@@ -145,9 +139,8 @@ impl StagePrefs {
     ///
     /// # Errors
     ///
-    /// Returns an error if `path` cannot be read (missing file, permissions) or
-    /// if its contents are not valid JSON for a [`StagePrefs`]. Validation
-    /// problems in an otherwise-parseable file are logged as warnings only.
+    /// Returns an error if `path` cannot be read or is not valid [`StagePrefs`]
+    /// JSON. Validation problems are only logged.
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         let content = std::fs::read_to_string(path.as_ref())
             .with_context(|| format!("Failed to read stage prefs: {}", path.as_ref().display()))?;
@@ -164,8 +157,7 @@ impl StagePrefs {
     ///
     /// # Errors
     ///
-    /// Returns an error if the prefs cannot be serialized to JSON, or if the
-    /// atomic write fails (temp file write or rename).
+    /// Returns an error if serialization or the atomic write fails.
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let errors = self.validate();
         for e in &errors {
@@ -178,9 +170,8 @@ impl StagePrefs {
     }
 }
 
-/// Workspace directory manager — handles `.varda/` paths and directory creation.
+/// `.varda/` paths and directory creation.
 pub struct Workspace {
-    /// Root of the workspace (current working directory)
     root: PathBuf,
 }
 
@@ -194,8 +185,7 @@ impl Workspace {
     ///
     /// # Errors
     ///
-    /// Returns an error if the current working directory cannot be determined
-    /// (e.g. it was deleted, or the process lacks permission to read it).
+    /// Returns an error if the current directory cannot be determined.
     pub fn from_cwd() -> Result<Self> {
         let cwd = std::env::current_dir().context("Failed to get current directory")?;
         Ok(Self::new(cwd))
@@ -246,7 +236,7 @@ impl Workspace {
         self.osc_path().is_file()
     }
 
-    /// Path to `controller-profiles/` directory for MIDI controller profiles.
+    /// Path to the MIDI `controller-profiles/` directory.
     pub fn controller_profiles_dir(&self) -> PathBuf {
         self.varda_dir().join("controller-profiles")
     }
@@ -275,8 +265,8 @@ impl Workspace {
     ///
     /// # Errors
     ///
-    /// Returns an error if `.varda/` or either of the `presets/decks/` and
-    /// `presets/channels/` directories cannot be created.
+    /// Returns an error if `.varda/`, `presets/decks/` or `presets/channels/`
+    /// cannot be created.
     pub fn ensure_preset_dirs(&self) -> Result<()> {
         self.ensure_dir()?;
         let dirs = [self.deck_presets_dir(), self.channel_presets_dir()];
@@ -298,8 +288,7 @@ impl Workspace {
     ///
     /// # Errors
     ///
-    /// Returns an error if the directory does not exist and cannot be created
-    /// (permissions, or a non-directory file already at that path).
+    /// Returns an error if the directory cannot be created.
     pub fn ensure_dir(&self) -> Result<()> {
         let dir = self.varda_dir();
         if !dir.exists() {
@@ -367,13 +356,11 @@ fn duration_config_to_spec(
     }
 }
 
-/// Convert persisted sequence steps into runtime steps, resolving fade steps'
-/// channel references against the channels as restored.
+/// Convert saved sequence steps into runtime steps, resolving fade channel
+/// references against the restored channels.
 ///
-/// A fade whose channels no longer resolve degrades to a `Wait` of the same
-/// duration rather than being dropped. `GoTo` steps address other steps by
-/// position, so removing a step would silently retarget every jump past it —
-/// keeping the slot preserves both the jump targets and the sequence's timing.
+/// A fade whose channels don't resolve becomes a `Wait` of the same duration,
+/// since `GoTo` steps address steps by position.
 pub fn restore_sequence_steps(
     steps: &[crate::scene::TransitionStepConfig],
     channel_uuids: &[String],
@@ -432,15 +419,8 @@ pub fn restore_sequence_steps(
         .collect()
 }
 
-/// Serialize a deck's depth-sensor preprocessor binding, if it has one.
-///
-/// Stores the device *name* rather than its id, matching how cameras and
-/// depth-sensor decks restore — ids shift when devices are replugged.
-/// Build a `SceneConfig` snapshot from live app state (show-specific: channels, effects, modulation).
-///
-/// `transport` contributes only its authored settings (frame rate, loop range);
-/// position and run state are deliberately not persisted, so a scene opens
-/// where it was authored to start rather than wherever it was stopped.
+/// Build a `SceneConfig` from live state. Only the transport's authored
+/// settings (frame rate, loop range) are saved, not position or run state.
 pub fn snapshot_scene(
     mixer: &Mixer,
     transport: Option<&crate::scene::TransportConfig>,
@@ -469,7 +449,6 @@ pub fn snapshot_scene(
                         })
                         .collect();
 
-                    // Snapshot auto-transition config
                     let auto_transition = slot
                         .auto_transition
                         .as_ref()
@@ -526,9 +505,8 @@ pub fn snapshot_scene(
                 blend_mode: ch.blend_mode.into(),
                 decks,
                 effects,
-                // A scene serializes the modulation engine whole, so recipes are
-                // only filled when a channel travels alone. See
-                // /spec/clipboard.md.
+                // A scene saves the whole modulation engine; recipes are only
+                // for a channel copied or saved alone.
                 modulation: Vec::new(),
             }
         })
@@ -547,7 +525,6 @@ pub fn snapshot_scene(
 
     let active_transition = mixer.active_transition().as_ref().map(|t| t.name.clone());
 
-    // Snapshot transition sequences
     let transition_sequences = mixer
         .transition_sequences()
         .iter()
@@ -608,7 +585,7 @@ pub fn snapshot_scene(
     }
 }
 
-/// Build a `StagePrefs` snapshot from live app state (venue-specific: surfaces, outputs, editor prefs).
+/// Build a `StagePrefs` from live state.
 pub fn snapshot_stage(
     surface_manager: &crate::surface::SurfaceManager,
     outputs_list: &[crate::output::Output],
@@ -658,8 +635,7 @@ pub fn snapshot_stage(
         domemaster_resolution,
         surfaces: surface_manager.clone(),
         outputs,
-        // Filled by the caller: the timecode patch is not derived from the
-        // stage geometry this function is given.
+        // Filled by the caller.
         timecode: crate::timecode::TimecodeConfig::default(),
     }
 }
@@ -669,8 +645,7 @@ pub fn snapshot_stage(
 use crate::deck::{Deck, Effect};
 use crate::isf::ISFShader;
 use crate::renderer::GpuContext;
-/// Restore result — contains reconstructed mixer.
-/// Surfaces and outputs are loaded separately from stage.json.
+/// The restored mixer. Surfaces and outputs load separately from stage.json.
 pub struct RestoreResult {
     pub mixer: Mixer,
     pub warnings: Vec<String>,
@@ -680,11 +655,9 @@ pub struct RestoreResult {
 ///
 /// # Errors
 ///
-/// Returns an error if the mixer or any deck/effect in `config` cannot be
-/// constructed on the GPU — for example a shader or media file that fails to
-/// load or compile. Individually recoverable problems are collected into
-/// [`RestoreResult::warnings`] instead.
-// Writes back into many independent live-state targets; no shared invariant to bundle.
+/// Returns an error if the mixer or a deck or effect cannot be built on the
+/// GPU. Recoverable problems go to [`RestoreResult::warnings`].
+// Writes into many independent live-state targets.
 #[allow(clippy::too_many_arguments)]
 pub fn restore_scene(
     config: &SceneConfig,
@@ -697,7 +670,7 @@ pub fn restore_scene(
     let (render_width, render_height) = (env.width, env.height);
     let mut mixer = Mixer::new(context, render_width, render_height)?;
 
-    // Clear default channels — we'll create from config
+    // Replace the default channels.
     mixer.channels_mut().clear();
 
     for ch_config in &config.channels {
@@ -732,7 +705,6 @@ pub fn restore_scene(
             slot.z_index = deck_config.z_index;
             slot.render_fps = deck_config.render_fps;
 
-            // Restore auto-transition config
             if let Some(at_config) = &deck_config.auto_transition {
                 use crate::channel::{DeckAutoTransition, TransitionTrigger};
                 let mut at = DeckAutoTransition::new();
@@ -747,7 +719,6 @@ pub fn restore_scene(
                     .clone_from(&at_config.transition_shader);
                 slot.auto_transition = Some(at);
 
-                // Compile transition shader if specified
                 if let Some(shader_name) = &at_config.transition_shader {
                     if let Some(shader) = registry
                         .transitions()
@@ -768,7 +739,6 @@ pub fn restore_scene(
             channel.add_deck_slot(slot);
         }
 
-        // Restore channel effects
         for eff_config in &ch_config.effects {
             match restore_effect(eff_config, context, context.compositing_format) {
                 Ok(eff) => channel.add_effect(eff),
@@ -786,8 +756,7 @@ pub fn restore_scene(
         mixer.channels_mut().push(channel);
     }
 
-    // Update next_channel_index so new channels don't get duplicate names.
-    // Parse existing channel names to find the highest "Ch N" index.
+    // Continue "Ch N" numbering after the highest restored index.
     let max_idx = mixer
         .channels()
         .iter()
@@ -800,7 +769,6 @@ pub fn restore_scene(
         .map_or(mixer.channel_count(), |n| n + 1);
     mixer.set_next_channel_index(max_idx);
 
-    // Restore master effects
     for eff_config in &config.master_effects {
         match restore_effect(eff_config, context, context.compositing_format) {
             Ok(eff) => mixer.master_effects_mut().push(eff),
@@ -815,20 +783,15 @@ pub fn restore_scene(
         }
     }
 
-    // Restore crossfader
     mixer.set_crossfader(config.crossfader);
 
-    // Restore modulation engine
     mixer.set_modulation(config.modulation.clone());
 
-    // Restore macro controls
     mixer.set_macros(config.macros.clone());
 
-    // Restore the arrangement. This also drops live overrides, since a reload
-    // returns full authority to the show.
+    // Also drops live overrides.
     mixer.set_arrangement(config.arrangement.clone());
 
-    // Restore active transition
     if let Some(transition_name) = &config.active_transition {
         if let Some(shader) = registry
             .transitions()
@@ -850,9 +813,8 @@ pub fn restore_scene(
         }
     }
 
-    // Restore transition sequences. Fade steps address channels by UUID; scenes
-    // at v4 and earlier stored indices, which `ChannelRef::resolve` maps through
-    // the restored channel order.
+    // Fade steps address channels by UUID. Scenes at v4 and earlier store
+    // indices, which `ChannelRef::resolve` maps through the restored order.
     let channel_uuids: Vec<String> = mixer
         .channels()
         .iter()
@@ -870,10 +832,8 @@ pub fn restore_scene(
             ));
     }
 
-    // Restore tonemap mode
     mixer.set_tonemap_mode(&context.queue, config.tonemap_mode);
 
-    // Restore active LUT
     if let Some(lut_filename) = &config.active_lut {
         let lut_path = std::env::current_dir()
             .unwrap_or_default()
@@ -902,10 +862,9 @@ pub fn restore_scene(
 
 /// Reacquire and attach a shader deck's depth-sensor preprocessor on restore.
 ///
-/// Resolves the sensor by saved name when the scene recorded one, falling back
-/// to the ISF header's device selection for scenes written before the binding
-/// was persisted. Returns `Err` when the shader needs a sensor and none is
-/// available, so the caller keeps a placeholder instead.
+/// Resolves the sensor by saved name, else by the ISF header's device
+/// selection (older scenes save no name). Returns `Err` when no sensor is
+/// available, so the caller keeps a placeholder.
 fn restore_depth_preprocessor(
     deck: &mut Deck,
     saved: Option<&crate::deck::DepthPreproConfig>,
@@ -934,7 +893,7 @@ fn restore_depth_preprocessor(
         mirror: c.mirror,
     });
 
-    // Prefer the saved device name; fall back to the header's selection.
+    // Saved device name first, then the header's selection.
     let by_name = saved.and_then(|c| {
         depth_manager
             .devices()
@@ -968,14 +927,9 @@ fn restore_depth_preprocessor(
     Ok(())
 }
 
-/// Restore a single deck from config.
-///
-/// The source is rebuilt through its provider. A source that cannot run here
-/// (unknown type, missing device, a shader whose depth sensor is gone) becomes
-/// a placeholder holding its config, and the reason comes back so the restore
-/// can report it: moving a scene between machines never loses a deck. See
-/// /spec/deck-source-providers.md Decision 4.
-///
+/// Restore one deck from config through its source provider. A source that
+/// cannot run here (unknown type, missing device) becomes a placeholder holding
+/// its config, and the reason is returned.
 pub(crate) fn restore_deck(
     config: &DeckConfig,
     sources: &mut crate::source::SourceRegistry,
@@ -984,8 +938,7 @@ pub(crate) fn restore_deck(
     let (source, mut warning) = sources.restore(&config.source, env);
     let mut deck = Deck::from_source(env.gpu, source, env.width, env.height);
 
-    // Generator parameter values, stored under `params` for every source
-    // that declares ISF inputs.
+    // ISF input values, stored under `params`.
     if let Some(params) = config.source.get("params").and_then(|v| {
         serde_json::from_value::<std::collections::HashMap<String, crate::params::ParamValue>>(
             v.clone(),
@@ -997,9 +950,7 @@ pub(crate) fn restore_deck(
         }
     }
 
-    // Reacquire the depth sensor a shader needs. `depth_sensor` is a required
-    // preprocessor, so a missing device leaves the deck a placeholder rather
-    // than one rendering against blank textures.
+    // A missing required depth sensor leaves the deck a placeholder.
     if let Some(metadata) = deck.shader().map(|s| s.metadata.clone()) {
         let saved: Option<crate::deck::DepthPreproConfig> = config
             .source
@@ -1022,12 +973,10 @@ pub(crate) fn restore_deck(
         }
     }
 
-    // Restore UUID from config
     if !config.uuid.is_empty() {
         deck.set_uuid(config.uuid.clone());
     }
 
-    // Restore effects
     for eff_config in &config.effects {
         match restore_effect(eff_config, env.gpu, env.gpu.compositing_format) {
             Ok(eff) => deck.effects.push(eff),
@@ -1038,9 +987,8 @@ pub(crate) fn restore_deck(
     (deck, warning)
 }
 
-/// Restore a single effect from config.
-/// `target_format` is `context.compositing_format` for every tier — deck,
-/// channel, and master effects all target the unified color-path format.
+/// Restore one effect from config. `target_format` is
+/// `context.compositing_format` for deck, channel and master effects alike.
 pub(crate) fn restore_effect(
     config: &EffectConfig,
     context: &GpuContext,
@@ -1051,16 +999,14 @@ pub(crate) fn restore_effect(
     let mut effect = Effect::new_with_format(context, shader, target_format)?;
     effect.set_uuid(config.uuid.clone());
     effect.enabled = config.enabled;
-    // Restore parameter values
     for (name, value) in &config.params {
         effect.params.set(name, *value);
     }
     Ok(effect)
 }
 
-/// Whether a live deck's source is the same source as `config` names, so a
-/// scene diff can patch the deck in place rather than rebuild it. What "the
-/// same" means is each source type's call (a path, a device name, a tap point).
+/// Whether a live deck's source matches `config`, so a scene diff can patch the
+/// deck in place. Each source type defines the match.
 pub(crate) fn source_configs_match(
     deck: &Deck,
     config: &SourceConfig,
@@ -1079,16 +1025,8 @@ mod tests {
         GpuContext::new_headless().expect("headless GPU required for tests")
     }
 
-    /// A restored effect must answer to the UUID it was saved under.
-    ///
-    /// Modulation targets an effect parameter by the key `effect/{uuid}/param/{param}`,
-    /// and the render path looks that key up through the effect's cached
-    /// `param_prefix`. Restore used to write `uuid` directly, leaving the prefix
-    /// built from the throwaway UUID `Effect::new` mints. Everything that keys
-    /// off `uuid` — the UI, assignment, removal — agreed with the saved scene,
-    /// so the modulation still looked attached, while the one consumer that used
-    /// the prefix silently found nothing. Effect modulation therefore worked
-    /// until you reloaded, and never again after.
+    /// A restored effect keeps its saved UUID, including the cached
+    /// `param_prefix` the render path uses for modulation lookups.
     #[test]
     fn restored_effect_keeps_the_uuid_its_modulation_is_keyed_on() {
         let gpu = headless_gpu();
@@ -1112,8 +1050,7 @@ mod tests {
         );
     }
 
-    /// `set_uuid` is the only way to move an effect's identity, so it has to
-    /// carry the derived prefix with it.
+    /// `set_uuid` updates the derived param prefix.
     #[test]
     fn setting_an_effect_uuid_moves_its_modulation_prefix() {
         let gpu = headless_gpu();
@@ -1215,7 +1152,6 @@ mod tests {
 
     #[test]
     fn restore_effect_pub_crate_accessible() {
-        // Just verify the function signature is accessible at pub(crate) level
         let gpu = headless_gpu();
         let cfg = EffectConfig {
             uuid: "test0001".to_string(),
@@ -1223,7 +1159,7 @@ mod tests {
             enabled: true,
             params: HashMap::new(),
         };
-        // Should fail (file doesn't exist) but shouldn't be a compile error
+        // The file doesn't exist.
         assert!(restore_effect(&cfg, &gpu, wgpu::TextureFormat::Rgba8Unorm).is_err());
     }
 
@@ -1258,8 +1194,7 @@ mod tests {
 
     #[test]
     fn validate_stage_prefs_warp_corners_non_finite() {
-        // Warp is per-surface now — a non-finite corner on a surface's warp
-        // must be reported by validation.
+        // A non-finite surface warp corner is reported.
         let mut prefs = StagePrefs::default();
         let uuid = prefs
             .surfaces

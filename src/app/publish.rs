@@ -1,7 +1,6 @@
-//! The engine snapshot every consumer reads. Published every 10th frame and
-//! shared, not copied: readers take an `Arc` without a lock, and the JSON form
-//! is serialized at most once per publication however many clients want it.
-//! See /spec/state-publication.md.
+//! The engine snapshot consumers read. Published every 10th frame; readers
+//! take an `Arc` without a lock, and the JSON form is serialized at most once
+//! per publication.
 
 use crate::engine::EngineState;
 use arc_swap::ArcSwapOption;
@@ -10,8 +9,7 @@ use std::sync::{Arc, OnceLock};
 
 /// One published snapshot.
 pub struct PublishedState {
-    /// Increases with every publication, so a reader can tell whether anything
-    /// new has arrived without comparing states.
+    /// Increases with every publication, so readers can detect new state cheaply.
     pub generation: u64,
     pub state: EngineState,
     json: OnceLock<serde_json::Value>,
@@ -54,7 +52,6 @@ impl StatePublication {
         publication
     }
 
-    /// Replace the published snapshot.
     pub fn publish(&self, state: EngineState) {
         let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
         self.latest.store(Some(Arc::new(PublishedState {

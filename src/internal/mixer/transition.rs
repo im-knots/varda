@@ -1,4 +1,4 @@
-//! Crossfade, transition, and sequence types + Mixer transition control methods.
+//! Crossfade, transition, and sequence types, and the mixer's transition controls.
 
 use super::Mixer;
 use crate::isf::{ISFShader, compile_glsl_to_spirv};
@@ -79,7 +79,7 @@ pub struct BeatSyncCrossfade {
     pub to: f32,
     /// Duration in beats
     pub beats: f32,
-    /// Whether we've started (waiting for next beat boundary)
+    /// Whether the fade has started; false while waiting for the next beat boundary.
     pub started: bool,
     /// The auto-crossfade that runs once triggered
     pub auto: Option<AutoCrossfade>,
@@ -90,12 +90,12 @@ pub struct BeatSyncCrossfade {
 /// A named sequence of channel transition steps for automated shows/installations.
 #[derive(Debug, Clone)]
 pub struct TransitionSequence {
-    /// Stable 8-char hex UUID — the canonical address for this sequence.
+    /// Stable 8-char hex UUID, the sequence's address.
     pub uuid: String,
     pub name: String,
     pub steps: Vec<TransitionStep>,
     pub enabled: bool,
-    /// Runtime sequencer state — NOT persisted.
+    /// Runtime sequencer state, not persisted.
     pub state: SequencerState,
 }
 
@@ -130,9 +130,8 @@ pub struct TransitionStep {
 pub enum StepKind {
     /// Fade from one channel to another over a duration.
     ///
-    /// Channels are held by UUID so a reorder or deletion elsewhere cannot
-    /// silently repoint the fade at a different channel. Resolved to indices at
-    /// execution time. See [`/spec/api-addressing.md`].
+    /// Channels are held by UUID so a reorder or deletion elsewhere cannot repoint the fade. They
+    /// are resolved to indices at execution time.
     Fade {
         from_ch: String,
         to_ch: String,
@@ -151,7 +150,7 @@ pub enum StepKind {
     GoTo { step_index: usize },
 }
 
-/// Runtime sequencer state — NOT persisted, computed each frame.
+/// Runtime sequencer state, not persisted; computed each frame.
 #[derive(Debug, Clone)]
 pub struct SequencerState {
     pub playing: bool,
@@ -334,9 +333,7 @@ impl Mixer {
         }
     }
 
-    /// Stop every playing transition sequence, for when the arrangement takes
-    /// authority. See /spec/transport.md § Relationship to Performance Mode
-    /// Sequencers.
+    /// Stop every playing transition sequence, for when the arrangement takes authority.
     pub(super) fn stop_free_running_sequences(&mut self) {
         for idx in 0..self.transition_sequences.len() {
             if self.transition_sequences[idx].state.playing {
@@ -634,9 +631,8 @@ mod tests {
         }
     }
 
-    /// Old formula had squared falloff: first channel weight was (1-cf)²
-    /// because `ALPHA_BLENDING` double-applied the opacity.  Ensure the new
-    /// formula avoids this.
+    /// The first channel's weight must be linear, not `(1-cf)²` as it is when `ALPHA_BLENDING`
+    /// applies the opacity twice.
     #[test]
     fn crossfade_midpoint_symmetric() {
         let cf = 0.5_f32;

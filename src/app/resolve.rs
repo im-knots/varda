@@ -1,6 +1,5 @@
-//! Command-layer view of UUID resolution: an unresolvable UUID becomes a
-//! "not found" result. Each owner resolves its own entities
-//! (`Mixer::resolve_deck`, `Outputs::resolve_output`, and friends).
+//! Turns an unresolvable UUID into a "not found" command result. Each owner
+//! resolves its own entities (`Mixer::resolve_deck`, `Outputs::resolve_output`, ...).
 
 pub use crate::engine::value::entity::UnknownEntity;
 
@@ -34,8 +33,7 @@ mod tests {
 
     #[test]
     fn into_command_result_is_not_found_with_display_message() {
-        // Every resolve_* error path relies on this `.into()` to build a 404:
-        // the code must be NotFound and the message must match the Display form.
+        // Every resolve_* error path uses this `.into()` to build a 404.
         let e = UnknownEntity::new("effect", "fx-99");
         let expected = e.to_string();
         let result: CommandResult = e.into();

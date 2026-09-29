@@ -1,9 +1,5 @@
-//! Domemaster renderer — generates equidistant azimuthal fisheye projection
-//! from mixer output via cubemap capture.
-//!
-//! The renderer captures 5 cubemap faces (front, right, back, left, top) from
-//! the mixer composite, then projects them into a circular domemaster image
-//! using the equidistant azimuthal projection.
+//! Domemaster renderer: projects 5 cubemap faces (front, right, back, left,
+//! top) captured from the mixer output into an equidistant azimuthal fisheye.
 
 use anyhow::Result;
 use wgpu::util::DeviceExt;
@@ -36,11 +32,11 @@ impl std::fmt::Display for DomemasterResolution {
 /// Configuration for the domemaster renderer.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DomemasterConfig {
-    /// Output resolution (square)
+    /// Output resolution (square).
     pub resolution: DomemasterResolution,
-    /// Field of view in degrees (180 = full hemisphere)
+    /// Field of view in degrees (180 = full hemisphere).
     pub fov_degrees: f32,
-    /// Content tilt in degrees (0 = zenith centered)
+    /// Content tilt in degrees (0 = zenith centered).
     pub tilt_degrees: f32,
 }
 
@@ -79,27 +75,23 @@ const NUM_FACES: usize = 5;
 /// Domemaster renderer: captures cubemap faces from the mixer output and
 /// projects them into a fisheye domemaster image.
 pub struct DomemasterRenderer {
-    /// Per-face render textures — kept alive so `face_views` remain valid.
+    /// Per-face render textures, kept alive for `face_views`.
     #[allow(dead_code)]
     face_textures: Vec<wgpu::Texture>,
     face_views: Vec<wgpu::TextureView>,
-    /// Output domemaster texture (square)
+    /// Output domemaster texture (square).
     pub output_texture: wgpu::Texture,
     pub output_view: wgpu::TextureView,
-    /// Blit pipeline for rendering source into each face
     face_blit: super::blit::BlitPipeline,
-    /// Projection pipeline (cubemap → fisheye)
+    /// Cubemap to fisheye.
     projection_pipeline: wgpu::RenderPipeline,
     projection_bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     params_buffer: wgpu::Buffer,
-    /// Current configuration
     pub config: DomemasterConfig,
-    /// Size of each cubemap face
     face_size: u32,
-    /// Whether the renderer is enabled
     pub enabled: bool,
-    /// Content rotation (radians), updated each frame from UI
+    /// Content rotation in radians, updated each frame from the UI.
     pub content_rotation: [f32; 3],
 }
 
@@ -108,17 +100,15 @@ impl DomemasterRenderer {
     ///
     /// # Errors
     ///
-    /// Never returns `Err` today: every wgpu resource here is created
-    /// infallibly (device validation failures surface on the device's error
-    /// scope instead). The `Result` keeps the constructor signature uniform
-    /// with the other pipelines so callers can `?` it.
+    /// Never returns `Err`; validation failures surface on the device's error
+    /// scope. The `Result` matches the other pipeline constructors.
     pub fn new(
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
         config: DomemasterConfig,
     ) -> Result<Self> {
         let output_size = config.resolution.pixels();
-        // Cubemap faces are half the output resolution for performance
+        // Faces are half the output resolution, for performance.
         let face_size = output_size / 2;
 
         let create_texture = |label: &str, size: u32| -> (wgpu::Texture, wgpu::TextureView) {
@@ -160,7 +150,7 @@ impl DomemasterRenderer {
         let (output_texture, output_view) = create_texture("Domemaster Output", output_size);
         let face_blit = super::blit::BlitPipeline::new(device, format)?;
 
-        // Projection pipeline: fullscreen pass reads 5 face textures → fisheye output
+        // Projection pipeline: fullscreen pass reading the 5 face textures.
         let tex_entry = |binding: u32| -> wgpu::BindGroupLayoutEntry {
             wgpu::BindGroupLayoutEntry {
                 binding,
@@ -312,14 +302,7 @@ impl DomemasterRenderer {
 
     /// Render the domemaster from the mixer composite.
     ///
-    /// The mixer composite texture is treated as a flat content plane positioned
-    /// in front of the dome center. Each cubemap face captures a 90° FOV view
-    /// of this content. The final fisheye projection merges all faces.
-    ///
-    /// For the initial implementation, we blit the mixer output directly into
-    /// the front face and leave other faces black. This gives a simple forward-
-    /// facing dome projection that can be enhanced later with full cubemap
-    /// rendering when 3D content positioning is added.
+    /// The composite is blitted into the front face; the other faces are black.
     pub fn render(&self, context: &super::context::GpuContext, source_view: &wgpu::TextureView) {
         if !self.enabled {
             return;
@@ -331,12 +314,10 @@ impl DomemasterRenderer {
             label: Some("Domemaster Encoder"),
         });
 
-        // Step 1: Render source into each cubemap face.
-        // Front face gets the mixer composite content; other faces get cleared to black.
-        // UV transforms per face map the source content onto the dome.
+        // Per face: (opacity, uv scale, uv offset).
         let face_uv_configs: [(f32, [f32; 2], [f32; 2]); NUM_FACES] = [
             (1.0, [1.0, 1.0], [0.0, 0.0]), // Front: full source
-            (0.0, [1.0, 1.0], [0.0, 0.0]), // Right: black (no content)
+            (0.0, [1.0, 1.0], [0.0, 0.0]), // Right: black
             (0.0, [1.0, 1.0], [0.0, 0.0]), // Back: black
             (0.0, [1.0, 1.0], [0.0, 0.0]), // Left: black
             (0.0, [1.0, 1.0], [0.0, 0.0]), // Top: black
@@ -369,7 +350,7 @@ impl DomemasterRenderer {
             }
         }
 
-        // Step 2: Projection pass — cubemap faces → fisheye domemaster
+        // Project the faces into the fisheye.
         let projection_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Domemaster Projection Bind Group"),
             layout: &self.projection_bind_group_layout,
@@ -430,7 +411,7 @@ impl DomemasterRenderer {
         context.submit(std::iter::once(encoder.finish()));
     }
 
-    /// Get the output domemaster texture view for downstream sampling.
+    /// The output domemaster texture view.
     pub fn output_view(&self) -> &wgpu::TextureView {
         &self.output_view
     }
@@ -464,8 +445,7 @@ mod tests {
 
     #[test]
     fn all_lists_every_preset_ascending() {
-        // Selectors are built from ALL, so a preset missing here is a preset the
-        // operator cannot reach.
+        // Selectors are built from ALL, so a missing preset is unreachable.
         assert_eq!(
             DomemasterResolution::ALL,
             [
@@ -513,7 +493,7 @@ mod tests {
 
     #[test]
     fn params_alignment() {
-        // DomemasterParams must be 32 bytes (2 × vec4) for GPU uniform alignment
+        // 32 bytes (2 × vec4) for GPU uniform alignment.
         assert_eq!(std::mem::size_of::<DomemasterParams>(), 32);
     }
 

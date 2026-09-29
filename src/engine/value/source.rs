@@ -1,8 +1,5 @@
-//! Deck source values: what crosses the engine boundary about a deck's
-//! source beyond the shared provider vocabulary in
+//! Deck source values beyond the shared provider types in
 //! [`crate::engine::value::provider`].
-//!
-//! See /spec/deck-source-providers.md.
 
 use serde::{Deserialize, Serialize};
 
@@ -17,12 +14,10 @@ pub struct DeckSourceSnapshot {
     /// Source type id; its schema is in [`ProviderTypeSnapshot`](super::provider::ProviderTypeSnapshot).
     #[serde(rename = "type")]
     pub source_type: String,
-    /// False when this build cannot run the type, and the deck is a
-    /// placeholder holding its config. See /spec/deck-source-providers.md
-    /// Decision 4.
+    /// False when this build cannot run the type; the deck is then a
+    /// placeholder holding its config.
     pub available: bool,
-    /// The source sets its own alpha, so the deck's transparent flag has no
-    /// effect on it. See /spec/deck-source-providers.md § Source-owned alpha.
+    /// The source sets its own alpha, so the deck's transparent flag is ignored.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub owns_alpha: bool,
     pub status: ControlStatus,
@@ -58,8 +53,6 @@ impl ScalingMode {
 
 /// Whether a deck that follows a timeline (a clip, timed text) maps it onto
 /// the show transport.
-///
-/// See /spec/timecode.md § Consumer 2 and /spec/text-source.md § Transport chase.
 #[derive(
     Debug,
     Clone,

@@ -1,8 +1,6 @@
-//! Operations the mixer answers alone, addressed by UUID: the commands that
-//! change a deck, a channel, or an effect chain without touching any device,
-//! file, or output. Each resolves its target first and reports an
-//! [`UnknownEntity`](crate::engine::value::entity::UnknownEntity) when the UUID
-//! names nothing.
+//! Mixer operations addressed by UUID that change a deck, channel, or effect chain without
+//! touching any device, file, or output. Each reports an
+//! [`UnknownEntity`](crate::engine::value::entity::UnknownEntity) when the UUID names nothing.
 
 use anyhow::{Context as _, Result};
 
@@ -135,8 +133,8 @@ impl Mixer {
         Ok(())
     }
 
-    /// Write one of a deck's source controls: what a GUI widget, the API or a
-    /// typed router write does. Numeric controls take normalized values.
+    /// Write one of a deck's source controls, as a GUI widget, the API, or a typed router write
+    /// does. Numeric controls take normalized values.
     ///
     /// # Errors
     ///

@@ -1,15 +1,8 @@
-//! Dome slicer value types — geometry, projector, and preset data.
-//!
-//! Definitions moved from `internal::renderer::slicer` (see
-//! /spec/engine-value-types.md). The slicing algorithm (ray casting,
-//! equidistant-azimuthal projection) stays in `renderer::slicer` as
-//! functions/inherent impls over these re-exported types.
+//! Dome slicer value types: geometry, projector, and preset data. The slicing
+//! code lives in `renderer::slicer`.
 
-/// Domemaster resolution presets.
-///
-/// Square by definition: a domemaster is a circular fisheye image inscribed in a
-/// square, so it is sized by the dome's projectors rather than by the master
-/// render resolution it samples from.
+/// Domemaster resolution presets. Always square, and independent of the
+/// master render resolution.
 #[derive(
     Debug,
     Clone,
@@ -41,17 +34,13 @@ pub struct DomeGeometry {
     pub truncation_degrees: f32,
     /// Dome tilt in degrees (0 = zenith up, positive = tilted forward).
     pub tilt_degrees: f32,
-    /// Content azimuth rotation in degrees. Rotates what content appears where
-    /// around the dome's vertical axis (0 = no rotation).
+    /// Content rotation around the dome's vertical axis, in degrees.
     #[serde(default)]
     pub content_azimuth_degrees: f32,
-    /// Content elevation rotation in degrees. Tilts the content sphere so the
-    /// zenith content (e.g. a black hole at center) can be aimed at the wall
-    /// instead of the top of the dome (0 = no tilt, 90 = zenith→horizon).
+    /// Content tilt in degrees; 90 moves zenith content to the horizon.
     #[serde(default)]
     pub content_elevation_degrees: f32,
-    /// Content roll in degrees. Spins the content around the dome's zenith axis
-    /// (like rotating the circular domemaster image around its center).
+    /// Content spin around the zenith axis, in degrees.
     #[serde(default)]
     pub content_roll_degrees: f32,
 }
@@ -99,8 +88,7 @@ pub enum DomePreset {
     Octa,
 }
 
-/// The dome projection a domemaster is rendered for: the projector preset and
-/// the dome it projects onto. Engine state, so a headless install can set it.
+/// Projector preset and dome geometry the domemaster is rendered for.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct DomeConfig {
     pub preset: DomePreset,

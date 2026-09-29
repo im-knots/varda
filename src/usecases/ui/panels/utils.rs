@@ -4,9 +4,8 @@ use super::super::{ChannelUIInfo, EffectDrag};
 
 /// Shorten `s` to at most `max` characters, ending in an ellipsis when cut.
 ///
-/// Counts characters, not bytes. Source names carry em dashes and emoji (a
-/// window capture is labelled `🖥 Firefox — Title`), and byte-slicing one of
-/// those panics on a char boundary rather than merely rendering oddly.
+/// Counts characters, not bytes: source names contain em dashes and emoji
+/// (`🖥 Firefox — Title`), and slicing bytes panics on a char boundary.
 pub(super) fn truncate_chars(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
@@ -15,40 +14,29 @@ pub(super) fn truncate_chars(s: &str, max: usize) -> String {
     format!("{head}…")
 }
 
-/// Format seconds as MM:SS
+/// Format seconds as MM:SS.
 pub(super) fn format_time(secs: f64) -> String {
     let m = (secs / 60.0).floor() as u32;
     let s = (secs % 60.0).floor() as u32;
     format!("{m:02}:{s:02}")
 }
 
-/// The size to draw a preview or output-space canvas at so that it keeps the
-/// render resolution's aspect ratio while fitting inside `budget`.
+/// Size for a preview or output-space canvas that keeps the render
+/// resolution's aspect ratio and fits inside `budget`.
 ///
-/// Every preview widget used to hardcode 16:9, so a portrait project — a phone
-/// video at 1080×1920, say — rendered correctly but was squashed into a
-/// landscape rectangle everywhere in the UI. The GPU side was never the
-/// problem: `PreviewEncoder` already downscales with the aspect preserved, and
-/// recordings always came out right. Only the widgets lied.
+/// The result never exceeds `budget` on either axis. Width-driven panels
+/// should pass a height cap too, or a tall project pushes everything below it
+/// off the panel.
 ///
-/// The result is scaled to *contain*: it never exceeds `budget` on either axis,
-/// and touches it on whichever axis binds first. Callers pass the space they are
-/// willing to give up, which for a width-driven panel means passing a height cap
-/// as well, or a tall project would push everything below it off the panel.
-///
-/// This also governs the stage surface and warp canvases. They are not preview
-/// images, but they map normalised output coordinates onto a rectangle, so a
-/// 16:9 canvas draws a square surface as a wide one whenever the output is not
-/// 16:9 — the same lie in a place where it misleads about geometry the user is
-/// editing.
+/// Also used by the stage surface and warp canvases, which map normalized
+/// output coordinates onto a rectangle.
 pub(super) fn preview_size(
     budget: egui::Vec2,
     render_width: u32,
     render_height: u32,
 ) -> egui::Vec2 {
     let budget = egui::vec2(budget.x.max(1.0), budget.y.max(1.0));
-    // A render resolution is never zero in practice; the fallback keeps a
-    // malformed scene file from producing a NaN-sized widget.
+    // Guards against a malformed scene file producing a NaN-sized widget.
     let aspect = if render_width == 0 || render_height == 0 {
         16.0 / 9.0
     } else {
@@ -72,14 +60,13 @@ pub(super) fn render_collapsed_column(ui: &mut egui::Ui, label: &str, open_id: e
             .memory_mut(|mem| mem.data.insert_temp(open_id, true));
     }
     let painter = ui.painter_at(rect);
-    // Background
     let bg = if response.hovered() {
         ui.visuals().widgets.hovered.bg_fill
     } else {
         ui.visuals().faint_bg_color
     };
     painter.rect_filled(rect, 4.0, bg);
-    // Draw each character vertically, centered in the strip
+    // Draw each character vertically, centered in the strip.
     let font_id = egui::FontId::proportional(10.0);
     let text_color = ui.visuals().text_color();
     let chars: Vec<char> = label.chars().collect();
@@ -98,9 +85,9 @@ pub(super) fn render_collapsed_column(ui: &mut egui::Ui, label: &str, open_id: e
     }
 }
 
-/// The clickable title row of an open deck detail column, followed by a
-/// separator. Clicking it collapses the column to the strip
-/// [`render_collapsed_column`] draws.
+/// Clickable title row of an open deck detail column, followed by a separator.
+/// Clicking it collapses the column to the strip [`render_collapsed_column`]
+/// draws.
 pub(super) fn render_column_header(ui: &mut egui::Ui, label: &str, open_id: egui::Id) {
     let header_rect = ui.available_rect_before_wrap();
     let header_rect =
@@ -134,8 +121,8 @@ pub(super) fn column_open(ui: &egui::Ui, open_id: egui::Id) -> bool {
 }
 
 /// Resolve a channel UUID to its ordinal and display name. The ordinal is only
-/// used for palette lookup; callers must treat `None` as "no longer exists"
-/// rather than falling back to a position.
+/// for palette lookup; `None` means the channel no longer exists, so callers
+/// must not fall back to a position.
 pub(super) fn resolve_channel(channels: &[ChannelUIInfo], uuid: &str) -> Option<(usize, String)> {
     channels
         .iter()
@@ -143,20 +130,20 @@ pub(super) fn resolve_channel(channels: &[ChannelUIInfo], uuid: &str) -> Option<
         .map(|i| (i, channels[i].name.clone()))
 }
 
-/// `chain_key` identifies the chain (e.g. "deck_<uuid>", "ch_<uuid>", "master").
-/// `position` is the insert index in the chain.
+/// Drop zone for effect reordering. `chain_key` identifies the chain
+/// ("deck_<uuid>", "ch_<uuid>", "master"); `position` is the insert index.
 pub(super) fn render_effect_drop_zone(ui: &mut egui::Ui, chain_key: &str, position: usize) {
     let dz = ui.allocate_response(
         egui::vec2(8.0, ui.available_height().max(40.0)),
         egui::Sense::hover(),
     );
     let has_drag = egui::DragAndDrop::has_payload_of_type::<EffectDrag>(ui.ctx());
-    // Store rect for deferred handler to find
+    // Store the rect for the deferred handler.
     let key = egui::Id::new("eff_dz_rect").with((chain_key.to_string(), position));
     ui.ctx().memory_mut(|mem| {
         mem.data.insert_temp(key, dz.rect);
     });
-    // Visual highlight: check if pointer is actually over this zone
+    // Highlight only when the pointer is over this zone.
     if has_drag
         && let Some(pos) = ui.ctx().input(|i| i.pointer.interact_pos())
         && dz.rect.contains(pos)
@@ -166,8 +153,8 @@ pub(super) fn render_effect_drop_zone(ui: &mut egui::Ui, chain_key: &str, positi
     }
 }
 
-/// Render a drag handle that initiates effect drag-and-drop.
-/// Returns the handle response. Uses painted dots instead of text to avoid selection.
+/// Drag handle that starts effect drag-and-drop. Painted dots instead of text
+/// so dragging doesn't select text.
 pub(super) fn render_effect_drag_handle(ui: &mut egui::Ui, payload: EffectDrag) {
     let handle_size = egui::vec2(12.0, 16.0);
     let (handle_rect, handle_resp) = ui.allocate_exact_size(handle_size, egui::Sense::drag());
@@ -176,7 +163,7 @@ pub(super) fn render_effect_drag_handle(ui: &mut egui::Ui, payload: EffectDrag) 
     } else {
         ui.visuals().weak_text_color()
     };
-    // Draw 6 grip dots (3 rows x 2 cols)
+    // 6 grip dots, 3 rows x 2 cols.
     let cx = handle_rect.center().x;
     let cy = handle_rect.center().y;
     let r = 1.5;
@@ -198,7 +185,7 @@ pub(super) fn render_effect_drag_handle(ui: &mut egui::Ui, payload: EffectDrag) 
     }
 }
 
-/// Show a floating ghost card while an effect is being dragged.
+/// Floating ghost card while an effect is being dragged.
 pub(super) fn render_effect_drag_ghost(
     ui: &mut egui::Ui,
     ghost_id: egui::Id,
@@ -206,12 +193,12 @@ pub(super) fn render_effect_drag_ghost(
     name: &str,
 ) {
     if egui::DragAndDrop::payload::<EffectDrag>(ui.ctx()).is_some_and(|p| *p == payload) {
-        // Store source in temp memory for deferred drop handler
+        // Store the source in temp memory for the deferred drop handler.
         ui.ctx().memory_mut(|mem| {
             mem.data
                 .insert_temp(egui::Id::new("__eff_dnd_src"), payload);
         });
-        // Paint floating ghost at pointer using Area (avoids cross-order sublayer panic)
+        // Paint the ghost at the pointer in an Area, which avoids a cross-order sublayer panic.
         if let Some(pos) = ui.ctx().input(|i| i.pointer.interact_pos()) {
             egui::Area::new(ghost_id)
                 .order(egui::Order::Tooltip)
@@ -234,17 +221,16 @@ pub(super) fn render_effect_drag_ghost(
     }
 }
 
-/// Channel accent colors — infinite non-colliding colors via binary hue subdivision.
+/// Channel accent color, unique for any channel index via binary hue
+/// subdivision.
 ///
-/// Hues are placed by halving the hue wheel: ch0 gets one hue, ch1 the opposite,
-/// ch2–3 fill the quarter-points, ch4–7 the eighth-points, etc. This guarantees
-/// maximum hue separation for any channel count. Each subdivision "ring" gets a
-/// distinct saturation/lightness style so nearby hues in later rings still look
-/// clearly different (vivid-dark vs pastel vs saturated, etc.).
+/// ch0 gets one hue, ch1 the opposite, ch2-3 the quarter-points, ch4-7 the
+/// eighth-points, and so on, maximizing hue separation. Each ring has its own
+/// saturation/lightness so nearby hues in later rings still differ.
 pub(super) fn channel_color(ch_idx: usize) -> egui::Color32 {
     const HUE_OFFSET: f32 = 0.76; // start at purple to match original Ch 0
 
-    // Saturation/lightness per ring — strongly varied so same-region hues differ
+    // Saturation/lightness per ring, strongly varied so similar hues differ.
     const RING_STYLES: [(f32, f32); 6] = [
         (0.75, 0.58), // ring 0: vivid mid
         (0.70, 0.65), // ring 1: vivid light
@@ -263,8 +249,8 @@ pub(super) fn channel_color(ch_idx: usize) -> egui::Color32 {
 }
 
 /// Binary subdivision of the hue wheel. Returns (ring, `hue_fraction`).
-/// Ring 0 → 1 slot (0/1), ring 1 → 1 slot (1/2), ring k≥2 → 2^(k-1) slots
-/// at odd multiples of 1/2^k. Guarantees optimal minimum hue distance.
+/// Ring 0 → 1 slot (0/1), ring 1 → 1 slot (1/2), ring k≥2 → 2^(k-1) slots at
+/// odd multiples of 1/2^k.
 pub(crate) fn hue_subdivision(idx: usize) -> (usize, f32) {
     if idx == 0 {
         return (0, 0.0);
@@ -331,7 +317,7 @@ mod tests {
         assert_eq!(format_time(30.0), "00:30");
         assert_eq!(format_time(60.0), "01:00");
         assert_eq!(format_time(125.0), "02:05");
-        // Minutes are not wrapped at 60 — an hour reads as 60:00.
+        // Minutes do not wrap at 60; an hour reads as 60:00.
         assert_eq!(format_time(3600.0), "60:00");
         // Fractional seconds floor, not round.
         assert_eq!(format_time(30.7), "00:30");
@@ -339,8 +325,7 @@ mod tests {
         assert_eq!(format_time(60.1), "01:00");
     }
 
-    /// The historical 16:9 sizing must be reproduced exactly, or every existing
-    /// layout shifts the moment this helper is wired in.
+    /// 16:9 sizing must match the fixed sizes the widgets used before this helper.
     #[test]
     fn preview_size_leaves_a_landscape_project_where_it_was() {
         let size = preview_size(egui::vec2(100.0, 100.0), 1920, 1080);
@@ -380,7 +365,7 @@ mod tests {
         }
     }
 
-    /// A zero from a malformed scene must not reach the layout as a NaN.
+    /// A zero from a malformed scene must not produce a NaN.
     #[test]
     fn preview_size_falls_back_when_the_resolution_is_degenerate() {
         let size = preview_size(egui::vec2(160.0, 160.0), 0, 0);
@@ -388,17 +373,12 @@ mod tests {
         assert!((size.x / size.y - 16.0 / 9.0).abs() < 1e-3);
     }
 
-    /// The portrait bug was one mistake made independently in seven places:
-    /// every preview widget and both stage canvases baked in 16:9 rather than
-    /// asking what the project actually renders at. They are all routed through
-    /// [`preview_size`] now, and this stops the eighth copy from landing.
-    ///
-    /// Matching on the literals is crude but it is what the bug looked like
-    /// every time, and it costs nothing to keep honest.
+    /// Preview widgets and stage canvases must size through [`preview_size`]
+    /// instead of hardcoding 16:9, which squashes portrait projects. Matches on the
+    /// literals.
     #[test]
     fn no_panel_hardcodes_a_16_by_9_widget() {
-        // The camera feed is sized to the camera, not to the render resolution;
-        // it has its own aspect problem and its own fix.
+        // The camera feed is sized to the camera, not the render resolution.
         const EXEMPT: &[&str] = &["camera_detect.rs"];
         const LITERALS: &[&str] = &["0.5625", "16.0 / 9.0", "9.0 / 16.0"];
 
@@ -454,8 +434,8 @@ mod tests {
 
     #[test]
     fn hue_subdivision_fractions_are_unique_across_channels() {
-        // Every channel index must map to a distinct hue fraction so palette
-        // colours never collide.
+        // Every channel index maps to a distinct hue fraction, so palette colors never
+        // collide.
         let mut seen = std::collections::HashSet::new();
         for idx in 0..16 {
             let (_ring, frac) = hue_subdivision(idx);
@@ -479,8 +459,6 @@ mod tests {
         }
     }
 
-    // ── truncate_chars ──────────────────────────────────────────────
-
     #[test]
     fn truncate_chars_leaves_short_strings_alone() {
         assert_eq!(truncate_chars("Deck 1", 16), "Deck 1");
@@ -494,8 +472,8 @@ mod tests {
         assert_eq!(truncate_chars("abcdefgh", 4).chars().count(), 4);
     }
 
-    /// The crash this replaces: a window-capture deck is named
-    /// `🖥 Firefox — Title`, and byte-slicing it panicked mid-em-dash.
+    /// A window-capture deck is named `🖥 Firefox — Title`; byte-slicing it
+    /// panics mid-em-dash.
     #[test]
     fn truncate_chars_never_splits_a_multibyte_character() {
         let name = "🖥 Firefox — + ##sre | Libera.Chat";
@@ -539,7 +517,7 @@ mod tests {
 
     #[test]
     fn hsl_to_rgb_hue_wraps_at_one() {
-        // h=1.0 must resolve to the same colour as h=0.0 (red).
+        // h=1.0 resolves to the same color as h=0.0 (red).
         approx(hsl_to_rgb(1.0, 1.0, 0.5), hsl_to_rgb(0.0, 1.0, 0.5));
     }
 

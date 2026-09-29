@@ -1,19 +1,13 @@
-//! System monitor — lightweight CPU & RAM usage sampling.
-//!
-//! Samples are taken at a configurable interval (default 1s) to avoid
-//! the cost of querying sysinfo every frame. The latest values are
-//! exposed via simple getters for the snapshot pipeline.
+//! CPU and RAM usage, sampled once per `SAMPLE_INTERVAL` because querying
+//! sysinfo every frame is expensive.
 
 use std::time::{Duration, Instant};
 use sysinfo::System;
 
-/// How often to re-sample CPU/RAM (default: 1 second).
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 
-/// Lightweight system resource monitor.
-///
-/// Call `update()` every frame — it only actually re-samples when
-/// `SAMPLE_INTERVAL` has elapsed since the last sample.
+/// System resource monitor. Call `update()` every frame; it re-samples only
+/// after `SAMPLE_INTERVAL`.
 pub struct SystemMonitor {
     sys: System,
     last_sample: Instant,
@@ -34,7 +28,7 @@ impl Default for SystemMonitor {
 impl SystemMonitor {
     pub fn new() -> Self {
         let mut sys = System::new();
-        // Initial refresh to populate baseline
+        // Baseline for the first CPU delta.
         sys.refresh_cpu_usage();
         sys.refresh_memory();
 
@@ -51,7 +45,7 @@ impl SystemMonitor {
         }
     }
 
-    /// Call every frame. Only re-samples when the interval has elapsed.
+    /// Re-samples if `SAMPLE_INTERVAL` has elapsed.
     pub fn update(&mut self) {
         if self.last_sample.elapsed() >= SAMPLE_INTERVAL {
             self.sys.refresh_cpu_usage();
@@ -63,22 +57,22 @@ impl SystemMonitor {
         }
     }
 
-    /// CPU usage % (0–100), averaged across all cores.
+    /// CPU usage in percent (0–100), averaged across cores.
     pub fn cpu_usage(&self) -> f32 {
         self.cpu_usage
     }
 
-    /// Total physical RAM in bytes.
+    /// Bytes.
     pub fn ram_total(&self) -> u64 {
         self.ram_total
     }
 
-    /// Used physical RAM in bytes.
+    /// Bytes.
     pub fn ram_used(&self) -> u64 {
         self.ram_used
     }
 
-    /// RAM usage as a percentage (0–100).
+    /// Percent (0–100).
     pub fn ram_usage_pct(&self) -> f32 {
         if self.ram_total > 0 {
             (self.ram_used as f64 / self.ram_total as f64 * 100.0) as f32
@@ -103,14 +97,10 @@ mod tests {
     #[test]
     fn system_monitor_initial_values() {
         let mon = SystemMonitor::new();
-        // CPU usage should be between 0 and 100
         assert!(mon.cpu_usage() >= 0.0);
         assert!(mon.cpu_usage() <= 100.0);
-        // RAM total should be positive on any real machine
         assert!(mon.ram_total() > 0);
-        // Used <= Total
         assert!(mon.ram_used() <= mon.ram_total());
-        // Percentage should be in range
         assert!(mon.ram_usage_pct() >= 0.0);
         assert!(mon.ram_usage_pct() <= 100.0);
     }
@@ -118,7 +108,6 @@ mod tests {
     #[test]
     fn update_does_not_panic() {
         let mut mon = SystemMonitor::new();
-        // Multiple updates should work fine
         for _ in 0..3 {
             mon.update();
         }

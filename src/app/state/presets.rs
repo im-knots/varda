@@ -1,10 +1,6 @@
-//! Deck/channel preset load + save commands.
-//!
-//! Preset operations are pure engine mutations (build decks, create channels,
-//! read/write preset files) with no egui coupling: preset *loads* only ever
-//! append decks or channels, so the GUI drain reacts to the returned
-//! `CommandOutcome::DecksCreated` (or the per-frame `refresh_textures` pass)
-//! to register the new previews — the handlers themselves never touch a texture.
+//! Deck and channel preset load and save commands. No egui coupling: the GUI
+//! registers previews from `CommandOutcome::DecksCreated` or its per-frame
+//! `refresh_textures` pass.
 
 use super::super::VardaApp;
 use crate::engine::{CommandResult, ErrorCode};
@@ -81,16 +77,13 @@ impl VardaApp {
             };
         };
 
-        // One identity pass over the whole tree before anything is built, so a
-        // preset loaded twice does not put two entities behind one UUID, and so
-        // its recipes name the effects that are about to exist.
-        // See /spec/clipboard.md § Paste reidentifies.
+        // Reidentify the whole tree before building, so a preset loaded twice
+        // gets distinct UUIDs and its recipes name the new effects.
         let mut config = preset.config.clone();
         let taken = self.mixer.uuids_in_use();
         crate::scene::reidentify::channel(&mut config, &|uuid| taken.contains(uuid));
 
-        // Only fill into the target channel if it's empty (no decks); otherwise
-        // create a new channel to avoid clobbering existing content.
+        // Fill the target channel only if it has no decks.
         let use_existing = target_channel.and_then(|idx| {
             self.mixer
                 .channel_mut(idx)
@@ -140,8 +133,7 @@ impl VardaApp {
         };
 
         if !created_new {
-            // The channel being filled has an effect chain of its own that the
-            // preset must not append to, so only its decks come across.
+            // The filled channel keeps its own effect chain; only decks come across.
             config.effects.clear();
             config.modulation.clear();
         }
@@ -167,7 +159,7 @@ impl VardaApp {
         CommandResult::Ok
     }
 
-    /// Save a deck's current config as a named deck preset (writes to disk).
+    /// Save a deck's config as a named preset on disk.
     pub(crate) fn cmd_save_deck_preset(&mut self, deck_uuid: &str, name: &str) -> CommandResult {
         let (channel_idx, deck_idx) = match self.mixer.resolve_deck(deck_uuid) {
             Ok(loc) => loc,
@@ -210,7 +202,6 @@ impl VardaApp {
             &preset_config,
         ) {
             Ok(()) => {
-                // Update the deck's display name to match the saved preset name.
                 if let Some(ch) = mixer.channel_mut(channel_idx)
                     && let Some(slot) = ch.decks.get_mut(deck_idx)
                 {
@@ -235,7 +226,7 @@ impl VardaApp {
         }
     }
 
-    /// Save a channel's current config as a named channel preset (writes to disk).
+    /// Save a channel's config as a named preset on disk.
     pub(crate) fn cmd_save_channel_preset(
         &mut self,
         channel_uuid: &str,
@@ -276,11 +267,8 @@ impl VardaApp {
         }
     }
 
-    /// Restore a `DeckConfig` into a channel, at `at` or appended, and return
-    /// the UUID it ended up with.
-    ///
-    /// Shared by preset loading and by paste, which differ only in identity:
-    /// see [`Identity`].
+    /// Restore a `DeckConfig` into a channel, at `at` or appended. Returns its
+    /// UUID. Used by preset load and paste; see [`Identity`].
     pub(crate) fn restore_deck_at(
         &mut self,
         config: &crate::scene::DeckConfig,
@@ -304,10 +292,7 @@ impl VardaApp {
         )
     }
 
-    /// Restore a single `DeckConfig` into an existing channel. Shared by
-    /// deck-preset loading and channel-preset bulk-loading. Pure engine: no egui
-    /// texture registration (the GUI drain handles previews via the command
-    /// outcome / the per-frame refresh).
+    /// Restore one `DeckConfig` into an existing channel.
     fn restore_deck_into_channel(
         config: &crate::scene::DeckConfig,
         ch_idx: usize,
@@ -317,10 +302,7 @@ impl VardaApp {
         at: Option<usize>,
         identity: Identity,
     ) -> anyhow::Result<String> {
-        // A config restores the identity it was saved with, which collides when
-        // the thing it names is already on stage: loading one preset twice, or
-        // loading it back into the scene it came from. See
-        // /spec/clipboard.md § Paste reidentifies.
+        // A saved UUID collides when the same entity is already on stage.
         let taken = mixer.uuids_in_use();
         let always = matches!(identity, Identity::Fresh);
         let mut config = config.clone();
@@ -331,7 +313,7 @@ impl VardaApp {
         if let Some(reason) = warning {
             log::warn!("Deck '{}' kept as a placeholder: {reason}", config.name);
         }
-        // Apply the preset's display name (overrides the generator/source name).
+        // Overrides the source's default name.
         if !config.name.is_empty() {
             deck.set_source_name(config.name.clone());
         }
@@ -346,8 +328,7 @@ impl VardaApp {
             slot.solo = config.solo;
             slot.z_index = config.z_index;
             ch.add_deck_slot(slot);
-            // Appended, then moved into place, so the slot goes through the one
-            // insertion path the channel maintains.
+            // Appended then moved, so the channel's single insertion path is used.
             let appended = ch.decks.len() - 1;
             match at {
                 Some(at) if at < appended => {
@@ -363,7 +344,6 @@ impl VardaApp {
             .and_then(|ch| ch.decks.get(dk_idx))
             .map(|slot| slot.deck.uuid().to_string())
             .unwrap_or_default();
-        // Apply modulation recipes with deduplication.
         if !config.modulation.is_empty() {
             let new_prefix = crate::engine::value::param::deck_prefix(&deck_uuid);
             apply_modulation_recipes(&config.modulation, &new_prefix, mixer.modulation_mut());
@@ -373,24 +353,18 @@ impl VardaApp {
     }
 }
 
-/// Whether a restored config keeps the identity it was saved with.
-///
-/// A preset restores it when it is free, so the mappings that point at that
-/// deck keep working; a paste never does, because a copy is a second entity.
-/// See /spec/clipboard.md § Paste reidentifies.
+/// Whether a restored config keeps its saved UUID. A preset keeps it when free,
+/// so mappings to it keep working; a paste always mints new ones.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Identity {
     RestoreIfFree,
     Fresh,
 }
 
-/// Extract modulation recipes for one entity from the global engine.
-/// Scans all assignments under the owner's prefix (`deck/<uuid>/`) and its
-/// effects' prefixes, groups by source, and makes owner keys relative so the
-/// recipe is portable.
+/// Extract modulation recipes for one entity, grouped by source. Owner keys
+/// (`deck/<uuid>/...`) become relative; effect keys stay fully qualified.
 ///
-/// `prefix` is absent when the entity has no params of its own, which is the
-/// case for an effect and for a channel: both own only effect assignments.
+/// `prefix` is `None` for effects and channels, which own only effect assignments.
 pub(crate) fn extract_modulation_recipes(
     engine: &crate::modulation::ModulationEngine,
     prefix: Option<&str>,
@@ -401,20 +375,18 @@ pub(crate) fn extract_modulation_recipes(
         Vec<crate::scene::ModulationRecipeAssignment>,
     > = std::collections::HashMap::new();
 
-    // Build a set of effect key prefixes for this deck's effects.
     let fx_prefixes: Vec<String> = effect_uuids
         .iter()
         .map(|u| crate::engine::value::param::effect_prefix(u))
         .collect();
 
     for (key, mods) in engine.assignments_iter() {
-        // Owner keys: "deck/{uuid}/param/brightness" → relative "param/brightness".
+        // "deck/{uuid}/param/brightness" -> "param/brightness".
         let own_param = prefix.and_then(|p| key.strip_prefix(p));
         let relative_param = if let Some(rel) = own_param {
             Some(rel.to_string())
         } else {
-            // Effect params: store the full "effect/{uuid}/param/{name}" key so it
-            // can be re-applied with the same UUID.
+            // Effect params keep the full "effect/{uuid}/param/{name}" key.
             fx_prefixes
                 .iter()
                 .find(|p| key.starts_with(p.as_str()))
@@ -449,9 +421,8 @@ pub(crate) fn extract_modulation_recipes(
         .collect()
 }
 
-/// Apply modulation recipes to the global engine for a newly loaded deck.
-/// UUID-is-identity: if a source with the recipe's UUID exists, wire up to it.
-/// Otherwise create a new source with that UUID.
+/// Apply modulation recipes for a newly loaded deck. A source whose UUID
+/// already exists is reused; otherwise it is created with that UUID.
 pub(crate) fn apply_modulation_recipes(
     recipes: &[crate::scene::ModulationRecipe],
     prefix: &str,
@@ -463,16 +434,13 @@ pub(crate) fn apply_modulation_recipes(
         } else {
             let uuid =
                 engine.add_source_with_uuid(recipe.source_uuid.clone(), recipe.source.clone());
-            // The clock the source follows lives on the engine's entry, so a
-            // recipe that did not carry it restored an arrangement curve as
-            // free-running. See /spec/timebase.md.
+            // The timebase lives on the engine entry, not the source.
             engine.set_timebase(&uuid, recipe.timebase);
             log::info!("Created new modulation source {uuid} for preset");
             uuid
         };
         for assignment in &recipe.assignments {
-            // Effect params are stored fully qualified; owner params relative to
-            // `prefix` ("param/brightness" → "deck/{uuid}/param/brightness").
+            // Owner params are relative to `prefix`; effect params are fully qualified.
             let full_key = if assignment.param.starts_with("effect/") {
                 assignment.param.clone()
             } else {
@@ -495,10 +463,7 @@ mod tests {
     use crate::modulation::{ModulationEngine, ModulationSource};
     use crate::scene::{ModulationRecipe, ModulationRecipeAssignment};
 
-    /// A preset saved from a deck that is still on stage used to restore that
-    /// deck's UUID onto a second one, so every command, modulation key, and MIDI
-    /// path addressed at it hit whichever resolved first.
-    /// See /spec/clipboard.md § Bug this fixes.
+    /// Loading a preset whose deck is still on stage mints a new UUID.
     #[test]
     fn loading_one_preset_twice_makes_two_decks() {
         let Some(mut app) = crate::testing::headless_app() else {
@@ -542,11 +507,10 @@ mod tests {
     fn extract_captures_generator_and_effect_params() {
         let mut engine = ModulationEngine::new();
         let src_uuid = engine.add_source(ModulationSource::sine_lfo(2.0));
-        // Generator param
         engine.assign("deck/abc12345/param/brightness", &src_uuid, 0.5);
-        // Effect param, keyed by effect UUID alone
+        // Effect param, keyed by effect UUID alone.
         engine.assign("effect/effuuid1/param/amount", &src_uuid, 0.3);
-        // Unrelated key from another deck — should NOT be captured
+        // Another deck's key; not captured.
         engine.assign("deck/def67890/param/brightness", &src_uuid, 1.0);
 
         let effect_uuids = vec!["effuuid1".to_string()];
@@ -605,7 +569,7 @@ mod tests {
 
     #[test]
     fn roundtrip_extract_then_apply_preserves_effect_modulation() {
-        // Simulate save: create engine with assignments, extract recipes
+        // Save.
         let mut save_engine = ModulationEngine::new();
         let src_uuid = save_engine.add_source(ModulationSource::sine_lfo(3.0));
         save_engine.assign("deck/saveuuid/param/contrast", &src_uuid, 0.7);
@@ -615,7 +579,7 @@ mod tests {
         let recipes =
             extract_modulation_recipes(&save_engine, Some("deck/saveuuid/"), &effect_uuids);
 
-        // Simulate load: fresh engine, apply recipes into a different slot
+        // Load into a fresh engine.
         let mut load_engine = ModulationEngine::new();
         apply_modulation_recipes(&recipes, "deck/loaduuid/", &mut load_engine);
 

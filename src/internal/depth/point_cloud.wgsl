@@ -1,12 +1,9 @@
-// Point-cloud reprojection pass for depth sensors.
+// Point-cloud reprojection for depth sensors.
 //
-// One point per depth texel: the vertex shader reads depth[u,v] from an
-// R16Uint texture, deprojects (u,v,depth) into camera-space XYZ using the
-// device intrinsics, orbits/zooms a virtual camera around the cloud, projects
-// to clip space, and emits a small screen-space quad (point splat). The
-// fragment shader colours each point by RGB sample or a depth ramp.
-//
-// See spec/depth-sensors.md.
+// One point per depth texel: the vertex shader reads depth from an R16Uint
+// texture, deprojects it to camera-space XYZ with the device intrinsics, orbits
+// and zooms a virtual camera, and emits a screen-space splat quad. The fragment
+// shader colors each point by RGB sample, depth ramp, or solid color.
 
 struct Params {
     // fx, fy, cx, cy
@@ -19,7 +16,7 @@ struct Params {
     misc: vec4<f32>,
     // solid color rgb + unused
     solid: vec4<f32>,
-    // time (s), seed (jitter metres), drift, disruption
+    // time (s), seed (jitter meters), drift, disruption
     anim: vec4<f32>,
 };
 
@@ -33,8 +30,8 @@ struct VsOut {
     @location(1) valid: f32,
 };
 
-// Stable per-point hash → 3 pseudo-random values in [0,1). Uses the point
-// index so every corner of a splat gets the identical offset (no tearing).
+// Per-point hash to 3 values in [0,1). Keyed on the point index so every
+// corner of a splat gets the same offset.
 fn hash3(n: u32) -> vec3<f32> {
     var x = n * 747796405u + 2891336453u;
     x = ((x >> ((x >> 28u) + 4u)) ^ x) * 277803737u;
@@ -48,8 +45,7 @@ fn hash3(n: u32) -> vec3<f32> {
     );
 }
 
-// Cheap smooth vector field from position + time. Sums a few sines so points
-// sharing space are pushed coherently — reads as turbulence/mutual reaction.
+// Smooth vector field from position and time. Nearby points move together.
 fn curl_field(pos: vec3<f32>, t: f32) -> vec3<f32> {
     let fx = sin(pos.y * 3.1 + t * 1.3) + cos(pos.z * 2.7 - t * 0.9);
     let fy = sin(pos.z * 2.9 + t * 1.1) + cos(pos.x * 3.3 - t * 1.7);
@@ -58,7 +54,6 @@ fn curl_field(pos: vec3<f32>, t: f32) -> vec3<f32> {
 }
 
 fn hsv_ramp(t: f32) -> vec3<f32> {
-    // Simple blue→red depth ramp (near = warm, far = cool inverted here).
     let c = clamp(t, 0.0, 1.0);
     return vec3<f32>(c, 0.4 + 0.4 * sin(c * 3.14159), 1.0 - c);
 }
@@ -69,7 +64,7 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {
 
     let w = u32(params.dims_range.x);
     let h = u32(params.dims_range.y);
-    // 6 vertices per point (two triangles forming a splat quad).
+    // 6 vertices per point: two triangles forming a splat quad.
     let point_idx = vid / 6u;
     let corner = vid % 6u;
 
@@ -87,18 +82,18 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {
         return out;
     }
 
-    let z_m = f32(raw) * params.misc.y; // metres
+    let z_m = f32(raw) * params.misc.y; // meters
     let fx = params.intrinsics.x;
     let fy = params.intrinsics.y;
     let cx = params.intrinsics.z;
     let cy = params.intrinsics.w;
 
-    // Deproject to camera-space (metres). Y is flipped to point up.
+    // Deproject to camera space (meters). Y is flipped to point up.
     let x = (f32(px) - cx) * z_m / fx;
     let y = -(f32(py) - cy) * z_m / fy;
     let z = z_m;
 
-    // Centre the cloud roughly and orbit.
+    // Roughly center the cloud, then orbit.
     let yaw = params.view.x;
     let pitch = params.view.y;
     let zoom = params.view.z;
@@ -111,30 +106,23 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {
     let disruption = params.anim.w;
     if (seed > 0.0 || drift > 0.0 || disruption > 0.0) {
         let rnd = hash3(point_idx) * 2.0 - 1.0; // [-1,1)^3, stable per point
-        // Static jitter breaks the rigid grid.
         var disp = rnd * seed;
-        // Drift animates each point's own offset over time.
         let phase = t * (0.5 + drift) + f32(point_idx) * 0.0001;
         disp += vec3<f32>(sin(phase + rnd.x * 6.28), sin(phase * 1.1 + rnd.y * 6.28), sin(phase * 0.9 + rnd.z * 6.28)) * (drift * 0.15);
-        // Disruption pushes points along a shared field so they react coherently.
         disp += curl_field(p, t) * (disruption * 0.25);
         p += disp;
     }
 
     let cy_ = cos(yaw); let sy = sin(yaw);
     let cp = cos(pitch); let sp = sin(pitch);
-    // Yaw around Y.
     p = vec3<f32>(cy_ * p.x + sy * p.z, p.y, -sy * p.x + cy_ * p.z);
-    // Pitch around X.
     p = vec3<f32>(p.x, cp * p.y - sp * p.z, sp * p.y + cp * p.z);
 
-    // Simple perspective projection.
     let dist = 2.5 / zoom;
     let pz = p.z + dist;
     let aspect = params.misc.z / max(params.misc.w, 1.0);
     var clip = vec3<f32>(p.x / (pz * aspect), p.y / pz, pz * 0.1);
 
-    // Screen-space splat expansion.
     let size = params.view.w;
     var offset = vec2<f32>(0.0, 0.0);
     switch corner {

@@ -1,6 +1,4 @@
 //! Dome 3D mode: full-canvas interactive dome preview.
-//!
-//! See spec/dome-projection.md.
 
 use super::super::super::{DomeAction, UIActions, UIData};
 
@@ -16,7 +14,6 @@ const SLICE_COLORS: [egui::Color32; 8] = [
     egui::Color32::from_rgb(232, 67, 147), // Pink
 ];
 
-/// Render the 3D dome canvas (`Dome3D` mode).
 pub(super) fn render_dome_canvas(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     let available_width = ui.available_width();
     let available_height = ui.available_height().max(200.0);
@@ -39,7 +36,7 @@ pub(super) fn render_dome_canvas(ui: &mut egui::Ui, data: &UIData, actions: &mut
             ));
             let response = ui.add(img.sense(egui::Sense::click_and_drag()));
 
-            // Mouse interaction: orbit camera
+            // Drag orbits the camera.
             if response.dragged_by(egui::PointerButton::Primary) {
                 let delta = response.drag_delta();
                 actions.session.dome_actions.push(DomeAction::RotateCamera {
@@ -59,7 +56,6 @@ pub(super) fn render_dome_canvas(ui: &mut egui::Ui, data: &UIData, actions: &mut
                 }
             }
 
-            // Right-click to reset camera
             if response.clicked_by(egui::PointerButton::Secondary) {
                 actions.session.dome_actions.push(DomeAction::ResetCamera);
             }
@@ -71,7 +67,6 @@ pub(super) fn render_dome_canvas(ui: &mut egui::Ui, data: &UIData, actions: &mut
             for (i, proj) in setup.projectors.iter().enumerate() {
                 let color = SLICE_COLORS[i % SLICE_COLORS.len()];
                 let label = format!("P{}", i + 1);
-                // Position label at projector azimuth around the dome edge
                 let az = proj.azimuth_degrees.to_radians();
                 let label_r = dome_size * 0.42;
                 let cx = rect.center().x + label_r * az.sin();

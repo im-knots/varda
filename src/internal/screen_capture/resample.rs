@@ -1,12 +1,8 @@
-//! Crop/scale geometry and CPU resampling shared by the platform backends.
+//! Crop/scale geometry and CPU resampling for the platform backends.
 //!
-//! macOS is the exception: `SCStreamConfiguration` crops and scales inside
-//! `ScreenCaptureKit`, so a 4K display never crosses the process boundary at
-//! full size. Windows Graphics Capture, X11, and `PipeWire` all hand back a
-//! full-size surface, so the same crop-then-downscale has to happen here. One
-//! implementation, so a fix to the filter is a fix on every platform.
-//!
-//! See spec/screen-capture.md § Platform Support.
+//! macOS does not use this: `SCStreamConfiguration` crops and scales inside
+//! `ScreenCaptureKit`. Windows Graphics Capture, X11 and `PipeWire` return a
+//! full-size surface, so they crop and downscale here.
 
 use super::backend::CaptureConfig;
 
@@ -22,13 +18,12 @@ pub struct Geometry {
 }
 
 impl Geometry {
-    /// Resolve a config against the target's native size.
+    /// Resolves a config against the target's native size.
     ///
-    /// Crop selects a sub-rectangle of the captured surface, which genuinely
-    /// shrinks the readback because backends copy only that region. `scale_to`
-    /// then sets the delivered size, preserving the cropped aspect ratio so the
-    /// deck's own scaling mode still has something sane to letterbox. Upscaling
-    /// is refused: enlarging on the CPU costs bandwidth and adds no detail.
+    /// Crop selects a sub-rectangle; backends copy only that region. `scale_to`
+    /// sets the delivered size, keeping the cropped aspect ratio so the deck's
+    /// scaling mode can letterbox it. Never upscales: CPU enlarging costs
+    /// bandwidth and adds no detail.
     pub fn resolve(native_w: u32, native_h: u32, config: &CaptureConfig) -> Self {
         let (nw, nh) = (native_w.max(1), native_h.max(1));
         let crop = config.crop.clamped();
@@ -51,8 +46,8 @@ impl Geometry {
         }
     }
 
-    /// Whether the resolved output already matches the source rectangle, in
-    /// which case the caller can skip [`downscale`] entirely.
+    /// Whether the output size equals the source rectangle, so [`downscale`] can
+    /// be skipped.
     pub fn is_identity_scale(self) -> bool {
         self.out_w == self.src_w && self.out_h == self.src_h
     }
@@ -61,13 +56,11 @@ impl Geometry {
 /// Largest size with `w:h`'s aspect ratio that fits inside `max_w × max_h`,
 /// never enlarging.
 ///
-/// Also the right value to put in [`CaptureConfig::scale_to`] when opening a
-/// capture for a deck: pass the target's native size and the deck's size. The
-/// deck's size alone would be wrong, because backends treat `scale_to` as the
-/// delivered extent — a window shaped differently from the stage would arrive
-/// already fitted to the deck's aspect (letterboxed by `ScreenCaptureKit`, which
-/// bakes the bars into the pixels), leaving the deck's own scaling mode with
-/// identical source and target dimensions and therefore nothing to do.
+/// Use it for [`CaptureConfig::scale_to`] when opening a capture for a deck,
+/// passing the target's native size and the deck's size. Passing the deck's
+/// size alone would deliver frames already fitted to the deck's aspect
+/// (`ScreenCaptureKit` bakes the letterbox bars into the pixels), leaving the
+/// deck's scaling mode nothing to do.
 pub fn fit_within(w: u32, h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
     let (w, h) = (w.max(1), h.max(1));
     if max_w == 0 || max_h == 0 {
@@ -83,12 +76,10 @@ pub fn fit_within(w: u32, h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
     )
 }
 
-/// Box-filter downscale of a tightly-packed 4-bytes-per-pixel image.
+/// Box-filter downscale of a tightly packed 4-bytes-per-pixel image.
 ///
-/// Averaging rather than nearest-neighbour matters here: desktop content is
-/// full of one-pixel text stems, and point sampling a 4K display down to deck
-/// resolution makes them shimmer as the source scrolls. Channel order is
-/// irrelevant, so this serves both RGBA and BGRA callers.
+/// Averaging instead of nearest-neighbor keeps one-pixel text stems from
+/// shimmering when a 4K display is scaled down. Works for RGBA and BGRA.
 pub fn downscale(src: &[u8], src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> Vec<u8> {
     let (dst_w, dst_h) = (dst_w.max(1), dst_h.max(1));
     let mut out = vec![0u8; (dst_w as usize) * (dst_h as usize) * 4];
@@ -191,7 +182,7 @@ mod tests {
         let g = Geometry::resolve(1920, 1080, &cfg);
         assert_eq!((g.src_x, g.src_y), (480, 540));
         assert_eq!((g.src_w, g.src_h), (960, 540));
-        // This is the whole bandwidth argument: a crop must not read the full frame.
+        // A crop must not read the full frame.
         assert!(g.src_w * g.src_h < 1920 * 1080);
     }
 
@@ -218,10 +209,9 @@ mod tests {
 
     #[test]
     fn fit_within_keeps_a_windows_shape_instead_of_the_decks() {
-        // The bug this guards: opening a 1000×800 window for a 16:9 deck used to
-        // pass the deck size straight through as scale_to, so the capture came
-        // back already fitted to 16:9 and the deck's scaling mode had identical
-        // source and target dimensions — every mode collapsed to identity.
+        // A 1000×800 window for a 16:9 deck must keep its shape. Passing the deck
+        // size as scale_to would deliver it fitted to 16:9, and every scaling mode
+        // would become identity.
         let (w, h) = fit_within(1000, 800, 1920, 1080);
         let native_aspect = 1000.0 / 800.0;
         let capped_aspect = w as f32 / h as f32;
@@ -238,10 +228,9 @@ mod tests {
 
     #[test]
     fn fit_within_caps_a_larger_target_to_the_deck() {
-        // The bandwidth argument still has to hold: 4K must not arrive at 4K.
+        // 4K must not arrive at 4K.
         assert_eq!(fit_within(3840, 2160, 1920, 1080), (1920, 1080));
-        // An ultrawide is bounded by width and keeps its shape rather than
-        // being squashed into the deck's 16:9.
+        // An ultrawide is bounded by width and keeps its shape.
         assert_eq!(fit_within(3440, 1440, 1920, 1080), (1920, 804));
     }
 
@@ -289,8 +278,8 @@ mod tests {
 
     #[test]
     fn downscale_never_reads_past_a_short_source() {
-        // A truncated readback must not panic — the backend clamps and delivers
-        // what it has rather than taking the whole app down.
+        // A truncated readback must not panic; the backend clamps and delivers
+        // what it has.
         let src = vec![7u8; 4 * 4 * 4 / 2];
         let out = downscale(&src, 4, 4, 2, 2);
         assert_eq!(out.len(), 2 * 2 * 4);

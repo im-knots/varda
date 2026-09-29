@@ -1,4 +1,4 @@
-//! `ModulationEngine` — manages sources, assignments, and per-frame evaluation.
+//! `ModulationEngine`: sources, assignments, and per-frame evaluation.
 
 use super::{
     AnalyzerValues, AssignmentMode, AudioValues, ModulationSource, ModulationSourceEntry,
@@ -6,20 +6,19 @@ use super::{
 };
 
 /// The two ways a parameter's assignments contribute, resolved together.
-/// See /spec/automation.md § Absolute vs Additive.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ResolvedModulation {
     /// Summed additive contributions, already range-scaled.
     pub additive: f32,
-    /// Normalized replacement for the base value, if an absolute source is
-    /// assigned and actually has something to say.
+    /// Normalized replacement for the base value, when an absolute source with content is
+    /// assigned.
     pub absolute: Option<f32>,
 }
 use crate::timebase::{Timebase, TimebaseSet};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Modulation engine manages sources and assignments for a deck
+/// Modulation sources and assignments for a deck.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ModulationEngine {
     /// Available modulation sources (with stable UUIDs)
@@ -41,13 +40,12 @@ pub struct ModulationEngine {
     /// Whether `cached_order` needs recomputation.
     #[serde(skip)]
     order_dirty: bool,
-    /// Per-source flag: does this source have any mod-on-mod assignments targeting it?
+    /// Per-source flag: whether any mod-on-mod assignment targets this source.
     #[serde(skip)]
     has_mod_on_mod: Vec<bool>,
     /// Parameters a performer has taken back from the arrangement.
     ///
-    /// Session state, never persisted: a saved override is an invisible trap
-    /// that would silently break the show the next time the file is opened.
+    /// Session state, never persisted, so a reopened file always plays the arrangement.
     #[serde(skip)]
     overrides: HashMap<String, ParamOverride>,
 }
@@ -93,7 +91,7 @@ impl ModulationEngine {
         }
     }
 
-    /// Ensure `uuid_to_idx` is populated (needed after deserialization)
+    /// Populate `uuid_to_idx`, needed after deserialization.
     pub fn ensure_index(&mut self) {
         if self.uuid_to_idx.len() != self.sources.len() {
             self.rebuild_uuid_index();
@@ -119,9 +117,8 @@ impl ModulationEngine {
         self.invalidate_order();
         uuid
     }
-    /// Add an automation lane: an empty envelope on `timebase`, assigned
-    /// absolutely to `target`, so a curve drawn to a value produces that value
-    /// rather than depending on the saved fader position. Returns its UUID.
+    /// Add an automation lane: an empty envelope on `timebase`, assigned absolutely to `target` so
+    /// a curve's value does not depend on the saved fader position. Returns its UUID.
     pub fn add_automation_lane(&mut self, target: &str, timebase: Timebase) -> String {
         let uuid = self.add_source(ModulationSource::envelope(Vec::new()));
         self.set_timebase(&uuid, timebase);
@@ -179,9 +176,8 @@ impl ModulationEngine {
         }
     }
 
-    /// Re-apply an assignment read from a preset or clipboard, keeping a
-    /// component index saved before scene version 9 for
-    /// [`Self::rekey_legacy_components`].
+    /// Re-apply an assignment from a preset or clipboard. A component index saved before scene
+    /// version 9 is kept for [`Self::rekey_legacy_components`].
     pub fn assign_saved(
         &mut self,
         param_name: &str,
@@ -205,9 +201,8 @@ impl ModulationEngine {
         self.assign_with_mode(param_name, source_id, amount, AssignmentMode::default());
     }
 
-    /// Assign with an explicit mode. Envelopes want `Absolute`, so that a curve
-    /// drawn to a value produces that value rather than depending on wherever
-    /// the fader happened to be saved.
+    /// Assign with an explicit mode. Envelopes use `Absolute`, so a curve's value does not depend
+    /// on the saved fader position.
     pub fn assign_with_mode(
         &mut self,
         param_name: &str,
@@ -357,9 +352,8 @@ impl ModulationEngine {
             .map(|e| e.timebase)
     }
 
-    /// Replace an envelope's breakpoints, restoring the sorted-by-position
-    /// invariant so callers do not have to. Returns false if the UUID is
-    /// unknown or does not name an envelope.
+    /// Replace an envelope's breakpoints and sort them by position. Returns false if the UUID is
+    /// unknown or not an envelope.
     pub fn set_envelope_breakpoints(
         &mut self,
         uuid: &str,
@@ -382,11 +376,9 @@ impl ModulationEngine {
         true
     }
 
-    /// How many sources actually read a given timebase.
+    /// How many sources read a given timebase.
     ///
-    /// Signal-driven sources (audio bands, analyzers) carry a timebase field but
-    /// ignore it, so they are excluded: the count answers "would anything stop
-    /// moving if this clock went away", which is what the readouts report.
+    /// Audio bands and analyzers carry a timebase field but ignore it, so they are not counted.
     pub fn followers_of(&self, timebase: Timebase) -> usize {
         self.sources
             .iter()
@@ -403,14 +395,13 @@ impl ModulationEngine {
             .map(|idx| &mut self.sources[idx].source)
     }
 
-    /// Find source by UUID (returns exists check)
+    /// Whether a source with this UUID exists.
     pub fn has_source(&self, uuid: &str) -> bool {
         self.sources.iter().any(|e| e.uuid == uuid)
     }
 
     fn get_mod_source_offset(&self, source_uuid: &str, param_name: &str) -> f32 {
-        // Look up "mod/{uuid}/{param}" without allocating a String.
-        // We scan assignments for keys matching this pattern.
+        // Look up "mod/{uuid}/{param}" keys without allocating a String.
         let prefix = "mod/";
         for (key, mods) in &self.assignments {
             if key.starts_with(prefix)
@@ -476,10 +467,8 @@ impl ModulationEngine {
                 *smoothing =
                     (*smoothing + self.get_mod_source_offset(uuid, "smoothing")).clamp(0.0, 0.99);
             }
-            // Envelopes take no part in the mod-on-mod graph: an arrangement may
-            // hold hundreds of them, and keeping them out of the dependency scan
-            // is one of the three properties that make that affordable.
-            // See /spec/automation.md § Performance.
+            // Envelopes stay out of the mod-on-mod dependency scan, since an arrangement can hold
+            // hundreds of them.
             ModulationSource::Envelope { .. } => {}
         }
         modified
@@ -490,7 +479,6 @@ impl ModulationEngine {
         const MAX_MOD_DEPTH: usize = 4;
         let n = self.sources.len();
 
-        // Rebuild has_mod_on_mod flags
         self.has_mod_on_mod.clear();
         self.has_mod_on_mod.resize(n, false);
 
@@ -555,7 +543,7 @@ impl ModulationEngine {
 
     /// Parse mod-on-mod key: "mod/{uuid}/{param}" → Some(uuid)
     pub(crate) fn parse_mod_target(key: &str) -> Option<&str> {
-        // Avoid allocating a Vec for splitn — just find the delimiters.
+        // Find the delimiters instead of allocating a Vec for splitn.
         let key = key.as_bytes();
         if key.len() < 5 || &key[..4] != b"mod/" {
             return None;
@@ -584,8 +572,8 @@ impl ModulationEngine {
 
     /// Update all source values for the current frame.
     ///
-    /// Each source reads whichever timebase it is assigned, so one LFO can ride
-    /// the beat while another free-runs. See /spec/timebase.md.
+    /// Each source reads its own timebase, so one LFO can follow the beat while another
+    /// free-runs.
     pub fn update(
         &mut self,
         timebases: &TimebaseSet,
@@ -594,8 +582,8 @@ impl ModulationEngine {
     ) {
         self.ensure_index();
         self.prev_time = Some(timebases.free_run().time);
-        // Wall-clock, not the envelope's timebase: this is a smoothing ramp on
-        // the way a handover looks, not a musical duration.
+        // Wall-clock time, not the envelope's timebase: the re-arm ramp is visual smoothing, not a
+        // musical duration.
         self.advance_rearms(f64::from(timebases.free_run().dt));
 
         while self.prev_values.len() < self.sources.len() {
@@ -609,16 +597,14 @@ impl ModulationEngine {
             self.recompute_order();
         }
 
-        // Iterate over cached order (clone the slice to avoid borrow conflict)
+        // Iterate the cached order by index to avoid a borrow conflict.
         let order_len = self.cached_order.len();
         for oi in 0..order_len {
             let i = self.cached_order[oi];
 
-            // Free-run resolves to the same context either way, so testing the
-            // timebase first skips the variant match for every source that has
-            // not opted in — which, since `FreeRun` is the default, is nearly
-            // all of them. Sources that integrate or follow a signal read
-            // free-run time whatever they are set to.
+            // Checking the timebase first skips the variant match for `FreeRun` sources, which is
+            // nearly all of them. Sources that integrate or follow a signal always read free-run
+            // time.
             let tb = self.sources[i].timebase;
             let tc = if tb == Timebase::FreeRun || !self.sources[i].source.follows_timebase() {
                 *timebases.free_run()
@@ -672,18 +658,13 @@ impl ModulationEngine {
 
     /// Resolve every assignment on a parameter in one pass.
     ///
-    /// Returns both halves together because callers need both and a parameter's
-    /// assignment list is looked up by string key: splitting this into two
-    /// entry points would double the hash lookups on a per-parameter,
-    /// per-frame path. See /spec/automation.md § Absolute vs Additive.
+    /// Returns both halves together so the per-frame path does one hash lookup per parameter.
     pub fn resolve(&self, param_name: &str) -> ResolvedModulation {
         let mut out = ResolvedModulation::default();
         let Some(mods) = self.assignments.get(param_name) else {
             return out;
         };
-        // Only envelopes answer to an override: an LFO the performer never
-        // took is still theirs to run, and suspending the whole parameter
-        // would stop it too.
+        // Overrides suspend only envelopes; other modulators on the parameter keep running.
         let override_record = self.overrides.get(param_name).copied();
         for m in mods {
             // Waiting to be rewritten to its component path; see
@@ -714,13 +695,11 @@ impl ModulationEngine {
             }
 
             if m.mode == AssignmentMode::Absolute {
-                // An envelope with no breakpoints is inert: a lane exists before
-                // any point is drawn on it, and overriding the base with zero
-                // would black the parameter out in the meantime.
+                // An envelope with no breakpoints is inert; overriding the base with zero would
+                // black out the parameter before any point is drawn.
                 if source.provides_absolute_value() {
-                    // Last assignment wins. Stacking absolute sources is
-                    // meaningless rather than dangerous, so the engine takes one
-                    // rather than rejecting the configuration.
+                    // Last assignment wins. Stacking absolute sources has no meaning, so it is
+                    // allowed rather than rejected.
                     let automated = self.current_values[idx] * m.amount;
                     out.absolute = Some(match override_record {
                         // Ramp out of the value the performer left rather than
@@ -739,16 +718,11 @@ impl ModulationEngine {
     }
 
     // ── Live override ───────────────────────────────────────────
-    //
-    // See /spec/arrangement.md § Live override. The performer's hand wins,
-    // always, and only over the parameter they actually touched.
+    // The performer's change wins, only on the parameter they touched.
 
-    /// Suspend arrangement control of one parameter, holding the value the
-    /// performer left it at.
+    /// Suspend arrangement control of one parameter, holding the value the performer left it at.
     ///
-    /// Re-taking a parameter mid-ramp restarts from the new value rather than
-    /// continuing the ramp, since the performer has spoken more recently than
-    /// the re-arm did.
+    /// Overriding mid-ramp restarts from the new value.
     pub fn override_param(&mut self, param_key: &str, held: f32) {
         if let Some(existing) = self.overrides.get_mut(param_key) {
             existing.held = held;
@@ -759,12 +733,8 @@ impl ModulationEngine {
             .insert(param_key.to_string(), ParamOverride { held, rearm: None });
     }
 
-    /// Hand one parameter back to the arrangement, ramping over `duration`
-    /// seconds rather than snapping.
-    ///
-    /// A snap is the correct state and the wrong look; this runs in front of an
-    /// audience. A zero or negative duration is honoured as an immediate
-    /// handover, which is what a test or an API caller asking for one means.
+    /// Hand one parameter back to the arrangement, ramping over `duration` seconds. A zero or
+    /// negative duration hands over immediately.
     pub fn rearm_param(&mut self, param_key: &str, duration: f64) {
         let Some(record) = self.overrides.get_mut(param_key) else {
             return;
@@ -842,10 +812,8 @@ impl ModulationEngine {
             .is_some_and(|v| !v.is_empty())
     }
 
-    /// Whether anything at all is assigned.
-    ///
-    /// Lets a per-frame caller skip building a parameter key on a scene that has
-    /// no modulation in it, which is most of them.
+    /// Whether anything is assigned. Lets per-frame callers skip building parameter keys on scenes
+    /// with no modulation.
     pub fn has_modulation_for_any(&self) -> bool {
         !self.assignments.is_empty()
     }
@@ -857,9 +825,8 @@ impl ModulationEngine {
 
     /// Device selection of every `AudioBand` modulator (`None` = default input).
     ///
-    /// Drives the per-frame audio-capture reconcile so a device is captured only
-    /// while at least one modulator references it. See
-    /// [/spec/audio-capture-lifecycle.md](/spec/audio-capture-lifecycle.md).
+    /// Drives the per-frame capture reconcile, so a device is captured only while a modulator
+    /// references it.
     pub fn audio_band_source_ids(&self) -> Vec<Option<crate::audio::AudioSourceId>> {
         self.sources
             .iter()

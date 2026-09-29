@@ -1,6 +1,4 @@
-// Dome Slice Overlay Shader
-// Renders colored semi-transparent triangles on the hemisphere
-// to visualize projector coverage areas.
+// Dome slice overlay: semi-transparent colored triangles showing projector coverage.
 
 struct Uniforms {
     mvp: mat4x4<f32>,

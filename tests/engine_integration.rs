@@ -1,4 +1,5 @@
-//! Engine integration tests — multi-step command workflows through real headless `VardaApp`.
+//! Engine integration tests: multi-step command workflows through a headless
+//! `VardaApp`.
 
 use varda::app::VardaApp;
 use varda::engine::{
@@ -14,7 +15,7 @@ mod common;
 fn headless_app() -> Option<VardaApp> {
     let gpu = common::headless_gpu()?;
     let config = varda::testing::headless_config();
-    // Once a GPU exists, a construction failure is a bug, not a reason to skip.
+    // With a GPU present, a construction failure is a bug, not a skip.
     Some(VardaApp::new(gpu, &config).expect("VardaApp::new"))
 }
 
@@ -34,7 +35,7 @@ fn fire(app: &mut VardaApp, cmd: EngineCommand) {
     app.process_commands();
 }
 
-/// The UUID a creating command reports (see ui-engine-boundary.md WS1).
+/// The UUID a creating command reports.
 fn new_uuid(result: CommandResult) -> String {
     match result {
         CommandResult::OkWithId { uuid } => uuid,
@@ -104,8 +105,8 @@ fn add_deck_add_effect_verify_chain() {
             shader_name: "invert".to_string(),
         },
     );
-    // If the shader exists the effect is added; otherwise the command must fail
-    // gracefully rather than panic.
+    // With the shader, the effect is added; without it, the command fails
+    // without panicking.
     assert!(matches!(
         r,
         CommandResult::OkWithId { .. } | CommandResult::Err { .. }
@@ -142,7 +143,7 @@ fn add_lfo_assign_modulation_verify() {
     assert!(state.modulation.assignments.contains_key(&target));
 
     // The crossfader is routable but nothing reads modulation for it, so an
-    // assignment would never fire. It is refused rather than accepted silently.
+    // assignment is refused.
     let r = send_cmd(
         &mut app,
         EngineCommand::AssignModulation {
@@ -156,8 +157,8 @@ fn add_lfo_assign_modulation_verify() {
 
 // ── Transport ───────────────────────────────────────────────────
 
-/// Transport control travels the command path and lands in the snapshot both
-/// the UI and the REST API read. See /spec/transport.md.
+/// Transport control goes through the command path and lands in the snapshot
+/// the UI and REST API read.
 #[test]
 fn transport_control_roundtrip() {
     use varda::transport::{LoopRegion, TransportSource};
@@ -216,8 +217,7 @@ fn transport_control_roundtrip() {
     );
 }
 
-/// The API can send an inverted range; the engine has to reject it rather than
-/// store a loop that can never wrap.
+/// The engine rejects an inverted loop range.
 #[test]
 fn transport_rejects_an_inverted_loop_region() {
     use varda::transport::LoopRegion;
@@ -244,8 +244,8 @@ fn transport_rejects_an_inverted_loop_region() {
     assert_eq!(app.build_engine_state().transport.loop_region, None);
 }
 
-/// Position is the master's while chasing, so a locate has to be refused with a
-/// reason rather than silently ignored.
+/// While chasing, the master owns position, so a locate is refused with a
+/// reason.
 #[test]
 fn transport_refuses_to_scrub_while_chasing_timecode() {
     use varda::transport::TransportSource;
@@ -306,8 +306,7 @@ fn timecode_rate_changes_how_the_position_reads() {
     assert_eq!(app.build_engine_state().transport.timecode, "00:00:01:00");
 }
 
-/// A source's timebase is set by command and visible in the engine snapshot,
-/// which is the path both the UI and the REST API read. See /spec/timebase.md.
+/// A source's timebase is set by command and visible in the engine snapshot.
 #[test]
 fn set_modulation_timebase_roundtrip() {
     let Some(mut app) = headless_app() else {
@@ -354,7 +353,7 @@ fn set_modulation_timebase_roundtrip() {
 }
 
 /// "Add automation lane" creates the envelope, locks it to the transport, and
-/// assigns it, all in one gesture. See /spec/automation.md.
+/// assigns it in one command.
 #[test]
 fn add_automation_lane_creates_an_assigned_transport_locked_envelope() {
     let Some(mut app) = headless_app() else {
@@ -392,10 +391,9 @@ fn add_automation_lane_creates_an_assigned_transport_locked_envelope() {
 
 /// A pass played through the command bus.
 ///
-/// Each write lands wherever the rolling transport has got to, which is what a
-/// hand on a control does. Tests that need the pass to cover a named stretch of
-/// show drive the transport directly instead; see the unit tests beside the
-/// recorder.
+/// Each write lands wherever the rolling transport is. Tests that need a pass
+/// over a specific stretch drive the transport directly; see the recorder's
+/// unit tests.
 fn record_a_pass(app: &mut VardaApp, deck: &str, values: &[f32]) {
     fire(app, EngineCommand::SetRecordArmed { armed: true });
     for opacity in values {
@@ -437,9 +435,8 @@ fn recorded_curve(app: &mut VardaApp, param_key: &str) -> Vec<(f64, f32)> {
     }
 }
 
-/// The point of the feature, end to end: play the show and keep what you
-/// played. The lane is created on the spot, because a performer reaching for a
-/// fader has not first gone to the timeline to make one.
+/// Record a pass end to end. The lane is created on demand, without visiting
+/// the timeline first.
 #[test]
 fn a_recorded_pass_becomes_a_curve_on_a_parameter_that_had_none() {
     let Some(mut app) = headless_app() else {
@@ -471,9 +468,7 @@ fn a_recorded_pass_becomes_a_curve_on_a_parameter_that_had_none() {
         "and ends where the hand left it: {curve:?}"
     );
 
-    // The whole pass is one undo entry, not one per point: undo means "that
-    // take was no good", and a performer should not have to press it fifty
-    // times to be rid of one.
+    // The whole pass is one undo entry, not one per point.
     fire(&mut app, EngineCommand::Undo);
     assert!(
         !app.build_engine_state()
@@ -484,8 +479,8 @@ fn a_recorded_pass_becomes_a_curve_on_a_parameter_that_had_none() {
     );
 }
 
-/// A take that outlived the pass would leave the performer's hand holding the
-/// parameter against the curve they just recorded.
+/// The take ends with the pass, so the hand doesn't keep holding the parameter
+/// against the new curve.
 #[test]
 fn the_parameter_goes_back_to_its_curve_when_the_pass_ends() {
     let Some((mut app, deck)) = app_with_one_region(0.0, 30.0) else {
@@ -503,8 +498,8 @@ fn the_parameter_goes_back_to_its_curve_when_the_pass_ends() {
     );
 }
 
-/// Arming is not recording: a still playhead would put every point of a pass at
-/// one position, which is not a curve.
+/// Arming is not recording: with a still playhead every point would land at one
+/// position.
 #[test]
 fn nothing_is_recorded_while_the_transport_is_not_running() {
     let Some(mut app) = headless_app() else {
@@ -539,8 +534,7 @@ fn nothing_is_recorded_while_the_transport_is_not_running() {
     );
 }
 
-/// Arming and then reaching for play is two gestures for one intent, so the
-/// button does both.
+/// The arm button also starts playback.
 #[test]
 fn arming_from_a_stop_rolls_the_transport() {
     let Some(mut app) = headless_app() else {
@@ -555,15 +549,14 @@ fn arming_from_a_stop_rolls_the_transport() {
     assert!(transport.record_armed);
 }
 
-/// A channel fader is among the most-played controls in a show, so a curve on
-/// it has to reach the composite. The stored fader position is left alone, the
-/// way every modulated parameter but a deck's opacity works.
+/// A curve on a channel fader reaches the composite. The stored fader position
+/// is unchanged, as for every modulated parameter except deck opacity.
 #[test]
 fn a_curve_on_a_channel_fader_drives_the_composite() {
     use varda::modulation::Breakpoint;
 
-    // Through a scene with a region in it, because taking a parameter back is
-    // gated on the arrangement being engaged at all.
+    // Uses a scene with a region, since taking a parameter back requires the
+    // arrangement to be engaged.
     let Some((mut app, _deck)) = app_with_one_region(0.0, 30.0) else {
         return;
     };
@@ -596,7 +589,7 @@ fn a_curve_on_a_channel_fader_drives_the_composite() {
         "and should not have overwritten the position the performer left"
     );
 
-    // A hand on the fader wins, exactly as it does on a deck's.
+    // A hand on the fader wins, as on a deck.
     fire(
         &mut app,
         EngineCommand::SetChannelOpacity {
@@ -620,13 +613,12 @@ fn a_curve_on_a_channel_fader_drives_the_composite() {
     );
 }
 
-/// A hand on a video playback control has to take its lane back too, or the
-/// curve keeps driving the parameter the performer just grabbed. MIDI and OSC
-/// get this from the router; a bottom-bar gesture never touches the router, so
-/// the command has to report the write itself.
+/// A hand on a video playback control takes its lane back too. MIDI and OSC get
+/// this from the router; a bottom-bar gesture bypasses the router, so the
+/// command reports the write itself.
 ///
-/// Scaling mode is the one playback parameter that applies to any deck with a
-/// source texture, so an image deck proves this without a video file.
+/// Scaling mode applies to any deck with a source texture, so an image deck
+/// works without a video file.
 #[test]
 fn a_hand_on_a_playback_control_takes_its_lane_back() {
     use varda::modulation::Breakpoint;
@@ -717,8 +709,8 @@ fn a_playback_gesture_on_a_missing_deck_holds_nothing() {
     );
 }
 
-/// A key that can never resolve again would be persisted and reloaded as dead
-/// weight, so the fader's curves leave with the channel.
+/// A channel fader's curves are removed with the channel, since their key can
+/// never resolve again.
 #[test]
 fn deleting_a_channel_takes_its_fader_curve_with_it() {
     let Some(mut app) = headless_app() else {
@@ -757,8 +749,7 @@ fn deleting_a_channel_takes_its_fader_curve_with_it() {
     );
 }
 
-/// Breakpoints are stored sorted regardless of the order they arrive in, so an
-/// API caller does not have to maintain the invariant.
+/// Breakpoints are stored sorted whatever order they arrive in.
 #[test]
 fn envelope_breakpoints_are_sorted_on_write() {
     use varda::modulation::Breakpoint;
@@ -886,8 +877,8 @@ fn modulation_values_change_over_frames() {
         .get(uuid)
         .copied()
         .unwrap_or(0.0);
-    // At 10 Hz over 30 frames (~0.5 s at 60fps), the LFO advances through
-    // multiple cycles. The current value must stay a finite, unipolar value.
+    // At 10 Hz over 30 frames (~0.5 s at 60fps) the LFO runs several cycles.
+    // The value must stay finite and unipolar.
     assert!(
         v1.is_finite() && (0.0..=1.0).contains(&v1),
         "LFO value out of range: v0={v0}, v1={v1}"
@@ -933,21 +924,11 @@ fn macro_value_modulation_drives_targets_live() {
         },
     );
 
-    // LFO assigned to the macro's *value* key (the exact path the UI uses).
+    // LFO on the macro's value key (the path the UI uses).
     //
-    // 1 Hz, not the 10 Hz this used to run at. The loop below samples the result
-    // once per rendered frame, so the sampling rate *is* the frame rate, and
-    // Nyquist wants that above twice the LFO frequency. At 10 Hz this test
-    // needed a sustained 20 fps to see anything, which it gets when run alone
-    // and does not get when the suite runs in parallel: sampling a 10 Hz sine at
-    // roughly 10 fps returns the same phase every time, the swing reads as zero,
-    // and the test fails claiming modulation is not reaching the target when it
-    // is. It failed on every full run and passed in isolation, which is the
-    // signature.
-    //
-    // At 1 Hz the same loop only needs a couple of frames a second, so it
-    // measures the modulation path rather than the machine's load. Nothing about
-    // what is under test depends on the rate.
+    // 1 Hz because the loop samples once per rendered frame: under a loaded
+    // parallel suite frames can drop near 10 fps, which aliases a 10 Hz sine
+    // to a constant.
     send_cmd(
         &mut app,
         EngineCommand::AddLfo {
@@ -966,23 +947,12 @@ fn macro_value_modulation_drives_targets_live() {
     );
     assert!(matches!(r, CommandResult::Ok), "{r:?}");
 
-    // Render until the swing shows, rather than for a fixed frame count.
+    // Render until the swing shows, not for a fixed frame count.
     //
-    // The LFO runs on wall-clock time (`Mixer::start_time.elapsed()`) while this
-    // loop samples once per rendered frame, so a fixed count buys an amount of
-    // LFO phase that depends on how fast frames happen to run. This used to
-    // render exactly 60 frames, about 50ms of phase, and **failed every full
-    // parallel run while passing in isolation**.
-    //
-    // It was not a slow machine: the elapsed wall time was the same either way,
-    // 50ms against 52ms. Under contention from the rest of the suite the
-    // modulation simply advances far less per unit of wall time, and 60 frames
-    // stopped being enough. Serial runs of the whole file pass, which is the
-    // signature of interference rather than of timing.
-    //
-    // Waiting for the signal removes the guess. It stops as soon as the swing is
-    // unambiguous, so a healthy run is as quick as it ever was, and only a
-    // genuinely dead modulation path pays the timeout.
+    // The LFO runs on wall-clock time (`Mixer::start_time.elapsed()`), and under
+    // contention from a parallel suite a fixed frame count may cover too little
+    // phase. Stopping once the swing is clear keeps healthy runs fast; only a
+    // dead modulation path pays the timeout.
     let mut min = f32::MAX;
     let mut max = f32::MIN;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -1067,8 +1037,8 @@ fn deck_solo_mute_interactions() {
         },
     );
     assert!(deck_snapshot(&mut app, &first).mute);
-    // Note: effective_opacity reflects transition phase, not mute state.
-    // Mute is applied at render time by skipping the deck entirely.
+    // effective_opacity reflects transition phase, not mute state; mute skips
+    // the deck at render time.
     fire(
         &mut app,
         EngineCommand::SetDeckSolo {
@@ -1216,8 +1186,8 @@ fn undo_redo_crossfader_value() {
     let Some(mut app) = headless_app() else {
         return;
     };
-    // History push only happens in the UI runner, not via execute_command.
-    // Undo/Redo on an empty history should return Err, not crash.
+    // History is pushed only by the UI runner, not execute_command, so
+    // Undo/Redo on an empty history returns Err.
     let r = send_cmd(&mut app, EngineCommand::Undo);
     assert!(
         matches!(r, CommandResult::Err { .. }),
@@ -1248,7 +1218,7 @@ fn set_render_resolution_and_verify() {
     );
     assert_eq!(app.render_width(), 1280);
     assert_eq!(app.render_height(), 720);
-    // Render a frame to verify no crash at new resolution
+    // Render a frame at the new resolution
     app.update_frame_timing();
     app.render_mixer_frame();
 }
@@ -1260,8 +1230,8 @@ fn set_domemaster_resolution_rebuilds_the_renderer() {
     let Some(mut app) = headless_app() else {
         return;
     };
-    // Nothing built yet: the setting still takes, so a stage restored before any
-    // dome surface exists comes up at the right size.
+    // With nothing built yet the setting still applies, so a stage restored
+    // before any dome surface exists comes up at the right size.
     fire(
         &mut app,
         EngineCommand::SetDomemasterResolution {
@@ -1277,8 +1247,7 @@ fn set_domemaster_resolution_rebuilds_the_renderer() {
         "the renderer must be built at the configured size, not the default"
     );
 
-    // Changing it with a renderer live rebuilds in place rather than being
-    // silently ignored until the next restart.
+    // With a renderer live, a change rebuilds in place.
     fire(
         &mut app,
         EngineCommand::SetDomemasterResolution {
@@ -1422,9 +1391,9 @@ fn reorder_deck_via_command() {
     assert_eq!(decks[1].uuid, first);
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Chaos Tests Round 3: GPU Headless — adversarial engine commands
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Adversarial engine commands (headless GPU)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 // ── G: Adversarial scene values ──────────────────────────────────────
 
@@ -1534,7 +1503,7 @@ fn chaos_unknown_deck_uuid_errors_not_found() {
         },
     );
     assert!(is_not_found(&r), "{r:?}");
-    // Deck should still be present (none of the above should have touched it)
+    // The deck is still present
     let state = app.build_engine_state();
     assert_eq!(state.mixer.channels[0].decks.len(), 1);
     assert_eq!(state.mixer.channels[0].decks[0].uuid, deck);
@@ -1640,7 +1609,7 @@ fn chaos_zero_render_resolution() {
     let Some(mut app) = headless_app() else {
         return;
     };
-    // Zero dimensions — should be clamped or rejected, not crash
+    // Zero dimensions: clamped or rejected, not a crash
     fire(
         &mut app,
         EngineCommand::SetRenderResolution {
@@ -1745,7 +1714,7 @@ fn chaos_interleaved_add_remove_render() {
         return;
     };
     let ch = channel_uuid(&mut app, 0);
-    // Add deck, render, remove, render — 10 cycles
+    // Add deck, render, remove, render: 10 cycles
     for _ in 0..10 {
         let deck = new_uuid(send_cmd(
             &mut app,
@@ -1767,7 +1736,7 @@ fn chaos_remove_last_channels_rejected() {
     let Some(mut app) = headless_app() else {
         return;
     };
-    // Mixer enforces minimum 2 channels — add extras then remove down to 2
+    // Mixer keeps at least 2 channels; add extras then remove down to 2
     send_cmd(&mut app, EngineCommand::AddChannel);
     send_cmd(&mut app, EngineCommand::AddChannel);
     assert_eq!(app.build_engine_state().mixer.channels.len(), 4);
@@ -1795,7 +1764,7 @@ fn chaos_remove_last_channels_rejected() {
         .map(|c| c.uuid.clone())
         .collect();
     assert_eq!(remaining.len(), 2);
-    // Removing either of the last 2 should fail (minimum 2 enforced)
+    // Removing either of the last 2 fails
     for uuid in remaining {
         let r = send_cmd(
             &mut app,
@@ -1953,7 +1922,7 @@ fn chaos_render_many_frames_with_content() {
             source: varda::solid_color::SolidColor::config_for([0.0, 1.0, 0.0, 1.0]),
         },
     );
-    // Render 100 frames — looking for GPU resource leaks or accumulation bugs
+    // Render 100 frames, looking for GPU resource leaks or accumulation bugs
     for _ in 0..100 {
         app.update_frame_timing();
         app.render_mixer_frame();
@@ -2245,12 +2214,11 @@ fn chaos_state_consistency_after_storm() {
     assert!((state.mixer.crossfader - 0.75).abs() < 1e-4);
 }
 
-// ── Mesh-warp editing (8i.5) ─────────────────────────────────────────
+// ── Mesh-warp editing ───────────────────────────────────────────────
 
 /// Full pipeline: add a surface, create a headless output, assign the surface,
-/// then subdivide its warp into a mesh and drag an interior point — verifying
-/// each step through the engine snapshot. Mirrors how the UI and API both drive
-/// per-assignment mesh warp.
+/// then subdivide its warp into a mesh and drag an interior point, checking
+/// each step in the engine snapshot.
 #[test]
 fn mesh_warp_subdivide_and_drag_point() {
     use varda::renderer::context::OutputSource;
@@ -2311,8 +2279,8 @@ fn mesh_warp_subdivide_and_drag_point() {
             .clone()
     };
 
-    // Auto-warp: a fresh surface is shape-bound, so its *effective* warp is the
-    // conforming mesh (never `None`). Unbind to enable manual mesh editing.
+    // A new surface is shape-bound, so its effective warp is the conforming
+    // mesh (never `None`). Unbind to allow manual mesh editing.
     assert!(surface_warp(&mut app).is_some());
     let r = send_cmd(
         &mut app,
@@ -2340,7 +2308,7 @@ fn mesh_warp_subdivide_and_drag_point() {
     assert_eq!(mesh.rows, 3);
     assert_eq!(mesh.points.len(), 9);
 
-    // Drag the centre point (row 1, col 1 → index 4).
+    // Drag the center point (row 1, col 1 → index 4).
     fire(
         &mut app,
         EngineCommand::SetWarpMeshPoint {
@@ -2357,9 +2325,8 @@ fn mesh_warp_subdivide_and_drag_point() {
     assert!((mesh.points[4].position[1] - 0.4).abs() < 1e-6);
 }
 
-/// Bezier warp (8i.6): convert an unbound surface's warp into a bezier cage,
-/// edit an anchor and a tangent handle, and resize the cage — all through the
-/// engine command path.
+/// Bezier warp: convert an unbound surface's warp into a bezier cage, edit an
+/// anchor and a tangent handle, and resize the cage through engine commands.
 #[test]
 fn bezier_warp_convert_and_edit() {
     use varda::renderer::context::OutputSource;
@@ -2461,8 +2428,7 @@ fn bezier_warp_convert_and_edit() {
     assert_eq!((b.anchor_cols, b.anchor_rows), (3, 3));
 }
 
-/// Setting subdivisions on a non-existent surface surfaces `NotFound` rather than
-/// silently succeeding.
+/// Setting subdivisions on a missing surface returns `NotFound`.
 #[test]
 fn mesh_warp_subdivisions_bad_index_errs() {
     let Some(mut app) = headless_app() else {
@@ -2566,7 +2532,7 @@ fn punch_surface_hole_workflow() {
             source: OutputSource::Master,
         },
     );
-    // Source: small polygon centred inside the target.
+    // Source: small polygon centered inside the target.
     fire(
         &mut app,
         EngineCommand::AddPolygonSurface {
@@ -2637,19 +2603,15 @@ fn punch_surface_hole_workflow() {
     ));
 }
 
-// ── Engine trait contracts (traits.rs / api-addressing.md) ─────────
+// ── Engine trait contracts ──────────────────────────────────────────
 //
-// These assert promises the engine traits make at their boundary, distinct
-// from the UUID-race regressions in tests/uuid_addressing.rs. They exercise
-// contract *shape* — which failures are NotFound, which creations hand back a
-// resolvable id, and which removals are permissive no-ops — rather than the
-// reindex-safety those tests cover.
+// Contract shape at the engine trait boundary: which failures are NotFound,
+// which creations return a resolvable id, and which removals are permissive
+// no-ops. Reindex safety is covered in tests/uuid_addressing.rs.
 
-/// `MixerCommands::add_effect` resolves its *target* before doing anything.
-/// An unresolvable Deck/Channel target is a precondition failure: the wire
-/// result is `NotFound` and no effect is created anywhere. The existing
-/// `NotFound` sweep only covers `Toggle`/`RemoveEffect` (which resolve the effect
-/// uuid); `AddEffect` resolves the target chain, a separate code path.
+/// `MixerCommands::add_effect` resolves its target first. An unresolvable
+/// Deck/Channel target returns `NotFound` and creates no effect. This is a
+/// separate path from `Toggle`/`RemoveEffect`, which resolve the effect uuid.
 #[test]
 fn add_effect_on_unknown_target_is_not_found_and_creates_nothing() {
     let Some(mut app) = headless_app() else {
@@ -2708,11 +2670,8 @@ fn add_effect_on_unknown_target_is_not_found_and_creates_nothing() {
     );
 }
 
-/// The creation contract: `add_effect` returns `OkWithId`, and the reported
-/// uuid resolves to a real effect in the very next state snapshot — for every
-/// chain (deck, channel, master). This is the id-is-real half of the WS1 /
-/// api-addressing promise (`uuid_addressing.rs` asserts the *toggle* works but
-/// never that the reported id is findable in the snapshot).
+/// `add_effect` returns `OkWithId`, and the uuid resolves to a real effect in
+/// the next state snapshot, for every chain (deck, channel, master).
 #[test]
 fn add_effect_reports_a_uuid_that_resolves_in_the_next_snapshot() {
     let Some(mut app) = headless_app() else {
@@ -2782,17 +2741,14 @@ fn add_effect_reports_a_uuid_that_resolves_in_the_next_snapshot() {
     );
 }
 
-/// `ModulationCommands::remove_modulation_source` has no `Result` in its
-/// signature — its contract is permissive: removing an unknown uuid is a silent
-/// `Ok` no-op, not an error, and it must not disturb existing sources. This is
-/// the inverse of the fallible-command contract (`Result`-returning commands
-/// report `NotFound` and mutate nothing).
+/// `ModulationCommands::remove_modulation_source` returns no `Result`: removing
+/// an unknown uuid is an `Ok` no-op and leaves existing sources alone.
 #[test]
 fn remove_unknown_modulation_source_is_a_silent_noop() {
     let Some(mut app) = headless_app() else {
         return;
     };
-    // Create a real source so we can prove the no-op leaves it intact.
+    // A real source, to show the no-op leaves it intact.
     let before = send_cmd(
         &mut app,
         EngineCommand::AddLfo {
@@ -2827,10 +2783,9 @@ fn remove_unknown_modulation_source_is_a_silent_noop() {
 
 // ── Arrangement ──────────────────────────────────────────────────────
 //
-// See /spec/arrangement.md. These exercise the whole path: command in,
-// region compiled to an envelope, transport moved, deck opacity out.
+// The whole path: command in, region compiled to an envelope, transport moved,
+// deck opacity out.
 
-/// A deck with one hard-edged region on it.
 /// Run frames until every background deck load has attached or failed.
 fn settle_deck_loads(app: &mut VardaApp) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
@@ -2849,6 +2804,7 @@ fn settle_deck_loads(app: &mut VardaApp) {
     }
 }
 
+/// A deck with one hard-edged region on it.
 fn app_with_one_region(start: f64, end: f64) -> Option<(VardaApp, String)> {
     let mut app = headless_app()?;
     let ch = channel_uuid(&mut app, 0);
@@ -2876,7 +2832,7 @@ fn add_region(app: &mut VardaApp, deck: &str, start: f64, end: f64) {
             },
         },
     );
-    // The new region's index comes back so a caller can address it immediately.
+    // The new region's index is returned so a caller can address it at once.
     assert!(matches!(r, CommandResult::OkWithData { .. }), "{r:?}");
 }
 
@@ -2887,16 +2843,16 @@ fn step(app: &mut VardaApp) {
     app.render_mixer_frame();
 }
 
-/// Put the playhead somewhere and actually run, since locating alone
-/// deliberately does not engage the arrangement.
+/// Put the playhead somewhere and run, since locating alone doesn't engage the
+/// arrangement.
 fn run_from(app: &mut VardaApp, position: f64) {
     fire(app, EngineCommand::TransportLocate { position });
     fire(app, EngineCommand::TransportPlay);
     step(app);
 }
 
-/// Opening a scene that has an arrangement must not black the output. Until the
-/// transport has actually run, Performance mode still owns the decks.
+/// Opening a scene with an arrangement doesn't black the output: until the
+/// transport has run, Performance mode drives the decks.
 #[test]
 fn an_arrangement_stays_inert_until_the_transport_runs() {
     let Some((mut app, deck)) = app_with_one_region(10.0, 20.0) else {
@@ -2949,8 +2905,7 @@ fn running_into_a_region_hands_the_deck_to_the_arrangement() {
     );
 }
 
-/// A gap between two regions is authored silence, not idle: the arrangement did
-/// say something about that stretch, and what it said was "nothing".
+/// A gap between two regions is authored silence, not idle.
 #[test]
 fn a_gap_inside_the_arranged_range_hides_the_deck() {
     let Some((mut app, deck)) = app_with_one_region(10.0, 20.0) else {
@@ -2965,15 +2920,15 @@ fn a_gap_inside_the_arranged_range_hides_the_deck() {
     );
 }
 
-/// `HoldPerformance` is the default, and it means the arrangement declines to
-/// drive anything outside its range rather than driving it to zero.
+/// `HoldPerformance` is the default: outside its range the arrangement drives
+/// nothing, rather than driving to zero.
 #[test]
 fn hold_performance_leaves_the_deck_alone_before_the_show() {
     let Some((mut app, deck)) = app_with_one_region(100.0, 200.0) else {
         return;
     };
-    // Engage inside the range first, so the test is about idle behaviour rather
-    // than about the transport never having run.
+    // Engage inside the range first, so this tests idle behavior rather than a
+    // transport that never ran.
     run_from(&mut app, 150.0);
     assert!((deck_snapshot(&mut app, &deck).opacity - 1.0).abs() < 1e-4);
 
@@ -2986,8 +2941,8 @@ fn hold_performance_leaves_the_deck_alone_before_the_show() {
     );
 }
 
-/// "Run this loop until the schedule starts" needs the pre-show state to be
-/// something rather than nothing.
+/// Pre-show state can be something other than nothing, e.g. a loop until the
+/// schedule starts.
 #[test]
 fn show_deck_lights_a_deck_before_the_arranged_range() {
     let Some((mut app, deck)) = app_with_one_region(100.0, 200.0) else {
@@ -3016,8 +2971,8 @@ fn show_deck_lights_a_deck_before_the_arranged_range() {
     );
 }
 
-/// Touching an automated parameter must take effect immediately, not fight the
-/// envelope for the rest of the show.
+/// Touching an automated parameter takes effect immediately rather than
+/// fighting the envelope.
 #[test]
 fn a_live_touch_takes_a_parameter_back_from_the_arrangement() {
     let Some((mut app, deck)) = app_with_one_region(10.0, 20.0) else {
@@ -3060,7 +3015,7 @@ fn re_arming_returns_the_parameter_to_the_arrangement() {
             opacity: 0.25,
         },
     );
-    // Zero seconds is an immediate handover, which keeps the test off the clock.
+    // Zero seconds is an immediate handover, keeping the test off the clock.
     fire(
         &mut app,
         EngineCommand::RearmParam {
@@ -3083,8 +3038,8 @@ fn re_arming_returns_the_parameter_to_the_arrangement() {
     );
 }
 
-/// A lane is a deck's row, so removing it must give the deck back rather than
-/// leave it pinned at whatever the envelope last said.
+/// Removing a lane releases the deck instead of leaving it at the envelope's
+/// last value.
 #[test]
 fn removing_a_lane_returns_the_deck_to_performance() {
     let Some((mut app, deck)) = app_with_one_region(10.0, 20.0) else {
@@ -3132,8 +3087,7 @@ fn arrangement_commands_reject_decks_that_do_not_exist() {
     );
 }
 
-/// How many regions a lane holds, for tests that care that a refusal stored
-/// nothing rather than merely reporting failure.
+/// How many regions a lane holds, for checking a refusal stored nothing.
 fn region_count(app: &mut VardaApp, deck: &str) -> usize {
     app.build_engine_state()
         .arrangement
@@ -3147,8 +3101,7 @@ fn region_count(app: &mut VardaApp, deck: &str) -> usize {
         .unwrap_or_default()
 }
 
-/// A region that ends before it starts compiles to nothing sensible, so it is
-/// refused at the door rather than stored and skipped later.
+/// A region that ends before it starts is refused, not stored.
 #[test]
 fn an_inverted_region_is_refused_rather_than_stored() {
     let Some((mut app, deck)) = app_with_one_region(10.0, 20.0) else {
@@ -3203,8 +3156,7 @@ fn an_inverted_region_is_refused_rather_than_stored() {
     );
 }
 
-/// An index that arrived from a stale client is a miss, not a panic and not a
-/// silent write to a neighbouring region.
+/// A stale region index is a miss: no panic, no write to a neighboring region.
 #[test]
 fn editing_a_region_that_is_not_there_is_an_error() {
     let Some((mut app, deck)) = app_with_one_region(10.0, 20.0) else {
@@ -3249,8 +3201,8 @@ fn editing_a_region_that_is_not_there_is_an_error() {
     assert_eq!(region_count(&mut app, &deck), 1, "nothing was removed");
 }
 
-/// The idle deck is shown before the show reaches its first region, so naming
-/// one that is gone would black the output at exactly the wrong moment.
+/// The idle deck shows before the first region, so naming a removed deck would
+/// black the output.
 #[test]
 fn showing_a_deck_that_does_not_exist_before_the_show_is_refused() {
     let Some(mut app) = headless_app() else {
@@ -3270,9 +3222,8 @@ fn showing_a_deck_that_does_not_exist_before_the_show_is_refused() {
     );
 }
 
-/// A lane owns its curves, so removing the row has to take them out of the
-/// modulation graph. An orphan envelope would keep driving a deck that no
-/// longer has a row to edit it from.
+/// Removing a lane removes its curves from the modulation graph; an orphan
+/// envelope would keep driving a deck with no row to edit it.
 #[test]
 fn removing_a_lane_takes_its_curves_with_it() {
     let Some((mut app, deck)) = app_with_one_region(10.0, 20.0) else {
@@ -3308,10 +3259,9 @@ fn source_count(app: &mut VardaApp) -> usize {
     app.build_engine_state().modulation.sources.len()
 }
 
-/// A lane is where a deck sits in show time rather than an object beside it, so
-/// deleting the deck takes the lane and its curves too. An orphan lane draws no
-/// row, because rows are read from the mixer, but it still saves and its
-/// envelopes still drive a parameter key nothing answers to.
+/// Deleting a deck removes its lane and curves. An orphan lane draws no row
+/// (rows come from the mixer) but still saves, and its envelopes drive a key
+/// nothing answers to.
 #[test]
 fn deleting_a_deck_takes_its_lane_with_it() {
     let Some((mut app, deck)) = app_with_one_region(10.0, 20.0) else {
@@ -3335,14 +3285,13 @@ fn deleting_a_deck_takes_its_lane_with_it() {
     );
 }
 
-/// Deleting a channel is deleting every deck in it, which means the same
-/// teardown each of those decks would get on its own.
+/// Deleting a channel tears down each of its decks the same way.
 #[test]
 fn deleting_a_channel_takes_its_decks_lanes_with_it() {
     let Some((mut app, deck)) = app_with_one_region(10.0, 20.0) else {
         return;
     };
-    // A third channel, because the mixer keeps two.
+    // A third channel, because the mixer keeps at least two.
     fire(&mut app, EngineCommand::AddChannel);
     let spare = channel_uuid(&mut app, 2);
     let stranger = new_uuid(send_cmd(
@@ -3371,8 +3320,8 @@ fn deleting_a_channel_takes_its_decks_lanes_with_it() {
     assert_eq!(source_count(&mut app), 1);
 }
 
-/// The mixer keeps two channels, and a refusal has to leave the one it refused
-/// exactly as it was rather than emptied of its decks on the way to finding out.
+/// The mixer keeps two channels, and a refused removal leaves the channel and
+/// its decks intact.
 #[test]
 fn a_refused_channel_removal_keeps_the_channels_decks() {
     let Some((mut app, deck)) = app_with_one_region(10.0, 20.0) else {
@@ -3402,8 +3351,7 @@ fn a_refused_channel_removal_keeps_the_channels_decks() {
     assert_eq!(source_count(&mut app), before);
 }
 
-/// The panic button: one press hands every held parameter back, not just the
-/// one that happens to be selected.
+/// The panic button releases every held parameter, not only the selected one.
 #[test]
 fn re_arming_everything_hands_back_every_parameter() {
     let Some((mut app, deck)) = app_with_one_region(10.0, 20.0) else {
@@ -3457,10 +3405,8 @@ fn re_arming_everything_hands_back_every_parameter() {
     }
 }
 
-/// A parameter handed back over a ramp must not snap: the ramp is what keeps a
-/// re-arm from reading as a cut on the output. The badge, though, clears on the
-/// press rather than at the end of the ramp, because the answer to "is a hand on
-/// this?" became no the moment it was let go.
+/// A parameter released over a ramp doesn't snap, so a re-arm isn't a cut. The
+/// held badge clears on the press, not at the end of the ramp.
 #[test]
 fn a_re_armed_parameter_ramps_rather_than_snapping() {
     let Some((mut app, deck)) = app_with_one_region(10.0, 20.0) else {
@@ -3500,10 +3446,9 @@ fn a_re_armed_parameter_ramps_rather_than_snapping() {
     );
 }
 
-/// Every surface write is a performer's hand, including the ones that arrive as
-/// router paths from OSC, MIDI, and the API rather than as engine commands. The
-/// write itself lands through the router; this is the half that stops the show
-/// from writing over it a frame later.
+/// Surface writes arriving as router paths (OSC, MIDI, API) also take the
+/// parameter from the envelope, so the show doesn't overwrite them a frame
+/// later.
 #[test]
 fn a_route_write_takes_the_parameter_back_from_the_show() {
     let Some((mut app, deck)) = app_with_one_region(10.0, 20.0) else {
@@ -3523,8 +3468,8 @@ fn a_route_write_takes_the_parameter_back_from_the_show() {
         "a route write holds the parameter exactly as a UI drag does"
     );
 
-    // Past the region, where the envelope would darken the deck if it still had
-    // the parameter.
+    // Past the region, where the envelope would darken the deck if it still
+    // held the parameter.
     run_from(&mut app, 25.0);
     assert!(
         (deck_snapshot(&mut app, &deck).opacity - 1.0).abs() < 1e-4,
@@ -3532,8 +3477,8 @@ fn a_route_write_takes_the_parameter_back_from_the_show() {
     );
 }
 
-/// A path that names nothing the modulation engine knows is dropped rather than
-/// holding a parameter that does not exist.
+/// A path unknown to the modulation engine is dropped rather than holding a
+/// nonexistent parameter.
 #[test]
 fn a_route_write_to_an_unknown_path_holds_nothing() {
     let Some((mut app, _deck)) = app_with_one_region(10.0, 20.0) else {
@@ -3555,8 +3500,6 @@ fn a_route_write_to_an_unknown_path_holds_nothing() {
 }
 
 // ── Cue points ───────────────────────────────────────────────────────
-//
-// See /spec/arrangement.md § Cue points.
 
 fn cues(app: &mut VardaApp) -> Vec<(String, f64)> {
     app.build_engine_state()
@@ -3588,8 +3531,8 @@ fn position(app: &mut VardaApp) -> f64 {
     app.build_engine_state().transport.position
 }
 
-/// Cues are named by how many exist and held in position order, so the arrows
-/// can scan the list rather than sort it on every press.
+/// Cues are named by count and kept in position order, so the arrows scan
+/// rather than sort.
 #[test]
 fn cues_are_named_as_they_are_dropped_and_kept_in_order() {
     let Some(mut app) = headless_app() else {
@@ -3604,8 +3547,7 @@ fn cues_are_named_as_they_are_dropped_and_kept_in_order() {
     );
 }
 
-/// A drag moves a cue past its neighbours, and navigation reads the list in
-/// order, so the move has to re-sort.
+/// Dragging a cue past its neighbors re-sorts the list.
 #[test]
 fn moving_a_cue_past_its_neighbour_reorders_the_list() {
     let Some(mut app) = headless_app() else {
@@ -3643,10 +3585,9 @@ fn moving_a_cue_past_its_neighbour_reorders_the_list() {
     );
 }
 
-/// Back with no earlier cue goes to zero, which is the way home now that the
-/// return-to-zero arrow walks cues. Forward past the last stays put rather than
-/// running off the end, and a cue level with the playhead is skipped in both
-/// directions so that holding an arrow walks the list.
+/// Back with no earlier cue goes to zero. Forward past the last stays put. A
+/// cue level with the playhead is skipped both ways, so holding an arrow walks
+/// the list.
 #[test]
 fn the_arrows_walk_the_cue_list_and_stop_at_its_ends() {
     let Some(mut app) = headless_app() else {
@@ -3674,8 +3615,7 @@ fn the_arrows_walk_the_cue_list_and_stop_at_its_ends() {
     );
 }
 
-/// A cue button is a way to *go somewhere*, so it locates and leaves the
-/// transport as it was rather than starting the show as a side effect.
+/// A cue button locates without starting the transport.
 #[test]
 fn firing_a_cue_locates_without_starting_the_show() {
     let Some(mut app) = headless_app() else {
@@ -3694,8 +3634,7 @@ fn firing_a_cue_locates_without_starting_the_show() {
     );
 }
 
-/// The button and the arrows are one way of moving, so a press of back after a
-/// press of a button steps from the cue that was pressed.
+/// Back after a cue button press steps from the pressed cue.
 #[test]
 fn firing_a_cue_is_where_the_arrows_carry_on_from() {
     let Some(mut app) = headless_app() else {
@@ -3728,8 +3667,8 @@ fn firing_a_cue_that_is_gone_is_an_error() {
     );
 }
 
-/// The position belongs to the incoming signal while chasing, so a cue button
-/// is refused there like every other way of moving the playhead.
+/// While chasing, the incoming signal owns position, so a cue button is
+/// refused.
 #[test]
 fn firing_a_cue_is_refused_while_chasing_timecode() {
     let Some(mut app) = headless_app() else {
@@ -3747,9 +3686,9 @@ fn firing_a_cue_is_refused_while_chasing_timecode() {
     assert!(position(&mut app).abs() < 1e-9, "the playhead stayed put");
 }
 
-/// The arrows walk the list while the show is running, not just while it is
-/// parked. Reading the live position each press would send every press back to
-/// the same cue, because playback carries the playhead past it between them.
+/// The arrows walk the list during playback too. Reading the live position on
+/// each press would return to the same cue, since playback moves past it
+/// between presses.
 #[test]
 fn the_back_arrow_keeps_walking_while_the_show_runs() {
     let Some(mut app) = headless_app() else {
@@ -3775,8 +3714,8 @@ fn the_back_arrow_keeps_walking_while_the_show_runs() {
     }
 }
 
-/// Scrubbing is not walking: the arrows step from the playhead again once a
-/// hand has moved it, rather than from wherever the last press left off.
+/// After scrubbing, the arrows step from the playhead again, not from the last
+/// press.
 #[test]
 fn scrubbing_ends_the_cue_walk() {
     let Some(mut app) = headless_app() else {
@@ -3798,9 +3737,8 @@ fn scrubbing_ends_the_cue_walk() {
     );
 }
 
-/// A second stop returns to zero, which is a move the walk did not make. The
-/// next press has to read the playhead again, or back from the top would jump
-/// forward to wherever the walk had reached.
+/// A second stop returns to zero, so the next press reads the playhead again
+/// rather than jumping forward to where the walk had reached.
 #[test]
 fn stopping_back_to_zero_ends_the_cue_walk() {
     let Some(mut app) = headless_app() else {
@@ -3824,8 +3762,7 @@ fn stopping_back_to_zero_ends_the_cue_walk() {
     );
 }
 
-/// Handing the position to a timecode master ends the walk too: whatever the
-/// master does with the playhead, it is not where the last press left it.
+/// Handing position to a timecode master ends the walk too.
 #[test]
 fn chasing_timecode_ends_the_cue_walk() {
     let Some(mut app) = headless_app() else {
@@ -3850,8 +3787,8 @@ fn chasing_timecode_ends_the_cue_walk() {
     );
 }
 
-/// Position is read-only while chasing, so the arrows are rejected like any
-/// other locate rather than fighting the master.
+/// While chasing, position is read-only, so the arrows are rejected like any
+/// other locate.
 #[test]
 fn the_arrows_are_refused_while_chasing_timecode() {
     let Some(mut app) = headless_app() else {
@@ -3873,8 +3810,8 @@ fn the_arrows_are_refused_while_chasing_timecode() {
     assert!(position(&mut app).abs() < 1e-9);
 }
 
-/// One button covers stop and return, because the arrangement's return-to-zero
-/// arrow is now the cue back arrow. See /spec/transport.md § Stop Twice.
+/// One button stops and returns: the first press stops, the second returns to
+/// zero.
 #[test]
 fn stopping_a_second_time_returns_the_show_to_zero() {
     let Some(mut app) = headless_app() else {
@@ -3910,8 +3847,8 @@ fn editing_a_cue_that_is_gone_is_an_error() {
     );
 }
 
-/// A cue before zero, or at a position arithmetic produced rather than a
-/// performer, would sort into a list the arrows then walk into nowhere.
+/// A cue before zero, or at a computed rather than performed position, is
+/// refused.
 #[test]
 fn a_cue_at_an_impossible_position_is_refused() {
     let Some(mut app) = headless_app() else {
@@ -3954,24 +3891,22 @@ fn a_cue_at_an_impossible_position_is_refused() {
 
 // ── Deck residency ───────────────────────────────────────────────────
 //
-// See /spec/deck-residency.md. A deck whose next region is far away stops
-// pulling frames; anything the arrangement cannot predict keeps running.
+// A deck whose next region is far away stops pulling frames; anything the
+// arrangement can't predict keeps running.
 
 fn asleep(app: &mut VardaApp, deck: &str) -> bool {
     deck_snapshot(app, deck).source_asleep
 }
 
-/// A long show with two short appearances, which is the shape residency exists
-/// for. Everything between them is inside the arranged range and dark, so the
-/// arrangement has actually said this deck is unwanted rather than said nothing.
+/// A long show with two short appearances. Everything between them is inside
+/// the arranged range and dark, so the arrangement has marked the deck unused.
 fn app_with_sparse_regions() -> Option<(VardaApp, String)> {
     let (mut app, deck) = app_with_one_region(10.0, 20.0)?;
     add_region(&mut app, &deck, 290.0, 300.0);
     Some((app, deck))
 }
 
-/// The whole point: sixty decode threads should not run for a show that will
-/// not show their decks for another forty minutes.
+/// A deck not shown for a long stretch stops decoding.
 #[test]
 fn a_deck_far_from_its_region_stops_pulling_frames() {
     let Some((mut app, deck)) = app_with_sparse_regions() else {
@@ -3985,9 +3920,8 @@ fn a_deck_far_from_its_region_stops_pulling_frames() {
     );
 }
 
-/// Cueing a channel is how an operator looks at what is coming next, so a deck
-/// being watched off-air keeps decoding however dark the arrangement has it.
-/// The same exemption the opacity cull already makes.
+/// A cued channel's decks keep decoding however dark the arrangement has them,
+/// matching the opacity cull's exemption.
 #[test]
 fn a_deck_in_a_previewed_channel_keeps_pulling_frames() {
     let Some((mut app, deck)) = app_with_sparse_regions() else {
@@ -4028,8 +3962,8 @@ fn a_deck_in_a_previewed_channel_keeps_pulling_frames() {
     );
 }
 
-/// Frames must be flowing before the audience sees any, so the wake happens
-/// ahead of the region rather than on its edge.
+/// Decode wakes ahead of the region, not at its edge, so frames are flowing
+/// when it starts.
 #[test]
 fn a_deck_wakes_before_its_region_arrives() {
     let Some((mut app, deck)) = app_with_sparse_regions() else {
@@ -4056,8 +3990,7 @@ fn a_deck_inside_its_region_never_sleeps() {
     assert!(!asleep(&mut app, &deck));
 }
 
-/// A jump into the middle of a region has to resume decode on the frame it
-/// lands, not on the next one.
+/// A jump into the middle of a region resumes decode on the frame it lands.
 #[test]
 fn locating_into_a_region_wakes_the_deck_in_the_same_frame() {
     let Some((mut app, deck)) = app_with_sparse_regions() else {
@@ -4075,8 +4008,8 @@ fn locating_into_a_region_wakes_the_deck_in_the_same_frame() {
     );
 }
 
-/// Outside the arranged range `HoldPerformance` declines to speak, and silence
-/// is not permission to stop a deck the performer may still have up.
+/// Outside the arranged range `HoldPerformance` drives nothing, which doesn't
+/// allow stopping a deck the performer may have up.
 #[test]
 fn a_deck_outside_the_arranged_range_is_left_alone() {
     let Some((mut app, deck)) = app_with_sparse_regions() else {
@@ -4087,8 +4020,8 @@ fn a_deck_outside_the_arranged_range_is_left_alone() {
     assert!(!asleep(&mut app, &deck));
 }
 
-/// Performance mode has never gated anything, and a scene that has not been
-/// started is Performance mode.
+/// Performance mode gates nothing, and a scene not yet started is in
+/// Performance mode.
 #[test]
 fn a_parked_transport_leaves_every_deck_awake() {
     let Some((mut app, deck)) = app_with_sparse_regions() else {
@@ -4102,8 +4035,7 @@ fn a_parked_transport_leaves_every_deck_awake() {
     );
 }
 
-/// An LFO can raise a deck at any moment, so nothing about the timeline says
-/// when its frames are safe to stop.
+/// An LFO can raise a deck at any moment, so its deck keeps decoding.
 #[test]
 fn a_live_modulator_on_opacity_keeps_the_deck_awake() {
     let Some((mut app, deck)) = app_with_sparse_regions() else {
@@ -4141,7 +4073,7 @@ fn a_live_modulator_on_opacity_keeps_the_deck_awake() {
     );
 }
 
-/// A hand on the fader is the least predictable driver there is.
+/// A hand on the fader keeps the deck decoding.
 #[test]
 fn an_overridden_deck_keeps_decoding() {
     let Some((mut app, deck)) = app_with_sparse_regions() else {
@@ -4165,8 +4097,8 @@ fn an_overridden_deck_keeps_decoding() {
     );
 }
 
-/// Sleep is derived state, recomputed every frame, so removing the lane that
-/// justified it has to hand the deck back.
+/// Sleep is recomputed every frame, so removing the lane that caused it wakes
+/// the deck.
 #[test]
 fn removing_a_lane_wakes_its_deck() {
     let Some((mut app, deck)) = app_with_sparse_regions() else {
@@ -4186,8 +4118,8 @@ fn removing_a_lane_wakes_its_deck() {
     assert!(!asleep(&mut app, &deck));
 }
 
-/// An arrangement that declines to speak outside its range has not said the
-/// deck is unwanted, and the idle deck is the one thing on screen.
+/// Outside its range the arrangement hasn't marked the deck unused, and the
+/// idle deck is what's on screen.
 #[test]
 fn the_idle_deck_is_never_put_to_sleep() {
     let Some((mut app, deck)) = app_with_sparse_regions() else {
@@ -4209,8 +4141,8 @@ fn the_idle_deck_is_never_put_to_sleep() {
     );
 }
 
-/// An arrangement with authority and a free-running sequence would fight over
-/// the crossfader, so the sequence is refused rather than allowed to lose.
+/// An arrangement with authority and a free-running sequence would both drive
+/// the crossfader, so the sequence is refused.
 #[test]
 fn a_sequence_cannot_start_while_the_arrangement_has_authority() {
     let Some((mut app, _deck)) = app_with_one_region(10.0, 20.0) else {
@@ -4293,7 +4225,7 @@ fn output_tonemap_override_is_settable_and_clearable_through_the_engine() {
     );
     let output_uuid = last_output_uuid(&mut app);
 
-    // Inherit is the default: nothing has deliberately differed yet.
+    // Inherit is the default.
     let state = app.build_engine_state();
     let output = state
         .outputs
@@ -4322,7 +4254,7 @@ fn output_tonemap_override_is_settable_and_clearable_through_the_engine() {
         .unwrap();
     assert_eq!(output.tonemap_override, Some(TonemapMode::AgX));
 
-    // Clearing must return to inherit, not to some concrete curve.
+    // Clearing returns to inherit, not a concrete curve.
     assert!(matches!(
         send_cmd(
             &mut app,
@@ -4366,7 +4298,7 @@ fn output_tonemap_override_does_not_disturb_the_show_wide_curve() {
         },
     );
 
-    // Overriding one output is not a way to change the show's look.
+    // Overriding one output doesn't change the show's look.
     assert_eq!(
         app.build_engine_state().mixer.tonemap_mode,
         TonemapMode::Aces
@@ -4659,17 +4591,11 @@ fn chaos_create_close_presentation_cycle() {
     assert!(app.build_engine_state().outputs.windows.is_empty());
 }
 
-/// Reported from the field: a stream output offered only 8-bit even for protocols
-/// that carry HDR. Drives the real command path end to end, because the pure
-/// resolver already agreed and the question was whether the engine kept the
-/// availability current when the codec changed.
+/// Changing a stream output's codec updates which presentation modes are
+/// available, through the real command path.
 ///
-/// Asserted through the blocking *reason* rather than the resulting set: whether
-/// HEVC can actually carry ten bits depends on the installed FFmpeg, not on this
-/// code, and an earlier version of this test turned that environment difference
-/// into a failure.
-///
-/// See /spec/presentation-mode-offering.md.
+/// Checks the blocking reason rather than the resulting set, because whether
+/// HEVC carries ten bits depends on the installed FFmpeg.
 #[test]
 fn a_stream_outputs_availability_tracks_its_codec_through_the_engine() {
     use varda::engine::value::render::{PresentationMode, StreamingCodec};
@@ -4729,9 +4655,9 @@ fn a_stream_outputs_availability_tracks_its_codec_through_the_engine() {
         CommandResult::Ok
     ));
 
-    // The codec is no longer the obstacle. Either HDR10 opened up, or the obstacle
-    // moved to the installed encoder. The H.264 reason surviving a codec change is
-    // the staleness this test exists to catch.
+    // The codec is no longer the obstacle: either HDR10 is available or the
+    // installed encoder blocks it. A surviving H.264 reason means the
+    // availability went stale.
     if let Some(reason) = blocked(&mut app, PresentationMode::Hdr10) {
         assert!(
             !reason.contains("H.264"),

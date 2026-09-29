@@ -6,45 +6,38 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use walkdir::WalkDir;
 
-/// Event types for shader changes
+/// A shader library change.
 #[derive(Debug, Clone)]
 pub enum ShaderEvent {
-    /// A shader was added or modified
     Changed(PathBuf),
-    /// A shader was removed
     Removed(PathBuf),
-    /// A shader failed to load/reload
+    /// A shader failed to load or reload.
     Error(PathBuf, String),
 }
 
-/// Registry of discovered ISF shaders with hot-reload support
+/// Discovered ISF shaders, with hot reload.
 pub struct ShaderRegistry {
-    /// Map of shader name to shader data
     shaders: HashMap<String, ISFShader>,
 
-    /// Map of file path to shader name (for hot-reload lookup)
+    /// File path to shader name, for hot reload.
     path_to_name: HashMap<PathBuf, String>,
 
-    /// Map of shader name to every file that provides it. Lets hot-reload and
-    /// removal re-resolve the correct winner instead of clobbering the active
-    /// shader, keeping library precedence stable across a running session, not
-    /// just at the initial scan.
+    /// Shader name to every file that provides it, so hot reload and removal
+    /// keep library precedence.
     name_to_paths: HashMap<String, Vec<PathBuf>>,
 
-    /// Library paths being watched. Order is priority: later paths win name
-    /// collisions (built-in, then workdir, then any extra override dirs).
+    /// Watched library paths. Later paths win name collisions (built-in,
+    /// then workdir, then override dirs).
     library_paths: Vec<PathBuf>,
 
-    /// File watcher (kept alive to maintain watch)
+    /// Held only to keep the watch alive.
     #[allow(dead_code)]
     watcher: Option<notify::RecommendedWatcher>,
 
-    /// Channel for receiving file change events
     change_receiver: Option<Receiver<notify::Result<Event>>>,
 }
 
 impl ShaderRegistry {
-    /// Create a new shader registry
     pub fn new() -> Self {
         Self {
             shaders: HashMap::new(),
@@ -56,14 +49,8 @@ impl ShaderRegistry {
         }
     }
 
-    /// Register a directory to scan for shaders.
-    ///
-    /// The path must already exist. A missing directory is an error, not
-    /// something to create: silently `mkdir -p`ing a mistyped or unmounted
-    /// directory just yields an empty library and hides the mistake, so
-    /// callers get an `Err` and decide whether to warn-and-skip. Duplicate
-    /// paths are ignored so overlapping libraries aren't scanned or watched
-    /// twice.
+    /// Register an existing directory to scan for shaders. A missing directory
+    /// is not created, so a typo surfaces as an error. Duplicates are ignored.
     ///
     /// # Errors
     ///
@@ -75,9 +62,8 @@ impl ShaderRegistry {
             anyhow::bail!("Shader library path does not exist: {}", path.display());
         }
 
-        // Canonicalize so `./shaders`, `shaders`, and an absolute path to the
-        // same directory dedup against each other (and so watcher event paths,
-        // which arrive absolute, line up with library paths for precedence).
+        // Canonicalized so spellings of one directory dedup, and so absolute
+        // watcher event paths match library paths.
         let path = path.canonicalize().unwrap_or(path);
 
         if self.library_paths.contains(&path) {
@@ -89,13 +75,11 @@ impl ShaderRegistry {
         Ok(())
     }
 
-    /// Scan all library paths for ISF shaders
+    /// Scan all library paths for ISF shaders. Returns the unique shader count.
     ///
     /// # Errors
     ///
-    /// Currently infallible in practice — individual shaders that fail to parse
-    /// are logged and skipped — but the signature stays fallible so directory
-    /// traversal failures can be surfaced without a breaking change.
+    /// Never fails: shaders that fail to parse are logged and skipped.
     pub fn scan(&mut self) -> Result<usize> {
         self.shaders.clear();
         self.path_to_name.clear();
@@ -111,7 +95,6 @@ impl ShaderRegistry {
             {
                 let path = entry.path();
 
-                // Only process .fs and .comp files
                 let ext = path.extension().and_then(|s| s.to_str());
                 if ext != Some("fs") && ext != Some("comp") {
                     continue;
@@ -122,8 +105,7 @@ impl ShaderRegistry {
                         let name = shader.name();
                         log::info!("  Loaded: {} ({})", name, path.display());
                         self.path_to_name.insert(path.to_path_buf(), name.clone());
-                        // Libraries are scanned in priority order, so the last
-                        // write for a name is the highest-priority provider.
+                        // Scanned in priority order, so the last write wins.
                         self.name_to_paths
                             .entry(name.clone())
                             .or_default()
@@ -137,8 +119,7 @@ impl ShaderRegistry {
             }
         }
 
-        // Count unique shaders, not files loaded: a name overridden across
-        // libraries collapses to one entry, so counting files would inflate.
+        // Unique names; overridden files don't count twice.
         let count = self.shaders.len();
         log::info!(
             "Loaded {} shaders from {} libraries",
@@ -148,12 +129,12 @@ impl ShaderRegistry {
         Ok(count)
     }
 
-    /// Start watching library paths for changes
+    /// Start watching library paths for changes.
     ///
     /// # Errors
     ///
-    /// Returns an error if the platform file watcher cannot be created, or if any
-    /// existing library path cannot be registered for recursive watching.
+    /// Returns an error if the file watcher cannot be created or a library path
+    /// cannot be watched.
     pub fn start_watching(&mut self) -> Result<()> {
         let (tx, rx) = mpsc::channel();
 
@@ -175,10 +156,9 @@ impl ShaderRegistry {
         Ok(())
     }
 
-    /// Check for and process file changes (non-blocking)
-    /// Returns a list of shader events that occurred
+    /// Process pending file changes without blocking.
     pub fn poll_changes(&mut self) -> Vec<ShaderEvent> {
-        // First, collect all pending notify events without holding a borrow
+        // Collect events first so the receiver borrow ends.
         let pending_events: Vec<(notify::EventKind, Vec<PathBuf>)> = {
             let Some(receiver) = &self.change_receiver else {
                 return Vec::new();
@@ -203,19 +183,16 @@ impl ShaderRegistry {
             collected
         };
 
-        // Check if we got disconnected
         if let Some(receiver) = &self.change_receiver
             && receiver.try_recv().is_err()
         {
-            // Don't clear on Empty, only on Disconnected
+            // Cleared only on Disconnected, not Empty.
         }
 
-        // Now process the collected events with mutable self access
         let mut shader_events = Vec::new();
 
         for (kind, paths) in pending_events {
             for path in paths {
-                // Only process .fs and .comp files
                 let ext = path.extension().and_then(|s| s.to_str());
                 if ext != Some("fs") && ext != Some("comp") {
                     continue;
@@ -223,7 +200,6 @@ impl ShaderRegistry {
 
                 match kind {
                     notify::EventKind::Create(_) | notify::EventKind::Modify(_) => {
-                        // Reload the shader
                         match self.reload_shader(&path) {
                             Ok(()) => {
                                 shader_events.push(ShaderEvent::Changed(path));
@@ -240,10 +216,8 @@ impl ShaderRegistry {
                         }
                     }
                     notify::EventKind::Remove(_) => {
-                        // Drop this file as a provider, then re-resolve the name.
-                        // If a lower-priority file still provides it (e.g. a
-                        // built-in that was shadowed by this override), it's
-                        // promoted back instead of the shader vanishing.
+                        // Drop this provider and re-resolve, so a shadowed
+                        // lower-priority file takes over.
                         if let Some(name) = self.path_to_name.remove(&path) {
                             self.forget_provider(&name, &path);
                             if self.resolve_winner(&name) {
@@ -266,18 +240,13 @@ impl ShaderRegistry {
         shader_events
     }
 
-    /// Reload a single shader from disk.
-    ///
-    /// Respects library precedence: a file only becomes the active shader if it
-    /// is the highest-priority provider of its name. Editing a built-in shader
-    /// that a higher-priority library currently overrides reloads it into the
-    /// registry's knowledge but does not clobber the override.
+    /// Reload one shader from disk. It becomes active only if it is the
+    /// highest-priority provider of its name.
     fn reload_shader(&mut self, path: &Path) -> Result<()> {
         let shader = ISFShader::from_file(path)?;
         let name = shader.name();
 
-        // If this file previously provided a different name (its NAME field was
-        // edited), stop attributing it to the old name and re-resolve that one.
+        // If the file's NAME changed, re-resolve the old name.
         if let Some(old_name) = self.path_to_name.get(path).cloned()
             && old_name != name
         {
@@ -297,7 +266,7 @@ impl ShaderRegistry {
                 name,
                 path.display()
             );
-            // The override should already be active; make sure of it.
+            // The override should already be active.
             if !self.shaders.contains_key(&name) {
                 self.resolve_winner(&name);
             }
@@ -306,9 +275,7 @@ impl ShaderRegistry {
         Ok(())
     }
 
-    /// Priority of a path = index of the highest-index (last-added) library path
-    /// that contains it, +1 so an unknown path is strictly lowest. Later
-    /// libraries win, matching the built-in, workdir, override-dir hierarchy.
+    /// Index + 1 of the last library path containing `path`; 0 if none.
     fn path_priority(&self, path: &Path) -> usize {
         self.library_paths
             .iter()
@@ -319,7 +286,7 @@ impl ShaderRegistry {
             .unwrap_or(0)
     }
 
-    /// Record `path` as a provider of `name` (deduped).
+    /// Record `path` as a provider of `name`, once.
     fn record_provider(&mut self, name: &str, path: &Path) {
         let providers = self.name_to_paths.entry(name.to_string()).or_default();
         if !providers.iter().any(|p| p == path) {
@@ -327,14 +294,12 @@ impl ShaderRegistry {
         }
     }
 
-    /// Drop `path` as a provider of `name`.
     fn forget_provider(&mut self, name: &str, path: &Path) {
         if let Some(providers) = self.name_to_paths.get_mut(name) {
             providers.retain(|p| p != path);
         }
     }
 
-    /// Is `path` the highest-priority provider currently registered for `name`?
     fn is_highest_priority_provider(&self, name: &str, path: &Path) -> bool {
         match self.name_to_paths.get(name) {
             Some(providers) => providers
@@ -345,9 +310,8 @@ impl ShaderRegistry {
         }
     }
 
-    /// Re-pick the active shader for `name` from its remaining providers,
-    /// loading the highest-priority one. Returns whether the shader still
-    /// exists afterward. Ties resolve to the last-recorded provider.
+    /// Load the highest-priority remaining provider of `name`. Returns whether
+    /// the shader still exists. Ties go to the last recorded provider.
     fn resolve_winner(&mut self, name: &str) -> bool {
         let providers = match self.name_to_paths.get(name) {
             Some(p) if !p.is_empty() => p.clone(),
@@ -382,17 +346,14 @@ impl ShaderRegistry {
         }
     }
 
-    /// Get a shader by name
     pub fn get(&self, name: &str) -> Option<&ISFShader> {
         self.shaders.get(name)
     }
 
-    /// Get all shader names
     pub fn shader_names(&self) -> Vec<String> {
         self.shaders.keys().cloned().collect()
     }
 
-    /// Get all generators
     pub fn generators(&self) -> Vec<&ISFShader> {
         self.shaders
             .values()
@@ -400,7 +361,7 @@ impl ShaderRegistry {
             .collect()
     }
 
-    /// Get all filters (excludes transitions)
+    /// Filters, excluding transitions.
     pub fn filters(&self) -> Vec<&ISFShader> {
         self.shaders
             .values()
@@ -408,7 +369,6 @@ impl ShaderRegistry {
             .collect()
     }
 
-    /// Get all transition shaders
     pub fn transitions(&self) -> Vec<&ISFShader> {
         self.shaders
             .values()
@@ -416,7 +376,6 @@ impl ShaderRegistry {
             .collect()
     }
 
-    /// Get shader count
     pub fn count(&self) -> usize {
         self.shaders.len()
     }
@@ -428,10 +387,8 @@ impl Default for ShaderRegistry {
     }
 }
 
-/// Where the bundled shaders sit relative to the executable's own directory.
-///
-/// Relative rather than absolute so a prefix install (`/opt/varda/bin/varda`) resolves
-/// the same way a system one (`/usr/bin/varda`) does.
+/// Bundled shader directory relative to the executable's directory, so prefix
+/// installs resolve like system ones.
 // Linux: FHS layout from a native package. /usr/bin/varda -> /usr/share/varda/shaders.
 #[cfg(target_os = "linux")]
 const BUNDLED_SHADERS_RELATIVE: &str = "../share/varda/shaders";
@@ -441,28 +398,25 @@ const BUNDLED_SHADERS_RELATIVE: &str = "../Resources/shaders";
 // Windows portable ZIP: shaders/ next to varda.exe.
 #[cfg(target_os = "windows")]
 const BUNDLED_SHADERS_RELATIVE: &str = "shaders";
-// Anything else gets the FHS layout, which is the best guess available.
+// Anything else: FHS layout.
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 const BUNDLED_SHADERS_RELATIVE: &str = "../share/varda/shaders";
 
-/// Resolve the bundled shader directory for a given executable directory.
-///
-/// Split from `get_bundled_shader_path` so the layout rule is testable without
-/// depending on where the test binary happens to live.
+/// Bundled shader directory for `exe_dir`. Separate from
+/// `get_bundled_shader_path` for testing.
 fn bundled_shaders_for(exe_dir: &Path) -> Option<PathBuf> {
     let dir = exe_dir.join(BUNDLED_SHADERS_RELATIVE);
     dir.is_dir().then_some(dir)
 }
 
-/// Get the bundled shader path relative to the current executable.
-/// Used when Varda is installed from a native package (Linux), or packaged as a
-/// .app (macOS) or portable ZIP (Windows).
+/// The bundled shader path for installed builds (Linux package, macOS .app,
+/// Windows ZIP).
 pub fn get_bundled_shader_path() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     bundled_shaders_for(exe.parent()?)
 }
 
-/// Get the default library paths for the current platform
+/// Default library paths for this platform.
 pub fn get_default_library_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
 
@@ -508,16 +462,12 @@ mod tests {
     use super::*;
     use std::fs;
 
-    /// The packaged layout has to resolve, or an installed Varda ships with no shader
-    /// library at all. Pre-0.7 this looked for the portable tarball's `../shaders`,
-    /// which `/usr/bin/varda` never matches.
+    /// The packaged layout resolves to the bundled shaders.
     #[test]
     fn bundled_shaders_resolve_from_the_packaged_layout() {
         let root = tempfile::tempdir().unwrap();
         let exe_dir = root.path().join("bin");
-        // Lay the directory out by the platform's own rule rather than assuming a shape.
-        // Windows puts shaders beside the executable; the others put them above it, and
-        // an earlier version of this test assumed the `../` and failed on Windows only.
+        // Use the platform's rule; Windows puts shaders beside the executable.
         let shaders = exe_dir.join(BUNDLED_SHADERS_RELATIVE);
         fs::create_dir_all(&exe_dir).unwrap();
         fs::create_dir_all(&shaders).unwrap();
@@ -529,11 +479,8 @@ mod tests {
         );
     }
 
-    /// Packaging and this constant have to agree, per platform, or Varda installs and
-    /// starts normally with an empty shader library and nothing else notices. Each pair
-    /// below is where that platform's packaging actually puts the executable and the
-    /// shaders: `/usr/bin` + `/usr/share/varda/shaders` for the Linux packages, the .app
-    /// bundle layout for macOS, and the portable ZIP's flat layout for Windows.
+    /// Each platform's packaging layout matches this constant; a mismatch ships
+    /// an empty shader library silently.
     #[test]
     fn bundled_shader_path_matches_what_packaging_installs() {
         use std::path::Component;
@@ -551,7 +498,7 @@ mod tests {
         let (exe_dir, expected) = ("/usr/bin", "/usr/share/varda/shaders");
 
         let joined = Path::new(exe_dir).join(BUNDLED_SHADERS_RELATIVE);
-        // Resolve `..` lexically: these paths do not exist on the machine running this.
+        // Resolved lexically; these paths don't exist here.
         let resolved = joined
             .components()
             .fold(PathBuf::new(), |mut acc, component| {
@@ -570,8 +517,7 @@ mod tests {
         );
     }
 
-    /// A missing directory is not an error. Dev builds have no bundled tier and fall
-    /// through to the CWD and workspace tiers instead.
+    /// A missing bundled directory is not an error; dev builds have none.
     #[test]
     fn bundled_shaders_are_absent_rather_than_wrong_when_not_installed() {
         let root = tempfile::tempdir().unwrap();
@@ -647,7 +593,7 @@ mod tests {
     #[test]
     fn transitions_classified() {
         let tmp = tempfile::tempdir().unwrap();
-        // Transition = has "Transition" category + image input
+        // Transition: "Transition" category plus an image input.
         let content = r#"/*{
 "CATEGORIES": ["Transition"],
 "INPUTS": [{"NAME": "inputImage", "TYPE": "image"}, {"NAME": "startImage", "TYPE": "image"}]
@@ -662,7 +608,7 @@ void main() {}"#;
 
         assert_eq!(reg.transitions().len(), 1);
         assert_eq!(reg.generators().len(), 1);
-        // Transitions are filters too, but filters() excludes transitions
+        // filters() excludes transitions.
         assert_eq!(reg.filters().len(), 0);
     }
 
@@ -725,7 +671,6 @@ void main() {}"#;
         reg.scan().unwrap();
         assert_eq!(reg.count(), 1);
 
-        // Add another shader and rescan
         write_shader(tmp.path(), "S2", "Filter", true);
         let count = reg.scan().unwrap();
         assert_eq!(count, 2);
@@ -759,7 +704,7 @@ void main() {}"#;
     fn later_library_path_overrides_by_name() {
         let builtin = tempfile::tempdir().unwrap();
         let user = tempfile::tempdir().unwrap();
-        // Both dirs have a shader named "Glow" but with different categories
+        // Both dirs have a "Glow" with different categories.
         write_shader(builtin.path(), "Glow", "Generator", false);
         write_shader(user.path(), "Glow", "Filter", true);
 
@@ -768,7 +713,7 @@ void main() {}"#;
         reg.add_library_path(user.path()).unwrap();
         reg.scan().unwrap();
 
-        // Should have exactly 1 shader named "Glow" (user version wins)
+        // The user version wins.
         assert_eq!(reg.count(), 1);
         let glow = reg.get("Glow").unwrap();
         assert!(
@@ -784,7 +729,7 @@ void main() {}"#;
 
         let mut reg = ShaderRegistry::new();
         reg.add_library_path(real.path()).unwrap();
-        // Don't add a nonexistent path — just verify that only real paths load
+        // Only real paths load.
         let count = reg.scan().unwrap();
         assert_eq!(count, 1);
     }
@@ -792,7 +737,7 @@ void main() {}"#;
     #[test]
     fn get_default_library_paths_returns_platform_path() {
         let paths = get_default_library_paths();
-        // Should return exactly one path on macOS, Linux (when HOME is set), or Windows (when APPDATA is set)
+        // One path on macOS, Linux (with HOME), or Windows (with APPDATA).
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         if std::env::var_os("HOME").is_some() {
             assert_eq!(paths.len(), 1);
@@ -810,14 +755,13 @@ void main() {}"#;
         }
     }
 
-    /// Path a scanned shader file resolves to (library paths are canonicalized
-    /// on registration, so reconstructed paths must be too).
+    /// Canonical path of a scanned shader file, matching registered library paths.
     fn shader_file(dir: &Path, name: &str) -> PathBuf {
         dir.canonicalize().unwrap().join(format!("{name}.fs"))
     }
 
-    /// Build a builtin (generator) + user-override (filter) pair named "Glow"
-    /// across two library paths, scan, and confirm the override wins initially.
+    /// A built-in generator and a user override filter, both named "Glow",
+    /// scanned with the override winning.
     fn overridden_glow() -> (tempfile::TempDir, tempfile::TempDir, ShaderRegistry) {
         let builtin = tempfile::tempdir().unwrap();
         let user = tempfile::tempdir().unwrap();
@@ -838,7 +782,7 @@ void main() {}"#;
     #[test]
     fn hot_reload_of_shadowed_builtin_keeps_override() {
         let (builtin, _user, mut reg) = overridden_glow();
-        // Simulate the shadowed built-in file being touched/edited.
+        // The shadowed built-in is edited.
         reg.reload_shader(&shader_file(builtin.path(), "Glow"))
             .unwrap();
         assert!(
@@ -860,7 +804,7 @@ void main() {}"#;
     fn removing_override_restores_shadowed_builtin() {
         let (_builtin, user, mut reg) = overridden_glow();
         let override_path = shader_file(user.path(), "Glow");
-        // Mirror what poll_changes does on a Remove event.
+        // As poll_changes does on a Remove event.
         reg.path_to_name.remove(&override_path);
         reg.forget_provider("Glow", &override_path);
         assert!(reg.resolve_winner("Glow"), "built-in should be promoted");
@@ -874,7 +818,7 @@ void main() {}"#;
     fn removing_shadowed_builtin_keeps_override() {
         let (builtin, _user, mut reg) = overridden_glow();
         let builtin_path = shader_file(builtin.path(), "Glow");
-        // Deleting the losing (shadowed) file must not disturb the winner.
+        // Deleting the shadowed file leaves the winner.
         reg.path_to_name.remove(&builtin_path);
         reg.forget_provider("Glow", &builtin_path);
         assert!(reg.resolve_winner("Glow"));
@@ -933,7 +877,7 @@ void main() {}"#;
 
         let mut reg = ShaderRegistry::new();
         reg.add_library_path(dir.path()).unwrap();
-        // Same directory via a different spelling should not double-register.
+        // Another spelling of the same directory is not registered twice.
         reg.add_library_path(dir.path().join(".")).unwrap();
         assert_eq!(reg.library_paths.len(), 1);
     }

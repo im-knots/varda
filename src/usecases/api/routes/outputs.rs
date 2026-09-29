@@ -17,12 +17,11 @@ pub struct AssignSurfaceBody {
 
 /// Add an output of any kind.
 ///
-/// The body names the kind of output in `type` and gives its settings, for
-/// example `{"type": "windowed"}`, `{"type": "recording", "path": "take.mov",
-/// "codec": "ProRes 422"}` or `{"type": "ndi_send", "sender_name": "Varda"}`;
-/// `GET /api/library/outputs` lists the types and their settings. Answers with
-/// the new output's UUID. A window opens on the next frame of a run with
-/// windows; a headless run cannot create one.
+/// The body gives the kind in `type` plus its settings, for example
+/// `{"type": "windowed"}`, `{"type": "recording", "path": "take.mov",
+/// "codec": "ProRes 422"}` or `{"type": "ndi_send", "sender_name": "Varda"}`.
+/// `GET /api/library/outputs` lists the types and settings. Returns the new
+/// output's UUID. A headless run cannot create a window.
 #[utoipa::path(post, path = "/api/outputs", request_body = crate::engine::value::provider::ProviderConfig, responses((status = 200, body = CommandResult)), tag = "Outputs")]
 pub async fn create(
     State(s): State<SharedState>,
@@ -135,13 +134,11 @@ pub async fn set_calibration_mode(
     }
 }
 
-// ── Missing Parity Routes ─────────────────────────────────────────
-
 /// Change an output into another kind, keeping its surfaces and blending.
 ///
-/// The body is the new kind and its settings, like `POST /api/outputs`. The
-/// output keeps its surfaces, warp, edge blend and presentation. A window moving between
-/// monitors keeps its window; a running recording or stream is stopped first.
+/// The body is the new kind and its settings, as for `POST /api/outputs`. The
+/// output keeps its surfaces, warp, edge blend and presentation. A running
+/// recording or stream is stopped first.
 #[utoipa::path(put, path = "/api/outputs/{output_uuid}/target", params(("output_uuid" = String, Path, description = "Output UUID")), request_body = crate::engine::value::provider::ProviderConfig, responses((status = 200, body = CommandResult), (status = 404, description = "Output not found")), tag = "Outputs")]
 pub async fn set_target(
     State(s): State<SharedState>,
@@ -166,8 +163,8 @@ pub struct SinkValueBody {
 
 /// Change one of an output's settings by name.
 ///
-/// The names are listed in `GET /api/library/outputs`. A setting that changes what an encoder is
-/// opened with stops a running output.
+/// Names are listed in `GET /api/library/outputs`. Changing an encoder setting
+/// stops a running output.
 #[utoipa::path(put, path = "/api/outputs/{output_uuid}/sink/params/{name}", params(("output_uuid" = String, Path, description = "Output UUID"), ("name" = String, Path, description = "Setting name")), request_body = SinkValueBody, responses((status = 200, body = CommandResult), (status = 404, description = "Output not found")), tag = "Outputs")]
 pub async fn set_sink_param(
     State(s): State<SharedState>,
@@ -214,7 +211,7 @@ pub async fn set_unassigned(
 
 /// Run an action an output kind offers, such as `rescan` for monitors.
 ///
-/// Answers with that kind's fresh entries.
+/// Returns that kind's entries.
 #[utoipa::path(post, path = "/api/outputs/types/{sink_type}/actions/{action}", params(("sink_type" = String, Path, description = "Output type id"), ("action" = String, Path, description = "Library action")), responses((status = 200, body = CommandResult), (status = 404, description = "Unknown output type")), tag = "Outputs")]
 pub async fn sink_library_action(
     State(s): State<SharedState>,

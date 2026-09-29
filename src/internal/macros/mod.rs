@@ -1,14 +1,12 @@
-//! Macro controls: user-defined knobs, faders, and buttons that fan out to many
-//! parameter targets at once. See `/spec/macro-controls.md`.
+//! Macro controls: user-defined knobs, faders, and buttons that drive many
+//! parameters at once.
 //!
-//! A macro is a manually-driven, **absolute** control layered on the parameter
-//! router: moving/pressing it writes to every configured target through that
-//! target's own sub-range, curve, and polarity. The macro is itself addressable
-//! as `macro/<uuid>/value`, so a single hardware knob mapped via MIDI learn
-//! drives the macro, and the macro drives many parameters.
+//! Moving a macro writes an absolute value to every target through that
+//! target's sub-range, curve, and polarity. The macro itself is addressable as
+//! `macro/<uuid>/value`, so it can be MIDI-mapped.
 //!
-//! This module is pure domain logic — no GPU, no UI, no engine coupling. Fan-out
-//! is computed here and applied by the parameter router (see `param_router.rs`).
+//! No GPU, UI, or engine dependencies. The fan-out is computed here and applied
+//! by `param_router.rs`.
 
 use crate::ids::generate_short_uuid;
 use serde::{Deserialize, Serialize};
@@ -27,7 +25,7 @@ pub enum MacroKind {
 }
 
 /// Response curve applied to a macro's 0..1 value before it is mapped to a
-/// target's `[min, max]` sub-range. All curves are pure `[0,1] -> [0,1]`.
+/// target's `[min, max]` sub-range. All curves map `[0,1]` to `[0,1]`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, utoipa::ToSchema, Default)]
 pub enum MacroCurve {
     #[default]
@@ -64,9 +62,8 @@ impl MacroCurve {
     }
 }
 
-/// A single parameter target of a macro. `path` is a parameter-router path
-/// (UUID-addressed); `min`/`max` select a sub-range in normalized 0..1 space
-/// that the router scales to the parameter's native range downstream.
+/// One parameter target of a macro. `path` is a router path; `min`/`max` are a
+/// normalized 0..1 sub-range that the router scales to the parameter's range.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MacroTarget {
     pub path: String,
@@ -99,7 +96,7 @@ impl MacroTarget {
         (self.min + (self.max - self.min) * t).clamp(0.0, 1.0)
     }
 
-    /// A macro may not target another macro (loop prevention).
+    /// A macro may not target another macro, which could loop.
     pub fn is_macro_path(&self) -> bool {
         self.path == "macro" || self.path.starts_with("macro/")
     }
@@ -108,18 +105,17 @@ impl MacroTarget {
 /// How a button macro responds to presses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema, Default)]
 pub enum ButtonBehavior {
-    /// Held = on (targets → max), released = off (targets → min).
+    /// Held sets targets to max; released sets them to min.
     #[default]
     Momentary,
-    /// Each press latches on/off, toggling targets between max/min.
+    /// Each press toggles targets between max and min.
     Toggle,
-    /// Each press fires `trigger` actions once (no latched state).
+    /// Each press fires `trigger` actions once.
     Trigger,
 }
 
-/// A global app action a Trigger button can fire. These require app-layer
-/// context and reuse the same dispatch (and pending-flag drain) as the MIDI
-/// `action/*` paths — see `app/inputs.rs`.
+/// A global app action a Trigger button can fire. Dispatched like MIDI
+/// `action/*` paths in `app/inputs.rs`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum GlobalAction {
     Undo,
@@ -146,8 +142,8 @@ pub struct ButtonSpec {
     pub trigger: Vec<TriggerAction>,
 }
 
-/// The result of feeding an input into a macro: parameter writes to apply
-/// through the router, plus any global app actions for the app layer to dispatch.
+/// The result of feeding an input into a macro: router writes plus app
+/// actions.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MacroFanout {
     /// `(router_path, normalized_value)` pairs to apply via `apply_param_by_path`.
@@ -195,7 +191,7 @@ impl Macro {
         }
     }
 
-    /// Change the macro kind, adding/removing the button spec as appropriate.
+    /// Change the macro kind, adding or removing the button spec.
     pub fn set_kind(&mut self, kind: MacroKind) {
         self.kind = kind;
         match kind {
@@ -207,9 +203,8 @@ impl Macro {
         }
     }
 
-    /// Feed a raw input value (0..1, e.g. from a controller or the UI). Updates
-    /// internal state and returns the fan-out to apply. The only mutation is to
-    /// `self` (value / latch / edge state).
+    /// Feed a raw 0..1 input (controller or UI). Updates the macro's state and
+    /// returns the fan-out to apply.
     pub fn apply_input(&mut self, raw: f32) -> MacroFanout {
         let raw = if raw.is_finite() {
             raw.clamp(0.0, 1.0)
@@ -272,11 +267,9 @@ impl Macro {
         crate::engine::value::param::ParamAddress::macro_value(uuid).to_string()
     }
 
-    /// Compute the fan-out for `clamp(base + offset, 0, 1)` **without** mutating
-    /// the macro, where `base` is the current (manual) value. Used to drive the
-    /// macro from a modulation source each frame while preserving the manual set
-    /// point. Returns target writes (macro-path targets filtered); empty for
-    /// button macros, which are not modulatable.
+    /// Fan-out for `clamp(base + offset, 0, 1)`, where `base` is the manual
+    /// value, without changing the macro. Used for per-frame modulation. Empty
+    /// for button macros, which are not modulatable.
     pub fn modulated_fanout(&self, offset: f32) -> Vec<(String, f32)> {
         if !matches!(self.kind, MacroKind::Knob | MacroKind::Fader) {
             return Vec::new();
@@ -294,13 +287,13 @@ impl Macro {
     }
 }
 
-/// Collection of user-defined macros. Owned by `Mixer`, serialized per-scene.
+/// User-defined macros. Owned by `Mixer`, saved per scene.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MacroBank {
     #[serde(default)]
     macros: Vec<Macro>,
-    /// Runtime-only queue of global actions produced by trigger buttons; the app
-    /// layer drains this each frame (see `param_router` + `app/inputs.rs`).
+    /// Runtime-only queue of actions from trigger buttons, drained each frame by
+    /// `app/inputs.rs`.
     #[serde(skip)]
     pending_actions: Vec<GlobalAction>,
 }
@@ -310,17 +303,15 @@ impl MacroBank {
         Self::default()
     }
 
-    /// Read-only access to all macros.
     pub fn macros(&self) -> &[Macro] {
         &self.macros
     }
 
-    /// Mutable access to all macros (used by config commands / persistence).
     pub fn macros_mut(&mut self) -> &mut Vec<Macro> {
         &mut self.macros
     }
 
-    /// Replace all macros (used by persistence restore).
+    /// Replace all macros, on restore.
     pub fn set_macros(&mut self, macros: Vec<Macro>) {
         self.macros = macros;
     }
@@ -430,9 +421,8 @@ impl MacroBank {
         }
     }
 
-    /// Feed a raw input into the macro identified by `uuid`. Returns the list of
-    /// `(path, value)` parameter writes to apply, or `None` if the macro does not
-    /// exist. Any global actions produced are queued in `pending_actions`.
+    /// Feed a raw input into macro `uuid`. Returns the `(path, value)` writes,
+    /// or `None` if there is no such macro. Actions go to `pending_actions`.
     pub fn apply_input(&mut self, uuid: &str, raw: f32) -> Option<Vec<(String, f32)>> {
         let m = self.macros.iter_mut().find(|m| m.uuid == uuid)?;
         let fanout = m.apply_input(raw);
@@ -548,7 +538,7 @@ mod tests {
         assert!(!MacroTarget::new("deck/xyz/opacity").is_macro_path());
     }
 
-    // ── Knob/fader fan-out (the motivating example) ───────────────────
+    // ── Knob/fader fan-out ───────────────────
 
     #[test]
     fn knob_fans_out_to_multiple_targets() {
@@ -767,7 +757,7 @@ mod tests {
 
     #[test]
     fn empty_bank_deserializes_from_missing_fields() {
-        // Graceful default: an object with no macros array yields an empty bank.
+        // An object with no macros array yields an empty bank.
         let bank: MacroBank = serde_json::from_str("{}").unwrap();
         assert!(bank.macros().is_empty());
     }

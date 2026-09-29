@@ -20,9 +20,8 @@ fn fx_accent() -> egui::Color32 {
 }
 
 pub(super) fn render_right_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
-    // Bottom-up so the telemetry cluster is pinned to the panel floor rather
-    // than riding the end of the scrolled content, where it would drift with
-    // whichever sections happen to be expanded.
+    // Bottom-up so the telemetry cluster stays pinned to the panel floor instead
+    // of moving with the scrolled content.
     ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
         ui.add_space(4.0);
         render_monitoring_section(ui, data, actions);
@@ -36,7 +35,7 @@ pub(super) fn render_right_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut
 
 fn render_right_panel_body(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     egui::ScrollArea::vertical().show(ui, |ui| {
-        // Header row: collapse button on left, heading on right (mirror of library panel)
+        // Header row mirrors the library panel: collapse button left, heading right.
         ui.horizontal(|ui| {
             if ui
                 .small_button("»")
@@ -56,9 +55,8 @@ fn render_right_panel_body(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAct
             });
         });
 
-        // Main output preview (clickable to select master). The height is
-        // capped at the panel width so a portrait project does not push the
-        // MIDI, modulation and output sections off the bottom of the panel.
+        // Clicking the main output preview selects master. Height is capped at the
+        // panel width so a portrait project does not push the sections below off-panel.
         let width = ui.available_width() - 10.0;
         let preview_size = super::utils::preview_size(
             egui::vec2(width, width),
@@ -111,7 +109,6 @@ fn render_right_panel_body(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAct
             });
         }
 
-        // Hint: click preview to see master effect chain
         let hint_resp = ui.add(
             egui::Label::new(
                 egui::RichText::new("Click preview to edit master effects")
@@ -126,10 +123,7 @@ fn render_right_panel_body(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAct
 
         ui.add_space(6.0);
 
-        // === Collapsible sections ===
-
-        // Directly under the preview it grades, and named in full on the header
-        // so the active curve is legible without opening anything.
+        // Header names the active curve in full.
         egui::CollapsingHeader::new(
             egui::RichText::new(format!("🎨 Tonemap — {}", tonemap_name(data.tonemap_mode)))
                 .strong(),
@@ -149,7 +143,7 @@ fn render_right_panel_body(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAct
 
         ui.add_space(4.0);
 
-        // Library panel toggle (if closed, show a button to reopen)
+        // When the library panel is closed, show a button to reopen it.
         if !data.library_panel_open {
             if ui.button("📚 Open Library (L)").clicked() {
                 actions.session.toggle_library_panel = true;
@@ -179,7 +173,6 @@ fn render_right_panel_body(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAct
                 render_output_section(ui, data, actions);
             });
 
-        // Loading indicator for background deck loads
         if data.pending_deck_loads > 0 {
             ui.add_space(8.0);
             ui.separator();

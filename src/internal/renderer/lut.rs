@@ -1,5 +1,4 @@
-//! LUT file parsing and GPU pipeline — supports .cube (Resolve/Adobe) and .3dl (broadcast) formats.
-//! Produces a common `ParsedLut` structure and uploads it to the GPU for post-process application.
+//! LUT parsing (.cube and .3dl) and the GPU post-process pass that applies it.
 
 use anyhow::{Context, Result, bail};
 use std::num::NonZeroU64;
@@ -9,7 +8,7 @@ use wgpu::util::DeviceExt;
 /// A parsed 3D LUT with optional 1D shaper, ready for GPU upload.
 #[derive(Debug)]
 pub struct ParsedLut {
-    /// Human-readable title from the file (if present).
+    /// Title from the file, if present.
     pub title: Option<String>,
     /// 3D LUT grid size per axis (e.g. 17, 33, 65).
     pub size_3d: u32,
@@ -19,14 +18,13 @@ pub struct ParsedLut {
     pub domain_min: [f32; 3],
     /// Domain maximum for the 3D LUT input range.
     pub domain_max: [f32; 3],
-    /// Optional 1D shaper LUT. If present, applied before the 3D lookup.
+    /// Applied before the 3D lookup.
     pub shaper: Option<ShaperLut>,
 }
 
 /// A 1D shaper LUT that redistributes precision in the input range.
 #[derive(Debug)]
 pub struct ShaperLut {
-    /// Number of entries in the shaper.
     pub size: u32,
     /// Shaper data as flat RGB triplets. Length = size * 3.
     pub data: Vec<f32>,
@@ -120,7 +118,7 @@ fn parse_cube(content: &str) -> Result<ParsedLut> {
             continue;
         }
 
-        // Skip unknown keywords (lines that don't start with a number)
+        // Skip unknown keywords (lines that don't start with a number).
         let first_char = line.chars().next().unwrap_or(' ');
         if !first_char.is_ascii_digit()
             && first_char != '-'
@@ -130,7 +128,6 @@ fn parse_cube(content: &str) -> Result<ParsedLut> {
             continue;
         }
 
-        // Data line: 3 floats
         let vals = parse_float_line(line, 3)?;
         data_values.extend_from_slice(&vals);
     }
@@ -138,7 +135,7 @@ fn parse_cube(content: &str) -> Result<ParsedLut> {
     let size_3d = size_3d.context("Missing LUT_3D_SIZE in .cube file")?;
     let expected_3d = (size_3d as usize).pow(3) * 3;
 
-    // If we have both 1D and 3D, split the data
+    // With both 1D and 3D present, the 1D entries come first.
     let shaper = if let Some(s1d) = size_1d {
         let expected_1d = s1d as usize * 3;
         if data_values.len() < expected_1d + expected_3d {
@@ -178,9 +175,8 @@ fn parse_cube(content: &str) -> Result<ParsedLut> {
     })
 }
 
-/// Parse a .3dl file (broadcast/projection format).
-/// .3dl files contain integer-encoded LUT values with a header line
-/// specifying the input range.
+/// Parse a .3dl file (broadcast/projection format): integer values after a
+/// header line giving the input range.
 fn parse_3dl(content: &str) -> Result<ParsedLut> {
     let mut data_lines: Vec<Vec<f32>> = Vec::new();
     let mut input_range: Option<(f32, f32)> = None;
@@ -196,14 +192,13 @@ fn parse_3dl(content: &str) -> Result<ParsedLut> {
             continue;
         }
 
-        // Try to parse as numbers
         let nums: Result<Vec<f32>, _> = parts.iter().map(|s| s.parse::<f32>()).collect();
         let Ok(nums) = nums else {
             continue;
         };
 
-        // First numeric line is the input range definition (any length).
-        // Subsequent lines with exactly 3 values are data.
+        // The first numeric line is the input range (any length); later
+        // 3-value lines are data.
         if input_range.is_none() {
             let min_val = nums[0];
             let max_val = *nums.last().unwrap();
@@ -211,7 +206,6 @@ fn parse_3dl(content: &str) -> Result<ParsedLut> {
             continue;
         }
 
-        // Data line: 3 values (R G B)
         if nums.len() == 3 {
             data_lines.push(nums);
         }
@@ -221,7 +215,7 @@ fn parse_3dl(content: &str) -> Result<ParsedLut> {
         bail!("No LUT data found in .3dl file");
     }
 
-    // Determine grid size from cube root of data count
+    // Grid size is the cube root of the data count.
     let count = data_lines.len();
     let size = (count as f64).cbrt().round() as u32;
     if (size as usize).pow(3) != count {
@@ -233,7 +227,7 @@ fn parse_3dl(content: &str) -> Result<ParsedLut> {
         );
     }
 
-    // Determine the normalization factor from max value in data
+    // Infer the bit depth from the largest value.
     let max_val = data_lines
         .iter()
         .flat_map(|v| v.iter())
@@ -280,8 +274,7 @@ fn parse_float_line(s: &str, expected: usize) -> Result<Vec<f32>> {
 // GPU pipeline
 // ---------------------------------------------------------------------------
 
-/// GPU uniform for LUT shader — matches `LutParams` in lut.wgsl.
-/// Must be 16-byte aligned (64 bytes total).
+/// GPU uniform matching `LutParams` in lut.wgsl. 16-byte aligned, 64 bytes.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct LutParams {
@@ -299,14 +292,13 @@ struct LutParams {
 
 /// A loaded LUT on the GPU, ready to be applied as a post-process pass.
 pub struct LoadedLut {
-    /// The parsed source data (kept for serialization/display).
     pub title: Option<String>,
     /// Source filename for persistence.
     pub filename: String,
-    /// Kept alive so the GPU resource backing `lut_3d_view` is not dropped.
+    /// Keeps `lut_3d_view`'s texture alive.
     _lut_3d_texture: wgpu::Texture,
     lut_3d_view: wgpu::TextureView,
-    /// Kept alive so the GPU resource backing `shaper_view` is not dropped.
+    /// Keeps `shaper_view`'s texture alive.
     _shaper_texture: Option<wgpu::Texture>,
     shaper_view: Option<wgpu::TextureView>,
     params_buffer: wgpu::Buffer,
@@ -318,19 +310,17 @@ pub struct LutPipeline {
     bind_group_layout: wgpu::BindGroupLayout,
     source_sampler: wgpu::Sampler,
     lut_sampler: wgpu::Sampler,
-    /// 1x1 dummy texture kept alive so `dummy_shaper_view` is not dropped.
+    /// Keeps `dummy_shaper_view`'s 1x1 texture alive.
     _dummy_shaper_texture: wgpu::Texture,
     dummy_shaper_view: wgpu::TextureView,
 }
 
 impl LoadedLut {
     /// Upload a parsed LUT to the GPU.
-    /// Upload a parsed LUT.
     ///
-    /// `scene_referred` selects the slot this LUT occupies. A look LUT operates
-    /// on scene-linear light and is encoded to `ACEScct` around the lookup; a
-    /// calibration LUT operates on the already display-referred signal and is
-    /// used as-is. See /spec/hdr-color-management.md.
+    /// `scene_referred` marks a look LUT, applied to scene-linear light through
+    /// the `ACEScct` shaper. Otherwise it is a calibration LUT, applied to the
+    /// display-referred signal as-is.
     pub fn from_parsed(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -338,7 +328,6 @@ impl LoadedLut {
         filename: String,
         scene_referred: bool,
     ) -> Self {
-        // Create 3D texture
         let size = parsed.size_3d;
         let lut_3d_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("LUT 3D Texture"),
@@ -355,7 +344,6 @@ impl LoadedLut {
             view_formats: &[],
         });
 
-        // Convert RGB f32 triplets to RGBA f16 for GPU upload
         let rgba_data = rgb_f32_to_rgba_f16(&parsed.data_3d);
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
@@ -378,7 +366,7 @@ impl LoadedLut {
         );
         let lut_3d_view = lut_3d_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Create shaper texture if present (stored as Nx1 2D texture)
+        // Shaper stored as an Nx1 2D texture.
         let (shaper_texture, shaper_view) = if let Some(shaper) = &parsed.shaper {
             let tex = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("Shaper 1D Texture"),
@@ -420,7 +408,6 @@ impl LoadedLut {
             (None, None)
         };
 
-        // Create params buffer
         let has_shaper = u32::from(parsed.shaper.is_some());
         let shaper_ref = parsed.shaper.as_ref();
         let params = LutParams {
@@ -456,10 +443,8 @@ impl LutPipeline {
     ///
     /// # Errors
     ///
-    /// Never returns `Err` today: every wgpu resource here is created
-    /// infallibly (device validation failures surface on the device's error
-    /// scope instead). The `Result` keeps the constructor signature uniform
-    /// with the other pipelines so callers can `?` it.
+    /// Never returns `Err`; validation failures surface on the device's error
+    /// scope. The `Result` matches the other pipeline constructors.
     pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Result<Self> {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("LUT Bind Group Layout"),
@@ -603,7 +588,7 @@ impl LutPipeline {
             ..Default::default()
         });
 
-        // Create dummy 1x1 shaper texture (bound when no shaper is active)
+        // Dummy 1x1 shaper, bound when there is no shaper.
         let dummy_shaper_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Dummy Shaper Texture"),
             size: wgpu::Extent3d {
@@ -635,8 +620,7 @@ impl LutPipeline {
     ///
     /// # Panics
     ///
-    /// Panics if `size_of::<LutParams>()` is zero, which cannot happen for a
-    /// non-empty `#[repr(C)]` struct.
+    /// Panics if `size_of::<LutParams>()` is zero, which cannot happen.
     pub fn render(
         &self,
         device: &wgpu::Device,
@@ -839,11 +823,8 @@ mod scene_referred_tests {
     use super::*;
     use crate::renderer::acescct;
 
-    /// An identity look LUT must be a no-op through the `ACEScct` shaper.
-    ///
-    /// This is the property that proves the encode and decode agree. If they
-    /// disagree, every graded frame is wrong by a fixed curve and no `.cube`
-    /// could compensate.
+    /// An identity look LUT is a no-op through the `ACEScct` shaper, so encode
+    /// and decode agree.
     #[test]
     fn an_identity_look_lut_leaves_scene_linear_untouched() {
         const N: usize = 8;
@@ -871,8 +852,7 @@ mod scene_referred_tests {
         let look = LoadedLut::from_parsed(&ctx.device, &ctx.queue, &parsed, "id.cube".into(), true);
         assert_eq!(look.filename, "id.cube");
 
-        // The CPU reference the shader mirrors: a round trip through the shaper
-        // must return the original scene-linear value.
+        // A round trip through the CPU shaper returns the original value.
         for linear in [0.0_f32, 0.002, 0.05, 0.18, 1.0, 4.0, 12.0] {
             let back = acescct::to_linear(acescct::from_linear(linear));
             let tolerance = (linear * 1e-3).max(1e-6);
@@ -896,8 +876,7 @@ mod scene_referred_tests {
             domain_max: [1.0; 3],
             shaper: None,
         };
-        // Same file, two slots: the difference is whether the shaper runs, which
-        // is what keeps a display-referred `.cube` from being fed log values.
+        // Same file, two slots: only the look slot runs the shaper.
         let calibration =
             LoadedLut::from_parsed(&ctx.device, &ctx.queue, &parsed, "c.cube".into(), false);
         let look = LoadedLut::from_parsed(&ctx.device, &ctx.queue, &parsed, "l.cube".into(), true);

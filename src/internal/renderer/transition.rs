@@ -1,11 +1,9 @@
 use super::ISFUniforms;
-/// `TransitionPipeline` — renders an ISF transition shader with two input textures.
+/// Renders an ISF transition shader with two input textures.
 ///
-/// Binding layout (fixed):
-///   [0: `ISFUniforms`, 1: Sampler, 2: startImage, 3: endImage, 4: `UserParams`]
-///
-/// The `progress` uniform is the first float in the `UserParams` block (set by the mixer
-/// from the crossfader position). Additional user params follow.
+/// Bindings: 0 `ISFUniforms`, 1 sampler, 2 startImage, 3 endImage, 4 `UserParams`.
+/// `progress` is the first float of `UserParams`, set by the mixer from the
+/// crossfader; other user params follow.
 use anyhow::Result;
 use wgpu::util::DeviceExt;
 
@@ -29,7 +27,7 @@ impl TransitionPipeline {
         spirv: &[u32],
         target_format: wgpu::TextureFormat,
     ) -> Result<Self> {
-        // SPIR-V → WGSL via naga
+        // SPIR-V to WGSL via naga.
         let spirv_bytes: Vec<u8> = spirv.iter().flat_map(|w| w.to_le_bytes()).collect();
         let module =
             naga::front::spv::parse_u8_slice(&spirv_bytes, &naga::front::spv::Options::default())?;
@@ -46,7 +44,6 @@ impl TransitionPipeline {
             source: wgpu::ShaderSource::Wgsl(wgsl.into()),
         });
 
-        // Bind group layout: uniforms, sampler, startImage, endImage, userParams
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Transition Bind Group Layout"),
             entries: &[
@@ -63,7 +60,7 @@ impl TransitionPipeline {
                     },
                     count: None,
                 },
-                // 1: Sampler (filtering — channel textures are Rgba8Unorm)
+                // 1: Sampler (filtering; channel textures are Rgba8Unorm)
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,

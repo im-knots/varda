@@ -1,27 +1,23 @@
-//! Guards the addressing rule fixed by /spec/api-addressing.md: writes address
-//! entities by UUID, never by position.
+//! Writes address entities by UUID, never by position. Checked by scanning
+//! source text:
 //!
-//! Two things are checked by scanning source text:
+//!   1. `EngineCommand` has no positional identity field. Ordinals within an
+//!      already-identified entity are allowed only if listed in
+//!      `ALLOWED_ORDINALS`.
+//!   2. No HTTP route path takes a numeric identity segment, and no handler is
+//!      a `*_by_idx` variant.
 //!
-//!   1. `EngineCommand` carries no positional *identity* field. Ordinals that
-//!      describe a position within an already-identified entity are allowed, but
-//!      only the ones named in `ALLOWED_ORDINALS`.
-//!   2. No HTTP route path takes a numeric identity segment, and no route
-//!      handler is a `*_by_idx` variant.
-//!
-//! This is an integration test rather than a `#[cfg(test)]` module so the
-//! forbidden string literals it greps for don't trip the guard against itself.
+//! This lives in `tests/` so the forbidden literals it greps for don't match
+//! this file.
 
 use std::path::{Path, PathBuf};
 
-/// Ordinals that describe a position *within* an entity the command already
-/// identifies by UUID. These are payload, not address, so they stay integers.
-/// The list is spelled out rather than pattern-matched so that adding one is a
-/// visible diff.
+/// Ordinals that give a position within an entity the command already
+/// identifies by UUID. Listed explicitly so adding one shows in the diff.
 ///
 /// - `from_idx` / `to_idx` — the two positions a reorder swaps.
-/// - `step_idx` / `step_index` — a step's position within its own sequence,
-///   which is how the sequencer itself addresses steps (`GoTo { step_index }`).
+/// - `step_idx` / `step_index` — a step's position within its sequence, as the
+///   sequencer addresses steps (`GoTo { step_index }`).
 /// - `corner_idx` — which corner of a four-corner warp.
 /// - `after_vert_idx`, `edge_idx`, `anchor_idx`, `segment_idx`, `hole_index` —
 ///   coordinates within a surface's geometry, on a surface named by UUID.
@@ -78,8 +74,8 @@ fn field_name(line: &str) -> Option<&str> {
 #[test]
 fn engine_commands_carry_no_positional_identity() {
     let src = std::fs::read_to_string(manifest_path("src/engine/mod.rs")).expect("read engine/mod");
-    // Scope the scan to the command vocabulary; the result and outcome types
-    // above it are read-side.
+    // Scan only the command enum; the result and outcome types above it are
+    // read-side.
     let start = src
         .find("pub enum EngineCommand")
         .expect("EngineCommand enum");
@@ -106,8 +102,7 @@ fn engine_commands_carry_no_positional_identity() {
         violations.is_empty(),
         "EngineCommand must identify entities by UUID, not position. A new \
          positional field is either an identity (use a UUID instead) or an \
-         ordinal (add it to ALLOWED_ORDINALS with a reason). \
-         See /spec/api-addressing.md. Found:\n{}",
+         ordinal (add it to ALLOWED_ORDINALS with a reason). Found:\n{}",
         violations.join("\n")
     );
 }
@@ -119,9 +114,9 @@ fn start_line(src: &str, offset: usize) -> usize {
 
 #[test]
 fn http_routes_take_no_numeric_identity_segment() {
-    // A path parameter whose name reads as a positional index, e.g. the old
-    // "/api/channels/{channel_idx}/decks/{deck_idx}". `{step_idx}` is absent by
-    // design — see ALLOWED_ORDINALS.
+    // A path parameter named as a positional index, e.g.
+    // "/api/channels/{channel_idx}/decks/{deck_idx}". `{step_idx}` is allowed;
+    // see ALLOWED_ORDINALS.
     let banned_segments = [
         "{idx}",
         "{channel_idx}",
@@ -135,7 +130,7 @@ fn http_routes_take_no_numeric_identity_segment() {
     let mut violations = Vec::new();
 
     for path in rust_files(&manifest_path("src/usecases/api")) {
-        // The route tests legitimately name legacy paths in their assertions.
+        // Route tests name legacy paths in their assertions.
         if path.file_name().and_then(|n| n.to_str()) == Some("tests.rs") {
             continue;
         }
@@ -166,8 +161,7 @@ fn http_routes_take_no_numeric_identity_segment() {
 
     assert!(
         violations.is_empty(),
-        "HTTP writes address entities by UUID, not position \
-         (/spec/api-addressing.md); found:\n{}",
+        "HTTP writes address entities by UUID, not position; found:\n{}",
         violations.join("\n")
     );
 }

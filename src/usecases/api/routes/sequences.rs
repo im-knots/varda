@@ -1,7 +1,7 @@
 //! Transition sequence write routes.
 //!
-//! Sequences are addressed by UUID. Steps are positional within their sequence,
-//! so `step_idx` stays an ordinal — see `/spec/api-addressing.md`.
+//! Sequences are addressed by UUID; `step_idx` is a position within the
+//! sequence.
 
 use axum::Json;
 use axum::extract::{Path, State};
@@ -225,7 +225,7 @@ pub async fn set_step_shader(
     }
 }
 
-// ── Missing Parity Routes ─────────────────────────────────────────
+// ── Step routes ─────────────────────────────────────────
 
 #[derive(Deserialize, ToSchema)]
 pub struct StepChBody {

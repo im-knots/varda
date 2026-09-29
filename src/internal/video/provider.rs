@@ -1,5 +1,5 @@
-//! Video files as a deck source: HAP on the GPU-native path, anything else
-//! through ffmpeg. See /spec/deck-sources.md § 2.
+//! Video files as a deck source: HAP on the GPU-native path, everything else
+//! through ffmpeg.
 
 use super::modulation as vm;
 use super::staging::VideoStagingBuffers;
@@ -35,10 +35,9 @@ const SYNC_MODES: [TransportSyncMode; 3] = [
     TransportSyncMode::Never,
 ];
 
-/// Playback controls are deck built-ins on the router (`deck/<uuid>/video/…`),
-/// modulatable where a continuous or discrete value makes sense. In and out
-/// points are not: they are the reference a position offset is scaled against,
-/// so modulating them would feed back. See /spec/video-playback-modulation.md.
+/// Playback controls, routed as `deck/<uuid>/video/…`. In and out points are
+/// not modulatable: position offsets scale against them, so modulating them
+/// would feed back.
 static PARAMS: LazyLock<Vec<ControlSpec>> = LazyLock::new(|| {
     vec![
         ControlSpec::toggle("play", "Play")
@@ -98,13 +97,13 @@ struct Config {
     out_point: f64,
     #[serde(default)]
     scaling_mode: ScalingMode,
-    /// Mapping onto the show transport. Default Auto: chase while the
-    /// transport is running. See /spec/timecode.md § Consumer 2.
+    /// Mapping onto the show transport. Default Auto: chase while the transport
+    /// runs.
     #[serde(default)]
     transport_sync: DeckTransportSync,
 }
 
-/// Map a normalized value to a playback speed multiplier.
+/// Maps a normalized value to a speed multiplier.
 pub fn speed_from_norm(value: f32) -> f64 {
     vm::SPEED_MIN + f64::from(value.clamp(0.0, 1.0)) * (vm::SPEED_MAX - vm::SPEED_MIN)
 }
@@ -114,13 +113,13 @@ pub fn speed_to_norm(speed: f64) -> f32 {
     ((speed - vm::SPEED_MIN) / (vm::SPEED_MAX - vm::SPEED_MIN)).clamp(0.0, 1.0) as f32
 }
 
-/// A normalized value scaled to seconds against a clip's duration.
+/// Scales a normalized value to seconds of a clip's duration.
 pub fn secs_from_norm(value: f32, duration: f64) -> f64 {
     f64::from(value.clamp(0.0, 1.0)) * duration.max(0.0)
 }
 
-/// Inverse of [`secs_from_norm`]. A clip of unknown length has no meaningful
-/// normalized position, so it reports the start rather than dividing by zero.
+/// Inverse of [`secs_from_norm`]. Returns the start for a clip of unknown
+/// length instead of dividing by zero.
 pub fn secs_to_norm(secs: f64, duration: f64) -> f32 {
     if duration <= 0.0 {
         return 0.0;
@@ -128,7 +127,6 @@ pub fn secs_to_norm(secs: f64, duration: f64) -> f32 {
     (secs / duration).clamp(0.0, 1.0) as f32
 }
 
-/// Video files.
 pub struct VideoProvider;
 
 impl DeckSourceProvider for VideoProvider {
@@ -192,19 +190,19 @@ impl DeckSourceProvider for VideoProvider {
     }
 }
 
-/// How the decoded frames reach the GPU.
+/// How decoded frames reach the GPU.
 #[allow(
     clippy::large_enum_variant,
     reason = "one per video deck, built once and never moved in bulk"
 )]
 enum Upload {
-    /// ffmpeg CPU decode to RGBA, blitted.
+    /// ffmpeg CPU decode to RGBA, then a blit.
     Rgba {
         view: wgpu::TextureView,
         texture: wgpu::Texture,
         staging: VideoStagingBuffers,
     },
-    /// HAP: compressed `BCn` blocks uploaded as-is and converted on the GPU.
+    /// HAP: compressed `BCn` blocks uploaded as-is and decoded on the GPU.
     Hap {
         texture: wgpu::Texture,
         view: wgpu::TextureView,
@@ -218,12 +216,11 @@ enum Upload {
     },
 }
 
-/// One video deck.
 pub struct Video {
     path: String,
     handle: VideoDecodeHandle,
     upload: Upload,
-    /// The RGBA path's blit, and the scaling mode and clip size for both paths.
+    /// Blit for the RGBA path; scaling mode and clip size for both paths.
     blit: ScaledBlit,
 }
 
@@ -253,13 +250,13 @@ fn bc_texture(
 }
 
 impl Video {
-    /// Open a clip. Detects HAP and takes the GPU-native path when the device
+    /// Opens a clip. Uses the HAP GPU path when the file is HAP and the device
     /// supports compressed textures.
     ///
     /// # Errors
     ///
-    /// Fails when the file cannot be opened as a HAP or generic video stream,
-    /// or a pipeline cannot be created.
+    /// Fails when the file cannot be opened as HAP or generic video, or a
+    /// pipeline cannot be created.
     pub fn open(gpu: &GpuContext, path: &str) -> Result<Self> {
         let has_bc = gpu
             .device
@@ -373,7 +370,7 @@ impl Video {
         })
     }
 
-    /// Take a saved config's playback settings.
+    /// Applies a saved config's playback settings.
     fn apply(&self, config: &Config) {
         self.handle
             .send(VideoCommand::SetLoopMode(config.loop_mode));
@@ -384,7 +381,7 @@ impl Video {
         self.handle.set_transport_sync(config.transport_sync);
     }
 
-    /// A config for a deck of the clip at `path`.
+    /// Config for a deck playing the clip at `path`.
     pub fn config_for(path: &str) -> SourceConfig {
         encode_config(
             SOURCE_TYPE,
@@ -400,26 +397,21 @@ impl Video {
         )
     }
 
-    /// The decoder's current state.
     pub fn playback(&self) -> PlaybackSnapshot {
         self.handle.playback_snapshot()
     }
 
-    /// Let modulation drive playback.
+    /// Applies modulation to playback.
     ///
-    /// Speed and playhead go to the decode thread as levels, because they are
-    /// continuous and only the newest value matters. Play and loop mode are
-    /// discrete, so they are written only when the option the modulator points
-    /// at differs from the one in force, which keeps a settled modulator from
-    /// generating any cross-thread traffic at all.
+    /// Speed and playhead go to the decode thread as latest values. Play and loop
+    /// mode are written only when the modulated option differs from the current
+    /// one, so a settled modulator sends nothing across threads.
     fn apply_modulation(&self, ctx: &mut SourceControl) {
         if !ctx.modulation.has_modulation_for_any() {
             return;
         }
         let snap = self.handle.playback_snapshot();
-        // The servo owns the timeline while chasing, so neither rate nor
-        // playhead is a modulator's to hold there. See
-        // /spec/video-playback-modulation.md § Authority.
+        // The chase servo controls rate and playhead while chasing.
         let chasing = self
             .handle
             .transport_sync()
@@ -439,9 +431,8 @@ impl Video {
                     vm::position_target(&r, snap.in_point, snap.effective_out(), snap.duration)
                 })
         };
-        // A sleeping clip is frozen rather than played on silently, so nothing
-        // may drive it: the same show position has to look the same on the
-        // second run. See /spec/deck-residency.md.
+        // A sleeping clip stays frozen so a show position looks the same on every
+        // run.
         self.handle.publish_modulation(if ctx.awake {
             vm::PlaybackModulation { speed, position }
         } else {
@@ -573,8 +564,8 @@ impl DeckSourceInstance for Video {
         }
     }
 
-    /// Runs every frame: modulation, then the transport a chasing clip
-    /// servos against, then residency and the decode rate bound.
+    /// Per frame: modulation, then the chase transport, then residency and the
+    /// decode rate bound.
     fn control(&mut self, ctx: &mut SourceControl) {
         self.blit.control(ctx);
         self.apply_modulation(ctx);
@@ -593,8 +584,7 @@ impl DeckSourceInstance for Video {
         }
     }
 
-    /// Upload the newest decoded frame through the double-buffered staging
-    /// pair, which avoids the per-frame allocation `queue.write_texture` makes.
+    /// Uploads the newest decoded frame through the double-buffered staging pair.
     fn upload(&mut self, encoder: &mut wgpu::CommandEncoder) {
         let Some(frame) = self.handle.take_frame() else {
             return;
@@ -798,8 +788,8 @@ impl DeckSourceInstance for Video {
         self.handle.is_suspended()
     }
 
-    /// The clip is blitted verbatim, so its own alpha reaches the deck
-    /// whatever the transparent flag says.
+    /// The clip is blitted as-is, so its own alpha reaches the deck regardless of
+    /// the transparent flag.
     fn owns_alpha(&self) -> bool {
         true
     }

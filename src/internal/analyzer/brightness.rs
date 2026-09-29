@@ -1,13 +1,11 @@
-//! Trivial brightness analyzer — validates analyzer plumbing.
-//!
-//! Computes average brightness, contrast, and dominant RGB channel from
-//! an RGBA input frame using pure CPU arithmetic. No ML dependencies.
+//! CPU brightness analyzer: average brightness, contrast, and dominant RGB
+//! channel of an RGBA frame. Mainly exercises the analyzer plumbing.
 
 use std::collections::HashMap;
 
 use super::traits::{Analyzer, AnalyzerInput, AnalyzerSchema, AnalyzerSnapshot, ScalarOutputDef};
 
-/// Pixel stride default — skip every N-th pixel for speed.
+/// Samples every N-th pixel.
 const DEFAULT_SAMPLE_STRIDE: usize = 4;
 
 /// Luminance weights (Rec.709).
@@ -216,7 +214,6 @@ mod tests {
     fn known_color_rgb_values() {
         let mut analyzer = BrightnessAnalyzer::new();
         analyzer.sample_stride = 1;
-        // Pure red frame
         let input = make_input(4, 4, 255, 0, 0);
         let snap = analyzer.analyze(&input).unwrap();
 
@@ -224,7 +221,7 @@ mod tests {
         assert!(snap.scalars["green"].abs() < 1e-4);
         assert!(snap.scalars["blue"].abs() < 1e-4);
 
-        // Luminance of pure red = 0.2126
+        // Rec.709 luminance of pure red.
         let b = snap.scalars["brightness"];
         assert!((b - 0.2126).abs() < 1e-3, "expected ~0.2126, got {b}");
     }

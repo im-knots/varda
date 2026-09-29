@@ -7,10 +7,9 @@ use crate::renderer::slicer::compute_dome_meshes;
 use crate::surface::warp::WarpMode;
 
 impl VardaApp {
-    /// Generate dome slices: remove old "Dome P*" surfaces, compute warp meshes,
-    /// create new surfaces with pre-computed `WarpMesh` per projector.
+    /// Replace the "Dome P*" surfaces with one surface per projector, each
+    /// with a precomputed `WarpMesh`.
     pub(crate) fn generate_dome_slices(&mut self, setup: &crate::renderer::slicer::DomeSetup) {
-        // Remove existing dome-generated surfaces (named "Dome P*")
         let dome_uuids: Vec<String> = self
             .output
             .surface_manager
@@ -23,21 +22,17 @@ impl VardaApp {
             self.execute_command(EngineCommand::RemoveSurface { uuid: uuid.clone() });
         }
 
-        // Compute warp meshes for all projectors
         let meshes = compute_dome_meshes(setup);
 
-        // Create a surface per projector with Domemaster source and pre-computed warp mesh
         for (i, mesh) in meshes.iter().enumerate() {
             let name = format!("Dome P{}", i + 1);
-            // Compute the convex hull of the warp mesh UVs as the 2D surface polygon
             let vertices = convex_hull_of_uvs(mesh);
             let uuid = self.output.surface_manager.add_polygon_surface(
                 name.clone(),
                 vertices,
                 OutputSource::Domemaster,
             );
-            // Store the pre-computed warp mesh on the surface (per-surface warp).
-            // Unbind from auto-warp so the dome's mesh is authoritative.
+            // Unbound from auto-warp so the dome mesh is used.
             if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(&uuid) {
                 surface.warp = Some(WarpMode::Mesh(mesh.clone()));
                 surface.warp_bound = false;
@@ -51,23 +46,20 @@ impl VardaApp {
             );
         }
 
-        // Store dome setup on surface manager
         self.output.surface_manager.dome_setup = Some(setup.clone());
 
-        // Ensure the domemaster renderer is created and enabled
         self.ensure_domemaster();
     }
 }
 
-/// Compute the convex hull of a warp mesh's UV coordinates.
-/// Returns polygon vertices in CCW order for use as a 2D surface shape.
+/// Convex hull of a warp mesh's UVs, in CCW order.
 fn convex_hull_of_uvs(mesh: &crate::surface::warp::WarpMesh) -> Vec<[f32; 2]> {
     let mut points: Vec<[f32; 2]> = mesh.points.iter().map(|p| p.uv).collect();
     if points.len() < 3 {
         return points;
     }
 
-    // Andrew's monotone chain convex hull algorithm
+    // Andrew's monotone chain.
     points.sort_by(|a, b| {
         a[0].partial_cmp(&b[0])
             .unwrap_or(std::cmp::Ordering::Equal)
@@ -101,7 +93,7 @@ fn convex_hull_of_uvs(mesh: &crate::surface::warp::WarpMesh) -> Vec<[f32; 2]> {
         hull.push(p);
     }
 
-    hull.pop(); // remove duplicate last point
+    hull.pop(); // duplicate of the first point
     hull
 }
 
@@ -119,9 +111,7 @@ mod tests {
     fn convex_hull_of_unit_square_mesh() {
         let mesh = WarpMesh::identity(3, 3);
         let hull = convex_hull_of_uvs(&mesh);
-        // Should be 4 corners of the unit square
         assert_eq!(hull.len(), 4);
-        // Verify bounding box covers [0,0] to [1,1]
         let min_x = hull.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min);
         let max_x = hull.iter().map(|p| p[0]).fold(f32::NEG_INFINITY, f32::max);
         let min_y = hull.iter().map(|p| p[1]).fold(f32::INFINITY, f32::min);
@@ -157,7 +147,7 @@ mod tests {
             ],
         };
         let hull = convex_hull_of_uvs(&mesh);
-        // The interior point (0.5, 0.5) should be excluded
+        // Interior point excluded.
         assert_eq!(hull.len(), 3);
     }
 
@@ -215,7 +205,7 @@ mod tests {
                 },
             ],
         };
-        // Must not panic — NaN comparisons fall back to Equal
+        // NaN comparisons fall back to Equal.
         let _hull = convex_hull_of_uvs(&mesh);
     }
 

@@ -1,4 +1,4 @@
-//! Channel - Groups multiple decks into a composited layer with its own effect chain
+//! Channel: groups decks into a composited layer with its own effect chain.
 
 use crate::arrangement::SourceDemand;
 use crate::deck::{Deck, Effect};
@@ -319,14 +319,12 @@ pub struct DeckSlot {
     pub skip_counter: u32,
     /// GPU-measured render cost in microseconds (EMA, 0 = no data yet)
     pub gpu_render_cost_us: f32,
-    /// True while the arrangement is driving this deck, which suspends its
-    /// auto-transition. Recomputed every frame by `Mixer::apply_arrangement`
-    /// and never persisted. See /spec/arrangement.md § Authority.
+    /// True while the arrangement drives this deck, suspending its auto-transition. Recomputed
+    /// every frame by `Mixer::apply_arrangement`; never persisted.
     pub arrangement_authority: bool,
-    /// What the arrangement predicts about this deck's source: whether it is
-    /// wanted soon, or far enough from any region that its decoding can stop.
-    /// Recomputed every frame alongside `arrangement_authority`, never
-    /// persisted. See /spec/deck-residency.md.
+    /// Whether the arrangement wants this deck's source soon, or it is far enough from any region
+    /// to stop decoding. Recomputed every frame alongside `arrangement_authority`; never
+    /// persisted.
     pub source_demand: SourceDemand,
 }
 
@@ -439,7 +437,7 @@ impl GpuTimingFrame {
     }
 }
 
-/// Channel - Groups multiple decks into a composited layer
+/// Channel: groups decks into a composited layer.
 pub struct Channel {
     /// Stable UUID for this channel (8-char hex, persists across saves)
     uuid: String,
@@ -467,10 +465,8 @@ pub struct Channel {
     pub effect_ping_texture: wgpu::Texture,
     pub effect_ping_view: wgpu::TextureView,
 
-    /// Previous frame's composite, kept only while some deck taps this channel.
-    /// Swapped with `composite_texture` at the top of each frame, so reading it
-    /// costs no copy and always yields frame N-1 regardless of channel order.
-    /// See spec/program-tap.md.
+    /// Previous frame's composite, kept only while a deck taps this channel. Swapped with
+    /// `composite_texture` each frame, so reading it costs no copy and always yields frame N-1.
     tap_prev: Option<(wgpu::Texture, wgpu::TextureView)>,
 
     /// Frame counter for uniforms
@@ -489,8 +485,7 @@ pub struct Channel {
 }
 
 impl Channel {
-    /// Create a new channel
-    /// Get the stable UUID for this channel
+    /// Stable UUID for this channel.
     pub fn uuid(&self) -> &str {
         &self.uuid
     }
@@ -500,6 +495,8 @@ impl Channel {
         self.uuid = uuid;
     }
 
+    /// Create a new channel.
+    ///
     /// # Errors
     ///
     /// Returns an error if the composite-blit or alpha-blend blit pipelines cannot
@@ -561,9 +558,8 @@ impl Channel {
         self.tap_prev = None;
     }
 
-    /// Exchange the composite and tap targets. Called once per frame before
-    /// any deck renders, which is what makes the tap uniformly one frame old
-    /// no matter where the tapping deck sits in the channel order.
+    /// Exchange the composite and tap targets. Called once per frame before any deck renders, so
+    /// the tap is one frame old wherever the tapping deck sits.
     pub(crate) fn swap_tap(&mut self) {
         if let Some((mut tex, mut view)) = self.tap_prev.take() {
             std::mem::swap(&mut self.composite_texture, &mut tex);
@@ -609,15 +605,12 @@ impl Channel {
         self.decks.len()
     }
 
-    /// Record every awake deck's source uploads for this frame, without a full
-    /// render. Runs for every channel, visible or not, so a clip faded out by
-    /// the crossfader stays in step and never shows a stale frame when it
-    /// comes back.
+    /// Record every awake deck's source uploads for this frame, without a full render. Runs for
+    /// every channel, visible or not, so a clip faded out by the crossfader never shows a stale
+    /// frame when it returns.
     ///
-    /// The one exception is a deck the arrangement has put to sleep, which is
-    /// far enough from its next region that nothing can bring it up in time to
-    /// matter. It holds its last frame and resumes from there.
-    /// See /spec/deck-residency.md.
+    /// Decks the arrangement has put to sleep are skipped; they hold their last frame and resume
+    /// from there.
     pub fn upload_sources(&mut self, encoder: &mut wgpu::CommandEncoder) {
         for slot in &mut self.decks {
             if slot.source_demand.wants_frames() {
@@ -633,20 +626,19 @@ impl Channel {
         }
     }
 
-    /// Render all decks in this channel and composite them, then apply channel effects
-    /// `channel_idx` is used for modulation key addressing (e.g., "`ch0_deck0:paramname`")
+    /// Render all decks in this channel, composite them, then apply channel effects.
+    /// `channel_idx` identifies the channel's GPU timing queries.
     /// `dt` is the frame delta in seconds (for auto-transition tick).
-    /// `target_fps` is the global target FPS for adaptive skip budget calculation.
-    /// `total_active_decks` is the total active deck count across all channels (from last frame).
-    /// `gpu_load_ratio` scales CPU-measured render costs to estimate true GPU execution time.
-    /// A ratio of 1.0 means CPU and GPU costs match; >1.0 means GPU-bound (GPU takes longer).
+    /// `target_fps` is the global target FPS for the adaptive skip budget.
+    /// `total_active_decks` is the active deck count across all channels, from the last frame.
+    /// `gpu_load_ratio` scales CPU-measured render costs to estimate GPU time; >1.0 means
+    /// GPU-bound.
     ///
     /// # Errors
     ///
     /// Returns an error if any deck fails to render its frame (shader/pipeline or
     /// source-decode failure), propagated from `Deck::render_with_prefix`.
-    // Hot-path render entry; args are distinct per-frame inputs and bundling them into a
-    // struct would add indirection without a shared invariant.
+    // Hot-path render entry; the args are distinct per-frame inputs with no shared invariant.
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
@@ -683,9 +675,8 @@ impl Channel {
         // Check if any deck is solo'd
         let any_solo = self.decks.iter().any(|slot| slot.solo);
 
-        // Note: video frame updates are handled by tick_video_frames() called
-        // from the mixer before render, so all channels stay in sync even when
-        // faded out by the crossfader.
+        // Video frame updates happen in tick_video_frames(), called by the mixer before render, so
+        // all channels stay in sync even when faded out.
 
         // Calculate per-deck budget for adaptive skipping
         let frame_budget_us = if target_fps > 0 {
@@ -719,12 +710,9 @@ impl Channel {
                         slot.skip_counter % skip_interval == 0
                     }
                     DeckRenderFps::Auto => {
-                        // Auto: skip if estimated cost exceeds budget share.
-                        // Always use CPU-measured cost × gpu_load_ratio for skip decisions.
-                        // GPU timestamps only measure shader execution, missing pipeline
-                        // setup, compositing, and submission overhead that scales with
-                        // deck count. The systemic estimate (cpu × ratio) captures the
-                        // true per-deck impact on frame timing.
+                        // Auto: skip if estimated cost exceeds the budget share. Uses CPU cost ×
+                        // gpu_load_ratio, because GPU timestamps miss pipeline setup, compositing,
+                        // and submission overhead, which scale with deck count.
                         let estimated_cost = slot.render_cost_us * gpu_load_ratio;
                         if estimated_cost > 0.0
                             && per_deck_budget_us < f32::MAX
@@ -787,10 +775,8 @@ impl Channel {
         }
         self.active_deck_count = active_count;
         let deck_render_us = t_deck_render.elapsed().as_micros();
-        // Batch submit all deck renders at once.
-        // Drain any prefix command buffers (e.g. video upload copies) and
-        // prepend them so they execute before deck render passes that read
-        // the updated textures — all in a single queue.submit() call.
+        // Batch submit all deck renders. Prefix command buffers (e.g. video upload copies) go first
+        // so render passes read the updated textures, all in one queue.submit().
         let t_deck_submit = std::time::Instant::now();
         if !prefix_cmds.is_empty() {
             let mut all_cmds: Vec<wgpu::CommandBuffer> = std::mem::take(prefix_cmds);
@@ -810,9 +796,9 @@ impl Channel {
                 if slot.mute || (any_solo && !slot.solo) || slot.opacity <= 0.0 {
                     return None;
                 }
-                // Inactive and Done auto-transition decks don't composite.
-                // Inactive = waiting for turn. Done = already played, no longer needed
-                // (the next deck in sequence gets re-activated to Playing when needed).
+                // Inactive and Done auto-transition decks don't composite: Inactive decks wait
+                // their turn, and Done decks have played (the next deck is re-activated when
+                // needed).
                 let has_at = slot.auto_transition.as_ref().is_some_and(|at| at.enabled);
                 if has_at
                     && (phase == DeckTransitionPhase::Inactive
@@ -822,8 +808,7 @@ impl Channel {
                 }
                 let transition_progress = match phase {
                     DeckTransitionPhase::Transitioning { progress } => Some(progress),
-                    // Done decks composite normally (full opacity) — they serve
-                    // as the visible background that transitioning decks reveal.
+                    // Every other phase composites without a transition.
                     _ => None,
                 };
                 Some(DeckCompositeInfo {
@@ -835,9 +820,8 @@ impl Channel {
             })
             .collect();
 
-        // Reorder compositing: non-transitioning decks first, then transitioning.
-        // This ensures composite-so-far always contains all "revealed" content
-        // before the transitioning deck is rendered.
+        // Composite non-transitioning decks first, then transitioning ones, so the composite
+        // already holds all revealed content when a transitioning deck draws.
         let mut non_transitioning: Vec<&DeckCompositeInfo> = Vec::new();
         let mut transitioning: Vec<&DeckCompositeInfo> = Vec::new();
         for info in &deck_composite_info {
@@ -850,11 +834,9 @@ impl Channel {
         let ordered: Vec<&DeckCompositeInfo> =
             non_transitioning.into_iter().chain(transitioning).collect();
 
-        // Composite all decks to the composite texture.
-        // Per-draw params are written into a persistent ring buffer (one slot per
-        // deck) so all command buffers can batch into a single queue.submit().
-        // This eliminates N-1 submit calls per channel — critical for Intel
-        // integrated GPUs where each Metal command buffer commit is expensive.
+        // Composite all decks. Per-draw params go into a persistent ring buffer (one slot per deck)
+        // so all command buffers batch into one queue.submit(). Each Metal command buffer commit is
+        // expensive on Intel integrated GPUs.
         let t_composite = std::time::Instant::now();
         let width = self.composite_texture.width();
         let height = self.composite_texture.height();
@@ -1048,9 +1030,8 @@ impl Channel {
         let raw_ms = render_start.elapsed().as_secs_f32() * 1000.0;
         self.render_time_ms = 0.1 * raw_ms + 0.9 * self.render_time_ms;
 
-        // Log detailed timing every 127 frames (~2s at 60fps).
-        // Prime interval avoids systematic alignment with skip intervals
-        // (e.g., 120 % 2/3/4/5/6 == 0 would always sample render frames).
+        // Log detailed timing every 127 frames (~2s at 60fps). A prime interval avoids always
+        // sampling the same phase of the skip intervals.
         if self.frame_count.is_multiple_of(127) && active_count > 0 {
             let total_us = render_start.elapsed().as_micros();
             // Build per-deck breakdown string: "shader_name=123us" or "shader_name=SKIP"
@@ -1178,12 +1159,9 @@ impl Channel {
         for i in 0..self.decks.len() {
             let is_active = active_idx == Some(i);
             let slot = &mut self.decks[i];
-            // A deck the arrangement drives keeps its auto-transition config but
-            // stops advancing it. Auto-transitions are *relative* (phase depends
-            // on when a deck became active, not on transport position), so they
-            // cannot be resolved from an arbitrary position and would fight the
-            // regions. See /spec/transport.md § Relationship to Performance Mode
-            // Sequencers.
+            // A deck the arrangement drives keeps its auto-transition config but stops advancing
+            // it: auto-transition phase depends on when the deck became active, not transport
+            // position, so it would fight the regions.
             if slot.arrangement_authority {
                 continue;
             }
@@ -1274,9 +1252,8 @@ impl Channel {
             }
         }
 
-        // Check if all auto-transition decks are now Done → loop reset.
-        // Done AFTER phase updates so the reset happens in the same frame
-        // a deck transitions to Done, preventing a flash of stale content.
+        // When every auto-transition deck is Done, loop. Runs after phase updates so the reset
+        // happens in the same frame, avoiding a flash of stale content.
         let all_done = self.decks.iter().all(|slot| match &slot.auto_transition {
             Some(at) if at.enabled => at.phase == DeckTransitionPhase::Done,
             _ => true,

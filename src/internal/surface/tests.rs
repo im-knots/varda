@@ -379,7 +379,7 @@ fn surface_regenerate_from_path_flattens() {
     assert_eq!(s.vertices, vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]);
 }
 
-// ── Subtractive holes (8i.7) ─────────────────────────────────────
+// ── Subtractive holes ─────────────────────────────────────
 
 fn square_hole(x0: f32, y0: f32, x1: f32, y1: f32) -> SurfacePath {
     SurfacePath::from_polygon(&[[x0, y0], [x1, y0], [x1, y1], [x0, y1]], true)
@@ -458,7 +458,7 @@ fn verts_to_geo_with_holes_attaches_interiors() {
 
 #[test]
 fn surface_without_path_deserializes_from_legacy_json() {
-    // Legacy stage.json surface (no `path` field) → path defaults to None.
+    // A surface without a `path` field loads with `path: None`.
     let json = r#"{
         "uuid":"abc12345","name":"Legacy",
         "vertices":[[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,1.0]],
@@ -470,7 +470,7 @@ fn surface_without_path_deserializes_from_legacy_json() {
     assert_eq!(s.vertices.len(), 4);
 }
 
-// ── Auto-warp binding (8i.5a) tests ──────────────────────────────
+// ── Auto-warp binding tests ──────────────────────────────
 
 #[test]
 fn new_surface_is_warp_bound_by_default() {
@@ -551,8 +551,7 @@ fn circle_conforming_warp_is_mesh() {
 
 #[test]
 fn legacy_json_loads_unbound_preserving_warp() {
-    // Pre-8i.5a file: no `warp_bound`, so it must default to false so any
-    // stored warp stays authoritative.
+    // No `warp_bound` field: defaults to false so the stored warp is used.
     let json = r#"{
         "uuid":"abc12345","name":"Legacy",
         "vertices":[[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,1.0]],
@@ -602,7 +601,7 @@ fn new_rect_has_uuid() {
     assert_eq!(s.uuid.len(), 8);
 }
 
-// ── Bezier edge editing (8i.4) ───────────────────────────────────
+// ── Bezier edge editing ───────────────────────────────────
 
 #[test]
 fn convert_edge_lazily_builds_path_and_regenerates() {
@@ -823,7 +822,7 @@ fn manager_combine_names_are_sequential() {
     assert!(mgr.surfaces.iter().any(|s| s.name == "Combined 2"));
 }
 
-// ── Stacking order (8i.12) ───────────────────────────────────────
+// ── Stacking order ───────────────────────────────────────
 
 fn mgr_abc() -> (SurfaceManager, String, String, String) {
     let mut mgr = SurfaceManager::new();
@@ -927,7 +926,7 @@ fn content_mapping_default() {
     assert_eq!(ContentMapping::default(), ContentMapping::Fill);
 }
 
-// ── Per-surface warp editing (8i.5) ───────────────────────────────
+// ── Per-surface warp editing ───────────────────────────────
 
 #[test]
 fn warp_defaults_to_none() {
@@ -999,7 +998,7 @@ fn reset_warp_clears() {
     assert!(s.warp.is_none());
 }
 
-// ── Bezier warp (8i.6) ───────────────────────────────────────────
+// ── Bezier warp ───────────────────────────────────────────
 
 #[test]
 fn convert_warp_to_bezier_seeds_cage_from_shape() {
@@ -1083,7 +1082,7 @@ fn effective_warp_bezier_is_returned_when_unbound() {
     assert!(s.effective_warp().unwrap().render_mesh().is_some());
 }
 
-// ── Make-Hole (punch) domain tests (8i.7) ────────────────────────
+// ── Make-Hole (punch) domain tests ────────────────────────
 
 #[test]
 fn outline_as_path_falls_back_to_vertices_when_no_path() {

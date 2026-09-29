@@ -1,11 +1,6 @@
-// Domemaster fisheye projection shader.
-// Converts a cubemap (5 faces: front, right, back, left, top) into an equidistant
-// azimuthal fisheye projection (domemaster format).
-//
-// For each output pixel:
-//   1. Map pixel to polar coordinates (r, theta) centered on the image
-//   2. Convert to a 3D direction on the hemisphere
-//   3. Sample the appropriate cubemap face
+// Domemaster projection: maps 5 cubemap faces (front, right, back, left, top)
+// to an equidistant azimuthal fisheye. Each output pixel becomes a hemisphere
+// direction, which samples the matching face.
 
 struct DomemasterParams {
     // Field of view in radians (pi = 180 degrees full dome)
@@ -48,7 +43,7 @@ var<uniform> params: DomemasterParams;
 fn sample_cubemap(dir: vec3<f32>) -> vec4<f32> {
     let abs_dir = abs(dir);
 
-    // Determine dominant axis
+    // Pick the face by dominant axis.
     if abs_dir.y >= abs_dir.x && abs_dir.y >= abs_dir.z && dir.y > 0.0 {
         // Top face (+Y): project onto XZ plane
         let u = dir.x / abs_dir.y * 0.5 + 0.5;
@@ -82,26 +77,23 @@ fn sample_cubemap(dir: vec3<f32>) -> vec4<f32> {
 
 @fragment
 fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
-    // Map UV [0,1] to centered coordinates [-1,1]
+    // UV [0,1] to centered [-1,1].
     let centered = uv * 2.0 - vec2<f32>(1.0, 1.0);
 
-    // Distance from center
     let r = length(centered);
 
-    // Outside the dome circle = black
+    // Outside the dome circle is black.
     if r > 1.0 {
         return vec4<f32>(0.0, 0.0, 0.0, 1.0);
     }
 
-    // Equidistant azimuthal projection:
-    // r maps linearly to angle from zenith: angle = r * (fov/2)
+    // Equidistant: angle from zenith = r * (fov/2).
     let half_fov = params.fov * 0.5;
     let angle_from_zenith = r * half_fov;
 
-    // Azimuth angle from the centered pixel position
     let azimuth = atan2(centered.x, -centered.y);
 
-    // Convert spherical to 3D direction (dome space: +Y = up/zenith)
+    // Dome space: +Y = up (zenith).
     let sin_angle = sin(angle_from_zenith);
     let cos_angle = cos(angle_from_zenith);
 
@@ -111,25 +103,21 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
         sin_angle * cos(azimuth)    // Z = forward
     );
 
-    // Apply dome tilt (X axis rotation)
+    // Dome tilt (X axis).
     let cos_tilt = cos(params.tilt);
     let sin_tilt = sin(params.tilt);
     let tilted_y = dir.y * cos_tilt - dir.z * sin_tilt;
     let tilted_z = dir.y * sin_tilt + dir.z * cos_tilt;
     dir = vec3<f32>(dir.x, tilted_y, tilted_z);
 
-    // Apply content rotation: rotate the sampling direction in the opposite
-    // direction so content appears to move in the intended direction.
-    // Order: roll (Z) → elevation (X) → azimuth (Y)
-    // Roll around Z
+    // Rotate the sampling direction opposite to the content rotation.
+    // Order: roll (Z), elevation (X), azimuth (Y).
     let cr = cos(-params.content_roll);
     let sr = sin(-params.content_roll);
     dir = vec3<f32>(dir.x * cr - dir.y * sr, dir.x * sr + dir.y * cr, dir.z);
-    // Elevation around X
     let ce = cos(-params.content_el);
     let se = sin(-params.content_el);
     dir = vec3<f32>(dir.x, dir.y * ce - dir.z * se, dir.y * se + dir.z * ce);
-    // Azimuth around Y
     let ca = cos(-params.content_az);
     let sa = sin(-params.content_az);
     dir = vec3<f32>(dir.x * ca + dir.z * sa, dir.y, -dir.x * sa + dir.z * ca);

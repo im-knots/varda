@@ -1,20 +1,15 @@
 //! MIDI Time Code: eight quarter-frame messages, or one system-exclusive
 //! locate.
 //!
-//! Quarter frames (`0xF1`) each carry one nibble of the time address, so a
-//! position takes eight of them and arrives over two frames of show. The rate
-//! is carried in the last one, which is why MTC needs no rate configuration
-//! while LTC does.
-//!
-//! See /spec/timecode.md § MTC.
+//! Each quarter frame (`0xF1`) carries one nibble of the time address, so a
+//! position takes eight messages over two frames. The last one carries the
+//! rate, so MTC needs no rate setting (LTC does).
 
 use super::TimecodeFrame;
 use crate::transport::TimecodeRate;
 
-/// Rebuilds a position from quarter-frame nibbles.
-///
-/// One of these per device: two masters on two ports are two conversations,
-/// and interleaving their nibbles would assemble a time neither of them sent.
+/// Rebuilds a position from quarter-frame nibbles. Use one per device;
+/// interleaving two masters' nibbles would produce a time neither sent.
 #[derive(Debug, Default, Clone)]
 pub struct QuarterFrameAssembler {
     nibbles: [u8; 8],
@@ -28,13 +23,12 @@ impl QuarterFrameAssembler {
         Self::default()
     }
 
-    /// Feed the data byte of an `F1` message, returning a position once eight
-    /// consecutive pieces have made one.
+    /// Feeds the data byte of an `F1` message. Returns a position once eight
+    /// consecutive pieces have arrived.
     ///
-    /// The sequence takes two frames to send, so a master running forwards is
-    /// two frames further on by the time the last nibble lands, and the reader
-    /// adds them back. Running backwards the sequence arrives in reverse and
-    /// the assembled address is already where the master is.
+    /// Sending takes two frames, so a forward-running position gets two frames
+    /// added. Running backwards, the pieces arrive in reverse and the address
+    /// is already current.
     pub fn feed(&mut self, data: u8) -> Option<TimecodeFrame> {
         let piece = (data >> 4) & 0x07;
         let value = data & 0x0F;
@@ -43,7 +37,7 @@ impl QuarterFrameAssembler {
             Some(previous) if piece == (previous + 1) % 8 => true,
             Some(previous) if previous == (piece + 1) % 8 => false,
             // Any other step means pieces were lost or a locate cut in, so the
-            // half-built address is abandoned rather than half-updated.
+            // partial address is discarded.
             Some(_) => {
                 self.seen = 0;
                 self.nibbles = [0; 8];
@@ -87,11 +81,8 @@ impl QuarterFrameAssembler {
     }
 }
 
-/// The `hh mm ss ff` of a full-frame locate, lifted out of its
-/// system-exclusive wrapper by [`crate::midi`].
-///
-/// Masters send these when they jump, because eight quarter frames would take
-/// two frames to say where they went.
+/// Decodes the `hh mm ss ff` of a full-frame locate, already unwrapped from
+/// its system-exclusive wrapper by [`crate::midi`]. Masters send these on a jump.
 pub fn full_frame(payload: [u8; 4]) -> Option<TimecodeFrame> {
     let [hours_byte, minutes, seconds, frames] = payload;
     valid(
@@ -113,7 +104,7 @@ fn rate_from_bits(bits: u8) -> TimecodeRate {
     }
 }
 
-/// The rate bits a master sends for a rate, for tests and for a future sender.
+/// Rate bits for a rate. Used by tests.
 pub fn rate_bits(rate: TimecodeRate) -> u8 {
     match rate {
         TimecodeRate::Fps24 => 0,
@@ -124,8 +115,8 @@ pub fn rate_bits(rate: TimecodeRate) -> u8 {
     }
 }
 
-/// Reject an address that cannot exist, so a corrupted nibble is dropped rather
-/// than jumping the show to hour 19.
+/// Rejects impossible addresses, so a corrupted nibble drops a frame instead
+/// of jumping the show to hour 19.
 fn valid(
     hours: u8,
     minutes: u8,
@@ -169,8 +160,7 @@ mod tests {
         last
     }
 
-    /// The whole point: eight nibbles in, one position out, at the rate the
-    /// master named.
+    /// Eight nibbles in, one position out, at the master's rate.
     #[test]
     fn eight_nibbles_assemble_the_address_that_was_sent() {
         for rate in [
@@ -183,14 +173,13 @@ mod tests {
             let mut assembler = QuarterFrameAssembler::new();
             let got = feed_all(&mut assembler, &quarter_frames(sent)).expect("a position");
 
-            // Two frames later than the address, because that is how long the
-            // eight messages took to arrive.
+            // Two frames later than the address: the time the eight messages took.
             assert_eq!(got, sent.plus_frames(2), "{rate:?}");
         }
     }
 
-    /// A master scrubbing backwards sends the sequence in reverse, and the
-    /// address it completes on is where it already is.
+    /// Scrubbing backwards sends the sequence in reverse; the completed address
+    /// is the current position.
     #[test]
     fn a_reversed_sequence_reads_as_the_address_it_completes_on() {
         let sent = TimecodeFrame::new(0, 10, 0, 12, TimecodeRate::Fps25);
@@ -201,15 +190,14 @@ mod tests {
         assert_eq!(feed_all(&mut assembler, &messages), Some(sent));
     }
 
-    /// Nibbles lost to a busy bus must not assemble half of one address and
-    /// half of the next: that would be a position the master never sent.
+    /// Lost nibbles must not combine two addresses into one.
     #[test]
     fn a_gap_in_the_sequence_abandons_the_half_built_address() {
         let sent = TimecodeFrame::new(2, 0, 0, 0, TimecodeRate::Fps25);
         let messages = quarter_frames(sent);
 
         let mut assembler = QuarterFrameAssembler::new();
-        // Pieces 0 and 1, then a jump to 5: the run is broken.
+        // Pieces 0 and 1, then a jump to 5, breaks the run.
         assert_eq!(assembler.feed(messages[0]), None);
         assert_eq!(assembler.feed(messages[1]), None);
         assert_eq!(assembler.feed(messages[5]), None);
@@ -220,8 +208,7 @@ mod tests {
         assert!(feed_all(&mut assembler, &messages).is_some());
     }
 
-    /// A locate cannot wait two frames for eight nibbles, so masters send the
-    /// whole address at once.
+    /// A locate sends the whole address in one message.
     #[test]
     fn a_locate_carries_the_whole_address() {
         // 0x41 = 0b010_00001: rate bits 10 (29.97 drop), hour 1.
@@ -231,8 +218,8 @@ mod tests {
         );
     }
 
-    /// A flipped bit on the wire must not throw the show to an impossible
-    /// address; dropping the frame costs one frame of freewheel instead.
+    /// A flipped bit drops the frame instead of jumping to an impossible
+    /// address.
     #[test]
     fn an_impossible_address_is_dropped() {
         assert_eq!(
@@ -257,9 +244,8 @@ mod tests {
         );
     }
 
-    /// The rate rides in the same two bits as the hour, and a locate read at
-    /// the wrong rate lands the show at the wrong second. 29.97 non-drop has no
-    /// code of its own, which is why the LTC patch carries an override.
+    /// The rate shares the hours byte. 29.97 non-drop has no code, so the LTC
+    /// patch has a rate override.
     #[test]
     fn a_locate_carries_the_rate_it_was_sent_at() {
         for (rate, expected) in [

@@ -1,7 +1,6 @@
 //! Transport control routes.
 //!
 //! The transport is a singleton, so these routes take no identifier.
-//! See `/spec/transport.md`.
 
 use axum::Json;
 use axum::extract::State;
@@ -38,7 +37,7 @@ pub struct RecordBody {
 
 #[derive(Deserialize, ToSchema)]
 pub struct RateBody {
-    /// Frame rate positions are displayed and quantised at.
+    /// Frame rate positions are displayed and quantized at.
     pub rate: crate::transport::TimecodeRate,
 }
 
@@ -91,7 +90,6 @@ pub async fn next_cue(State(s): State<SharedState>) -> impl IntoResponse {
 }
 
 /// Locate to one named cue, leaving the transport running or stopped as it was.
-/// What the Performance-mode cue pads and a mapped foot switch both do.
 #[utoipa::path(post, path = "/api/transport/cue/{uuid}", params(("uuid" = String, Path, description = "Cue UUID")), responses((status = 200, body = CommandResult)), tag = "Transport")]
 pub async fn trigger_cue(
     State(s): State<SharedState>,
@@ -128,8 +126,8 @@ pub async fn set_loop(State(s): State<SharedState>, Json(b): Json<LoopBody>) -> 
     }
 }
 
-/// Arm or disarm automation recording. Arming from a stop also rolls the show,
-/// the way the record button does. See `/spec/automation-recording.md`.
+/// Arm or disarm automation recording. Arming from a stop also starts the
+/// transport.
 #[utoipa::path(put, path = "/api/transport/record", request_body = RecordBody, responses((status = 200, body = CommandResult)), tag = "Transport")]
 pub async fn set_record(
     State(s): State<SharedState>,

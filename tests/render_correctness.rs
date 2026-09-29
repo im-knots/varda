@@ -1,15 +1,14 @@
-//! Tier 1 render-correctness tests — see /spec/render-testing.md.
+//! Render-correctness tests.
 //!
-//! Render the mixer headless, read back the linear-light composite texture,
-//! and assert on pixel values whose correct result is known in closed form
-//! (opacity, crossfader, zero-opacity culling, blend-mode algebra, passthrough).
+//! Render the mixer headless, read back the linear-light composite, and check
+//! pixel values with a closed-form answer (opacity, crossfader, zero-opacity
+//! culling, blend-mode algebra, passthrough).
 //!
-//! Tonemap is forced to `Bypass` so the `Rgba16Float` composite holds the raw
-//! linear compositing result, isolating the math from the tonemap curve. Colours
-//! use only 0.0 / 1.0 channels (gamma-invariant) except crossfader-at-0.5, which
-//! is a genuine linear midpoint on the pre-tonemap target.
+//! Tonemap is `Bypass` so the `Rgba16Float` composite holds raw linear values.
+//! Colors use only 0.0 / 1.0 channels (gamma-invariant), except
+//! crossfader-at-0.5, a true linear midpoint.
 //!
-//! Skips cleanly when no GPU adapter is present (same idiom as `benches/`).
+//! Skips without a GPU adapter.
 
 use std::sync::mpsc;
 
@@ -23,9 +22,8 @@ use varda::{
     renderer::tonemap::TonemapMode,
 };
 
-/// Small target — solid-colour compositing is per-pixel uniform, so a tiny
-/// texture is sufficient and fast. Padded to the 256-byte row alignment in the
-/// readback helper.
+/// Small target: solid-color compositing is uniform per pixel. The readback
+/// helper pads rows to 256 bytes.
 const W: u32 = 16;
 const H: u32 = 16;
 
@@ -54,37 +52,24 @@ fn render_once(ctx: &GpuContext, mixer: &mut Mixer) {
     render_frame(ctx, mixer, None);
 }
 
-/// One frame at a stated point on the free-running clock.
+/// One frame at a given point on the free-running clock.
 ///
-/// Any test that grades how a picture changes *between* frames needs this
-/// rather than [`render_once`]: on the wall clock a frame advances `TIME` by
-/// however long the last one took to render, so the metric would partly measure
-/// the machine. Under a software rasterizer on a shared runner that jitter is
-/// larger than the effect being graded.
+/// Tests that grade change between frames use this rather than
+/// [`render_once`]: on the wall clock `TIME` advances by the last frame's
+/// render time, which under a software rasterizer jitters more than the
+/// effect being measured.
 fn render_at(ctx: &GpuContext, mixer: &mut Mixer, frame: usize) {
-    /// The rate a show is authored against, so the steps are the ones a
-    /// performer would see.
+    /// The authoring frame rate.
     const FPS: f32 = 60.0;
     render_frame(ctx, mixer, Some(frame as f32 / FPS));
 }
 
-/// Take the frame scheduler out of every measurement in this file.
+/// Disable frame skipping for every measurement in this file.
 ///
-/// Decks default to `DeckRenderFps::Auto`, which skips a deck when its
-/// wall-clock render cost is over budget, and a skipped deck repeats its
-/// previous picture. Under a software rasterizer everything is over budget, so
-/// the skipping is not occasional, it is most frames.
-///
-/// That has now broken three tests here in two different disguises. The
-/// `liquid_light` pair measured a *median* frame delta and got exactly zero, since
-/// most frames repeated. `tap_latency_does_not_depend_on_channel_order` asked
-/// what a tap showed on frame two and got black, because the deck it taps never
-/// rendered on frame one. Both looked like shader or tap bugs and were neither.
-///
-/// Pinning this centrally rather than per test, because the failure mode is
-/// invisible at the call site: a test does not mention the scheduler, it just
-/// quietly measures it. Any test in this file that cares which frame something
-/// happened on was exposed, whether or not it has failed yet.
+/// Decks default to `DeckRenderFps::Auto`, which skips a deck whose render
+/// cost is over budget and repeats its previous picture. Under a software
+/// rasterizer that is most frames, so any test that cares which frame
+/// something happened on would measure the scheduler instead.
 fn disable_frame_skipping(mixer: &mut Mixer) {
     for channel in mixer.channels_mut() {
         for slot in &mut channel.decks {
@@ -113,8 +98,7 @@ fn render_frame(ctx: &GpuContext, mixer: &mut Mixer, free_run_time: Option<f32>)
 }
 
 /// Read back the mixer composite (`Rgba16Float`) as linear-light RGBA f32,
-/// row-major, `w*h` pixels. Blocks on `poll(Wait)` — allowed here because this
-/// is a test, not the render thread.
+/// row-major, `w*h` pixels. Blocks on `poll(Wait)`.
 fn read_back(ctx: &GpuContext, mixer: &Mixer, width: u32, height: u32) -> Vec<[f32; 4]> {
     read_texture(ctx, mixer.composite_texture(), width, height)
 }
@@ -203,12 +187,12 @@ fn render_and_read(ctx: &GpuContext, mixer: &mut Mixer) -> Vec<[f32; 4]> {
     read_back(ctx, mixer, W, H)
 }
 
-/// Centre pixel of the readback — representative for uniform solid composites.
+/// Center pixel of the readback, representative for uniform solid composites.
 fn center(pixels: &[[f32; 4]]) -> [f32; 4] {
     pixels[((H / 2) * W + W / 2) as usize]
 }
 
-/// A tap deck built the way the engine builds one: through its provider.
+/// A tap deck built through its provider, as the engine builds one.
 fn tap_deck(ctx: &GpuContext, point: &varda::tap::TapPoint) -> Deck {
     use varda::source::DeckSourceProvider;
     let shaders = varda::registry::ShaderRegistry::new();
@@ -229,7 +213,7 @@ fn tap_deck(ctx: &GpuContext, point: &varda::tap::TapPoint) -> Deck {
 
 fn new_mixer(ctx: &GpuContext) -> Mixer {
     let mut mixer = Mixer::new(ctx, W, H).expect("mixer");
-    // Bypass tonemap → composite holds raw linear values.
+    // Bypass tonemap so the composite holds raw linear values.
     mixer.set_tonemap_mode(&ctx.queue, TonemapMode::Bypass);
     mixer
 }
@@ -249,15 +233,13 @@ fn assert_near(v: f32, target: f32, tol: f32, label: &str) {
 
 // ── Compositing capacity ─────────────────────────────────────────────
 
-/// The channel compositor writes one params ring-buffer slot per compositing
-/// deck (`write_params_slot(.., i, ..)` in `channel/mod.rs`), and the ring is
-/// allocated at a fixed `MAX_DRAW_SLOTS` = 16 in `renderer/blit.rs`. Nothing
-/// clamps or grows it — `PolygonBlitPipeline` has `ensure_ring_slots`, the blit
-/// and composite pipelines do not — so deck 17 addresses past the end of the
-/// buffer.
+/// The channel compositor writes one params ring slot per compositing deck,
+/// and the ring has a fixed `MAX_DRAW_SLOTS` = 16 (`renderer/blit.rs`) with no
+/// growth, unlike `PolygonBlitPipeline::ensure_ring_slots`. More decks than
+/// slots must still render correctly.
 ///
-/// Stacked opaque Normal decks mean the topmost is the only visible one, so a
-/// correct run shows the last deck's colour and raises no GPU fault.
+/// Stacked opaque Normal decks show only the top one, so a correct run shows
+/// the last deck's color and raises no GPU fault.
 #[test]
 fn channel_composites_more_decks_than_ring_slots() {
     const DECKS: usize = 20;
@@ -268,8 +250,8 @@ fn channel_composites_more_decks_than_ring_slots() {
     let mut mixer = new_mixer(&ctx);
     let ch = mixer.channel_mut(0).unwrap();
     for i in 0..DECKS {
-        // Every deck below the top is red; the top deck is green, so the
-        // assertion below distinguishes "deck 20 drew" from "deck 16 drew".
+        // Every deck below the top is red and the top is green, so the check
+        // tells "deck 20 drew" from "deck 16 drew".
         let color = if i == DECKS - 1 {
             [0.0, 1.0, 0.0, 1.0]
         } else {
@@ -328,10 +310,9 @@ fn zero_opacity_deck_is_culled_from_output() {
 }
 
 /// Opacity is linear over black: a white deck at opacity `o` composites to
-/// brightness `o` (premultiplied-alpha, linear-light). This is the regression
-/// test for the double-darkening bug where a channel's premultiplied composite
-/// was re-blended with straight-alpha in the mixer, yielding opacity² (0.25 at
-/// half). See /spec/linear-light-compositing.md and /spec/render-testing.md.
+/// brightness `o` (premultiplied alpha, linear light). Re-blending a
+/// premultiplied composite as straight alpha would give opacity² (0.25 at
+/// half).
 #[test]
 fn opacity_is_linear_over_black() {
     let Some(ctx) = headless_gpu() else {
@@ -352,9 +333,9 @@ fn opacity_is_linear_over_black() {
     assert_hi(brightness_at(1.0), "opacity1");
 }
 
-/// The subsequent-channel composite path (composite.wgsl, premultiplied source)
-/// must also avoid double-darkening: crossfader=1 shows channel B, and a
-/// half-opacity white deck in B composites to ~0.5, not 0.25.
+/// The subsequent-channel composite path (composite.wgsl, premultiplied
+/// source) also avoids double-darkening: at crossfader=1 a half-opacity white
+/// deck in B composites to ~0.5, not 0.25.
 #[test]
 fn subsequent_channel_partial_opacity_is_linear() {
     let Some(ctx) = headless_gpu() else {
@@ -425,7 +406,7 @@ fn crossfader_at_half_blends_both_channels() {
     assert_near(px[2], 0.5, 0.2, "xf.5.B");
 }
 
-// ── Blend-mode algebra (GPU-only; cannot be unit-tested on the CPU) ───
+// ── Blend-mode algebra (GPU only) ───────────────────────────────────
 
 /// base (red, Normal) with a top deck (green) in the given blend mode.
 fn blend_mixer(ctx: &GpuContext, top_mode: BlendMode) -> Mixer {
@@ -476,25 +457,22 @@ fn blend_multiply_of_disjoint_primaries_is_black() {
     assert_lo(px[2], "mul.B");
 }
 
-// ── Blend space: pivot modes (spec/blend-modes.md § Blend Space) ─────
+// ── Blend space: pivot modes ────────────────────────────────────────
 //
 // Overlay, Hard Light, and Soft Light pin a branch (or, for Pegtop Soft Light,
-// an identity point) to the constant 0.5 — perceptual middle grey in a
-// gamma-encoded space. Middle grey is linear 0.214, so evaluating these three
-// on linear operands relocates the pivot to sRGB 0.735.
-//
-// The existing blend tests above use only 0.0/1.0 channels, which are
-// gamma-invariant — that is precisely why this shipped undetected. These tests
-// use mid-tones, the only place the defect is observable.
+// an identity point) to 0.5, perceptual middle gray in a gamma-encoded space.
+// Middle gray is linear 0.214, so evaluating them on linear operands moves the
+// pivot to sRGB 0.735. The 0.0/1.0 blend tests above are gamma-invariant and
+// can't see this, so these use mid-tones.
 
-/// Linear value of sRGB 0.5 — perceptual middle grey.
+/// Linear value of sRGB 0.5 (perceptual middle gray).
 const MID_GREY_LINEAR: f32 = 0.214_041_14;
 
-/// `Rgba16Float` carries ~10-11 mantissa bits; 5e-3 is comfortably above the
-/// format's resolution and far below the ~0.1 deltas these tests discriminate.
+/// `Rgba16Float` carries ~10-11 mantissa bits; 5e-3 is above its resolution and
+/// far below the ~0.1 differences these tests check.
 const BLEND_TOL: f32 = 0.005;
 
-/// Base deck at `dst` grey, top deck at `src` grey in `mode`. Greys keep R=G=B
+/// Base deck at `dst` gray, top deck at `src` gray in `mode`. Grays keep R=G=B
 /// so any channel witnesses the result.
 fn grey_blend_mixer(ctx: &GpuContext, mode: BlendMode, src: f32, dst: f32) -> Mixer {
     let mut mixer = new_mixer(ctx);
@@ -513,11 +491,10 @@ fn assert_grey(px: [f32; 4], target: f32, label: &str) {
     assert_near(px[2], target, BLEND_TOL, &format!("{label}.B"));
 }
 
-/// Overlay of middle grey over middle grey is identity.
+/// Overlay of middle gray over middle gray is identity.
 ///
-/// Both branches of Overlay agree at the pivot, so this is exact regardless of
-/// which side the comparison lands on — no knife-edge on `dst < 0.5`.
-/// Linear-operand evaluation instead yields 2·0.214·0.214 = 0.092.
+/// Both Overlay branches agree at the pivot, so the result is exact whichever
+/// side `dst < 0.5` picks. Linear-operand evaluation gives 2·0.214·0.214 = 0.092.
 #[test]
 fn blend_overlay_of_middle_grey_is_identity() {
     let Some(ctx) = headless_gpu() else {
@@ -528,7 +505,7 @@ fn blend_overlay_of_middle_grey_is_identity() {
     assert_grey(px, MID_GREY_LINEAR, "overlay_mid");
 }
 
-/// Hard Light of middle grey over middle grey is identity (same pivot, roles
+/// Hard Light of middle gray over middle gray is identity (same pivot, roles
 /// swapped). Linear-operand evaluation yields 0.092.
 #[test]
 fn blend_hard_light_of_middle_grey_is_identity() {
@@ -540,7 +517,7 @@ fn blend_hard_light_of_middle_grey_is_identity() {
     assert_grey(px, MID_GREY_LINEAR, "hard_light_mid");
 }
 
-/// Pegtop Soft Light is identity when the source is middle grey: the
+/// Pegtop Soft Light is identity when the source is middle gray: the
 /// `(1-2s)` term vanishes at s = 0.5, leaving `2·0.5·d = d`. Linear-operand
 /// evaluation yields 0.118.
 #[test]
@@ -553,10 +530,9 @@ fn blend_soft_light_of_middle_grey_is_identity() {
     assert_grey(px, MID_GREY_LINEAR, "soft_light_mid");
 }
 
-/// Off-pivot reference value, computed from the sRGB-operand formula:
-/// src sRGB 0.25 over dst sRGB 0.75 takes Overlay's screen branch —
-/// `1 - 2·(1-0.25)·(1-0.75) = 0.625` → linear 0.34851.
-/// Linear-operand evaluation yields 0.0936, a 0.255 error.
+/// Off-pivot reference from the sRGB-operand formula: src sRGB 0.25 over dst
+/// sRGB 0.75 takes Overlay's screen branch, `1 - 2·(1-0.25)·(1-0.75) = 0.625`
+/// → linear 0.34851. Linear-operand evaluation gives 0.0936.
 #[test]
 fn blend_overlay_off_pivot_matches_perceptual_reference() {
     let Some(ctx) = headless_gpu() else {
@@ -568,12 +544,10 @@ fn blend_overlay_off_pivot_matches_perceptual_reference() {
     assert_grey(px, 0.348_51, "overlay_off_pivot");
 }
 
-/// Guard: the fix must stay scoped to the pivot modes. Screen is a physical
-/// mode and must keep evaluating on linear operands.
+/// Screen is a physical mode and stays on linear operands.
 ///
-/// Linear (correct): `1 - (1-0.214)² = 0.3823`.
-/// If Screen were wrongly encoded too it would give `1 - 0.5² = 0.75` → linear
-/// 0.5225 — far outside tolerance.
+/// Linear (correct): `1 - (1-0.214)² = 0.3823`. Encoded operands would give
+/// `1 - 0.5² = 0.75` → linear 0.5225.
 #[test]
 fn blend_screen_stays_linear() {
     let Some(ctx) = headless_gpu() else {
@@ -585,30 +559,24 @@ fn blend_screen_stays_linear() {
     assert_grey(px, expected, "screen_linear");
 }
 
-// ── Unified color path (spec/unified-color-pipeline.md) ──────────────
+// ── Unified color path ──────────────────────────────────────────────
 //
-// These three tests replace the unfalsifiable revisit trigger that the
-// superseded linear-light decision left behind ("revisit if users report shadow
-// banding"). They assert the deck stage's numeric behaviour directly.
+// Numeric checks on the deck stage: shadow precision, HDR headroom, and effect
+// precision.
 
-/// Deck targets must preserve shadow gradation.
+/// Deck targets preserve shadow gradation.
 ///
-/// The deck tier used to be `Rgba8Unorm` holding *linear* values, which is the
-/// one combination that loses on both axes: 8-bit precision with linear code
-/// distribution. Re-quantizing linear light into 8 bits collapsed the bottom 41
-/// sRGB levels into 6, so closely-spaced dark values became indistinguishable.
-///
-/// Concretely, at 8-bit: 0.002 → round(0.51) = 1 and 0.004 → round(1.02) = 1 —
-/// the same stored code. On a float target they stay distinct. This asserts every
-/// input in a dark ramp survives as a distinct output.
+/// 8-bit linear storage collapses the bottom 41 sRGB levels into 6 codes: 0.002
+/// and 0.004 both round to code 1. On a float target they stay distinct. Every
+/// input in a dark ramp must come out distinct.
 #[test]
 fn deck_stage_preserves_shadow_gradation() {
     let Some(ctx) = headless_gpu() else {
         return;
     };
 
-    // Deep-shadow ramp. Every step is below linear 0.02 (~5.7 stops down),
-    // which is the region 8-bit linear resolved into ~6 codes.
+    // Deep-shadow ramp, every step below linear 0.02 (~5.7 stops down), where
+    // 8-bit linear has ~6 codes.
     let ramp = [0.001_f32, 0.002, 0.004, 0.006, 0.008, 0.012, 0.016];
 
     let mut observed = Vec::new();
@@ -619,8 +587,8 @@ fn deck_stage_preserves_shadow_gradation() {
         observed.push(center(&render_and_read(&ctx, &mut mixer))[0]);
     }
 
-    // Every distinct input must yield a distinct output. Pairwise, because a
-    // simple dedup count would not say which steps collapsed.
+    // Every distinct input yields a distinct output. Pairwise, so a failure
+    // names which steps collapsed.
     for i in 0..observed.len() {
         for j in (i + 1)..observed.len() {
             assert!(
@@ -635,8 +603,7 @@ fn deck_stage_preserves_shadow_gradation() {
         }
     }
 
-    // And the ramp must stay monotonic — ordering is not merely preserved by
-    // accident of rounding.
+    // And the ramp stays monotonic.
     for w in observed.windows(2) {
         assert!(
             w[1] > w[0],
@@ -645,12 +612,8 @@ fn deck_stage_preserves_shadow_gradation() {
     }
 }
 
-/// A deck must be able to hand HDR to the compositor.
-///
-/// The deck tier's `Rgba8Unorm` target clamped to [0,1], so no value above 1.0
-/// from any deck ever reached the `Rgba16Float` composite. That left the nine
-/// tonemap operators fed by blend arithmetic alone — a signal bounded around
-/// 2.0 that could not exercise curves designed for scene-referred highlights.
+/// A deck can hand values above 1.0 to the compositor, so tonemap operators
+/// see scene-referred highlights.
 #[test]
 fn deck_headroom_above_one_survives_to_the_composite() {
     let Some(ctx) = headless_gpu() else {
@@ -671,26 +634,20 @@ fn deck_headroom_above_one_survives_to_the_composite() {
     );
 }
 
-/// Deck effects must run at the same precision as channel and master effects.
+/// Deck effects run at the compositing format, like channel and master
+/// effects, so precision doesn't depend on which chain an effect is in.
 ///
-/// `Effect::new` defaulted to `Rgba8Unorm` while channel and master effects were
-/// given `compositing_format`, so an effect's precision silently depended on
-/// which chain it was dropped into — and a four-deep deck chain re-quantized
-/// once per stage. See spec/unified-color-pipeline.md.
-///
-/// This asserts the format invariant; `deck_effect_transforms_pixels` covers the
-/// behavioural side. Kept separate because they fail for different reasons — a
-/// format regression here is silent in pixels for mid-tone content, where 8-bit
-/// and float differ by only ~0.001.
+/// Checks the format; `deck_effect_transforms_pixels` checks pixels. For
+/// mid-tones 8-bit and float differ by only ~0.001, so a format regression
+/// would pass a pixel test.
 #[test]
 fn deck_effects_run_at_composite_precision() {
     let Some(ctx) = headless_gpu() else {
         return;
     };
-    // Repo path, not `get_bundled_shader_path()` — that resolves relative to the
-    // executable and only finds shaders in a packaged .app/tarball, so it returns
-    // None under `cargo test` and would make this test silently skip forever.
-    // A missing shader here is a failure, not a skip; only a missing GPU skips.
+    // Repo path, not `get_bundled_shader_path()`, which finds shaders only in a
+    // packaged .app/tarball and returns None under `cargo test`. A missing
+    // shader fails; only a missing GPU skips.
     let invert = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders/invert.fs");
     assert!(
         invert.exists(),
@@ -713,20 +670,14 @@ fn deck_effects_run_at_composite_precision() {
     );
 }
 
-/// Every bundled shader must produce a valid render pipeline.
+/// Every bundled shader produces a valid render pipeline.
 ///
-/// Regression test for a real break introduced while unifying the color path:
-/// the sampler was switched to `Filtering` (correct — `Rgba16Float` is
-/// filterable) but the *texture* bind-group entries still declared
-/// `Float { filterable: false }` whenever a shader had pass buffers. wgpu
-/// rejects that pairing at `create_render_pipeline`, so the app aborted on
-/// startup as soon as it loaded a multipass shader.
-///
-/// Nothing caught it: every other GPU test here uses solid-colour decks or a
-/// single-pass filter, so `num_pass_buffers == 0` and the two settings happened
-/// to agree. This builds every bundled shader through the same constructors the
-/// app uses — `Deck::new` for generators, `Effect::new` for filters — so any
-/// future bind-group-layout mismatch fails here instead of at runtime.
+/// A `Filtering` sampler needs texture entries declared filterable; wgpu
+/// rejects a mismatch at `create_render_pipeline`, which aborts on loading a
+/// multipass shader. Other GPU tests here use solid decks or single-pass
+/// filters (`num_pass_buffers == 0`), so this builds every bundled shader with
+/// the app's constructors: `Deck::new` for generators, `Effect::new` for
+/// filters.
 #[test]
 fn every_bundled_shader_builds_a_pipeline() {
     let Some(ctx) = headless_gpu() else {
@@ -773,10 +724,8 @@ fn every_bundled_shader_builds_a_pipeline() {
             multipass += 1;
         }
 
-        // Three shader kinds, three production constructors. Classify by the image
-        // inputs the shader declares, and use the real constructors so binding
-        // counts come from production code rather than being re-derived (and
-        // drifting) here.
+        // Classify by declared image inputs and use the production
+        // constructors, so binding counts come from production code.
         let has_input = |want: &str| {
             shader
                 .metadata
@@ -801,7 +750,7 @@ fn every_bundled_shader_builds_a_pipeline() {
         };
 
         let built = if is_transition {
-            // Transitions bypass Deck/Effect entirely — own pipeline, own layout.
+            // Transitions have their own pipeline and layout.
             match varda::isf::compile_glsl_to_spirv(&shader.fragment_source, &name) {
                 Ok(spirv) => varda::renderer::TransitionPipeline::new(
                     &ctx.device,
@@ -828,8 +777,7 @@ fn every_bundled_shader_builds_a_pipeline() {
         entries.len(),
         failures.join("\n  ")
     );
-    // Guard the guard: if the classification ever collapses this test would still
-    // pass while covering nothing interesting.
+    // Fail if classification collapses and the test covers nothing.
     assert!(
         multipass >= 8,
         "expected at least 8 multipass shaders (the case that regressed), saw {multipass}"
@@ -841,18 +789,14 @@ fn every_bundled_shader_builds_a_pipeline() {
     );
 }
 
-/// A deck effect must actually transform the deck's pixels.
+/// A deck effect transforms the deck's pixels.
 ///
-/// Regression test for a bug that made every ISF `bool` toggle permanently
-/// false: `ParamValue::Bool` is written as a `u32`, but five shaders declared
-/// their bool inputs as `float`. The bytes `01 00 00 00` reinterpreted as an
-/// IEEE-754 float are `1.4e-45`, so `invert_r > 0.5` was never true and
-/// `invert.fs` returned its input unchanged — the effect ran, bound correctly,
-/// and did nothing.
+/// `ParamValue::Bool` is written as a `u32`; a shader declaring the input as
+/// `float` reads `1.4e-45` and the toggle never turns on, so the effect runs
+/// and does nothing.
 ///
-/// `invert` with default params is a total inversion, so black must come out
-/// white. Two effects must cancel back to black, which also pins the deck
-/// ping-pong parity (an off-by-one there would show the wrong buffer).
+/// `invert` with default params is a full inversion, so black comes out white.
+/// Two effects cancel back to black, which also checks deck ping-pong parity.
 #[test]
 fn deck_effect_transforms_pixels() {
     let Some(ctx) = headless_gpu() else {
@@ -890,35 +834,33 @@ fn deck_effect_transforms_pixels() {
 
 // ── Generator framing ────────────────────────────────────────────────
 
-/// `dull_skull` must keep its subject on screen for the whole animation.
+/// `dull_skull` keeps its subject on screen for the whole animation.
 ///
-/// Its camera used to orbit the world origin without bound (`rotAngle =
-/// PHASE_TIME_1`). Past roughly 68° it crossed behind the backdrop half-space
-/// the skull melts into, and from there every frame was solid black until the
-/// orbit came back around — the shader went dark for a third of its cycle. The
-/// swing is now `sin(PHASE_TIME_1) * sway_range` about the skull's mean
-/// position, which bounds it and keeps the camera in front of the backdrop.
+/// An unbounded camera orbit crosses behind the backdrop past ~68° and renders
+/// black for a third of the cycle. The swing is `sin(PHASE_TIME_1) *
+/// sway_range` about the skull's mean position, which keeps the camera in
+/// front of the backdrop.
 ///
-/// Driven at maximum `speed` and `rot_speed` so a few hundred frames stand in
-/// for minutes of a set. Measured over these samples at this resolution:
+/// Driven at maximum `speed` and `rot_speed` so a few hundred frames cover
+/// minutes of a set. Measured at this resolution:
 ///
-/// | metric                | fixed            | buggy                  |
+/// | metric                | bounded          | unbounded              |
 /// |-----------------------|------------------|------------------------|
 /// | dark-pixel fraction   | 0.000 throughout | 0.49–1.00 on 12/30     |
 /// | mean horizontal edge  | 0.0034–0.0062    | 0.0000 while blacked   |
 ///
-/// The dark fraction is the decisive one. The edge floor additionally catches
-/// the frames where the drifting backdrop swallowed the skull into a
-/// featureless blob, which measured 0.0013–0.0024.
+/// The dark fraction is the main check. The edge floor also catches frames
+/// where the backdrop swallows the skull into a featureless blob
+/// (0.0013–0.0024).
 #[test]
 fn dull_skull_stays_in_frame_for_the_whole_sway() {
     const SW: u32 = 320;
     const SH: u32 = 180;
     const FRAMES: usize = 400;
     const SAMPLE_EVERY: usize = 20;
-    /// Fixed measures 0.000; buggy reaches 1.000.
+    /// Bounded measures 0.000; unbounded reaches 1.000.
     const MAX_DARK_FRACTION: f32 = 0.25;
-    /// Fixed measures 0.0034 at worst; a swallowed skull measures 0.0024.
+    /// Bounded measures 0.0034 at worst; a swallowed skull measures 0.0024.
     const MIN_EDGE: f32 = 0.0020;
 
     let Some(ctx) = headless_gpu() else {
@@ -935,9 +877,8 @@ fn dull_skull_stays_in_frame_for_the_whole_sway() {
     deck.generator_params.set_float("rot_speed", 2.0);
     mixer.channel_mut(0).unwrap().add_deck(deck);
 
-    // Thresholds above were measured on gamma-encoded values — the space the
-    // audience sees, and the only one in which "is anything visible" means
-    // anything. The composite is linear, so encode before measuring.
+    // Thresholds were measured on gamma-encoded values, what the audience
+    // sees. The composite is linear, so encode before measuring.
     let encode = |v: f32| -> f32 {
         if v <= 0.003_130_8 {
             v * 12.92
@@ -990,37 +931,32 @@ fn dull_skull_stays_in_frame_for_the_whole_sway() {
 
 /// Automating a control must not make the picture stutter.
 ///
-/// Passing `no_shader_scales_accumulated_phase_by_a_parameter` is necessary but
-/// not sufficient. A parameter can be perfectly continuous and still be an
-/// *amplitude* — something that sets where the image is sampled rather than how
-/// fast it moves — and an LFO on an amplitude drives the picture out and back at
-/// the LFO's rate. That reads as sloshing, and it is what an operator means when
-/// they say an automated fader looks stuttery.
+/// A continuous parameter can still be an amplitude, setting where the image
+/// is sampled rather than how fast it moves, and an LFO on an amplitude
+/// sloshes the picture at the LFO's rate.
 ///
-/// `liquid_light.fs`'s Agitation was built both ways, so the two are measured
-/// against each other here. Per-frame luminance change under a 1 Hz triangle
-/// LFO sweeping Agitation 0.1..0.9, against the same shader with the fader
-/// parked at the midpoint:
+/// Per-frame luminance change of `liquid_light.fs` under a 1 Hz triangle LFO
+/// sweeping Agitation 0.1..0.9, against the fader parked at the midpoint:
 ///
 /// | Agitation implemented as | parked  | automated | ratio  |
 /// |--------------------------|---------|-----------|--------|
 /// | domain-warp gain         | 0.00135 | 0.01814   | 13.5x  |
 /// | mixing rate (slot 1)     | 0.00475 | 0.00459   | 0.97x  |
 ///
-/// A rate scores at or below 1.0 because the LFO spends half its time below the
-/// midpoint, slowing the churn. Anything much above 1.0 means the fader is
-/// moving the fluid rather than stirring it.
+/// A rate scores at or below 1.0 because the LFO spends half its time below
+/// the midpoint. Much above 1.0 means the fader moves the fluid rather than
+/// stirring it.
 #[test]
 fn liquid_light_agitation_survives_being_automated() {
     const SW: u32 = 256;
     const SH: u32 = 144;
     const WARMUP: usize = 300;
     const MEASURE: usize = 120;
-    /// Triangle period in frames — a brisk but ordinary LFO.
+    /// Triangle period in frames, a typical LFO.
     const PERIOD: usize = 60;
     const LOW: f32 = 0.1;
     const HIGH: f32 = 0.9;
-    /// Rate scores 0.97x, the amplitude version it replaced scored 13.5x.
+    /// A rate scores 0.97x, an amplitude 13.5x.
     const MAX_RATIO: f32 = 3.0;
 
     let Some(ctx) = headless_gpu() else {
@@ -1041,8 +977,7 @@ fn liquid_light_agitation_survives_being_automated() {
     };
 
     // Median per-frame change over MEASURE frames, with Agitation set by
-    // `automate` each frame. Median rather than mean so one outlier cannot
-    // carry the result either way.
+    // `automate` each frame. Median so one outlier can't decide it.
     let run = |automate: &dyn Fn(usize) -> f32| -> f32 {
         let mut mixer = Mixer::new(&ctx, SW, SH).expect("mixer");
         mixer.set_tonemap_mode(&ctx.queue, TonemapMode::Bypass);
@@ -1050,26 +985,12 @@ fn liquid_light_agitation_survives_being_automated() {
         deck.generator_params.set_float("flow_speed", 0.5);
         deck.generator_params.set_float("agitation", automate(0));
         mixer.channel_mut(0).unwrap().add_deck(deck);
-        // Decks default to adaptive skipping keyed on wall-clock render cost, and
-        // a skipped frame repeats the previous picture. Under a software
-        // rasterizer everything is over budget, so nearly every frame is skipped
-        // and the median delta below is exactly zero: this test failed on Windows
-        // with a parked delta of 0.000000, tripping its own "proves nothing"
-        // guard on a shader that was animating perfectly well.
-        //
-        // The chroma_flow test one screen down has pinned this since it was
-        // written; these two had not. Note the rotation test's *mean* baseline
-        // survived where this *median* one did not, which is what a mostly
-        // skipped run looks like.
+        // No adaptive skipping: a skipped frame repeats the picture, and under a
+        // software rasterizer most frames skip, making the median delta zero.
         mixer.channel_mut(0).unwrap().decks[0].render_fps = varda::channel::DeckRenderFps::Fixed(0);
 
-        // `render_at`, not `render_once`: this grades how the picture changes
-        // *between* frames, so it needs the free-running clock stepped in equal
-        // increments rather than by however long the last frame took. On the
-        // wall clock under a software rasterizer, frames are slow enough that
-        // the flow animation aliases, and the dish reads as perfectly still:
-        // this test failed on Windows with a parked delta of 0.000000, tripping
-        // its own "proves nothing" guard.
+        // `render_at`, not `render_once`: equal clock steps, so slow frames
+        // under a software rasterizer don't alias the animation into stillness.
         for frame in 0..WARMUP {
             render_at(&ctx, &mut mixer, frame);
         }
@@ -1080,8 +1001,8 @@ fn liquid_light_agitation_survives_being_automated() {
                 .deck
                 .generator_params
                 .set_float("agitation", automate(frame));
-            // `automate` keys the LFO off the measurement index, while the clock
-            // continues from the warmup, so both stay monotonic.
+            // `automate` keys the LFO off the measurement index, while the
+            // clock continues from the warmup, so both stay monotonic.
             render_at(&ctx, &mut mixer, WARMUP + frame);
             let cur = luminance(&ctx, &mixer);
             deltas.push(mean_delta(&prev, &cur));
@@ -1103,7 +1024,7 @@ fn liquid_light_agitation_survives_being_automated() {
         LOW + (HIGH - LOW) * triangle
     });
 
-    // Guard the guard: a frozen dish makes any automation look smooth.
+    // A frozen dish would make any automation look smooth.
     assert!(
         parked > 1e-4,
         "the dish is not moving with the fader parked ({parked:.6}), so this proves nothing"
@@ -1114,53 +1035,42 @@ fn liquid_light_agitation_survives_being_automated() {
         ratio <= MAX_RATIO,
         "automating Agitation makes the fluid slosh: {automated:.5} per frame under a \
          {PERIOD}-frame LFO against {parked:.5} parked ({ratio:.1}x — allowed {MAX_RATIO:.1}x). \
-         Agitation is setting a position rather than a rate; see spec/phase-accumulators.md \
-         § Authoring Rules."
+         Agitation is setting a position rather than a rate."
     );
 }
 
-/// Moving a rate fader must change the speed of the motion, not cut to a
-/// different frame of it.
+/// Moving a rate fader changes the speed of the motion, not the frame shown.
 ///
-/// This is the behavioural half of the phase-accumulator contract; the source
-/// half is `no_shader_scales_accumulated_phase_by_a_parameter` in
-/// `tests/shader_param_contract_guard.rs`. Both exist because the guard reads
-/// source and so cannot see a value that crosses a function boundary, while
-/// this measures pixels and so catches the mistake however it is spelled.
+/// Pixel-side check for the phase-accumulator contract; the source-side check
+/// is `no_shader_scales_accumulated_phase_by_a_parameter` in
+/// `tests/shader_param_contract_guard.rs`, which can't follow values across
+/// function calls.
 ///
-/// The subject is `liquid_light`'s Dish Rotation, chosen because it is a *pure*
-/// rate: it drives accumulator slot 2 and has no other effect on the image. An
-/// earlier version of this test used Agitation, which was where the bug
-/// actually shipped, and had to be retargeted when Agitation gained a
-/// legitimate instantaneous effect — it now opens the domain warp as well as
-/// speeding the flow. Once a fader changes the picture for a good reason, a
-/// pixel metric can no longer tell that change apart from a teleport: measured
-/// against the restored bug, correct code scored 1.26x and buggy code 1.90x,
-/// which is not a gap a threshold can live in. A pure rate keeps the
-/// measurement clean.
+/// Uses `liquid_light`'s Dish Rotation because it is a pure rate (accumulator
+/// slot 2, no other effect on the image). A fader with an instantaneous effect
+/// too can't be told apart from a jump by a pixel metric.
 ///
 /// Mean per-pixel luminance change between consecutive frames, 30 s of
 /// accumulated phase in, with Dish Rotation nudged from 0.40 to 0.45:
 ///
-/// | metric                       | fixed  | buggy  |
-/// |------------------------------|--------|--------|
-/// | steady-state delta per frame | 0.0031 | 0.0021 |
-/// | delta across the fader move  | 0.0034 | 0.0369 |
-/// | ratio                        | 1.1x   | 17.6x  |
+/// | metric                       | correct | scaled |
+/// |------------------------------|---------|--------|
+/// | steady-state delta per frame | 0.0031  | 0.0021 |
+/// | delta across the fader move  | 0.0034  | 0.0369 |
+/// | ratio                        | 1.1x    | 17.6x  |
 ///
-/// Buggy numbers taken by writing `float dish = PHASE_TIME_2 * swirl;`, which
-/// is the shape the guard and this test both exist to reject.
+/// "Scaled" is `float dish = PHASE_TIME_2 * swirl;`.
 #[test]
 fn liquid_light_dish_rotation_changes_speed_rather_than_position() {
     const SW: u32 = 256;
     const SH: u32 = 144;
     /// 30 s at 60 fps. The jump grows with accumulated phase, so a short run
-    /// would let the bug through; a set lasts far longer than this.
+    /// would miss it.
     const WARMUP: usize = 1800;
     /// Frames of steady state to average the baseline over.
     const BASELINE_FRAMES: usize = 10;
-    /// Fixed measures 1.1x, buggy 17.6x, so the threshold sits between them
-    /// with room for run-to-run variation on either side.
+    /// Correct measures 1.1x, scaled 17.6x; the threshold sits between with
+    /// margin both ways.
     const MAX_RATIO: f32 = 5.0;
 
     let Some(ctx) = headless_gpu() else {
@@ -1176,8 +1086,7 @@ fn liquid_light_dish_rotation_changes_speed_rather_than_position() {
     deck.generator_params.set_float("flow_speed", 1.0);
     deck.generator_params.set_float("swirl", 0.4);
     mixer.channel_mut(0).unwrap().add_deck(deck);
-    // Same reason as the agitation test above: no adaptive skipping, so the
-    // metric grades the shader rather than the scheduler.
+    // No adaptive skipping, so the metric grades the shader, not the scheduler.
     mixer.channel_mut(0).unwrap().decks[0].render_fps = varda::channel::DeckRenderFps::Fixed(0);
 
     let luminance = |ctx: &GpuContext, mixer: &Mixer| -> Vec<f32> {
@@ -1190,10 +1099,8 @@ fn liquid_light_dish_rotation_changes_speed_rather_than_position() {
         a.iter().zip(b).map(|(x, y)| (x - y).abs()).sum::<f32>() / a.len() as f32
     };
 
-    // Deterministic clock, for the same reason as the agitation test above: this
-    // grades between-frame change, so wall-clock frame cost would be part of the
-    // measurement. That test tripped its identical "proves nothing" guard on
-    // Windows; this one has not yet, which is luck rather than a difference.
+    // Deterministic clock: this grades between-frame change, so wall-clock
+    // frame cost must not enter the measurement.
     for frame in 0..WARMUP {
         render_at(&ctx, &mut mixer, frame);
     }
@@ -1208,7 +1115,7 @@ fn liquid_light_dish_rotation_changes_speed_rather_than_position() {
     }
     baseline /= BASELINE_FRAMES as f32;
 
-    // Guard the guard: a static image would make any jump look proportional.
+    // A static image would make any jump look proportional.
     assert!(
         baseline > 1e-4,
         "the dish is not turning (baseline {baseline:.6}), so this proves nothing"
@@ -1225,26 +1132,20 @@ fn liquid_light_dish_rotation_changes_speed_rather_than_position() {
         jump <= baseline * MAX_RATIO,
         "moving Dish Rotation spun the dish: {jump:.4} against a steady-state {baseline:.4} \
          ({:.1}x — allowed {MAX_RATIO:.1}x). Accumulated phase is being scaled by a live \
-         parameter again; see spec/phase-accumulators.md.",
+         parameter again.",
         jump / baseline
     );
 }
 
-/// A shader that emits above display white must reach the compositor unclamped.
+/// A shader that emits above display white reaches the compositor unclamped.
 ///
-/// The clamp-removal pass (spec/unified-color-pipeline.md step 7) replaced the
-/// terminal `clamp(col, 0.0, 1.0)` in 37 shaders with `max(col, 0.0)` — dropping
-/// the ceiling while keeping the floor, so negatives never reach the blend math.
-/// Before that, generators and filters silently limited to display white and the
-/// nine tonemap operators could never see a signal wide enough to exercise them.
+/// Shaders end with `max(col, 0.0)` rather than `clamp(col, 0.0, 1.0)`, keeping
+/// the floor so negatives never reach the blend math. A clamping filter
+/// removes headroom produced upstream.
 ///
-/// `glow_bloom` is purely additive (`result = src.rgb + bloom * amount * color`),
-/// so white input plus bloom must exceed 1.0. Params are pinned rather than left
-/// at defaults so the expected value is deterministic.
-///
-/// This also covers the filter half of the pass, which matters more than the
-/// generator half: a filter that clamps destroys headroom produced *upstream*,
-/// so every clamping filter was an HDR limiter sitting in the chain.
+/// `glow_bloom` is additive (`result = src.rgb + bloom * amount * color`), so
+/// white input plus bloom exceeds 1.0. Params are pinned so the expected value
+/// is deterministic.
 #[test]
 fn additive_filter_emits_above_display_white() {
     let Some(ctx) = headless_gpu() else {
@@ -1260,7 +1161,7 @@ fn additive_filter_emits_above_display_white() {
 
     let shader = varda::isf::ISFShader::from_file(&path).expect("parse glow_bloom.fs");
     let mut fx = varda::deck::Effect::new(&ctx, shader).expect("deck effect");
-    // threshold 0 → all of a white input counts as "bright"; full glow amount.
+    // threshold 0: all of a white input counts as bright; full glow amount.
     fx.params.set_float("threshold", 0.0);
     fx.params.set_float("glow_amount", 1.0);
     fx.params.set_color("glow_color", [1.0, 1.0, 1.0, 1.0]);
@@ -1274,45 +1175,31 @@ fn additive_filter_emits_above_display_white() {
     );
 }
 
-/// An effect fed smoothly changing input must change smoothly.
+/// An effect fed smoothly changing input changes smoothly.
 ///
-/// `chroma_flow` grades every pixel against a palette of anchor colours and
-/// gives each colour group its own flow direction, so the anchors decide how the
-/// whole frame moves. In auto mode those anchors were re-derived every frame by
-/// greedy farthest-point selection over a grid of samples. Selection is
-/// discontinuous: when two candidates are near-tied, a change in the picture too
-/// small to see swaps which one wins, and that slot's anchor jumps to an
-/// unrelated colour. Because every pixel is graded against it, one jump
-/// re-groups the entire frame at once and the image lurches — the "jitters every
-/// so often" report, against a source that is itself perfectly smooth.
+/// `chroma_flow` grades every pixel against a palette of anchor colors, and
+/// each color group has its own flow direction. Auto mode derives anchors by
+/// greedy farthest-point selection, which is discontinuous: near-tied
+/// candidates swap on invisible changes, an anchor jumps, and the whole frame
+/// regroups at once.
 ///
-/// Measured as the worst single-frame change over the median one, which is what
-/// separates an occasional lurch from ordinary motion. A fixed palette is the
-/// control: it holds the anchors still, so whatever it scores is the harness and
-/// the content rather than the effect. Auto has to stay near it.
+/// Measured as tail frame change over median change, against a fixed palette
+/// as control (the harness and content without anchor motion). The palette
+/// persists across frames, slots match the closest available anchor pair each
+/// round, and the settle is short enough that a lagging anchor can't sweep a
+/// flat region across a boundary in one frame.
 ///
-/// Persisting the palette fixed most of it. Two further faults surfaced later,
-/// both of them in the machinery meant to keep the palette calm. Slots were
-/// matched to fresh anchors in slot-index order, so slot 0 took whichever anchor
-/// it liked and the last slot was left with whatever remained — possibly nothing
-/// like where it sat. And the settle was easing the anchors so far behind the
-/// picture that a lagging anchor would eventually sweep a whole flat region
-/// across a decision boundary in one frame, which meant turning Palette
-/// Stability *up* made the picture measurably less stable. Matching the closest
-/// available pair each round and shortening the settle fixed both.
+/// | source          | per-frame | persisted | + closest-pair matching, short settle |
+/// |-----------------|-----------|-----------|---------------------------------------|
+/// | `dull_skull`    | 7.44x     | 5.77x     | 1.16x                                 |
+/// | `liquid_light`  | 5.84x     | 1.10x     | 1.10x                                 |
 ///
-/// | source          | original | palette persisted | + ordered matching, short settle |
-/// |-----------------|----------|-------------------|----------------------------------|
-/// | `dull_skull`    | 7.44x    | 5.77x             | 1.16x                            |
-/// | `liquid_light`  | 5.84x    | 1.10x             | 1.10x                            |
-///
-/// Auto now scores at or below the fixed-palette control. The middle column was
-/// read against a different transport model, so it is indicative rather than
-/// directly comparable; the outer two were measured on the current one.
+/// The middle column used a different transport model, so it is indicative
+/// only.
 #[test]
 fn chroma_flow_auto_palette_does_not_lurch_on_smooth_input() {
-    /// One configuration's delta distribution, not just its ratio, so a failure
-    /// says what the frames actually did.
+    /// One configuration's delta distribution, not only its ratio, so a
+    /// failure shows what the frames did.
     struct Spike {
         ratio: f32,
         median: f32,
@@ -1335,33 +1222,20 @@ fn chroma_flow_auto_palette_does_not_lurch_on_smooth_input() {
     const SH: u32 = 128;
     const WARMUP: usize = 30;
     const MEASURE: usize = 90;
-    /// How much worse than the fixed-palette control the automatic one is
-    /// allowed to be.
+    /// How much worse than the fixed-palette control the auto palette may be.
     ///
-    /// Graded against the control rather than against an absolute number,
-    /// because the absolute figure measures the effect and the source as much as
-    /// the palette: a warp with a hard grade on the way out produces spiky frame
-    /// deltas by design, and a fixed threshold set against one transport model
-    /// silently becomes a different test under the next. The control holds the
-    /// anchors still and is otherwise identical, so it isolates the one thing
-    /// this is about.
+    /// Relative to the control because the absolute figure depends on the
+    /// effect and source as much as the palette; the control differs only in
+    /// holding anchors still.
     ///
-    /// Derived rather than chosen. With the true maximum this was 1.4 against a
-    /// worst observed ratio of 1.17, a 20% allowance. Measured on the p95
-    /// statistic the worst observed ratio is 1.08 (`taste_of_noise` at stability
-    /// 0), and 1.3 keeps the same 20% allowance, so the guard is about as
-    /// sensitive to a real regression as it was before.
-    ///
-    /// If this trips again on a software rasterizer, the answer is to find out
-    /// why the *tail* moved, not to widen this. A tail that shifts is the effect
-    /// changing behaviour, which is what the test is for.
+    /// Worst observed p95 ratio is 1.08 (`taste_of_noise` at stability 0); 1.3
+    /// allows 20%. If this trips on a software rasterizer, find out why the tail
+    /// moved rather than widening it.
     const MAX_SPIKE_RATIO: f32 = 1.3;
     /// The control settings graded, lowest to highest.
     const STABILITIES: [f32; 3] = [0.0, 0.5, 1.0];
     /// Slack on "steadier as the control rises". Metal reads 1.93 / 1.94 / 1.93,
-    /// flat within noise, so a small rise between neighbours is measurement
-    /// rather than inversion. A real inversion is far larger: the regression
-    /// this guards against scored 1.81 rising to 4.64.
+    /// flat within noise. A real inversion is far larger (1.81 rising to 4.64).
     const MONOTONIC_TOLERANCE: f32 = 1.15;
 
     let Some(ctx) = headless_gpu() else {
@@ -1383,16 +1257,9 @@ fn chroma_flow_auto_palette_does_not_lurch_on_smooth_input() {
 
     // Tail-frame-over-median change for one configuration.
     //
-    // The p95 delta rather than the maximum. The maximum is a single frame out
-    // of ninety, and on this content it sits well clear of the rest: for
-    // `taste_of_noise` the top six deltas run 1.43, 1.45, 1.45, 1.47, 1.49 and
-    // then 1.66, so the statistic was decided by one outlier. Which frame that
-    // is, and how far it sticks out, differs between renderers, and the test
-    // passed on Metal while failing on both lavapipe and WARP for that reason
-    // alone.
-    //
-    // A lurch big enough to matter lifts the whole tail, not one frame, so p95
-    // still sees it while no longer being decided by float noise.
+    // p95 rather than max: the max is one frame of ninety and differs between
+    // renderers (for `taste_of_noise` the top deltas run 1.43, 1.45, 1.45,
+    // 1.47, 1.49, then 1.66). A lurch that matters lifts the whole tail.
     let spike_ratio = |src_name: &str, manual: bool, stability: f32| -> Spike {
         let src =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("shaders/{src_name}"));
@@ -1406,10 +1273,8 @@ fn chroma_flow_auto_palette_does_not_lurch_on_smooth_input() {
         fx.params.set_bool("palette_mode", manual);
         fx.params.set_float("palette_stability", stability);
         ch.decks[0].deck.add_effect(fx);
-        // Decks default to adaptive skipping keyed on wall-clock render cost. A
-        // skipped frame repeats the previous picture, which lands in the metric
-        // as a near-zero delta or a doubled one, so the measurement would partly
-        // grade the scheduler and vary with machine load.
+        // No adaptive skipping: a skipped frame repeats the picture and shows
+        // as a near-zero or doubled delta, grading the scheduler instead.
         ch.decks[0].render_fps = varda::channel::DeckRenderFps::Fixed(0);
 
         for frame in 0..WARMUP {
@@ -1430,14 +1295,9 @@ fn chroma_flow_auto_palette_does_not_lurch_on_smooth_input() {
             median > 0.0,
             "{src_name} is animated, so frames must differ; got a static image"
         );
-        // The absolute figures come back with the ratio, not just the ratio.
-        //
-        // This has now failed on Windows three times reporting exactly 4.64
-        // against 1.95, across two different versions of the shader, and a ratio
-        // alone cannot say why. The shape of the distribution can: a low median
-        // beside a high p95 is repeated frames, a high median is a picture that
-        // never settles, and a spread across stability settings would point at
-        // the palette while a flat one would not.
+        // Return absolute figures too: a low median beside a high p95 means
+        // repeated frames, a high median means a picture that never settles,
+        // and spread across stability settings points at the palette.
         Spike {
             ratio: deltas[deltas.len() * 95 / 100] / median,
             median,
@@ -1448,10 +1308,7 @@ fn chroma_flow_auto_palette_does_not_lurch_on_smooth_input() {
     };
 
     for src in ["dull_skull.fs", "liquid_light.fs", "taste_of_noise.fs"] {
-        // Across the whole of Palette Stability, not just its default. Turning
-        // that control up used to make the picture measurably *less* steady,
-        // which is the opposite of what it promises, and a single reading at the
-        // default would not have caught it.
+        // Across the whole Palette Stability range, not only its default.
         let per: Vec<Spike> = STABILITIES
             .into_iter()
             .map(|stability| spike_ratio(src, false, stability))
@@ -1465,17 +1322,11 @@ fn chroma_flow_auto_palette_does_not_lurch_on_smooth_input() {
         }
         let report = format!("\n  auto:{detail}\n    manual (fixed palette): {manual_spike}");
 
-        // 1. Steadier as the control goes up, which is the promise in the name.
+        // 1. Steadier as the control goes up.
         //
-        // This used to assert the *worst* stability setting against a fixed
-        // palette, and that is a stronger claim than the control makes. At
-        // stability 0.0 the palette is asked to react in about five frames, so
-        // when an anchor genuinely changes it is supposed to follow visibly. The
-        // old form only ever passed because on Metal the anchors do not change
-        // during the window at all, which makes every setting look identical and
-        // the assertion vacuous. Windows, where they do change, reported
-        // 4.64 / 2.80 / 1.81 across the three settings: the control working,
-        // failing a test that could not tell the difference.
+        // Stability 0.0 asks the palette to react in about five frames, so a
+        // real anchor change shows at low settings. Comparing the lowest
+        // setting against a fixed palette would be wrong.
         for (i, pair) in per.windows(2).enumerate() {
             assert!(
                 pair[1].ratio <= pair[0].ratio * MONOTONIC_TOLERANCE,
@@ -1489,9 +1340,8 @@ fn chroma_flow_auto_palette_does_not_lurch_on_smooth_input() {
             );
         }
 
-        // 2. And at the top of the control, an auto palette has to be as steady
-        //    as one that never moves. This is where the anchors-jumped failure
-        //    would show: an anchor that hops regardless of stability lands here.
+        // 2. At the top setting, an auto palette is as steady as a fixed one.
+        //    An anchor that hops regardless of stability fails here.
         let steadiest = per.last().expect("STABILITIES is not empty");
         assert!(
             steadiest.ratio < manual * MAX_SPIKE_RATIO,
@@ -1503,46 +1353,25 @@ fn chroma_flow_auto_palette_does_not_lurch_on_smooth_input() {
     }
 }
 
-/// The auto palette must be *state*, carried between frames, not a fresh
-/// derivation each frame.
+/// The auto palette is state carried between frames, not re-derived each
+/// frame.
 ///
-/// This exists because the lurch test one screen up cannot see any of that.
-/// Checked by deliberately breaking the shader on macOS: with the temporal
-/// easing deleted, with the nearest-anchor pairing bypassed, and with **both**
-/// gone, `chroma_flow_auto_palette_does_not_lurch_on_smooth_input` still passes.
-/// Its content never produces the near-tied candidates those mitigations exist
-/// to survive, so on the platform this shader is developed on it cannot tell the
-/// shipped shader from one with every anti-lurch measure removed. It only bites
-/// on Windows, where it has been failing at 4.64x against an allowed 1.3x, and a
-/// green run locally proves nothing.
+/// The lurch test above passes on Metal even with easing and nearest-anchor
+/// pairing removed, because its content never produces near-tied candidates.
+/// This grades the mechanism directly, which needs the palette to be the only
+/// thing moving:
 ///
-/// Grading the mechanism instead of a symptom needs the palette to be the only
-/// thing moving, which takes holding still everything that normally is:
+/// * A static source: `gradient.fs` with `anim_speed` at its default of zero,
+///   which still has three colors.
+/// * Chroma Flow's warp, zoom, drift and trail zeroed, since flow otherwise
+///   dominates whole-frame luminance.
 ///
-/// * A static source. `gradient.fs` has `anim_speed` defaulting to zero, so its
-///   phase accumulator never advances, and it still carries three colours.
-/// * Chroma Flow's own warp, zoom, drift and trail, all zeroed. The first
-///   attempt at this test left them running and was **inert**, passing with
-///   persistence broken and with easing removed, because whole-frame luminance
-///   delta is dominated by the flow rather than by the palette.
+/// Even then luminance barely sees the palette, so the final pass is replaced
+/// with one that shows `paletteBuf`; the palette pass runs as shipped.
 ///
-/// Even with those held, whole-frame luminance barely sees the palette: the
-/// flow buffer dominates it, and the snapped and eased palettes score the same
-/// to eight digits. So the final pass is replaced with one that shows
-/// `paletteBuf` itself, and the palette pass, the thing under test, runs as
-/// shipped.
-///
-/// A static source seeds the palette on its first frame with nothing left to
-/// ease toward, so the source changes once the picture has settled, and the
-/// palette is graded on how it follows. Carried and eased, it is still moving
-/// ten frames later. Re-derived or snapped, it lands in one frame and stops.
-///
-/// Measured, not chosen: after the change the shipped shader keeps 0.695 of its
-/// first frame's movement at frame ten, and with the easing removed it keeps
-/// none. An earlier version graded the settle from a cleared buffer instead,
-/// which only moved because the palette pass ran a frame behind its input and
-/// so seeded from black; that lag is gone. See
-/// /spec/performance-hot-paths.md item D.
+/// The source changes once the palette has settled. Carried and eased, the
+/// palette still moves ten frames later (0.695 of its first frame's
+/// movement); snapped, it lands in one frame and stops (0.0).
 #[test]
 fn chroma_flow_auto_palette_is_carried_between_frames() {
     const W: u32 = 64;
@@ -1550,14 +1379,14 @@ fn chroma_flow_auto_palette_is_carried_between_frames() {
     /// Frames for the flow buffer and palette to settle before the change.
     const SETTLE: usize = 60;
     /// `tau` is 0.5s at full stability and a frame is 1/60s, so an easing
-    /// palette is nowhere near settled by here.
+    /// palette is far from settled by here.
     const LATE: usize = 10;
     /// Movement at LATE as a fraction of the first frame's after the change:
-    /// 0.695 eased, 0.0 snapped. The threshold sits midway.
+    /// 0.695 eased, 0.0 snapped. The threshold is midway.
     const MIN_RESIDUAL: f32 = 0.35;
-    /// How much a frame delta may exceed the one before it. Easing decays, so
-    /// the true value is 1.0; measured on Metal the worst step is 1.11. The
-    /// allowance is for readback noise, not for a real rise.
+    /// How much a frame delta may exceed the previous one. Easing decays, so
+    /// the true value is 1.0; the worst on Metal is 1.11. The allowance covers
+    /// readback noise.
     const MAX_RISE: f32 = 1.35;
 
     let Some(ctx) = headless_gpu() else {
@@ -1590,7 +1419,7 @@ fn chroma_flow_auto_palette_is_carried_between_frames() {
         let mut fx = varda::deck::Effect::new(&ctx, fx_shader).expect("deck effect");
         fx.params.set_bool("palette_mode", false);
         fx.params.set_float("palette_stability", 1.0);
-        // Everything that moves a pixel for any reason other than the palette.
+        // Everything that moves a pixel other than the palette.
         for still in [
             "zoom",
             "rotate",
@@ -1625,8 +1454,7 @@ fn chroma_flow_auto_palette_is_carried_between_frames() {
         .generator_params
         .set_color("color_c", [1.0, 0.35, 0.0, 1.0]);
 
-    // Every consecutive frame, not just two windows, because the *shape* of the
-    // sequence says more than any single pair.
+    // Every consecutive frame, since the shape of the sequence matters.
     let mut prev = luminance(&ctx, &mixer);
     let mut deltas = Vec::with_capacity(LATE);
     for frame in (SETTLE + 1)..=(SETTLE + LATE) {
@@ -1643,7 +1471,7 @@ fn chroma_flow_auto_palette_is_carried_between_frames() {
         "the palette did not follow the source at all, so this proves nothing\n  sequence: {deltas:.8?}"
     );
 
-    // 1. It has to still be moving late, which is what carried state buys.
+    // 1. Still moving late, because state is carried.
     let residual = late / early;
     assert!(
         residual >= MIN_RESIDUAL,
@@ -1654,14 +1482,11 @@ fn chroma_flow_auto_palette_is_carried_between_frames() {
          \n  sequence: {deltas:.8?}"
     );
 
-    // 2. And it has to move *every* frame, decaying smoothly.
+    // 2. Moving every frame, decaying smoothly.
     //
-    // This is the part aimed at what Windows reported: a p95 of 4.64x the
-    // median, against 1.95x for a fixed palette, which is the signature of a
-    // palette that updates on some frames and not others. The frames it sits out
-    // barely move, and the frame it catches up on carries several frames of
-    // easing at once. Easing is a decaying exponential, so each delta should be
-    // no larger than the one before.
+    // A palette that updates only on some frames shows near-still frames and
+    // then one catch-up frame carrying several frames of easing. Easing is a
+    // decaying exponential, so each delta should be no larger than the last.
     for (i, pair) in deltas.windows(2).enumerate() {
         assert!(
             pair[1] <= pair[0] * MAX_RISE,
@@ -1721,45 +1546,31 @@ fn tie_bait_jitter(ctx: &GpuContext, mixer: &mut Mixer, size: (u32, u32)) -> f32
     deltas[deltas.len() / 2]
 }
 
-/// An anchor must hand over, not flap.
+/// An anchor hands over rather than flapping.
 ///
-/// The palette is chosen by greedy farthest-point over a grid of samples. That
-/// is a selection, and a *memoryless* selection flaps: when two candidates sit
-/// near the cut, every wobble in the content swaps which one is in the palette,
-/// a completely different colour arrives, and the frame regrades. The pairing in
-/// `palettePass` cannot absorb it, because pairing re-matches a reordered set
-/// and this is a changed set.
+/// The palette is chosen by greedy farthest-point selection over a grid of
+/// samples. A memoryless selection flaps when two candidates sit near the cut:
+/// each wobble swaps which is in the palette and the frame regrades.
+/// `palettePass` pairing can't absorb it, since the set itself changes.
 ///
-/// Real content reaches that cut only by luck, which made this untestable for a
-/// long time. `dull_skull` reaches it on the DX12 backend and not on Metal, so
-/// the lurch test above failed on Windows and could not be reproduced anywhere
-/// else, and two attempted fixes were graded against a test with nothing to
-/// detect. `tests/shaders/palette_tie_bait.fs` removes the luck: flat blocks on
-/// the exact grid the extraction samples, with two of them sliding through the
-/// point where they swap.
+/// Real content hits the cut only by chance (`dull_skull` does on DX12, not on
+/// Metal). `tests/shaders/palette_tie_bait.fs` forces it: flat blocks on the
+/// extraction grid, with two sliding through the swap point.
 ///
-/// Three things had to be right before this measured anything, each costing a
-/// round to find:
-///
-/// * **A wide enough swing.** The first fixture moved the two distances by 1.5%,
-///   inside the 2% `SELECTION_MARGIN`, which was already suppressing the swap.
-/// * **Jitter, not a sweep.** Sliding past the crossing once swaps the winner
-///   once and easing hides it. Content that wobbles around the cut is what makes
-///   a memoryless selection flap.
-/// * **The right reference.** Flapping lifts the whole distribution rather than
-///   adding a tail, so p95-over-median, which the lurch test uses, is blind to
-///   it: measured, 2.4x while flapping against 3.0x while healthy, the wrong way
-///   round. What flapping does show is the picture moving far more than the
-///   content it is grading.
+/// * The swing exceeds the 2% `SELECTION_MARGIN`, which would otherwise
+///   suppress the swap.
+/// * The content jitters around the cut; a single sweep swaps once and easing
+///   hides it.
+/// * Flapping lifts the whole distribution rather than adding a tail, so
+///   p95-over-median can't see it. This grades how much more the picture
+///   moves than its content.
 #[test]
 fn chroma_flow_palette_hands_over_rather_than_flapping() {
     const W: u32 = 64;
     const H: u32 = 64;
     /// How much more the graded picture may move than the content it grades.
     ///
-    /// Measured on the palette's fastest setting: **4.3x with hysteresis, 350x
-    /// without**. The gap is nearly two orders of magnitude, so this sits far
-    /// from both ends rather than being tuned against either.
+    /// Measured at the fastest setting: 4.3x with hysteresis, 350x without.
     const MAX_CHASE: f32 = 20.0;
 
     let Some(ctx) = headless_gpu() else {
@@ -1788,11 +1599,10 @@ fn chroma_flow_palette_hands_over_rather_than_flapping() {
         let fx_shader = varda::isf::ISFShader::from_file(&fx_path).expect("parse chroma_flow.fs");
         let mut fx = varda::deck::Effect::new(&ctx, fx_shader).expect("deck effect");
         fx.params.set_bool("palette_mode", false);
-        // Two groups: the centre sample, and one slot for the two rivals to
-        // contest. With more slots both are simply included, the pairing absorbs
-        // the reorder, and nothing can jump.
+        // Two groups: the center sample, and one slot the two rivals contest.
+        // With more slots both are included and nothing can jump.
         fx.params.set_float("palette_size", 2.0);
-        // The fastest setting, where a jump is least disguised by easing.
+        // The fastest setting, where easing hides a jump least.
         fx.params.set_float("palette_stability", 0.0);
         for still in [
             "zoom",
@@ -1805,10 +1615,9 @@ fn chroma_flow_palette_hands_over_rather_than_flapping() {
         ] {
             fx.params.set_float(still, 0.0);
         }
-        // Show the palette plainly. At their defaults `barrier_level` holds the
-        // darker rival back from being graded at all and `color_preservation`
-        // blends the source back over the anchor; together they hid the effect
-        // completely and cost a round to notice.
+        // Show the palette plainly: at defaults `barrier_level` keeps the
+        // darker rival from being graded and `color_preservation` blends the
+        // source back over the anchor, hiding the effect.
         fx.params.set_float("barrier_level", 0.0);
         fx.params.set_float("color_preservation", 0.0);
         fx.params.set_float("edge_blend_width", 0.0);
@@ -1865,8 +1674,8 @@ fn chroma_flow_frames(
             configure(&mut fx.params);
             ch.decks[0].deck.add_effect(fx);
         }
-        // Adaptive skipping keys on wall-clock render cost, so the number of
-        // rendered frames would otherwise vary between runs that must line up.
+        // Adaptive skipping depends on wall-clock cost, so frame counts would
+        // vary between runs that must line up.
         ch.decks[0].render_fps = varda::channel::DeckRenderFps::Fixed(0);
     }
 
@@ -1912,47 +1721,32 @@ fn edge_energy(img: &[f32], width: usize) -> f32 {
     sum / n as f32
 }
 
-/// Colour must never cross into darkness.
+/// Color never crosses into darkness.
 ///
-/// A layer travels over whatever it is sitting on, and dark ground is not
-/// something to travel over — it is floor. Without the rule every region expands
-/// into whatever is next to it, the frame fills in, and the result reads as
-/// smoke; with it, shapes are held to the lit parts of the picture and crawl
-/// around the dark ones.
+/// Dark ground is a barrier: without it every region expands into its
+/// neighbors and the frame fills in like smoke. Barrier ground is also kept
+/// apart from vacated ground: vacated ground is repainted from the refill
+/// cycle, barrier ground keeps its seeded brightness and is never repainted.
 ///
-/// Dark ground is also kept distinct from ground a layer has *vacated*. Vacated
-/// ground is repainted from the refill cycle, and repainting the shadows would
-/// turn the darkest parts of the frame into the loudest. Barrier ground shows
-/// the brightness it seeded with instead, and is never repainted.
-///
-/// The comparison is against the same source with no effect, so "dark" means
-/// dark in the real picture rather than wherever the test guessed. It takes the
-/// brightest each pixel ever gets across the whole run: a pixel dark only at the
-/// final frame may legitimately have seeded as a layer while it was lit, and
-/// carries that colour until its memory runs out. Only a pixel that is dark for
-/// the entire run can never have been anything but barrier.
+/// "Dark" is taken from the same source with no effect, using the brightest
+/// each pixel gets across the run: a pixel lit earlier may have seeded a layer
+/// and carry its color. Only pixels dark for the whole run are checked.
 #[test]
 fn chroma_flow_never_flows_into_darkness() {
     const SW: u32 = 128;
     const SH: u32 = 128;
     const FRAMES: usize = 90;
-    /// Readback is f16 and the barrier path passes its seeded brightness
-    /// through, so anything above rounding is colour that genuinely arrived
-    /// where it was forbidden.
+    /// Readback is f16 and barrier pixels pass their seeded brightness
+    /// through, so anything above rounding is color where it isn't allowed.
     const TOLERANCE: f32 = 4e-3;
-    /// Needs a source with genuine shadow in it: the skull and liquid shaders
-    /// used elsewhere never fall below the barrier at all, so they would prove
-    /// nothing.
+    /// Needs real shadow: the skull and liquid shaders never fall below the
+    /// barrier.
     const SOURCE: &str = "taste_of_noise.fs";
-    /// Raised well above its default. The shader classifies against the deck's
-    /// own output while this test reads the composited frame, and the two do not
-    /// agree closely enough to call a pixel sitting near the threshold. Lifting
-    /// the barrier far above anything the test calls dark makes the subset
-    /// unambiguous in either space, at no cost to what is being checked — the
-    /// rule under test is that layers cannot enter barrier ground, not where the
-    /// barrier happens to sit.
+    /// Well above the default. The shader classifies against the deck output
+    /// while this test reads the composite, and the two differ near the
+    /// threshold. A high barrier makes the dark subset unambiguous in both.
     const BARRIER: f32 = 0.6;
-    /// Comfortably below `BARRIER` however the two spaces relate.
+    /// Well below `BARRIER` in either space.
     const CALLED_DARK: f32 = 0.15;
 
     let Some(ctx) = headless_gpu() else {
@@ -1974,15 +1768,15 @@ fn chroma_flow_never_flows_into_darkness() {
         (SW, SH),
         FRAMES,
         Some(&|p: &mut varda::params::ShaderParams| {
-            // Push hard: fast warp and a large palette give the motion every
-            // opportunity to spill somewhere it should not reach.
+            // Fast warp and a large palette, to give color every chance to
+            // spill.
             p.set_float("zoom", 1.6);
             p.set_float("rotate", 90.0);
             p.set_float("warp_amount", 1.5);
             p.set_float("palette_size", 6.0);
             p.set_float("barrier_level", BARRIER);
-            // Softening happens on the way out and would blur a lit pixel a
-            // fraction of a texel into the dark. Off, so this grades transport.
+            // Edge softening would blur a lit pixel slightly into the dark.
+            // Off, so this grades transport only.
             p.set_float("edge_blend_width", 0.0);
         }),
     );
@@ -2013,20 +1807,15 @@ fn chroma_flow_never_flows_into_darkness() {
     );
 }
 
-/// Hardness must be able to open the boundary.
+/// Low hardness opens the barrier.
 ///
-/// The guard above proves the barrier holds; on its own that is also satisfied
-/// by a barrier welded shut. This is the other half: wound down, colour is
-/// supposed to burst its banks and run into the dark, which is the whole point
-/// of having the control on a modulator for a drop.
+/// The barrier test above would also pass with a barrier that never opens.
+/// Wound down, color must run into the dark.
 ///
-/// Graded against the same effect with hardness closed, not against the source.
-/// Measuring the open run against the source directly does not work: the
-/// reference is the brightest each pixel ever gets across the run while the
-/// reading is the final frame, so on an animated source the two differ by a
-/// wide margin whatever the barrier does. That version passed with hardness
-/// wired out of the calculation entirely. Two runs of the same effect at the
-/// same frame share all of that, and differ only in the one control.
+/// Compared against the same effect with hardness closed, not the source: the
+/// source reference is each pixel's brightest across the run while the reading
+/// is the final frame, which differ widely on animated content regardless of
+/// the barrier.
 #[test]
 fn chroma_flow_barrier_hardness_opens_the_boundary() {
     const SW: u32 = 128;
@@ -2035,8 +1824,7 @@ fn chroma_flow_barrier_hardness_opens_the_boundary() {
     const SOURCE: &str = "taste_of_noise.fs";
     const BARRIER: f32 = 0.6;
     const CALLED_DARK: f32 = 0.15;
-    /// Softened all the way, the flow should be well into the dark rather than
-    /// just brushing the boundary.
+    /// Fully softened, the flow should reach well into the dark.
     const MIN_SPILL: f32 = 0.02;
 
     let Some(ctx) = headless_gpu() else {
@@ -2098,25 +1886,22 @@ fn chroma_flow_barrier_hardness_opens_the_boundary() {
 
 /// The picture must not dissolve into itself.
 ///
-/// Feeding a picture back through a warp and blending, however lightly, is a
-/// diffusion: run it back through itself sixty times a second and every boundary
-/// in the frame washes out within seconds. That is what turns this kind of
-/// effect into smoke, and it is why the field is stored as flat stack heights
-/// and moved by a hard hand-off rather than a blend.
+/// Feeding a picture back through a warp with any blend is diffusion: at 60
+/// fps every boundary washes out in seconds. The field is stored as flat
+/// stack heights and moved by a hard hand-off to avoid this.
 ///
-/// Edge energy is the direct measure. Diffusion drives it toward zero; transport
-/// leaves it alone, because a region that moves as a body keeps the boundary it
-/// started with. Measured against the untouched source, so a quiet passage in
-/// the source does not read as a failure.
+/// Edge energy measures it: diffusion drives it toward zero, while a region
+/// moving as a body keeps its boundary. Compared against the source so a quiet
+/// passage doesn't read as failure.
 #[test]
 fn chroma_flow_regions_keep_their_edges() {
     const SW: u32 = 128;
     const SH: u32 = 128;
-    /// Long enough that a per-frame blend would have compounded away. A 5% blend
-    /// leaves under a thousandth of any boundary after this many frames.
+    /// A 5% per-frame blend leaves under a thousandth of any boundary after
+    /// this many frames.
     const FRAMES: usize = 180;
-    /// Grouping flattens the interior of each region, so some loss against the
-    /// source is expected and correct. Total collapse is not.
+    /// Grouping flattens region interiors, so some loss against the source is
+    /// expected. Total collapse is not.
     const MIN_EDGE_FRACTION: f32 = 0.35;
 
     let Some(ctx) = headless_gpu() else {
@@ -2143,26 +1928,22 @@ fn chroma_flow_regions_keep_their_edges() {
     );
 }
 
-/// The picture has to actually travel.
+/// The picture actually travels.
 ///
-/// This is the failure that produced three rebuilds. Each one moved its material
-/// correctly and none of it showed, because the vacated space was refilled from
-/// the live frame — so what was carried away was instantly replaced by the
-/// picture that had been there all along. All that appeared was churn in the
-/// thin band where the moved material and the source disagreed, which reads as
-/// flicker rather than flow.
+/// If vacated space is refilled from the live frame, carried material is
+/// replaced by the picture already there, leaving only flicker at the band
+/// where they disagree.
 ///
-/// A still camera is the control. It exercises the identical path — same warp
-/// pass, same regeneration, same grading — with only the motion removed, so
-/// anything the two runs share is not travel. A build that merely re-grades its
-/// source in place scores near zero here no matter how busy it looks.
+/// A still camera is the control: same warp, regeneration, and grading with
+/// motion removed. A build that only re-grades its source in place scores near
+/// zero.
 #[test]
 fn chroma_flow_actually_travels() {
     const SW: u32 = 128;
     const SH: u32 = 128;
     const FRAMES: usize = 120;
-    /// Well clear of the boundary-band churn a static build produces, and far
-    /// under what real travel gives.
+    /// Above the boundary-band churn of a static build and well below real
+    /// travel.
     const MIN_TRAVEL: f32 = 0.02;
 
     let Some(ctx) = headless_gpu() else {
@@ -2201,21 +1982,15 @@ fn chroma_flow_actually_travels() {
     );
 }
 
-/// The mask must hold its circle still and let the rest move.
+/// The mask holds its circle still and lets the rest move.
 ///
-/// The hold is applied twice, in the warp buffer and again on the way out, and
-/// only the second is checked here. Fading back to the source at the end is what
-/// makes held ground read as untouched picture rather than as a posterised,
-/// frozen version of the effect, and that is what this measures. Holding it in
-/// the buffer as well matters for a reason a still mask cannot show: without it
-/// the warp keeps running underneath the held area, and the moment the mask is
-/// moved — which is the whole point of putting it on a modulator — everything
-/// that accumulated under there surfaces at once.
+/// The hold applies in the warp buffer and on output; only the output fade
+/// back to the source is checked here. The buffer hold keeps the warp from
+/// running under the held area, which would surface all at once when the mask
+/// moves.
 ///
-/// Measured against the bare deck. An earlier version of this used the effect
-/// itself in a hold-everything configuration, which looked tidier and was very
-/// nearly vacuous: any break shared by both runs cancels out, and removing
-/// either half of the mask still passed.
+/// Compared against the bare deck, so a break shared by the effect's own
+/// configurations can't cancel out.
 #[test]
 fn chroma_flow_mask_holds_its_circle_still() {
     const SW: u32 = 128;
@@ -2224,9 +1999,8 @@ fn chroma_flow_mask_holds_its_circle_still() {
     const RADIUS: f32 = 0.3;
     /// Held ground is a fade back to the source, so it should match to rounding.
     const MAX_HELD_DRIFT: f32 = 6e-3;
-    /// Outside has a warp and a hard grade on it, so it should differ by far
-    /// more than this. Set low enough to stay clear of quiet passages in the
-    /// source.
+    /// Outside has a warp and a hard grade, so it differs by far more. Low
+    /// enough to clear quiet passages in the source.
     const MIN_FLOW: f32 = 0.02;
 
     let Some(ctx) = headless_gpu() else {
@@ -2255,8 +2029,7 @@ fn chroma_flow_mask_holds_its_circle_still() {
         let x = (i % SW as usize) as f32 / SW as f32 - 0.5;
         let y = (i / SW as usize) as f32 / SH as f32 - 0.5;
         let r = (x * x + y * y).sqrt();
-        // Skip an annulus around the boundary: the edge lands between texels and
-        // grading either side of it is a coin toss.
+        // Skip an annulus around the boundary, which falls between texels.
         if r < RADIUS * 0.8 {
             held.push((p - m).abs());
         } else if r > RADIUS * 1.25 {
@@ -2288,25 +2061,19 @@ fn chroma_flow_mask_holds_its_circle_still() {
     );
 }
 
-/// The source must keep bleeding back into the field.
+/// The source keeps bleeding back into the field.
 ///
-/// A warp can only move and stretch what is already in the buffer, so a field
-/// left to warp alone drifts away from its input and eventually shows nothing
-/// but its own smeared history. Letting the source reassert itself at a
-/// controlled rate is Deforum's strength schedule, and it is what keeps the
-/// picture tied to the material it is supposed to be transforming.
-///
-/// Guarded as "Regen changes the picture", because the failure it catches is
-/// exact: if the source is never mixed back in, the setting is inert and runs at
-/// different values come back bit for bit identical.
+/// A warp only moves what is in the buffer, so without the source mixed back
+/// in, the field drifts into its own smeared history. Regen sets that rate,
+/// like Deforum's strength schedule. If regen is inert, runs at different
+/// values are bit-identical.
 #[test]
 fn chroma_flow_regenerates_from_the_source() {
     const SW: u32 = 128;
     const SH: u32 = 128;
     const FRAMES: usize = 300;
-    /// The failure this catches is exact equality, so the bar only has to sit
-    /// clear of readback rounding. It is set well above that anyway, since two
-    /// genuinely different regeneration rates diverge across the whole frame.
+    /// The failure is exact equality, so the bar only needs to clear readback
+    /// rounding; different rates diverge across the whole frame.
     const MIN_DIFFERENCE: f32 = 5e-3;
 
     let Some(ctx) = headless_gpu() else {
@@ -2346,21 +2113,19 @@ fn chroma_flow_regenerates_from_the_source() {
 
 // ── Program / channel tap ────────────────────────────────────────────
 //
-// See /spec/program-tap.md. The contract these pin is that a tap shows the
-// *previous* frame, uniformly, regardless of where the tapping deck sits in
-// the channel order. That is what makes feedback loops terminate, so it must
-// fail loudly if someone later "optimizes" a tap into reading the live target.
+// A tap shows the previous frame, whatever the tapping deck's position in the
+// channel order. That is what lets feedback loops terminate, so a tap must
+// never read the live target.
 
-/// Advance the mixer the way the app does: resolve taps, then render.
+/// Advance the mixer as the app does: resolve taps, then render.
 fn render_frame_with_taps(ctx: &GpuContext, mixer: &mut Mixer) {
     mixer.prepare_taps(ctx);
     render_once(ctx, mixer);
 }
 
-/// A tap in a *later* channel than the one it reads. This is the direction a
-/// naive implementation gets wrong: channel 0 has already composited by the
-/// time channel 1's decks render, so binding it directly would show the
-/// current frame's red on frame one.
+/// A tap in a later channel than the one it reads. Channel 0 has already
+/// composited when channel 1 renders, so binding it directly would show this
+/// frame's red on frame one.
 #[test]
 fn tap_shows_the_previous_frame_not_the_current_one() {
     let Some(ctx) = headless_gpu() else {
@@ -2388,9 +2153,8 @@ fn tap_shows_the_previous_frame_not_the_current_one() {
     assert_hi(second[0], "frame 2 tap must show frame 1's red");
 }
 
-/// The same assertion with the tap in an *earlier* channel than its source.
-/// Both directions agreeing is what proves the double buffer removed the
-/// ordering dependence rather than merely reversing it.
+/// The same check with the tap in an earlier channel than its source. Both
+/// directions agreeing shows there is no ordering dependence.
 #[test]
 fn tap_latency_does_not_depend_on_channel_order() {
     let Some(ctx) = headless_gpu() else {
@@ -2418,8 +2182,8 @@ fn tap_latency_does_not_depend_on_channel_order() {
     );
 }
 
-/// A master tap is uniformly one frame behind for the same reason: every deck
-/// renders before the master composite, so there is no ordering to depend on.
+/// A master tap is one frame behind too: every deck renders before the master
+/// composite.
 #[test]
 fn master_tap_shows_the_previous_frame() {
     let Some(ctx) = headless_gpu() else {
@@ -2427,11 +2191,9 @@ fn master_tap_shows_the_previous_frame() {
     };
     let mut mixer = new_mixer(&ctx);
 
-    // The tap deck sits *under* the red deck in the same channel: an opaque
-    // Normal blend covers it, so the program is always exactly red, while the
-    // tap deck still renders every frame. Parking it in the far channel instead
-    // would fade that channel out, and a fully faded channel is culled — the
-    // deck would never render and this would measure the cull, not the tap.
+    // The tap deck sits under the red deck in the same channel: opaque Normal
+    // covers it, so the program is always red while the tap deck still renders.
+    // In the far channel it would be faded out and culled, never rendering.
     let tap = tap_deck(&ctx, &varda::tap::TapPoint::MasterProgram);
     mixer.channel_mut(0).unwrap().add_deck(tap);
     let red = Deck::solid_color(&ctx, [1.0, 0.0, 0.0, 1.0], W, H);
@@ -2455,9 +2217,8 @@ fn master_tap_shows_the_previous_frame() {
     );
 }
 
-/// A deck tapping the channel it lives in is a legitimate and commonly wanted
-/// feedback configuration. At partial opacity it must converge rather than
-/// producing NaN or infinity in the `Rgba16Float` target.
+/// A deck tapping its own channel is valid feedback. At partial opacity it
+/// converges, with no NaN or infinity in the `Rgba16Float` target.
 #[test]
 fn self_tapping_deck_converges_rather_than_diverging() {
     let Some(ctx) = headless_gpu() else {
@@ -2486,7 +2247,7 @@ fn self_tapping_deck_converges_rather_than_diverging() {
     }
 }
 
-/// The feature has to be free when unused: no tap deck, no tap target.
+/// No tap deck means no tap target is allocated.
 #[test]
 fn a_scene_without_taps_allocates_no_tap_targets() {
     let Some(ctx) = headless_gpu() else {
@@ -2502,7 +2263,7 @@ fn a_scene_without_taps_allocates_no_tap_targets() {
         "a scene with no tap decks must not allocate any tap render target"
     );
 
-    // ...and adding one, then removing it, gives the memory back.
+    // ...and adding one then removing it frees the memory.
     let ch0_uuid = mixer.channel(0).unwrap().uuid().to_string();
     let tap = tap_deck(&ctx, &varda::tap::TapPoint::Channel { uuid: ch0_uuid });
     let idx = mixer.channel_mut(1).unwrap().add_deck(tap);
@@ -2571,9 +2332,9 @@ void main() {
 }
 "#;
 
-/// Every pass of a multi-pass shader now encodes into one command buffer. Each
-/// must still read its own uniforms, and a later pass must see what an earlier
-/// one wrote in the same frame. See /spec/performance-hot-paths.md item D.
+/// All passes of a multi-pass shader encode into one command buffer. Each pass
+/// reads its own uniforms, and a later pass sees what an earlier one wrote in
+/// the same frame.
 #[test]
 fn a_later_pass_reads_what_an_earlier_pass_wrote_this_frame() {
     let Some(ctx) = headless_gpu() else {

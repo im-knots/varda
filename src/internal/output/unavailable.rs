@@ -1,6 +1,6 @@
 //! A sink that holds a saved output this build or host cannot run, so the
-//! output keeps its surfaces, warp and settings and saves back unchanged.
-//! Mirrors the deck placeholder of /spec/deck-source-providers.md Decision 4.
+//! output keeps its surfaces, warp and settings and saves back unchanged, like
+//! the deck placeholder.
 
 use super::{FramePath, OutputSinkInstance, Presentation, SinkConfig, SinkQuery};
 use crate::delivery::presentation::{modes_for, resolve_eight_bit_sdr};

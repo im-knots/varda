@@ -1,13 +1,10 @@
 //! Automation rows: the envelope editor.
 //!
-//! An envelope's editor is its lane rather than a card in the right panel,
-//! because an arrangement produces hundreds of curves and a row of parameter
-//! cards does not survive that. See /spec/arrangement.md § Envelopes are not
-//! modulator cards.
+//! Envelopes are edited in their lane, not as cards in the right panel, since
+//! an arrangement can hold hundreds of curves.
 //!
 //! Every edit replaces the whole breakpoint list through
-//! `SetEnvelopeBreakpoints`. The engine owns the sort invariant, so the panel
-//! never has to maintain it.
+//! `SetEnvelopeBreakpoints`. The engine keeps the list sorted.
 
 use super::super::super::{ModSourceUI, UIActions, UIData};
 use super::super::utils::channel_color;
@@ -15,33 +12,32 @@ use super::{AutomationRow, Owner, RowGeometry, snap_seconds};
 use crate::engine::EngineCommand;
 use crate::modulation::{Breakpoint, CurveKind};
 
-/// Vertical breathing room so a breakpoint at 0.0 or 1.0 is still grabbable.
+/// Vertical padding so breakpoints at 0.0 and 1.0 stay grabbable.
 const PADDING: f32 = 5.0;
 const POINT_RADIUS: f32 = 4.0;
-/// How close a press must land to count as grabbing a breakpoint.
+/// Grab radius for a breakpoint, in pixels.
 const GRAB_RADIUS: f32 = 7.0;
-/// How close a press must land to the drawn curve to count as grabbing a
-/// segment. Smaller than the breakpoint radius, which wins where they overlap.
+/// Grab distance from the drawn curve for a segment, in pixels. Smaller than
+/// the breakpoint radius, which wins where they overlap.
 const CURVE_GRAB: f32 = 6.0;
 /// Vertical travel, in pixels, for one unit of tension.
 const TENSION_PIXELS: f32 = 40.0;
-/// Past about this the curve is indistinguishable from a hold, so the drag
-/// stops rather than running away into numbers that all look the same.
+/// Beyond this the curve looks like a hold, so the drag stops here.
 const TENSION_LIMIT: f32 = 4.0;
 
-/// What a drag on the curve track has hold of.
+/// What a drag on the curve track holds.
 #[derive(Clone, Copy)]
 enum CurveDrag {
     Point(usize),
-    /// The segment leaving breakpoint `index`, bent by vertical travel from
-    /// where the press landed.
+    /// The segment leaving breakpoint `index`, bent by vertical travel from the
+    /// press point.
     Tension {
         index: usize,
         origin: f32,
         grab_y: f32,
     },
-    /// The flat run of breakpoints `first..=last`, raised or lowered bodily
-    /// from the value `origin` it was pressed at.
+    /// The flat run of breakpoints `first..=last`, moved up or down from the value
+    /// `origin` it was pressed at.
     Level {
         first: usize,
         last: usize,
@@ -50,16 +46,15 @@ enum CurveDrag {
     },
 }
 
-/// What a curve's context menu was opened on: the breakpoint under the press if
-/// there was one, and the time the press landed at, which is where a paste from
-/// that menu lands.
+/// What a curve's context menu was opened on: the breakpoint under the press,
+/// if any, and the press time, where a paste from that menu lands.
 #[derive(Clone, Copy)]
 struct MenuSubject {
     point: Option<usize>,
     at: f64,
 }
 
-/// Which envelope the keyboard is addressing, and what it has on the clipboard.
+/// Memory key for the envelope the keyboard addresses and its clipboard.
 fn selected_id() -> egui::Id {
     egui::Id::new("__arrangement_selected_envelope")
 }
@@ -99,8 +94,7 @@ pub(super) fn render_automation_row(
     );
 
     render_header(ui, data, actions, geom, row, is_selected);
-    // Before the track, so the badge takes the click rather than the curve
-    // editor underneath it.
+    // Before the track, so the badge takes the click instead of the curve editor.
     if row.overridden {
         super::draw_override_badge(
             ui,
@@ -137,8 +131,8 @@ fn render_header(
     });
     if response.clicked() {
         select(ui.ctx(), row.envelope_uuid);
-        // The bottom bar follows the selection, so clicking a curve puts the
-        // parameters of whatever owns it within reach.
+        // The bottom bar follows the selection, so clicking a curve shows its owner's
+        // parameters.
         match row.owner {
             Owner::Deck(ch_idx, deck_idx) => {
                 actions.session.select_deck = Some((ch_idx, deck_idx));
@@ -148,8 +142,7 @@ fn render_header(
         }
     }
     response.context_menu(|ui| {
-        // The header is beside the timeline rather than on it, so a paste from
-        // here has no time of its own and falls back to the playhead.
+        // The header is beside the timeline, so a paste from here uses the playhead.
         clipboard_items(ui, data, actions, row, data.transport.position);
         ui.separator();
         if ui.button("Remove automation lane").clicked() {
@@ -180,15 +173,15 @@ fn render_track(
         )
     });
 
-    // Shift turns a drag into a marquee, so the point edits below stand down and
-    // the top-level marquee handler reads the same drag.
+    // Shift makes a drag a marquee: the point edits below skip it and the
+    // top-level marquee handler reads it.
     let shift = ui.ctx().input(|i| i.modifiers.shift);
     if response.clicked() || response.drag_started() {
         select(ui.ctx(), row.envelope_uuid);
     }
     if !shift && response.clicked() {
-        // Clicking a curve clears any armed selection, so the whole-curve
-        // clipboard is available again on that row.
+        // Clicking a curve clears any armed selection, re-enabling the whole-curve
+        // clipboard on that row.
         super::selection::clear(ui.ctx());
     }
 
@@ -204,8 +197,8 @@ fn render_track(
     let grabbed_id = id.with("grabbed");
     if !shift && response.drag_started() {
         let grabbed = super::regions::press_origin(&response).and_then(|pos| {
-            // Inside an armed selection the whole slice moves instead, so
-            // hand-editing points there means clearing the selection first.
+            // Inside an armed selection the whole slice moves, so points there can only
+            // be edited after clearing the selection.
             if super::selection::owns_envelope_press(
                 ui.ctx(),
                 row.envelope_uuid,
@@ -213,8 +206,7 @@ fn render_track(
             ) {
                 return None;
             }
-            // A breakpoint wins over the segment it sits on: moving a point is
-            // the more common gesture and the more precise target.
+            // A breakpoint wins over the segment it sits on.
             point_at(row.breakpoints, geom, pos)
                 .map(CurveDrag::Point)
                 .or_else(|| {
@@ -226,7 +218,7 @@ fn render_track(
                         }
                     })
                 })
-                // Flat where a bend would not show, so the two never contend.
+                // Levelling applies only where a bend would not show, so the two never overlap.
                 .or_else(|| {
                     flat_run_at(row.breakpoints, geom, pos).map(|(first, last)| CurveDrag::Level {
                         first,
@@ -296,8 +288,7 @@ fn render_track(
     {
         let position = snap_seconds(data, geom.axis.seconds(pos.x));
         let points = match point_at(row.breakpoints, geom, pos) {
-            // A double click on a point removes it, which is the gesture
-            // every curve editor uses and saves a trip to the menu.
+            // Double-clicking a point removes it.
             Some(index) => without_point(row.breakpoints, index),
             None => with_point_added(row.breakpoints, position, value_at(geom.track, pos.y)),
         };
@@ -308,18 +299,14 @@ fn render_track(
     point_context_menu(&response, ui, data, geom, row, actions);
 }
 
-/// Copying a shape between parameters, which is how one curve gets reused.
+/// Copy and paste a curve's shape between parameters.
 ///
-/// An envelope drives the one parameter it was drawn for, so the same shape on a
-/// second parameter is a second curve rather than a shared source. See
-/// /spec/automation.md § One envelope per parameter.
+/// An envelope drives only the parameter it was drawn for, so pasting creates
+/// a second curve rather than sharing a source. The clipboard is shared with
+/// the keyboard shortcuts.
 ///
-/// The clipboard is the one the keyboard shortcuts use, so a curve copied with
-/// the menu pastes with `Cmd+V` and the other way around.
-///
-/// `anchor` is where the shape lands, in seconds: the point on the timeline the
-/// menu was opened over, or the playhead where the press carries no time of its
-/// own. See /spec/automation.md § One envelope per parameter.
+/// `anchor` is where the shape lands, in seconds: the time the menu was opened
+/// over, or the playhead when the press has no time.
 fn clipboard_items(
     ui: &mut egui::Ui,
     data: &UIData,
@@ -361,14 +348,11 @@ fn clipboard_items(
     }
 }
 
-/// Curve shape and delete on the breakpoint the press landed on, and the
-/// clipboard either way.
+/// Curve shape and delete for the breakpoint under the press, plus the
+/// clipboard items.
 ///
-/// Which breakpoint the menu belongs to is decided **once, when it opens**, and
-/// held in memory for as long as it is up. Deciding it from the live pointer
-/// instead rewrites the menu the moment the hand moves toward the item it was
-/// opened for, because reaching any item means leaving the point it belongs to:
-/// the click then lands on whatever slid under the cursor.
+/// The breakpoint is fixed when the menu opens and kept in memory. Using the
+/// live pointer would change the menu as the pointer moves toward an item.
 fn point_context_menu(
     response: &egui::Response,
     ui: &egui::Ui,
@@ -392,8 +376,7 @@ fn point_context_menu(
     else {
         return;
     };
-    // The list can shrink under an open menu, so the frozen index is checked
-    // rather than trusted.
+    // The list can shrink under an open menu, so the stored index is checked.
     let point = subject.point.filter(|i| *i < row.breakpoints.len());
 
     response.context_menu(|ui| {
@@ -425,24 +408,20 @@ fn point_context_menu(
             }
             ui.separator();
         }
-        // Offered wherever the press landed, because a point is the thing most
-        // people will aim at when they mean "this curve".
+        // Offered wherever the press landed, including on a point.
         clipboard_items(ui, data, actions, row, subject.at);
     });
 }
 
-/// Copy and paste a curve's shape between lanes.
-///
-/// The clipboard holds breakpoints rather than a whole envelope, so a shape
-/// authored on one parameter can be dropped onto another.
+/// Copy and paste a curve's shape between lanes via the keyboard. The
+/// clipboard holds breakpoints, not an envelope.
 pub(super) fn handle_clipboard_shortcuts(ui: &egui::Ui, data: &UIData, actions: &mut UIActions) {
-    // A keyboard shortcut must never fire while something is being typed into.
+    // Shortcuts never fire while a text field has focus.
     if ui.ctx().memory(egui::Memory::focused).is_some() {
         return;
     }
-    // An armed arrangement selection owns the clipboard: its slice copy wins
-    // over the whole-curve copy this handler offers. See
-    // /spec/arrangement-selection.md § Copy.
+    // An armed arrangement selection takes the clipboard: its slice copy wins
+    // over the whole-curve copy.
     if super::selection::load(ui.ctx()).is_some() {
         return;
     }
@@ -478,10 +457,10 @@ pub(super) fn handle_clipboard_shortcuts(ui: &egui::Ui, data: &UIData, actions: 
     }
 }
 
-/// Whether a curve owns the keyboard clipboard this frame.
+/// Whether a curve takes the keyboard clipboard this frame.
 ///
-/// `Cmd+C` over a selected lane means its breakpoints, not the deck the lane
-/// belongs to, so the scene-object shortcuts stand down while one is selected.
+/// `Cmd+C` over a selected lane copies its breakpoints, not its deck, so the
+/// scene-object shortcuts are skipped while one is selected.
 pub(in crate::usecases::ui::panels) fn a_lane_is_selected(ctx: &egui::Context) -> bool {
     let selected: Option<String> = ctx.memory(|mem| mem.data.get_temp(selected_id()));
     selected.is_some()
@@ -492,7 +471,7 @@ fn select(ctx: &egui::Context, envelope_uuid: &str) {
     ctx.memory_mut(|mem| mem.data.insert_temp(selected_id(), uuid));
 }
 
-/// The envelope the keyboard is addressing, for the playhead paste fallback.
+/// The envelope the keyboard addresses, for the playhead paste fallback.
 pub(super) fn selected_envelope(ctx: &egui::Context) -> Option<String> {
     ctx.memory(|mem| mem.data.get_temp(selected_id()))
 }
@@ -526,10 +505,10 @@ fn value_at(track: egui::Rect, y: f32) -> f32 {
     ((track.bottom() - PADDING - y) / usable).clamp(0.0, 1.0)
 }
 
-/// How much value a vertical travel of `dy` pixels is worth, upward positive.
+/// Value change for a vertical travel of `dy` pixels, upward positive.
 ///
-/// Unclamped, unlike [`value_at`]: a drag that leaves the lane and comes back
-/// has to return to where it was rather than to the edge it was pinned at.
+/// Unclamped, unlike [`value_at`], so a drag that leaves the lane and returns
+/// comes back to where it was.
 fn value_travel(track: egui::Rect, dy: f32) -> f32 {
     dy / (track.height() - 2.0 * PADDING).max(1.0)
 }
@@ -550,10 +529,9 @@ fn point_at(points: &[Breakpoint], geom: RowGeometry, pointer: egui::Pos2) -> Op
 
 /// The segment under `pointer`, if bending it would show.
 ///
-/// A flat segment is refused: `shape()` interpolates between two equal values,
-/// so every tension produces the same straight line and the drag would be dead
-/// in the hand. Outside the drawn range there is no segment at all, because the
-/// envelope holds its end values there.
+/// Flat segments are refused, since `shape()` draws the same straight line at
+/// every tension. Outside the drawn range there is no segment; the envelope
+/// holds its end values.
 fn bendable_segment_at(
     points: &[Breakpoint],
     geom: RowGeometry,
@@ -573,16 +551,11 @@ fn bendable_segment_at(
 }
 
 /// The flat stretch of curve under `pointer`, as the inclusive range of
-/// breakpoints holding it there.
+/// breakpoints holding it.
 ///
-/// This is the half of the track a bend cannot claim: a segment between two
-/// equal values draws the same straight line at every tension, and outside the
-/// drawn range the envelope holds its end value. Both look like a line worth
-/// grabbing, and dragging one bodily up or down is what a performer means by it.
-///
-/// The run is widened across every neighbour at the same value, because what
-/// reads as one flat line has to move as one rather than breaking into a ramp at
-/// a breakpoint that was never visible.
+/// Covers what a bend cannot: segments between equal values, and the held end
+/// values outside the drawn range. The run extends across every neighbor at
+/// the same value so a visually flat line moves as one.
 fn flat_run_at(
     points: &[Breakpoint],
     geom: RowGeometry,
@@ -591,8 +564,7 @@ fn flat_run_at(
     let position = geom.axis.seconds(pointer.x);
     let last_index = points.len().checked_sub(1)?;
     // Strictly before the first point: a press exactly on it belongs to the
-    // segment leaving it, or the two gestures would both claim that one column
-    // of pixels and which one ran would be an accident of ordering.
+    // segment leaving it, so the two gestures never share a pixel column.
     let seed = if position < points[0].position {
         0
     } else if position >= points[last_index].position {
@@ -601,8 +573,7 @@ fn flat_run_at(
         let index = points
             .windows(2)
             .position(|pair| pair[0].position <= position && position < pair[1].position)?;
-        // A segment between two different values is a bend's, whatever shape it
-        // draws on the way.
+        // A segment between two different values belongs to the bend gesture.
         if (points[index].value - points[index + 1].value).abs() > f32::EPSILON {
             return None;
         }
@@ -625,8 +596,7 @@ fn flat_run_at(
 fn tension_of(curve: CurveKind) -> f32 {
     match curve {
         CurveKind::Linear { tension } => tension,
-        // A held or smoothed segment starts from straight, since bending it is
-        // a request for the eased shape rather than for more of what it was.
+        // Step and Smooth segments start from straight when bent.
         CurveKind::Step | CurveKind::Smooth => 0.0,
     }
 }
@@ -639,21 +609,19 @@ fn descends(points: &[Breakpoint], index: usize) -> bool {
 
 /// Tension from vertical drag travel.
 ///
-/// Dragging up bulges the curve up, which for a falling segment means *less*
-/// tension: the shaping function runs along the segment rather than along the
-/// screen, so the sign has to follow the segment's direction or half the curves
-/// in a lane bend the wrong way.
+/// Dragging up bulges the curve up, which for a falling segment means less
+/// tension: the shaping function runs along the segment, so the sign follows
+/// the segment's direction.
 fn tension_from_drag(origin: f32, dy: f32, descends: bool) -> f32 {
     let up = -dy / TENSION_PIXELS;
     let signed = if descends { -up } else { up };
     (origin + signed).clamp(-TENSION_LIMIT, TENSION_LIMIT)
 }
 
-/// Move one breakpoint, penned in by its neighbours.
+/// Move one breakpoint, clamped between its neighbors.
 ///
-/// Clamping rather than reordering keeps the list sorted without renumbering
-/// mid-drag, which would otherwise hand the gesture a different point halfway
-/// through.
+/// Clamping instead of reordering keeps the list sorted and the drag on the
+/// same point.
 fn with_point_moved(
     points: &[Breakpoint],
     index: usize,
@@ -677,8 +645,8 @@ fn with_point_moved(
     out
 }
 
-/// Set every breakpoint in `first..=last` to `value`, which is what raising a
-/// flat line does: the run keeps its length and its shape and changes height.
+/// Set every breakpoint in `first..=last` to `value`, raising or lowering a
+/// flat line without changing its length.
 fn with_run_levelled(
     points: &[Breakpoint],
     first: usize,
@@ -730,10 +698,7 @@ fn with_curve(points: &[Breakpoint], index: usize, curve: CurveKind) -> Vec<Brea
     out
 }
 
-/// Drop a copied shape in at `at`, clearing whatever it lands on.
-///
-/// Merging instead would leave the pasted curve fighting the points it was
-/// pasted over, which is never what was meant.
+/// Insert a copied shape at `at`, replacing the points it covers.
 fn pasted(points: &[Breakpoint], clipboard: &[Breakpoint], at: f64) -> Vec<Breakpoint> {
     let Some(first) = clipboard.first() else {
         return points.to_vec();
@@ -754,8 +719,8 @@ fn pasted(points: &[Breakpoint], clipboard: &[Breakpoint], at: f64) -> Vec<Break
     out
 }
 
-/// Sampled rather than joined point to point, so eased and held segments draw as
-/// the shapes they actually are.
+/// Sample spacing in pixels. Sampled rather than joined point to point, so
+/// eased and held segments draw their real shape.
 const SAMPLE_PX: f32 = 3.0;
 
 fn draw_curve(
@@ -827,8 +792,8 @@ mod tests {
         }
     }
 
-    /// Dragging up bends the curve up on the way up and on the way down alike,
-    /// which means the stored tension has to change sign with the segment.
+    /// Dragging up bends the curve up on rising and falling segments alike, so the
+    /// stored tension changes sign with the segment.
     #[test]
     fn bending_follows_the_pointer_on_rising_and_falling_segments() {
         let up = tension_from_drag(0.0, -TENSION_PIXELS, false);
@@ -850,9 +815,7 @@ mod tests {
         assert!((pinned - TENSION_LIMIT).abs() < 1e-6);
     }
 
-    /// A bend is a request for an eased shape, so a held or smoothed segment
-    /// becomes linear at the tension the drag asks for rather than compounding
-    /// whatever it was.
+    /// Bending a Step or Smooth segment makes it linear at the dragged tension.
     #[test]
     fn a_held_or_smoothed_segment_starts_from_straight() {
         assert!(tension_of(CurveKind::Step).abs() < f32::EPSILON);
@@ -863,8 +826,7 @@ mod tests {
         assert!(matches!(bent[0].curve, CurveKind::Linear { tension } if tension == 1.0));
     }
 
-    /// The drawn curve is what the pointer aims at, so the hit test has to
-    /// follow the eased shape rather than a straight line between the points.
+    /// The hit test follows the eased shape, not a straight line between points.
     #[test]
     fn a_segment_is_grabbed_along_the_curve_it_draws() {
         let mut points = curve();
@@ -895,8 +857,7 @@ mod tests {
         );
     }
 
-    /// Bending a flat segment cannot show, so the gesture declines rather than
-    /// starting a drag that does nothing.
+    /// A flat segment cannot be bent, so no drag starts.
     #[test]
     fn a_flat_segment_refuses_to_bend() {
         let flat = vec![linear(0.0, 0.5), linear(4.0, 0.5)];
@@ -906,8 +867,7 @@ mod tests {
         assert_eq!(bendable_segment_at(&flat, geom, on_the_line), None);
     }
 
-    /// Outside the drawn range the envelope holds its end values, so there is
-    /// no segment to bend even though there is a line to point at.
+    /// Outside the drawn range there is no segment to bend.
     #[test]
     fn the_held_tails_outside_the_curve_are_not_segments() {
         let points = curve();
@@ -919,8 +879,8 @@ mod tests {
         assert_eq!(bendable_segment_at(&points, geom, after), None);
     }
 
-    /// The other half of the bend gesture: where bending is dead, the line is
-    /// dragged bodily instead, and both breakpoints holding it move together.
+    /// Where bending does nothing, the line is dragged as a whole and both
+    /// breakpoints holding it move together.
     #[test]
     fn a_flat_segment_is_grabbed_as_a_whole_line() {
         let flat = vec![linear(0.0, 0.5), linear(4.0, 0.5), linear(8.0, 1.0)];
@@ -930,9 +890,7 @@ mod tests {
         assert_eq!(flat_run_at(&flat, geom, on_the_line), Some((0, 1)));
     }
 
-    /// What reads as one flat line has to move as one, however many breakpoints
-    /// happen to sit along it: breaking it into a ramp at a point that was never
-    /// visible is not what the hand asked for.
+    /// A flat line moves as one, however many breakpoints sit along it.
     #[test]
     fn a_flat_run_widens_across_every_point_at_the_same_value() {
         let points = vec![
@@ -954,8 +912,8 @@ mod tests {
         }
     }
 
-    /// Outside the drawn range the envelope holds its end value, which is a flat
-    /// line like any other and the only way to raise a one-point curve.
+    /// Outside the drawn range the held end value is a flat line; this is the only
+    /// way to raise a one-point curve.
     #[test]
     fn the_held_tails_are_flat_lines_that_can_be_dragged() {
         let points = curve();
@@ -972,9 +930,7 @@ mod tests {
         assert_eq!(flat_run_at(&[], geom, anywhere), None);
     }
 
-    /// The two line gestures divide the track between them: a press that bends
-    /// must never also level, or the drag that starts depends on which branch
-    /// was written first.
+    /// Bend and level never claim the same press.
     #[test]
     fn bending_and_levelling_never_claim_the_same_press() {
         let mut points = curve();
@@ -994,8 +950,8 @@ mod tests {
         }
     }
 
-    /// A line is only grabbed where it is drawn, so a press in the empty part of
-    /// the lane still falls through to whatever else wants it.
+    /// A line is only grabbed where it is drawn; presses elsewhere in the lane
+    /// fall through.
     #[test]
     fn a_press_away_from_the_line_grabs_nothing() {
         let flat = vec![linear(0.0, 0.5), linear(4.0, 0.5)];
@@ -1030,9 +986,8 @@ mod tests {
         assert!(under.iter().all(|p| p.value.abs() < f32::EPSILON));
     }
 
-    /// The drag is relative to where it was pressed and unclamped on the way, so
-    /// dragging out of the lane and back returns the line to where it was rather
-    /// than leaving it pinned at the edge it hit.
+    /// The drag is relative and unclamped, so dragging out of the lane and back
+    /// returns the line to where it was.
     #[test]
     fn a_level_drag_out_of_the_lane_and_back_returns_to_its_value() {
         let track = geom().track;
@@ -1059,8 +1014,8 @@ mod tests {
         assert!((moved[1].value - 0.5).abs() < f32::EPSILON);
     }
 
-    /// A dragged point stops at its neighbours rather than swapping past them,
-    /// so the list stays sorted and the gesture keeps hold of the same point.
+    /// A dragged point stops at its neighbors, keeping the list sorted and the
+    /// same point held.
     #[test]
     fn a_point_cannot_be_dragged_past_its_neighbours() {
         let past_right = with_point_moved(&curve(), 1, 100.0, 0.5);
@@ -1106,7 +1061,7 @@ mod tests {
         let cut = without_point(&curve(), 1);
         assert_eq!(cut.len(), 2);
         assert!((cut[1].position - 8.0).abs() < 1e-9);
-        // An index past the end is a stale click, not a panic.
+        // An index past the end is a stale click and must not panic.
         assert_eq!(without_point(&curve(), 9).len(), 3);
     }
 
@@ -1117,8 +1072,7 @@ mod tests {
         assert!((held[0].position - curve()[0].position).abs() < 1e-9);
     }
 
-    /// Paste lands at the playhead and clears what it covers, rather than
-    /// leaving two curves fighting over the same span.
+    /// Paste lands at the playhead and replaces what it covers.
     #[test]
     fn pasting_replaces_the_span_it_covers() {
         let target = vec![linear(0.0, 0.0), linear(11.0, 0.5), linear(30.0, 1.0)];
@@ -1142,8 +1096,7 @@ mod tests {
         assert_eq!(pasted(&curve(), &[], 5.0), curve());
     }
 
-    /// Screen y and normalized value must round-trip, or a point jumps the
-    /// moment it is grabbed.
+    /// Screen y and normalized value round-trip, or a point jumps when grabbed.
     #[test]
     fn value_and_pixel_round_trip() {
         let track = egui::Rect::from_min_size(egui::pos2(0.0, 40.0), egui::vec2(600.0, 46.0));

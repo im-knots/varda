@@ -1,12 +1,9 @@
-//! GPU readback — async texture-to-CPU transfer with double buffering.
+//! Async, double-buffered GPU texture readback.
 //!
-//! Used by headless outputs (NDI send, Syphon server, recording) and the
-//! analyzer pipeline to read rendered frames back to the CPU without stalling
-//! the render thread. Each staging buffer advances through a non-blocking state
-//! machine: a copy is enqueued (`Copied`), then mapped asynchronously
-//! (`Mapping`), then read once the GPU signals completion. The render thread
-//! never blocks on `poll(Wait)` — it only ever does a non-blocking `poll(Poll)`
-//! and `try_recv`, accepting a couple frames of latency instead.
+//! Used by headless outputs (NDI, Syphon, recording) and analyzers. Each
+//! staging buffer goes `Copied` -> `Mapping` -> read. The render thread only
+//! uses non-blocking `poll(Poll)` and `try_recv`, trading a couple of frames
+//! of latency for never stalling.
 
 use std::sync::mpsc::{Receiver, TryRecvError};
 
@@ -28,7 +25,7 @@ pub enum ReadbackFormat {
     /// Planar 4:2:2 ten-bit video in sixteen-bit words.
     P216,
     /// Four IEEE-754 single-precision channels. Used by the content light level
-    /// reduction, whose final level is a handful of texels.
+    /// reduction.
     Rgba32Float,
 }
 
@@ -121,20 +118,18 @@ impl ReadbackFrame {
 enum SlotState {
     /// Available to be used as the target of a new copy.
     Free,
-    /// A texture→buffer copy has been enqueued (and is/will be submitted by the
-    /// caller). The buffer can be mapped once that submission has executed.
+    /// A texture-to-buffer copy is enqueued; mappable once the caller's
+    /// submission has executed.
     Copied,
     /// `map_async` has been issued; awaiting the completion callback.
     Mapping(Receiver<Result<(), wgpu::BufferAsyncError>>),
 }
 
-/// Double-buffered GPU→CPU readback. Alternates two staging buffers
-/// so the GPU copy and CPU map never contend on the same buffer.
+/// Double-buffered GPU-to-CPU readback, so the GPU copy and CPU map never use
+/// the same buffer.
 pub struct ReadbackBuffer {
     buffers: [wgpu::Buffer; 2],
-    /// Width of the source texture
     width: u32,
-    /// Height of the source texture
     height: u32,
     /// Storage copied from the source texture.
     format: ReadbackFormat,
@@ -142,9 +137,8 @@ pub struct ReadbackBuffer {
     alpha_mode: crate::engine::value::render::AlphaMode,
     /// Bytes in one tightly packed source row.
     unpadded_bytes_per_row: u32,
-    /// Bytes per row (aligned to wgpu requirements)
+    /// Bytes per row, aligned for wgpu.
     padded_bytes_per_row: u32,
-    /// Non-blocking state machine state for each staging buffer.
     slots: [SlotState; 2],
 }
 
@@ -226,12 +220,11 @@ impl ReadbackBuffer {
         self.alpha_mode
     }
 
-    /// Enqueue a texture→buffer copy for this frame. Call during command encoding.
-    /// The source texture must have `COPY_SRC` usage.
+    /// Enqueue a texture-to-buffer copy for this frame. Call during command
+    /// encoding; the source texture needs `COPY_SRC` usage.
     ///
-    /// Picks any buffer currently in the `Free` state as the copy target. If both
-    /// buffers are still in flight (GPU behind), the copy is skipped this frame
-    /// rather than blocking — the readback simply refreshes on a later frame.
+    /// Uses any `Free` buffer. If both are in flight, the copy is skipped this
+    /// frame instead of blocking.
     pub fn begin_readback(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
@@ -266,16 +259,13 @@ impl ReadbackBuffer {
         self.slots[idx] = SlotState::Copied;
     }
 
-    /// Non-blocking attempt to read back a previously copied frame.
+    /// Non-blocking read of a previously copied frame.
     ///
-    /// Returns a typed, tightly packed frame for the most recent buffer whose
-    /// map has completed, or `None` if nothing is ready yet. This never
-    /// blocks the render thread: it advances pending maps with a non-blocking
-    /// `poll(Poll)` and checks completion with `try_recv`, accepting a couple
-    /// frames of latency. Works regardless of whether the copy was submitted in a
-    /// prior frame (analyzer path) or immediately before this call (headless path).
+    /// Returns the most recent buffer whose map has completed, or `None`. Works
+    /// whether the copy was submitted in a prior frame (analyzers) or just
+    /// before this call (headless outputs).
     pub fn try_read(&mut self, device: &wgpu::Device) -> Option<ReadbackFrame> {
-        // Give wgpu a chance to fire any completed map callbacks (non-blocking).
+        // Fire any completed map callbacks without blocking.
         let _ = device.poll(wgpu::PollType::Poll);
 
         let mut result = None;
@@ -283,8 +273,7 @@ impl ReadbackBuffer {
             match std::mem::replace(&mut self.slots[idx], SlotState::Free) {
                 SlotState::Free => {}
                 SlotState::Copied => {
-                    // The copy has been submitted by now; issue the async map and
-                    // check for completion on a subsequent call.
+                    // The copy is submitted by now; map it and check on a later call.
                     let (tx, rx) = std::sync::mpsc::channel();
                     self.buffers[idx]
                         .slice(..)
@@ -308,7 +297,7 @@ impl ReadbackBuffer {
                         // slot left Free
                     }
                     Err(TryRecvError::Empty) => {
-                        // Still in flight — restore state and check next frame.
+                        // Still in flight; check next frame.
                         self.slots[idx] = SlotState::Mapping(rx);
                     }
                     Ok(Err(e)) => {
@@ -326,8 +315,8 @@ impl ReadbackBuffer {
         result
     }
 
-    /// Copy the mapped contents of buffer `idx` into a tightly-packed RGBA vec,
-    /// stripping any per-row padding. The buffer must be mapped.
+    /// Copy mapped buffer `idx` into a tightly packed vec, stripping row
+    /// padding. The buffer must be mapped.
     fn copy_out(&self, idx: usize) -> Vec<u8> {
         let data = self.buffers[idx]
             .slice(..)

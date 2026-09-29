@@ -1,12 +1,8 @@
-//! HTML deck source — offscreen web rendering via Servo → wgpu texture.
+//! HTML deck source: offscreen web pages rendered by Servo into wgpu textures.
 //!
-//! See `/spec/html-source.md` for the full design.
-//!
-//! The integration surface (`HtmlManager` and its public API) always compiles
-//! so the deck/persistence/UI/API plumbing is testable without pulling in the
-//! heavy Servo dependency. The Servo-backed rendering is gated behind the
-//! `html` cargo feature (`servo_backend`); when the feature is disabled the
-//! manager still allocates a texture per instance but produces a blank frame.
+//! `HtmlManager` always compiles so the deck, persistence, UI and API code is
+//! testable without Servo. Rendering needs the `html` cargo feature
+//! (`servo_backend`); without it each instance gets a blank texture.
 
 pub mod provider;
 #[cfg(feature = "html")]
@@ -14,37 +10,37 @@ mod servo_backend;
 
 use std::sync::{Arc, Mutex};
 
-/// Default render resolution for an HTML instance when none is supplied.
+/// Render resolution when none is supplied.
 const DEFAULT_WIDTH: u32 = 1920;
 const DEFAULT_HEIGHT: u32 = 1080;
 
-/// Stable opaque identifier for an HTML render instance. Addresses the owning
-/// servo thread's `WebViews` independently of render-side `Vec` ordering.
+/// Identifies an HTML instance on the servo thread, independent of the
+/// render side's `Vec` order.
 type HtmlId = u64;
 
-/// A finished RGBA frame (`width*height*4`) published from the servo thread.
+/// An RGBA frame (`width*height*4`) from the servo thread.
 struct HtmlFrame {
     data: Vec<u8>,
     width: u32,
     height: u32,
 }
 
-/// Latest-frame slot shared between the servo thread (writer) and the render
-/// thread (reader), mirroring the NDI/stream `Arc<Mutex<Option<…>>>` pattern.
+/// Latest-frame slot. The servo thread writes it, the render thread reads it.
 type FrameSlot = Arc<Mutex<Option<HtmlFrame>>>;
 
-/// A single interactive-mode input event forwarded from an interactive window to
-/// the owning servo thread (feature `html`). Carries only `Send` data plus
-/// `keyboard_types` values; the winit→here translation lives in the app layer so
-/// winit never reaches this module, preserving the "only `Send` data crosses the
-/// thread boundary" contract. Positions are `WebView` **device** pixels. See
-/// `/spec/html-source.md` §4.
+/// An input event forwarded from an interactive window to the servo thread
+/// (feature `html`). Holds only `Send` data; the app layer translates winit
+/// events so winit stays out of this module. Positions are `WebView` device
+/// pixels.
 #[cfg(feature = "html")]
 #[derive(Debug, Clone)]
 pub enum HtmlInputEvent {
     /// Pointer moved to a `WebView` device-pixel position.
-    MouseMove { x: f32, y: f32 },
-    /// Mouse button pressed/released. `button`: 0=left, 1=middle, 2=right.
+    MouseMove {
+        x: f32,
+        y: f32,
+    },
+    /// Mouse button press or release. `button`: 0=left, 1=middle, 2=right.
     MouseButton {
         x: f32,
         y: f32,
@@ -52,48 +48,54 @@ pub enum HtmlInputEvent {
         pressed: bool,
     },
     /// Wheel delta (DOM `wheel` event) in device pixels.
-    Wheel { x: f32, y: f32, dx: f64, dy: f64 },
-    /// Scroll the page by a device-pixel delta at a position.
-    Scroll { x: f32, y: f32, dx: f64, dy: f64 },
-    /// A translated keyboard event.
+    Wheel {
+        x: f32,
+        y: f32,
+        dx: f64,
+        dy: f64,
+    },
+    /// Scrolls the page by a device-pixel delta at a position.
+    Scroll {
+        x: f32,
+        y: f32,
+        dx: f64,
+        dy: f64,
+    },
     Key(keyboard_types::KeyboardEvent),
-    /// An IME composition update (preedit start/update or commit end).
+    /// IME composition update (preedit or commit).
     Ime(keyboard_types::CompositionEvent),
-    /// IME composition dismissed/cancelled.
+    /// IME composition cancelled.
     ImeDismissed,
-    /// Window focus gained/lost → `WebView::focus()`/`blur()`.
+    /// Window focus change, mapped to `WebView::focus()`/`blur()`.
     Focus(bool),
 }
 
-/// Manages offscreen HTML render instances and their destination GPU textures.
-///
-/// Mirrors the shape of `NdiManager` / `StreamManager`: the render loop calls
-/// [`HtmlManager::update`] each frame and looks up [`HtmlManager::texture_view`]
-/// for compositing.
+/// Offscreen HTML render instances and their GPU textures. The render loop
+/// calls [`HtmlManager::update`] each frame and composites
+/// [`HtmlManager::texture_view`].
 pub struct HtmlManager {
     instances: Vec<HtmlInstance>,
     disabled: bool,
     next_id: HtmlId,
-    /// The single shared servo pump thread, spawned lazily on first render.
+    /// Shared servo thread, spawned on first render.
     #[cfg(feature = "html")]
     engine: Option<servo_backend::ServoEngine>,
 }
 
-/// A single HTML render target: the wgpu texture frames are uploaded into, plus
-/// the shared slot the servo thread publishes finished frames to.
+/// One HTML render target: its wgpu texture and the slot the servo thread
+/// publishes frames to.
 struct HtmlInstance {
     url: String,
     width: u32,
     height: u32,
     texture: wgpu::Texture,
     view: wgpu::TextureView,
-    /// True once at least one frame (or the placeholder) has been written.
+    /// True once a frame or the placeholder has been written.
     initialized: bool,
-    /// Stable id addressing this instance on the servo thread.
     #[cfg_attr(not(feature = "html"), allow(dead_code))]
     id: HtmlId,
-    /// Latest frame published by the servo thread (never filled when the `html`
-    /// feature is off → placeholder is shown).
+    /// Latest frame from the servo thread. Stays empty without the `html`
+    /// feature, so the placeholder shows.
     frame: FrameSlot,
 }
 
@@ -104,7 +106,7 @@ impl Default for HtmlManager {
 }
 
 impl HtmlManager {
-    /// Create an active manager. Servo itself is initialized lazily per instance.
+    /// Creates an active manager. Servo starts on first render.
     pub fn new() -> Self {
         Self {
             instances: Vec::new(),
@@ -115,8 +117,8 @@ impl HtmlManager {
         }
     }
 
-    /// Create a no-op manager (for the `--no-html` CLI flag). `start_render`
-    /// always returns `None`.
+    /// Creates a disabled manager (`--no-html`). `start_render` always returns
+    /// `None`.
     pub fn new_disabled() -> Self {
         log::info!("HTML source manager disabled");
         Self {
@@ -128,13 +130,13 @@ impl HtmlManager {
         }
     }
 
-    /// Whether HTML rendering is available (feature enabled and not disabled).
+    /// Whether the `html` feature is enabled and the manager is not disabled.
     pub fn is_available(&self) -> bool {
         !self.disabled && cfg!(feature = "html")
     }
 
-    /// Start rendering `url` at `width`×`height`. Returns the instance index, or
-    /// reuses an existing instance for the same URL. Returns `None` when the
+    /// Starts rendering `url` at `width`×`height` and returns the instance index.
+    /// Reuses an existing instance for the same URL. Returns `None` when the
     /// manager is disabled.
     pub fn start_render(
         &mut self,
@@ -167,8 +169,7 @@ impl HtmlManager {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            // COPY_SRC lets the rendered frame be read back to CPU (deck smoke
-            // tests; future thumbnail/snapshot of HTML decks).
+            // COPY_SRC lets frames be read back to the CPU (deck smoke tests).
             usage: wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_DST
                 | wgpu::TextureUsages::COPY_SRC,
@@ -180,7 +181,7 @@ impl HtmlManager {
         self.next_id += 1;
         let frame: FrameSlot = Arc::new(Mutex::new(None));
 
-        // Spawn the shared servo thread on first use, then start this instance.
+        // Spawn the shared servo thread on first use.
         #[cfg(feature = "html")]
         {
             let engine = self
@@ -209,13 +210,11 @@ impl HtmlManager {
         Some(self.instances.len() - 1)
     }
 
-    /// Per-frame: pump each Servo instance and upload its latest frame. When the
-    /// `html` feature is off this writes a one-time placeholder so the deck is
-    /// not invisible.
+    /// Uploads each instance's latest frame. Without the `html` feature, writes a
+    /// placeholder once so the deck is not invisible.
     pub fn update(&mut self, _device: &wgpu::Device, queue: &wgpu::Queue) {
         for instance in &mut self.instances {
-            // Non-blocking poll of the latest frame published by the servo thread
-            // (latest-wins, identical to the NDI/stream sources).
+            // Non-blocking poll; the latest frame wins.
             let frame = instance.frame.try_lock().ok().and_then(|mut g| g.take());
 
             if let Some(frame) = frame {
@@ -231,7 +230,7 @@ impl HtmlManager {
         }
     }
 
-    /// Upload an RGBA byte buffer (`width*height*4`) into the instance texture.
+    /// Uploads an RGBA buffer (`width*height*4`) into the instance texture.
     fn upload(queue: &wgpu::Queue, instance: &HtmlInstance, rgba: &[u8]) {
         let expected = (instance.width * instance.height * 4) as usize;
         if rgba.len() < expected {
@@ -258,27 +257,23 @@ impl HtmlManager {
         );
     }
 
-    /// Texture view for compositing the instance at `idx`.
     pub fn texture_view(&self, idx: usize) -> Option<&wgpu::TextureView> {
         self.instances.get(idx).map(|i| &i.view)
     }
 
-    /// Render dimensions of the instance at `idx`.
     pub fn instance_dimensions(&self, idx: usize) -> Option<(u32, u32)> {
         self.instances.get(idx).map(|i| (i.width, i.height))
     }
 
-    /// URL of the instance at `idx`.
     pub fn instance_url(&self, idx: usize) -> Option<&str> {
         self.instances.get(idx).map(|i| i.url.as_str())
     }
 
-    /// Number of active instances.
     pub fn instance_count(&self) -> usize {
         self.instances.len()
     }
 
-    /// Navigate an existing instance to a new URL.
+    /// Navigates an existing instance to a new URL.
     pub fn navigate(&mut self, idx: usize, url: &str) {
         if let Some(instance) = self.instances.get_mut(idx) {
             instance.url = url.to_string();
@@ -290,7 +285,7 @@ impl HtmlManager {
         }
     }
 
-    /// Reload an existing instance, re-fetching its current URL.
+    /// Reloads an instance's current URL.
     pub fn reload(&mut self, idx: usize) {
         if let Some(instance) = self.instances.get_mut(idx) {
             instance.initialized = false;
@@ -301,8 +296,8 @@ impl HtmlManager {
         }
     }
 
-    /// Forward an interactive-mode input event to the instance at `idx`.
-    /// No-op for an unknown index or when no engine has been spawned.
+    /// Forwards an input event to instance `idx`. No-op for an unknown index or
+    /// when no engine is running.
     #[cfg(feature = "html")]
     pub fn send_input(&self, idx: usize, event: HtmlInputEvent) {
         if let (Some(instance), Some(engine)) = (self.instances.get(idx), self.engine.as_ref()) {
@@ -310,8 +305,8 @@ impl HtmlManager {
         }
     }
 
-    /// Stop and drop the instance at `idx`. Note: indices of later instances are
-    /// not preserved — callers that hold indices should treat this as teardown.
+    /// Stops and drops instance `idx`. Later instances shift down, so held
+    /// indices become invalid.
     pub fn stop_render(&mut self, idx: usize) {
         if idx < self.instances.len() {
             #[cfg(feature = "html")]
@@ -326,10 +321,8 @@ impl HtmlManager {
     }
 }
 
-/// A fully transparent placeholder used when no frame is available. Transparent
-/// (rather than opaque dark-gray) so that on a deck flagged `transparent` the
-/// pre-first-frame window shows through; an unflagged deck composites it over the
-/// opaque black base clear, yielding black (see /spec/html-source.md §2).
+/// Transparent placeholder shown before the first frame, so a `transparent`
+/// deck shows through. An unflagged deck composites it over black.
 fn placeholder_frame(width: u32, height: u32) -> Vec<u8> {
     vec![0u8; (width * height * 4) as usize]
 }
@@ -362,7 +355,7 @@ mod tests {
 
     #[test]
     fn reload_out_of_range_is_noop() {
-        // Reloading a non-existent instance must not panic (no engine spawned).
+        // Must not panic when no engine is running.
         let mut mgr = HtmlManager::new();
         mgr.reload(0);
         mgr.reload(999);
@@ -373,7 +366,7 @@ mod tests {
     #[cfg(feature = "html")]
     #[test]
     fn send_input_out_of_range_is_noop() {
-        // Forwarding input to a non-existent instance must not panic (no engine).
+        // Must not panic when no engine is running.
         let mgr = HtmlManager::new();
         mgr.send_input(0, HtmlInputEvent::MouseMove { x: 1.0, y: 2.0 });
         mgr.send_input(999, HtmlInputEvent::Focus(true));
@@ -385,18 +378,14 @@ mod tests {
     fn placeholder_frame_is_transparent_and_sized() {
         let buf = placeholder_frame(4, 2);
         assert_eq!(buf.len(), 4 * 2 * 4);
-        // Fully transparent (all channels 0) so a `transparent` deck shows through
-        // before its first Servo frame; see /spec/html-source.md §2.
         assert!(buf.iter().all(|&b| b == 0));
     }
 }
 
-/// True end-to-end smoke tests for the HTML deck path (feature `html`).
+/// End-to-end smoke tests for the HTML deck path (feature `html`). They render
+/// with a real Servo instance through `HtmlManager` and read the pixels back.
 ///
-/// These drive a real Servo instance through `HtmlManager` (the deck source),
-/// render into the GPU texture, then read the pixels back to verify content.
-/// They are `#[ignore]` because each starts a full Servo engine (heavy, several
-/// seconds). Run explicitly with:
+/// Ignored because each starts Servo (several seconds). Run with:
 ///   cargo test `html_deck_smoke` -- --ignored --test-threads=1
 #[cfg(all(test, feature = "html"))]
 mod smoke_tests {
@@ -406,17 +395,17 @@ mod smoke_tests {
 
     use crate::renderer::context::GpuContext;
 
-    const W: u32 = 320; // 320*4 = 1280 bytes/row, already 256-aligned (no padding)
+    const W: u32 = 320; // 1280 bytes/row, already 256-aligned
     const H: u32 = 240;
     const ROW_BYTES: u32 = W * 4;
 
-    /// Wrap an HTML document in a base64 `data:` URL (avoids percent-encoding).
+    /// Wraps an HTML document in a base64 `data:` URL to avoid percent-encoding.
     fn data_url(html: &str) -> String {
         let b64 = base64::engine::general_purpose::STANDARD.encode(html.as_bytes());
         format!("data:text/html;base64,{b64}")
     }
 
-    /// Read the center pixel of an instance's texture back to CPU.
+    /// Reads the center pixel of an instance's texture back to the CPU.
     fn center_pixel(gpu: &GpuContext, mgr: &HtmlManager, idx: usize) -> [u8; 4] {
         let texture = &mgr.instances[idx].texture;
         let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
@@ -469,7 +458,7 @@ mod smoke_tests {
         px
     }
 
-    /// True when `px` is a solid version of `want` (each channel near 0 or 255).
+    /// True when `px` matches `want` (each channel near 0 or 255).
     fn is_color(px: [u8; 4], want: [u8; 3]) -> bool {
         px[3] > 200
             && (0..3).all(|i| {
@@ -481,7 +470,7 @@ mod smoke_tests {
             })
     }
 
-    /// Pump the deck each frame until its center pixel matches `want` (or timeout).
+    /// Pumps the deck until its center pixel matches `want` or the timeout hits.
     fn pump_until(
         gpu: &GpuContext,
         mgr: &mut HtmlManager,
@@ -511,7 +500,7 @@ mod smoke_tests {
         };
         let mut mgr = HtmlManager::new();
 
-        // 1) Plain HTML: the body background propagates to the viewport.
+        // Plain HTML: the body background fills the viewport.
         let red = data_url("<!doctype html><html><body bgcolor=\"red\"></body></html>");
         let idx = mgr
             .start_render(&red, W, H, &gpu.device)
@@ -522,8 +511,7 @@ mod smoke_tests {
             "plain HTML deck did not render red; got {px:?}"
         );
 
-        // 2) HTML + CSS + JS: CSS paints black, then JS overrides to blue.
-        //    Asserting blue proves both CSS parsing and JS execution in the deck.
+        // CSS paints black, JS sets blue. Blue shows both CSS and JS ran.
         let css_js = "<!doctype html><html><head><style>html,body{height:100%;margin:0}body{background:#000}</style></head><body><script>document.body.style.background='rgb(0,0,255)';</script></body></html>";
         mgr.navigate(idx, &data_url(css_js));
         let px2 = pump_until(&gpu, &mut mgr, idx, [0, 0, 255], Duration::from_secs(30));
@@ -533,13 +521,10 @@ mod smoke_tests {
         );
     }
 
-    /// Idle-repaint correctness: a `setInterval` timer mutates the DOM *after*
-    /// the initial load completes — driving neither `requestAnimationFrame` nor a
-    /// CSS animation, so `animating()` stays false. This is the gating caveat
-    /// noted in `/spec/html-source.md`: the off-thread engine must still repaint
-    /// via the `frame_ready` path (`notify_new_frame_ready` + the event-loop
-    /// waker unparking the pump thread). Reaching blue proves a timer-driven
-    /// update on a settled page is not dropped.
+    /// A `setInterval` timer changes the DOM after load, with no
+    /// `requestAnimationFrame` or CSS animation, so `animating()` stays false.
+    /// The engine must still repaint through the `frame_ready` path
+    /// (`notify_new_frame_ready` plus the waker unparking the servo thread).
     #[test]
     #[ignore = "heavy: starts a real Servo engine; run with --ignored --test-threads=1"]
     fn html_deck_setinterval_idle_repaint() {
@@ -549,8 +534,7 @@ mod smoke_tests {
         };
         let mut mgr = HtmlManager::new();
 
-        // Paints black at load, then a setInterval timer flips to blue on its
-        // first tick (~120ms after load) — no rAF, no CSS animation/transition.
+        // Black at load; the first setInterval tick (~120ms) sets blue.
         let idle = "<!doctype html><html><head><style>html,body{height:100%;margin:0}\
 body{background:#000}</style></head><body><script>var done=false;\
 setInterval(function(){if(!done){document.body.style.background='rgb(0,0,255)';\
@@ -565,10 +549,8 @@ done=true;}},120);</script></body></html>";
         );
     }
 
-    /// Reload correctness: after a page has rendered, `reload()` re-fetches the
-    /// current URL and re-executes its JS, repainting the same content without
-    /// error. Proves the `HtmlCommand::Reload` → `WebView::reload()` path drives a
-    /// fresh paint on a live, settled instance.
+    /// `reload()` on a rendered page re-runs its JS and repaints the same content
+    /// (`HtmlCommand::Reload` -> `WebView::reload()`).
     #[test]
     #[ignore = "heavy: starts a real Servo engine; run with --ignored --test-threads=1"]
     fn html_deck_reload_repaints() {
@@ -578,7 +560,7 @@ done=true;}},120);</script></body></html>";
         };
         let mut mgr = HtmlManager::new();
 
-        // CSS paints black, JS overrides to blue — reaching blue proves JS ran.
+        // CSS paints black, JS sets blue. Blue means JS ran.
         let css_js = "<!doctype html><html><head><style>html,body{height:100%;margin:0}body{background:#000}</style></head><body><script>document.body.style.background='rgb(0,0,255)';</script></body></html>";
         let idx = mgr
             .start_render(&data_url(css_js), W, H, &gpu.device)
@@ -589,7 +571,7 @@ done=true;}},120);</script></body></html>";
             "deck did not render blue; got {px:?}"
         );
 
-        // Reload re-fetches the same URL and re-runs the JS; it must paint blue again.
+        // Reload re-runs the JS; it must paint blue again.
         mgr.reload(idx);
         let px2 = pump_until(&gpu, &mut mgr, idx, [0, 0, 255], Duration::from_secs(30));
         assert!(
@@ -598,11 +580,9 @@ done=true;}},120);</script></body></html>";
         );
     }
 
-    /// Interactive input correctness: a forwarded mouse click reaches the DOM.
-    /// The page paints red and registers a `click` handler that flips it blue;
-    /// after `send_input` delivers `MouseMove` + button down/up at the center, the
-    /// deck must repaint blue. Proves the `HtmlInputEvent` → `HtmlCommand::Input`
-    /// → `WebView::notify_input_event` path drives a real DOM event + repaint.
+    /// A forwarded mouse click reaches the DOM. The page is red and a `click`
+    /// handler turns it blue; after `send_input` sends a move plus button down/up
+    /// at the center, the deck must repaint blue.
     #[test]
     #[ignore = "heavy: starts a real Servo engine; run with --ignored --test-threads=1"]
     fn html_deck_click_input_repaints() {
@@ -612,7 +592,7 @@ done=true;}},120);</script></body></html>";
         };
         let mut mgr = HtmlManager::new();
 
-        // Paints red; a document-level click handler flips the background to blue.
+        // Red page; a document click handler sets blue.
         let page = "<!doctype html><html><head><style>html,body{height:100%;margin:0}\
 body{background:red}</style></head><body><script>\
 document.addEventListener('click',function(){\
@@ -621,15 +601,15 @@ document.body.style.background='rgb(0,0,255)';});</script></body></html>";
             .start_render(&data_url(page), W, H, &gpu.device)
             .expect("start_render returned None with the html feature enabled");
 
-        // Wait for the page's red paint (distinct from the gray placeholder) so
-        // the document is loaded and interactive before we click.
+        // Wait for red (distinct from the transparent placeholder) so the page is
+        // loaded before clicking.
         let red = pump_until(&gpu, &mut mgr, idx, [255, 0, 0], Duration::from_secs(30));
         assert!(
             is_color(red, [255, 0, 0]),
             "page did not render red; got {red:?}"
         );
 
-        // Forward a click at the viewport center: move, press, release.
+        // Click at the viewport center: move, press, release.
         let (cx, cy) = ((W / 2) as f32, (H / 2) as f32);
         mgr.send_input(idx, HtmlInputEvent::MouseMove { x: cx, y: cy });
         mgr.send_input(
@@ -658,10 +638,8 @@ document.body.style.background='rgb(0,0,255)';});</script></body></html>";
         );
     }
 
-    /// Transparency correctness (Blocker 1): with `shell_background_color_rgba`
-    /// set to `[0,0,0,0]`, a page whose html/body are transparent must read back
-    /// with alpha below 255 — proving the Servo viewport clears transparent rather
-    /// than the default opaque white. See /spec/html-source.md §2.
+    /// With `shell_background_color_rgba` set to `[0,0,0,0]`, a page with
+    /// transparent html/body reads back with alpha below 255.
     #[test]
     #[ignore = "heavy: starts a real Servo engine; run with --ignored --test-threads=1"]
     fn html_deck_transparent_background_has_alpha() {
@@ -671,14 +649,13 @@ document.body.style.background='rgb(0,0,255)';});</script></body></html>";
         };
         let mut mgr = HtmlManager::new();
 
-        // Explicitly transparent html/body; no opaque content anywhere.
         let page = "<!doctype html><html><head><style>html,body{height:100%;margin:0;\
 background:transparent}</style></head><body></body></html>";
         let idx = mgr
             .start_render(&data_url(page), W, H, &gpu.device)
             .expect("start_render returned None with the html feature enabled");
 
-        // Pump until the center pixel reads transparent (alpha < 255), or time out.
+        // Pump until the center pixel has alpha < 255, or time out.
         let start = Instant::now();
         let mut px = [255u8; 4];
         while start.elapsed() < Duration::from_secs(30) {

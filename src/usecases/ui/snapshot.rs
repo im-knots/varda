@@ -1,10 +1,8 @@
-//! `UIData` builder — derives the UI consumer's view-model from `EngineState`.
+//! `UIData` builder: maps `EngineState` to the UI view model.
 //!
-//! Lives here (not `app/snapshot.rs`) because it is presentation mapping:
-//! it names egui's `TextureId` and constructs `usecases::ui::UIData` itself.
-//! See `/spec/app-presentation-boundary.md`. `app::VardaApp::build_engine_state()`
-//! remains the one legitimate cross-layer read — it returns a plain,
-//! framework-free `EngineState` that this function then maps from.
+//! Lives in `usecases::ui` because it names egui's `TextureId` and builds
+//! `UIData`. `app::VardaApp::build_engine_state()` returns the framework-free
+//! `EngineState` this maps from.
 
 use super::{EffectInfo, ParamUIInfo, ShaderParamsUI};
 use crate::engine::types::{
@@ -19,9 +17,9 @@ pub(crate) struct PreviewTextures<'a> {
     pub main_output: Option<egui::TextureId>,
 }
 
-/// Derive the GUI's view model from this frame's engine snapshot, the UI
-/// layout, and the registered preview textures. Borrows `engine` so the runner
-/// can publish the same snapshot to the API afterwards.
+/// Build the GUI view model from this frame's engine snapshot, the UI layout,
+/// and the registered preview textures. Borrows `engine` so the runner can
+/// publish the same snapshot to the API afterwards.
 pub(crate) fn build_ui_data(
     engine: &crate::engine::EngineState,
     layout: &crate::usecases::ui::UILayoutState,
@@ -35,9 +33,6 @@ pub(crate) fn build_ui_data(
         SequenceStepUI, SequenceUIData, SurfaceAssignmentUI, SurfaceUI, UIData,
     };
 
-    // ── Map EngineState → UIData ──────────────────────────────────────
-
-    // Channels: map ChannelSnapshot → ChannelUIInfo
     let channels = engine
         .mixer
         .channels
@@ -112,7 +107,6 @@ pub(crate) fn build_ui_data(
         .map(effect_snapshot_to_ui)
         .collect();
 
-    // Modulation: map snapshots → UI types
     let modulation_sources = engine
         .modulation
         .sources
@@ -213,7 +207,6 @@ pub(crate) fn build_ui_data(
         })
         .collect();
 
-    // Audio: map AudioSnapshot → AudioUIData
     let audio = AudioUIData {
         level: engine.audio.level,
         bass: engine.audio.bass,
@@ -245,8 +238,7 @@ pub(crate) fn build_ui_data(
                 uuid: o.uuid.clone(),
                 name: o.name.clone(),
                 sink: o.sink.clone(),
-                // A window shows whenever it exists; a startable sink only
-                // while it sends.
+                // A window is active whenever it exists; a startable sink only while sending.
                 is_active: !o.sink.startable || o.is_active,
                 unassigned: o.unassigned,
                 active_duration: std::time::Duration::from_secs_f64(o.active_seconds),
@@ -321,7 +313,6 @@ pub(crate) fn build_ui_data(
         })
         .collect();
 
-    // MIDI: map snapshots → UI types
     let midi_devices = engine
         .midi
         .devices
@@ -346,7 +337,6 @@ pub(crate) fn build_ui_data(
         })
         .collect();
 
-    // Sequences: map snapshots → UI types
     let sequences = engine
         .mixer
         .sequences
@@ -448,7 +438,7 @@ pub(crate) fn build_ui_data(
             .collect(),
         transition_names: engine.mixer.transition_names.clone(),
         active_transition_name: engine.mixer.active_transition_name.clone(),
-        // UI layout/selection state — owned by the UI consumer, not the engine
+        // UI layout and selection, owned by the UI rather than the engine.
         selected_deck: layout.selected_deck,
         selected_channel: layout.selected_channel,
         selected_master: layout.selected_master,
@@ -464,9 +454,8 @@ pub(crate) fn build_ui_data(
         arrangement_scroll: layout.arrangement_scroll,
         arrangement_scroll_y: layout.arrangement_scroll_y,
         arrangement_snap: layout.arrangement_snap,
-        // A loop that came back with the scene is a focus area nobody has drawn
-        // yet this session, so the strip shows it rather than opening blank over
-        // a loop that is already wrapping playback.
+        // A loop restored with the scene has no focus area this session, so show it
+        // instead of opening blank over a loop that is already playing.
         arrangement_focus: layout.arrangement_focus.or_else(|| {
             engine
                 .transport
@@ -502,7 +491,7 @@ pub(crate) fn build_ui_data(
                 .channels
                 .iter()
                 .map(|ch| {
-                    // Average the per-deck wall-clock FPS across active decks
+                    // Average per-deck wall-clock FPS across active decks.
                     let active_decks: Vec<f32> = ch
                         .decks
                         .iter()
@@ -525,7 +514,7 @@ pub(crate) fn build_ui_data(
                 .collect();
             stats
         },
-        // Wall-clock frame rate (smoothed over 60 frames)
+        // Wall-clock frame rate, smoothed over 60 frames.
         fps: engine.fps,
         gpu_device_name: engine.system.gpu.name.clone(),
         gpu_backend: engine.system.gpu.backend.clone(),
@@ -554,7 +543,7 @@ pub(crate) fn build_ui_data(
         render_height: engine.render.height,
         max_render_dimension: engine.render.max_dimension,
         target_fps: engine.target_fps,
-        // Populated by UIRunner after build (history/pending loads live on runner, not app)
+        // UIRunner fills these after build; history and pending loads live on the runner.
         can_undo: false,
         can_redo: false,
         pending_deck_loads: engine
@@ -566,8 +555,6 @@ pub(crate) fn build_ui_data(
         channel_presets: engine.presets.channel.clone(),
     }
 }
-
-// ── Snapshot → UI type helpers ──────────────────────────────────────
 
 fn params_snapshot_to_ui(snap: &ShaderParamsSnapshot) -> ShaderParamsUI {
     ShaderParamsUI {
@@ -606,7 +593,7 @@ fn effect_snapshot_to_ui(snap: &EffectSnapshot) -> EffectInfo {
 }
 
 /// How long a LUT listing stays fresh. LUTs are copied into `.varda/luts/` by
-/// hand, so a periodic rescan picks them up without a per-frame directory read.
+/// hand, so a periodic rescan finds them without reading the directory every frame.
 const LUT_RESCAN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Throttled listing of the LUT files in a workspace's `luts/` directory.
@@ -617,8 +604,8 @@ pub(crate) struct LutCatalog {
 }
 
 impl LutCatalog {
-    /// The LUT filenames in `dir`, rescanning only when the listing is stale or
-    /// `dir` has changed.
+    /// LUT filenames in `dir`, rescanning only when the listing is stale or `dir`
+    /// changed.
     pub(crate) fn files(
         &mut self,
         dir: &std::path::Path,

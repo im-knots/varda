@@ -1,17 +1,11 @@
-//! Tonemap mode and 3D LUT selection for the master output.
-//!
-//! Lives beside the main output preview rather than in the top bar: tonemapping
-//! is the last thing that touches every pixel on the way out, and it was easy to
-//! miss as a five-character abbreviation in a corner. Here the current curve is
-//! named in full on the section header, and the preview it affects is directly
-//! above it.
+//! Tonemap mode and 3D LUT selection for the master output, shown under the
+//! main output preview.
 
 use super::super::{UIActions, UIData};
 use crate::engine::EngineCommand;
 use crate::renderer::tonemap::TonemapMode;
 
-/// Presets in user-facing order, shared with the per-output picker so the two
-/// cannot drift apart.
+/// Presets in UI order, shared with the per-output picker.
 const TONEMAP_PRESETS: &[TonemapMode] = &TonemapMode::ALL;
 
 /// Full name of a mode, for the collapsed section header.
@@ -106,8 +100,7 @@ mod tests {
     use super::*;
     use egui_kittest::kittest::Queryable;
 
-    /// Every mode must be listed, or a scene could load a curve the UI cannot
-    /// display or change.
+    /// Every mode must be listed, or a scene could load a curve the UI cannot show.
     #[test]
     fn every_mode_is_selectable_and_named() {
         for mode in [
@@ -151,7 +144,7 @@ mod tests {
         );
     }
 
-    /// Re-picking the active mode must not churn the engine with a no-op.
+    /// Re-picking the active mode must not send a no-op to the engine.
     #[test]
     fn reselecting_the_active_mode_emits_nothing() {
         let mut data = UIData::test_fixture();

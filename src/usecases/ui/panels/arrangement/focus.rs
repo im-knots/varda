@@ -1,13 +1,11 @@
-//! The focus area: the stretch of show being worked on.
+//! The focus area: the part of the show being worked on.
 //!
-//! A bar on its own strip above the ruler, drawn, moved, and resized like a
-//! region. Looping is one thing done to it rather than the thing it is, so the
-//! range outlives the loop it sets and can be zoomed to instead. See
-//! /spec/arrangement.md § The focus area.
+//! A bar on its own strip above the ruler, drawn, moved and resized like a
+//! region. Looping uses the range, but the range outlives the loop and can be
+//! zoomed to.
 //!
-//! The strip is its own band rather than a modifier-drag on the ruler because
-//! the ruler already scrubs on press, drops a cue on double-click, and carries
-//! cue handles that claim the band around themselves.
+//! The strip is separate from the ruler because the ruler already scrubs on
+//! press, adds a cue on double-click, and has cue handles.
 
 use super::super::super::state::FocusRange;
 use super::super::super::{UIActions, UIData};
@@ -16,18 +14,16 @@ use super::{TimeAxis, min_span, snap_seconds};
 use crate::engine::EngineCommand;
 use crate::transport::LoopRegion;
 
-/// Height of the strip. Tall enough to grab, short enough that it does not read
-/// as a row of the arrangement.
+/// Strip height: tall enough to grab, short enough not to look like an
+/// arrangement row.
 pub(super) const STRIP_HEIGHT: f32 = 12.0;
 
-/// Grab zone for either edge, in pixels, on both sides of it. Same reasoning as
-/// a region's: aiming at a one-pixel line and landing just outside it is the
-/// normal way to miss.
+/// Grab zone on each side of either edge, in pixels, as for regions.
 const EDGE_GRAB: f32 = 5.0;
 
 const COLOR: egui::Color32 = egui::Color32::from_rgb(120, 180, 255);
 
-/// Which part of the bar a drag has hold of.
+/// Which part of the bar a drag holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Grab {
     Move,
@@ -35,13 +31,13 @@ enum Grab {
     ResizeEnd,
 }
 
-/// A held edit, carried across the frames of one gesture.
+/// An edit in progress, carried across the frames of one gesture.
 #[derive(Clone, Copy)]
 struct Drag {
     grab: Grab,
     origin: FocusRange,
-    /// Show position the pointer was over when the drag started, so the edit is
-    /// an absolute offset rather than accumulated deltas.
+    /// Show position under the pointer at drag start, so the edit is an absolute
+    /// offset rather than accumulated deltas.
     at: f64,
 }
 
@@ -61,8 +57,8 @@ pub(super) fn render(
         ui.visuals().extreme_bg_color.gamma_multiply(0.5),
     );
 
-    // Registered first, so the bar drawn on top of it takes the press: egui
-    // gives it to the last widget registered.
+    // Registered first so the bar on top takes the press; egui gives it to the
+    // last widget registered.
     handle_create(ui, data, actions, strip, axis);
 
     if let Some(range) = data.arrangement_focus {
@@ -73,8 +69,8 @@ pub(super) fn render(
 
 /// Drag across the strip to mark a range.
 ///
-/// The range is published on every frame of the drag rather than at the end, so
-/// the bar is drawn under the pointer while it is being drawn.
+/// The range is published every frame of the drag so the bar follows the
+/// pointer.
 fn handle_create(
     ui: &mut egui::Ui,
     data: &UIData,
@@ -242,11 +238,8 @@ fn menu(
     }
 }
 
-/// Mark the range, and keep the loop on it while looping is on.
-///
-/// The loop following the range is what makes the drawn bar and the thing that
-/// wraps playback the same object, which is the whole reason the bar is worth
-/// looking at while a loop runs.
+/// Mark the range, and move the loop with it while looping is on, so the bar
+/// and the loop stay the same span.
 fn publish(actions: &mut UIActions, data: &UIData, range: FocusRange) {
     actions.session.set_arrangement_focus = Some(range);
     if data.transport.loop_region.is_some() {
@@ -279,8 +272,7 @@ fn draw(
         );
     }
 
-    // Faint down the lanes, so the stretch reads against the arrangement it
-    // covers without competing with the regions inside it.
+    // Faint down the lanes so the span is visible without hiding the regions.
     if looping {
         let over = egui::Rect::from_min_max(
             egui::pos2(bar.left().max(lanes.left()), lanes.top()),
@@ -310,10 +302,10 @@ fn bar_rect(range: FocusRange, strip: egui::Rect, axis: TimeAxis) -> egui::Rect 
     )
 }
 
-/// Which part of the bar a press at `x` has hold of.
+/// Which part of the bar a press at `x` holds.
 ///
-/// A bar narrower than the two grab zones is all edges and no body, which would
-/// leave no way to move a short range; the body wins the middle in that case.
+/// A bar narrower than both grab zones would be all edges, so the body takes
+/// the middle and a short range can still be moved.
 fn grab_at(bar: egui::Rect, x: f32) -> Grab {
     if bar.width() <= EDGE_GRAB * 2.0 {
         return Grab::Move;
@@ -327,11 +319,10 @@ fn grab_at(bar: egui::Rect, x: f32) -> Grab {
     }
 }
 
-/// The range an in-flight drag has produced.
+/// The range produced by a drag in progress.
 ///
-/// Resizing stops at `min_span` rather than letting an edge cross the other:
-/// a range inverted mid-drag would re-enter as a different range with the
-/// grabbed edge now on the far side, which reads as the bar jumping.
+/// Resizing stops at `min_span` instead of letting an edge cross the other,
+/// which would make the bar appear to jump.
 fn dragged(
     grab: Grab,
     origin: FocusRange,
@@ -360,7 +351,7 @@ fn dragged(
     }
 }
 
-/// The zoom and scroll that put the range across the timeline.
+/// Zoom and scroll that fit the range across the timeline.
 fn zoom_to(range: FocusRange, width: f32) -> (f32, f64) {
     let span = range.span().max(f64::from(f32::EPSILON));
     let pps = f64::from(width) / span;
@@ -392,8 +383,7 @@ mod tests {
         }
     }
 
-    /// A range drawn right to left is the same stretch of show as one drawn left
-    /// to right. Anything else would make half of all drags produce nothing.
+    /// A range drawn right to left equals one drawn left to right.
     #[test]
     fn a_range_is_the_same_whichever_way_it_was_drawn() {
         assert_eq!(FocusRange::new(6.0, 2.0), FocusRange::new(2.0, 6.0));
@@ -412,9 +402,8 @@ mod tests {
         assert_eq!(grab_at(bar, bar.center().x), Grab::Move);
     }
 
-    /// Zoomed far out, a range can be a few pixels wide, and both grab zones
-    /// would cover all of it. Moving it is then the only edit that still makes
-    /// sense, and resizing is a zoom away.
+    /// Zoomed far out, a range can be a few pixels wide and covered by both grab
+    /// zones; it can still be moved.
     #[test]
     fn a_bar_too_narrow_to_have_edges_can_still_be_moved() {
         let narrow = egui::Rect::from_min_max(egui::pos2(200.0, 0.0), egui::pos2(206.0, 10.0));
@@ -429,8 +418,8 @@ mod tests {
         assert!((moved.start - 5.0).abs() < f64::EPSILON);
     }
 
-    /// Dragged hard left, the bar stops at the start of the show rather than
-    /// running into negative positions the transport cannot reach.
+    /// Dragged hard left, the bar stops at the start of the show instead of going
+    /// negative.
     #[test]
     fn the_bar_stops_at_the_start_of_the_show() {
         let moved = dragged(Grab::Move, range(), -100.0, |s| s, 0.1);
@@ -438,8 +427,8 @@ mod tests {
         assert!((moved.span() - range().span()).abs() < f64::EPSILON);
     }
 
-    /// An edge dragged past the other one stops rather than inverting, so the
-    /// grabbed edge stays the edge under the pointer.
+    /// An edge dragged past the other stops instead of inverting, so the grabbed
+    /// edge stays under the pointer.
     #[test]
     fn an_edge_cannot_cross_the_other_one() {
         let min = 0.5;
@@ -452,8 +441,7 @@ mod tests {
         assert!((squashed.end - (range().start + min)).abs() < f64::EPSILON);
     }
 
-    /// A scene saved with a loop opens with the strip already showing it, so the
-    /// thing wrapping playback is visible before anyone drags anything.
+    /// A scene saved with a loop opens with the strip already showing it.
     #[test]
     fn a_marked_range_can_be_sent_to_the_transport_as_a_loop() {
         let mut data = super::super::tests::fixture_with_arrangement();
@@ -478,9 +466,8 @@ mod tests {
         assert!((looped.end - range().end).abs() < f64::EPSILON);
     }
 
-    /// Clearing is not just an unmark while a loop is running on the range:
-    /// leaving playback wrapping inside a stretch nothing is drawn around is how
-    /// a show appears to hang.
+    /// Clearing while a loop runs on the range also stops the loop; otherwise
+    /// playback would wrap inside an unmarked span and the show would look hung.
     #[test]
     fn clearing_a_looping_range_stops_the_loop_with_it() {
         let mut data = super::super::tests::fixture_with_arrangement();
@@ -506,8 +493,7 @@ mod tests {
         );
     }
 
-    /// While a loop is on, the bar and the loop are meant to be one object, so
-    /// an edit to the bar has to carry the loop with it.
+    /// While a loop is on, editing the bar moves the loop with it.
     #[test]
     fn moving_the_bar_while_looping_moves_the_loop() {
         let data = {
@@ -534,8 +520,8 @@ mod tests {
         assert!((moved.start - 10.0).abs() < f64::EPSILON);
     }
 
-    /// Without a loop running there is nothing to keep in step, and pushing a
-    /// loop command per frame of a drag would start one nobody asked for.
+    /// Without a loop, editing the bar sends no loop commands, which would start
+    /// a loop.
     #[test]
     fn moving_the_bar_without_a_loop_leaves_the_transport_alone() {
         let data = super::super::tests::fixture_with_arrangement();
@@ -550,7 +536,7 @@ mod tests {
     fn zooming_to_a_range_puts_its_start_at_the_left_edge() {
         let (pps, scroll) = zoom_to(range(), 600.0);
         assert!((scroll - range().start).abs() < f64::EPSILON);
-        // Four seconds across six hundred pixels.
+        // Four seconds across 600 pixels.
         assert!((pps - 150.0).abs() < f32::EPSILON, "{pps}");
     }
 }

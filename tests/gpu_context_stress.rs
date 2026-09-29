@@ -1,24 +1,12 @@
-//! A deliberate reproducer for the Windows parallel-test crash, not a gate.
+//! Reproducer for Windows crashes under parallel tests; not a gate.
 //!
-//! The Windows lib suite dies within the first few seconds under the default
-//! test parallelism, with `STATUS_HEAP_CORRUPTION` (0xc0000374) on one run and
-//! `STATUS_ACCESS_VIOLATION` (0xc0000005) on another. Two rounds of bisecting
-//! by module put the fault in neither half: splitting the suite into
-//! `internal::renderer` and everything-else crashed *both* cells. So the fault
-//! is not one bad test, it is something both halves do a great deal of.
+//! The Windows lib suite can die with `STATUS_HEAP_CORRUPTION` (0xc0000374) or
+//! `STATUS_ACCESS_VIOLATION` (0xc0000005) under default test parallelism. These
+//! tests do only GPU context, shader compile, or app construction from several
+//! threads at once. On Windows, `Backends::all()` also brings up the Vulkan
+//! loader and WGL, which is not safe to initialize concurrently.
 //!
-//! What both halves do is build GPU contexts. Roughly sixty test sites call
-//! `GpuContext::new_headless`, spread across nearly every module, and each one
-//! constructs its own `wgpu::Instance` with `Backends::all()`, enumerates
-//! adapters, and creates a device. On the runner the adapter is WARP, a
-//! software D3D12 implementation. `Backends::all()` on Windows also brings up
-//! the Vulkan loader and a WGL context, and WGL in particular has never been
-//! safe to initialise concurrently.
-//!
-//! These tests strip everything else away and do only that, from several
-//! threads at once. They are `#[ignore]`d: they exist to be run deliberately by
-//! `.github/workflows/windows-heap-bisect.yml`, and a reproducer that crashes
-//! the process has no business running in the normal suite.
+//! `#[ignore]`d; run by `.github/workflows/windows-heap-bisect.yml`.
 //!
 //! Knobs, all optional:
 //!   `VARDA_STRESS_THREADS`  threads (default 4, matching the runner's vCPUs)
@@ -26,11 +14,8 @@
 //!   `VARDA_STRESS_BACKENDS` all | primary | dx12 | vulkan | gl (default all)
 //!   `VARDA_STRESS_STAGE`    instance | adapter | device (default device)
 //!
-//! `STAGE` is the sharp end. If `instance` alone crashes, the fault is in
-//! backend loading and never reaches wgpu's device code; if only `device`
-//! crashes, instance creation is innocent and WARP device churn is the cause.
-//!
-//! See spec/roadmap.md, DEBT: Windows Heap Corruption Under Parallel Tests.
+//! If `instance` alone crashes, the fault is in backend loading; if only
+//! `device` crashes, it is WARP device creation.
 
 use std::thread;
 
@@ -76,8 +61,8 @@ fn stage() -> Stage {
 }
 
 /// Run `body` on `threads` threads, `iters` times each, and report how many
-/// iterations reached the end. A crash takes the whole process down and never
-/// gets here, which is the point: the result is the exit code, not an assertion.
+/// iterations finished. A crash kills the process, so the exit code is the
+/// result.
 fn stress(label: &str, body: impl Fn(usize, usize) -> bool + Send + Sync + Clone + 'static) {
     let threads = env_usize("VARDA_STRESS_THREADS", 4);
     let iters = env_usize("VARDA_STRESS_ITERS", 8);
@@ -99,10 +84,7 @@ fn stress(label: &str, body: impl Fn(usize, usize) -> bool + Send + Sync + Clone
     assert!(ok > 0, "{label}: every iteration failed to build a context");
 }
 
-/// The production path, exactly as ~60 test sites call it, from several threads.
-///
-/// This is the shape the suite actually has. If it crashes, the crash is
-/// explained and the fix is a shared context rather than one per test.
+/// The production path, `GpuContext::new_headless`, from several threads.
 #[test]
 #[ignore = "reproducer: builds many GPU contexts at once and may crash the process"]
 fn parallel_headless_contexts() {
@@ -111,9 +93,8 @@ fn parallel_headless_contexts() {
     });
 }
 
-/// The same load, but with the backend set and the stage under our control, so
-/// a crash can be attributed to one backend's initialisation or to one phase of
-/// setup rather than to "GPU stuff".
+/// The same load with the backend set and the stage chosen, to attribute a
+/// crash to one backend or one setup phase.
 #[test]
 #[ignore = "reproducer: builds many wgpu instances at once and may crash the process"]
 fn parallel_instances() {
@@ -167,20 +148,19 @@ fn parallel_instances() {
     });
 }
 
-// ── Round 4: shader compilation ─────────────────────────────────────
+// ── Shader compilation ──────────────────────────────────────────────
 
-/// Serialises pipeline creation when `VARDA_STRESS_LOCK_COMPILE` is set, so a
-/// crash and its absence can be compared with nothing else changed.
+/// Serializes pipeline creation when `VARDA_STRESS_LOCK_COMPILE` is set, for
+/// A/B comparison.
 static COMPILE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// An empty value counts as unset. CI fills these from a matrix, and on Windows
-/// an empty variable is still present in the environment.
+/// An empty value counts as unset: CI fills these from a matrix, and on Windows
+/// an empty variable is still present.
 fn compile_lock_enabled() -> bool {
     std::env::var("VARDA_STRESS_LOCK_COMPILE").is_ok_and(|v| !v.is_empty())
 }
 
-/// A trivial pipeline, with `tag` woven into the source so no two iterations
-/// compile identical text and nothing can be served from a cache.
+/// A trivial pipeline with `tag` in the source so no compile hits a cache.
 fn build_pipeline(device: &wgpu::Device, tag: usize) -> wgpu::RenderPipeline {
     let source = format!(
         r"
@@ -203,8 +183,8 @@ fn fs_main() -> @location(0) vec4<f32> {{
         source: wgpu::ShaderSource::Wgsl(source.into()),
     });
 
-    // The lock, if any, covers exactly this call. On DX12 this is where naga
-    // emits HLSL and wgpu-hal calls into `d3dcompiler_47.dll`.
+    // The lock, if any, covers only this call. On DX12 naga emits HLSL here and
+    // wgpu-hal calls `d3dcompiler_47.dll`.
     let _guard = compile_lock_enabled().then(|| {
         COMPILE_LOCK
             .lock()
@@ -240,15 +220,12 @@ fn fs_main() -> @location(0) vec4<f32> {{
 
 /// Which DX12 shader compiler to force, from `VARDA_STRESS_COMPILER`.
 ///
-/// `None` means take the production path through `GpuContext::new_headless`,
-/// which is `Dx12Compiler::Auto`: try `dxcompiler.dll`, fall back to FXC. Note
-/// that `WGPU_DX12_COMPILER` cannot be used for this. It is only read by
-/// `BackendOptions::from_env_or_default`, and `new_headless` calls
-/// `BackendOptions::default`, so Varda ignores that variable entirely.
+/// `None` uses `GpuContext::new_headless`, which is `Dx12Compiler::Auto`:
+/// `dxcompiler.dll`, falling back to FXC. `WGPU_DX12_COMPILER` has no effect,
+/// because `new_headless` uses `BackendOptions::default`.
 ///
-/// Neither explicit setting falls back: wgpu returns an instance error if the
-/// named compiler will not load. That is what we want here, because a silent
-/// fall back to FXC would report a green cell having tested nothing.
+/// Explicit settings don't fall back: wgpu errors if the compiler won't load,
+/// so a pass always means the named compiler was tested.
 fn compiler_override() -> Option<wgpu::Dx12Compiler> {
     match std::env::var("VARDA_STRESS_COMPILER")
         .ok()
@@ -263,8 +240,7 @@ fn compiler_override() -> Option<wgpu::Dx12Compiler> {
 
 /// A DX12 device using an explicitly chosen shader compiler.
 ///
-/// The instance is returned alongside the device because dropping it would take
-/// the loaded compiler library with it.
+/// Returns the instance too, because dropping it unloads the compiler library.
 fn device_with_compiler(
     compiler: wgpu::Dx12Compiler,
 ) -> Option<(wgpu::Instance, wgpu::Device, wgpu::Queue)> {
@@ -303,18 +279,13 @@ fn device_with_compiler(
     Some((instance, device, queue))
 }
 
-/// Build a context **and compile a shader on it**, on several threads at once.
+/// Build a context and compile a shader on it, on several threads at once.
 ///
-/// This is the difference between Round 3, which was green on every cell, and
-/// what the real suite does. Round 3 built contexts and dropped them; it never
-/// compiled anything. On DX12 `create_render_pipeline` is where wgpu-hal calls
-/// `D3DCompile` in `d3dcompiler_47.dll`, and wgpu-hal holds no lock around it:
-/// every `Instance` loads the library separately, but Windows reference counts
-/// modules, so all of them are calling into one copy with one set of globals.
+/// On DX12, `create_render_pipeline` calls `D3DCompile` in
+/// `d3dcompiler_47.dll` with no lock. Each `Instance` loads the library, but
+/// Windows reference-counts modules, so all share one copy and its globals.
 ///
-/// Set `VARDA_STRESS_LOCK_COMPILE=1` to serialise just the pipeline call. If
-/// that turns a crashing run green, the compiler is named and the shape of the
-/// fix is known.
+/// Set `VARDA_STRESS_LOCK_COMPILE=1` to serialize only the pipeline call.
 #[test]
 #[ignore = "reproducer: compiles many shaders at once and may crash the process"]
 fn parallel_pipelines() {
@@ -352,55 +323,28 @@ fn parallel_pipelines() {
     });
 }
 
-// ── Round 7: whole-app construction ─────────────────────────────────
+// ── Whole-app construction ──────────────────────────────────────────
 
-/// Build a full headless `VardaApp` on several threads at once.
+/// Build a full headless `VardaApp` on several threads at once, as the
+/// `headless_app()` fixture does.
 ///
-/// This is not a hypothesis. Round 6 ran the Windows suite with libtest's JSON
-/// output and asked which tests had *started* and never reported a result, which
-/// is the set that was executing when the process died. At two threads it named
-/// exactly two:
+/// `VARDA_STRESS_APP_STAGE` picks how much of startup to run:
 ///
-///   `app::commands::tests::a_timecode_patch_over_the_bus_leaves_the_undo_stack_alone`
-///   `app::commands::tests::choosing_a_timecode_signal_reaches_the_reader`
-///
-/// Both are timecode tests, which is a red herring: each only sets a preference
-/// in memory. What they share is their fixture. Both call `headless_app()`,
-/// which is `GpuContext::new_headless()` followed by `VardaApp::new`, and the
-/// crash landed five tests into a 2590 test run, while two of those overlapped.
-///
-/// Round 3 already cleared the GPU half: four threads building contexts, on all
-/// backends and on DX12 alone, passed every cell. So the suspect is `VardaApp::new`,
-/// which starts audio, OSC, the shader registry and the rest of the app.
-///
-/// Three cells across two, four and eight threads all agreed, and the
-/// correlation is exact: **fourteen of fourteen in flight tests build an app,
-/// and every test that finished builds none.** The page heap cell also died
-/// with `ACCESS_VIOLATION` rather than `HEAP_CORRUPTION`, which is page heap doing
-/// its job: the corrupting write happens *here*, rather than being noticed here
-/// after happening somewhere else.
-///
-/// `VARDA_STRESS_APP_STAGE` picks how much of startup to run, so one CI run says
-/// which subsystem rather than another round of guessing:
-///
-///   `gpu`       GPU context only. Round 3 cleared this; it is the control.
-///   `audio`     `AudioManager::new`. Enumerates devices, so cpal into WASAPI on
+///   `gpu`       GPU context only (control).
+///   `audio`     `AudioManager::new`. Enumerates devices: cpal into WASAPI on
 ///               Windows, which means COM.
-///   `camera`    `CameraManager::new`. Not feature gated, so it runs in every
-///               build. nokhwa on Windows is Media Foundation, which also means
-///               COM and an `MFStartup` refcount.
+///   `camera`    `CameraManager::new`. Not feature gated. nokhwa on Windows is
+///               Media Foundation: COM and an `MFStartup` refcount.
 ///   `screencap` `ScreenCaptureManager::new`. Windows Graphics Capture, which
 ///               calls `CoIncrementMTAUsage` to pin the process into the MTA.
-///   `midi`      `MidiDeviceManager::new`, which enumerates MIDI ports. **This
-///               is the one that crashed**, and it now holds a process wide lock,
-///               so this stage validates that fix.
-///   `midi_in`   midir's input enumeration directly, underneath that lock.
-///   `midi_out`  midir's output enumeration directly, underneath that lock.
-///   `app`       the whole thing, matching the fixture that crashed.
+///   `midi`      `MidiDeviceManager::new`, which enumerates MIDI ports under a
+///               process-wide lock.
+///   `midi_in`   midir's input enumeration directly, without that lock.
+///   `midi_out`  midir's output enumeration directly, without that lock.
+///   `app`       the whole `VardaApp::new`.
 ///
-/// The COM ones are grouped deliberately. Three separate subsystems put this
-/// process into a COM apartment during startup, none of them coordinating, and
-/// mixing apartment models is a classic source of exactly this failure.
+/// Three subsystems enter a COM apartment during startup without coordinating,
+/// and mixed apartment models can cause this kind of crash.
 #[test]
 #[ignore = "reproducer: builds whole apps at once and may crash the process"]
 fn parallel_app_construction() {
@@ -411,7 +355,7 @@ fn parallel_app_construction() {
         "gpu" => varda::renderer::GpuContext::new_headless().is_ok(),
         "audio" => {
             let mgr = varda::audio::AudioManager::new();
-            // Read something off it so the construction cannot be optimized out.
+            // Read from it so construction can't be optimized out.
             let _ = mgr.devices().len();
             true
         }
@@ -425,14 +369,10 @@ fn parallel_app_construction() {
         }
         "midi" => varda::midi::MidiDeviceManager::new().is_ok(),
 
-        // The two below call midir directly, underneath the process wide lock
-        // that `MidiDeviceManager::scan_devices` now holds. That is the point:
-        // `midi` above validates the fix, while these two keep reproducing the
-        // underlying fault and say which half of the enumeration owns it, which
-        // is what an upstream report needs.
-        //
-        // A CI runner usually has no MIDI *inputs* but does have one output,
-        // the GS Wavetable Synth, so `midi_out` is the likelier of the two.
+        // These call midir directly, bypassing the lock in
+        // `MidiDeviceManager::scan_devices`, to show which half of enumeration
+        // faults. CI runners usually have no MIDI inputs but one output (GS
+        // Wavetable Synth).
         "midi_in" => {
             let Ok(client) = midir::MidiInput::new("varda stress in") else {
                 return false;

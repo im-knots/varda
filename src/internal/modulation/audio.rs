@@ -62,7 +62,7 @@ impl AudioValues {
         }
     }
 
-    /// Get the first/primary source's data (convenience).
+    /// The first source's data.
     pub fn primary(&self) -> Option<&AudioSourceValues> {
         self.sources
             .iter()
@@ -71,8 +71,8 @@ impl AudioValues {
     }
 }
 
-/// Analyzer scalar values collected from all decks for the current frame.
-/// Used by `ModulationSource::Analyzer` to read analysis results.
+/// Analyzer scalar values from all decks for the current frame, read by
+/// `ModulationSource::Analyzer`.
 #[derive(Debug, Default)]
 pub struct AnalyzerValues {
     entries: Vec<AnalyzerValueEntry>,
@@ -99,7 +99,7 @@ impl AnalyzerValues {
             .map_or(0.0, |e| e.value)
     }
 
-    /// Add a scalar value entry. Called when collecting from deck analyzers.
+    /// Add a scalar value entry.
     pub fn insert(
         &mut self,
         deck_id: String,
@@ -115,7 +115,7 @@ impl AnalyzerValues {
         });
     }
 
-    /// Clear all entries (for reuse across frames without reallocation).
+    /// Clear all entries, keeping the allocation.
     pub fn clear(&mut self) {
         self.entries.clear();
     }
@@ -126,8 +126,7 @@ mod tests {
     use super::AudioValues;
     use crate::audio::AudioData;
 
-    /// A frame's modulation inputs share each source's spectrum rather than
-    /// copying it. See /spec/performance-hot-paths.md item I.
+    /// A frame's modulation inputs share each source's spectrum instead of copying it.
     #[test]
     fn collected_values_share_each_sources_spectrum() {
         let data = AudioData::default();

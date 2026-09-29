@@ -1,15 +1,12 @@
-//! Platform capture provider — enumeration, permissions, and session creation.
+//! Platform capture: enumeration, permissions and session creation.
 //!
-//! Each supported OS supplies four free functions selected by `cfg`. They are
-//! the only place OS capture APIs are touched; everything above this module
-//! deals in [`CaptureTargetInfo`] / [`ScreenCaptureBackend`] and is portable.
+//! Each OS supplies four free functions selected by `cfg`. Only this module
+//! touches OS capture APIs; code above it uses [`CaptureTargetInfo`] and
+//! [`ScreenCaptureBackend`].
 //!
-//! Platforms without a backend compile to [`unsupported`], whose `open` returns
-//! [`CaptureError::Unavailable`] with a message naming the reason. The manager
-//! surfaces that verbatim, so a missing backend degrades to a clear notification
-//! rather than a silently black deck.
-//!
-//! See spec/screen-capture.md § Platform Support.
+//! Platforms without a backend use [`unsupported`], whose `open` returns
+//! [`CaptureError::Unavailable`] with the reason. The manager shows that
+//! message, so the user gets a notification instead of a black deck.
 
 use super::backend::{
     CaptureConfig, CaptureError, CaptureTargetInfo, PermissionState, ScreenCaptureBackend,
@@ -22,8 +19,8 @@ pub mod macos;
 #[cfg(all(feature = "screen-capture", target_os = "windows"))]
 pub mod windows;
 
-/// Fallback provider for platforms with no backend yet, and for builds with the
-/// `screen-capture` feature disabled.
+/// Fallback for platforms without a backend and for builds without the
+/// `screen-capture` feature.
 pub mod unsupported {
     use super::{
         CaptureConfig, CaptureError, CaptureTargetInfo, PermissionState, ScreenCaptureBackend,
@@ -93,8 +90,8 @@ mod tests {
             matches!(err, super::CaptureError::Unavailable(_)),
             "expected Unavailable, got {err:?}"
         );
-        // The message must name a cause — a bare "unavailable" is what makes a
-        // black deck unexplainable in the field.
+        // The message must name a cause; a bare "unavailable" leaves a black deck
+        // unexplained.
         assert!(!err.to_string().is_empty());
     }
 }

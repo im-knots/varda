@@ -1,19 +1,13 @@
 //! SVG parsing and rasterization for image decks.
 //!
-//! An SVG has no native pixel size, only a shape. Rasterizing it once at
-//! whatever the artwork's `width`/`height` attributes happen to say would waste
-//! the one advantage vector art has: a 512-unit logo would arrive as a 512 px
-//! bitmap and be blown up to a 4K deck like any other small PNG. So decks keep
-//! the parsed tree and re-render it whenever the master resolution changes,
-//! which is what makes the same file sharp on a laptop preview and on a wall.
-//!
-//! See /spec/deck-sources.md § 3 (Image / Still).
+//! Decks keep the parsed tree and re-rasterize it at the deck size whenever
+//! the master resolution changes, instead of using the file's own
+//! `width`/`height`.
 
 use anyhow::{Context, Result};
 use std::path::Path;
 
-/// Whether a path should be treated as vector art rather than handed to the
-/// raster image decoder. `.svgz` is a gzipped `.svg`, which `usvg` unwraps.
+/// Whether a path is vector art. `.svgz` (gzipped `.svg`) is unwrapped by `usvg`.
 pub fn is_svg_path(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -22,9 +16,7 @@ pub fn is_svg_path(path: &Path) -> bool {
 
 /// Parse an SVG file into a resolved tree.
 ///
-/// Relative `<image>` and font references resolve against the file's own
-/// directory, so artwork exported next to its assets loads the way it looks in
-/// the drawing program.
+/// Relative `<image>` and font references resolve against the file's directory.
 ///
 /// # Errors
 ///
@@ -43,12 +35,8 @@ pub fn parse_file(path: &Path) -> Result<usvg::Tree> {
 
 /// The pixel size to rasterize `tree` at so it fills a `deck_w × deck_h` deck.
 ///
-/// Fits rather than stretches, and scales up as readily as down — the point of
-/// vector art is that enlarging costs nothing but memory. The deck's own
-/// scaling mode then treats the result like any other image, so an SVG shaped
-/// unlike the stage letterboxes or crops the same way a photograph would.
-/// Bounded by the deck in both axes, so a long thin drawing cannot blow up the
-/// texture budget on the axis it is not constrained by.
+/// Fits without stretching, scaling up or down, bounded by the deck in both
+/// axes. The deck's scaling mode then treats the result like any image.
 pub fn raster_size(tree: &usvg::Tree, deck_w: u32, deck_h: u32) -> (u32, u32) {
     let size = tree.size();
     let (svg_w, svg_h) = (size.width(), size.height());
@@ -64,9 +52,7 @@ pub fn raster_size(tree: &usvg::Tree, deck_w: u32, deck_h: u32) -> (u32, u32) {
 
 /// Rasterize `tree` to straight-alpha RGBA at the size [`raster_size`] picks.
 ///
-/// resvg composites onto a premultiplied pixmap; the pixels are demultiplied on
-/// the way out so an SVG behaves exactly like a PNG with an alpha channel once
-/// it reaches the deck's blit.
+/// resvg renders premultiplied; the pixels are demultiplied to match PNG input.
 ///
 /// # Errors
 ///
@@ -120,8 +106,7 @@ mod tests {
 
     #[test]
     fn a_small_drawing_is_enlarged_to_the_deck_rather_than_left_at_its_own_size() {
-        // The whole reason to keep the tree: a 100-unit logo must not arrive as
-        // a 100 px bitmap on a 1080p stage.
+        // A 100-unit logo is rasterized at deck size, not 100 px.
         assert_eq!(raster_size(&tree(SQUARE), 1920, 1080), (1080, 1080));
     }
 
@@ -149,8 +134,7 @@ mod tests {
 
     #[test]
     fn transparent_areas_survive_as_straight_alpha() {
-        // A half-covered canvas: the empty half must stay fully transparent and
-        // not carry premultiplied colour into the deck's blit.
+        // The empty half stays fully transparent, with no premultiplied color.
         let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"
             width="100" height="100"><rect width="50" height="100" fill="#ffffff"/></svg>"##;
         let img = rasterize(&tree(svg), 100, 100).expect("rasterized");
@@ -172,8 +156,7 @@ mod tests {
 
     #[test]
     fn a_parsed_tree_can_cross_thread_boundaries() {
-        // Decks are built on a background loader thread and sent to the render
-        // thread; holding the tree for re-rasterization only works if it is Send.
+        // Decks are built on a loader thread, so the kept tree must be Send.
         fn assert_send<T: Send>() {}
         assert_send::<usvg::Tree>();
     }

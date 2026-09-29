@@ -1,5 +1,4 @@
-//! Data-driven keyboard shortcuts for the stage editor, resolved through the
-//! user's keymap rather than hard-coded bindings.
+//! Stage editor keyboard shortcuts, resolved through the user's keymap.
 
 use super::super::super::super::{UIActions, UIData};
 use super::super::state::{DrawingTool, StageEditorState};

@@ -1,8 +1,8 @@
-//! Core types and trait for the analyzer plugin system.
+//! Core types and trait for analyzers.
 //!
-//! An analyzer receives input frames from a deck, processes them (face detection,
-//! brightness analysis, etc.), and publishes results as immutable snapshots.
-//! Consumers (modulation engine, shader preprocessors) read snapshots lock-free.
+//! An analyzer takes frames from a deck, processes them (face detection,
+//! brightness, etc.), and publishes immutable snapshots. The modulation engine
+//! and shader preprocessors read snapshots lock-free.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -14,40 +14,36 @@ use crate::params::ParamValue;
 
 // ── Output definitions ──────────────────────────────────────────────────────
 
-/// Definition of a scalar output an analyzer can produce.
+/// A scalar output an analyzer can produce.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ScalarOutputDef {
-    /// Output name (e.g. "`face_x`", "brightness").
+    /// e.g. "`face_x`", "brightness".
     pub name: String,
     /// Human-readable description.
     pub description: String,
     /// Expected value range, typically `(0.0, 1.0)`.
     pub range: (f32, f32),
-    /// Value returned when analysis has no result (e.g. no face detected).
+    /// Value when analysis has no result (e.g. no face detected).
     pub default: f32,
-    /// Default smoothing in seconds for modulation consumers.
+    /// Default modulation smoothing in seconds.
     pub default_smoothing: f32,
 }
 
-/// Definition of a texture output an analyzer can produce.
+/// A texture output an analyzer can produce.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct TextureOutputDef {
-    /// Output name (e.g. "`depth_map`", "`edge_map`").
+    /// e.g. "`depth_map`", "`edge_map`".
     pub name: String,
     /// Human-readable description.
     pub description: String,
-    /// Texture format as a string key (mapped to `wgpu::TextureFormat` at bind time).
-    ///
-    /// Examples: `"r8unorm"`, `"r16float"`, `"rg16float"`, `"rgba8unorm"`.
+    /// Format key, mapped to `wgpu::TextureFormat` at bind time, e.g.
+    /// `"r8unorm"`, `"r16float"`, `"rg16float"`, `"rgba8unorm"`.
     pub format: String,
 }
 
-/// Resolve a [`TextureOutputDef::format`] string to a `wgpu` format.
-///
-/// `"color_path"` resolves to the compositing colour format so preprocessor
-/// outputs that carry colour stay in the unified pipeline
-/// (see `/spec/unified-color-pipeline.md`); every other key is an explicit
-/// data format that must not be colour-managed.
+/// Resolves a [`TextureOutputDef::format`] string to a `wgpu` format.
+/// `"color_path"` maps to the compositing color format for outputs that carry
+/// color; every other key is a data format that is not color-managed.
 pub(crate) fn texture_format_from_str(format: &str) -> Option<wgpu::TextureFormat> {
     Some(match format {
         "r8unorm" => wgpu::TextureFormat::R8Unorm,
@@ -55,61 +51,57 @@ pub(crate) fn texture_format_from_str(format: &str) -> Option<wgpu::TextureForma
         "rg16float" => wgpu::TextureFormat::Rg16Float,
         "rgba8unorm" => wgpu::TextureFormat::Rgba8Unorm,
         "rgba16float" => wgpu::TextureFormat::Rgba16Float,
-        // Raw-float data payloads. Not filterable: only legal for shaders
-        // that read with `texelFetch`.
+        // Raw-float data, not filterable: shaders must read it with `texelFetch`.
         "rgba32float" => wgpu::TextureFormat::Rgba32Float,
         "color_path" => crate::renderer::context::COLOR_PATH_FORMAT,
         _ => return None,
     })
 }
 
-/// Schema declaring all outputs an analyzer can produce.
+/// Every output an analyzer can produce.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct AnalyzerSchema {
-    /// Scalar float outputs (consumed by modulation engine).
+    /// Read by the modulation engine.
     pub scalars: Vec<ScalarOutputDef>,
-    /// Texture outputs (consumed by shader preprocessor bindings).
+    /// Read by shader preprocessor bindings.
     pub textures: Vec<TextureOutputDef>,
 }
 
 // ── Snapshot ─────────────────────────────────────────────────────────────────
 
-/// Raw texture data produced by an analyzer, to be uploaded to GPU by the consumer.
+/// Raw texture data from an analyzer, for the consumer to upload.
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // Fields used when runtime texture injection is wired up
 pub(crate) struct TextureData {
-    /// Monotonic content generation. Zero asks consumers to upload every
-    /// snapshot; non-zero generations may be skipped when already resident.
+    /// Monotonic content generation. Zero means upload every snapshot; a
+    /// non-zero generation already resident may be skipped.
     pub generation: u64,
-    /// Texture width in pixels.
+    /// Pixels.
     pub width: u32,
-    /// Texture height in pixels.
+    /// Pixels.
     pub height: u32,
     /// Format string matching [`TextureOutputDef::format`].
     pub format: String,
-    /// Raw pixel data in the specified format.
+    /// Pixel data in `format`.
     pub data: Arc<[u8]>,
 }
 
-/// Process-wide texture generation, so restarting an analyzer cannot collide
-/// with a generation already resident in its deck slot.
-///
-/// Part of the preprocessor texture contract, with no in-tree consumer at
-/// present: the deck's upload path skips a slot whose generation is unchanged,
-/// so any analyzer publishing a texture needs this to have its updates seen.
+/// Process-wide texture generation, so a restarted analyzer can't reuse a
+/// generation already resident in its deck slot. Unused in-tree, but the
+/// deck skips uploads whose generation is unchanged, so any analyzer that
+/// publishes textures needs it.
 #[allow(dead_code)]
 pub(crate) fn next_texture_generation() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Immutable snapshot of analyzer results, published lock-free via `ArcSwap`.
+/// Immutable analyzer results, published lock-free via `ArcSwap`.
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // Fields used when runtime texture injection is wired up
 pub(crate) struct AnalyzerSnapshot {
-    /// Named scalar values (e.g. `"face_x"` → `0.73`).
+    /// e.g. `"face_x"` → `0.73`.
     pub scalars: HashMap<String, f32>,
-    /// Named texture outputs.
     pub textures: HashMap<String, TextureData>,
     /// When this snapshot was produced.
     pub timestamp: Instant,
@@ -117,7 +109,7 @@ pub(crate) struct AnalyzerSnapshot {
 
 #[allow(dead_code)] // Methods used when runtime texture injection is wired up
 impl AnalyzerSnapshot {
-    /// Create an empty snapshot (used as initial state before first analysis).
+    /// Empty snapshot, the state before the first analysis.
     pub fn empty() -> Self {
         Self {
             scalars: HashMap::new(),
@@ -126,9 +118,7 @@ impl AnalyzerSnapshot {
         }
     }
 
-    /// Create a snapshot pre-populated with schema default values for all scalars.
-    ///
-    /// Pre-allocates the hashmap to avoid rehashing.
+    /// Snapshot with every scalar set to its schema default.
     pub fn from_defaults(schema: &AnalyzerSchema) -> Self {
         let mut scalars = HashMap::with_capacity(schema.scalars.len());
         for s in &schema.scalars {
@@ -141,7 +131,7 @@ impl AnalyzerSnapshot {
         }
     }
 
-    /// Get a scalar value by name, returning `0.0` if not present.
+    /// Scalar by name, or `0.0` if missing.
     pub fn scalar(&self, name: &str) -> f32 {
         self.scalars.get(name).copied().unwrap_or(0.0)
     }
@@ -220,17 +210,16 @@ mod tests {
 
 // ── Input ────────────────────────────────────────────────────────────────────
 
-/// Immutable live values explicitly bound by one preprocessor declaration.
+/// Live values bound by one preprocessor declaration.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct AnalyzerStateSnapshot {
-    /// Analyzer-local names mapped to effective shader parameter values or phases.
+    /// Analyzer-local names mapped to shader parameter values or phases.
     pub values: HashMap<String, ParamValue>,
 }
 
 impl AnalyzerStateSnapshot {
-    /// Typed reads of the bound values. No in-tree analyzer binds parameters
-    /// at present, so these are unused; they are the accessor half of the
-    /// preprocessor parameter-binding contract and are kept with it.
+    /// Typed reads of the bound values. Unused in-tree, since no analyzer
+    /// binds parameters yet; kept as part of the binding API.
     #[allow(dead_code)]
     pub(crate) fn float(&self, name: &str) -> Option<f32> {
         match self.values.get(name) {
@@ -248,65 +237,53 @@ impl AnalyzerStateSnapshot {
     }
 }
 
-/// Input frame delivered to an analyzer for processing.
+/// Input frame for an analyzer.
 #[derive(Debug, Clone)]
 pub(crate) struct AnalyzerInput {
-    /// RGBA pixel data, downscaled from the deck's source frame.
+    /// RGBA pixels, downscaled from the deck's frame.
     pub frame: Vec<u8>,
-    /// Width of the downscaled frame in pixels.
+    /// Pixels.
     pub width: u32,
-    /// Height of the downscaled frame in pixels.
+    /// Pixels.
     pub height: u32,
     /// When the source frame was captured.
     pub timestamp: Instant,
-    /// Live parameter and phase values declared by this preprocessor.
+    /// Live parameter and phase values bound by this preprocessor.
     pub state: AnalyzerStateSnapshot,
 }
 
 // ── Trait ─────────────────────────────────────────────────────────────────────
 
-/// The core analyzer trait. Implement this to create a new analyzer plugin.
-///
-/// Analyzers run on dedicated threads and publish results as [`AnalyzerSnapshot`]s.
-/// The engine handles threading, lifecycle, and snapshot delivery — implementors
-/// only need to define the analysis logic.
+/// An analyzer. Runs on its own thread and publishes [`AnalyzerSnapshot`]s; the
+/// engine handles threading, lifecycle, and delivery.
 pub(crate) trait Analyzer: Send + 'static {
-    /// Unique type identifier (e.g. `"face_detect"`, `"brightness"`).
-    ///
-    /// Must be stable across sessions for serialization.
+    /// Stable type id (e.g. `"face_detect"`, `"brightness"`), used in
+    /// serialization.
     #[allow(dead_code)] // Used for logging/serialization when analyzers are active
     fn analyzer_type(&self) -> &str;
 
-    /// Declare all outputs this analyzer can produce.
+    /// Every output this analyzer can produce.
     fn output_schema(&self) -> AnalyzerSchema;
 
-    /// Initialize with options from the ISF `PREPROCESSORS` block or user config.
-    ///
-    /// Called once before analysis begins.
+    /// Called once before analysis, with options from the ISF `PREPROCESSORS`
+    /// block or user config.
     fn init(&mut self, options: &serde_json::Value) -> anyhow::Result<()>;
 
     /// Whether this analyzer reads the deck's pixels.
     ///
-    /// Most do, and for those the deck reads its own frame back from the GPU
-    /// each frame and hands it over. Some produce output from their options and
-    /// parameters alone, and for those the readback is pure cost: it stalls the
-    /// pipeline for milliseconds and, because the deck's texture is in the
-    /// linear-light colour-path format rather than eight-bit RGBA, it is also
-    /// a format mismatch that fails validation.
-    ///
-    /// Returning `false` means "tick me, but do not read the frame". Such an
-    /// analyzer still has `analyze` called on its own thread, with a placeholder
-    /// input it is expected to ignore.
+    /// If `true`, the deck reads its frame back from the GPU every frame. If
+    /// `false`, there is no readback (it stalls the pipeline, and the
+    /// linear-light deck format fails validation as RGBA8); `analyze` still
+    /// runs, with a placeholder input to ignore.
     fn needs_frame_input(&self) -> bool {
         true
     }
 
-    /// Analyze a single frame. Called on the analyzer's dedicated thread.
-    ///
-    /// When [`Self::needs_frame_input`] is `false`, `input` is a placeholder and
-    /// its pixels must not be read.
+    /// Analyzes one frame, on the analyzer's thread. When
+    /// [`Self::needs_frame_input`] is `false`, `input` is a placeholder and its
+    /// pixels must not be read.
     fn analyze(&mut self, input: &AnalyzerInput) -> anyhow::Result<AnalyzerSnapshot>;
 
-    /// Cleanup when analyzer is stopped. Default is no-op.
+    /// Called when the analyzer stops. Default does nothing.
     fn shutdown(&mut self) {}
 }

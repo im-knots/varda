@@ -1,10 +1,9 @@
 //! winit event-loop wiring: the `ApplicationHandler` callbacks and the
 //! [`WindowHost`] abstraction over the parts of `ActiveEventLoop` the render
-//! paths need.
+//! paths use.
 //!
-//! This is the only place that reacts to raw winit events. Everything it decides
-//! is delegated straight back to `UIRunner`, so the per-frame logic stays
-//! testable without an event loop — see `/spec/app-presentation-boundary.md`.
+//! The only place that handles raw winit events. Decisions are delegated to
+//! `UIRunner`, so per-frame logic is testable without an event loop.
 
 use super::UIRunner;
 use crate::app::VardaApp;
@@ -16,15 +15,12 @@ use winit::{
     window::{Window, WindowId},
 };
 
-/// The slice of the winit event loop that the per-frame render paths actually use.
+/// The parts of the winit event loop the per-frame render paths use.
 ///
-/// `render_headless` and `render` are long functions, but they touch
-/// `ActiveEventLoop` in only a handful of places: to exit, and to let `VardaApp`
-/// reconcile output windows and monitors (which must happen on the event-loop
-/// thread). Naming that dependency as a trait lets the render paths be driven
-/// without a real event loop, which is otherwise impossible to construct in a
-/// test. See `/spec/app-presentation-boundary.md` for why winit access is
-/// confined to this boundary.
+/// `render_headless` and `render` touch `ActiveEventLoop` only to exit and to
+/// let `VardaApp` reconcile output windows and monitors, which must happen on
+/// the event-loop thread. The trait lets tests drive the render paths without
+/// a real event loop, which cannot be constructed in a test.
 pub(crate) trait WindowHost {
     /// Ask the event loop to terminate.
     fn exit(&self);
@@ -58,7 +54,7 @@ impl WindowHost for ActiveEventLoop {
 
 impl ApplicationHandler for UIRunner {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        // Guard re-entry (resumed can be called multiple times on some platforms)
+        // `resumed` can be called more than once on some platforms.
         if self.varda.is_some() {
             return;
         }
@@ -67,7 +63,7 @@ impl ApplicationHandler for UIRunner {
         log::info!("[STARTUP] resumed() entered — beginning initialization");
 
         if self.config.headless {
-            // Headless: no main window, no egui — GPU without window surface
+            // Headless: GPU without a window surface, no egui.
             log::info!("[STARTUP] Headless mode: skipping main window creation");
             let gpu = match GpuContext::new_headless() {
                 Ok(gpu) => gpu,
@@ -79,13 +75,11 @@ impl ApplicationHandler for UIRunner {
             };
             self.finish_init(gpu, None, startup_t0, event_loop);
         } else {
-            // Windowed: create main UI window, then spawn GPU init on a background
-            // thread so we return from resumed() immediately.  On macOS (especially
-            // under Rosetta / Intel), blocking the main thread during Metal device
-            // creation causes a GCD dispatch-queue deadlock because Metal needs to
-            // dispatch work back to the main queue.  By returning to the event loop
-            // we keep that queue alive; about_to_wait() polls the thread handle and
-            // finishes initialization once the GPU is ready.
+            // Windowed: create the main window, then run GPU init on a background thread
+            // and return from resumed() immediately. On macOS (especially under Rosetta or
+            // on Intel), blocking the main thread during Metal device creation deadlocks
+            // the GCD dispatch queue, because Metal dispatches work back to the main
+            // queue. about_to_wait() polls the thread handle and finishes init.
             let window_icon = {
                 static ICON_BYTES: &[u8] = include_bytes!("../../../../assets/icon.png");
                 image::load_from_memory(ICON_BYTES).ok().and_then(|img| {
@@ -115,13 +109,13 @@ impl ApplicationHandler for UIRunner {
             self.main_window_id = Some(window_static.id());
             self.window = Some(window_static);
 
-            // Kick a redraw so macOS marks the window as "live" — required for
-            // Metal/CALayer to function correctly (see wgpu#5722).
+            // Request a redraw so macOS marks the window live, which Metal/CALayer
+            // requires (wgpu#5722).
             window_static.request_redraw();
 
-            // Create wgpu instance + surface on the main thread (macOS requires
-            // NSView/CAMetalLayer access from the main thread), then hand off
-            // adapter/device creation to a background thread.
+            // Create the wgpu instance and surface on the main thread (macOS requires
+            // NSView/CAMetalLayer access there), then create the adapter and device on a
+            // background thread.
             log::info!("[STARTUP] Creating surface on main thread...");
             let (instance, surface, size) =
                 match GpuContext::create_surface_for_window(window_static) {
@@ -139,8 +133,7 @@ impl ApplicationHandler for UIRunner {
                 pollster::block_on(GpuContext::new_with_surface(instance, surface, size))
             }));
 
-            // Return immediately — about_to_wait() will complete initialization.
-            // Keep polling so the event loop stays responsive.
+            // about_to_wait() completes initialization. Poll to keep the loop responsive.
             event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
         }
     }
@@ -183,8 +176,7 @@ impl ApplicationHandler for UIRunner {
                 }
                 WindowEvent::RedrawRequested => {
                     self.render(event_loop);
-                    // Frame pacing: don't request_redraw() here.
-                    // about_to_wait() schedules the next frame via WaitUntil.
+                    // No request_redraw() here; about_to_wait() schedules frames via WaitUntil.
                 }
                 _ => {}
             }
@@ -209,7 +201,7 @@ impl ApplicationHandler for UIRunner {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // ── Phase 2 of deferred GPU init: poll the background thread ────
+        // Deferred GPU init: poll the background thread.
         if let Some(handle) = self.gpu_init_handle.as_ref() {
             if handle.is_finished() {
                 let handle = self.gpu_init_handle.take().unwrap();
@@ -226,50 +218,46 @@ impl ApplicationHandler for UIRunner {
                     }
                 }
             } else {
-                // GPU init still in progress — keep the event loop alive.
+                // GPU init still running; keep the event loop alive.
                 event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
                 return;
             }
         }
 
-        // Read target_fps from engine state (runtime-mutable via UI/API).
+        // target_fps can change at runtime via UI or API.
         let target_fps = self
             .varda
             .as_ref()
             .map_or(self.config.target_fps, crate::app::VardaApp::target_fps);
 
         if self.config.headless {
-            // No window means no OS events, so the loop schedules its own
-            // wake-up for the next frame instead of waiting for one.
+            // Headless has no window, so no OS events; the loop schedules its own wake-up.
             if headless_frame_due(target_fps, self.cadence_anchor, std::time::Instant::now()) {
                 self.render_headless(event_loop);
                 self.advance_cadence_anchor(target_fps);
             }
             event_loop.set_control_flow(headless_wake(target_fps, self.cadence_anchor));
         } else {
-            // Windowed: adaptive cadence pacing.
-            // Only request_redraw when the cadence anchor says it's time.
-            // Between frames, let WaitUntil handle OS-level sleeping so we
-            // don't burn CPU or produce burst-pause patterns.
+            // Windowed: request_redraw only when the cadence anchor says a frame is due.
+            // Between frames WaitUntil sleeps, avoiding CPU burn and burst-pause patterns.
             if target_fps > 0 {
                 let now = std::time::Instant::now();
                 let deadline = self.cadence_anchor.unwrap_or(now);
 
                 if deadline > now {
-                    // Not time yet — let the OS sleep until the deadline.
-                    // Do NOT request_redraw; winit will call about_to_wait
-                    // again when the timer fires.
+                    // Not due yet: sleep until the deadline. Don't request_redraw; winit calls
+                    // about_to_wait again when the timer fires.
                     event_loop
                         .set_control_flow(winit::event_loop::ControlFlow::WaitUntil(deadline));
                 } else {
-                    // At or past deadline — render now.
+                    // At or past the deadline: render now.
                     event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(now));
                     if let Some(w) = self.window {
                         w.request_redraw();
                     }
                 }
             } else {
-                // Uncapped: poll continuously
+                // Uncapped: poll continuously.
                 event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
                 if let Some(w) = self.window {
                     w.request_redraw();
@@ -289,8 +277,8 @@ fn headless_frame_due(
     target_fps == 0 || next_frame.is_none_or(|due| due <= now)
 }
 
-/// When the headless loop wakes next. A headless run has no window, so no OS
-/// event arrives to wake it: it must always name a time, never plain `Wait`.
+/// When the headless loop wakes next. With no window, no OS event wakes it, so
+/// it always names a time instead of `Wait`.
 fn headless_wake(
     target_fps: u32,
     next_frame: Option<std::time::Instant>,

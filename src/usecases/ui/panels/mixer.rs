@@ -27,9 +27,8 @@ pub(super) fn render_central_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
         return;
     }
 
-    // Arrangement is a view of the same decks, so it replaces the central area
-    // and nothing else. The stage editor wins when both are open: it is a modal
-    // task, while arrangement is a way of looking at the scene.
+    // Arrangement replaces only the central area. The stage editor wins when both
+    // are open because it is modal.
     if data.arrangement_mode_open {
         super::arrangement::render_arrangement(ui, data, actions);
         return;
@@ -41,9 +40,9 @@ pub(super) fn render_central_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
     let left_count = num_channels.div_ceil(2); // ceil(N/2)
     let right_count = num_channels / 2; // floor(N/2)
 
-    // Fixed widths — channels and mixer never scale with window resize
+    // Fixed widths; channels and mixer don't scale with the window.
     let ch_card_width = 150.0_f32;
-    // Mixer width scales with channel count (30px per fader + 4px spacing + frame padding)
+    // Mixer width scales with channel count (30px per fader + 4px spacing + frame padding).
     let per_fader = 30.0_f32;
     let fader_spacing = 4.0_f32;
     let frame_pad = 6.0 * 2.0; // inner_margin on each side
@@ -54,17 +53,17 @@ pub(super) fn render_central_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
     let center_width = mixer_width;
     let preset_hint_threshold = 80.0;
 
-    // Channels always take priority — compute how much space they need
+    // Space the channels need; channels take priority.
     let left_channels_total = left_count as f32 * ch_card_width;
     let right_channels_total = right_count as f32 * ch_card_width;
     let max_channels_side = left_channels_total.max(right_channels_total);
     let all_channels_and_center = max_channels_side * 2.0 + center_width;
 
-    // Does the wider channel side overflow the available space?
+    // Whether the wider channel side overflows the available space.
     let channels_overflow = all_channels_and_center > available;
 
     if channels_overflow {
-        // Too many channels — horizontal scroll across full width
+        // Too many channels: scroll horizontally across the full width.
         egui::ScrollArea::horizontal()
             .id_salt("central_channel_scroll")
             .show(ui, |ui| {
@@ -103,17 +102,16 @@ pub(super) fn render_central_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                 });
             });
     } else {
-        // Channels fit — compute equal empty hint space on each side.
-        // Use the LARGER channel side to determine side_width so both sides are equal.
-        // Empty space = side_width - that side's channels. Both sides get the same side_width.
+        // Channels fit: both sides get the same side_width, sized from the side with
+        // more channels, and the rest is empty hint space.
         let side_width = ((available - center_width) / 2.0).max(0.0);
-        // Empty space is limited by the side with MORE channels (so it doesn't overflow)
+        // Limited by the side with more channels so it doesn't overflow.
         let empty_each = (side_width - max_channels_side).max(0.0);
 
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
 
-            // Left side: hint on far left, channels adjacent to mixer
+            // Left side: hint on the far left, channels next to the mixer.
             ui.allocate_ui(egui::vec2(side_width, panel_height), |ui| {
                 ui.horizontal_top(|ui| {
                     if empty_each > preset_hint_threshold {
@@ -136,7 +134,7 @@ pub(super) fn render_central_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                 });
             });
 
-            // Center column — force vertical layout (parent is horizontal_top)
+            // Center column, forced vertical (the parent is horizontal_top).
             ui.allocate_ui_with_layout(
                 egui::vec2(center_width, panel_height),
                 egui::Layout::top_down(egui::Align::LEFT),
@@ -146,7 +144,7 @@ pub(super) fn render_central_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                 },
             );
 
-            // Right side: channels adjacent to mixer, hint on far right
+            // Right side: channels next to the mixer, hint on the far right.
             ui.allocate_ui(egui::vec2(side_width, panel_height), |ui| {
                 ui.separator();
                 ui.horizontal_top(|ui| {
@@ -172,8 +170,8 @@ pub(super) fn render_central_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
     }
 }
 
-/// A single channel column, wrapped in a vertical scroll area so a tall deck
-/// stack scrolls independently instead of overflowing the panel.
+/// A channel column in its own vertical scroll area, so a tall deck stack
+/// scrolls instead of overflowing the panel.
 fn render_channel_column_scrolled(
     ui: &mut egui::Ui,
     ch: &ChannelUIInfo,
@@ -194,8 +192,8 @@ fn render_channel_column_scrolled(
     });
 }
 
-/// The center column stack (mixer box, sequence builder, macros), wrapped in a
-/// vertical scroll area so many sequences/macros scroll instead of overflowing.
+/// The center column (mixer box, sequence builder, macros) in a vertical scroll
+/// area, so many sequences or macros scroll instead of overflowing.
 fn render_center_stack(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     let height = ui.available_height();
     egui::ScrollArea::vertical()
@@ -204,12 +202,12 @@ fn render_center_stack(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
         .auto_shrink([false, true])
         .show(ui, |ui| {
             render_mixer_box(ui, data, actions);
-            // Sequence builder — same width as mixer
+            // Sequence builder, same width as the mixer.
             if !data.sequences.is_empty() {
                 ui.add_space(4.0);
                 render_sequence_builder(ui, data, actions);
             }
-            // + Sequence button — centered below mixer
+            // + Sequence button, centered below the mixer.
             if data.channel_count >= 2 {
                 ui.add_space(4.0);
                 ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
@@ -222,15 +220,14 @@ fn render_center_stack(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
                     }
                 });
             }
-            // Macro controls — compact widgets in the center column
             render_macro_column(ui, data, actions);
-            // Cue pads — the arrangement's marks, reachable from the desk
+            // Cue pads for the arrangement's cue points.
             super::cue_bank::render_cue_bank(ui, data, actions);
         });
 }
 
-/// Render the center mixer box (DJ console style)
-/// Supports N channels: 2 channels = crossfader mode, 3+ = per-channel opacity mode
+/// Center mixer box. 2 channels use the crossfader; 3 or more use per-channel
+/// opacity faders.
 pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     let num_channels = data.channels.len();
     let use_crossfader = num_channels == 2;
@@ -256,13 +253,13 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
             });
             ui.add_space(4.0);
 
-            // Channel volume faders (vertical, side by side) — N channels
+            // Vertical channel faders, side by side.
             let fader_height = 100.0;
             let mut opacities: Vec<f32> = data.channels.iter().map(|c| c.opacity).collect();
 
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
-                // Center faders: estimate total width and add leading space
+                // Estimate the total fader width and add leading space to center them.
                 let per_fader_width = 30.0_f32; // label + slider column width
                 let spacing = 4.0;
                 let total_faders_width = num_channels as f32 * per_fader_width
@@ -281,7 +278,7 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                                     .color(color)
                                     .size(11.0),
                             );
-                            // Show remove button only if more than 2 channels
+                            // Remove button only with more than 2 channels.
                             if num_channels > 2
                                 && ui
                                     .small_button("x")
@@ -301,7 +298,7 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                             &data.modulation_assignments,
                             &mut actions.commands,
                         );
-                        // Render slider — disabled in learn mode
+                        // Slider is disabled in learn mode.
                         let any_learn = data.midi_learn_active || data.keyboard_learn_active;
                         let slider_rect = if any_learn {
                             let inner = ui.scope(|ui| {
@@ -323,7 +320,7 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                             }
                             resp.rect
                         };
-                        // MIDI learn: glow + click overlay
+                        // MIDI learn: glow and click overlay.
                         if data.midi_learn_active {
                             let path = ParamAddress::channel_opacity(&ch.uuid).to_string();
                             let is_target =
@@ -342,7 +339,7 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                                     .push(EngineCommand::MidiLearnSelect { path });
                             }
                         }
-                        // Keyboard learn: orange glow + click overlay
+                        // Keyboard learn: orange glow and click overlay.
                         if data.keyboard_learn_active {
                             let path = ParamAddress::channel_opacity(&ch.uuid).to_string();
                             let is_target =
@@ -365,8 +362,8 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                 }
             });
 
-            // Only emit channel updates when opacity actually changed (via the fader)
-            // This avoids overwriting blend mode changes made by the blend mode selector below
+            // Emit channel updates only when the fader changed opacity, so blend mode
+            // changes from the selector below aren't overwritten.
             for (ch_idx, ch) in data.channels.iter().enumerate() {
                 if (opacities[ch_idx] - ch.opacity).abs() > f32::EPSILON {
                     actions.commands.push(EngineCommand::SetChannelOpacity {
@@ -379,7 +376,7 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
             ui.add_space(4.0);
             ui.separator();
 
-            // Crossfader — only shown for exactly 2 channels
+            // Crossfader, only with exactly 2 channels.
             if use_crossfader {
                 let color_a = channel_color(0);
                 let color_b = channel_color(1);
@@ -444,7 +441,6 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                     ui.label(egui::RichText::new(name_b).small().color(color_b));
                 });
 
-                // Snap buttons
                 ui.horizontal(|ui| {
                     if ui.small_button(format!("⏮ {name_a}")).clicked() {
                         actions.commands.push(EngineCommand::SetCrossfader(0.0));
@@ -457,7 +453,6 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                 ui.add_space(2.0);
                 ui.separator();
 
-                // Auto-transition
                 let auto_target = if data.crossfader < 0.5 { 1.0 } else { 0.0 };
                 let auto_label = if data.crossfader < 0.5 {
                     format!("→{name_b}")
@@ -471,7 +466,7 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                             .text("Transitioning..."),
                     );
                 } else {
-                    // Toggle state: beats vs seconds (stored in egui memory)
+                    // Beats vs seconds toggle, stored in egui memory.
                     let mode_id = egui::Id::new("crossfade_duration_is_beats");
                     let has_bpm = data.clock_bpm.is_some();
                     let is_beats =
@@ -500,7 +495,7 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                                 }
                             }
                         }
-                        // Unit toggle button (only show when BPM is available)
+                        // Unit toggle, only when BPM is available.
                         if has_bpm {
                             let toggle_label = if is_beats { "♩" } else { "s" };
                             if ui
@@ -517,7 +512,6 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                 ui.add_space(2.0);
                 ui.separator();
 
-                // Transition shader selector
                 let current_label = data.active_transition_name.as_deref().unwrap_or("Opacity");
                 egui::ComboBox::from_id_salt("transition_selector")
                     .selected_text(egui::RichText::new(format!("🔀 {current_label}")).small())
@@ -546,8 +540,8 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
         });
 }
 
-/// Render a channel column with header and its decks.
-/// Always shown in a bordered box. Clicking anywhere (except deck thumbnails) selects the channel.
+/// A channel column with its header and decks, in a bordered box. Clicking
+/// anywhere except a deck thumbnail selects the channel.
 pub(super) fn render_channel_column(
     ui: &mut egui::Ui,
     ch: &ChannelUIInfo,
@@ -558,7 +552,7 @@ pub(super) fn render_channel_column(
     let ch_idx = ch.ch_idx;
 
     ui.push_id(format!("ch_{ch_idx}"), |ui| {
-        // Detect relevant drags: library sources (not Effect) or deck moves
+        // Relevant drags: library sources (not effects) or deck moves.
         let has_source_drag = egui::DragAndDrop::payload::<LibraryDrag>(ui.ctx())
             .is_some_and(|p| !matches!(&*p, LibraryDrag::Effect(_)));
         let has_deck_drag = egui::DragAndDrop::has_payload_of_type::<DeckDrag>(ui.ctx());
@@ -568,9 +562,8 @@ pub(super) fn render_channel_column(
         let fx_hovering = has_fx_drag && ui.rect_contains_pointer(ui.max_rect());
         let is_ch_selected = data.selected_channel == Some(ch_idx);
 
-        // Always show a bordered box — glow when a relevant drag is active, intensify on hover
+        // Glow while a relevant drag is active, stronger on hover.
         let frame = if is_hovering {
-            // Direct hover — strong highlight
             egui::Frame::default()
                 .fill(accent.linear_multiply(0.15))
                 .stroke(egui::Stroke::new(2.0_f32, accent))
@@ -584,7 +577,7 @@ pub(super) fn render_channel_column(
                 .corner_radius(4.0)
                 .inner_margin(2.0)
         } else if has_relevant_drag {
-            // Drag active but not hovering this channel — subtle glow
+            // Drag active elsewhere: subtle glow.
             egui::Frame::default()
                 .fill(accent.linear_multiply(0.08))
                 .stroke(egui::Stroke::new(1.5_f32, accent.linear_multiply(0.5)))
@@ -614,7 +607,7 @@ pub(super) fn render_channel_column(
 
         frame.show(ui, |ui| {
             ui.vertical(|ui| {
-                // Channel header — clickable to select channel
+                // Channel header; click to select the channel.
                 let header_frame = if is_ch_selected {
                     egui::Frame::default()
                         .fill(accent.linear_multiply(0.15))
@@ -639,7 +632,7 @@ pub(super) fn render_channel_column(
                         }
                         header_resp.context_menu(|ui| channel_context_menu(ui, data, actions, ch));
 
-                        // Blend mode dropdown — right-aligned in header
+                        // Blend mode dropdown, right-aligned in the header.
                         let all_modes = BlendMode::all();
                         let current = all_modes
                             .iter()
@@ -670,7 +663,6 @@ pub(super) fn render_channel_column(
                     actions.session.select_channel = Some(ch_idx);
                 }
 
-                // Deck stack (single column, vertical)
                 egui::ScrollArea::vertical()
                     .id_salt(format!("ch_scroll_{ch_idx}"))
                     .scroll_source(egui::scroll_area::ScrollSource {
@@ -706,7 +698,7 @@ pub(super) fn render_channel_column(
                             .is_some_and(|p| ch.decks.iter().any(|d| d.uuid == p.deck_uuid));
 
                         for (i, deck) in ch.decks.iter().enumerate() {
-                            // Drop zone BEFORE each deck (for reordering within channel)
+                            // Drop zone before each deck, for reordering within the channel.
                             if is_deck_drag_active && drag_is_same_ch {
                                 let drop_zone = ui.allocate_response(
                                     egui::vec2(ui.available_width(), 6.0),
@@ -720,9 +712,8 @@ pub(super) fn render_channel_column(
                                     );
                                 }
                                 if let Some(payload) = drop_zone.dnd_release_payload::<DeckDrag>() {
-                                    // The ordinal is read here, not at drag
-                                    // start, so a reorder mid-drag can't send
-                                    // the wrong deck.
+                                    // Read the ordinal here, not at drag start, so a reorder
+                                    // mid-drag can't send the wrong deck.
                                     let from_idx =
                                         ch.decks.iter().position(|d| d.uuid == payload.deck_uuid);
                                     if let Some(from_idx) = from_idx {
@@ -742,7 +733,7 @@ pub(super) fn render_channel_column(
                             ui.add_space(2.0);
                         }
 
-                        // Drop zone AFTER last deck (for moving to end)
+                        // Drop zone after the last deck.
                         if is_deck_drag_active && drag_is_same_ch && !ch.decks.is_empty() {
                             let drop_zone = ui.allocate_response(
                                 egui::vec2(ui.available_width(), 6.0),
@@ -771,7 +762,7 @@ pub(super) fn render_channel_column(
                             }
                         }
 
-                        // Drop hint when dragging over a channel with existing decks
+                        // Drop hint when dragging over a channel that has decks.
                         if is_hovering && !ch.decks.is_empty() {
                             ui.label(
                                 egui::RichText::new("➕ Drop to add deck")
@@ -780,7 +771,7 @@ pub(super) fn render_channel_column(
                             );
                         }
 
-                        // Remaining space — clickable to select channel + drop zone for deck moves
+                        // Remaining space: selects the channel on click and accepts deck moves.
                         let drop_resp = ui.allocate_response(
                             egui::vec2(ui.available_width(), 20.0_f32.max(ui.available_height())),
                             egui::Sense::click() | egui::Sense::hover(),
@@ -788,8 +779,7 @@ pub(super) fn render_channel_column(
                         if drop_resp.clicked() {
                             actions.session.select_channel = Some(ch_idx);
                         }
-                        // The body of a column is the obvious place to aim a
-                        // paste, and the only one an empty channel has.
+                        // The column body is the paste target, the only one an empty channel has.
                         drop_resp.widget_info(|| {
                             egui::WidgetInfo::labeled(
                                 egui::WidgetType::Button,
@@ -807,7 +797,7 @@ pub(super) fn render_channel_column(
                             });
                         }
 
-                        // Channel FX chain (compact) — clickable to select channel
+                        // Compact channel FX chain; click to select the channel.
                         if !ch.effects.is_empty() {
                             ui.add_space(4.0);
                             let fx_resp = ui.add(
@@ -838,20 +828,20 @@ pub(super) fn render_channel_column(
             });
         }); // frame.show
 
-        // Store this channel's screen rect for the deferred DnD drop handler
+        // Store the channel's screen rect for the deferred drop handler.
         let ch_rect = ui.min_rect();
         ui.ctx().memory_mut(|mem| {
             mem.data
                 .insert_temp(egui::Id::new("ch_drop_rect").with(ch_idx), ch_rect);
         });
-        // Effect drops resolve channel ownership from this surface (deck cards
-        // publish their own rects and win by hit priority).
+        // Effect drops resolve the channel from this surface; deck cards publish their
+        // own rects and win by hit priority.
         publish_channel_surface_fx(ui.ctx(), &ch.uuid, ch_idx, ch_rect);
     });
 }
 
-/// Copy, duplicate, and paste for a channel, on every part of its column that
-/// is the channel rather than a deck inside it.
+/// Copy, duplicate, and paste for a channel, on every part of its column
+/// outside its decks.
 fn channel_context_menu(
     ui: &mut egui::Ui,
     data: &UIData,
@@ -862,9 +852,9 @@ fn channel_context_menu(
     clipboard_menu::items(ui, data, actions, &subject);
 }
 
-/// Render a drop zone in empty mixer side space that creates a new channel on drop.
-/// Accepts library drags (except Effect) and deck drags from existing channels.
-/// `side` distinguishes left (0) vs right (1) so both zones can coexist.
+/// Drop zone in the empty mixer side space that creates a new channel. Accepts
+/// library drags (except effects) and deck drags. `side` is 0 for left, 1 for
+/// right.
 fn render_new_channel_drop_zone(
     ui: &mut egui::Ui,
     max_width: f32,
@@ -876,9 +866,8 @@ fn render_new_channel_drop_zone(
         .is_some_and(|p| !matches!(&*p, LibraryDrag::Effect(_)));
     let has_deck_drag = egui::DragAndDrop::has_payload_of_type::<DeckDrag>(ui.ctx());
     let relevant_drag = has_library_drag || has_deck_drag;
-    // A deck dropped here needs a channel that does not exist yet, so the move
-    // is held until `AddChannel` has been applied and the new channel has a
-    // UUID to address. See `/spec/api-addressing.md`.
+    // A deck dropped here needs a channel that doesn't exist yet, so the move is
+    // held until `AddChannel` is applied and the channel has a UUID.
     let pending_move_id = egui::Id::new("__new_ch_pending_deck_move");
     if let Some((deck_uuid, expected_len)) = ui
         .ctx()
@@ -896,8 +885,8 @@ fn render_new_channel_drop_zone(
             _ => log::warn!("Dropping deck move: the new channel was never created"),
         }
     }
-    // Pre-compute the zone rect from the cursor — ui.max_rect() is too broad
-    // (it spans the full remaining horizontal space including adjacent channels)
+    // Compute the zone rect from the cursor; ui.max_rect() also spans the
+    // adjacent channels.
     let hint_height = ui.available_height().max(60.0);
     let zone_rect = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(max_width, hint_height));
     let is_hovering = relevant_drag
@@ -907,7 +896,7 @@ fn render_new_channel_drop_zone(
 
     let accent = egui::Color32::from_rgb(100, 200, 255);
     let (stroke, fill, label_text, label_color) = if is_hovering {
-        // Direct hover — strong highlight (matches channel hover intensity)
+        // Direct hover: strong highlight, as on channels.
         (
             egui::Stroke::new(2.0_f32, accent),
             accent.linear_multiply(0.15),
@@ -915,7 +904,7 @@ fn render_new_channel_drop_zone(
             accent,
         )
     } else if relevant_drag {
-        // Drag active, not hovering — subtle glow (matches channel ambient glow)
+        // Drag active elsewhere: subtle glow, as on channels.
         (
             egui::Stroke::new(1.5_f32, accent.linear_multiply(0.5)),
             accent.linear_multiply(0.08),
@@ -923,7 +912,6 @@ fn render_new_channel_drop_zone(
             accent.linear_multiply(0.5),
         )
     } else {
-        // Idle
         (
             egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(60, 60, 80)),
             egui::Color32::TRANSPARENT,
@@ -951,7 +939,7 @@ fn render_new_channel_drop_zone(
         frame_resp.response
     });
 
-    // Store rect for the deferred library DnD handler (indexed by side)
+    // Store the rect for the deferred library drop handler, keyed by side.
     let zone_rect = resp.response.rect;
     ui.ctx().memory_mut(|mem| {
         mem.data
@@ -970,7 +958,7 @@ fn render_new_channel_drop_zone(
     }
 }
 
-/// Render a compact deck thumbnail (clickable cell in the deck grid)
+/// Compact deck thumbnail in the deck grid.
 /// Layout: [ preview | opacity slider (vertical) ]
 ///         [ name                                 ]
 ///         [ M  S  x                              ]
@@ -987,8 +975,7 @@ pub(super) fn render_deck_thumbnail(
     let mut solo = deck.solo;
     let mut mute = deck.mute;
     let is_selected = data.selected_deck == Some((ch_idx, idx));
-    // Square budget, so a 16:9 project keeps the 100×56 card it has always had
-    // while a portrait one grows downward to 56×100 instead of being squashed.
+    // Square budget: a 16:9 project gets a 100×56 card and a portrait one 56×100.
     let preview = super::utils::preview_size(
         egui::vec2(100.0, 100.0),
         data.render_width,
@@ -1000,8 +987,8 @@ pub(super) fn render_deck_thumbnail(
     let card_width = preview_width + slider_width + 8.0; // preview + slider + padding
 
     ui.push_id(format!("deck_{ch_idx}_{idx}"), |ui| {
-        // Use manual rect-based painting to avoid egui layout overlap issues.
-        // Total card height = preview_height + name_row(16) + button_row(20) + spacing(8) + padding(8)
+        // Manual rect-based painting avoids egui layout overlap.
+        // Card height = preview_height + name_row(16) + button_row(20) + spacing(8) + padding(8)
         let name_row_h = 16.0;
         let button_row_h = 20.0;
         let spacing = 4.0;
@@ -1029,7 +1016,7 @@ pub(super) fn render_deck_thumbnail(
             1.0_f32
         };
 
-        // MIDI learn mode: glow on deck card, click to select trigger
+        // MIDI learn: glow on the card; click selects the trigger.
         if data.midi_learn_active {
             let trigger_path = ParamAddress::deck(&deck.uuid, DeckTarget::Trigger).to_string();
             let is_target = data.midi_learn_target.as_deref() == Some(trigger_path.as_str());
@@ -1044,7 +1031,7 @@ pub(super) fn render_deck_thumbnail(
                     .push(EngineCommand::MidiLearnSelect { path: trigger_path });
             }
         }
-        // Keyboard learn mode: orange glow on deck card
+        // Keyboard learn: orange glow on the card.
         if data.keyboard_learn_active {
             let trigger_path = ParamAddress::deck(&deck.uuid, DeckTarget::Trigger).to_string();
             let is_target = data.keyboard_learn_target.as_deref() == Some(trigger_path.as_str());
@@ -1079,7 +1066,7 @@ pub(super) fn render_deck_thumbnail(
             }
         });
 
-        // Start drag: set payload for deck move between channels
+        // Drag start sets the payload for moving the deck between channels.
         if card_resp.drag_started() {
             egui::DragAndDrop::set_payload(
                 ui.ctx(),
@@ -1089,7 +1076,7 @@ pub(super) fn render_deck_thumbnail(
             );
         }
 
-        // While dragging, show a translucent ghost at the cursor
+        // Translucent ghost at the cursor while dragging.
         if card_resp.dragged()
             && let Some(pointer_pos) = ui.ctx().pointer_interact_pos()
         {
@@ -1110,7 +1097,6 @@ pub(super) fn render_deck_thumbnail(
             );
         }
 
-        // Draw card background + border
         let bg_alpha = if card_resp.dragged() { 100 } else { 255 };
         ui.painter().rect_filled(
             card_rect,
@@ -1124,7 +1110,7 @@ pub(super) fn render_deck_thumbnail(
             egui::StrokeKind::Outside,
         );
 
-        // Row 1: Preview image (left) + vertical opacity slider (right)
+        // Row 1: preview (left) and vertical opacity slider (right).
         let preview_rect = egui::Rect::from_min_size(
             card_rect.min + egui::vec2(padding, padding),
             egui::vec2(preview_width, preview_height),
@@ -1134,7 +1120,6 @@ pub(super) fn render_deck_thumbnail(
             egui::vec2(slider_width, preview_height),
         );
 
-        // Draw preview
         if let Some(&texture_id) = data.deck_preview_textures.get(&deck.uuid) {
             ui.painter().image(
                 texture_id,
@@ -1154,9 +1139,8 @@ pub(super) fn render_deck_thumbnail(
             );
         }
 
-        // Arrangement state overlay. A performer looking at the mixer needs the
-        // same answer the timeline gives: is this deck mine right now, or the
-        // arrangement's? See /spec/arrangement.md § Live Override.
+        // Arrangement state overlay: whether the performer or the arrangement
+        // controls this deck right now, as on the timeline.
         if let Some(arrangement) = &data.arrangement {
             let held = arrangement
                 .overridden_params
@@ -1179,7 +1163,7 @@ pub(super) fn render_deck_thumbnail(
             }
         }
 
-        // Auto-transition indicator overlay on preview
+        // Auto-transition indicator over the preview.
         if let Some(ref at) = deck.auto_transition
             && at.enabled
         {
@@ -1195,7 +1179,7 @@ pub(super) fn render_deck_thumbnail(
                     ("✓", egui::Color32::from_rgb(100, 100, 100))
                 }
             };
-            // Small badge in top-right of preview
+            // Small badge in the preview's top-right corner.
             ui.painter().text(
                 egui::pos2(preview_rect.max.x - 2.0, preview_rect.min.y + 2.0),
                 egui::Align2::RIGHT_TOP,
@@ -1203,7 +1187,7 @@ pub(super) fn render_deck_thumbnail(
                 egui::FontId::proportional(10.0),
                 color,
             );
-            // Progress bar at bottom of preview during transition
+            // Progress bar at the bottom of the preview during a transition.
             if let crate::channel::DeckTransitionPhase::Transitioning { progress } = at.phase {
                 let bar_h = 3.0;
                 let bar_rect = egui::Rect::from_min_size(
@@ -1213,7 +1197,7 @@ pub(super) fn render_deck_thumbnail(
                 ui.painter()
                     .rect_filled(bar_rect, 0.0, egui::Color32::from_rgb(200, 160, 40));
             }
-            // Countdown bar during playing phase
+            // Countdown bar during the playing phase.
             if let crate::channel::DeckTransitionPhase::Playing { elapsed } = at.phase {
                 let total = at.play_duration_value;
                 if total > 0.0 {
@@ -1229,12 +1213,12 @@ pub(super) fn render_deck_thumbnail(
             }
         }
 
-        // Click on card to select deck (only when not in learn mode — learn mode click selects trigger)
+        // Click selects the deck, except in learn mode where it selects the trigger.
         if !data.midi_learn_active && !data.keyboard_learn_active && card_resp.clicked() {
             actions.session.select_deck = Some((ch_idx, idx));
         }
 
-        // Vertical opacity slider — use a child ui placed at the slider rect
+        // Vertical opacity slider in a child ui at the slider rect.
         let mut slider_ui = ui.new_child(egui::UiBuilder::new().max_rect(slider_rect));
         let any_learn = data.midi_learn_active || data.keyboard_learn_active;
         let op_slider_rect = if any_learn {
@@ -1292,7 +1276,7 @@ pub(super) fn render_deck_thumbnail(
             }
         }
 
-        // Effective opacity overlay (shows auto-transition fading as a filled bar)
+        // Effective opacity overlay: a filled bar showing auto-transition fading.
         if deck.effective_opacity < deck.opacity - 0.01 {
             let frac = deck.effective_opacity / deck.opacity.max(0.001);
             let bar_h = op_slider_rect.height() * (1.0 - frac);
@@ -1307,7 +1291,7 @@ pub(super) fn render_deck_thumbnail(
             );
         }
 
-        // Row 2: Deck name
+        // Row 2: deck name.
         let name_y = card_rect.min.y + padding + preview_height + spacing;
         let display_name = super::utils::truncate_chars(&deck.name, 16);
         ui.painter().text(
@@ -1318,7 +1302,7 @@ pub(super) fn render_deck_thumbnail(
             accent,
         );
 
-        // Row 3: M S x buttons — use a child ui placed at the button row
+        // Row 3: M S x buttons in a child ui at the button row.
         let btn_y = name_y + name_row_h + spacing;
         let btn_rect = egui::Rect::from_min_size(
             egui::pos2(card_rect.min.x + padding, btn_y),
@@ -1401,9 +1385,8 @@ pub(super) fn render_deck_thumbnail(
             }
         });
 
-        // Push a command per control that actually changed (opacity slider,
-        // solo/mute buttons). Separate commands mean a change here never clobbers
-        // a blend-mode edit made in the detail panel.
+        // One command per changed control (opacity, solo, mute), so a change here
+        // never overwrites a blend-mode edit from the detail panel.
         if (opacity - deck.opacity).abs() > f32::EPSILON {
             actions.commands.push(EngineCommand::SetDeckOpacity {
                 deck_uuid: deck.uuid.clone(),

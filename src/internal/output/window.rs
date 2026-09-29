@@ -5,8 +5,7 @@
 //! for one ([`OutputSinkInstance::window_request`]) and draws nothing until
 //! the runner has created it and handed it over
 //! ([`OutputSinkInstance::attach_window`]). Headless runs have no event loop,
-//! and report both types unavailable. See /spec/output-sink-providers.md
-//! Decisions 6 and 9.
+//! and report both types unavailable.
 
 use super::{
     ControlSpec, ControlValue, FramePath, LibraryEntry, LibrarySection, OutputSinkInstance,
@@ -130,9 +129,8 @@ impl OutputSinkProvider for DisplayProvider {
         }
     }
 
-    /// Monitors are listed by the event loop, which refreshes them every time
-    /// it creates windows, so a rescan has nothing more to do than wait for
-    /// the next pass.
+    /// The event loop refreshes the monitor list whenever it creates windows,
+    /// so a rescan does nothing.
     fn library_action(&mut self, action: &str, _env: &mut SinkEnv) -> Result<()> {
         anyhow::ensure!(action == "rescan", "displays have no action '{action}'");
         Ok(())
@@ -318,8 +316,7 @@ impl OutputSinkInstance for WindowSink {
             })
     }
 
-    /// Ten-bit output composes in float; eight-bit in the surface's own format,
-    /// as a window always has.
+    /// Ten-bit output composes in float; eight-bit in the surface's own format.
     fn intermediate_format(&self, resolved: &ResolvedPresentation) -> wgpu::TextureFormat {
         if resolved.resolved == PresentationDepth::Sdr10 {
             crate::renderer::context::COLOR_PATH_FORMAT
@@ -385,8 +382,8 @@ impl OutputSinkInstance for WindowSink {
         }
         let monitor = crate::source::expect_text(name, value)?;
         self.config.name = Some(monitor.to_string());
-        // Placing needs the monitor list; the caller patches with the new
-        // config, which does.
+        // Placing needs the monitor list, which the rebuild from the new config
+        // has.
         Ok(ParamEffect::Rebuild)
     }
 

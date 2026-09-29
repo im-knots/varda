@@ -22,9 +22,7 @@ impl SourceRegistry {
     ///
     /// # Panics
     ///
-    /// Panics if a provider with the same id is already registered: two
-    /// providers answering to one `type` tag would make every saved scene
-    /// ambiguous.
+    /// Panics if a provider with the same id is already registered.
     pub fn register(&mut self, provider: impl DeckSourceProvider) -> &mut Self {
         assert!(
             self.get(provider.id()).is_none(),
@@ -105,10 +103,9 @@ impl SourceRegistry {
         provider.create(config, env)
     }
 
-    /// Rebuild a saved source. Unlike [`Self::create`] this never fails: a
-    /// source that cannot run here becomes a placeholder that keeps its config,
-    /// and the reason comes back for the restore report.
-    /// See /spec/deck-source-providers.md Decision 4.
+    /// Rebuild a saved source. Never fails: a source that cannot run here
+    /// becomes a placeholder that keeps its config, and the reason is returned
+    /// for the restore report.
     pub fn restore(
         &mut self,
         config: &SourceConfig,
@@ -150,9 +147,9 @@ impl SourceRegistry {
         }
     }
 
-    /// Run one frame of device servicing over `decks`: every provider observes
-    /// its decks, ticks once, then prepares each deck. Each entry is a deck's
-    /// source and whether the deck is wanted this frame.
+    /// Service devices for one frame: every provider observes its decks, ticks
+    /// once, then prepares each deck. Each entry is a deck's source and whether
+    /// the deck is in use this frame.
     pub fn service_frame(
         &mut self,
         decks: &mut [(&mut Box<dyn DeckSourceInstance>, bool)],

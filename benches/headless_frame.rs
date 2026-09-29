@@ -1,18 +1,18 @@
-/// Per-frame cost of the engine's own frame sequence with no window: timing,
+/// Per-frame cost of the engine's frame sequence with no window: timing,
 /// notifications, the command drain, inputs, then rendering the mixer, the
 /// outputs, and the interactive window.
 ///
 ///   `default_scene` — the default two-channel scene with one solid deck, so
-///                     what is measured is the sequence and its fixed costs.
+///                     only the sequence's fixed costs are measured.
 ///   `syphon_output` — the default scene plus one live Syphon output showing
 ///                     the whole program (macOS only).
 ///   `syphon_output_surface` — the same output with one surface assigned, so
 ///                     the output composes surfaces before delivering.
 ///   `heavy_modulation` — the same scene with 128 LFOs, each modulating the
 ///                     next one's frequency and all driving the channel's
-///                     opacity. See /spec/performance-hot-paths.md item G.
+///                     opacity.
 ///
-/// Skipped when no GPU adapter is available.
+/// Skipped without a GPU adapter.
 use criterion::{Criterion, criterion_group, criterion_main};
 use varda::app::VardaApp;
 use varda::engine::EngineCommand;
@@ -83,7 +83,7 @@ fn heavy_modulation_app() -> Option<VardaApp> {
 }
 
 /// The default scene plus one live Syphon output, with one surface assigned
-/// when `surface` is set. Syphon is the output a test machine can always run.
+/// when `surface` is set. Syphon needs no extra hardware on a test machine.
 #[cfg(target_os = "macos")]
 fn output_app(surface: bool) -> Option<VardaApp> {
     use clap::Parser;

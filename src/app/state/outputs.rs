@@ -17,9 +17,9 @@ fn not_found(uuid: &str) -> CommandResult {
 }
 
 impl VardaApp {
-    /// Point an output at another sink, keeping its surfaces, warp, edge blend
-    /// and presentation. A window moving between monitors keeps its window; any
-    /// other change rebuilds the sink, stopping it first.
+    /// Point an output at another sink, keeping surfaces, warp, edge blend and
+    /// presentation. A window moving monitors keeps its window; other changes
+    /// stop and rebuild the sink.
     pub fn cmd_set_output_target(&mut self, output_uuid: &str, sink: &SinkConfig) -> CommandResult {
         let Ok(idx) = self.output.resolve_output(output_uuid) else {
             return not_found(output_uuid);
@@ -64,8 +64,7 @@ impl VardaApp {
         CommandResult::Ok
     }
 
-    /// Take `config` in place when the sink can, otherwise rebuild the sink
-    /// from it. A running output is stopped before a rebuild.
+    /// Apply `config` in place if the sink supports it, otherwise stop and rebuild.
     pub(crate) fn apply_sink_config(
         &mut self,
         idx: usize,
@@ -167,8 +166,7 @@ impl VardaApp {
         }
     }
 
-    /// Run a library action an output type offers. Answers with the type's
-    /// fresh entries.
+    /// Run an output type's library action and return its fresh entries.
     pub fn cmd_sink_library_action(&mut self, sink_type: &str, action: &str) -> CommandResult {
         let (width, height) = (self.render.width, self.render.height);
         let mut env = SinkEnv {
@@ -195,14 +193,12 @@ impl VardaApp {
         }
     }
 
-    /// Resize every output that renders at the render resolution, returning
-    /// the names of any that had to be stopped to do it.
+    /// Resize every output that renders at the render resolution. Returns the
+    /// names of any that had to be stopped.
     ///
-    /// An encoder is opened with a fixed `-s WxH` and feeding it raw frames of
-    /// another size desyncs the stream rather than failing cleanly. Restarting
-    /// it here would be worse than stopping: a recording would reopen the same
-    /// path and truncate the take already on disk. Senders that carry their
-    /// size per frame keep running.
+    /// An encoder opened with fixed `-s WxH` desyncs on other frame sizes, and
+    /// restarting a recording would truncate the file, so fixed-size sinks stop.
+    /// Senders that carry size per frame keep running.
     pub(in crate::app) fn resize_headless_outputs(
         &mut self,
         width: u32,
@@ -226,8 +222,7 @@ impl VardaApp {
         stopped
     }
 
-    /// Start an output's sink: settle its presentation, open its audio, begin
-    /// delivering.
+    /// Start an output's sink: resolve presentation, open audio, begin delivering.
     pub fn cmd_start_output(&mut self, output_uuid: &str) -> CommandResult {
         let Ok(idx) = self.output.resolve_output(output_uuid) else {
             return not_found(output_uuid);
@@ -244,8 +239,7 @@ impl VardaApp {
                 message: format!("Output '{}' is always showing", output.name),
             };
         }
-        // The encoder's frame size is fixed for the life of the session, so
-        // the output is pinned to the render resolution first.
+        // The encoder's frame size is fixed per session, so match the render size first.
         if let Err(e) = output.resize(gpu, render) {
             return CommandResult::Err {
                 code: ErrorCode::InternalError,
@@ -322,8 +316,8 @@ impl VardaApp {
         }
     }
 
-    /// Stop an output's sink and release what its session held, telling the
-    /// operator `reason` when it stopped on its own.
+    /// Stop an output's sink and release its session. `reason` is shown when it
+    /// stopped on its own.
     pub(crate) fn stop_output(&mut self, output_uuid: &str, reason: Option<String>) {
         let Ok(idx) = self.output.resolve_output(output_uuid) else {
             return;
@@ -333,10 +327,8 @@ impl VardaApp {
             return;
         }
         output.sink_mut().stop();
-        // Report what the content actually reached. The file's MaxCLL and
-        // MaxFALL are whatever the encoder wrote at start and cannot be
-        // rewritten, so these are for choosing the peak next time.
-        // See /spec/hdr-recording-output.md § As built.
+        // Report measured light levels. The file's MaxCLL/MaxFALL were written
+        // at start and can't change; this helps pick the peak next time.
         let levels = output.take_light_levels();
         if let Some((max_cll, max_fall)) = levels.measured() {
             log::info!(
@@ -465,20 +457,12 @@ impl VardaApp {
 
 /// The frame rate an ffmpeg output is opened at.
 ///
-/// Must be the rate frames are actually produced at. A raw video input is timed
-/// by position — frame N sits at N/fps — so if the encoder is told a rate the
-/// renderer is not running at, the recording comes out at the wrong speed and
-/// drifts against its own audio, which runs on the capture device's clock.
+/// Must match the render rate: raw video is timed by frame index, so a wrong
+/// rate plays back at the wrong speed and drifts from the audio. The gap
+/// padding in `FfmpegSubprocess` also measures against this rate.
 ///
-/// Every output used to be opened at a hardcoded 30 while the app defaults to
-/// 60, so a stock recording was labelled at half the rate it was made: twice as
-/// long as the session, in slow motion, with the audio running out halfway. It
-/// also disabled the gap padding in `FfmpegSubprocess`, which measures the
-/// renderer's shortfall against this same rate and saw a surplus instead.
-///
-/// Uncapped (`target_fps == 0`) has no rate to report, so it takes 60 — the
-/// default cap, and the closest thing to an expected rate. A wildly different
-/// actual rate will be corrected by frame padding rather than by mislabelling.
+/// Uncapped (`target_fps == 0`) uses 60, the default cap; frame padding covers
+/// the difference.
 pub(crate) fn encoder_fps(target_fps: u32) -> u32 {
     const UNCAPPED_ASSUMED_FPS: u32 = 60;
     if target_fps == 0 {
@@ -488,10 +472,9 @@ pub(crate) fn encoder_fps(target_fps: u32) -> u32 {
     }
 }
 
-/// Resolve a persisted audio device name to a live PCM subscription for output
-/// passthrough. Returns `(AudioInput for ffmpeg, AudioPassthrough to retain for
-/// teardown)`. On a missing/unopenable device, emits a warning and returns
-/// `(None, None)` → video-only (Decision 6).
+/// Resolve a saved audio device name to a PCM subscription for output
+/// passthrough. Returns the ffmpeg input and the passthrough to keep for
+/// teardown. A missing device warns and returns `(None, None)` (video only).
 fn resolve_output_audio(
     audio_manager: &mut crate::audio::AudioManager,
     notifications: &mut crate::notifications::NotificationSystem,
@@ -537,8 +520,8 @@ fn resolve_output_audio(
 }
 
 impl super::super::Outputs {
-    /// How long an output has been sending: the sink's own clock when it keeps
-    /// one, otherwise the time since it started. Zero for an idle output.
+    /// How long an output has been sending: the sink's clock if it has one,
+    /// else time since start. Zero when idle.
     pub(crate) fn active_duration(output: &Output) -> std::time::Duration {
         if !output.active {
             return std::time::Duration::ZERO;
@@ -550,15 +533,15 @@ impl super::super::Outputs {
             .unwrap_or_default()
     }
 
-    /// Close an output, stopping whatever it was sending through. Returns its
-    /// audio passthrough, for the caller to unsubscribe from the audio manager.
+    /// Stop and close an output. Returns its audio passthrough for the caller
+    /// to unsubscribe.
     pub(crate) fn close_output(
         &mut self,
         output_uuid: &str,
     ) -> anyhow::Result<Option<AudioPassthrough>> {
         let idx = self.resolve_output(output_uuid)?;
         let mut output = self.outputs.remove(idx);
-        // Stop the encoder before dropping, to release ports and files.
+        // Stop before dropping to release ports and files.
         output.sink_mut().stop();
         log::info!("Closed output '{}'", output.name);
         Ok(output.audio.take())
@@ -567,7 +550,7 @@ impl super::super::Outputs {
     pub(crate) fn assign_surface_to_output(&mut self, output_uuid: &str, surface_uuid: &str) {
         if let Some(output) = self.outputs.iter_mut().find(|o| o.uuid == output_uuid) {
             let assignments = &mut output.surface_assignments;
-            // Warp lives on the surface now — the assignment is membership only.
+            // Warp lives on the surface; the assignment is membership only.
             if !assignments.iter().any(|a| a.surface_uuid == surface_uuid)
                 && self.surface_manager.find_by_uuid(surface_uuid).is_some()
             {
@@ -588,9 +571,8 @@ impl super::super::Outputs {
         }
     }
 
-    /// Enable or disable one surface assignment, the `output/<uuid>/surface/
-    /// <surface_uuid>` control. Assigns the surface when enabling one that is
-    /// not assigned yet.
+    /// Enable or disable one surface assignment (the `output/<uuid>/surface/
+    /// <surface_uuid>` control), assigning the surface if needed.
     pub(crate) fn set_surface_assignment_enabled(
         &mut self,
         output_uuid: &str,
@@ -619,13 +601,13 @@ impl super::super::Outputs {
         Ok(())
     }
 
-    /// Recompute per-surface edge blend for all Auto-mode outputs based on surface topology.
+    /// Recompute per-surface edge blend for all Auto-mode outputs from surface overlap.
     pub fn recompute_auto_edge_blend(&mut self) {
         use crate::renderer::edge_blend::{
             MappedRegion, OutputSurfaceInfo, SurfaceOverlapZones, compute_auto_edge_blend,
         };
 
-        // Check if any output is in Auto mode — early exit if none.
+        // Early exit if no output is in Auto mode.
         let auto_count = self
             .outputs
             .iter()
@@ -666,7 +648,7 @@ impl super::super::Outputs {
             })
             .collect();
 
-        // Clear overlap zones on all Auto-mode assignments before applying new results.
+        // Clear old overlap zones on Auto-mode assignments.
         for output in &mut self.outputs {
             if output.edge_blend_mode == EdgeBlendMode::Auto {
                 for assignment in &mut output.surface_assignments {
@@ -725,7 +707,7 @@ impl super::super::Outputs {
         CommandResult::Ok
     }
 
-    /// Set edge blend mode for an output; triggers auto-recompute if mode is Auto.
+    /// Set an output's edge blend mode; Auto recomputes immediately.
     pub fn cmd_set_edge_blend_mode(
         &mut self,
         output_uuid: &str,
@@ -741,11 +723,8 @@ impl super::super::Outputs {
         CommandResult::Ok
     }
 
-    /// Set or clear one output's tonemap override.
-    ///
-    /// Needs no restart and no GPU reconfiguration: the curve only selects which
-    /// graded program the output reads, and the mixer materializes that on the
-    /// next frame.
+    /// Set or clear one output's tonemap override. Takes effect next frame
+    /// without a restart.
     pub fn cmd_set_output_tonemap(
         &mut self,
         output_uuid: &str,
@@ -776,8 +755,8 @@ mod tests {
         }
     }
 
-    /// The default RTMP output (`rtmp://`) names no server. Starting it is
-    /// refused with what to fill in, before ffmpeg runs, and it stays stopped.
+    /// The default RTMP output (`rtmp://`) names no server, so starting it is
+    /// refused before ffmpeg runs.
     #[test]
     fn starting_an_rtmp_output_without_a_server_says_so() {
         let Some(mut app) = crate::testing::headless_app() else {
@@ -795,8 +774,8 @@ mod tests {
         assert!(!app.output.outputs[idx].active);
     }
 
-    /// A setting written by name lands in the sink's saved config, and a bare
-    /// type is filled with the type's defaults.
+    /// A setting written by name is saved in the sink config; a bare type gets
+    /// its defaults.
     #[test]
     fn a_sink_setting_rebuilds_the_sink_with_it() {
         let Some(mut app) = headless_app() else {
@@ -832,8 +811,7 @@ mod tests {
     }
 
     /// `output/<uuid>/surface/<surface_uuid>` shows or hides a surface, and
-    /// `surface/<uuid>/source` re-routes one, through the same addresses a
-    /// controller uses. See /spec/output-sink-providers.md Decisions 11 and 12.
+    /// `surface/<uuid>/source` re-routes one.
     #[test]
     fn output_and_surface_addresses_reach_the_stage() {
         let Some(mut app) = headless_app() else {
@@ -892,16 +870,7 @@ mod tests {
         );
     }
 
-    /// An ffmpeg output must be opened at the rate frames are actually made.
-    ///
-    /// Raw video carries no per-frame timing, so the rate declared at spawn is
-    /// the only thing that says how long the recording is. Declaring a rate the
-    /// renderer is not running at plays the result back at the wrong speed and
-    /// slides it against its own audio, which is timed by the capture device's
-    /// sample clock and cannot be talked into agreeing.
-    ///
-    /// Every spawn site used to pass a literal 30 while the app defaults to 60.
-    /// See /spec/av-sync.md.
+    /// An ffmpeg output is opened at the render rate.
     #[test]
     fn outputs_are_opened_at_the_rate_frames_are_produced() {
         for target in [24, 25, 30, 50, 60, 120, 144] {
@@ -913,8 +882,7 @@ mod tests {
         }
     }
 
-    /// Uncapped has no rate to declare, so it takes the default cap. Frame
-    /// padding absorbs the difference if the real rate turns out lower.
+    /// Uncapped uses the default cap.
     #[test]
     fn an_uncapped_renderer_falls_back_to_a_declarable_rate() {
         assert_eq!(encoder_fps(0), 60);

@@ -1,5 +1,4 @@
-// Fullscreen quad vertex shader
-// Generates a fullscreen triangle without vertex buffers
+// Fullscreen triangle vertex shader, without vertex buffers.
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -10,7 +9,6 @@ struct VertexOutput {
 fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     var out: VertexOutput;
     
-    // Generate fullscreen triangle
     let x = f32((vertex_index & 1u) << 2u);
     let y = f32((vertex_index & 2u) << 1u);
     

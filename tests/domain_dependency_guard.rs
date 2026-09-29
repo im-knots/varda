@@ -1,6 +1,5 @@
-//! Guards the module order in /spec/domain-dependencies.md: production code in
-//! a domain module under `src/internal/` names only modules earlier in
-//! [`ORDER`], and `engine::value` names none. Test code is exempt.
+//! Production code in a domain module under `src/internal/` names only modules
+//! earlier in [`ORDER`], and `engine::value` names none. Test code is exempt.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -648,7 +647,7 @@ fn the_order_lists_every_domain_module() {
     let missing: Vec<_> = listed.difference(&on_disk).collect();
     assert!(
         unlisted.is_empty() && missing.is_empty(),
-        "ORDER must match src/internal/ (/spec/domain-dependencies.md). \
+        "ORDER must match src/internal/. \
          Place new modules in their tier: {unlisted:?}. Remove deleted ones: {missing:?}"
     );
 }
@@ -665,7 +664,7 @@ fn domain_modules_depend_only_downward() {
         .collect();
     assert!(
         upward.is_empty(),
-        "a domain module names one above it in /spec/domain-dependencies.md. Move \
+        "a domain module names one above it in ORDER. Move \
          the shared type or helper down, or pass the behavior in:\n{}",
         upward.join("\n")
     );
@@ -686,7 +685,7 @@ fn engine_value_names_no_domain_module() {
     }
     assert!(
         found.is_empty(),
-        "engine::value is the bottom of /spec/domain-dependencies.md and names no domain module:\n{}",
+        "engine::value is below every domain module and names none:\n{}",
         found.join("\n")
     );
 }

@@ -124,7 +124,7 @@ static RTMP_PARAMS: LazyLock<Vec<ControlSpec>> = LazyLock::new(|| {
 });
 
 /// The saved shape of every ffmpeg sink, a superset of each kind's fields.
-/// Codecs are saved as their labels, as `stage.json` always has.
+/// Codecs are saved as their labels.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -274,8 +274,8 @@ impl Destination {
     }
 
     /// Why this destination cannot start yet, such as an RTMP URL with no
-    /// server. Checked before ffmpeg is spawned, so the user is told what to
-    /// fill in instead of seeing ffmpeg fail to connect.
+    /// server. Checked before ffmpeg is spawned so the user sees what to fill
+    /// in.
     fn url_problem(&self) -> Option<String> {
         match self {
             Self::Recording { path, .. } if path.trim().is_empty() => {
@@ -769,8 +769,7 @@ mod tests {
 
     use super::*;
 
-    /// Every ffmpeg target saved before providers must read back unchanged,
-    /// codec labels and all.
+    /// Saved ffmpeg targets read back unchanged, codec labels included.
     #[test]
     fn saved_stage_targets_read_back_unchanged() {
         let saved = [

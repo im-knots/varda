@@ -1,17 +1,14 @@
-//! Guard: every deck built from a shader, image, or video is finalized, and
-//! only the engine builds them.
+//! Every shader, image, or video deck is finalized, and only the engine builds
+//! them.
 //!
-//! Post-construction wiring (starting CPU analyzers and acquiring devices a
-//! shader's `PREPROCESSORS` block requires) lives in
-//! `VardaApp::finalize_new_deck`. A deck that skips it renders against blank
-//! 1x1 textures with no error. The engine's background loader
-//! (`app/deck_loads.rs`) is the one construction path for every consumer, so
-//! this guard checks it finalizes and reports failures, and that no consumer
-//! builds decks itself.
+//! `VardaApp::finalize_new_deck` starts CPU analyzers and acquires devices a
+//! shader's `PREPROCESSORS` block requires; a deck that skips it renders blank
+//! 1x1 textures with no error. The background loader (`app/deck_loads.rs`) is
+//! the only construction path, so this checks it finalizes and reports
+//! failures, and that no consumer builds decks itself.
 //!
-//! Targets are named as directories where possible, and read recursively, so the
-//! guard follows the code when it is split across submodules rather than failing
-//! on a stale path.
+//! Targets are directories where possible, read recursively, so splitting a
+//! module into submodules doesn't break the guard.
 
 use std::path::{Path, PathBuf};
 

@@ -1,8 +1,7 @@
 //! Image decks: a still, raster or vector, drawn onto the deck.
 //!
-//! Raster files are decoded once. SVG has no native pixel size, so it is
-//! rasterized against the deck and redrawn when the deck is resized. See
-//! /spec/deck-sources.md § 3 and [`svg`].
+//! Raster files are decoded once. SVG is rasterized at the deck size and
+//! redrawn when the deck is resized; see [`svg`].
 
 pub mod svg;
 
@@ -98,13 +97,11 @@ impl DeckSourceProvider for ImageProvider {
 /// One image deck.
 pub struct Image {
     path: String,
-    /// The uploaded image and its view. The texture is owned so the view's
-    /// backing store lives as long as the deck.
+    /// The uploaded image and its view; the texture keeps the view alive.
     upload: (wgpu::Texture, wgpu::TextureView),
     blit: ScaledBlit,
-    /// Vector artwork this texture was rendered from, kept so a resolution
-    /// change can re-render it at the new size rather than magnifying pixels.
-    /// `None` for raster images, which have nothing to re-render.
+    /// Kept so the SVG can be re-rasterized at a new deck size. `None` for
+    /// raster images.
     svg: Option<Box<usvg::Tree>>,
 }
 
@@ -190,13 +187,8 @@ impl DeckSourceInstance for Image {
         Ok(())
     }
 
-    /// Re-render vector artwork for the new deck size.
-    ///
-    /// This is what makes vector art resolution-independent in practice: the
-    /// same file that was rasterized for a 720p stage is redrawn at 4K when the
-    /// master resolution goes up, instead of the blit magnifying the pixels it
-    /// was first rendered at. A failed re-render keeps the existing texture, so
-    /// the deck goes soft rather than black.
+    /// Re-render vector artwork at the new deck size. On failure the existing
+    /// texture is kept, so the deck goes soft instead of black.
     fn resize(&mut self, gpu: &GpuContext, width: u32, height: u32) {
         let Some(tree) = &self.svg else {
             return;
@@ -240,8 +232,7 @@ impl DeckSourceInstance for Image {
             .unwrap_or_else(|| Err(ControlError::Unknown(name.to_string())))
     }
 
-    /// The image is blitted verbatim, so its own alpha reaches the deck
-    /// whatever the transparent flag says.
+    /// The image is blitted verbatim, so its alpha ignores the transparent flag.
     fn owns_alpha(&self) -> bool {
         true
     }
@@ -302,8 +293,7 @@ pub fn upload_image_texture(
 mod tests {
     use super::*;
 
-    /// A 4:1 drawing, so a stretched rasterization is distinguishable from a
-    /// fitted one and the deck's own scaling mode has something to work with.
+    /// A 4:1 drawing, so stretching is distinguishable from fitting.
     const WIDE_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg"
         viewBox="0 0 200 50" width="200" height="50">
         <rect width="200" height="50" fill="#3050ff"/></svg>"##;
@@ -332,8 +322,7 @@ mod tests {
         std::fs::write(&path, WIDE_SVG).expect("write svg");
 
         let deck = image_deck(&gpu, &path, 1920, 1080);
-        // Not (200, 50): vector art is drawn for the stage it lands on, and it
-        // fills the width without being stretched to the deck's 16:9.
+        // Rasterized at deck width, not the file's 200x50, and not stretched to 16:9.
         assert_eq!(source_size(&deck), (1920, 480));
     }
 
@@ -350,7 +339,7 @@ mod tests {
         let mut deck = image_deck(&gpu, &path, 640, 360);
         assert_eq!(source_size(&deck), (640, 160));
 
-        // Going up to 4K must redraw rather than magnify the 640 px raster.
+        // Resizing to 4K redraws instead of magnifying the 640 px raster.
         deck.resize(&gpu, 3840, 2160);
         assert_eq!(source_size(&deck), (3840, 960));
 
@@ -360,8 +349,7 @@ mod tests {
 
     #[test]
     fn a_raster_image_keeps_its_own_pixels_across_a_resize() {
-        // The counterpart to the SVG behavior: a PNG has real pixels and there
-        // is nothing to redraw, so resizing must leave the source alone.
+        // A PNG has nothing to redraw, so resizing leaves the source alone.
         let Some(gpu) = crate::testing::headless_gpu() else {
             eprintln!("Skipping: no headless GPU available");
             return;

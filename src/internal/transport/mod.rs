@@ -1,38 +1,32 @@
 //! Absolute show position.
 //!
-//! The transport is the one position that arrangement regions, automation
-//! envelopes, video chase, and the show runner all read. It either advances on
-//! its own internal clock or chases incoming timecode, and because it can run
-//! internally every position-locked feature works with no external hardware.
+//! Arrangement regions, automation envelopes, video chase, and the show runner
+//! all read this position. It advances on an internal clock or chases incoming
+//! timecode, so position-locked features work without external hardware.
 //!
-//! This is deliberately *not* the tempo clock ([`crate::clock`]), which resolves
-//! BPM and beat phase. Both can be active at once: an arrangement can run
-//! against the transport while beat-synced modulators follow a DJ's MIDI clock.
-//!
-//! See /spec/transport.md.
+//! Separate from the tempo clock ([`crate::clock`]), which resolves BPM and
+//! beat phase. Both can run at once, e.g. an arrangement on the transport while
+//! modulators follow a DJ's MIDI clock.
 
 use serde::{Deserialize, Serialize};
 
-/// Frame rate used to display and quantise timecode positions.
-///
-/// Defined here rather than with the timecode receiver because the arrangement
-/// ruler needs to render `HH:MM:SS:FF` before any timecode exists.
-/// See /spec/arrangement.md § `TimecodeRate` ownership.
+/// Frame rate for displaying and quantizing timecode positions. Lives here
+/// because the arrangement ruler shows `HH:MM:SS:FF` without any timecode input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum TimecodeRate {
     Fps24,
     Fps25,
     /// 29.97 non-drop. Frame numbers run 0–29 and drift against wall time.
     Fps2997,
-    /// 29.97 drop-frame, the broadcast default: frame numbers skip to keep
-    /// long-run agreement with wall time.
+    /// 29.97 drop-frame, the broadcast default: frame numbers skip to stay in
+    /// step with wall time.
     #[default]
     Fps2997Drop,
     Fps30,
 }
 
 impl TimecodeRate {
-    /// Frames per second as a rate, for converting positions to frame counts.
+    /// Frames per second, for converting positions to frame counts.
     pub fn fps(self) -> f64 {
         match self {
             TimecodeRate::Fps24 => 24.0,
@@ -57,23 +51,17 @@ impl TimecodeRate {
         }
     }
 
-    /// Format an absolute position as `HH:MM:SS:FF`.
-    ///
-    /// Drop-frame renumbers so the label tracks wall time, and is written with
-    /// a `;` before the frames, which is the convention desks and players use
-    /// to signal the distinction. Negative positions clamp to zero.
+    /// Formats a position as `HH:MM:SS:FF`. Drop-frame renumbers to track wall
+    /// time and uses `;` before the frames, as desks and players do. Negative
+    /// positions clamp to zero.
     pub fn format(self, position: f64) -> String {
         let (hours, minutes, seconds, frames) = self.label_parts(position);
         let sep = if self.is_drop_frame() { ';' } else { ':' };
         format!("{hours:02}:{minutes:02}:{seconds:02}{sep}{frames:02}")
     }
 
-    /// The `HH`, `MM`, `SS`, `FF` a position is labelled with.
-    ///
-    /// Split out of [`Self::format`] because the timecode receiver needs the
-    /// same arithmetic to *write* frames, and a decoder that disagreed with the
-    /// display about drop-frame would be a bug nobody could see.
-    /// See /spec/timecode.md § Data Model.
+    /// The `HH`, `MM`, `SS`, `FF` label for a position. Shared with the timecode
+    /// receiver so encoding and display agree on drop-frame.
     pub fn label_parts(self, position: f64) -> (u8, u8, u8, u8) {
         let elapsed_frames = (position.max(0.0) * self.fps()).floor() as u64;
         let counted = if self.is_drop_frame() {
@@ -82,8 +70,7 @@ impl TimecodeRate {
             elapsed_frames
         };
 
-        // Label rate: 29.97 counts to 30 and lets the label drift against wall
-        // time, which is exactly what non-drop means.
+        // Labels count at 30 for 29.97, so non-drop drifts against wall time.
         let fps = self.nominal_fps();
         let (frames, total_seconds) = (counted % fps, counted / fps);
         (
@@ -94,24 +81,22 @@ impl TimecodeRate {
         )
     }
 
-    /// Frames per second as labels are counted: 30 for both 29.97 variants.
+    /// Label frames per second: 30 for both 29.97 variants.
     pub fn nominal_fps(self) -> u64 {
         self.fps().round() as u64
     }
 
     /// SMPTE 12M drop-frame: skip frame numbers 0 and 1 at the start of every
-    /// minute except every tenth, so the label stays within a frame of wall
-    /// time despite counting at 30 while running at 29.97.
+    /// minute except every tenth, keeping the label within a frame of wall time.
     fn renumber_drop_frame(elapsed_frames: u64) -> u64 {
-        /// Frames actually elapsed in ten minutes at 29.97.
+        /// Real frames in ten minutes at 29.97.
         const PER_TEN_MINUTES: u64 = 17_982;
-        /// Frames actually elapsed in one minute at 29.97, after the first.
+        /// Real frames in each minute after the first, at 29.97.
         const PER_MINUTE: u64 = 1_798;
 
         let ten_minute_blocks = elapsed_frames / PER_TEN_MINUTES;
         let within_block = elapsed_frames % PER_TEN_MINUTES;
-        // The first two frames of a block are inside the un-dropped tenth
-        // minute, so they contribute nothing.
+        // A block's first two frames are in the undropped tenth minute.
         let dropped_in_block = within_block.saturating_sub(2) / PER_MINUTE * 2;
         elapsed_frames + 18 * ten_minute_blocks + dropped_in_block
     }
@@ -131,11 +116,11 @@ pub enum TransportSource {
     /// Position advances locally on play/stop/locate. Scrubbing allowed.
     #[default]
     Internal,
-    /// Position chases incoming timecode. Position is read-only.
+    /// Position chases incoming timecode and is read-only.
     Timecode,
 }
 
-/// A range of show positions, in seconds, that internal playback wraps within.
+/// Show positions in seconds that internal playback loops within.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct LoopRegion {
     pub start: f64,
@@ -159,18 +144,14 @@ impl LoopRegion {
     }
 }
 
-/// One read of an external timecode master, as the transport sees it.
-///
-/// A plain struct rather than the receiver's own state so the transport does
-/// not depend on the timecode module: the transport is what everything reads,
-/// and it should not know which protocol, if any, is behind the position.
-/// See /spec/timecode.md § Consumer 1.
+/// One read of an external timecode master. A plain struct so the transport
+/// doesn't depend on the timecode module or know which protocol is behind it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Chase {
     pub position: f64,
     /// Frames are arriving, or the freewheel is still coasting.
     pub running: bool,
-    /// The master jumped rather than played on.
+    /// The master jumped instead of playing on.
     pub discontinuity: bool,
     /// Coasting through a dropout.
     pub freewheeling: bool,
@@ -178,11 +159,8 @@ pub struct Chase {
     pub speed: f64,
 }
 
-/// Why the transport is or is not moving.
-///
-/// Idle and broken look identical on the output (both are "nothing is
-/// happening"), so the reason has to be legible rather than inferred.
-/// See /spec/transport.md § Legibility.
+/// Why the transport is or isn't moving. Idle and broken look the same on the
+/// output, so the state is reported explicitly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub enum TransportStatus {
     /// Internal, never started this session. The saved scene renders as-is.
@@ -191,8 +169,8 @@ pub enum TransportStatus {
     WaitingForSignal,
     /// Position is advancing.
     Running,
-    /// Coasting through a timecode dropout. Still running, but on the reader's
-    /// extrapolation rather than on frames that arrived.
+    /// Coasting through a timecode dropout on the reader's extrapolation.
+    /// Still counts as running.
     Freewheeling,
     /// Ran and stopped. Position holds, so envelopes freeze.
     Stopped,
@@ -210,11 +188,10 @@ impl TransportStatus {
     }
 }
 
-/// Rejected transport operations, so a caller learns why rather than watching
-/// nothing happen.
+/// Rejected transport operations, so the caller learns why.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransportError {
-    /// Position is owned by the incoming timecode master.
+    /// Position belongs to the incoming timecode master.
     PositionIsReadOnly,
     /// A loop region must have a positive length.
     EmptyLoopRegion,
@@ -236,10 +213,8 @@ impl std::fmt::Display for TransportError {
 impl std::error::Error for TransportError {}
 
 /// The engine-owned show position.
-// Four flags, but they are independent axes (advancing, ever-advanced, jumped,
-// jump-pending) rather than a state that wants an enum: `running` and `has_run`
-// disagree for exactly the window a play sits before its first tick, which is
-// the distinction engagement depends on.
+// The four flags are independent: `running` and `has_run` differ between a
+// play and its first tick, which engagement depends on.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 pub struct Transport {
@@ -248,16 +223,16 @@ pub struct Transport {
     has_run: bool,
     rate: f64,
     discontinuity: bool,
-    /// A jump raised since the last tick. Held separately because a locate
-    /// arrives during command processing, which is before the frame's tick;
-    /// clearing on tick alone would drop it before anything read it.
+    /// A jump since the last tick. Separate because a locate arrives during
+    /// command processing, before the tick; clearing on tick alone would drop
+    /// it unread.
     pending_discontinuity: bool,
     timecode_rate: TimecodeRate,
     source: TransportSource,
-    /// Coasting through a timecode dropout. Only ever true while chasing.
+    /// Coasting through a timecode dropout. Only true while chasing.
     freewheeling: bool,
     loop_region: Option<LoopRegion>,
-    /// Frame time of the previous [`Transport::update`], for `tick`'s dt.
+    /// Previous [`Transport::update`] time, for `tick`'s dt.
     last_update: Option<std::time::Instant>,
 }
 
@@ -286,8 +261,8 @@ impl Transport {
 
     // ── Reads ───────────────────────────────────────────────────
 
-    /// Absolute position in seconds. `f64` because shows conventionally start
-    /// at hour 1, where `f32` would quantise to about 0.4 ms.
+    /// Absolute position in seconds. `f64` because shows usually start at hour
+    /// 1, where `f32` quantizes to about 0.4 ms.
     pub fn position(&self) -> f64 {
         self.position
     }
@@ -296,23 +271,21 @@ impl Transport {
         self.running
     }
 
-    /// Whether the transport has advanced at least once this session.
-    ///
-    /// This is the entire basis of arrangement engagement: until it is true, the
-    /// arrangement stays inert and the saved scene renders live, so a missing
-    /// timecode cable cannot black the output on a cold start.
+    /// Whether the transport has advanced this session. Until it has, the
+    /// arrangement stays inert and the saved scene renders, so a missing
+    /// timecode cable can't black out a cold start.
     pub fn has_run(&self) -> bool {
         self.has_run
     }
 
-    /// Playback rate multiplier. 1.0 internally; derived from timecode cadence
-    /// when chasing.
+    /// Playback rate multiplier: 1.0 internally, from timecode cadence when
+    /// chasing.
     pub fn rate(&self) -> f64 {
         self.rate
     }
 
-    /// True from a position jump until the end of the frame that publishes it,
-    /// so consumers that integrate can react.
+    /// True from a jump until the end of the frame that publishes it, so
+    /// integrating consumers can react.
     pub fn discontinuity(&self) -> bool {
         self.discontinuity || self.pending_discontinuity
     }
@@ -321,8 +294,8 @@ impl Transport {
         self.source
     }
 
-    /// Frame rate positions are displayed and quantised at. Display only while
-    /// running internally; it becomes load-bearing once timecode arrives.
+    /// Frame rate for display and quantization. Only affects position once
+    /// timecode arrives.
     pub fn timecode_rate(&self) -> TimecodeRate {
         self.timecode_rate
     }
@@ -331,7 +304,7 @@ impl Transport {
         self.timecode_rate = rate;
     }
 
-    /// The current position as `HH:MM:SS:FF` at the transport's rate.
+    /// Position as `HH:MM:SS:FF` at the transport's rate.
     pub fn formatted_position(&self) -> String {
         self.timecode_rate.format(self.position)
     }
@@ -341,10 +314,8 @@ impl Transport {
     }
 
     /// This frame's position for the timebase resolver, or `None` until the
-    /// transport has run.
-    ///
-    /// `None` is what freezes every transport-locked consumer on a cold start;
-    /// see [`Self::has_run`].
+    /// transport has run, which freezes transport-locked consumers on a cold
+    /// start.
     pub fn sample(&self) -> Option<crate::timebase::TransportSample> {
         self.has_run.then_some(crate::timebase::TransportSample {
             position: self.position,
@@ -372,10 +343,8 @@ impl Transport {
 
     // ── Control ─────────────────────────────────────────────────
 
-    /// Choose where position comes from.
-    ///
-    /// Switching to `Timecode` stops local playback: the master owns position
-    /// from that point, and leaving a local play running would race it.
+    /// Sets where position comes from. Switching to `Timecode` stops local
+    /// playback so it can't race the master.
     pub fn set_source(&mut self, source: TransportSource) {
         if source == self.source {
             return;
@@ -388,11 +357,8 @@ impl Transport {
         }
     }
 
-    /// Start advancing.
-    ///
-    /// Does not set `has_run`; that happens on the first frame actually
-    /// advanced, so a play immediately followed by a stop leaves a cold start
-    /// cold.
+    /// Starts advancing. `has_run` is set on the first advanced frame, not
+    /// here, so play then immediately stop leaves a cold start cold.
     ///
     /// # Errors
     ///
@@ -405,15 +371,11 @@ impl Transport {
         Ok(())
     }
 
-    /// Stop advancing, and return to zero when already stopped.
+    /// Stops advancing; if already stopped, returns to zero.
     ///
-    /// The first stop holds position, so anything reading it freezes rather
-    /// than releasing: a tripped cable should keep the last look, not cut it.
-    /// The second is the way home, since the arrangement's return-to-zero arrow
-    /// is now the cue back arrow. See /spec/transport.md § Stop Twice to Return.
-    ///
-    /// `has_run` survives the return, so the arrangement keeps authority rather
-    /// than handing the output back to Performance mode mid-show.
+    /// The first stop holds position so readers freeze on the last look. The
+    /// second returns to zero. `has_run` stays set, so the arrangement keeps
+    /// control instead of handing the output back to Performance mode.
     pub fn stop(&mut self) {
         if self.running {
             self.running = false;
@@ -423,7 +385,7 @@ impl Transport {
         }
     }
 
-    /// Jump to an absolute position.
+    /// Jumps to an absolute position.
     ///
     /// # Errors
     ///
@@ -437,16 +399,10 @@ impl Transport {
         Ok(())
     }
 
-    /// Take this frame's position from an external timecode master.
-    ///
-    /// The one way position may be written while the source is `Timecode`, and
-    /// the reason [`Self::play`] and [`Self::locate`] can refuse everyone else
-    /// outright. Ignored when the source is `Internal`, so a cable left patched
-    /// during a rehearsal cannot drag the playhead.
-    ///
-    /// A loop is not applied here: the master owns position, and wrapping it
-    /// locally would put the show somewhere the master says it is not.
-    /// See /spec/timecode.md § Consumer 1.
+    /// Takes this frame's position from an external timecode master: the only
+    /// write allowed while the source is `Timecode`. Ignored when the source is
+    /// `Internal`, so a cable left patched can't move the playhead. The loop
+    /// region is not applied; the master owns position.
     pub fn chase(&mut self, chase: Chase) {
         if self.source != TransportSource::Timecode {
             return;
@@ -454,10 +410,8 @@ impl Transport {
         if chase.discontinuity {
             self.pending_discontinuity = true;
         }
-        // A master that reports something that is not a place keeps the last
-        // one it did. This is what the whole renderer reads: a position that is
-        // not a number stops the show rendering, where holding the last look is
-        // survivable and legible.
+        // Keep the last position if the master sends a non-finite one; a NaN
+        // position would stop rendering.
         if chase.position.is_finite() {
             self.position = chase.position.max(0.0);
         }
@@ -468,31 +422,27 @@ impl Transport {
         } else {
             1.0
         };
-        // Engagement is "the show has moved", however it moved: a chased
-        // arrangement takes authority exactly as an internally played one does.
+        // Any movement engages the arrangement, chased or played.
         if chase.running {
             self.has_run = true;
         }
     }
 
-    /// Set or clear the loop range honoured during internal playback.
-    ///
-    /// Retained but inert while chasing timecode, so switching back to internal
-    /// restores it.
+    /// Sets or clears the loop range for internal playback. Kept but inert
+    /// while chasing, so switching back to internal restores it.
     pub fn set_loop_region(&mut self, region: Option<LoopRegion>) {
         self.loop_region = region;
     }
 
     // ── Per-frame ───────────────────────────────────────────────
 
-    /// Advance one frame using wall-clock elapsed time. Call once per frame,
-    /// before anything reads position.
+    /// Advances one frame by wall-clock time. Call once per frame, before
+    /// anything reads position.
     pub fn update(&mut self) {
         self.update_at(std::time::Instant::now());
     }
 
-    /// [`Self::update`] with an injectable frame time, so advancement can be
-    /// tested without sleeping.
+    /// [`Self::update`] with an injected frame time, for tests.
     pub fn update_at(&mut self, now: std::time::Instant) {
         let dt = self.last_update.map_or(0.0, |prev| {
             now.saturating_duration_since(prev).as_secs_f64()
@@ -501,10 +451,8 @@ impl Transport {
         self.tick(dt);
     }
 
-    /// Advance by an explicit delta.
-    ///
-    /// `dt` is wall-clock seconds. Does nothing unless internally running, which
-    /// is what keeps a cold start at zero: the transport never free-runs.
+    /// Advances by `dt` wall-clock seconds. Does nothing unless running
+    /// internally, so a cold start stays at zero.
     pub fn tick(&mut self, dt: f64) {
         self.discontinuity = std::mem::take(&mut self.pending_discontinuity);
 
@@ -544,9 +492,8 @@ mod tests {
         assert_eq!(t.status(), TransportStatus::Idle);
     }
 
-    /// The transport must not free-run. `has_run` is the basis of arrangement
-    /// engagement, and a transport that sets it on launch would engage
-    /// authority at position zero and black a cold start.
+    /// The transport must not free-run: setting `has_run` on launch would engage
+    /// the arrangement at zero and black out a cold start.
     #[test]
     fn does_not_advance_until_played() {
         let mut t = Transport::new();
@@ -578,8 +525,7 @@ mod tests {
         assert_eq!(t.status(), TransportStatus::Idle);
     }
 
-    /// Stopping holds position so envelopes freeze. Releasing instead would cut
-    /// the look the instant someone trips over a cable.
+    /// Stop holds position so envelopes freeze.
     #[test]
     fn stop_holds_position() {
         let mut t = Transport::new();
@@ -596,8 +542,7 @@ mod tests {
         assert_eq!(t.status(), TransportStatus::Stopped);
     }
 
-    /// The second press is the way home, now that the arrangement's
-    /// return-to-zero arrow walks cues instead.
+    /// A second stop returns to zero.
     #[test]
     fn stopping_twice_returns_to_zero() {
         let mut t = Transport::new();
@@ -617,8 +562,7 @@ mod tests {
         );
     }
 
-    /// Position is read-only while chasing, so a stop clears local running state
-    /// and touches nothing else.
+    /// While chasing, stop clears local running state and nothing else.
     #[test]
     fn stopping_twice_while_chasing_does_not_move_the_playhead() {
         let mut t = Transport::new();
@@ -639,8 +583,8 @@ mod tests {
         assert!(t.discontinuity());
     }
 
-    /// A locate arrives during command processing, before the frame's tick, so
-    /// the flag has to survive that tick and clear on the next one.
+    /// A locate arrives before the frame's tick, so the flag survives that tick
+    /// and clears on the next.
     #[test]
     fn discontinuity_survives_the_tick_that_publishes_it() {
         let mut t = Transport::new();
@@ -683,8 +627,7 @@ mod tests {
         assert_eq!(t.position(), 0.0);
     }
 
-    /// Position is deterministic from the operations applied, not from the path
-    /// taken to get there.
+    /// Position depends only on the operations applied, not the path.
     #[test]
     fn locate_is_deterministic_regardless_of_path() {
         let mut direct = Transport::new();
@@ -774,8 +717,7 @@ mod tests {
         }
     }
 
-    /// The whole point of the source: an incoming master moves the show, and
-    /// moving the show is what engages the arrangement.
+    /// An incoming master moves the show and engages the arrangement.
     #[test]
     fn an_arriving_master_drives_the_position() {
         let mut t = Transport::new();
@@ -789,8 +731,7 @@ mod tests {
         assert_eq!(t.status(), TransportStatus::Running);
     }
 
-    /// A cable left patched from yesterday's rehearsal must not drag the
-    /// playhead of a show being run by hand.
+    /// Timecode is ignored while the source is internal.
     #[test]
     fn a_master_is_ignored_while_running_internally() {
         let mut t = Transport::new();
@@ -803,8 +744,7 @@ mod tests {
         assert!((t.position() - position).abs() < 1e-9);
     }
 
-    /// Coasting is still running (the show must not stutter on one bad frame)
-    /// but it is a different thing to be told about.
+    /// Freewheeling counts as running but is reported separately.
     #[test]
     fn coasting_through_a_dropout_reads_as_freewheeling() {
         let mut t = Transport::new();
@@ -821,8 +761,7 @@ mod tests {
         assert_eq!(t.status(), TransportStatus::Running, "and it clears");
     }
 
-    /// A master that stops holds the show where it stopped, exactly as a local
-    /// stop does: a dropped signal should keep the last look, not cut it.
+    /// A stopped master holds the show where it stopped, like a local stop.
     #[test]
     fn a_master_that_stops_holds_the_position() {
         let mut t = Transport::new();
@@ -842,8 +781,8 @@ mod tests {
         );
     }
 
-    /// A master's locate has to reach the consumers that integrate, or a video
-    /// deck chasing it would varispeed its way across an hour.
+    /// A master's locate reaches integrating consumers, so a chasing video deck
+    /// jumps instead of varispeeding.
     #[test]
     fn a_master_locate_is_published_as_a_jump() {
         let mut t = Transport::new();
@@ -860,9 +799,7 @@ mod tests {
         assert!(!t.discontinuity(), "and playing on is not a jump");
     }
 
-    /// Freewheeling is a claim that the show is still moving on an educated
-    /// guess. A master that has stopped is not moving at all, and saying
-    /// otherwise sends a performer looking for a cable fault that is not there.
+    /// A stopped master is not reported as freewheeling.
     #[test]
     fn a_stopped_master_is_never_reported_as_coasting() {
         let mut t = Transport::new();
@@ -877,9 +814,7 @@ mod tests {
         assert_eq!(t.status(), TransportStatus::Stopped);
     }
 
-    /// Nothing downstream expects a negative show position: an arrangement
-    /// starts at zero and a region lookup before it has nothing to return. A
-    /// master counting down to its start must not take the show there.
+    /// A master counting down before zero doesn't take the show negative.
     #[test]
     fn a_master_counting_down_cannot_push_the_show_before_zero() {
         let mut t = Transport::new();
@@ -893,8 +828,7 @@ mod tests {
         );
     }
 
-    /// Switching back to internal must not leave the show reading as if a
-    /// master were still coasting it along.
+    /// Switching back to internal clears the chase state.
     #[test]
     fn taking_the_show_back_clears_the_chase() {
         let mut t = Transport::new();
@@ -920,9 +854,8 @@ mod tests {
         assert!(!t.running(), "a local play must not race the master");
     }
 
-    /// Surfaces resend state they already sent (a controller's periodic push, a
-    /// UI redraw), so setting the source it already has must not disturb the
-    /// show. Re-asserting Internal mid-flight used to be the risk here.
+    /// Surfaces resend state they already sent (periodic pushes, redraws), so
+    /// setting the current source must not disturb the show.
     #[test]
     fn setting_the_source_it_already_has_changes_nothing() {
         let mut t = Transport::new();
@@ -939,8 +872,7 @@ mod tests {
         );
     }
 
-    /// Play is a state, not an edge: a held pad or a repeated API call must not
-    /// restart or jog anything.
+    /// Play is a state, not an edge: repeating it doesn't restart anything.
     #[test]
     fn playing_while_already_playing_is_the_same_as_playing() {
         let mut t = Transport::new();
@@ -965,7 +897,7 @@ mod tests {
         assert_eq!(t.position(), 0.0);
     }
 
-    /// Inert rather than cleared, so switching back to internal restores it.
+    /// Inert, not cleared, so switching back to internal restores it.
     #[test]
     fn loop_region_survives_a_trip_through_timecode() {
         let mut t = Transport::new();
@@ -1007,23 +939,21 @@ mod tests {
         assert_eq!(TimecodeRate::Fps30.format(-5.0), "00:00:00:00");
     }
 
-    /// Non-drop 29.97 counts to 30 and drifts against wall time; drop-frame
-    /// renumbers so it does not. One hour of real time is the classic check:
-    /// the difference is the famous 3 seconds and 18 frames.
+    /// Over one hour, non-drop 29.97 drifts 3 seconds and 18 frames from wall
+    /// time; drop-frame doesn't.
     #[test]
     fn drop_frame_tracks_wall_time_and_non_drop_does_not() {
         assert_eq!(TimecodeRate::Fps2997Drop.format(3600.0), "01:00:00;00");
         assert_eq!(TimecodeRate::Fps2997.format(3600.0), "00:59:56:12");
     }
 
-    /// Drop-frame corrects at minute boundaries rather than continuously, so
-    /// within a minute it lags wall time by up to two frames. The tenth minute
-    /// drops nothing and lands exactly.
+    /// Drop-frame corrects at minute boundaries, so within a minute it lags by
+    /// up to two frames. The tenth minute drops nothing and lands exactly.
     #[test]
     fn drop_frame_corrects_at_minute_boundaries() {
         assert_eq!(TimecodeRate::Fps2997Drop.format(60.0), "00:00:59;28");
         assert_eq!(TimecodeRate::Fps2997Drop.format(600.0), "00:10:00;00");
-        // Two frames past the minute is where the skipped numbers resume.
+        // The skipped numbers resume two frames past the minute.
         assert_eq!(
             TimecodeRate::Fps2997Drop.format(1800.0 / 29.97),
             "00:01:00;02"

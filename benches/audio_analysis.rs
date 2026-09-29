@@ -1,17 +1,15 @@
 /// Audio analysis hot-path benchmarks.
 ///
 /// Two functions run inside the cpal audio callback (~every 5ms at 48kHz/256):
-///   `onset_threshold`  — median computation over spectral flux history (8 values)
+///   `onset_threshold`  — median over spectral flux history (8 values)
 ///   `bpm_estimation`   — median + outlier rejection over beat intervals (4-16 values)
 ///
-/// Both currently clone + full-sort their input to compute a median.
-/// Benchmarks measure per-invocation cost at realistic window sizes.
+/// Both clone and fully sort their input to compute a median.
 ///
-/// Two more groups, for /spec/performance-hot-paths.md item H:
 ///   `audio_callback`     — the capture callback's work for one 256-frame
 ///                          stereo buffer from the device.
 ///   `audio_hop_analysis` — one 256-sample hop of FFT, flux, onset and BPM
-///                          analysis, wherever it runs.
+///                          analysis.
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use varda::audio::{compute_onset_threshold, estimate_bpm};
 use varda::testing::{AudioCaptureBench, HopAnalysisBench};

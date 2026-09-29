@@ -1,12 +1,5 @@
-//! Surface auto-detection value types — contour/detection DTOs and the
-//! import error type.
-//!
-//! Definitions moved from `internal::surface::detect` / `::import` (see
-//! /spec/engine-value-types.md). The CV pipeline (`detect_contours`,
-//! `check_circularity`, image import) stays in those modules, operating on
-//! these re-exported types. `DetectedContour::path` depends on
-//! `engine::value::surface::SurfacePath`, which also lives here in
-//! `engine::value` (intra-module dependency, not `internal`).
+//! Surface auto-detection value types and the import error. The detection
+//! pipeline lives in `internal::surface::detect` and `::import`.
 
 /// A single detected contour with computed geometry metadata.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
@@ -21,8 +14,7 @@ pub struct DetectedContour {
     pub circle_fit: Option<([f32; 2], f32)>,
     /// Auto-generated name based on position (e.g. "top-left-1").
     pub suggested_name: String,
-    /// Editable curve outline captured during SVG import (control points
-    /// preserved). `None` for raster/DXF detection, which produce polylines only.
+    /// Curve outline from SVG import. `None` for raster and DXF detection.
     #[serde(default)]
     pub path: Option<super::surface::SurfacePath>,
 }
@@ -34,7 +26,7 @@ pub struct DetectedContour {
 pub enum DetectionMethod {
     /// Canny edge detector (good for line-art and SVG-like inputs).
     Canny,
-    /// Simple threshold (industry standard for camera feeds with controlled lighting).
+    /// Binary threshold (camera feeds with controlled lighting).
     #[default]
     Threshold,
 }

@@ -1,24 +1,19 @@
-//! Syphon — macOS inter-app GPU texture sharing.
+//! Syphon: macOS inter-app GPU texture sharing. Varda is both client and
+//! server, and neither side copies frames through the CPU.
 //!
-//! varda is both client and server, and both halves share memory with the peer
-//! process rather than copying frames through the CPU.
+//! Receive: `[SyphonMetalClient newFrameImage]` returns an `IOSurface`-backed
+//! `MTLTexture`. Varda creates its own texture over that `IOSurface` on wgpu's
+//! `MTLDevice` and imports it into wgpu. The import is rebuilt only when the
+//! server resizes or restarts (the client rebinds its surface then).
 //!
-//! Receive: `[SyphonMetalClient newFrameImage]` hands back an `IOSurface`-backed
-//! `MTLTexture`. varda takes the `IOSurface` off it and builds its own texture
-//! over the same surface on wgpu's `MTLDevice`, which is then imported into wgpu
-//! and bound directly. Nothing is read back and nothing is uploaded. The client
-//! rebinds its surface only when the server resizes or restarts, so the import is
-//! rebuilt on that event rather than per frame.
+//! Send: a ring of `BGRA8Unorm` textures on wgpu's device, filled by a
+//! conversion blit and handed to `SyphonMetalServer`, which copies them into
+//! its own surface. The publish format is not `_sRGB` (see
+//! `make_publish_slot`).
 //!
-//! Send: a ring of `BGRA8Unorm` textures on wgpu's device, written by a conversion
-//! blit and handed to `SyphonMetalServer`, which copies them into its own surface.
-//!
-//! See /spec/syphon-zero-copy.md for why the receive path builds its own texture
-//! instead of wrapping Syphon's, and why the publish format is not `_sRGB`.
-//!
-//! macOS only. Syphon.framework is loaded at runtime via `dlopen` (see
-//! `framework_loaded`), not linked — a Mac without Syphon installed still builds
-//! and runs, with Syphon features disabled.
+//! macOS only. Syphon.framework is loaded with `dlopen` (see
+//! `framework_loaded`), so a Mac without Syphon still builds and runs, with
+//! Syphon disabled.
 
 use std::collections::HashMap;
 use std::sync::{
@@ -37,8 +32,8 @@ use objc2_metal::{
 };
 
 // ---------------------------------------------------------------------------
-// Syphon.framework FFI. These classes are vended by Syphon.framework (loaded at
-// runtime via dlopen), declared here as opaque NSObject subclasses.
+// Syphon.framework FFI. The classes come from the framework (loaded at runtime
+// via dlopen) and are declared here as opaque NSObject subclasses.
 //
 // SyphonServerDirectory.h:
 //   + (SyphonServerDirectory *)sharedDirectory;
@@ -76,104 +71,97 @@ extern_class!(
     pub struct SyphonMetalServer;
 );
 
-// Syphon server-description dictionary keys. The framework exports these as
-// extern NSString constants; we reconstruct them from their documented values
-// to avoid an extern-static binding.
+// Server-description dictionary keys. The framework exports these as extern
+// NSString constants; they are rebuilt from their documented values to avoid
+// an extern-static binding.
 const KEY_NAME: &str = "SyphonServerDescriptionNameKey";
 const KEY_APP: &str = "SyphonServerDescriptionAppNameKey";
 
 /// Discovered Syphon server.
 #[derive(Debug, Clone)]
 pub struct SyphonSource {
-    /// Server name (matches the publisher's server name).
+    /// The publisher's server name.
     pub name: String,
-    /// Application name publishing the server.
+    /// Name of the publishing application.
     pub app_name: String,
 }
 
-/// Manages Syphon server discovery, client receivers, and server publishers.
+/// Syphon server discovery, receivers, and publishers.
 pub struct SyphonManager {
     available: bool,
     sources: Vec<SyphonSource>,
-    /// Server-description dicts kept alongside `sources` by name, needed to init
-    /// a `SyphonMetalClient`. Looked up on the render thread in `start_receive`
-    /// because `SyphonServerDirectory` observes notifications on that run loop.
+    /// Server-description dicts by name, needed to init a `SyphonMetalClient`.
+    /// Read on the render thread in `start_receive`, because
+    /// `SyphonServerDirectory` observes notifications on that run loop.
     descriptions: Vec<(String, Retained<NSDictionary<NSString, AnyObject>>)>,
     receivers: Vec<SyphonReceiver>,
     textures: Vec<(wgpu::Texture, wgpu::TextureView)>,
-    /// wgpu's own `MTLDevice`, extracted via `as_hal` so the publish textures,
-    /// the server, and the publish queue share one device — the basis for the
-    /// zero-copy (no readback) sender path. Lazily extracted on first publish.
+    /// wgpu's own `MTLDevice` (via `as_hal`), so publish textures, the server,
+    /// and the publish queue share one device. Extracted on first use.
     wgpu_metal_device: Option<Retained<ProtocolObject<dyn MTLDevice>>>,
-    /// Command queue for publishing (sender side), on wgpu's device. Lazy.
+    /// Publish command queue on wgpu's device. Created lazily.
     publish_queue: Option<Retained<ProtocolObject<dyn MTLCommandQueue>>>,
-    /// RGBA→BGRA GPU conversion pipeline (sender side), replacing the old CPU
-    /// swizzle. Targets `Bgra8UnormSrgb`. Lazily built on first publish.
+    /// RGBA→BGRA conversion pipeline for publishing. Targets `Bgra8UnormSrgb`.
+    /// Built on first publish.
     convert_pipeline: Option<crate::renderer::blit::BlitPipeline>,
-    /// Active Syphon publishers, keyed by server name (sender side). Created
-    /// lazily on first `publish_frame_gpu`. Render-thread only.
+    /// Publishers by server name. Created on first `publish_frame_gpu`.
+    /// Render-thread only.
     servers: HashMap<String, SyphonServerHandle>,
 }
 
-/// A Syphon client and the wgpu texture sharing its `IOSurface`.
-///
-/// Unlike `NdiReceiver` there is no thread here. The client and its texture both
-/// live on the render thread, because with nothing to copy the only work left is
-/// a cheap poll, and `SyphonClientBase` wants a run loop anyway.
+/// A Syphon client and the wgpu texture sharing its `IOSurface`. No thread:
+/// with nothing to copy, the work is a cheap poll on the render thread, where
+/// `SyphonClientBase` needs a run loop anyway.
 struct SyphonReceiver {
     server_name: String,
-    /// Render-thread only, like every other Metal object this manager owns.
+    /// Render-thread only, like every Metal object this manager holds.
     client: Retained<SyphonMetalClient>,
-    /// Address of the `IOSurface` currently imported. Syphon rebinds its surface
-    /// when the server resizes or restarts and its client rebuilds the texture
-    /// only then, so comparing addresses is enough to know when to re-import.
-    /// Zero means nothing imported yet.
+    /// Address of the imported `IOSurface`, 0 if none. Syphon rebinds the
+    /// surface only when the server resizes or restarts, so an address change
+    /// means re-import.
     surface_addr: usize,
     connected: bool,
     width: u32,
     height: u32,
 }
 
-/// A Syphon publisher (sender side). The Metal server and its ring of publish
-/// textures live on the render thread, mirroring `NdiSender`. The conversion
-/// blit (RGBA→BGRA) renders into a ring slot via wgpu; Syphon then publishes
-/// that slot's native `MTLTexture` directly — no CPU readback, no CPU swizzle.
+/// A Syphon publisher. The Metal server and its ring of publish textures live
+/// on the render thread, like `NdiSender`. A wgpu blit converts RGBA→BGRA into
+/// a ring slot, and Syphon publishes that slot's `MTLTexture` directly.
 struct SyphonServerHandle {
     server: Retained<SyphonMetalServer>,
     width: u32,
     height: u32,
-    /// Ring of BGRA textures shared between wgpu (render) and Syphon (publish).
+    /// Ring of BGRA textures written by wgpu and published by Syphon.
     slots: Vec<PublishSlot>,
     sched: PublishScheduler,
 }
 
-/// One publish texture, created on wgpu's `MTLDevice` and imported into wgpu so
-/// the conversion blit can render into it while Syphon reads the same native
-/// `MTLTexture`.
+/// One publish texture, created on wgpu's `MTLDevice` and imported into wgpu,
+/// so the blit renders into the same `MTLTexture` Syphon reads.
 struct PublishSlot {
-    /// Native handle handed to Syphon's `publishFrameTexture:`.
+    /// Native handle passed to Syphon's `publishFrameTexture:`.
     mtl: Retained<ProtocolObject<dyn MTLTexture>>,
-    /// The same texture imported into wgpu; kept alive so `view` stays valid.
+    /// The same texture in wgpu; kept alive so `view` stays valid.
     _wgpu_texture: wgpu::Texture,
     /// Render target for the conversion blit.
     view: wgpu::TextureView,
-    /// Set true once this slot's blit submission completes on the GPU. Ensures
-    /// Syphon never reads a half-rendered texture (the write→read hazard).
+    /// Set once this slot's blit completes on the GPU, so Syphon never reads a
+    /// half-rendered texture.
     write_done: Arc<AtomicBool>,
 }
 
-/// Number of publish textures per server. One is being rendered, one is pending
-/// publish, and the extra gives Syphon's in-flight read margin before the slot
-/// is reused (the softer read→overwrite hazard, mitigated by ring depth).
+/// Publish textures per server: one being rendered, one pending publish, and
+/// one of margin for Syphon's in-flight read before a slot is reused.
 const PUBLISH_RING: usize = 3;
 
-/// Round-robin scheduler decoupling GPU render (write) from Syphon publish.
-/// Pure index logic — unit-tested without a GPU. A slot is published only after
-/// its blit is GPU-complete, and never overwritten while pending publish.
+/// Round-robin scheduling of GPU writes and Syphon publishes. Pure index logic,
+/// tested without a GPU. A slot is published only after its blit completes and
+/// is never overwritten while pending.
 struct PublishScheduler {
     n: usize,
     write_cursor: usize,
-    /// Slot rendered-into but not yet published.
+    /// Slot rendered into but not yet published.
     pending: Option<usize>,
 }
 
@@ -186,8 +174,8 @@ impl PublishScheduler {
         }
     }
 
-    /// If a pending slot's blit has signalled completion, return it to publish
-    /// (clearing pending). `write_done[i]` reflects slot i's GPU completion.
+    /// Returns the pending slot and clears it once its blit is done
+    /// (`write_done[i]` is slot i's GPU completion).
     fn poll_publish(&mut self, write_done: &[bool]) -> Option<usize> {
         let p = self.pending?;
         if write_done.get(p).copied().unwrap_or(false) {
@@ -198,8 +186,8 @@ impl PublishScheduler {
         }
     }
 
-    /// Next slot to render into, or None if the previously rendered slot hasn't
-    /// been published yet (backpressure — drop the frame rather than clobber it).
+    /// Next slot to render into, or `None` while the last rendered slot is
+    /// unpublished (the frame is dropped instead of overwriting it).
     fn poll_write(&mut self) -> Option<usize> {
         if self.pending.is_some() {
             return None;
@@ -214,11 +202,9 @@ impl PublishScheduler {
     }
 }
 
-// The manager lives on (and is only touched from) varda's render thread. Every
-// Metal object it owns is render-thread-only: the publisher `servers`, the
-// `wgpu_metal_device`, the `publish_queue`, the retained server descriptions, and
-// since the zero-copy receive landed, the client handles too. Nothing is shared
-// across threads, so asserting Send is sound.
+// SAFETY: the manager and every Metal object it holds (servers, device,
+// publish queue, server descriptions, clients) are only used on the render
+// thread; nothing is shared across threads.
 unsafe impl Send for SyphonManager {}
 
 impl Default for SyphonManager {
@@ -248,7 +234,7 @@ impl SyphonManager {
         }
     }
 
-    /// Create a disabled Syphon manager (CLI `--no-syphon` flag).
+    /// A disabled manager (CLI `--no-syphon`).
     pub fn new_disabled() -> Self {
         let mut m = Self::new();
         m.available = false;
@@ -262,17 +248,14 @@ impl SyphonManager {
         &self.sources
     }
 
-    /// Return discovered server names for UI display.
+    /// Discovered server names, for the UI.
     pub fn discovered_sources(&self) -> Vec<String> {
         self.sources.iter().map(|s| s.name.clone()).collect()
     }
 
-    /// Scan for available Syphon servers via `SyphonServerDirectory`.
-    /// wgpu's own `MTLDevice`, extracted once through `as_hal` and cached.
-    ///
-    /// Both halves of the Syphon path need it. An `MTLTexture` belongs to exactly
-    /// one device, so anything Varda intends to bind, whether a publish slot or an
-    /// imported `IOSurface`, has to be created on the device wgpu is rendering on.
+    /// wgpu's own `MTLDevice`, extracted once through `as_hal` and cached. An
+    /// `MTLTexture` belongs to one device, so publish slots and imported
+    /// `IOSurface`s must be created on the device wgpu renders with.
     fn wgpu_metal_device(
         &mut self,
         device: &wgpu::Device,
@@ -289,6 +272,7 @@ impl SyphonManager {
         self.wgpu_metal_device.clone()
     }
 
+    /// Scans for Syphon servers via `SyphonServerDirectory`.
     pub fn discover(&mut self) {
         if !self.available {
             return;
@@ -299,7 +283,7 @@ impl SyphonManager {
         unsafe {
             let dir: Retained<SyphonServerDirectory> =
                 msg_send![SyphonServerDirectory::class(), sharedDirectory];
-            // serversMatchingName:nil appName:nil → all servers.
+            // serversMatchingName:nil appName:nil returns all servers.
             let nil_str: *const NSString = std::ptr::null();
             let servers: Retained<NSArray<NSDictionary<NSString, AnyObject>>> =
                 msg_send![&dir, serversMatchingName: nil_str, appName: nil_str];
@@ -322,24 +306,23 @@ impl SyphonManager {
         log::debug!("Syphon discover: {} server(s)", self.sources.len());
     }
 
-    /// Start receiving from a named Syphon server. Spawns a dedicated receive
-    /// thread (`syphon-recv-{name}`) that owns the `SyphonMetalClient`, polls
-    /// `newFrameImage`, performs the `getBytes` CPU readback off the render
-    /// thread, and publishes RGBA into `frame_data`. Returns a client index used
-    /// by `texture_view()` / `client_dimensions()`.
+    /// Starts receiving from a named Syphon server. Creates a
+    /// `SyphonMetalClient` on wgpu's device with a placeholder texture;
+    /// [`Self::update`] polls it and imports the shared surface. Returns the
+    /// index for `texture_view()` / `client_dimensions()`.
     ///
     /// # Panics
     ///
-    /// Panics only if the cached device is absent immediately after this call
-    /// populated it, which cannot happen.
+    /// Never in practice: only if the cached device is missing right after
+    /// being set.
     pub fn start_receive(&mut self, server_name: &str, device: &wgpu::Device) -> Option<usize> {
         if !self.available {
             log::warn!("Cannot receive Syphon: framework not available");
             return None;
         }
 
-        // The description must be resolved here (render thread): SyphonServerDirectory
-        // observes distributed notifications on the render-thread run loop.
+        // Resolve the description on the render thread, where
+        // SyphonServerDirectory observes distributed notifications.
         let desc = self
             .descriptions
             .iter()
@@ -350,14 +333,13 @@ impl SyphonManager {
             return None;
         };
 
-        // wgpu's own MTLDevice, not MTLCreateSystemDefaultDevice(). A texture
-        // belongs to exactly one device, so a client on any other device could
-        // only ever be copied from, never bound.
+        // wgpu's MTLDevice, not MTLCreateSystemDefaultDevice(): a texture on
+        // another device could only be copied, never bound.
         let metal = self.wgpu_metal_device(device)?;
         let client: Retained<SyphonMetalClient> = unsafe {
             let alloc = SyphonMetalClient::alloc();
             let nil_opts: *const NSDictionary<NSString, AnyObject> = std::ptr::null();
-            // newFrameHandler: nil — update() polls on the render thread.
+            // No newFrameHandler; update() polls on the render thread.
             let handler: *const AnyObject = std::ptr::null();
             msg_send![
                 alloc,
@@ -368,8 +350,8 @@ impl SyphonManager {
             ]
         };
 
-        // Placeholder until the first surface arrives, so `texture_view` has
-        // something to hand a deck that binds before the server publishes.
+        // Placeholder until the first surface arrives, so a deck that binds
+        // early has a texture.
         let (width, height) = (1920u32, 1080u32);
         let (texture, view) = make_placeholder_texture(device, server_name, width, height);
 
@@ -387,12 +369,9 @@ impl SyphonManager {
         Some(idx)
     }
 
-    /// Re-import any receiver whose server has rebound its `IOSurface`.
-    ///
-    /// Render-thread, and in the steady state it does nothing: the surface is
-    /// shared memory that the producer updates in place, so an unchanged surface
-    /// address means the bound texture is already showing the current frame.
-    /// Work happens only when a server starts, resizes, or restarts.
+    /// Re-imports any receiver whose server has rebound its `IOSurface`. The
+    /// surface is shared memory updated in place, so this does nothing unless
+    /// a server starts, resizes, or restarts.
     pub fn update(&mut self, device: &wgpu::Device) {
         if self.receivers.is_empty() {
             return;
@@ -404,8 +383,7 @@ impl SyphonManager {
         for i in 0..self.receivers.len() {
             let tex: Option<Retained<ProtocolObject<dyn MTLTexture>>> =
                 unsafe { msg_send![&self.receivers[i].client, newFrameImage] };
-            // The framework's own answer, rather than inferring a dead producer
-            // from a run of nil frames as the old receive thread had to.
+            // Ask the framework whether the server is alive.
             self.receivers[i].connected = unsafe { msg_send![&self.receivers[i].client, isValid] };
 
             let Some(tex) = tex else { continue };
@@ -444,29 +422,24 @@ impl SyphonManager {
         self.receivers.get(idx).map(|c| (c.width, c.height))
     }
 
-    /// Whether the client for `idx` is currently attached to a live server.
+    /// Whether client `idx` is attached to a live server.
     pub fn is_connected(&self, idx: usize) -> bool {
         self.receivers.get(idx).is_some_and(|r| r.connected)
     }
 
-    /// Publish a composited frame to a Syphon server, GPU-side (zero-copy).
+    /// Publishes a composited frame to a Syphon server without a readback.
+    /// Runs an RGBA→BGRA blit from `src_view` (the output's rendered texture)
+    /// into a ring slot shared with Metal, and hands that slot to
+    /// `SyphonMetalServer`.
     ///
-    /// Render-thread. Unlike the old CPU path, this takes no readback bytes: it
-    /// extracts wgpu's `MTLDevice` (`as_hal`), keeps a ring of BGRA `MTLTexture`s
-    /// imported into wgpu, runs the RGBA→BGRA conversion as a GPU blit into a
-    /// ring slot, and hands that slot's native texture to `SyphonMetalServer`.
-    /// This removes the pipeline-stalling readback and the CPU swizzle.
-    ///
-    /// `src_view` is the output's rendered texture view (e.g. `h.texture_view`).
-    /// Synchronization: a slot is published only after its blit submission
-    /// completes (`on_submitted_work_done` → `write_done`), so Syphon always
-    /// reads a fully-rendered texture; the ring depth covers Syphon's in-flight
-    /// read before a slot is reused.
+    /// A slot is published only after its blit completes
+    /// (`on_submitted_work_done` → `write_done`); the ring depth covers
+    /// Syphon's in-flight read before a slot is reused.
     ///
     /// # Panics
     ///
-    /// Panics only if the cached wgpu Metal device is absent immediately after
-    /// this call populated it, which cannot happen.
+    /// Never in practice: only if the cached Metal device is missing right
+    /// after being set.
     pub fn publish_frame_gpu(
         &mut self,
         context: &crate::renderer::context::GpuContext,
@@ -481,14 +454,13 @@ impl SyphonManager {
 
         let device = &context.device;
 
-        // 1. wgpu's MTLDevice — unify so the imported textures, the server, and
-        //    the publish queue all live on one device.
+        // 1. wgpu's MTLDevice, so textures, server, and queue share one device.
         let Some(mtl_dev) = self.wgpu_metal_device(device) else {
             return;
         };
 
-        // 2. Publish command queue on wgpu's device (wgpu's own queue handle is
-        //    private in wgpu-hal, so the publish runs on a separate queue).
+        // 2. Publish queue on wgpu's device (wgpu-hal keeps its own queue
+        //    private).
         if self.publish_queue.is_none() {
             self.publish_queue = mtl_dev.newCommandQueue();
             if self.publish_queue.is_none() {
@@ -497,7 +469,7 @@ impl SyphonManager {
             }
         }
 
-        // 3. RGBA→BGRA conversion pipeline (GPU; replaces the old CPU swizzle).
+        // 3. RGBA→BGRA conversion pipeline.
         if self.convert_pipeline.is_none() {
             match crate::renderer::blit::BlitPipeline::new(
                 device,
@@ -511,7 +483,7 @@ impl SyphonManager {
             }
         }
 
-        // 4. Server + slot ring (recreate on first use / size change).
+        // 4. Server and slot ring, recreated on first use or size change.
         let need_new = match self.servers.get(server_name) {
             None => true,
             Some(h) => h.width != width || h.height != height,
@@ -553,8 +525,8 @@ impl SyphonManager {
         let pub_queue = self.publish_queue.as_ref().unwrap();
         let handle = self.servers.get_mut(server_name).unwrap();
 
-        // 5a. Publish step (before write, so a written slot is never overwritten
-        //     before it is published). Only a GPU-complete slot is published.
+        // 5a. Publish before writing, so a written slot is never overwritten
+        //     unpublished. Only a GPU-complete slot is published.
         let write_done: Vec<bool> = handle
             .slots
             .iter()
@@ -584,8 +556,8 @@ impl SyphonManager {
             }
         }
 
-        // 5b. Write step: render the RGBA→BGRA conversion into a free slot and
-        //     arm its completion flag so it can be published next frame.
+        // 5b. Blit into a free slot and arm its completion flag for the next
+        //     frame's publish.
         if let Some(w) = handle.sched.poll_write() {
             let bind = pipeline.create_bind_group(device, src_view);
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -620,22 +592,17 @@ impl SyphonManager {
         }
     }
 
-    /// Create one publish texture on wgpu's `MTLDevice` and import it into wgpu
-    /// so the conversion blit can target it while Syphon reads the same native
-    /// texture.
+    /// Creates a publish texture on wgpu's `MTLDevice` and imports it into wgpu,
+    /// so the blit targets the same texture Syphon reads.
     ///
-    /// The Metal format is `BGRA8Unorm`, exactly what `SyphonMetalServer` creates
-    /// its own destination surface as. That equality is the sole condition Varda
-    /// was failing, and failing it sent every frame down Syphon's render fallback,
-    /// which applies an sRGB decode on sample and never re-encodes: 128 published
-    /// as 55. See /spec/syphon-zero-copy.md.
+    /// The Metal format is `BGRA8Unorm`, matching `SyphonMetalServer`'s own
+    /// surface. Any other format sends frames down Syphon's render fallback,
+    /// which decodes sRGB and never re-encodes (128 arrives as 55).
     ///
-    /// The sRGB encode Varda still needs is kept by rendering through a
-    /// `Bgra8UnormSrgb` **view** of the same linear texture, so the hardware
-    /// performs the transfer and there is no hand-written curve to drift. That
-    /// needs `PixelFormatView` usage on the Metal side and `view_formats` on the
-    /// wgpu side; wgpu only calls `newTextureViewWithPixelFormat` when the view
-    /// format differs from the texture format, which is precisely this case.
+    /// The sRGB encode comes from rendering through a `Bgra8UnormSrgb` **view**
+    /// of the linear texture. That needs `PixelFormatView` usage in Metal and
+    /// `view_formats` in wgpu; wgpu calls `newTextureViewWithPixelFormat` only
+    /// when the view format differs from the texture format.
     fn make_publish_slot(
         mtl_dev: &Retained<ProtocolObject<dyn MTLDevice>>,
         device: &wgpu::Device,
@@ -658,7 +625,7 @@ impl SyphonManager {
         desc.setStorageMode(MTLStorageMode::Private);
         let mtl = mtl_dev.newTextureWithDescriptor(&desc)?;
 
-        // Import the same MTLTexture into wgpu; keep a retained clone for Syphon.
+        // Import the MTLTexture into wgpu; keep a retained clone for Syphon.
         let hal_texture = unsafe {
             wgpu::hal::metal::Device::texture_from_raw(
                 mtl.clone(),
@@ -695,7 +662,7 @@ impl SyphonManager {
                 wgpu::TextureUses::COLOR_TARGET,
             )
         };
-        // The blit target: sRGB view over the linear texture Syphon will read.
+        // Blit target: an sRGB view over the linear texture Syphon reads.
         let view = wgpu_texture.create_view(&wgpu::TextureViewDescriptor {
             label: Some("Syphon Publish sRGB View"),
             format: Some(wgpu::TextureFormat::Bgra8UnormSrgb),
@@ -722,13 +689,10 @@ impl SyphonManager {
     }
 }
 
-/// dlopen Syphon.framework once and keep it loaded for the process lifetime.
-///
-/// We load at runtime (via libloading, already a varda dep) rather than linking
-/// the framework, so a Mac *without* Syphon installed still builds and runs —
-/// `available` simply stays false and every Syphon call is guarded. Once loaded,
-/// the Obj-C runtime can resolve `SyphonServerDirectory` / `SyphonMetalClient`
-/// by name (`objc_getClass`), which is all `extern_class!` + `msg_send!` need.
+/// Loads Syphon.framework with `dlopen` (via libloading) once for the process.
+/// Not linked, so a Mac without Syphon still builds and runs with `available`
+/// false and every Syphon call guarded. Once loaded, `objc_getClass` resolves
+/// the Syphon classes for `extern_class!` and `msg_send!`.
 fn framework_loaded() -> bool {
     static SYPHON_LIB: OnceLock<Option<libloading::Library>> = OnceLock::new();
     let lib = SYPHON_LIB.get_or_init(|| {
@@ -752,7 +716,7 @@ fn framework_loaded() -> bool {
     lib.is_some()
 }
 
-/// Read an `NSString` value out of a server-description dictionary.
+/// Reads an `NSString` value from a server-description dictionary.
 fn nsstring_value(dict: &NSDictionary<NSString, AnyObject>, key: &NSString) -> Option<String> {
     unsafe {
         let val: *mut AnyObject = msg_send![dict, objectForKey: key];
@@ -764,12 +728,9 @@ fn nsstring_value(dict: &NSDictionary<NSString, AnyObject>, key: &NSString) -> O
     }
 }
 
-/// Allocate the RGBA wgpu texture + view a Syphon client uploads into.
-/// A black stand-in bound until the server publishes its first frame.
-///
-/// Decks bind a Syphon source the moment it is added, which can be before the
-/// producer has started, so `texture_view` must always have something to hand
-/// back. Replaced wholesale by [`import_surface_texture`] on the first surface.
+/// Black placeholder texture and view for a Syphon client, bound until the
+/// server's first surface arrives. Decks can bind a source before its producer
+/// starts. Replaced by [`import_surface_texture`].
 fn make_placeholder_texture(
     device: &wgpu::Device,
     server_name: &str,
@@ -794,21 +755,16 @@ fn make_placeholder_texture(
     (texture, view)
 }
 
-/// Bind a server's `IOSurface` as a wgpu texture, sharing its memory.
+/// Binds a server's `IOSurface` as a wgpu texture sharing its memory.
 ///
-/// The Metal texture is created as `BGRA8Unorm_sRGB`, even though the client's
-/// own texture over the same surface is plain `BGRA8Unorm`. An `IOSurface` is
-/// just bytes; the transfer function belongs to the view of it, and Syphon's
+/// The Metal texture is `BGRA8Unorm_sRGB`, though the client's own texture
+/// over the surface is `BGRA8Unorm`: the surface is just bytes, and Syphon's
 /// convention is display-encoded 8-bit BGRA.
 ///
-/// Building our own texture rather than wrapping the client's is load-bearing
-/// rather than tidiness. `wgpu::hal::metal` stores whatever format the caller
-/// declares with no validation against the raw texture, and `create_texture_view`
-/// returns the raw texture untouched whenever the declared formats agree. So
-/// importing Syphon's linear texture while claiming `Bgra8UnormSrgb` would skip
-/// the sRGB decode entirely, silently, and nothing would catch it. Owning the
-/// Metal texture makes the format we declare the format we actually have.
-/// See /spec/syphon-zero-copy.md § Why the receive path must re-wrap the `IOSurface`.
+/// Varda creates its own texture instead of wrapping the client's because
+/// `wgpu::hal::metal` trusts the declared format and returns the raw texture
+/// when the declared formats agree. Importing Syphon's linear texture as
+/// `Bgra8UnormSrgb` would silently skip the sRGB decode.
 fn import_surface_texture(
     mtl_dev: &Retained<ProtocolObject<dyn MTLDevice>>,
     device: &wgpu::Device,
@@ -956,18 +912,16 @@ pub fn sink_provider() -> crate::output::share::ShareSinkProvider<SyphonManager>
 #[cfg(test)]
 mod tests {
     use super::*;
-    // Readback types the production path no longer needs: nothing is copied out
-    // of a Metal texture at runtime any more, only in these tests.
+    // Readback types, used only by these tests.
     use objc2_metal::{MTLOrigin, MTLRegion, MTLSize};
 
-    // These exercise the host-independent paths only: a fresh manager holds no
-    // clients/sources, so none of these touch Syphon.framework or Metal. They
-    // pass whether or not Syphon is installed on the test machine.
+    // Host-independent tests: a fresh manager has no clients or sources, so
+    // these don't touch Syphon.framework or Metal.
 
     #[test]
     fn syphon_manager_new_no_crash() {
-        // new() probes for Syphon.framework; on machines without it, `available`
-        // is simply false. Just verify construction and the query don't panic.
+        // Without Syphon.framework, `available` is false. Construction and the
+        // query must not panic.
         let mgr = SyphonManager::new();
         let _ = mgr.is_available();
     }
@@ -1001,8 +955,8 @@ mod tests {
 
     #[test]
     fn syphon_manager_discover_noop_when_unavailable() {
-        // discover() early-returns when the framework is absent; on a machine
-        // with Syphon it may populate sources, but must never panic either way.
+        // discover() returns early without the framework, and must not panic
+        // either way.
         let mut mgr = SyphonManager::new_disabled();
         mgr.discover();
         assert!(mgr.sources().is_empty());
@@ -1056,20 +1010,16 @@ mod tests {
         let mut s = PublishScheduler::new(2);
         assert_eq!(s.poll_write(), Some(0));
         s.mark_written(0);
-        // Unpublished pending slot → writes blocked (frame dropped, not clobbered).
+        // Pending slot unpublished: writes blocked (frame dropped, not overwritten).
         assert_eq!(s.poll_write(), None);
         assert_eq!(s.poll_write(), None);
         assert_eq!(s.poll_publish(&[true, false]), Some(0));
         assert_eq!(s.poll_write(), Some(1));
     }
 
-    /// Syphon's fast blit is gated on an exact pixel-format match against its own
-    /// destination, which `SyphonMetalServer` always creates as
-    /// `MTLPixelFormatBGRA8Unorm`. Publishing a `_sRGB` texture instead sends every
-    /// frame down the render fallback, which samples with an sRGB decode and writes
-    /// to a linear target, linearising the picture: 128 arrives as 55.
-    ///
-    /// See /spec/syphon-zero-copy.md § The send path corrupts colour today.
+    /// Syphon's fast blit needs an exact format match with its destination,
+    /// which is always `MTLPixelFormatBGRA8Unorm`. An `_sRGB` texture takes
+    /// the render fallback, which linearizes the picture: 128 arrives as 55.
     #[test]
     fn publish_slot_matches_syphons_destination_pixel_format() {
         let Some(ctx) = crate::testing::headless_gpu() else {
@@ -1090,17 +1040,14 @@ mod tests {
         );
     }
 
-    /// End to end against the installed framework: publish a known ramp and read
-    /// the published `IOSurface` straight back off the server.
-    ///
-    /// This is the shape of test that catches the linearisation defect. Checking
-    /// the arguments we hand Syphon cannot, because the corruption happens inside
-    /// Syphon, one step past anything we can inspect.
+    /// End to end with the installed framework: publish a ramp and read the
+    /// published `IOSurface` back from the server. The linearization happens
+    /// inside Syphon, so only a round trip catches it.
     #[test]
     fn published_bytes_survive_the_publish_path() {
         const SERVER: &str = "Varda Publish Self Test";
         const N: u32 = 64;
-        // Neutral greys. 128 is the value the defect turned into 55.
+        // Neutral grays. A linearized 128 arrives as 55.
         const BANDS: [u8; 5] = [0, 64, 128, 192, 255];
 
         let mut mgr = SyphonManager::new();
@@ -1111,7 +1058,7 @@ mod tests {
             return;
         };
 
-        // A stand-in for a headless output, which is Rgba8UnormSrgb (see
+        // Like a headless output (Rgba8UnormSrgb, see
         // HeadlessOutput::storage_formats): display-encoded bytes, sRGB tagged.
         let src = ctx.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("syphon self test source"),
@@ -1159,9 +1106,8 @@ mod tests {
         );
         let view = src.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // The scheduler publishes a slot only once its blit has signalled
-        // completion, so this needs several rounds. The image is static, so any
-        // completed publish is the whole answer.
+        // Publish waits for the blit to complete, so this takes several rounds.
+        // The image is static, so any completed publish is the answer.
         let mut out = vec![0u8; (N * N * 4) as usize];
         let mut matched = false;
         for _ in 0..16 {
@@ -1215,18 +1161,11 @@ mod tests {
         );
     }
 
-    /// The trap `import_surface_texture` exists to avoid, tested by behaviour
-    /// rather than by inspecting a format constant.
-    ///
-    /// `wgpu::hal::metal` believes whatever format an imported texture declares
-    /// and hands back the raw Metal texture whenever the declared formats agree,
-    /// so importing Syphon's linear `BGRA8Unorm` texture while claiming
-    /// `Bgra8UnormSrgb` would skip the sRGB decode with nothing to catch it.
-    /// Varda builds its own `BGRA8Unorm_sRGB` texture over the surface instead.
-    ///
-    /// Sampling a value of 128 must therefore yield linear 0.216, which lands at
-    /// 55 in a linear target. If the decode were being skipped it would arrive
-    /// back as 128. See /spec/syphon-zero-copy.md.
+    /// `wgpu::hal::metal` trusts an imported texture's declared format, so
+    /// importing Syphon's linear `BGRA8Unorm` texture as `Bgra8UnormSrgb` would
+    /// skip the sRGB decode. `import_surface_texture` builds its own
+    /// `BGRA8Unorm_sRGB` texture instead. Sampling 128 must give linear 0.216,
+    /// which is 55 in a linear target; a skipped decode gives 128.
     #[test]
     fn an_imported_surface_actually_applies_the_srgb_decode() {
         const SERVER: &str = "Varda Import Self Test";
@@ -1245,7 +1184,7 @@ mod tests {
             return; // not the Metal backend
         };
 
-        // A flat mid-grey source, published so Syphon owns a real surface.
+        // A flat mid-gray source, published so Syphon owns a real surface.
         let src = ctx.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("syphon import test source"),
             size: wgpu::Extent3d {
@@ -1305,8 +1244,8 @@ mod tests {
             panic!("could not import the published IOSurface");
         };
 
-        // Sample the imported texture into a *linear* target: whatever decode the
-        // texture applies on sample is what lands in the bytes read back.
+        // Sample into a *linear* target, so any decode on sample shows in the
+        // bytes read back.
         let target = ctx.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("syphon import test target"),
             size: wgpu::Extent3d {
@@ -1393,16 +1332,14 @@ mod tests {
         );
     }
 
-    /// `start_receive` plus `update` against a live server, end to end.
+    /// `start_receive` plus `update` against a live server. Discovery is
+    /// bypassed with the server's own description, since `SyphonServerDirectory`
+    /// needs distributed notifications a test can't deliver. The client
+    /// handshake needs the run loop, so the test pumps it.
     ///
-    /// Discovery is bypassed by handing the manager the server's own description,
-    /// because `SyphonServerDirectory` resolves names through distributed
-    /// notifications that a test has no run loop to deliver. The client handshake
-    /// does need the run loop, so this pumps it.
-    ///
-    /// The assertion is that the placeholder texture gets replaced by one sized to
-    /// the actual shared surface, which only happens if the poll, the `IOSurface`
-    /// address compare, and the import all worked.
+    /// Passes when the placeholder is replaced by a texture sized to the shared
+    /// surface, which requires the poll, the `IOSurface` address compare, and
+    /// the import to work.
     #[test]
     fn a_receiver_binds_the_servers_shared_surface() {
         use objc2_foundation::{NSDate, NSRunLoop};
@@ -1434,7 +1371,7 @@ mod tests {
         });
         let src_view = src.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // One publish to bring the server, and therefore a surface, into being.
+        // One publish creates the server and its surface.
         mgr.publish_frame_gpu(&ctx, SERVER, &src_view, N, N);
         let _ = ctx.device.poll(wgpu::PollType::wait_indefinitely());
         let Some(handle) = mgr.servers.get(SERVER) else {
@@ -1447,7 +1384,7 @@ mod tests {
         let Some(idx) = mgr.start_receive(SERVER, &ctx.device) else {
             panic!("start_receive refused a server it had a description for");
         };
-        // The placeholder, until a surface arrives.
+        // Placeholder until a surface arrives.
         assert_eq!(mgr.client_dimensions(idx), Some((1920, 1080)));
 
         let mut bound = false;

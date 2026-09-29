@@ -1,8 +1,7 @@
-//! Data-driven controller profiles for MIDI LED feedback.
+//! Controller profiles for MIDI LED feedback.
 //!
-//! Profiles describe a controller's physical layout and LED protocol so the
-//! LED feedback system works with any hardware. Profiles are loaded from JSON
-//! files in `.varda/controller-profiles/` or compiled-in as built-in defaults.
+//! A profile describes a controller's layout and LED protocol. Profiles load
+//! from JSON in `.varda/controller-profiles/` or are compiled in.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -38,7 +37,7 @@ pub struct ProfileMeta {
 /// LED feedback protocol configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct LedConfig {
-    /// How LEDs are addressed: "`note_velocity`", "`cc_value`"
+    /// How LEDs are addressed: "`note_velocity`" or "`cc_value`".
     #[serde(default = "default_led_method")]
     pub method: String,
     #[serde(default)]
@@ -55,7 +54,7 @@ fn default_tap_hold_threshold() -> u64 {
     300
 }
 
-/// Auto-mapping configuration: drives grid/fader/button behavior from profile JSON.
+/// Auto-mapping config: grid, fader, and button behavior.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AutoMapConfig {
     pub strategy: String,
@@ -106,8 +105,7 @@ const VALID_CONTROL_TYPES: &[&str] = &["button", "fader", "encoder"];
 const VALID_MIDI_TYPES: &[&str] = &["note", "cc"];
 
 impl ControllerProfileData {
-    /// Validate the profile for semantic correctness. Returns a list of errors.
-    /// An empty list means the profile is valid.
+    /// Checks the profile for semantic errors. Empty means valid.
     pub fn validate(&self) -> Vec<String> {
         let mut errors = Vec::new();
 
@@ -179,7 +177,6 @@ impl ControllerProfileData {
             }
         }
 
-        // Validate auto_map if present
         if let Some(am) = &self.auto_map {
             const VALID_STRATEGIES: &[&str] = &["channel_grid"];
             const VALID_ACTIONS: &[&str] = &["mute", "solo"];
@@ -245,14 +242,14 @@ impl ControllerProfileData {
         errors
     }
 
-    /// Check if a MIDI device name matches this profile.
+    /// Whether a MIDI device name matches this profile.
     pub fn matches(&self, device_name: &str) -> bool {
         device_name
             .to_lowercase()
             .contains(&self.profile.name_match.to_lowercase())
     }
 
-    /// Get the MIDI value for a logical color name. Returns 0 (off) if not found.
+    /// MIDI value for a logical color name, or 0 (off) if unknown.
     pub fn color_value(&self, color: &str) -> u8 {
         self.leds
             .as_ref()
@@ -261,8 +258,7 @@ impl ControllerProfileData {
             .unwrap_or(0)
     }
 
-    /// Check if a given control number has an LED on this controller.
-    /// `midi_type` should be "note" or "cc".
+    /// Whether a control has an LED. `midi_type` is "note" or "cc".
     pub fn control_has_led(&self, midi_type: &str, channel: u8, number: u8) -> bool {
         self.controls.iter().any(|c| {
             c.has_led
@@ -273,12 +269,12 @@ impl ControllerProfileData {
         })
     }
 
-    /// Get the LED send channel (from leds config, default 0).
+    /// LED send channel (default 0).
     pub fn led_channel(&self) -> u8 {
         self.leds.as_ref().map_or(0, |l| l.channel)
     }
 
-    /// Get the LED method (default "`note_velocity`").
+    /// LED method (default "`note_velocity`").
     pub fn led_method(&self) -> &str {
         self.leds
             .as_ref()
@@ -290,13 +286,12 @@ impl ControllerProfileData {
 
 const APC_MINI_PROFILE_JSON: &str = include_str!("apc_mini_profile.json");
 
-/// Load the compiled-in APC Mini mk1 profile.
+/// Loads the compiled-in APC Mini mk1 profile.
 ///
 /// # Panics
 ///
-/// Panics if the bundled `apc_mini_profile.json` fails to deserialize or fails
-/// semantic validation — both indicate a corrupt build artefact, not a runtime
-/// condition.
+/// Panics if the bundled `apc_mini_profile.json` fails to deserialize or
+/// validate, which means a corrupt build.
 pub fn builtin_apc_mini() -> ControllerProfileData {
     let profile: ControllerProfileData = serde_json::from_str(APC_MINI_PROFILE_JSON)
         .expect("Built-in APC Mini profile JSON is invalid");
@@ -310,7 +305,7 @@ pub fn builtin_apc_mini() -> ControllerProfileData {
 
 // ── Profile Registry ──────────────────────────────────────────────
 
-/// Holds all loaded controller profiles (built-in + user-supplied).
+/// All loaded controller profiles, built-in and user.
 pub struct ProfileRegistry {
     profiles: Vec<Arc<ControllerProfileData>>,
 }
@@ -322,14 +317,14 @@ impl Default for ProfileRegistry {
 }
 
 impl ProfileRegistry {
-    /// Create a registry with only the built-in profiles.
+    /// A registry with only the built-in profiles.
     pub fn new() -> Self {
         let profiles = vec![Arc::new(builtin_apc_mini())];
         Self { profiles }
     }
 
-    /// Load user profiles from a directory, adding them before built-ins
-    /// (so user profiles take precedence in matching).
+    /// Loads user profiles from `dir`, ahead of the built-ins so they win in
+    /// matching.
     pub fn load_user_profiles(&mut self, dir: &Path) {
         if !dir.is_dir() {
             return;
@@ -346,8 +341,7 @@ impl ProfileRegistry {
             }
         };
 
-        // Remove previous user profiles (keep only built-ins at the end).
-        // Built-ins are always loaded in new(), user profiles are prepended.
+        // Drop previous user profiles; the built-ins sit at the end.
         let builtin_count = 1; // just APC Mini for now
         let user_start = self.profiles.len().saturating_sub(builtin_count);
         self.profiles.drain(..user_start);
@@ -397,12 +391,12 @@ impl ProfileRegistry {
             }
         }
 
-        // User profiles go first so they override built-ins with same name_match
+        // User profiles first, so they override built-ins with the same name_match.
         user_profiles.append(&mut self.profiles);
         self.profiles = user_profiles;
     }
 
-    /// Find a profile matching a MIDI device name. First match wins.
+    /// Profile for a MIDI device name. First match wins.
     pub fn detect(&self, device_name: &str) -> Option<Arc<ControllerProfileData>> {
         self.profiles
             .iter()
@@ -410,7 +404,7 @@ impl ProfileRegistry {
             .cloned()
     }
 
-    /// Get all loaded profile names (for debugging/UI).
+    /// Names of all loaded profiles.
     pub fn profile_names(&self) -> Vec<&str> {
         self.profiles
             .iter()
@@ -436,7 +430,7 @@ impl DeviceLeds {
         }
     }
 
-    /// Set an LED, only sending if the value changed.
+    /// Sets an LED, sending only if the value changed.
     fn set_led(
         &mut self,
         mgr: &MidiDeviceManager,
@@ -471,9 +465,9 @@ impl DeviceLeds {
         true
     }
 
-    /// Turn all LEDs off on this device.
+    /// Turns off every LED on this device.
     fn all_off(&mut self, mgr: &MidiDeviceManager, device_id: DeviceId) {
-        // Collect ranges first to avoid borrow conflict with self.set_led
+        // Collect ranges first; `self.set_led` borrows mutably.
         let led_ranges: Vec<(u8, u8)> = self
             .profile
             .controls
@@ -489,7 +483,7 @@ impl DeviceLeds {
     }
 }
 
-/// Manages LED state for all connected devices that have a controller profile.
+/// LED state for every connected device with a controller profile.
 pub struct ControllerLedManager {
     device_leds: HashMap<DeviceId, DeviceLeds>,
 }
@@ -507,9 +501,8 @@ impl ControllerLedManager {
         }
     }
 
-    /// Sync tracked devices with the device manager. Call after rescan.
+    /// Syncs tracked devices with the device manager. Call after rescan.
     pub fn sync_devices(&mut self, mgr: &MidiDeviceManager) {
-        // Add new devices that have profiles
         for (id, info) in &mgr.devices {
             if let Some(profile) = &info.profile {
                 self.device_leds.entry(*id).or_insert_with(|| {
@@ -523,24 +516,23 @@ impl ControllerLedManager {
             }
         }
 
-        // Remove stale devices
         let active_ids: Vec<DeviceId> = mgr.devices.keys().copied().collect();
         self.device_leds.retain(|id, _| active_ids.contains(id));
     }
 
-    /// How many devices are being tracked for LED feedback.
+    /// Devices tracked for LED feedback.
     pub fn device_count(&self) -> usize {
         self.device_leds.len()
     }
 
-    /// Turn all LEDs off on all tracked devices.
+    /// Turns off every LED on every tracked device.
     pub fn all_off(&mut self, mgr: &MidiDeviceManager) {
         for (device_id, leds) in &mut self.device_leds {
             leds.all_off(mgr, *device_id);
         }
     }
 
-    /// Update LEDs on all tracked devices based on current mixer state.
+    /// Updates LEDs on every tracked device from mixer state.
     pub fn update_leds(
         &mut self,
         mgr: &MidiDeviceManager,
@@ -562,7 +554,7 @@ impl ControllerLedManager {
                     continue;
                 }
 
-                // MIDI learn target blinks red
+                // The MIDI learn target blinks red.
                 if midi_learn_active
                     && let Some(target) = midi_learn_target
                     && path == target
@@ -579,13 +571,13 @@ impl ControllerLedManager {
     }
 }
 
-// ── Parameter → Color Logic ───────────────────────────────────────
-// This is parameter semantics, not device knowledge. It maps parameter
-// state to logical color names that profiles resolve to MIDI values.
+// ── Parameter → Color ─────────────────────────────────────────────
+// Maps parameter state to logical color names; profiles resolve those to MIDI
+// values.
 
-/// Read a parameter's normalized value back through the parameter router.
-/// Returns 0.0–1.0, or -1.0 when the path is malformed, unreadable, or names
-/// an entity that no longer exists; callers render that as the "not found" color.
+/// A parameter's normalized value, read through the parameter router: 0.0–1.0,
+/// or -1.0 when the path is malformed, unreadable, or names a missing entity.
+/// Callers show -1.0 as the "not found" color.
 fn read_param_value(mixer: &Mixer, path: &str) -> f32 {
     path.parse::<ParamAddress>()
         .ok()
@@ -593,7 +585,7 @@ fn read_param_value(mixer: &Mixer, path: &str) -> f32 {
         .unwrap_or(-1.0)
 }
 
-/// Determine logical LED color from parameter path and current value.
+/// Logical LED color for a parameter path and value.
 fn param_value_to_color(path: &str, value: f32) -> &'static str {
     if value < 0.0 {
         return "green";
@@ -632,7 +624,6 @@ mod tests {
         assert_eq!(*leds.colors.get("green").unwrap(), 1);
         assert_eq!(*leds.colors.get("red_blink").unwrap(), 4);
         assert_eq!(profile.controls.len(), 5);
-        // Auto-map is present
         assert!(profile.auto_map.is_some());
         let am = profile.auto_map.as_ref().unwrap();
         assert_eq!(am.strategy, "channel_grid");
@@ -694,8 +685,8 @@ mod tests {
         assert_eq!(param_value_to_color("ch/aabbccdd/opacity", 1.0), "green");
     }
 
-    // ── LED feedback reader resolves entities by stable UUID, so a mapped
-    //    control keeps tracking its entity when positions shift.
+    // ── LED feedback resolves entities by UUID, so a mapped control follows
+    //    its entity when positions shift.
     #[test]
     fn read_param_value_resolves_by_uuid_and_survives_reorder() {
         use crate::renderer::GpuContext;
@@ -725,13 +716,13 @@ mod tests {
             1.0
         );
 
-        // Removing the earlier deck shifts positional indices; UUID still resolves.
+        // Removing the earlier deck shifts positions; the UUID still resolves.
         mixer.channel_mut(0).unwrap().decks.remove(0);
         assert!(
             (read_param_value(&mixer, &format!("deck/{deck_uuid}/opacity")) - 0.7).abs() < 1e-4
         );
 
-        // Unknown UUIDs yield the "not found" sentinel, not a wrong entity.
+        // Unknown UUIDs return the "not found" sentinel.
         assert_eq!(read_param_value(&mixer, "deck/deadbeef/opacity"), -1.0);
         assert_eq!(read_param_value(&mixer, "ch/deadbeef/opacity"), -1.0);
     }
