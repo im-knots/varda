@@ -2353,3 +2353,170 @@ fn a_later_pass_reads_what_an_earlier_pass_wrote_this_frame() {
     assert_hi(px[1], "the final pass ran");
     assert_lo(px[2], "blue");
 }
+
+// ── Pass extensions: HISTORY, FORMAT, TARGETS ────────────────────────
+
+/// The uniform block with the fields appended for pass extensions.
+const ISF_UNIFORMS_WITH_HISTORY: &str = r"
+layout(set = 0, binding = 0) uniform ISFUniforms {
+    float TIME;
+    float TIMEDELTA;
+    uint FRAMEINDEX;
+    int PASSINDEX;
+    vec2 RENDERSIZE;
+    float audio_level;
+    float audio_bass;
+    float audio_mid;
+    float audio_treble;
+    float audio_bpm;
+    float audio_beat_phase;
+    vec4 DATE;
+    float PHASE_TIME_0;
+    float PHASE_TIME_1;
+    float PHASE_TIME_2;
+    float PHASE_TIME_3;
+    vec2 JITTER;
+    int JITTERINDEX;
+    int HISTORYVALID;
+};
+";
+
+fn pass_extension_shader(passes: &str, bindings: &str, body: &str) -> varda::isf::ISFShader {
+    let source = format!(
+        r#"/*{{
+    "ISFVSN": "2.0",
+    "CATEGORIES": ["Generator"],
+    "PASSES": {passes}
+}}*/
+
+#version 450
+
+layout(location = 0) in vec2 uv;
+{ISF_UNIFORMS_WITH_HISTORY}
+layout(set = 0, binding = 1) uniform sampler texSampler;
+{bindings}
+
+{body}
+"#
+    );
+    varda::isf::ISFShader::from_string(&source).expect("parse")
+}
+
+/// A `HISTORY` pass counts frames in a 32-bit float target: it adds one to
+/// what it wrote last frame, and starts from one when `HISTORYVALID` is 0.
+fn frame_counter_shader() -> varda::isf::ISFShader {
+    pass_extension_shader(
+        r#"[{"TARGET": "count", "HISTORY": true, "FORMAT": "rgba32float"}, {}]"#,
+        "layout(set = 0, binding = 2) uniform texture2D count;",
+        r"
+layout(location = 0) out vec4 fragColor;
+void main() {
+    float previous = texelFetch(sampler2D(count, texSampler), ivec2(gl_FragCoord.xy), 0).r;
+    if (PASSINDEX == 0) {
+        fragColor = vec4(HISTORYVALID == 1 ? previous + 1.0 : 1.0, 0.0, 0.0, 1.0);
+    } else {
+        fragColor = vec4(previous * 0.1, 0.0, 0.0, 1.0);
+    }
+}",
+    )
+}
+
+#[test]
+fn a_history_pass_reads_its_own_previous_frame_and_resets_on_resize() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    let mut mixer = new_mixer(&ctx);
+    let deck = Deck::from_shader(&ctx, frame_counter_shader(), W, H).expect("deck");
+    mixer.channel_mut(0).unwrap().add_deck(deck);
+
+    let mut counts = Vec::new();
+    for _ in 0..3 {
+        counts.push(center(&render_and_read(&ctx, &mut mixer))[0]);
+    }
+    assert_near(
+        counts[0],
+        0.1,
+        0.002,
+        "first frame: history invalid, count 1",
+    );
+    assert_near(counts[1], 0.2, 0.002, "second frame reads the first");
+    assert_near(counts[2], 0.3, 0.002, "third frame reads the second");
+
+    mixer.channel_mut(0).unwrap().decks[0]
+        .deck
+        .resize(&ctx, W, H);
+    let after_resize = center(&render_and_read(&ctx, &mut mixer))[0];
+    assert_near(after_resize, 0.1, 0.002, "a resize starts history over");
+}
+
+#[test]
+fn one_pass_writes_several_targets_in_their_own_formats() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    // `fine` holds 1 + 2^-16, which an f16 target would round to 1.0.
+    let shader = pass_extension_shader(
+        r#"[{"TARGETS": ["fine", "coarse"], "FORMATS": ["rgba32float", "rgba16float"]}, {}]"#,
+        "layout(set = 0, binding = 2) uniform texture2D fine;\n\
+         layout(set = 0, binding = 3) uniform texture2D coarse;",
+        r"
+layout(location = 0) out vec4 out0;
+layout(location = 1) out vec4 out1;
+void main() {
+    if (PASSINDEX == 0) {
+        out0 = vec4(1.0 + 1.0 / 65536.0, 0.0, 0.0, 1.0);
+        out1 = vec4(0.0, 0.0, 0.5, 1.0);
+    } else {
+        ivec2 texel = ivec2(gl_FragCoord.xy);
+        float excess = texelFetch(sampler2D(fine, texSampler), texel, 0).r - 1.0;
+        float blue = texelFetch(sampler2D(coarse, texSampler), texel, 0).b;
+        out0 = vec4(excess * 65536.0 * 0.25, 0.0, blue, 1.0);
+    }
+}",
+    );
+    let mut mixer = new_mixer(&ctx);
+    let deck = Deck::from_shader(&ctx, shader, W, H).expect("deck");
+    mixer.channel_mut(0).unwrap().add_deck(deck);
+
+    let px = center(&render_and_read(&ctx, &mut mixer));
+    assert_near(
+        px[0],
+        0.25,
+        0.01,
+        "the rgba32float target kept a 2^-16 step f16 cannot hold",
+    );
+    assert_near(
+        px[2],
+        0.5,
+        0.01,
+        "the second target was written in the same pass",
+    );
+}
+
+#[test]
+fn a_shader_binding_more_textures_than_the_device_allows_fails_by_name() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    let shader = frame_counter_shader();
+    let spirv = varda::isf::compile_glsl_to_spirv(&shader.fragment_source, "limit").unwrap();
+    let limit = ctx.device.limits().max_sampled_textures_per_shader_stage as usize;
+    let too_many = vec![true; limit + 1];
+    let err = varda::renderer::UnifiedPipeline::new(
+        &ctx.device,
+        &spirv,
+        ctx.compositing_format,
+        false,
+        &too_many,
+        &[],
+        0,
+        &[],
+    )
+    .err()
+    .expect("over the limit");
+    assert!(
+        format!("{err:#}").contains(&format!("this GPU allows {limit}")),
+        "{err:#}"
+    );
+}

@@ -287,3 +287,54 @@ pub(crate) trait Analyzer: Send + 'static {
     /// Called when the analyzer stops. Default does nothing.
     fn shutdown(&mut self) {}
 }
+
+/// One rendered frame, as a host-inline preprocessor sees it.
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // read by host-inline implementations; none is built in yet
+pub(crate) struct HostFrame<'a> {
+    /// Seconds since the deck's previous frame. `TIMEDELTA`.
+    pub time_delta: f32,
+    /// The deck's frame counter. `FRAMEINDEX`.
+    pub frame_index: u32,
+    /// The deck's render size in pixels.
+    pub render_size: (u32, u32),
+    /// Live parameter and phase values bound by `PARAM_BINDINGS` and
+    /// `PHASE_BINDINGS`.
+    pub state: &'a AnalyzerStateSnapshot,
+}
+
+/// A preprocessor stepped on the render thread once per rendered frame, before
+/// the deck's shader, so its outputs always belong to the frame being drawn.
+///
+/// Instances belong to one deck. Expensive, latency-tolerant work goes to a
+/// worker the preprocessor owns; `step` must stay within its registered
+/// budget.
+pub(crate) trait HostInlinePreprocessor: Send + 'static {
+    /// Every output this preprocessor can produce.
+    fn output_schema(&self) -> AnalyzerSchema;
+
+    /// Called once before the first step, with the ISF `OPTIONS`.
+    fn init(&mut self, options: &serde_json::Value) -> anyhow::Result<()>;
+
+    /// Advance one frame and return this frame's outputs.
+    fn step(&mut self, frame: &HostFrame<'_>) -> AnalyzerSnapshot;
+
+    /// State that must survive a save, or `None` if there is none.
+    fn persisted_state(&self) -> Option<serde_json::Value> {
+        None
+    }
+
+    /// Replace the state with a saved one. May be called before or after
+    /// `init`.
+    ///
+    /// # Errors
+    ///
+    /// When the value is not a state this preprocessor wrote. The caller logs
+    /// it and keeps the current state.
+    fn restore_state(&mut self, _state: &serde_json::Value) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Called when the deck drops the preprocessor.
+    fn shutdown(&mut self) {}
+}

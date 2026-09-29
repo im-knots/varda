@@ -140,8 +140,14 @@ layout(set = 0, binding = 0) uniform ISFUniforms {
     float PHASE_TIME_1;      // Phase accumulator 1
     float PHASE_TIME_2;      // Phase accumulator 2
     float PHASE_TIME_3;      // Phase accumulator 3
+    vec2 JITTER;             // Sub-pixel offset in pixels, [-0.5, 0.5), Halton (2, 3)
+    int JITTERINDEX;         // Index in the 16-frame jitter cycle
+    int HISTORYVALID;        // 0 on the first frame after HISTORY targets were cleared
 };
 ```
+
+You can stop the block after any field. A shader that declares only up to `PHASE_TIME_3` still
+binds.
 
 ### Phase Accumulators
 
@@ -478,7 +484,9 @@ For feedback effects, simulations, and post-processing chains, declare multiple 
 - The final pass (empty `{}`) renders to the output.
 - Read pass buffers as `texture2D` samplers with the target name.
 - Optional `WIDTH`/`HEIGHT` expressions: `"$WIDTH/2"` for half-resolution buffers. Only `$WIDTH`, `$HEIGHT`, `$WIDTH/N` and `$WIDTH*N` with integer `N` are parsed. `$WIDTH/2.0` and arithmetic like `max($WIDTH,$HEIGHT)` are not parsed and fall back to full resolution. A bare integer literal (`"WIDTH": "32"`) sets a fixed size, which you can use to build a reduction pyramid.
-- Optional `FLOAT: true` for 32-bit float buffers (HDR, simulation data).
+- Optional `FLOAT: true`. Pass buffers are 16-bit float (`rgba16float`) with or without it; use
+  `FORMAT` for 32-bit.
+- Optional `FORMAT`, `TARGETS` and `HISTORY`, described below.
 
 > **`RENDERSIZE` is the size of the pass being rendered**, not the deck's. In a
 > `"WIDTH": "1", "HEIGHT": "1"` pass, `RENDERSIZE` is `(1, 1)`. Anything that needs the deck's
@@ -486,11 +494,66 @@ For feedback effects, simulations, and post-processing chains, declare multiple 
 > full-size pass. For this reason `eyes_depth.fs` carries its gaze target in sensor space through a
 > 1x1 pass and converts it to deck space in the final pass.
 
-**Every pass buffer is double-buffered**, whether `PERSISTENT` or not. `PERSISTENT` controls whether
-the contents carry meaning across frames. Each pass reads the last value written to its target and
+**Every pass buffer is double-buffered.** Each pass reads the last value written to its target and
 writes to the other texture. (Every pass binds all pass buffers as sampled textures, and wgpu rejects
-a texture used as both color attachment and sampled resource.) Budget two textures per declared pass
-when sizing large buffers.
+a texture used as both color attachment and sampled resource.) Budget two textures per declared
+target when sizing large buffers. A pass that needs its own previous output declares `HISTORY`;
+reading your own target from any other pass is not guaranteed to keep working.
+
+### `HISTORY`: last frame's output
+
+```json
+{ "TARGET": "taa", "HISTORY": true }
+```
+
+A `HISTORY` pass runs once per frame and reads its own target to get what it wrote in the previous
+frame. Use it for temporal accumulation (TAA, denoising, shadows or fog built up over frames).
+
+History starts at zero whenever the pass buffers are allocated: when the deck is created, when the
+shader reloads, and when the deck is resized. On that first frame `HISTORYVALID` is 0, so the shader
+can ignore the empty history; on every later frame it is 1.
+
+`HISTORY` and `PERSISTENT` cannot be combined. `PERSISTENT` runs four substeps a frame (below), which
+makes it four times as expensive as `HISTORY` for the same pass.
+
+### `FORMAT` and `TARGETS`: G-buffers
+
+```json
+"PASSES": [
+    { "TARGETS": ["gA", "gB"], "FORMATS": ["rgba32float", "rgba16float"] },
+    { "TARGET": "depth", "FORMAT": "r32float" },
+    {}
+]
+```
+
+| Format | Use |
+|---|---|
+| `rgba16float` (default) | Color, normals, anything you want to sample with filtering |
+| `rgba32float` | Depth and data that need full float precision |
+| `r32float` | One channel of full precision at a quarter of the memory |
+
+- `TARGETS` writes up to four buffers in one pass. Declare one output per target:
+  `layout(location = 0) out vec4 out0; layout(location = 1) out vec4 out1;`. All targets of a pass
+  share its `WIDTH` and `HEIGHT`. Give their formats as `FORMATS`, one per target.
+- **Read 32-bit targets with `texelFetch`**, never `texture()`. They are not filterable:
+  `texelFetch(sampler2D(gA, texSampler), ivec2(gl_FragCoord.xy), 0)`.
+- The final pass renders to the deck and has no `FORMAT` or `TARGETS`.
+
+Half-float depth has an 11-bit mantissa. A hit position rebuilt from it at 1080p is off by about
+half a pixel's footprint, which is enough to make shadow rays start inside the surface. Store depth
+in `rgba32float` or `r32float`.
+
+### `JITTER`: sub-pixel offsets
+
+`JITTER` is an offset in pixels, in `[-0.5, 0.5)`, from the Halton (2, 3) sequence over 16 frames.
+It changes once per rendered frame and is the same for every pass of that frame. Add it to the pixel
+position before building a ray, and a `HISTORY` pass that accumulates the result gets
+supersampled edges. `JITTERINDEX` is the position in the cycle.
+
+### Texture limit
+
+Every pass binds every pass buffer, plus imported and preprocessor textures. A shader that binds
+more sampled textures than the GPU allows fails to load, and the error names both numbers.
 
 **Reductions.** A fragment shader cannot reduce an image to one value in a single pass, and doing it
 inline in the final pass repeats the whole scan for every output pixel. Use fixed-size passes as a
@@ -498,13 +561,15 @@ pyramid. `eyes_depth.fs` tallies the sensor image into a 32x32 buffer, reduces t
 target, and reads one texel in the final pass: about 110k texture fetches per frame, against billions
 for the inline version.
 
-### Persistent pass substeps and pass-buffer filtering
+### Persistent pass substeps and pass-buffer sampling
 
-**`PERSISTENT` passes run four times per frame.** Varda substeps persistent passes for numerical stability: 4 iterations at `TIMEDELTA / 4`, with `FRAMEINDEX` advancing once per substep. Time-based simulations integrate correctly (4 × dt/4 == dt). Anything that steps once per invocation regardless of time (cellular automata, fixed-step reaction-diffusion, `FRAMEINDEX`-gated logic) advances **four generations per frame**.
+**`PERSISTENT` passes in generators run four times per frame** (in effects, once). Varda substeps persistent passes for numerical stability: 4 iterations at `TIMEDELTA / 4`, with `FRAMEINDEX` advancing once per substep. Time-based simulations integrate correctly (4 × dt/4 == dt). Anything that steps once per invocation regardless of time (cellular automata, fixed-step reaction-diffusion, `FRAMEINDEX`-gated logic) advances **four generations per frame**.
 
 Drive state changes from `TIMEDELTA`, or rate-limit against `FRAMEINDEX` explicitly, as `game_of_life.fs` does. A persistent multi-pass shader also costs roughly 4× its apparent GPU budget, which matters when you stack decks.
 
-**Any pass buffer forces nearest-neighbor filtering on every texture in the shader.** Float pass buffers are not filterable in WebGPU, and the sampler is shared, so declaring even one `PASSES` target switches `inputImage` sampling from linear to nearest. If a filter looks blocky after you add a pass, this is the cause. Sample at texel centers to keep results predictable:
+**`texSampler` filters linearly.** `rgba16float` pass buffers, imported images and `inputImage`
+are all sampled with bilinear filtering. For an exact texel, use `texelFetch`, or sample at texel
+centers:
 
 ```glsl
 vec2 texel = 1.0 / RENDERSIZE;
@@ -531,13 +596,13 @@ grade. Before copying the pattern:
   must be 1.0, but a pass buffer's alpha can hold anything. Packing depth there lets a single-buffer
   post pass do focus and haze without a second target. Normalize depth by a constant the shader also
   uses to convert a world-space focus parameter, so the two agree.
-- **Every pass buffer is `Rgba16Float`**, with or without `FLOAT: true`, because all pass targets
-  use the compositing format. That covers HDR emission and linear depth, so bloom can threshold
-  above 1.0.
+- **Pass buffers default to `Rgba16Float`**, with or without `FLOAT: true`. That covers HDR emission,
+  so bloom can threshold above 1.0. Depth that later passes rebuild positions from belongs in a
+  32-bit `FORMAT` target.
 - **Keep the post pass unclamped and linear.** Varda tonemaps the composite downstream, and a grade
   that clamps to 1.0 removes the highlight headroom the tonemap uses. Put saturation and contrast in
   the shader; leave the display transform to Varda.
-- **Sampling is nearest** (see above), so post taps land exactly where you put them. Divide uv
+- **Sampling is bilinear** (see above), so a post tap between texels blends its neighbors. Divide uv
   offsets by the aspect ratio, or radial effects come out elliptical.
 
 
@@ -867,9 +932,17 @@ Add a `PREPROCESSORS` array to your ISF JSON header:
 ```
 
 Each preprocessor entry declares:
-- **NAME**: the texture binding name your shader uses
-- **TYPE**: which analyzer to run (e.g. `face_detect`, `depth_estimate`, `edge_detect`)
-- **OPTIONS** (optional): a JSON object passed to the analyzer as configuration (e.g. `{"resolution": "half"}`)
+
+| Key | Default | Meaning |
+|---|---|---|
+| `NAME` | required | The texture binding name your shader uses, and the output it receives |
+| `TYPE` | required | Which preprocessor to run (e.g. `face_detect`, `depth_sensor`) |
+| `OPTIONS` | `{}` | A JSON object passed to the preprocessor as configuration |
+| `PARAM_BINDINGS` | `{}` | Preprocessor value name to one of your `INPUTS`. The preprocessor reads the live, modulated value every frame |
+| `PHASE_BINDINGS` | `{}` | Preprocessor value name to a phase accumulator index (0 to 3) |
+| `FORMAT` | `rgba8unorm` | Texture format of the output. `rgba32float` holds raw floats; read it with `texelFetch`, never `texture()` |
+
+Several entries with the same `TYPE` share one running instance, one entry per output.
 
 ### How It Works
 
@@ -880,6 +953,8 @@ Each preprocessor entry declares:
 5. Your shader reads them with standard `texture()` calls.
 
 Preprocessor textures are bound **after** imported textures and **before** user params. They never block the render loop. If analysis is slower than the frame rate, the shader uses the most recent result.
+
+Some preprocessors are **host-inline**: instead of a background thread, they step once per rendered frame on the render thread, just before your shader, so their outputs always belong to the frame being drawn. They take no frame input, only bound parameters and time. A host-inline preprocessor can also keep state that is saved with the scene and with deck presets.
 
 ### Available Analyzer Types
 

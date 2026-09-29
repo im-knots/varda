@@ -3,7 +3,10 @@
 pub(crate) mod brightness;
 #[cfg(feature = "face-detection")]
 pub(crate) mod face_detect;
+pub(crate) mod host_inline;
 pub(crate) mod traits;
+
+pub(crate) use host_inline::HostInlineSet;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -14,11 +17,15 @@ use std::time::Duration;
 use arc_swap::ArcSwap;
 use crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError};
 
-use traits::{Analyzer, AnalyzerInput, AnalyzerSchema, AnalyzerSnapshot, AnalyzerStateSnapshot};
+use traits::{
+    Analyzer, AnalyzerInput, AnalyzerSchema, AnalyzerSnapshot, AnalyzerStateSnapshot,
+    HostInlinePreprocessor,
+};
 
 // ── Registry ────────────────────────────────────────────────────────────────
 
 type AnalyzerFactory = Box<dyn Fn() -> Box<dyn Analyzer> + Send + Sync>;
+type HostInlineFactory = Box<dyn Fn() -> Box<dyn HostInlinePreprocessor> + Send + Sync>;
 
 /// Execution category of a preprocessor type. Shaders declare every category
 /// the same way in `PREPROCESSORS`; the category decides how the engine runs it
@@ -31,6 +38,9 @@ pub(crate) enum PreprocessorCategory {
     /// GPU passes reading textures from an external device manager. The device
     /// is acquired at load; if unavailable, the shader does not load.
     GpuDeviceBacked,
+    /// Stepped on the render thread once per rendered frame, before the
+    /// shader. One instance per deck. Optional.
+    HostInline,
     // GPU passes over the deck's own frame (e.g. edge detect) are not
     // implemented; they need a frame-input path no preprocessor uses yet.
 }
@@ -39,7 +49,7 @@ impl PreprocessorCategory {
     /// Whether this category runs as GPU passes instead of an analyzer thread.
     /// GPU categories have no factory and never go to `DeckAnalyzers`.
     pub(crate) fn is_gpu(self) -> bool {
-        !matches!(self, Self::CpuAnalyzer)
+        matches!(self, Self::GpuDeviceBacked)
     }
 
     /// Whether a shader declaring this type fails to load when it is unavailable.
@@ -51,6 +61,7 @@ impl PreprocessorCategory {
 /// Available preprocessor types, built at startup.
 pub(crate) struct AnalyzerRegistry {
     factories: HashMap<String, AnalyzerFactory>,
+    host_inline_factories: HashMap<String, HostInlineFactory>,
     schemas: HashMap<String, AnalyzerSchema>,
     categories: HashMap<String, PreprocessorCategory>,
 }
@@ -59,6 +70,7 @@ impl AnalyzerRegistry {
     pub(crate) fn new() -> Self {
         Self {
             factories: HashMap::new(),
+            host_inline_factories: HashMap::new(),
             schemas: HashMap::new(),
             categories: HashMap::new(),
         }
@@ -95,6 +107,33 @@ impl AnalyzerRegistry {
         self.categories
             .insert(preprocessor_type.to_owned(), category);
         self
+    }
+
+    /// Registers a host-inline preprocessor type with a factory.
+    #[allow(dead_code)] // no built-in host-inline type is registered yet; tests register one
+    pub(crate) fn register_host_inline<F>(mut self, preprocessor_type: &str, factory: F) -> Self
+    where
+        F: Fn() -> Box<dyn HostInlinePreprocessor> + Send + Sync + 'static,
+    {
+        let schema = factory().output_schema();
+        self.schemas.insert(preprocessor_type.to_owned(), schema);
+        self.host_inline_factories
+            .insert(preprocessor_type.to_owned(), Box::new(factory));
+        self.categories.insert(
+            preprocessor_type.to_owned(),
+            PreprocessorCategory::HostInline,
+        );
+        self
+    }
+
+    /// New instance of a host-inline type. `None` for any other category.
+    pub(crate) fn create_host_inline(
+        &self,
+        preprocessor_type: &str,
+    ) -> Option<Box<dyn HostInlinePreprocessor>> {
+        self.host_inline_factories
+            .get(preprocessor_type)
+            .map(|f| f())
     }
 
     /// New instance of `analyzer_type`. `None` for GPU categories, which have

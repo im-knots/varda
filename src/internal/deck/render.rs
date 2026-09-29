@@ -7,7 +7,7 @@ use crate::audio::AudioData;
 use crate::isf::PhaseInput;
 use crate::modulation::ModulationEngine;
 use crate::params::{ParamValue, ShaderParams};
-use crate::renderer::{GpuContext, ISFUniforms};
+use crate::renderer::GpuContext;
 use crate::source::{SourceControl, SourceFrame};
 use anyhow::Result;
 use std::collections::HashMap;
@@ -221,15 +221,34 @@ impl Deck {
             }
         }
 
+        // Host-inline preprocessors live in the deck's own set, one per type.
+        let host_inline: Vec<&str> = needed
+            .iter()
+            .map(|(ty, _)| ty.as_str())
+            .filter(|ty| registry.category_for(ty) == Some(PreprocessorCategory::HostInline))
+            .collect();
+        self.host_inline.retain(&host_inline);
+        for (analyzer_type, options) in &needed {
+            if host_inline.contains(&analyzer_type.as_str())
+                && !self.host_inline.ensure(analyzer_type, registry, options)
+            {
+                log::warn!(
+                    "Deck '{}': failed to start preprocessor '{}'",
+                    self.uuid,
+                    analyzer_type
+                );
+            }
+        }
+
         // Deduplicate by analyzer_type and request each
         let mut seen = std::collections::HashSet::new();
         for (analyzer_type, options) in &needed {
             // GPU-inline preprocessors have no factory or worker thread; the deck render path
             // drives them. Passing one to `DeckAnalyzers` would log a spurious failure on every
-            // load.
+            // load. Host-inline ones are handled above.
             if registry
                 .category_for(analyzer_type)
-                .is_some_and(PreprocessorCategory::is_gpu)
+                .is_some_and(|c| c != PreprocessorCategory::CpuAnalyzer)
             {
                 continue;
             }
@@ -390,6 +409,17 @@ impl Deck {
         // fields.
         self.run_depth_preprocess(context, cmd_buffers);
 
+        // Host-inline preprocessors step for this frame before anything draws with their outputs.
+        if !self.host_inline.is_empty() {
+            self.step_host_inline(
+                context,
+                time_delta,
+                generator_phase_times,
+                modulation,
+                param_prefix,
+            );
+        }
+
         let (target, target_texture) = if source_to_b {
             (&self.texture_b_view, &self.texture_b)
         } else {
@@ -436,21 +466,15 @@ impl Deck {
             );
             let effect_phase_times = effect.phase_accumulators;
 
-            let uniforms = ISFUniforms {
+            let uniforms = crate::generator::pass::uniforms(
+                audio_data,
                 time,
                 time_delta,
-                frame_index: self.frame_count,
-                pass_index: 0,
-                render_size: [self.texture.width() as f32, self.texture.height() as f32],
-                audio_level: audio_data.level,
-                audio_bass: audio_data.bass(),
-                audio_mid: audio_data.mid(),
-                audio_treble: audio_data.treble(),
-                audio_bpm: audio_data.bpm.unwrap_or(0.0),
-                audio_beat_phase: audio_data.beat_phase(),
-                date: crate::generator::get_current_date(),
-                phase_times: effect_phase_times,
-            };
+                self.frame_count,
+                0,
+                [self.texture.width() as f32, self.texture.height() as f32],
+                effect_phase_times,
+            );
             let (input_view, output_view) = if read_from_b {
                 (&self.texture_b_view, &self.texture_view)
             } else {
@@ -509,6 +533,60 @@ impl Deck {
         }
 
         Ok(())
+    }
+
+    /// Step the host-inline preprocessors with this frame's bound values and upload their
+    /// outputs into the preprocessor slots that declare them.
+    fn step_host_inline(
+        &mut self,
+        context: &GpuContext,
+        time_delta: f32,
+        generator_phase_times: [f32; 4],
+        modulation: &ModulationEngine,
+        param_prefix: &str,
+    ) {
+        let mut states = HashMap::new();
+        collect_preprocessor_state(
+            self.source.preprocessor_slots(),
+            &mut self.generator_params,
+            generator_phase_times,
+            modulation,
+            param_prefix,
+            &mut states,
+        );
+        for effect in &mut self.effects {
+            collect_preprocessor_state(
+                &effect.preprocessor_textures,
+                &mut effect.params,
+                effect.phase_accumulators,
+                modulation,
+                &effect.param_prefix,
+                &mut states,
+            );
+        }
+        self.host_inline.step(
+            time_delta,
+            self.frame_count,
+            (self.texture.width(), self.texture.height()),
+            &states,
+        );
+        let host_inline = &self.host_inline;
+        let upload = |slots: &mut [PreprocessorSlot]| {
+            for slot in slots {
+                if let Some(tex_data) = host_inline
+                    .latest(&slot.analyzer_type)
+                    .and_then(|snapshot| snapshot.textures.get(&slot.name))
+                {
+                    upload_texture_to_slot(&context.device, &context.queue, slot, tex_data);
+                }
+            }
+        };
+        if let Some(slots) = self.source.preprocessor_slots_mut() {
+            upload(slots);
+        }
+        for effect in &mut self.effects {
+            upload(&mut effect.preprocessor_textures);
+        }
     }
 
     /// Run the depth-sensor preprocessor's conversion passes for this frame.
@@ -669,11 +747,13 @@ mod tests {
     }
 
     #[test]
-    fn isf_uniforms_size_is_80_bytes() {
+    fn isf_uniforms_size_is_96_bytes() {
+        // Shaders declare the block themselves, so fields are only ever
+        // appended: a shader declaring the older, shorter block still binds.
         assert_eq!(
-            std::mem::size_of::<ISFUniforms>(),
-            80,
-            "ISFUniforms should be 80 bytes (64 original + 16 for phase_times)"
+            std::mem::size_of::<crate::renderer::ISFUniforms>(),
+            96,
+            "80 bytes through PHASE_TIME_3, then JITTER, JITTERINDEX, HISTORYVALID"
         );
     }
 
@@ -1073,5 +1153,76 @@ mod tests {
 
         // Normal resize still works
         deck.resize(&gpu, 128, 128);
+    }
+
+    /// A generator whose `step` parameter is bound into the test counter.
+    fn counter_deck(gpu: &GpuContext) -> crate::deck::Deck {
+        use crate::analyzer::host_inline::tests::{COUNTER, registry};
+        let source = format!(
+            r#"/*{{
+    "INPUTS": [{{"NAME": "step", "TYPE": "float", "DEFAULT": 2.0, "MIN": 0.0, "MAX": 10.0}}],
+    "PREPROCESSORS": [{{"NAME": "count", "TYPE": "{COUNTER}", "PARAM_BINDINGS": {{"step": "step"}}}}]
+}}*/
+#version 450
+layout(location = 0) out vec4 fragColor;
+void main() {{ fragColor = vec4(1.0); }}
+"#
+        );
+        let shader = crate::isf::ISFShader::from_string(&source).expect("parse");
+        let mut deck = crate::deck::Deck::from_shader(gpu, shader, 64, 64).expect("deck");
+        deck.ensure_preprocessor_analyzers(&registry());
+        deck
+    }
+
+    fn render(deck: &mut crate::deck::Deck, gpu: &GpuContext) {
+        let mut cmd_buffers = Vec::new();
+        deck.render(
+            gpu,
+            &AudioData::default(),
+            &no_modulation(),
+            0,
+            &mut cmd_buffers,
+        )
+        .expect("render");
+        gpu.queue.submit(cmd_buffers);
+    }
+
+    fn count(deck: &crate::deck::Deck) -> f32 {
+        use crate::analyzer::host_inline::tests::COUNTER;
+        deck.host_inline
+            .latest(COUNTER)
+            .expect("running")
+            .scalar("count")
+    }
+
+    #[test]
+    fn host_inline_preprocessors_step_once_per_frame_with_bound_parameters() {
+        let Some(gpu) = crate::testing::headless_gpu() else {
+            return;
+        };
+        let mut deck = counter_deck(&gpu);
+        render(&mut deck, &gpu);
+        render(&mut deck, &gpu);
+        assert_eq!(count(&deck), 4.0, "two frames at the bound step of 2");
+    }
+
+    #[test]
+    fn host_inline_state_is_saved_with_the_source_config() {
+        let Some(gpu) = crate::testing::headless_gpu() else {
+            return;
+        };
+        let mut deck = counter_deck(&gpu);
+        render(&mut deck, &gpu);
+        let saved = deck.source_config();
+        let states = saved
+            .get("preprocessor_state")
+            .and_then(serde_json::Value::as_object)
+            .expect("preprocessor_state saved")
+            .clone();
+
+        let mut restored = counter_deck(&gpu);
+        restored.restore_preprocessor_state(&states);
+        render(&mut restored, &gpu);
+        assert_eq!(count(&restored), 4.0, "resumed from 2 and stepped by 2");
     }
 }

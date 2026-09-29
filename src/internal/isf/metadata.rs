@@ -242,9 +242,144 @@ pub struct ISFPass {
     #[serde(rename = "HEIGHT")]
     pub height: Option<String>,
 
-    /// Use a floating-point texture.
+    /// Use a floating-point texture. Pass targets are `rgba16float` either way.
     #[serde(rename = "FLOAT")]
     pub float: Option<bool>,
+
+    /// Several targets written in one pass (MRT), instead of `TARGET`.
+    #[serde(rename = "TARGETS")]
+    pub targets: Option<Vec<String>>,
+
+    /// Runs once per frame and reads its own previous output.
+    #[serde(rename = "HISTORY")]
+    pub history: Option<bool>,
+
+    /// Texture format of `TARGET`.
+    #[serde(rename = "FORMAT")]
+    pub format: Option<String>,
+
+    /// Texture formats of `TARGETS`, one per target.
+    #[serde(rename = "FORMATS")]
+    pub formats: Option<Vec<String>>,
+}
+
+/// Most targets one pass may write.
+pub const MAX_PASS_TARGETS: usize = 4;
+
+/// A pass target format, named by ISF `FORMAT` / `FORMATS`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PassFormat {
+    Rgba16Float,
+    Rgba32Float,
+    R32Float,
+}
+
+impl PassFormat {
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "rgba16float" => Some(Self::Rgba16Float),
+            "rgba32float" => Some(Self::Rgba32Float),
+            "r32float" => Some(Self::R32Float),
+            _ => None,
+        }
+    }
+}
+
+impl ISFPass {
+    /// The buffers this pass writes, in attachment order. Empty for the final
+    /// pass.
+    pub fn target_names(&self) -> Vec<&str> {
+        match (&self.target, &self.targets) {
+            (Some(target), _) => vec![target.as_str()],
+            (None, Some(targets)) => targets.iter().map(String::as_str).collect(),
+            (None, None) => Vec::new(),
+        }
+    }
+
+    /// Whether this pass writes a buffer rather than the output.
+    pub fn is_targeted(&self) -> bool {
+        self.target.is_some() || self.targets.as_ref().is_some_and(|t| !t.is_empty())
+    }
+
+    pub fn is_persistent(&self) -> bool {
+        self.persistent.unwrap_or(false)
+    }
+
+    pub fn is_history(&self) -> bool {
+        self.history.unwrap_or(false)
+    }
+
+    /// Declared format of each target, in attachment order. `None` where the
+    /// pass leaves it to the host's default.
+    pub fn target_formats(&self) -> Vec<Option<PassFormat>> {
+        let declared: Vec<Option<&String>> = match (&self.format, &self.formats) {
+            (Some(format), _) => vec![Some(format)],
+            (None, Some(formats)) => formats.iter().map(Some).collect(),
+            (None, None) => Vec::new(),
+        };
+        (0..self.target_names().len())
+            .map(|i| {
+                declared
+                    .get(i)
+                    .copied()
+                    .flatten()
+                    .and_then(|name| PassFormat::from_name(name))
+            })
+            .collect()
+    }
+
+    /// Reject pass declarations the renderer cannot honor.
+    ///
+    /// # Errors
+    ///
+    /// Names the first problem found.
+    pub fn validate(&self, index: usize) -> anyhow::Result<()> {
+        use anyhow::bail;
+        let label = format!("PASSES[{index}]");
+        if self.target.is_some() && self.targets.is_some() {
+            bail!("{label} declares both TARGET and TARGETS");
+        }
+        if self.is_history() && self.is_persistent() {
+            bail!("{label} declares both HISTORY and PERSISTENT");
+        }
+        let names = self.target_names();
+        if names.len() > MAX_PASS_TARGETS {
+            bail!(
+                "{label} declares {} TARGETS; the limit is {MAX_PASS_TARGETS}",
+                names.len()
+            );
+        }
+        if self.targets.as_ref().is_some_and(Vec::is_empty) {
+            bail!("{label} declares an empty TARGETS list");
+        }
+        if names.is_empty() {
+            if self.is_history() || self.format.is_some() || self.formats.is_some() {
+                bail!("{label} is the output pass; HISTORY, FORMAT and FORMATS need a target");
+            }
+            return Ok(());
+        }
+        if self.format.is_some() && self.targets.is_some() {
+            bail!("{label} uses TARGETS; give its formats as FORMATS");
+        }
+        if self.formats.is_some() && self.target.is_some() {
+            bail!("{label} uses TARGET; give its format as FORMAT");
+        }
+        if let Some(formats) = &self.formats
+            && formats.len() != names.len()
+        {
+            bail!(
+                "{label} declares {} FORMATS for {} TARGETS",
+                formats.len(),
+                names.len()
+            );
+        }
+        for name in self.format.iter().chain(self.formats.iter().flatten()) {
+            if PassFormat::from_name(name).is_none() {
+                bail!("{label} FORMAT '{name}' is not one of rgba16float, rgba32float, r32float");
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Which user parameter drives which phase accumulator.
@@ -309,6 +444,18 @@ pub struct ISFImported {
 }
 
 impl ISFMetadata {
+    /// Reject declarations the renderer cannot honor.
+    ///
+    /// # Errors
+    ///
+    /// Names the first invalid pass.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        for (index, pass) in self.passes.iter().flatten().enumerate() {
+            pass.validate(index)?;
+        }
+        Ok(())
+    }
+
     /// Generator: no image inputs.
     pub fn is_generator(&self) -> bool {
         if let Some(inputs) = &self.inputs {

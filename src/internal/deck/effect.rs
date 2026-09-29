@@ -2,7 +2,7 @@
 
 use super::Effect;
 use crate::generator::{
-    create_pass_buffers, create_preprocessor_slots, load_imported_textures,
+    PassBindings, PassSet, create_preprocessor_slots, load_imported_textures,
     preprocessor_filterability,
 };
 use crate::isf::{ISFPass, ISFShader, compile_glsl_to_spirv};
@@ -37,7 +37,6 @@ impl Effect {
             .context("Failed to compile filter shader to SPIR-V")?;
 
         let passes: Vec<ISFPass> = shader.metadata.passes.clone().unwrap_or_default();
-        let num_passes = passes.iter().filter(|p| p.target.is_some()).count();
 
         // Load ISF IMPORTED images
         let imported_textures =
@@ -50,17 +49,18 @@ impl Effect {
             &context.device,
             &spirv,
             target_format,
-            true, // has_input_image — it's a filter
-            num_passes,
+            true, // has_input_image, since it's a filter
+            &PassSet::binding_filterability(&passes, target_format),
+            &PassSet::target_formats(&passes, target_format),
             imported_textures.len(),
             &preprocessor_filterable,
         )
         .context("Failed to create effect pipeline")?;
 
         // Pass buffers use the effect's target format, sized at the internal resolution.
-        let pass_buffers = create_pass_buffers(
+        let passes = PassSet::new(
             context,
-            &passes,
+            passes,
             1920,
             1080,
             target_format,
@@ -81,7 +81,6 @@ impl Effect {
             pipeline,
             enabled: true,
             params,
-            pass_buffers,
             passes,
             target_format,
             imported_textures,
@@ -132,56 +131,6 @@ impl Effect {
         )
     }
 
-    /// Encode one pass of a multi-pass effect into `target`, reading its
-    /// uniforms from `slot`, the input, and every pass buffer's current contents.
-    #[allow(clippy::too_many_arguments)] // the pass's bindings, borrowed from different owners
-    fn encode_pass(
-        &self,
-        context: &GpuContext,
-        encoder: &mut wgpu::CommandEncoder,
-        slot: usize,
-        input_view: &wgpu::TextureView,
-        imported_views: &[&wgpu::TextureView],
-        preprocessor_views: &[&wgpu::TextureView],
-        user_params_buffer: &wgpu::Buffer,
-        target: &wgpu::TextureView,
-    ) {
-        let pass_buffer_views: Vec<&wgpu::TextureView> = self
-            .passes
-            .iter()
-            .filter_map(|p| p.target.as_ref().and_then(|t| self.pass_buffers.get(t)))
-            .map(super::PassBuffer::read_view)
-            .collect();
-        let bind_group = self.pipeline.create_pass_bind_group(
-            &context.device,
-            slot,
-            Some(input_view),
-            &pass_buffer_views,
-            imported_views,
-            preprocessor_views,
-            Some(user_params_buffer),
-        );
-        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Effect Pass Render"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-                depth_slice: None,
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        render_pass.set_pipeline(&self.pipeline.pipeline);
-        render_pass.set_bind_group(0, &bind_group, &[]);
-        render_pass.draw(0..3, 0..1);
-    }
-
     /// Apply this effect with modulation support
     ///
     /// # Errors
@@ -229,109 +178,41 @@ impl Effect {
             .map(|pp| &pp.view)
             .collect();
 
-        let has_targeted_passes = self.passes.iter().any(|p| p.target.is_some());
-
-        if has_targeted_passes {
-            // Multi-pass: targeted passes, then the final pass to the output. Each pass has its own
-            // uniform slot, so all are written first and encoded into one command buffer.
-            let targeted = self.passes.iter().filter(|p| p.target.is_some()).count();
-            self.pipeline
-                .ensure_pass_slots(&context.device, targeted + 1);
-            let mut encoder =
-                context
-                    .device
-                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("Effect Multi-pass Encoder"),
-                    });
-            let mut slot = 0;
-            for (pass_idx, pass) in self.passes.iter().enumerate() {
-                let Some(target_name) = &pass.target else {
-                    continue; // Final pass handled below
-                };
+        // Targeted passes, then the output pass, each with its own uniform
+        // slot, encoded into one command buffer. A single-pass effect is the
+        // output pass alone. Persistent passes run once per frame here.
+        self.pipeline
+            .ensure_pass_slots(&context.device, self.passes.uniform_slots(1));
+        let bindings = PassBindings {
+            device: &context.device,
+            queue: &context.queue,
+            pipeline: &self.pipeline,
+            input: Some(input_view),
+            imported: &imported_views,
+            preprocessors: &preprocessor_views,
+            user_params: user_params_buffer,
+        };
+        let mut encoder = context
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Effect Encoder"),
+            });
+        let slot = self
+            .passes
+            .encode_targeted(&mut encoder, &bindings, 1, |step| {
                 let mut pass_uniforms = *uniforms;
-                pass_uniforms.pass_index = i32::try_from(pass_idx).unwrap_or(i32::MAX);
-                self.pipeline
-                    .write_pass_uniforms(&context.queue, slot, &pass_uniforms);
-                let target_view = self
-                    .pass_buffers
-                    .get(target_name)
-                    .map_or(output_view, super::PassBuffer::write_view);
-                self.encode_pass(
-                    context,
-                    &mut encoder,
-                    slot,
-                    input_view,
-                    &imported_views,
-                    &preprocessor_views,
-                    user_params_buffer,
-                    target_view,
-                );
-                slot += 1;
-                if let Some(pb) = self.pass_buffers.get_mut(target_name) {
-                    pb.swap();
-                }
-            }
-
-            let mut final_uniforms = *uniforms;
-            final_uniforms.pass_index = i32::try_from(self.passes.len()).unwrap_or(i32::MAX);
-            self.pipeline
-                .write_pass_uniforms(&context.queue, slot, &final_uniforms);
-            self.encode_pass(
-                context,
-                &mut encoder,
-                slot,
-                input_view,
-                &imported_views,
-                &preprocessor_views,
-                user_params_buffer,
-                output_view,
-            );
-            cmd_buffers.push(encoder.finish());
-        } else {
-            // Simple single-pass effect
-            self.pipeline.update_uniforms(&context.queue, uniforms);
-
-            let bind_group = self.pipeline.create_bind_group(
-                &context.device,
-                Some(input_view),
-                &[],
-                &imported_views,
-                &preprocessor_views,
-                Some(user_params_buffer),
-            );
-
-            let mut encoder =
-                context
-                    .device
-                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("Effect Render Encoder"),
-                    });
-
-            {
-                let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Effect Render Pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: output_view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                            store: wgpu::StoreOp::Store,
-                        },
-                        depth_slice: None,
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-
-                render_pass.set_pipeline(&self.pipeline.pipeline);
-                render_pass.set_bind_group(0, &bind_group, &[]);
-                render_pass.draw(0..3, 0..1);
-            }
-
-            cmd_buffers.push(encoder.finish());
+                pass_uniforms.pass_index = i32::try_from(step.pass_index).unwrap_or(i32::MAX);
+                pass_uniforms
+            });
+        let mut final_uniforms = *uniforms;
+        if self.passes.has_targeted_passes() {
+            final_uniforms.pass_index =
+                i32::try_from(self.passes.passes().len()).unwrap_or(i32::MAX);
         }
+        self.passes
+            .encode_output(&mut encoder, &bindings, slot, final_uniforms, output_view);
+        cmd_buffers.push(encoder.finish());
+        self.passes.finish_frame();
 
         Ok(())
     }
