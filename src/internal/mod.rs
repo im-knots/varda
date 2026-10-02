@@ -10,6 +10,7 @@ pub mod delivery;
 pub mod depth;
 pub mod files;
 pub mod fonts;
+pub mod fractal;
 pub mod generator;
 pub mod html;
 pub mod ids;

@@ -194,6 +194,8 @@ pub struct ShaderParams {
     scratch: Vec<u8>,
     /// Reusable scratch string for modulation key construction (avoids per-param allocation).
     mod_key_scratch: String,
+    /// The `SPECIALIZE` inputs, in `INPUTS` order.
+    specialized: Vec<String>,
 }
 
 impl ShaderParams {
@@ -215,6 +217,11 @@ impl ShaderParams {
             }
         }
 
+        let specialized = param_order
+            .iter()
+            .filter(|name| definitions[*name].specialize)
+            .cloned()
+            .collect();
         Self {
             param_order,
             values,
@@ -223,12 +230,36 @@ impl ShaderParams {
             dirty: true,
             scratch: Vec::new(),
             mod_key_scratch: String::new(),
+            specialized,
         }
+    }
+
+    /// The pipeline constants of the `SPECIALIZE` inputs, by `constant_id`,
+    /// from the base values: modulation never reaches them. A float rounds to
+    /// the nearest integer.
+    pub fn specialization_constants(&self) -> impl Iterator<Item = f64> + '_ {
+        self.specialized
+            .iter()
+            .map(|name| match self.values.get(name) {
+                Some(ParamValue::Long(v)) => f64::from(*v),
+                Some(ParamValue::Bool(v)) => f64::from(u8::from(*v)),
+                Some(ParamValue::Float(v)) => f64::from(*v).round(),
+                _ => 0.0,
+            })
     }
 
     /// Check if this has any parameters
     pub fn is_empty(&self) -> bool {
         self.param_order.is_empty()
+    }
+
+    /// A float or long input's base value, unmodulated.
+    pub fn base_number(&self, name: &str) -> Option<f64> {
+        match self.values.get(name) {
+            Some(ParamValue::Float(v)) => Some(f64::from(*v)),
+            Some(ParamValue::Long(v)) => Some(f64::from(*v)),
+            _ => None,
+        }
     }
 
     /// Get a float value
@@ -864,6 +895,7 @@ mod tests {
             labels: None,
             identity: None,
             group: None,
+            specialize: false,
         }
     }
 
@@ -879,6 +911,7 @@ mod tests {
             labels: None,
             identity: None,
             group: None,
+            specialize: false,
         }
     }
 
@@ -894,6 +927,7 @@ mod tests {
             labels: None,
             identity: None,
             group: None,
+            specialize: false,
         }
     }
 
@@ -913,6 +947,7 @@ mod tests {
             labels: Some(vec!["A".into(), "B".into(), "C".into()]),
             identity: None,
             group: None,
+            specialize: false,
         }
     }
 
@@ -928,6 +963,7 @@ mod tests {
             labels: None,
             identity: None,
             group: None,
+            specialize: false,
         }
     }
 
@@ -1051,6 +1087,7 @@ mod tests {
                 labels: None,
                 identity: None,
                 group: None,
+                specialize: false,
             },
         ];
         let params = ShaderParams::from_inputs(&inputs);
@@ -1288,6 +1325,7 @@ mod tests {
                 labels: None,
                 identity: None,
                 group: None,
+                specialize: false,
             },
         ]);
         params.randomize(None, 5);

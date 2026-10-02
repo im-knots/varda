@@ -442,6 +442,9 @@ pub struct Channel {
     /// Stable UUID for this channel (8-char hex, persists across saves)
     uuid: String,
 
+    /// Whether the wall clock paces frames, set by the mixer each frame.
+    wall_paced: bool,
+
     /// Channel name (A, B, C, ...)
     pub name: String,
 
@@ -485,6 +488,11 @@ pub struct Channel {
 }
 
 impl Channel {
+    /// Set by the mixer each frame: whether the wall clock paces frames.
+    pub fn set_wall_paced(&mut self, wall_paced: bool) {
+        self.wall_paced = wall_paced;
+    }
+
     /// Stable UUID for this channel.
     pub fn uuid(&self) -> &str {
         &self.uuid
@@ -518,6 +526,7 @@ impl Channel {
         )?;
 
         Ok(Self {
+            wall_paced: false,
             uuid: crate::ids::generate_short_uuid(),
             name,
             decks: Vec::new(),
@@ -736,6 +745,7 @@ impl Channel {
                         dt // uncapped: use actual frame delta
                     };
                     slot.deck.set_render_dt(render_dt);
+                    slot.deck.set_wall_paced(self.wall_paced);
 
                     // Allocate GPU timing queries for this deck
                     let gpu_timing = match (&mut timing, query_set) {

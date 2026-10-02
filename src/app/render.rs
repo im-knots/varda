@@ -193,6 +193,24 @@ impl VardaApp {
                 format!("Deck '{name}': {warning}"),
             );
         }
+        // Toast what decks' preprocessors have to say (Find Inside found no
+        // rooms), once per event.
+        let messages: Vec<String> = self
+            .mixer
+            .channels_mut()
+            .iter_mut()
+            .flat_map(|ch| ch.decks.iter_mut())
+            .flat_map(|slot| {
+                let name = slot.deck.source_name().to_string();
+                slot.deck
+                    .take_preprocessor_messages()
+                    .into_iter()
+                    .map(move |m| format!("Deck '{name}': {m}"))
+            })
+            .collect();
+        for message in messages {
+            self.session.notifications.info(message);
+        }
 
         // Effective channel opacities decide which sources are wanted.
         let channel_count = self.mixer.channel_count();

@@ -10,6 +10,7 @@ const ORDER: &[&str] = &[
     "ids",
     "files",
     "fonts",
+    "fractal",
     "isf",
     "audio",
     "notifications",

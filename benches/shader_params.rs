@@ -28,6 +28,7 @@ fn float_input(name: &str) -> ISFInput {
         labels: None,
         identity: None,
         group: None,
+        specialize: false,
     }
 }
 
@@ -43,6 +44,7 @@ fn color_input(name: &str) -> ISFInput {
         labels: None,
         identity: None,
         group: None,
+        specialize: false,
     }
 }
 
@@ -58,6 +60,7 @@ fn point2d_input(name: &str) -> ISFInput {
         labels: None,
         identity: None,
         group: None,
+        specialize: false,
     }
 }
 

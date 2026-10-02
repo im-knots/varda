@@ -60,11 +60,16 @@ impl Default for ISFUniforms {
 ///   Multi-pass filter:  [0: Uniforms, 1: Sampler, 2: inputImage, 3..N: passBuffers, N+1..M: imported, M+1..P: preprocessor, P+1: `UserParams`]
 ///   With imported:      [0: Uniforms, 1: Sampler, ..., N+1..M: imported, M+1..P: preprocessor, P+1: `UserParams`]
 pub struct UnifiedPipeline {
-    /// The pipeline for the output pass, writing `surface_format`.
-    pub pipeline: wgpu::RenderPipeline,
-    /// One pipeline per distinct set of pass target formats (ISF `FORMAT`,
-    /// `TARGETS`), in attachment order.
-    pass_pipelines: Vec<(Vec<wgpu::TextureFormat>, wgpu::RenderPipeline)>,
+    /// The pipelines for the current specialization constants.
+    variant: Variant,
+    /// Pipelines built for other constants, most recent last, so returning to
+    /// an earlier combination does not rebuild.
+    other_variants: Vec<Variant>,
+    /// What a variant is built from.
+    fragment_module: wgpu::ShaderModule,
+    vertex_module: wgpu::ShaderModule,
+    pipeline_layout: wgpu::PipelineLayout,
+    passes: PassPlan,
     pub bind_group_layout: wgpu::BindGroupLayout,
     /// Uniforms, one slot per pass.
     uniforms: super::pass_uniforms::PassUniforms,
@@ -81,23 +86,51 @@ pub struct UnifiedPipeline {
     pub surface_format: wgpu::TextureFormat,
 }
 
+/// Variants kept besides the current one.
+const MAX_OTHER_VARIANTS: usize = 8;
+
+/// The passes a shader renders, for choosing its pipelines.
+#[derive(Debug, Clone, Default)]
+pub struct PassPlan {
+    /// Each targeted pass's `PASSINDEX` and target formats, in attachment
+    /// order.
+    pub targeted: Vec<(i32, Vec<wgpu::TextureFormat>)>,
+    /// The output pass's `PASSINDEX`.
+    pub output_index: i32,
+    /// One pipeline per pass, with `PASSINDEX` as the specialization
+    /// constant after the inputs' (ISF `SPECIALIZE_PASSES`). Otherwise one
+    /// pipeline per distinct set of target formats.
+    pub specialize: bool,
+}
+
+/// The render pipelines of one set of specialization constants.
+struct Variant {
+    constants: Vec<f64>,
+    /// Keyed by `PASSINDEX` when passes are specialized, and by target
+    /// formats.
+    pipelines: Vec<(Option<i32>, Vec<wgpu::TextureFormat>, wgpu::RenderPipeline)>,
+}
+
 impl UnifiedPipeline {
     /// Create a unified pipeline from SPIR-V bytecode.
     ///
     /// - `has_input_image`: true for filters (binding for inputImage texture)
     /// - `pass_buffer_filterable`: one entry per pass buffer binding; false for
     ///   32-bit float targets, which the shader must read with `texelFetch`
-    /// - `pass_target_formats`: the target formats of each targeted pass
+    /// - `passes`: the targeted passes and the output pass
     /// - `num_imported_textures`: number of ISF IMPORTED image textures
     /// - `preprocessor_filterable`: one entry per preprocessor texture binding;
     ///   false for `texelFetch`-only float data (`FORMAT: "rgba32float"`)
     /// - `surface_format`: always `COLOR_PATH_FORMAT`
+    /// - `constants`: the specialization constants to build with, by
+    ///   `constant_id`; see [`Self::specialize`]
     ///
     /// # Errors
     ///
     /// Returns an error if the SPIR-V fails to parse, fails naga validation, or
-    /// cannot be transpiled to WGSL, or if the shader binds more sampled
-    /// textures than the device allows.
+    /// cannot be transpiled to WGSL, if the shader binds more sampled textures
+    /// than the device allows, or if its specialization constants are not
+    /// numbered `0..constants.len()`.
     // Takes many distinct GPU descriptors with nothing in common to bundle.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -106,9 +139,10 @@ impl UnifiedPipeline {
         surface_format: wgpu::TextureFormat,
         has_input_image: bool,
         pass_buffer_filterable: &[bool],
-        pass_target_formats: &[Vec<wgpu::TextureFormat>],
+        passes: &PassPlan,
         num_imported_textures: usize,
         preprocessor_filterable: &[bool],
+        constants: &[f64],
     ) -> Result<Self> {
         let num_pass_buffers = pass_buffer_filterable.len();
         let num_preprocessor_textures = preprocessor_filterable.len();
@@ -127,12 +161,22 @@ impl UnifiedPipeline {
         let spirv_bytes: Vec<u8> = spirv.iter().flat_map(|word| word.to_le_bytes()).collect();
 
         let module =
-            naga::front::spv::parse_u8_slice(&spirv_bytes, &naga::front::spv::Options::default())?;
+            naga::front::spv::parse_u8_slice(&spirv_bytes, &naga::front::spv::Options::default())
+                .map_err(|e| {
+                let hint = if e.to_string().contains("SpecConstantOp") {
+                    "; an expression on a specialization constant cannot be translated: \
+                         pass the constant through a function and use the result"
+                } else {
+                    ""
+                };
+                anyhow::anyhow!("{e}{hint}")
+            })?;
         let info = naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
         )
         .validate(&module)?;
+        check_constant_ids(&module, constants.len() + usize::from(passes.specialize))?;
 
         let wgsl =
             naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())?;
@@ -295,79 +339,21 @@ impl UnifiedPipeline {
             immediate_size: 0,
         });
 
-        let vertex_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let vertex_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Fullscreen Vertex Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/fullscreen.wgsl").into()),
         });
 
-        let create_pipeline = |formats: &[wgpu::TextureFormat], label: &str| {
-            // 32-bit float targets are not blendable; no blend state means
-            // replace for them too.
-            let targets: Vec<Option<wgpu::ColorTargetState>> = formats
-                .iter()
-                .map(|&format| {
-                    let blendable = !matches!(
-                        format,
-                        wgpu::TextureFormat::Rgba32Float | wgpu::TextureFormat::R32Float
-                    );
-                    Some(wgpu::ColorTargetState {
-                        format,
-                        blend: blendable.then_some(wgpu::BlendState::REPLACE),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })
-                })
-                .collect();
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &vertex_shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader_module,
-                    entry_point: Some("main"),
-                    targets: &targets,
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: None,
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    unclipped_depth: false,
-                    conservative: false,
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState {
-                    count: 1,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-
-        let pipeline = create_pipeline(&[surface_format], "ISF Unified Render Pipeline");
-        let mut pass_pipelines: Vec<(Vec<wgpu::TextureFormat>, wgpu::RenderPipeline)> = Vec::new();
-        for formats in pass_target_formats {
-            if formats.as_slice() != [surface_format]
-                && !pass_pipelines.iter().any(|(f, _)| f == formats)
-            {
-                pass_pipelines.push((
-                    formats.clone(),
-                    create_pipeline(formats, "ISF Pass Render Pipeline"),
-                ));
-            }
-        }
-
-        Ok(Self {
-            pipeline,
-            pass_pipelines,
+        let mut pipeline = Self {
+            variant: Variant {
+                constants: constants.to_vec(),
+                pipelines: Vec::new(),
+            },
+            other_variants: Vec::new(),
+            fragment_module: shader_module,
+            vertex_module,
+            pipeline_layout,
+            passes: passes.clone(),
             bind_group_layout,
             uniforms,
             sampler,
@@ -378,7 +364,80 @@ impl UnifiedPipeline {
             default_user_params_buffer,
             user_params_binding,
             surface_format,
-        })
+        };
+        pipeline.variant.pipelines = pipeline.build(device, constants);
+        Ok(pipeline)
+    }
+
+    /// Use the pipelines built with `constants`, the values of the shader's
+    /// specialization constants by `constant_id`. Builds them the first time a
+    /// combination is seen, which compiles the shader again.
+    pub fn specialize(&mut self, device: &wgpu::Device, constants: impl Iterator<Item = f64>) {
+        let mut constants = constants.peekable();
+        if constants.peek().is_none() && self.variant.constants.is_empty() {
+            return;
+        }
+        let constants: Vec<f64> = constants.collect();
+        if constants == self.variant.constants {
+            return;
+        }
+        let cached = self
+            .other_variants
+            .iter()
+            .position(|v| v.constants == constants);
+        let variant = if let Some(index) = cached {
+            self.other_variants.remove(index)
+        } else {
+            let started = std::time::Instant::now();
+            let variant = Variant {
+                pipelines: self.build(device, &constants),
+                constants,
+            };
+            log::info!("specialized shader pipeline in {:.0?}", started.elapsed());
+            variant
+        };
+        let previous = std::mem::replace(&mut self.variant, variant);
+        self.other_variants.push(previous);
+        if self.other_variants.len() > MAX_OTHER_VARIANTS {
+            self.other_variants.remove(0);
+        }
+    }
+
+    /// The specialization constants the current pipelines were built with.
+    pub fn constants(&self) -> &[f64] {
+        &self.variant.constants
+    }
+
+    /// Every pipeline the passes need, for one set of input constants.
+    fn build(
+        &self,
+        device: &wgpu::Device,
+        constants: &[f64],
+    ) -> Vec<(Option<i32>, Vec<wgpu::TextureFormat>, wgpu::RenderPipeline)> {
+        let output = (self.passes.output_index, vec![self.surface_format]);
+        let mut pipelines: Vec<(Option<i32>, Vec<wgpu::TextureFormat>, wgpu::RenderPipeline)> =
+            Vec::new();
+        for (index, formats) in self.passes.targeted.iter().chain(std::iter::once(&output)) {
+            let key = self.passes.specialize.then_some(*index);
+            if pipelines.iter().any(|(k, f, _)| *k == key && f == formats) {
+                continue;
+            }
+            let mut values = constants.to_vec();
+            if self.passes.specialize {
+                values.push(f64::from(*index));
+            }
+            let pipeline = create_pipeline(
+                device,
+                &self.pipeline_layout,
+                &self.vertex_module,
+                &self.fragment_module,
+                formats,
+                &values,
+                "ISF Unified Render Pipeline",
+            );
+            pipelines.push((key, formats.clone(), pipeline));
+        }
+        pipelines
     }
 
     /// Create a bind group for rendering.
@@ -534,21 +593,25 @@ impl UnifiedPipeline {
         self.create_bind_group(device, None, &[], &[], &[], Some(user_params_buffer))
     }
 
-    /// The pipeline writing a pass's targets, in attachment order.
+    /// The pipeline for pass `pass_index` writing `formats`, in attachment
+    /// order.
     ///
     /// # Panics
     ///
-    /// Panics if `formats` was not among the pass target formats the pipeline
-    /// was built with, which is a caller bug.
-    pub fn pipeline_for(&self, formats: &[wgpu::TextureFormat]) -> &wgpu::RenderPipeline {
-        if formats == [self.surface_format] {
-            return &self.pipeline;
-        }
-        self.pass_pipelines
+    /// Panics if the pass was not in the plan the pipeline was built with,
+    /// which is a caller bug.
+    pub fn pipeline_for(
+        &self,
+        pass_index: i32,
+        formats: &[wgpu::TextureFormat],
+    ) -> &wgpu::RenderPipeline {
+        let key = self.passes.specialize.then_some(pass_index);
+        self.variant
+            .pipelines
             .iter()
-            .find(|(f, _)| f == formats)
-            .map(|(_, pipeline)| pipeline)
-            .expect("pass target formats were declared when the pipeline was built")
+            .find(|(k, f, _)| *k == key && f == formats)
+            .map(|(_, _, pipeline)| pipeline)
+            .expect("the pass was planned when the pipeline was built")
     }
 
     /// Update a single-pass shader's uniforms.
@@ -565,4 +628,93 @@ impl UnifiedPipeline {
     pub fn write_pass_uniforms(&self, queue: &wgpu::Queue, slot: usize, uniforms: &ISFUniforms) {
         self.uniforms.write(queue, slot, uniforms);
     }
+}
+
+/// Fails unless the shader's specialization constants are numbered
+/// `0..count`, one per `SPECIALIZE` input.
+fn check_constant_ids(module: &naga::Module, count: usize) -> Result<()> {
+    let mut ids: Vec<u16> = module.overrides.iter().filter_map(|(_, o)| o.id).collect();
+    ids.sort_unstable();
+    let expected: Vec<u16> = (0..count).filter_map(|i| u16::try_from(i).ok()).collect();
+    if ids != expected {
+        anyhow::bail!(
+            "shader declares specialization constants {ids:?}; its {count} SPECIALIZE inputs \
+             need constant_id 0 to {}",
+            count.saturating_sub(1)
+        );
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)] // one per part of the pipeline descriptor
+fn create_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    vertex: &wgpu::ShaderModule,
+    fragment: &wgpu::ShaderModule,
+    formats: &[wgpu::TextureFormat],
+    constants: &[f64],
+    label: &str,
+) -> wgpu::RenderPipeline {
+    // wgpu names a numbered override by its id in decimal.
+    let names: Vec<String> = (0..constants.len()).map(|id| id.to_string()).collect();
+    let constants: Vec<(&str, f64)> = names
+        .iter()
+        .map(String::as_str)
+        .zip(constants.iter().copied())
+        .collect();
+    // 32-bit float targets are not blendable; no blend state means replace
+    // for them too.
+    let targets: Vec<Option<wgpu::ColorTargetState>> = formats
+        .iter()
+        .map(|&format| {
+            let blendable = !matches!(
+                format,
+                wgpu::TextureFormat::Rgba32Float
+                    | wgpu::TextureFormat::R32Float
+                    | wgpu::TextureFormat::Rg32Float
+            );
+            Some(wgpu::ColorTargetState {
+                format,
+                blend: blendable.then_some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })
+        })
+        .collect();
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: vertex,
+            entry_point: Some("vs_main"),
+            buffers: &[],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: fragment,
+            entry_point: Some("main"),
+            targets: &targets,
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: &constants,
+                ..Default::default()
+            },
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState {
+            count: 1,
+            mask: !0,
+            alpha_to_coverage_enabled: false,
+        },
+        multiview_mask: None,
+        cache: None,
+    })
 }

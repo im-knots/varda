@@ -157,6 +157,11 @@ pub struct Deck {
     /// Last wall-clock render instant (for FPS measurement only, not for TIME uniform)
     last_frame_time: Instant,
 
+    /// Whether frames are paced by the wall clock, as live frames are. Then
+    /// host-inline preprocessors get the measured frame time; offline they
+    /// get `render_dt`.
+    wall_paced: bool,
+
     /// Depth-sensor shader preprocessor, present when this deck's shader or one of its effects
     /// declared a `depth_sensor` PREPROCESSOR and the device was acquired.
     pub depth_prepro: Option<DepthPreprocessState>,
@@ -282,6 +287,12 @@ impl Deck {
         states: &serde_json::Map<String, serde_json::Value>,
     ) {
         self.host_inline.restore_states(states);
+    }
+
+    /// Messages the deck's preprocessors have for the performer since the
+    /// last call.
+    pub(crate) fn take_preprocessor_messages(&mut self) -> Vec<String> {
+        self.host_inline.take_messages()
     }
 
     /// The ISF shader this deck runs, when its source is one.
@@ -436,6 +447,11 @@ impl Deck {
     /// Called by the channel to keep `render_dt` in sync with the target FPS.
     pub fn set_render_dt(&mut self, dt: f32) {
         self.render_dt = dt;
+    }
+
+    /// Set by the channel each frame: whether the wall clock paces frames.
+    pub fn set_wall_paced(&mut self, wall_paced: bool) {
+        self.wall_paced = wall_paced;
     }
 
     /// Get the smoothed FPS derived from actual render pipeline timing

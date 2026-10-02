@@ -130,7 +130,13 @@ fn collect_preprocessor_state(
     states: &mut HashMap<String, AnalyzerStateSnapshot>,
 ) {
     for slot in slots {
-        if slot.param_bindings.is_empty() && slot.phase_bindings.is_empty() {
+        // `OPTIONS: {"bind_all_inputs": true}` binds every input under its own name.
+        let bind_all = slot
+            .options
+            .get("bind_all_inputs")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if slot.param_bindings.is_empty() && slot.phase_bindings.is_empty() && !bind_all {
             continue;
         }
         let state = states.entry(slot.analyzer_type.clone()).or_default();
@@ -142,6 +148,14 @@ fn collect_preprocessor_state(
         for (local_name, param_name) in &slot.param_bindings {
             if let Some(value) = params.get_modulated(param_name, modulation, Some(param_prefix)) {
                 state.values.insert(local_name.clone(), value);
+            }
+        }
+        if bind_all {
+            let names: Vec<String> = params.definitions.keys().cloned().collect();
+            for name in names {
+                if let Some(value) = params.get_modulated(&name, modulation, Some(param_prefix)) {
+                    state.values.insert(name, value);
+                }
             }
         }
         for (local_name, index) in &slot.phase_bindings {
@@ -379,6 +393,11 @@ impl Deck {
         let now = Instant::now();
         let wall_dt = (now - self.last_frame_time).as_secs_f32();
         self.last_frame_time = now;
+        let frame_seconds = if self.wall_paced && wall_dt > 0.0 && wall_dt < 1.0 {
+            wall_dt
+        } else {
+            time_delta
+        };
         if wall_dt > 0.0 && wall_dt < 1.0 {
             let instant_fps = 1.0 / wall_dt;
             self.fps_smoothed = 0.1 * instant_fps + 0.9 * self.fps_smoothed;
@@ -413,7 +432,7 @@ impl Deck {
         if !self.host_inline.is_empty() {
             self.step_host_inline(
                 context,
-                time_delta,
+                frame_seconds,
                 generator_phase_times,
                 modulation,
                 param_prefix,
@@ -540,7 +559,7 @@ impl Deck {
     fn step_host_inline(
         &mut self,
         context: &GpuContext,
-        time_delta: f32,
+        frame_seconds: f32,
         generator_phase_times: [f32; 4],
         modulation: &ModulationEngine,
         param_prefix: &str,
@@ -564,12 +583,7 @@ impl Deck {
                 &mut states,
             );
         }
-        self.host_inline.step(
-            time_delta,
-            self.frame_count,
-            (self.texture.width(), self.texture.height()),
-            &states,
-        );
+        self.host_inline.step(frame_seconds, &states);
         let host_inline = &self.host_inline;
         let upload = |slots: &mut [PreprocessorSlot]| {
             for slot in slots {
@@ -743,6 +757,7 @@ mod tests {
             labels: None,
             identity: None,
             group: None,
+            specialize: false,
         }
     }
 
@@ -1204,6 +1219,22 @@ void main() {{ fragColor = vec4(1.0); }}
         render(&mut deck, &gpu);
         render(&mut deck, &gpu);
         assert_eq!(count(&deck), 4.0, "two frames at the bound step of 2");
+    }
+
+    #[test]
+    fn host_inline_messages_reach_the_deck() {
+        let Some(gpu) = crate::testing::headless_gpu() else {
+            return;
+        };
+        let mut deck = counter_deck(&gpu);
+        render(&mut deck, &gpu);
+        assert!(deck.take_preprocessor_messages().is_empty());
+        deck.generator_params.set_float("step", 0.0);
+        render(&mut deck, &gpu);
+        assert_eq!(
+            deck.take_preprocessor_messages(),
+            vec!["standing still".to_owned()]
+        );
     }
 
     #[test]

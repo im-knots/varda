@@ -1,4 +1,5 @@
-//! Deck and channel presets in `.varda/presets/`.
+//! Deck and channel presets in `.varda/presets/`, plus read-only deck
+//! presets shipped in shader library folders (`presets/decks/`).
 
 use super::Workspace;
 use crate::scene::{ChannelConfig, DeckConfig};
@@ -8,6 +9,8 @@ use anyhow::{Context, Result};
 pub struct DeckPreset {
     pub name: String,
     pub config: DeckConfig,
+    /// Shipped with Varda rather than saved by the user.
+    pub built_in: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -20,18 +23,51 @@ pub struct ChannelPreset {
 pub struct PresetLibrary {
     pub deck_presets: Vec<DeckPreset>,
     pub channel_presets: Vec<ChannelPreset>,
+    /// Folders of shipped deck presets, scanned again on refresh.
+    built_in_dirs: Vec<std::path::PathBuf>,
+}
+
+/// Where a shader library folder keeps its shipped deck presets.
+pub fn built_in_deck_presets_dir(shader_library: &std::path::Path) -> std::path::PathBuf {
+    shader_library.join("presets").join("decks")
 }
 
 impl PresetLibrary {
     /// Load every valid JSON file in the preset directories.
     pub fn load(workspace: &Workspace) -> Self {
+        Self::load_with_built_in(workspace, Vec::new())
+    }
+
+    /// [`Self::load`], plus the read-only deck presets in `built_in_dirs`. A
+    /// user preset with the same name as a shipped one replaces it.
+    pub fn load_with_built_in(
+        workspace: &Workspace,
+        built_in_dirs: Vec<std::path::PathBuf>,
+    ) -> Self {
         let mut lib = Self {
             deck_presets: Vec::new(),
             channel_presets: Vec::new(),
+            built_in_dirs,
         };
-        lib.scan_dir(&workspace.deck_presets_dir(), true);
-        lib.scan_dir(&workspace.channel_presets_dir(), false);
+        lib.scan_all(workspace);
         lib
+    }
+
+    fn scan_all(&mut self, workspace: &Workspace) {
+        self.scan_dir(&workspace.deck_presets_dir(), true, false);
+        self.scan_dir(&workspace.channel_presets_dir(), false, false);
+        for dir in self.built_in_dirs.clone() {
+            self.scan_dir(&dir, true, true);
+        }
+        let user: std::collections::HashSet<String> = self
+            .deck_presets
+            .iter()
+            .filter(|p| !p.built_in)
+            .map(|p| p.name.clone())
+            .collect();
+        self.deck_presets
+            .retain(|p| !p.built_in || !user.contains(&p.name));
+        self.deck_presets.sort_by(|a, b| a.name.cmp(&b.name));
     }
 
     /// Save a deck preset to disk.
@@ -84,11 +120,10 @@ impl PresetLibrary {
     pub fn refresh(&mut self, workspace: &Workspace) {
         self.deck_presets.clear();
         self.channel_presets.clear();
-        self.scan_dir(&workspace.deck_presets_dir(), true);
-        self.scan_dir(&workspace.channel_presets_dir(), false);
+        self.scan_all(workspace);
     }
 
-    fn scan_dir(&mut self, dir: &std::path::Path, is_deck: bool) {
+    fn scan_dir(&mut self, dir: &std::path::Path, is_deck: bool, built_in: bool) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
         };
@@ -118,7 +153,11 @@ impl PresetLibrary {
                         for w in &warnings {
                             log::warn!("Preset {}: {}", path.display(), w);
                         }
-                        self.deck_presets.push(DeckPreset { name: stem, config });
+                        self.deck_presets.push(DeckPreset {
+                            name: stem,
+                            config,
+                            built_in,
+                        });
                     }
                     Err(e) => log::warn!("Failed to parse deck preset {}: {}", path.display(), e),
                 }
@@ -250,6 +289,62 @@ mod tests {
         let lib = PresetLibrary::load(&ws);
         assert_eq!(lib.deck_presets.len(), 1);
         assert_eq!(lib.deck_presets[0].name, "good");
+    }
+
+    #[test]
+    fn shipped_presets_are_listed_and_a_user_preset_of_the_same_name_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path().join("show"));
+        let library = dir.path().join("shaders");
+        let shipped = built_in_deck_presets_dir(&library);
+        std::fs::create_dir_all(&shipped).unwrap();
+        let json = serde_json::to_string(&sample_deck_config()).unwrap();
+        std::fs::write(shipped.join("World A.json"), &json).unwrap();
+        std::fs::write(shipped.join("World B.json"), &json).unwrap();
+        PresetLibrary::save_deck_preset(&ws, "World_B", &sample_deck_config()).unwrap();
+        std::fs::rename(
+            ws.deck_presets_dir().join("World_B.json"),
+            ws.deck_presets_dir().join("World B.json"),
+        )
+        .unwrap();
+
+        let lib = PresetLibrary::load_with_built_in(&ws, vec![shipped]);
+        let listed: Vec<(&str, bool)> = lib
+            .deck_presets
+            .iter()
+            .map(|p| (p.name.as_str(), p.built_in))
+            .collect();
+        assert_eq!(listed, [("World A", true), ("World B", false)]);
+    }
+
+    #[test]
+    fn every_shipped_preset_loads_and_names_a_shipped_shader() {
+        let library = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders");
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path().to_path_buf());
+        let shipped = built_in_deck_presets_dir(&library);
+        let files = std::fs::read_dir(&shipped).map_or(0, |d| {
+            d.flatten()
+                .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+                .count()
+        });
+        let lib = PresetLibrary::load_with_built_in(&ws, vec![shipped]);
+        assert_eq!(
+            lib.deck_presets.len(),
+            files,
+            "a shipped preset failed to parse"
+        );
+        for preset in &lib.deck_presets {
+            let name =
+                preset.config.source.str("name").unwrap_or_else(|| {
+                    panic!("{}: shipped presets name their shader", preset.name)
+                });
+            assert!(
+                library.join(format!("{name}.fs")).is_file(),
+                "{}: no shader {name}",
+                preset.name
+            );
+        }
     }
 
     #[test]

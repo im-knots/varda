@@ -34,9 +34,7 @@ Varda sorts shaders by type automatically:
 | `eyes_depth.fs` | The same eyes, tracking people seen by a Kinect: the gaze follows the motion-weighted centroid of whoever is in view, lids wake as someone approaches, pupils dilate on sudden movement. **Requires an attached depth sensor**. See [ISF authoring § `depth_sensor`](12-isf-authoring.md#depth_sensor-live-depth-camera) |
 | `fire.fs` | Procedural animated fire effect |
 | `fractal.fs` | Mandelbrot / Julia set generator |
-| `fractal_mandelbox.fs` | Raymarched Mandelbox flythrough with orbit-trap coloring, soft shadows and ambient occlusion. Controls for the box fold (Scale, Fold Limit, Min Radius, Fixed Radius), the camera and the sun |
-| `fractal_mandelbulb.fs` | Raymarched Mandelbulb flythrough with orbit-trap coloring, soft shadows and ambient occlusion. Controls for Power, Bailout, the camera and the sun |
-| `fractal_menger.fs` | Raymarched Menger sponge flythrough with orbit-trap coloring, soft shadows and ambient occlusion. Controls for Scale, Offset, the camera and the sun |
+| `fractal_explorer.fs` | Free flight through a six-slot hybrid 3D fractal: ten Mandelbulb3D-style formulas (Box, Menger, Sierpinski, KIFS, Pseudo-Kleinian, Kaliset, Mandelbulb, Transform, Helispiral, Gnarl) chained or combined, with a key light, fill, headlight, soft shadows, occlusion, fog, light shafts, depth of field, bloom and a grade. Fly with Throttle, Yaw and Pitch (speed follows the distance to the surface), or hand over to the Autopilot. Save locations and tour them. See [Fractal Explorer](16-fractal-explorer.md) |
 | `game_of_life.fs` | Conway's Game of Life: cellular automaton with persistent state |
 | `generative_feedback.fs` | Evolving patterns using a persistent feedback buffer |
 | `gradient.fs` | Color gradient generator: linear, radial, or angular |

@@ -4,7 +4,7 @@
 //! `UIData`. `app::VardaApp::build_engine_state()` returns the framework-free
 //! `EngineState` this maps from.
 
-use super::{EffectInfo, ParamUIInfo, ShaderParamsUI};
+use super::{EffectInfo, ParamColumnUI, ParamUIInfo, ShaderParamsUI};
 use crate::engine::types::{
     EffectSnapshot, ModulationSourceSnapshot, SequenceStepKindSnapshot, ShaderParamsSnapshot,
 };
@@ -559,6 +559,14 @@ pub(crate) fn build_ui_data(
 fn params_snapshot_to_ui(snap: &ShaderParamsSnapshot) -> ShaderParamsUI {
     ShaderParamsUI {
         shader_name: snap.shader_name.clone(),
+        columns: snap
+            .columns
+            .iter()
+            .map(|c| ParamColumnUI {
+                title: c.title.clone(),
+                groups: c.groups.clone(),
+            })
+            .collect(),
         params: snap
             .params
             .iter()

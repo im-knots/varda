@@ -51,9 +51,10 @@ impl Effect {
             target_format,
             true, // has_input_image, since it's a filter
             &PassSet::binding_filterability(&passes, target_format),
-            &PassSet::target_formats(&passes, target_format),
+            &PassSet::plan(&passes, target_format, shader.metadata.specialize_passes),
             imported_textures.len(),
             &preprocessor_filterable,
+            &crate::generator::specialization_defaults(&shader),
         )
         .context("Failed to create effect pipeline")?;
 
@@ -165,6 +166,10 @@ impl Effect {
         } else {
             self.params.update_buffer(&context.queue);
         }
+        self.pipeline
+            .specialize(&context.device, self.params.specialization_constants());
+        self.passes
+            .update_sizes(context, &|name| self.params.base_number(name));
         let user_params_buffer = self
             .params
             .buffer()
@@ -207,7 +212,7 @@ impl Effect {
         let mut final_uniforms = *uniforms;
         if self.passes.has_targeted_passes() {
             final_uniforms.pass_index =
-                i32::try_from(self.passes.passes().len()).unwrap_or(i32::MAX);
+                i32::try_from(self.passes.output_index()).unwrap_or(i32::MAX);
         }
         self.passes
             .encode_output(&mut encoder, &bindings, slot, final_uniforms, output_view);

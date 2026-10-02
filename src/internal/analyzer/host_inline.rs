@@ -24,6 +24,8 @@ pub(crate) struct HostInlineSet {
     instances: HashMap<String, Instance>,
     /// Saved states for types not created yet.
     pending: HashMap<String, serde_json::Value>,
+    /// Messages for the performer, oldest first, until taken.
+    messages: Vec<String>,
 }
 
 impl HostInlineSet {
@@ -84,22 +86,19 @@ impl HostInlineSet {
     /// values.
     pub(crate) fn step(
         &mut self,
-        time_delta: f32,
-        frame_index: u32,
-        render_size: (u32, u32),
+        frame_seconds: f32,
         states: &HashMap<String, AnalyzerStateSnapshot>,
     ) {
         let empty = AnalyzerStateSnapshot::default();
         for (ty, instance) in &mut self.instances {
             let frame = HostFrame {
-                time_delta,
-                frame_index,
-                render_size,
+                frame_seconds,
                 state: states.get(ty).unwrap_or(&empty),
             };
             let started = Instant::now();
             instance.latest = instance.preprocessor.step(&frame);
             let took = started.elapsed();
+            self.messages.extend(instance.preprocessor.take_message());
             instance.slowest = instance.slowest.max(took);
             if took > STEP_BUDGET && !instance.over_budget_logged {
                 instance.over_budget_logged = true;
@@ -110,6 +109,11 @@ impl HostInlineSet {
                 );
             }
         }
+    }
+
+    /// Messages for the performer since the last call.
+    pub(crate) fn take_messages(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.messages)
     }
 
     /// This frame's outputs of `preprocessor_type`.
@@ -182,12 +186,18 @@ pub(crate) mod tests {
     /// count.
     pub(crate) struct Counter {
         count: f32,
+        message: Option<String>,
     }
 
     pub(crate) const COUNTER: &str = "test_counter";
 
     pub(crate) fn registry() -> AnalyzerRegistry {
-        AnalyzerRegistry::new().register_host_inline(COUNTER, || Box::new(Counter { count: 0.0 }))
+        AnalyzerRegistry::new().register_host_inline(COUNTER, || {
+            Box::new(Counter {
+                count: 0.0,
+                message: None,
+            })
+        })
     }
 
     impl HostInlinePreprocessor for Counter {
@@ -214,6 +224,9 @@ pub(crate) mod tests {
                 _ => 1.0,
             };
             self.count += step;
+            if step == 0.0 {
+                self.message = Some("standing still".into());
+            }
             let mut snapshot = AnalyzerSnapshot::from_defaults(&self.output_schema());
             snapshot.scalars.insert("count".into(), self.count);
             snapshot
@@ -221,6 +234,10 @@ pub(crate) mod tests {
 
         fn persisted_state(&self) -> Option<serde_json::Value> {
             Some(serde_json::json!({ "count": self.count }))
+        }
+
+        fn take_message(&mut self) -> Option<String> {
+            self.message.take()
         }
 
         fn restore_state(&mut self, state: &serde_json::Value) -> anyhow::Result<()> {
@@ -239,7 +256,7 @@ pub(crate) mod tests {
             state.values.insert("step".into(), ParamValue::Float(step));
             states.insert(COUNTER.to_owned(), state);
         }
-        set.step(1.0 / 60.0, 0, (64, 64), &states);
+        set.step(1.0 / 60.0, &states);
     }
 
     fn count(set: &HostInlineSet) -> f32 {
@@ -253,6 +270,17 @@ pub(crate) mod tests {
         step_once(&mut set, None);
         step_once(&mut set, Some(2.0));
         assert_eq!(count(&set), 3.0);
+    }
+
+    #[test]
+    fn a_message_is_taken_once() {
+        let mut set = HostInlineSet::new();
+        set.ensure(COUNTER, &registry(), &serde_json::Value::Null);
+        step_once(&mut set, Some(1.0));
+        assert!(set.take_messages().is_empty());
+        step_once(&mut set, Some(0.0));
+        assert_eq!(set.take_messages(), vec!["standing still".to_owned()]);
+        assert!(set.take_messages().is_empty(), "taking clears it");
     }
 
     #[test]
