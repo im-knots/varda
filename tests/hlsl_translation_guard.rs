@@ -46,6 +46,16 @@ fn every_shipped_shader_translates_to_hlsl() {
         .validate(&module)
         .unwrap_or_else(|e| panic!("{name}: naga validation failed: {e:?}"));
 
+        // wgpu replaces specialization constants (ISF SPECIALIZE) with their
+        // values before writing HLSL; the shader's defaults stand in here.
+        let (module, info) = naga::back::pipeline_constants::process_overrides(
+            &module,
+            &info,
+            None,
+            &naga::back::PipelineConstants::default(),
+        )
+        .unwrap_or_else(|e| panic!("{name}: specialization constants failed: {e:?}"));
+
         let mut hlsl = String::new();
         let options = naga::back::hlsl::Options::default();
         let pipeline_options = naga::back::hlsl::PipelineOptions::default();

@@ -455,6 +455,7 @@ impl Mixer {
                 channel.active_deck_count = 0;
                 continue;
             }
+            channel.set_wall_paced(free_run_time.is_none());
             if let Err(e) = channel.render(
                 context,
                 audio_data,

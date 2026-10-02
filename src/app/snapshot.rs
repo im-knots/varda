@@ -41,8 +41,13 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                 .iter()
                 .enumerate()
                 .map(|(deck_idx, slot)| {
-                    let gen_params =
-                        build_shader_params(slot.deck.source_name(), &slot.deck.generator_params);
+                    let gen_params = build_shader_params(
+                        slot.deck.source_name(),
+                        &slot.deck.generator_params,
+                        slot.deck
+                            .shader()
+                            .map_or(&[][..], |shader| &shader.metadata.columns),
+                    );
                     let effects = slot
                         .deck
                         .effects
@@ -51,7 +56,7 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                             uuid: e.uuid().to_owned(),
                             name: e.shader.name(),
                             enabled: e.enabled,
-                            params: build_shader_params(&e.shader.name(), &e.params),
+                            params: build_shader_params(&e.shader.name(), &e.params, &[]),
                         })
                         .collect();
 
@@ -145,7 +150,7 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                     uuid: e.uuid().to_owned(),
                     name: e.shader.name(),
                     enabled: e.enabled,
-                    params: build_shader_params(&e.shader.name(), &e.params),
+                    params: build_shader_params(&e.shader.name(), &e.params, &[]),
                 })
                 .collect();
 
@@ -170,7 +175,7 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
             uuid: e.uuid().to_owned(),
             name: e.shader.name(),
             enabled: e.enabled,
-            params: build_shader_params(&e.shader.name(), &e.params),
+            params: build_shader_params(&e.shader.name(), &e.params, &[]),
         })
         .collect();
 
@@ -213,6 +218,7 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
 fn build_shader_params(
     shader_name: &str,
     params: &crate::params::ShaderParams,
+    columns: &[crate::isf::ParamColumn],
 ) -> ShaderParamsSnapshot {
     let params_vec = params
         .param_order
@@ -241,6 +247,13 @@ fn build_shader_params(
     ShaderParamsSnapshot {
         shader_name: shader_name.to_string(),
         params: params_vec,
+        columns: columns
+            .iter()
+            .map(|c| crate::engine::types::ParamColumnSnapshot {
+                title: c.title.clone(),
+                groups: c.groups.clone(),
+            })
+            .collect(),
     }
 }
 
@@ -1030,7 +1043,7 @@ mod tests {
         // A param in param_order with no value is filtered out.
         let mut params = crate::params::ShaderParams::from_inputs(&[]);
         params.param_order.push("brightness".into());
-        let snap = build_shader_params("test_shader", &params);
+        let snap = build_shader_params("test_shader", &params, &[]);
         assert!(snap.params.is_empty());
     }
 
@@ -1042,12 +1055,25 @@ mod tests {
         params
             .values
             .insert("mystery".into(), crate::params::ParamValue::Float(0.5));
-        let snap = build_shader_params("test_shader", &params);
+        let snap = build_shader_params("test_shader", &params, &[]);
         assert_eq!(snap.params.len(), 1);
         let p = &snap.params[0];
         assert!(p.label.is_none());
         assert!(p.min.is_none());
         assert!(p.max.is_none());
+    }
+
+    #[test]
+    fn shader_columns_reach_the_snapshot() {
+        let params = crate::params::ShaderParams::from_inputs(&[]);
+        let columns = [crate::isf::ParamColumn {
+            title: "Light".into(),
+            groups: vec!["Lighting".into(), "Palette".into()],
+        }];
+        let snap = build_shader_params("test_shader", &params, &columns);
+        assert_eq!(snap.columns.len(), 1);
+        assert_eq!(snap.columns[0].title, "Light");
+        assert_eq!(snap.columns[0].groups, ["Lighting", "Palette"]);
     }
 
     #[test]

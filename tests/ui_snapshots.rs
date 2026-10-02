@@ -254,8 +254,8 @@ fn expand_bottom_panel(harness: &mut Harness<'static, UIActions>) {
 /// A grouped shader in the params column, with `long` and `point2D` rows.
 ///
 /// The shared fixture has one ungrouped float, so this covers section headers,
-/// the first-group-open rule, and the `long`/`point2D` widgets. Modeled on
-/// `shaders/fractal_mandelbulb.fs`.
+/// the first-group-open rule, and the `long`/`point2D` widgets. Modeled on a
+/// raymarched fractal shader's inputs.
 fn grouped_param_fixture() -> UIData {
     use varda::params::ParamValue;
     use varda::usecases::ui::{ParamChoiceUI, ParamUIInfo};
@@ -345,6 +345,23 @@ fn snapshot_bottom_bar_param_groups_collapsed() {
     harness.get_by_label("Form").click();
     harness.run();
     harness.snapshot("bottom_bar_param_groups_collapsed");
+}
+
+/// `COLUMNS`: Lighting and Palette leave the params column for a Light column
+/// of their own, Lighting open as its first group; ungrouped rows, Form and
+/// Camera stay in the params column.
+#[test]
+fn snapshot_bottom_bar_param_columns() {
+    let mut data = grouped_param_fixture();
+    data.channels[0].decks[0].generator.columns = vec![varda::usecases::ui::ParamColumnUI {
+        title: "Light".to_string(),
+        groups: vec!["Lighting".to_string(), "Palette".to_string()],
+    }];
+    let Some(mut harness) = snapshot_harness(data) else {
+        return;
+    };
+    expand_bottom_panel(&mut harness);
+    harness.snapshot("bottom_bar_param_columns");
 }
 
 #[test]

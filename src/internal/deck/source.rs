@@ -67,6 +67,7 @@ impl Deck {
             render_dt: 1.0 / 60.0,
             frame_count: 0,
             last_frame_time: Instant::now(),
+            wall_paced: false,
             depth_prepro: None,
             fps_smoothed: 0.0,
             phase_accumulators: [0.0; 4],

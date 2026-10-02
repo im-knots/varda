@@ -138,6 +138,14 @@ This manual covers everything you need to get started.
   - [Undo, Saving, and Load](15-arrangement.md#undo-saving-and-load) (scene version 7, memory)
   - [Sleeping Clips](15-arrangement.md#sleeping-clips) (why a distant clip stops decoding, and its effects)
 
+### Part VI: Showcase
+
+- **16. [Fractal Explorer](16-fractal-explorer.md)** (flying through 3D fractals)
+  - [Flying](16-fractal-explorer.md#flying) (throttle, distance-scaled speed, autopilot, saved locations, tours)
+  - [Building the Fractal](16-fractal-explorer.md#building-the-fractal) (six formula slots, alternate and combine hybrids)
+  - [Look](16-fractal-explorer.md#look) (lighting, palette, atmosphere, lens, grade)
+  - [Quality and Speed](16-fractal-explorer.md#quality-and-speed) (detail, geometry band, diagnostics)
+
 ---
 
 ## Additional Resources

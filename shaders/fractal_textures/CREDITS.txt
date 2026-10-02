@@ -1,0 +1,6 @@
+surfaces.png: six materials from ambientCG (https://ambientcg.com), released under CC0 1.0
+Universal (public domain). Packed 3 x 2 at 512 x 512 each: RGB is the color map, alpha is the
+displacement (height) map.
+
+Row 1: Rock058, Rock064, Metal041B
+Row 2: Bark014, Ground037, Ice003

@@ -88,6 +88,26 @@ The inspector lays groups out by three rules:
 - **The first named group starts open; the rest start closed.** A large shader opens as a short list
   of section headers.
 
+### Columns
+
+A shader with many groups can lay some of them out as columns of their own in the deck detail bar,
+next to the params column, with the top-level `COLUMNS` key. Each column lists groups by name:
+
+```json
+"COLUMNS": [
+    { "TITLE": "Light", "GROUPS": ["Lighting", "Palette"] },
+    { "TITLE": "Detail", "GROUPS": ["Detail"] }
+]
+```
+
+- Columns follow the params column in `COLUMNS` order. Clicking a column's title collapses it to a
+  strip, like the other columns in the bar.
+- A column shows its groups as sections in the order listed, the first open.
+- Ungrouped inputs and any group no column names stay in the params column.
+- Without `COLUMNS` the inspector is unchanged. Other ISF hosts ignore the key.
+- Varda rejects the shader at load when a column names a group no input declares, puts a group in
+  two columns, or has an empty `TITLE` or `GROUPS`.
+
 ### Group names in the shipped library
 
 `GROUP` accepts any string. The shaders Varda ships use a fixed set of names, because group names
@@ -531,6 +551,7 @@ makes it four times as expensive as `HISTORY` for the same pass.
 | `rgba16float` (default) | Color, normals, anything you want to sample with filtering |
 | `rgba32float` | Depth and data that need full float precision |
 | `r32float` | One channel of full precision at a quarter of the memory |
+| `rg32float` | Two channels of full precision, for example texture coordinates |
 
 - `TARGETS` writes up to four buffers in one pass. Declare one output per target:
   `layout(location = 0) out vec4 out0; layout(location = 1) out vec4 out1;`. All targets of a pass
@@ -538,17 +559,73 @@ makes it four times as expensive as `HISTORY` for the same pass.
 - **Read 32-bit targets with `texelFetch`**, never `texture()`. They are not filterable:
   `texelFetch(sampler2D(gA, texSampler), ivec2(gl_FragCoord.xy), 0)`.
 - The final pass renders to the deck and has no `FORMAT` or `TARGETS`.
+- **A pass's targets may total at most 32 bytes per pixel**, the portable GPU limit: `rgba32float`
+  is 16, `rgba16float` and `rg32float` are 8, `r32float` is 4. Beyond it the pipeline fails to
+  build.
 
 Half-float depth has an 11-bit mantissa. A hit position rebuilt from it at 1080p is off by about
 half a pixel's footprint, which is enough to make shadow rays start inside the surface. Store depth
-in `rgba32float` or `r32float`.
+in `rgba32float`, `r32float` or `rg32float`.
+
+### Pass sizes from inputs
+
+`WIDTH` and `HEIGHT` may multiply or divide by an input, so a shader can render its expensive
+passes below the deck's resolution under a user control:
+
+```json
+{ "TARGET": "gbuf", "WIDTH": "$WIDTH*$render_scale", "HEIGHT": "$HEIGHT*$render_scale" }
+```
+
+An expression is `$WIDTH` or `$HEIGHT` followed by `*f` or `/f` steps, left to right, where `f` is
+a number or `$name` of a `float` or `long` input. The result is rounded down and never below one
+pixel. Varda reads the input's base value each frame (modulation does not reach it) and resizes
+the pass's buffers when the size changes; history restarts that frame. A reduced pass that feeds
+a full-size one must say how to upsample, for example a temporal pass that reads the reduced
+image and accumulates it at full size, as `fractal_explorer.fs` does.
 
 ### `JITTER`: sub-pixel offsets
 
-`JITTER` is an offset in pixels, in `[-0.5, 0.5)`, from the Halton (2, 3) sequence over 16 frames.
+`JITTER` is an offset in pixels, in `[-0.5, 0.5)`, from the Halton (2, 3) sequence over 64 frames.
 It changes once per rendered frame and is the same for every pass of that frame. Add it to the pixel
 position before building a ray, and a `HISTORY` pass that accumulates the result gets
 supersampled edges. `JITTERINDEX` is the position in the cycle.
+
+### `SPECIALIZE`: inputs as compile-time constants
+
+A `long`, `bool` or `float` input marked `"SPECIALIZE": true` also reaches the shader as a
+specialization constant. The GPU compiler then treats it as a literal and drops the code it rules
+out, which a uniform cannot do: a shader choosing between ten formulas with a uniform keeps all ten
+live and pays for the choice on every call.
+
+```json
+{"NAME": "formula", "TYPE": "long", "DEFAULT": 1, "VALUES": [1, 2, 3], "SPECIALIZE": true}
+```
+
+```glsl
+layout(constant_id = 0) const int SPEC_FORMULA = 1;
+
+// Read the constant through a function. Varda's shader translator cannot
+// handle an expression on a specialization constant, such as SPEC_FORMULA == 2,
+// and a function call keeps it out of one. The compiler still folds it.
+int specialized(int value) {
+    return value;
+}
+#define FORMULA specialized(SPEC_FORMULA)
+```
+
+- Constants are numbered by the inputs' order among the specialized inputs: the first specialized
+  input is `constant_id = 0`. A shader whose constants do not match fails to load.
+- The value is the input's base value. A float rounds to the nearest integer. Modulation does not
+  reach it.
+- Changing the input builds a new pipeline, which takes a moment. Varda keeps the last few, so
+  switching back is instant. Use it for structure (which formula, which mode), not for anything
+  that animates.
+- The input is still in `UserParams`, so the shader may read either.
+
+`"SPECIALIZE_PASSES": true` at the top level does the same for the pass: each pass gets its own
+pipeline, with `PASSINDEX` as the constant after the inputs' constants. Each pass then compiles
+alone and runs with the registers it needs, instead of those of the largest pass in the file. In
+`fractal_explorer.fs` that was worth 1 to 4 ms at 1080p.
 
 ### Texture limit
 
@@ -660,6 +737,18 @@ It steps a fixed 60 fps clock up to `--frame`, so phase accumulators integrate a
 and a given frame index is reproducible between runs. `--set NAME=VALUE` overrides any float, bool or
 long input. The frame is taken from the mixer composite, so it has gone through the real compositing
 and tonemap path.
+
+| Option | Does |
+|---|---|
+| `--set NAME=VALUE` | Override an input, clamped to its `MIN`/`MAX` with a warning |
+| `--warmup N`, `--settle MS` | Extra frames at time 0, each followed by a pause, so background preprocessors can publish first |
+| `--time N` | After the capture, render N more frames and print ms/frame for the render loop alone |
+| `--probe` | Per-channel mean and percentiles of the linear values, read before the PNG's sRGB encode |
+| `--pair` | Also write frame N-1 (from the same process) and print their difference at 1x, 4x, 8x and 16x downsampling |
+| `--sweep`, `--sweep2`, `--grid` | A contact sheet with one or two inputs walked across it |
+
+Every capture prints the frame's mean Laplacian. Near zero means a flat frame. A high value means
+detail or noise; compare the `--pair` rows to tell which.
 
 ## Compute Shaders
 
@@ -943,6 +1032,9 @@ Each preprocessor entry declares:
 | `FORMAT` | `rgba8unorm` | Texture format of the output. `rgba32float` holds raw floats; read it with `texelFetch`, never `texture()` |
 
 Several entries with the same `TYPE` share one running instance, one entry per output.
+
+`"OPTIONS": {"bind_all_inputs": true}` binds every one of your `INPUTS` under its own name, for a
+preprocessor that needs most of them.
 
 ### How It Works
 

@@ -183,9 +183,10 @@ impl Shader {
             gpu.compositing_format,
             false,
             &PassSet::binding_filterability(&passes, default_format),
-            &PassSet::target_formats(&passes, default_format),
+            &PassSet::plan(&passes, default_format, shader.metadata.specialize_passes),
             imported_textures.len(),
             &preprocessor_filterability(&preprocessor_slots),
+            &specialization_defaults(shader),
         )
         .context("Failed to create shader pipeline")?;
         let passes = PassSet::new(gpu, passes, width, height, default_format, "Pass Buffer");
@@ -233,7 +234,7 @@ impl Shader {
 
     fn render_fragment(
         frame: &mut SourceFrame,
-        pipeline: &UnifiedPipeline,
+        pipeline: &mut UnifiedPipeline,
         passes: &mut PassSet,
         imported: &[&wgpu::TextureView],
         preprocessors: &[&wgpu::TextureView],
@@ -245,6 +246,9 @@ impl Shader {
             frame.modulation,
             Some(frame.param_prefix),
         );
+        pipeline.specialize(&frame.gpu.device, frame.params.specialization_constants());
+        passes.update_sizes(frame.gpu, &|name| frame.params.base_number(name));
+        let pipeline = &*pipeline;
         let Some(user_params) = frame.params.buffer() else {
             return;
         };
@@ -321,11 +325,7 @@ impl Shader {
             time,
             time_delta,
             frame_index,
-            if passes.has_targeted_passes() {
-                passes.passes().len()
-            } else {
-                0
-            },
+            passes.output_index(),
             size,
             phase_times,
         );
@@ -478,4 +478,13 @@ impl DeckSourceInstance for Shader {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }
+}
+
+/// The specialization constants of `shader`'s `SPECIALIZE` inputs at their
+/// defaults.
+pub fn specialization_defaults(shader: &ISFShader) -> Vec<f64> {
+    let inputs = shader.metadata.inputs.as_deref().unwrap_or(&[]);
+    crate::params::ShaderParams::from_inputs(inputs)
+        .specialization_constants()
+        .collect()
 }

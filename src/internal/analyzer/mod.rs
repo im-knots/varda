@@ -3,6 +3,7 @@
 pub(crate) mod brightness;
 #[cfg(feature = "face-detection")]
 pub(crate) mod face_detect;
+pub(crate) mod fractal_flight;
 pub(crate) mod host_inline;
 pub(crate) mod traits;
 
@@ -110,7 +111,6 @@ impl AnalyzerRegistry {
     }
 
     /// Registers a host-inline preprocessor type with a factory.
-    #[allow(dead_code)] // no built-in host-inline type is registered yet; tests register one
     pub(crate) fn register_host_inline<F>(mut self, preprocessor_type: &str, factory: F) -> Self
     where
         F: Fn() -> Box<dyn HostInlinePreprocessor> + Send + Sync + 'static,
@@ -621,9 +621,13 @@ fn frame_to_rgba8(frame: &crate::renderer::ReadbackFrame) -> Vec<u8> {
 /// Default registry with every built-in analyzer.
 pub(crate) fn default_registry() -> AnalyzerRegistry {
     #[allow(unused_mut)]
-    let mut registry = AnalyzerRegistry::new().register("brightness", || {
-        Box::new(brightness::BrightnessAnalyzer::new())
-    });
+    let mut registry = AnalyzerRegistry::new()
+        .register("brightness", || {
+            Box::new(brightness::BrightnessAnalyzer::new())
+        })
+        .register_host_inline(fractal_flight::PREPROCESSOR_TYPE, || {
+            Box::new(fractal_flight::FractalFlight::new())
+        });
     #[cfg(feature = "face-detection")]
     {
         registry = registry.register("face_detect", || {

@@ -464,7 +464,18 @@ impl VardaApp {
         let calibration_textures =
             crate::renderer::context::create_calibration_textures(&gpu.device, &gpu.queue, 8);
         let mixer = Mixer::new(&gpu, DEFAULT_RENDER_WIDTH, DEFAULT_RENDER_HEIGHT)?;
-        let preset_library = crate::persistence::presets::PresetLibrary::load(&workspace);
+        // Shipped presets live beside the built-in shaders: the bundled folder
+        // in an installed build, `./shaders` in the repo.
+        let built_in_presets: Vec<std::path::PathBuf> = crate::registry::get_bundled_shader_path()
+            .into_iter()
+            .chain(std::iter::once(std::path::PathBuf::from("shaders")))
+            .map(|dir| crate::persistence::presets::built_in_deck_presets_dir(&dir))
+            .filter(|dir| dir.is_dir())
+            .collect();
+        let preset_library = crate::persistence::presets::PresetLibrary::load_with_built_in(
+            &workspace,
+            built_in_presets,
+        );
 
         Ok(Self {
             mixer,

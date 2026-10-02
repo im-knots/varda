@@ -473,6 +473,15 @@ pub struct EffectSnapshot {
 pub struct ShaderParamsSnapshot {
     pub shader_name: String,
     pub params: Vec<ParamSnapshot>,
+    /// The shader's `COLUMNS`: groups laid out as columns of their own.
+    pub columns: Vec<ParamColumnSnapshot>,
+}
+
+/// One column of a generator's controls: a title and the groups it holds.
+#[derive(Clone, Serialize)]
+pub struct ParamColumnSnapshot {
+    pub title: String,
+    pub groups: Vec<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -1156,6 +1165,7 @@ mod tests {
             generator: ShaderParamsSnapshot {
                 shader_name: "Sine".into(),
                 params: vec![],
+                columns: vec![],
             },
             effects: vec![],
             auto_transition: None,

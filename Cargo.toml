@@ -280,6 +280,10 @@ name = "headless_frame"
 harness = false
 
 [[bench]]
+name = "fractal_explorer"
+harness = false
+
+[[bench]]
 name = "ndi_convert"
 harness = false
 

@@ -163,6 +163,7 @@ pub(crate) mod tests {
                         generator: ShaderParamsSnapshot {
                             shader_name: "Sine".into(),
                             params: vec![],
+                            columns: vec![],
                         },
                         effects: vec![],
                         auto_transition: None,
