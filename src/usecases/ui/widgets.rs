@@ -384,32 +384,7 @@ fn component_menus<S: std::hash::BuildHasher>(
             text = text.color(modulator_color(idx));
         }
         let rect = ui.label(text).rect;
-        if let Some(prefix) = ctx.midi_learn_path_prefix {
-            let path = format!("{prefix}/param/{name}");
-            if ctx.midi_learn_active {
-                if ctx.midi_learn_target == Some(path.as_str()) {
-                    draw_midi_learn_selected(ui, rect);
-                } else {
-                    draw_midi_learn_glow(ui, rect);
-                }
-                let id = ui.id().with(("midi_learn_component", ctx.id_prefix, &name));
-                if ui.interact(rect, id, egui::Sense::click()).clicked() {
-                    commands.push(EngineCommand::MidiLearnSelect { path });
-                }
-            } else if ctx.keyboard_learn_active {
-                if ctx.keyboard_learn_target == Some(path.as_str()) {
-                    draw_keyboard_learn_selected(ui, rect);
-                } else {
-                    draw_keyboard_learn_glow(ui, rect);
-                }
-                let id = ui.id().with(("kb_learn_component", ctx.id_prefix, &name));
-                if ui.interact(rect, id, egui::Sense::click()).clicked() {
-                    commands.push(EngineCommand::KeyboardLearnSelect {
-                        target: crate::keymap::KeyTarget::ParamPath(path),
-                    });
-                }
-            }
-        }
+        learn_target(ui, rect, &name, ctx, commands);
         if let Some(menu) = &ctx.menu {
             modulation_dropdown(
                 ui,
@@ -422,6 +397,62 @@ fn component_menus<S: std::hash::BuildHasher>(
             );
         }
     }
+}
+
+/// In MIDI or keyboard learn mode, mark `rect` as the learn target for the
+/// parameter `name` and pick it on click.
+fn learn_target<S>(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    name: &str,
+    ctx: &ComponentMenus<S>,
+    commands: &mut Vec<EngineCommand>,
+) {
+    let Some(prefix) = ctx.midi_learn_path_prefix else {
+        return;
+    };
+    let path = format!("{prefix}/param/{name}");
+    if ctx.midi_learn_active {
+        if ctx.midi_learn_target == Some(path.as_str()) {
+            draw_midi_learn_selected(ui, rect);
+        } else {
+            draw_midi_learn_glow(ui, rect);
+        }
+        let id = ui.id().with(("midi_learn_component", ctx.id_prefix, name));
+        if ui.interact(rect, id, egui::Sense::click()).clicked() {
+            commands.push(EngineCommand::MidiLearnSelect { path });
+        }
+    } else if ctx.keyboard_learn_active {
+        if ctx.keyboard_learn_target == Some(path.as_str()) {
+            draw_keyboard_learn_selected(ui, rect);
+        } else {
+            draw_keyboard_learn_glow(ui, rect);
+        }
+        let id = ui.id().with(("kb_learn_component", ctx.id_prefix, name));
+        if ui.interact(rect, id, egui::Sense::click()).clicked() {
+            commands.push(EngineCommand::KeyboardLearnSelect {
+                target: crate::keymap::KeyTarget::ParamPath(path),
+            });
+        }
+    }
+}
+
+/// An `event` input: a button that fires it. In learn mode the button is the
+/// learn target instead.
+fn render_event_row<S>(
+    ui: &mut egui::Ui,
+    param: &ParamUIInfo,
+    label: egui::RichText,
+    ctx: &ComponentMenus<S>,
+    make_update: &dyn Fn(&str, ParamValue) -> EngineCommand,
+    commands: &mut Vec<EngineCommand>,
+) {
+    let learning = ctx.midi_learn_active || ctx.keyboard_learn_active;
+    let response = ui.add_enabled(!learning, egui::Button::new(label));
+    if response.clicked() {
+        commands.push(make_update(&param.name, ParamValue::Bool(true)));
+    }
+    learn_target(ui, response.rect, &param.name, ctx, commands);
 }
 
 /// Parameter controls (sliders, checkboxes, color pickers) for a list of params.
@@ -588,6 +619,14 @@ pub fn render_params<S: std::hash::BuildHasher>(
                     }
                 });
             }
+            ParamValue::Bool(_) if param.event => render_event_row(
+                ui,
+                param,
+                egui::RichText::new(label).small(),
+                &components,
+                make_update,
+                commands,
+            ),
             ParamValue::Bool(mut v) => {
                 if ui
                     .checkbox(&mut v, egui::RichText::new(label).small())
@@ -806,6 +845,14 @@ pub fn render_effect_params<S: std::hash::BuildHasher>(
                     }
                 });
             }
+            ParamValue::Bool(_) if param.event => render_event_row(
+                ui,
+                param,
+                egui::RichText::new(label).small().weak(),
+                &components,
+                make_update,
+                commands,
+            ),
             ParamValue::Bool(mut v) => {
                 if ui
                     .checkbox(&mut v, egui::RichText::new(label).small().weak())
@@ -1094,6 +1141,7 @@ mod tests {
             max: Some(1.0),
             group: group.map(str::to_string),
             choices: Vec::new(),
+            event: false,
         }
     }
 

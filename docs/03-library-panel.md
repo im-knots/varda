@@ -45,7 +45,7 @@ To create a deck, **drag an item onto a channel**:
 | **Deck Preset** | (none) | Drag onto a channel (or double-click → Channel 0) to load it. |
 | **Channel Preset** | (none) | Drag (or double-click) to add a channel to the mixer. |
 
-Images and video load through their section's **📁 Load to [Channel]** button; you can't drag them. The image dialog accepts SVG as well as the usual raster formats. See [Per-Deck Scaling](10-resolution-and-monitoring.md#per-deck-scaling) for how Varda redraws vector art at your render resolution.
+Images and video load through their section's **📁 Load to [Channel]** button; you can't drag them. The image dialog accepts SVG as well as the usual raster formats. See [Per-Deck Scaling](13-resolution-and-monitoring.md#per-deck-scaling) for how Varda redraws vector art at your render resolution.
 
 You can also drag effects within a chain to reorder them, and toggle each one on or off (see [Effect Chains](02-concepts.md#effect-chains)).
 
@@ -68,7 +68,7 @@ A colored bullet (`●`) next to each entry shows **connection status**:
 
 Click an entry's **✕** button to remove it from the list.
 
-> **Library entries and decks.** Stream URLs you add to the sidebar last for the current session only and are not saved to disk. When you drag a stream onto a channel, the resulting **deck** is saved in `scene.json` with its protocol, URL, and mode. See [Streaming & I/O](09-streaming-and-io.md) for adding and configuring stream sources.
+> **Library entries and decks.** Stream URLs you add to the sidebar last for the current session only and are not saved to disk. When you drag a stream onto a channel, the resulting **deck** is saved in `scene.json` with its protocol, URL, and mode. See [Streaming & I/O](12-streaming-and-io.md) for adding and configuring stream sources.
 
 ## HTML Sources
 
@@ -78,7 +78,7 @@ The **🌐 HTML Sources** section holds web pages that the embedded [Servo](http
 - Each entry has a colored bullet (`●`): **green** when a deck is rendering it, **gray** otherwise. The **✕** button removes it from the list.
 - **Drag** an entry onto a channel to create an HTML deck.
 
-As with streams, URLs you add here last for the current session only and are not saved to disk. The **deck** you create by dragging is saved in `scene.json` by URL. See [HTML / Web Content](09-streaming-and-io.md#html--web-content) for rendering and performance.
+As with streams, URLs you add here last for the current session only and are not saved to disk. The **deck** you create by dragging is saved in `scene.json` by URL. See [HTML / Web Content](12-streaming-and-io.md#html--web-content) for rendering and performance.
 
 ## Cameras
 
@@ -89,7 +89,7 @@ Varda lists camera devices under **📹 Cameras** at startup (AVFoundation on ma
 
 ### Resolution
 
-Set a camera's resolution in the **deck detail panel** (bottom bar) when a camera deck is selected. The **resolution selector** is a dropdown of the device's supported resolutions (default: the device's native default). The standard scaling mode (Fill / Fit / Stretch / Center) is next to it. See [Per-Deck Scaling](10-resolution-and-monitoring.md#per-deck-scaling).
+Set a camera's resolution in the **deck detail panel** (bottom bar) when a camera deck is selected. The **resolution selector** is a dropdown of the device's supported resolutions (default: the device's native default). The standard scaling mode (Fill / Fit / Stretch / Center) is next to it. See [Per-Deck Scaling](13-resolution-and-monitoring.md#per-deck-scaling).
 
 ## Screen Capture
 
@@ -100,7 +100,7 @@ The **🖥 Screen Capture** section lists capturable displays and windows in two
 - On macOS the section also shows the Screen Recording permission state. When access has not been granted, it shows a **Grant Screen Recording access** button. Restart Varda after granting.
 - Capture decks are saved in `scene.json` by display name, or by application and window title. If the target is gone at load time, the deck stays and renders black.
 
-The rate, crop, cursor, and Varda-exclusion controls are in the **deck detail panel** (bottom bar) when a capture deck is selected. See [Screen & Window Capture](09-streaming-and-io.md#screen--window-capture) for those controls, the permission flow, and performance.
+The rate, crop, cursor, and Varda-exclusion controls are in the **deck detail panel** (bottom bar) when a capture deck is selected. See [Screen & Window Capture](12-streaming-and-io.md#screen--window-capture) for those controls, the permission flow, and performance.
 
 ## Taps
 
@@ -110,7 +110,7 @@ The **🔁 Taps** section feeds Varda's own output back in as a deck source. It 
 - A tap always shows the **previous** frame. This keeps feedback loops stable, and the delay stays the same whatever the deck order.
 - Select a tap deck to get a **Source** dropdown in the deck detail panel. Use it to repoint the tap without recreating the deck.
 
-See [Program Tap](09-streaming-and-io.md#program-tap) for frame timing, feedback behavior, and the API.
+See [Program Tap](12-streaming-and-io.md#program-tap) for frame timing, feedback behavior, and the API.
 
 ## Text
 
@@ -138,7 +138,7 @@ In Step, **Transition** sets how one unit replaces the next: **Cut**, **Fade**, 
 
 ### Timecode
 
-A text deck follows the show transport like a video deck does (**Chase**: Auto, Always, Never; **Chase offset**; **Chase delay**). Plain text moves at its speed from the offset, so the same show position always shows the same line. LRC, WebVTT and SubRip files cue each line at its timestamp, and each word where the file has word timing. Word timing only lines up with the singer when the transport is locked to the track, from LTC or MTC sent by the playback rig or from an arrangement. See [Arrangement](15-arrangement.md).
+A text deck follows the show transport like a video deck does (**Chase**: Auto, Always, Never; **Chase offset**; **Chase delay**). Plain text moves at its speed from the offset, so the same show position always shows the same line. LRC, WebVTT and SubRip files cue each line at its timestamp, and each word where the file has word timing. Word timing only lines up with the singer when the transport is locked to the track, from LTC or MTC sent by the playback rig or from an arrangement. See [Arrangement](05-arrangement.md).
 
 ### Placement and speakers
 
@@ -150,7 +150,7 @@ A WebVTT file whose cues set `position`, `line` or `align` places every cue itse
 
 The deck draws **Color** text over the **Background** color, white on black by default. Lower the background's alpha in its color picker for a transparent background. For a knockout over lower decks, keep the black background and set the deck's blend mode to **Subtract**.
 
-Size, weight, speed, scroll, transition time, line spacing, position and every color can be modulated, automated and mapped to MIDI. Colors and position are mapped one channel or axis at a time (see [Per-Component Modulation](05-modulation.md#per-component-modulation)).
+Size, weight, speed, scroll, transition time, line spacing, position and every color can be modulated, automated and mapped to MIDI. Colors and position are mapped one channel or axis at a time (see [Per-Component Modulation](06-modulation.md#per-component-modulation)).
 
 ### Live text over OSC
 

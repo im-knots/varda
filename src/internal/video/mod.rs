@@ -1667,7 +1667,7 @@ mod tests {
 
         // Empty pool yields a fresh buffer.
         let buf = pool_take(&pool);
-        assert!(buf.is_empty());
+        assert_eq!(buf.len(), 0);
 
         // A returned buffer is handed back out.
         let mut b = Vec::with_capacity(4096);

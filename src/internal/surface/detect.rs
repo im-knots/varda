@@ -695,7 +695,7 @@ mod tests {
     fn follow_borders_empty_image() {
         let img = image::GrayImage::new(50, 50);
         let contours = follow_borders(&img);
-        assert!(contours.is_empty());
+        assert_eq!(contours.len(), 0);
     }
 
     #[test]

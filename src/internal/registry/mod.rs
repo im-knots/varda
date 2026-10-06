@@ -543,7 +543,7 @@ mod tests {
     fn new_registry_is_empty() {
         let reg = ShaderRegistry::new();
         assert_eq!(reg.count(), 0);
-        assert!(reg.shader_names().is_empty());
+        assert_eq!(reg.shader_names().len(), 0);
         assert!(reg.generators().is_empty());
         assert!(reg.filters().is_empty());
         assert!(reg.transitions().is_empty());

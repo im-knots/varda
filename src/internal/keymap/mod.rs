@@ -662,7 +662,7 @@ mod tests {
                 target: KeyTarget::Action(ActionId::Undo),
             }],
         };
-        assert!(config.validate().is_empty());
+        assert_eq!(config.validate().len(), 0);
     }
 
     #[test]

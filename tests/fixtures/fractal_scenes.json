@@ -1,0 +1,32 @@
+[
+  {
+    "name": "temple",
+    "description": "Amazing Box, scale -1.8, slightly rotated: overhanging lit forms",
+    "params": { "slot1_a": -1.8, "slot1_rot_y": 0.1, "max_iterations": 14 },
+    "state": { "fractal_flight": { "version": 1, "position": [1.5707332851504758, 1.6058306175065422, -2.0461986878871867], "orientation": [0.9713032977000352, -0.18950155015841977, 0.14366894545749145, 0.004277905530203902], "locations": [] } }
+  },
+  {
+    "name": "garden",
+    "description": "Combine: Box temple filleted with a Box and power-2 bulb hybrid",
+    "params": { "hybrid_mode": 1, "combine_split": 4, "slot1_a": -1.8, "slot4_formula": 1, "slot4_a": 2.0, "slot4_b": 0.5, "slot4_c": 1, "slot4_d": 1, "slot5_formula": 7, "slot5_a": 2, "slot5_b": 1, "slot5_count": 1, "combine_op": 4, "combine_width": 6, "aperture": 0.15 },
+    "state": { "fractal_flight": { "version": 1, "position": [0.31974980209909326, 0.3141823308471828, -6.60058973144504], "orientation": [0.9990966961956832, -0.04176492000423257, -0.007839395504491453, 0.00016427426750383284], "locations": [] } }
+  },
+  {
+    "name": "corridor",
+    "description": "Menger sponge from inside its central tunnel, sun raking the walls",
+    "params": { "slot1_formula": 2, "slot1_a": 3, "slot1_b": 1, "max_iterations": 8, "aperture": 0.15 },
+    "state": { "fractal_flight": { "version": 1, "position": [0.04, 0.03, -0.95], "orientation": [0.9998, 0.01, 0.015, 0.0], "locations": [] } }
+  },
+  {
+    "name": "crystal",
+    "description": "Icosahedral KIFS with light shafts",
+    "params": { "slot1_formula": 4, "slot1_mode": 2, "slot1_a": 2, "slot1_b": 1, "slot1_c": 0, "slot1_d": 1, "shafts": 0.3, "max_iterations": 12 },
+    "state": { "fractal_flight": { "version": 1, "position": [1.0561733271253595, 0.5795102647537221, -1.302538981718782], "orientation": [0.979537231561618, -0.020031927871712252, 0.19628287196830532, -0.03973119709016545], "locations": [] } }
+  },
+  {
+    "name": "organic",
+    "description": "Box then power-2 bulb, Julia mode",
+    "params": { "slot1_a": 2.0, "slot2_formula": 7, "slot2_count": 1, "slot2_a": 2, "slot2_b": 1, "julia_mode": 1, "julia_x": 0.2, "julia_y": 0.1, "julia_z": -0.3, "max_iterations": 10 },
+    "state": { "fractal_flight": { "version": 1, "position": [0.813927375889339, 0.5276432437065433, -2.763206140428106], "orientation": [0.997923986662282, -0.05141044159468166, 0.03741686521774304, 0.010230422101490038], "locations": [] } }
+  }
+]

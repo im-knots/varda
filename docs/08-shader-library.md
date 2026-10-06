@@ -1,6 +1,6 @@
 # Shader Library
 
-Varda ships with a catalog of ISF shaders. Drag them from the **Library** panel into a deck (generators), onto a deck, channel or master (filters), or into a transition slot. They are in the `shaders/` directory, and you can open, edit and hot-reload them. See [ISF Shader Authoring](12-isf-authoring.md).
+Varda ships with a catalog of ISF shaders. Drag them from the **Library** panel into a deck (generators), onto a deck, channel or master (filters), or into a transition slot. They are in the `shaders/` directory, and you can open, edit and hot-reload them. See [ISF Shader Authoring](14-isf-authoring.md).
 
 Varda sorts shaders by type automatically:
 
@@ -31,12 +31,10 @@ Varda sorts shaders by type automatically:
 | `digital_brain.fs` | Glowing voronoi-noise plasma with drifting camera and pulsing "moving electrons" octaves |
 | `dull_skull.fs` | Raymarched skull with an animated jaw that sways, turns and drifts in front of a backdrop, with glowing eyes, fresnel rim light and fog. Controls include Mouth Open, Jaw Chatter, Head Turn and Sway Range |
 | `eyes.fs` | Tiled grid of procedural cartoon eyes: autonomous blink, drifting gaze, IQ cosine-palette irises |
-| `eyes_depth.fs` | The same eyes, tracking people seen by a Kinect: the gaze follows the motion-weighted centroid of whoever is in view, lids wake as someone approaches, pupils dilate on sudden movement. **Requires an attached depth sensor**. See [ISF authoring § `depth_sensor`](12-isf-authoring.md#depth_sensor-live-depth-camera) |
+| `eyes_depth.fs` | The same eyes, tracking people seen by a Kinect: the gaze follows the motion-weighted centroid of whoever is in view, lids wake as someone approaches, pupils dilate on sudden movement. **Requires an attached depth sensor**. See [ISF authoring § `depth_sensor`](14-isf-authoring.md#depth_sensor-live-depth-camera) |
 | `fire.fs` | Procedural animated fire effect |
 | `fractal.fs` | Mandelbrot / Julia set generator |
-| `fractal_mandelbox.fs` | Raymarched Mandelbox flythrough with orbit-trap coloring, soft shadows and ambient occlusion. Controls for the box fold (Scale, Fold Limit, Min Radius, Fixed Radius), the camera and the sun |
-| `fractal_mandelbulb.fs` | Raymarched Mandelbulb flythrough with orbit-trap coloring, soft shadows and ambient occlusion. Controls for Power, Bailout, the camera and the sun |
-| `fractal_menger.fs` | Raymarched Menger sponge flythrough with orbit-trap coloring, soft shadows and ambient occlusion. Controls for Scale, Offset, the camera and the sun |
+| `fractal_explorer.fs` | Free flight through a six-slot hybrid 3D fractal: 22 Mandelbulb3D-style formulas (Box, Menger, Sierpinski, KIFS, Pseudo-Kleinian, Kaliset, Mandelbulb, Transform, Helispiral, Gnarl, and more) chained or combined, with a key light, fill, headlight, soft shadows, occlusion, fog, light shafts, depth of field, bloom and a grade. Fly with Throttle, Yaw and Pitch (speed follows the distance to the surface), or hand over to the Autopilot. Save locations and tour them. See [Fractal Explorer](09-fractal-explorer.md) |
 | `game_of_life.fs` | Conway's Game of Life: cellular automaton with persistent state |
 | `generative_feedback.fs` | Evolving patterns using a persistent feedback buffer |
 | `gradient.fs` | Color gradient generator: linear, radial, or angular |
@@ -46,7 +44,7 @@ Varda sorts shaders by type automatically:
 | `lagrangian.fs` | Standard Model Lagrangian typed terminal-style with parallax layers |
 | `lines.fs` | Animated geometric lines generator |
 | `liquid_light.fs` | 1960s liquid light show: oil/water/dye overhead projector psychedelia |
-| `liquid_light_depth.fs` | The same look driven by a live Kinect: bodies in the sensor's view push a real advected fluid and read as flowing dye outlines. **Requires an attached depth sensor**. See [ISF authoring § `depth_sensor`](12-isf-authoring.md#depth_sensor-live-depth-camera) |
+| `liquid_light_depth.fs` | The same look driven by a live Kinect: bodies in the sensor's view push a real advected fluid and read as flowing dye outlines. **Requires an attached depth sensor**. See [ISF authoring § `depth_sensor`](14-isf-authoring.md#depth_sensor-live-depth-camera) |
 | `mandelbrot_deco.fs` | Mandelbrot set with a decorative pattern overlay, adjustable zoom, color modes and vignette |
 | `noise.fs` | Procedural simplex-style animated noise |
 | `oscilloscope.fs` | Audio-reactive waveform and shape visualizer with 2D/3D modes |
@@ -171,4 +169,4 @@ Varda sorts shaders by type automatically:
 
 ---
 
-[← Prev: Resolution, Settings & Monitoring](10-resolution-and-monitoring.md) · [Home](README.md) · [Next: ISF Shader Authoring →](12-isf-authoring.md)
+[← Prev: Control Surfaces & Macros](07-control-surfaces.md) · [Home](README.md) · [Next: Fractal Explorer →](09-fractal-explorer.md)

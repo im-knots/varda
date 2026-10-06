@@ -1,6 +1,6 @@
 //! Building a deck around a source.
 
-use super::{Deck, Effect, generator_params_for};
+use super::{Deck, Effect, FramePacing, generator_params_for};
 use crate::isf::ISFShader;
 use crate::renderer::GpuContext;
 use crate::source::DeckSourceInstance;
@@ -64,7 +64,10 @@ impl Deck {
             opacity: 1.0,
             transparent: false,
             render_time: 0.0,
-            render_dt: 1.0 / 60.0,
+            pacing: FramePacing {
+                step: 1.0 / 60.0,
+                live: false,
+            },
             frame_count: 0,
             last_frame_time: Instant::now(),
             depth_prepro: None,

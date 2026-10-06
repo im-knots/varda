@@ -1101,6 +1101,65 @@ fn render_exploration_controls(
     });
 }
 
+/// A generator's parameters through the shared widget path, for the params
+/// column and the shader's own `COLUMNS`.
+fn render_generator_params(
+    ui: &mut egui::Ui,
+    deck: &DeckUIInfo,
+    params: &[ParamUIInfo],
+    data: &UIData,
+    actions: &mut UIActions,
+    id_prefix: &str,
+) {
+    let deck_uuid = deck.uuid.clone();
+    let midi_path_prefix = format!("deck/{deck_uuid}");
+    let deck_uuid_assign = deck_uuid.clone();
+    let deck_uuid_unassign = deck_uuid.clone();
+    let deck_uuid_remove = deck_uuid.clone();
+    let deck_uuid_automate = deck_uuid.clone();
+    widgets::render_params(
+        ui,
+        params,
+        &data.modulation_sources,
+        &|name: &str, val: ParamValue| EngineCommand::SetGeneratorParam {
+            deck_uuid: deck.uuid.clone(),
+            name: name.to_string(),
+            value: val,
+        },
+        Some(
+            &|name: &str, source_uuid: &str| EngineCommand::AssignModulation {
+                target: ParamAddress::deck_param(&deck_uuid_assign, name).to_string(),
+                source_id: source_uuid.to_string(),
+                amount: DEFAULT_ASSIGNMENT_AMOUNT,
+            },
+        ),
+        Some(
+            &|name: &str, source_uuid: &str| EngineCommand::ClearModulationSource {
+                target: ParamAddress::deck_param(&deck_uuid_unassign, name).to_string(),
+                source_id: source_uuid.to_string(),
+            },
+        ),
+        Some(&|name: &str| EngineCommand::ClearModulation {
+            target: ParamAddress::deck_param(&deck_uuid_remove, name).to_string(),
+        }),
+        Some(&|name: &str| EngineCommand::AddAutomationLane {
+            target: ParamAddress::deck_param(&deck_uuid_automate, name).to_string(),
+            timebase: crate::timebase::Timebase::Transport,
+        }),
+        &mut actions.commands,
+        &mut actions.session.gesture_active,
+        id_prefix,
+        Some(&midi_path_prefix),
+        data.midi_learn_active,
+        data.midi_learn_target.as_deref(),
+        &data.modulation_assignments,
+        &data.modulation_current_values,
+        &crate::engine::value::param::deck_param_prefix(&deck_uuid),
+        data.keyboard_learn_active,
+        data.keyboard_learn_target.as_deref(),
+    );
+}
+
 /// The selected deck's full details (params, effects, blend, scaling) in the bottom bar.
 pub(super) fn render_selected_deck_detail(
     ui: &mut egui::Ui,
@@ -1456,42 +1515,19 @@ pub(super) fn render_selected_deck_detail(
                                 if !gen_params.params.is_empty() {
                                     ui.add_space(4.0);
                                     ui.label(egui::RichText::new(&gen_params.shader_name).strong());
-                                    let deck_uuid = deck.uuid.clone();
-                                    let midi_path_prefix = format!("deck/{deck_uuid}");
-                                    let deck_uuid_assign = deck_uuid.clone();
-                                    let deck_uuid_unassign = deck_uuid.clone();
-                                    let deck_uuid_remove = deck_uuid.clone();
-                                    let deck_uuid_automate = deck_uuid.clone();
-                                    widgets::render_params(
-                                        ui,
-                                        &gen_params.params,
-                                        &data.modulation_sources,
-                                        &|name: &str, val: ParamValue| EngineCommand::SetGeneratorParam { deck_uuid: deck.uuid.clone(), name: name.to_string(), value: val },
-                                        Some(&|name: &str, source_uuid: &str| EngineCommand::AssignModulation {
-                                            target: ParamAddress::deck_param(&deck_uuid_assign, name).to_string(), source_id: source_uuid.to_string(), amount: DEFAULT_ASSIGNMENT_AMOUNT,
-                                        }),
-                                        Some(&|name: &str, source_uuid: &str| EngineCommand::ClearModulationSource {
-                                            target: ParamAddress::deck_param(&deck_uuid_unassign, name).to_string(), source_id: source_uuid.to_string(),
-                                        }),
-                                        Some(&|name: &str| EngineCommand::ClearModulation {
-                                            target: ParamAddress::deck_param(&deck_uuid_remove, name).to_string(),
-                                        }),
-                                        Some(&|name: &str| EngineCommand::AddAutomationLane {
-                                            target: ParamAddress::deck_param(&deck_uuid_automate, name).to_string(),
-                                            timebase: crate::timebase::Timebase::Transport,
-                                        }),
-                                        &mut actions.commands,
-                                        &mut actions.session.gesture_active,
-                                        &format!("sel_{ch_idx}_{deck_idx}"),
-                                        Some(&midi_path_prefix),
-                                        data.midi_learn_active,
-                                        data.midi_learn_target.as_deref(),
-                                        &data.modulation_assignments,
-                                        &data.modulation_current_values,
-                                        &crate::engine::value::param::deck_param_prefix(&deck_uuid),
-                                        data.keyboard_learn_active,
-                                        data.keyboard_learn_target.as_deref(),
-                                    );
+                                    // Groups the shader puts in columns of their own leave this one.
+                                    let in_columns: Vec<&str> = gen_params
+                                        .columns
+                                        .iter()
+                                        .flat_map(|c| c.groups.iter().map(String::as_str))
+                                        .collect();
+                                    let here: Vec<ParamUIInfo> = gen_params
+                                        .params
+                                        .iter()
+                                        .filter(|p| !p.group.as_deref().is_some_and(|g| in_columns.contains(&g)))
+                                        .cloned()
+                                        .collect();
+                                    render_generator_params(ui, deck, &here, data, actions, &format!("sel_{ch_idx}_{deck_idx}"));
                                     ui.add_space(4.0);
                                     render_exploration_controls(ui, &deck.uuid, &gen_params.params, &mut actions.commands);
                                 }
@@ -1501,6 +1537,51 @@ pub(super) fn render_selected_deck_detail(
                 } else {
                     // Collapsed: narrow strip with vertical text.
                     render_collapsed_column(ui, &format!("Params: {}", deck.generator.shader_name), params_open_id);
+                }
+            }
+
+            // Columns: the shader's own `COLUMNS`, each holding some of its groups.
+            for (index, column) in deck.generator.columns.iter().enumerate() {
+                let params: Vec<ParamUIInfo> = column
+                    .groups
+                    .iter()
+                    .flat_map(|group| {
+                        deck.generator
+                            .params
+                            .iter()
+                            .filter(move |p| p.group.as_deref() == Some(group.as_str()))
+                    })
+                    .cloned()
+                    .collect();
+                let open_id = egui::Id::new("param_column_open").with((ch_idx, deck_idx, index));
+                if column_open(ui, open_id) {
+                    egui::Frame::default()
+                        .inner_margin(6.0)
+                        .corner_radius(4.0)
+                        .fill(ui.visuals().faint_bg_color)
+                        .show(ui, |ui| {
+                            ui.set_min_width(200.0);
+                            ui.set_max_width(280.0);
+                            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                                render_column_header(ui, &column.title, open_id);
+                                let max_h = (ui.available_height() - 8.0).max(100.0);
+                                egui::ScrollArea::vertical()
+                                    .id_salt(("deck_param_column", index))
+                                    .max_height(max_h)
+                                    .show(ui, |ui| {
+                                        render_generator_params(
+                                            ui,
+                                            deck,
+                                            &params,
+                                            data,
+                                            actions,
+                                            &format!("sel_{ch_idx}_{deck_idx}"),
+                                        );
+                                    });
+                            });
+                        });
+                } else {
+                    render_collapsed_column(ui, &column.title, open_id);
                 }
             }
 

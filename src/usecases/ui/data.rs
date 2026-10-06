@@ -27,6 +27,8 @@ pub struct ParamUIInfo {
     pub group: Option<String>,
     /// Options for a `long` param, empty for every other type.
     pub choices: Vec<ParamChoiceUI>,
+    /// An `event` input, drawn as a button.
+    pub event: bool,
 }
 
 /// One option of a `long` (enum) parameter.
@@ -41,6 +43,17 @@ pub struct ParamChoiceUI {
 pub struct ShaderParamsUI {
     pub shader_name: String,
     pub params: Vec<ParamUIInfo>,
+    /// The shader's `COLUMNS`: groups drawn as columns of their own in the
+    /// deck detail bar. Empty for most shaders.
+    pub columns: Vec<ParamColumnUI>,
+}
+
+/// One column of a generator's controls: a title and the groups it holds,
+/// shown as sections in this order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ParamColumnUI {
+    pub title: String,
+    pub groups: Vec<String>,
 }
 
 /// Modulation source snapshot for the UI, with its UUID.

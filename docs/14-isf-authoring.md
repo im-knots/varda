@@ -37,6 +37,7 @@ Every ISF shader starts with a JSON block in a block comment:
 |------|-----------|------------|-------------|
 | `float` | `float` | MIN, MAX, DEFAULT | Slider control |
 | `bool` | `uint` | DEFAULT (true/false) | Toggle switch |
+| `event` | `uint` | (none) | Button. True for one frame per press |
 | `long` | `int` | VALUES, LABELS, DEFAULT | Dropdown / enum selector |
 | `color` | `vec4` | DEFAULT [R,G,B,A] | Color picker (0.0–1.0 per channel) |
 | `point2D` | `vec2` | DEFAULT [x,y] | Paired X and Y number drags, bounded by MIN and MAX |
@@ -65,6 +66,49 @@ API.
 The shader receives `VALUES`; the performer sees `LABELS`. If you declare only `LABELS`, the index
 becomes the value. If you declare neither, the input is a plain number stepper.
 
+### Input presets
+
+```json
+{ "NAME": "look", "TYPE": "long", "DEFAULT": 1, "VALUES": [1, 2], "LABELS": ["Day", "Night"],
+  "PRESETS": [{ "sun": 4.0, "fog_color": [0.62, 0.64, 0.66, 1.0] },
+              { "sun": 0.5, "fog_color": [0.1, 0.14, 0.22, 1.0] }] }
+```
+
+A `long` input may carry `PRESETS`, one object per entry of `VALUES`, in the same order. When the
+input changes value (inspector, MIDI, keyboard, API), Varda writes that entry's values into the
+named inputs, and the sliders show them. The performer can adjust from there. Choosing the value
+already selected writes nothing, so those adjustments stay.
+
+- Give numbers for `float`, `long` and `bool` inputs, an array of 4 for a `color` (the same sRGB
+  values as its `DEFAULT`), and an array of 2 for a `point2D`. Inputs an entry does not name keep
+  their values; names that are not inputs and values of the wrong shape are skipped.
+- Loading a scene, preset or saved deck applies no preset: the saved values already hold the result.
+  Modulating the input applies none either.
+- The shader still receives the input's value, but it does not need to read it.
+- `PRESETS` on any other type, or a count that differs from `VALUES`, fails the load.
+
+Make the other inputs' defaults match the default value's preset, so a fresh deck shows it.
+
+### Event inputs
+
+```json
+{ "NAME": "reset_camera", "TYPE": "event", "LABEL": "Reset camera" }
+```
+
+An `event` is a momentary trigger. In the parameter block it is laid out like a `bool`, so declare it
+as `uint`. It takes no `DEFAULT` and is 0 at rest.
+
+A press makes it 1 for exactly one rendered frame of its deck or effect, then 0 again. A host-inline
+preprocessor bound to it sees that same frame. If the deck skips frames, the press waits for the
+next frame it renders.
+
+The inspector draws a button with the input's `LABEL`, in its `GROUP`. A MIDI, OSC or keyboard
+mapping fires it on the press: a note on, a key down, or a value rising past 0.5. Through the HTTP
+API, setting it to true fires it and setting it to false does nothing.
+
+An event is not modulated or automated, and its value is not saved in scenes, presets or the
+clipboard.
+
 ### Grouping parameters
 
 Give an input a `GROUP` and the inspector puts it in a collapsible section. This helps once a shader
@@ -87,6 +131,26 @@ The inspector lays groups out by three rules:
   `INPUTS`, so the order of `INPUTS` sets the order of sections.
 - **The first named group starts open; the rest start closed.** A large shader opens as a short list
   of section headers.
+
+### Columns
+
+A shader with many groups can lay some of them out as columns of their own in the deck detail bar,
+next to the params column, with the top-level `COLUMNS` key. Each column lists groups by name:
+
+```json
+"COLUMNS": [
+    { "TITLE": "Light", "GROUPS": ["Lighting", "Palette"] },
+    { "TITLE": "Detail", "GROUPS": ["Detail"] }
+]
+```
+
+- Columns follow the params column in `COLUMNS` order. Clicking a column's title collapses it to a
+  strip, like the other columns in the bar.
+- A column shows its groups as sections in the order listed, the first open.
+- Ungrouped inputs and any group no column names stay in the params column.
+- Without `COLUMNS` the inspector is unchanged. Other ISF hosts ignore the key.
+- Varda rejects the shader at load when a column names a group no input declares, puts a group in
+  two columns, or has an empty `TITLE` or `GROUPS`.
 
 ### Group names in the shipped library
 
@@ -531,6 +595,7 @@ makes it four times as expensive as `HISTORY` for the same pass.
 | `rgba16float` (default) | Color, normals, anything you want to sample with filtering |
 | `rgba32float` | Depth and data that need full float precision |
 | `r32float` | One channel of full precision at a quarter of the memory |
+| `rg32float` | Two channels of full precision, for example texture coordinates |
 
 - `TARGETS` writes up to four buffers in one pass. Declare one output per target:
   `layout(location = 0) out vec4 out0; layout(location = 1) out vec4 out1;`. All targets of a pass
@@ -538,17 +603,73 @@ makes it four times as expensive as `HISTORY` for the same pass.
 - **Read 32-bit targets with `texelFetch`**, never `texture()`. They are not filterable:
   `texelFetch(sampler2D(gA, texSampler), ivec2(gl_FragCoord.xy), 0)`.
 - The final pass renders to the deck and has no `FORMAT` or `TARGETS`.
+- **A pass's targets may total at most 32 bytes per pixel**, the portable GPU limit: `rgba32float`
+  is 16, `rgba16float` and `rg32float` are 8, `r32float` is 4. Beyond it the pipeline fails to
+  build.
 
 Half-float depth has an 11-bit mantissa. A hit position rebuilt from it at 1080p is off by about
 half a pixel's footprint, which is enough to make shadow rays start inside the surface. Store depth
-in `rgba32float` or `r32float`.
+in `rgba32float`, `r32float` or `rg32float`.
+
+### Pass sizes from inputs
+
+`WIDTH` and `HEIGHT` may multiply or divide by an input, so a shader can render its expensive
+passes below the deck's resolution under a user control:
+
+```json
+{ "TARGET": "gbuf", "WIDTH": "$WIDTH*$render_scale", "HEIGHT": "$HEIGHT*$render_scale" }
+```
+
+An expression is `$WIDTH` or `$HEIGHT` followed by `*f` or `/f` steps, left to right, where `f` is
+a number or `$name` of a `float` or `long` input. The result is rounded down and never below one
+pixel. Varda reads the input's base value each frame (modulation does not reach it) and resizes
+the pass's buffers when the size changes; history restarts that frame. A reduced pass that feeds
+a full-size one must say how to upsample, for example a temporal pass that reads the reduced
+image and accumulates it at full size, as `fractal_explorer.fs` does.
 
 ### `JITTER`: sub-pixel offsets
 
-`JITTER` is an offset in pixels, in `[-0.5, 0.5)`, from the Halton (2, 3) sequence over 16 frames.
+`JITTER` is an offset in pixels, in `[-0.5, 0.5)`, from the Halton (2, 3) sequence over 64 frames.
 It changes once per rendered frame and is the same for every pass of that frame. Add it to the pixel
 position before building a ray, and a `HISTORY` pass that accumulates the result gets
 supersampled edges. `JITTERINDEX` is the position in the cycle.
+
+### `SPECIALIZE`: inputs as compile-time constants
+
+A `long`, `bool` or `float` input marked `"SPECIALIZE": true` also reaches the shader as a
+specialization constant. The GPU compiler then treats it as a literal and drops the code it rules
+out, which a uniform cannot do: a shader choosing between ten formulas with a uniform keeps all ten
+live and pays for the choice on every call.
+
+```json
+{"NAME": "formula", "TYPE": "long", "DEFAULT": 1, "VALUES": [1, 2, 3], "SPECIALIZE": true}
+```
+
+```glsl
+layout(constant_id = 0) const int SPEC_FORMULA = 1;
+
+// Never use a specialization constant in an expression, such as
+// SPEC_FORMULA == 2. Read it through a function instead. The compiler
+// still folds it.
+int specialized(int value) {
+    return value;
+}
+#define FORMULA specialized(SPEC_FORMULA)
+```
+
+- Constants are numbered by the inputs' order among the specialized inputs: the first specialized
+  input is `constant_id = 0`. A shader whose constants do not match fails to load.
+- The value is the input's base value. A float rounds to the nearest integer. Modulation does not
+  reach it.
+- Changing the input builds a new pipeline, which takes a moment. Varda keeps the last few, and
+  always the one built with every specialized input at its `DEFAULT`, so switching back is
+  instant. Use it for structure (which formula, which mode), not for anything
+  that animates.
+- The input is still in `UserParams`, so the shader may read either.
+
+`"SPECIALIZE_PASSES": true` at the top level does the same for the pass: each pass gets its own
+pipeline, with `PASSINDEX` as the constant after the inputs' constants. Each pass then compiles
+alone and runs with the registers it needs, instead of those of the largest pass in the file.
 
 ### Texture limit
 
@@ -656,10 +777,23 @@ LIBRARY_PATH="/opt/homebrew/lib:${LIBRARY_PATH:-}" cargo run --release --example
     shaders/alien_grove.fs /tmp/frame.png --size 960x540 --frame 300
 ```
 
-It steps a fixed 60 fps clock up to `--frame`, so phase accumulators integrate as they would live
+It steps a fixed clock (60 fps unless `--fps` says otherwise) up to `--frame`, so phase accumulators integrate as they would live
 and a given frame index is reproducible between runs. `--set NAME=VALUE` overrides any float, bool or
 long input. The frame is taken from the mixer composite, so it has gone through the real compositing
 and tonemap path.
+
+| Option | Does |
+|---|---|
+| `--set NAME=VALUE` | Override an input, clamped to its `MIN`/`MAX` with a warning |
+| `--fps N` | Step time at N frames per second. A lower rate moves a flying camera further per frame and, with a target frame rate set, lowers the render scale, as a slow live machine would |
+| `--warmup N`, `--settle MS` | Extra frames at time 0, each followed by a pause, so background preprocessors can publish first |
+| `--time N` | After the capture, render N more frames and print ms/frame for the render loop alone |
+| `--probe` | Per-channel mean and percentiles of the linear values, read before the PNG's sRGB encode |
+| `--pair` | Also write frame N-1 (from the same process) and print their difference at 1x, 4x, 8x and 16x downsampling |
+| `--sweep`, `--sweep2`, `--grid` | A contact sheet with one or two inputs walked across it |
+
+Every capture prints the frame's mean Laplacian. Near zero means a flat frame. A high value means
+detail or noise; compare the `--pair` rows to tell which.
 
 ## Compute Shaders
 
@@ -907,7 +1041,7 @@ Read `black_hole_sim.comp` for persistence and binning. Read `cosmic_web.comp` f
 
 Some effects need **structured data about the input frame** that plain GLSL cannot compute: face detection bounding boxes, depth maps, segmentation masks, optical flow fields. A **preprocessor** runs an analyzer and binds its output to your shader as an extra texture, which you read with ordinary texture samples.
 
-> This section covers **authoring**: declaring preprocessors and reading their textures in GLSL. For the analyzer engine itself (how it runs, the two output paths, the full type catalog, the depth-sensor performer controls, and the HTTP API), see [Frame Analysis & Preprocessors](14-frame-analysis.md).
+> This section covers **authoring**: declaring preprocessors and reading their textures in GLSL. For the analyzer engine itself (how it runs, the two output paths, the full type catalog, the depth-sensor performer controls, and the HTTP API), see [Analyzers & Preprocessors](16-analyzers-and-preprocessors.md).
 
 This is an advanced feature for shader authors building ML integrations, sensor-driven effects, or data processing pipelines.
 
@@ -941,8 +1075,33 @@ Each preprocessor entry declares:
 | `PARAM_BINDINGS` | `{}` | Preprocessor value name to one of your `INPUTS`. The preprocessor reads the live, modulated value every frame |
 | `PHASE_BINDINGS` | `{}` | Preprocessor value name to a phase accumulator index (0 to 3) |
 | `FORMAT` | `rgba8unorm` | Texture format of the output. `rgba32float` holds raw floats; read it with `texelFetch`, never `texture()` |
+| `WRITES` | `[]` | `SPECIALIZE` inputs a host-inline preprocessor sets each frame. See below |
 
 Several entries with the same `TYPE` share one running instance, one entry per output.
+
+`"OPTIONS": {"bind_all_inputs": true}` binds every one of your `INPUTS` under its own name, for a
+preprocessor that needs most of them.
+
+### Inputs a preprocessor writes
+
+A host-inline preprocessor can pick a pipeline from a value it derives. List the inputs under
+`WRITES`; each must be a `SPECIALIZE` input, and the preprocessor publishes a scalar output of the
+same name.
+
+```json
+"PREPROCESSORS": [{"NAME": "flight", "TYPE": "fractal_flight", "WRITES": ["track_jacobian"]}]
+```
+
+- Each frame, after the preprocessor steps and before your shader renders, the deck writes the
+  scalar into the input, converted to its type and clamped to its range. Until the preprocessor
+  publishes, the input holds its `DEFAULT`.
+- A written input is derived: the deck detail does not show it, scenes and presets do not save
+  it, and modulation, automation and mappings cannot target it. Writes to it from the API, MIDI
+  or keys do nothing.
+- The pipelines built with every `SPECIALIZE` input at its `DEFAULT` stay cached for the deck's
+  life. Make that combination the general one, correct for every value the preprocessor can
+  write, so switching back to it is instant while a narrower build runs.
+- A `WRITES` name that is not a `SPECIALIZE` input fails the load.
 
 ### How It Works
 
@@ -965,7 +1124,7 @@ You can request two analyzers as preprocessors:
 | `face_detect` | `landmarks` (wireframe overlay), `face_data` (bbox/scores), `dossier_text` (character indices) | ONNX-based face detection with 478-point mesh landmarks |
 | `depth_sensor` | `depth`, `mask`, `motion`, `rgb` | Live depth camera (Kinect v1). **Required** (see below) |
 
-More analyzer types (`depth_estimate`, `segmentation`, `optical_flow`, `edge_detect`) are planned. See [Frame Analysis & Preprocessors](14-frame-analysis.md#whats-implemented) for the current implemented and planned list, and for the scalar outputs the same analyzers expose to modulation.
+More analyzer types (`depth_estimate`, `segmentation`, `optical_flow`, `edge_detect`) are planned. See [Analyzers & Preprocessors](16-analyzers-and-preprocessors.md#whats-implemented) for the current implemented and planned list, and for the scalar outputs the same analyzers expose to modulation.
 
 ### `depth_sensor` (live depth camera)
 
@@ -1000,7 +1159,7 @@ shaders never load there.
 
 Runtime framing (near/far clip, smoothing, hole fill, mask feather, motion gain, and mirror) is set
 per deck in the bottom bar and can be mapped over MIDI/OSC at `deck/<uuid>/depth_prepro/<param>`. See
-[Frame Analysis → Depth Sensor](14-frame-analysis.md#depth-sensor-performers) for the full control
+[Analyzers & Preprocessors → Depth Sensor](16-analyzers-and-preprocessors.md#depth-sensor-performers) for the full control
 reference and guidance on framing performers.
 
 `shaders/liquid_light_depth.fs` is a worked example: an advected fluid whose flow is driven by
@@ -1060,4 +1219,4 @@ Varda discovers shaders at startup from every directory in the hierarchy. They a
 
 ---
 
-[← Prev: Shader Library](11-shader-library.md) · [Home](README.md) · [Next: HTTP API & Headless Mode →](13-api.md)
+[← Prev: Resolution, Settings & Monitoring](13-resolution-and-monitoring.md) · [Home](README.md) · [Next: HTTP API & Headless Mode →](15-api.md)

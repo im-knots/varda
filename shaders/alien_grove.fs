@@ -122,7 +122,7 @@ layout(set = 0, binding = 1) uniform UserParams {
 // phase, so scaling world position by a live parameter would slide the whole
 // forest past the camera whenever that fader moved. Thinning is done by
 // rejecting cells on a hash instead, which leaves every surviving tree where
-// it was. See docs/12-isf-authoring.md § Combining two rates.
+// it was. See docs/14-isf-authoring.md § Combining two rates.
 const float GRID = 4.0;
 const float MAX_DIST = 88.0;
 const vec3 MOON_DIR = vec3(0.0, 0.09, 1.0);

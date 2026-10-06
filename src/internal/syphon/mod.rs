@@ -936,7 +936,7 @@ mod tests {
     fn syphon_manager_sources_empty() {
         let mgr = SyphonManager::new();
         assert!(mgr.sources().is_empty());
-        assert!(mgr.discovered_sources().is_empty());
+        assert_eq!(mgr.discovered_sources().len(), 0);
     }
 
     #[test]

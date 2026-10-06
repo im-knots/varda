@@ -455,13 +455,17 @@ impl Mixer {
                 channel.active_deck_count = 0;
                 continue;
             }
+            let clock = crate::channel::FrameClock {
+                time,
+                dt,
+                live: free_run_time.is_none(),
+            };
             if let Err(e) = channel.render(
                 context,
                 audio_data,
                 &self.modulation,
                 ch_idx,
-                time,
-                dt,
+                clock,
                 target_fps,
                 total_active_decks,
                 gpu_load_ratio,
@@ -522,7 +526,13 @@ impl Mixer {
         let mixer_composite_us = t_mixer_composite.elapsed().as_micros();
 
         let t_master_fx = std::time::Instant::now();
-        let master_fx = self.apply_master_effects(context, audio_data, time, composite_cmds);
+        let master_fx = self.apply_master_effects(
+            context,
+            audio_data,
+            time,
+            free_run_time.is_none(),
+            composite_cmds,
+        );
         let master_fx_us = t_master_fx.elapsed().as_micros();
         // Always swap back, so a failed effect chain cannot leave the fields transposed.
         self.swap_master_tap();
@@ -965,6 +975,7 @@ impl Mixer {
         context: &GpuContext,
         audio_data: &crate::audio::AudioData,
         time: f32,
+        live: bool,
         mut cmd_buffers: Vec<wgpu::CommandBuffer>,
     ) -> Result<()> {
         if self.master_effects.is_empty() {
@@ -1005,6 +1016,7 @@ impl Mixer {
                 input_view,
                 output_view,
                 &uniforms,
+                live,
                 &mut cmd_buffers,
             )?;
             read_from_composite = !read_from_composite;

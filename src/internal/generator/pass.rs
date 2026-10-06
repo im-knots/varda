@@ -2,7 +2,7 @@
 //! multi-pass loop, imported textures, size expressions, uniforms.
 
 use crate::isf::{ISFMetadata, ISFPass, PassFormat};
-use crate::renderer::{GpuContext, ISFUniforms, UnifiedPipeline};
+use crate::renderer::{GpuContext, ISFUniforms, PassPlan, UnifiedPipeline};
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -27,6 +27,7 @@ pub fn wgpu_pass_format(format: PassFormat) -> wgpu::TextureFormat {
         PassFormat::Rgba16Float => wgpu::TextureFormat::Rgba16Float,
         PassFormat::Rgba32Float => wgpu::TextureFormat::Rgba32Float,
         PassFormat::R32Float => wgpu::TextureFormat::R32Float,
+        PassFormat::Rg32Float => wgpu::TextureFormat::Rg32Float,
     }
 }
 
@@ -77,6 +78,11 @@ pub struct PassSet {
     /// Frames finished since the buffers were created. 0 means `HISTORY`
     /// targets hold nothing yet.
     frames: u32,
+    /// The size pass sizes are expressions of.
+    base: (u32, u32),
+    /// Inputs the pass sizes refer to, with the values the buffers were
+    /// sized with.
+    size_inputs: Vec<(String, Option<f64>)>,
 }
 
 impl PassSet {
@@ -90,23 +96,56 @@ impl PassSet {
         default_format: wgpu::TextureFormat,
         label: &'static str,
     ) -> Self {
-        let buffers = create_pass_buffers(gpu, &passes, width, height, default_format, label);
-        Self {
+        let size_inputs = size_inputs(&passes)
+            .into_iter()
+            .map(|name| (name, None))
+            .collect();
+        let mut set = Self {
             passes,
-            buffers,
+            buffers: HashMap::new(),
             default_format,
             label,
             frames: 0,
-        }
+            base: (width, height),
+            size_inputs,
+        };
+        set.reallocate(gpu);
+        set
     }
 
     /// Reallocate for a new size. History starts over.
     pub fn resize(&mut self, gpu: &GpuContext, width: u32, height: u32) {
+        self.base = (width, height);
+        self.reallocate(gpu);
+    }
+
+    /// Re-read the inputs pass sizes refer to, and reallocate if any changed.
+    /// History starts over when it does.
+    pub fn update_sizes(&mut self, gpu: &GpuContext, inputs: &dyn Fn(&str) -> Option<f64>) {
+        let mut changed = false;
+        for (name, value) in &mut self.size_inputs {
+            let now = inputs(name);
+            if now.is_none() && value.is_some() {
+                log::warn!("pass size refers to unknown input '{name}'; it counts as 1");
+            }
+            if now != *value {
+                *value = now;
+                changed = true;
+            }
+        }
+        if changed {
+            self.reallocate(gpu);
+        }
+    }
+
+    fn reallocate(&mut self, gpu: &GpuContext) {
+        let values = self.size_inputs.clone();
+        let lookup = move |name: &str| values.iter().find(|(n, _)| n == name).and_then(|(_, v)| *v);
         self.buffers = create_pass_buffers(
             gpu,
             &self.passes,
-            width,
-            height,
+            self.base,
+            &lookup,
             self.default_format,
             self.label,
         );
@@ -141,16 +180,37 @@ impl PassSet {
             .collect()
     }
 
-    /// Target formats of every targeted pass, for the pipeline.
-    pub fn target_formats(
+    /// The passes' indices and target formats, for the pipeline.
+    pub fn plan(
         passes: &[ISFPass],
         default_format: wgpu::TextureFormat,
-    ) -> Vec<Vec<wgpu::TextureFormat>> {
-        passes
+        specialize: bool,
+    ) -> PassPlan {
+        let targeted: Vec<(i32, Vec<wgpu::TextureFormat>)> = passes
             .iter()
-            .filter(|pass| pass.is_targeted())
-            .map(|pass| pass_formats(pass, default_format))
-            .collect()
+            .enumerate()
+            .filter(|(_, pass)| pass.is_targeted())
+            .map(|(index, pass)| (pass_index(index), pass_formats(pass, default_format)))
+            .collect();
+        let output_index = if targeted.is_empty() {
+            0
+        } else {
+            pass_index(passes.len())
+        };
+        PassPlan {
+            targeted,
+            output_index,
+            specialize,
+        }
+    }
+
+    /// `PASSINDEX` of the output pass.
+    pub fn output_index(&self) -> usize {
+        if self.has_targeted_passes() {
+            self.passes.len()
+        } else {
+            0
+        }
     }
 
     /// Uniform slots one frame needs: one per targeted pass iteration and
@@ -213,7 +273,15 @@ impl PassSet {
                         .filter_map(|n| self.buffers.get(*n))
                         .map(PassBuffer::write_view)
                         .collect();
-                    encode_pass(encoder, bindings, slot, &views, &targets, &formats);
+                    encode_pass(
+                        encoder,
+                        bindings,
+                        slot,
+                        pass_index(pass_idx),
+                        &views,
+                        &targets,
+                        &formats,
+                    );
                 }
                 slot += 1;
                 for name in &names {
@@ -244,6 +312,7 @@ impl PassSet {
             encoder,
             bindings,
             slot,
+            uniforms.pass_index,
             &views,
             &[target],
             &[bindings.pipeline.surface_format],
@@ -264,10 +333,16 @@ fn iterations(pass: &ISFPass, persistent_substeps: usize) -> usize {
     }
 }
 
+fn pass_index(index: usize) -> i32 {
+    i32::try_from(index).unwrap_or(i32::MAX)
+}
+
+#[allow(clippy::too_many_arguments)] // the pass, its bindings and its targets
 fn encode_pass(
     encoder: &mut wgpu::CommandEncoder,
     bindings: &PassBindings<'_>,
     slot: usize,
+    pass_index: i32,
     pass_views: &[&wgpu::TextureView],
     targets: &[&wgpu::TextureView],
     formats: &[wgpu::TextureFormat],
@@ -303,7 +378,7 @@ fn encode_pass(
         occlusion_query_set: None,
         multiview_mask: None,
     });
-    pass.set_pipeline(bindings.pipeline.pipeline_for(formats));
+    pass.set_pipeline(bindings.pipeline.pipeline_for(pass_index, formats));
     pass.set_bind_group(0, &bind_group, &[]);
     pass.draw(0..3, 0..1);
 }
@@ -348,15 +423,15 @@ impl PassBuffer {
 fn create_pass_buffers(
     gpu: &GpuContext,
     passes: &[ISFPass],
-    width: u32,
-    height: u32,
+    (width, height): (u32, u32),
+    inputs: &dyn Fn(&str) -> Option<f64>,
     default_format: wgpu::TextureFormat,
     label: &str,
 ) -> HashMap<String, PassBuffer> {
     let mut buffers = HashMap::new();
     for pass in passes {
-        let pass_width = parse_size_expression(pass.width.as_deref(), width);
-        let pass_height = parse_size_expression(pass.height.as_deref(), height);
+        let pass_width = evaluate_size(pass.width.as_deref(), width, inputs);
+        let pass_height = evaluate_size(pass.height.as_deref(), height, inputs);
         for (target_name, format) in pass
             .target_names()
             .into_iter()
@@ -438,6 +513,7 @@ pub fn create_preprocessor_slots(
                 options: pp.options.clone(),
                 param_bindings: pp.param_bindings.clone(),
                 phase_bindings: pp.phase_bindings.clone(),
+                writes: pp.writes.clone(),
                 texture,
                 view,
                 format,
@@ -486,7 +562,7 @@ pub fn uniforms(
 }
 
 /// Frames in one jitter cycle.
-pub const JITTER_CYCLE: u32 = 16;
+pub const JITTER_CYCLE: u32 = 64;
 
 /// The `JITTER` offset for a frame: the Halton (2, 3) sequence over
 /// [`JITTER_CYCLE`] frames, centered on the pixel.
@@ -508,31 +584,69 @@ fn halton(mut index: u32, base: u32) -> f32 {
 
 /// Parse ISF size expressions like "$WIDTH", "$WIDTH/2", "1024", etc.
 pub fn parse_size_expression(expr: Option<&str>, base_size: u32) -> u32 {
-    match expr {
-        None => base_size,
-        Some(s) => {
-            let s = s.trim();
-            if s == "$WIDTH" || s == "$HEIGHT" {
-                base_size
-            } else if s.starts_with("$WIDTH/") || s.starts_with("$HEIGHT/") {
-                let divisor: u32 = s
-                    .split('/')
-                    .nth(1)
-                    .and_then(|d| d.trim().parse().ok())
-                    .unwrap_or(1);
-                base_size / divisor.max(1)
-            } else if s.starts_with("$WIDTH*") || s.starts_with("$HEIGHT*") {
-                let multiplier: u32 = s
-                    .split('*')
-                    .nth(1)
-                    .and_then(|m| m.trim().parse().ok())
-                    .unwrap_or(1);
-                base_size * multiplier
-            } else {
-                s.parse().unwrap_or(base_size)
+    evaluate_size(expr, base_size, &|_| None)
+}
+
+/// A pass size: `$WIDTH` or `$HEIGHT` (both mean `base_size`) followed by
+/// any number of `*f` or `/f`, `f` a number or `$name` of an input, taken
+/// left to right and rounded down to at least 1; or a literal size. A
+/// factor that is missing, unknown or not positive counts as 1.
+pub fn evaluate_size(
+    expr: Option<&str>,
+    base_size: u32,
+    inputs: &dyn Fn(&str) -> Option<f64>,
+) -> u32 {
+    let Some(expr) = expr.map(str::trim) else {
+        return base_size;
+    };
+    let rest = if let Some(rest) = expr.strip_prefix("$WIDTH") {
+        rest
+    } else if let Some(rest) = expr.strip_prefix("$HEIGHT") {
+        rest
+    } else {
+        return expr.parse().unwrap_or(base_size);
+    };
+    let mut size = f64::from(base_size);
+    let mut rest = rest.trim_start();
+    while let Some(op) = rest.chars().next() {
+        let tail = rest[op.len_utf8()..].trim_start();
+        let end = tail.find(['*', '/']).unwrap_or(tail.len());
+        let token = tail[..end].trim();
+        let factor = match token.strip_prefix('$') {
+            Some(name) => inputs(name),
+            None => token.parse::<f64>().ok(),
+        }
+        .filter(|f| *f > 0.0 && f.is_finite())
+        .unwrap_or(1.0);
+        match op {
+            '*' => size *= factor,
+            '/' => size /= factor,
+            _ => return base_size,
+        }
+        rest = tail[end..].trim_start();
+    }
+    (size.floor() as u32).max(1)
+}
+
+/// The inputs any pass size refers to, each once, in first-use order.
+pub fn size_inputs(passes: &[ISFPass]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for expr in passes
+        .iter()
+        .flat_map(|p| [p.width.as_deref(), p.height.as_deref()])
+        .flatten()
+    {
+        for part in expr.split(['*', '/']) {
+            if let Some(name) = part.trim().strip_prefix('$')
+                && name != "WIDTH"
+                && name != "HEIGHT"
+                && !names.iter().any(|n| n == name)
+            {
+                names.push(name.to_owned());
             }
         }
     }
+    names
 }
 
 /// Load ISF `IMPORTED` images as GPU textures, as (name, texture, view) sorted
@@ -557,17 +671,17 @@ pub fn load_imported_textures(
     let mut entries: Vec<_> = imported.iter().collect();
     entries.sort_by_key(|(name, _)| (*name).clone());
 
+    // Every declared image gets a binding, loaded or not: a missing one
+    // would shift every binding after it and break the whole pipeline.
     let load_list: Vec<_> = entries
         .iter()
-        .filter_map(|(name, import_def)| {
-            let rel_path = import_def.path.as_ref()?;
-            Some(((*name).clone(), shader_dir.join(rel_path)))
+        .map(|(name, import_def)| {
+            (
+                (*name).clone(),
+                import_def.path.as_ref().map(|p| shader_dir.join(p)),
+            )
         })
         .collect();
-
-    if load_list.is_empty() {
-        return Vec::new();
-    }
 
     let t0 = Instant::now();
 
@@ -577,17 +691,27 @@ pub fn load_imported_textures(
             .map(|(name, path)| {
                 let name = name.clone();
                 let path = path.clone();
-                s.spawn(move || match image::open(&path) {
-                    Ok(img) => Some((name, img.to_rgba8())),
-                    Err(e) => {
-                        log::warn!(
-                            "IMPORTED '{}': failed to load '{}': {}",
-                            name,
-                            path.display(),
-                            e
-                        );
-                        None
-                    }
+                s.spawn(move || {
+                    let loaded = if let Some(path) = &path {
+                        image::open(path).map_err(|e| {
+                            log::warn!(
+                                "IMPORTED '{}': failed to load '{}': {}",
+                                name,
+                                path.display(),
+                                e
+                            );
+                        })
+                    } else {
+                        log::warn!("IMPORTED '{name}' has no PATH");
+                        Err(())
+                    };
+                    // Magenta, so a missing image shows instead of breaking
+                    // the shader.
+                    let img = loaded.map_or_else(
+                        |()| image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 255, 255])),
+                        |img| img.to_rgba8(),
+                    );
+                    Some((name, img))
                 })
             })
             .collect();
@@ -686,6 +810,58 @@ mod tests {
             let [x, y] = jitter(frame);
             assert!((-0.5..0.5).contains(&x) && (-0.5..0.5).contains(&y));
         }
+    }
+
+    #[test]
+    fn each_quarter_of_a_pixel_sees_about_sixteen_positions_a_cycle() {
+        // At render scale 0.5 an output pixel is a quarter of a render pixel.
+        let mut quarters = [0; 4];
+        for frame in 0..JITTER_CYCLE {
+            let [x, y] = jitter(frame);
+            quarters[usize::from(x >= 0.0) + 2 * usize::from(y >= 0.0)] += 1;
+        }
+        assert!(quarters.iter().all(|&n| n >= 15), "{quarters:?}");
+    }
+
+    fn inputs(name: &str) -> Option<f64> {
+        match name {
+            "render_scale" => Some(0.5),
+            "zero" => Some(0.0),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn sizes_can_scale_by_an_input() {
+        assert_eq!(
+            evaluate_size(Some("$WIDTH*$render_scale"), 1920, &inputs),
+            960
+        );
+        assert_eq!(
+            evaluate_size(Some("$HEIGHT*$render_scale/8"), 1080, &inputs),
+            67
+        );
+        assert_eq!(
+            evaluate_size(Some("$WIDTH/2*$render_scale"), 1920, &inputs),
+            480
+        );
+    }
+
+    #[test]
+    fn a_bad_input_counts_as_one_and_sizes_stay_positive() {
+        assert_eq!(evaluate_size(Some("$WIDTH*$missing"), 1920, &inputs), 1920);
+        assert_eq!(evaluate_size(Some("$WIDTH*$zero"), 1920, &inputs), 1920);
+        assert_eq!(evaluate_size(Some("$WIDTH/100000"), 1920, &inputs), 1);
+    }
+
+    #[test]
+    fn referenced_inputs_are_listed_once() {
+        let passes: Vec<ISFPass> = serde_json::from_str(
+            r#"[{"TARGET": "a", "WIDTH": "$WIDTH*$render_scale", "HEIGHT": "$HEIGHT*$render_scale"},
+                {"TARGET": "b", "WIDTH": "$WIDTH/2"}, {}]"#,
+        )
+        .unwrap();
+        assert_eq!(size_inputs(&passes), ["render_scale"]);
     }
 
     #[test]

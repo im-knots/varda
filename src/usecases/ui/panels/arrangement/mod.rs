@@ -2763,7 +2763,7 @@ mod tests {
 
         let armed = selection::load(&ctx).expect("a region click arms a selection");
         assert_eq!(armed.decks, vec![deck.uuid.clone()]);
-        assert!(armed.envelopes.is_empty());
+        assert_eq!(armed.envelopes.len(), 0);
         assert!((armed.start - 4.0).abs() < f64::EPSILON);
         assert!((armed.end - 12.0).abs() < f64::EPSILON);
     }
@@ -2890,7 +2890,7 @@ mod tests {
             decks: Vec::new(),
             envelopes: vec!["env-speed".to_string()],
         };
-        assert!(lane_mapping(&["a", "b"], &curves, 1).is_empty());
+        assert_eq!(lane_mapping(&["a", "b"], &curves, 1).len(), 0);
     }
 
     /// Only a press inside the selection rectangle, on a member row, starts a

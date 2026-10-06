@@ -193,7 +193,7 @@ mod tests {
     fn hundredths_thousandths_and_whole_seconds_all_parse() {
         let parsed = parse("[00:01.50]a\n[00:02.250]b\n[00:03]c");
         assert_eq!(starts(&parsed), [1.5, 2.25, 3.0]);
-        assert!(parsed.problems.is_empty());
+        assert_eq!(parsed.problems.len(), 0);
     }
 
     #[test]
@@ -277,7 +277,7 @@ mod tests {
                     [re:Tool]\n[ve:1.0]\n[custom:thing]\n[00:01.00]a";
         let parsed = parse(text);
         assert_eq!(parsed.cues.len(), 1);
-        assert!(parsed.problems.is_empty());
+        assert_eq!(parsed.problems.len(), 0);
     }
 
     #[test]
@@ -296,14 +296,14 @@ mod tests {
     #[test]
     fn a_bracketed_word_that_is_not_a_tag_is_reported() {
         let parsed = parse("[Chorus]");
-        assert!(parsed.cues.is_empty());
+        assert_eq!(parsed.cues.len(), 0);
         assert_eq!(parsed.problems[0].line, 1);
     }
 
     #[test]
     fn a_bad_timestamp_is_reported() {
         let parsed = parse("[00:75.00]a\n[0a:10.00]b");
-        assert!(parsed.cues.is_empty());
+        assert_eq!(parsed.cues.len(), 0);
         assert_eq!(parsed.problems.len(), 2);
     }
 
@@ -311,7 +311,7 @@ mod tests {
     fn blank_lines_are_ignored() {
         let parsed = parse("\n  \n[00:01.00]a\n\n");
         assert_eq!(parsed.cues.len(), 1);
-        assert!(parsed.problems.is_empty());
+        assert_eq!(parsed.problems.len(), 0);
     }
 
     #[test]
@@ -320,7 +320,7 @@ mod tests {
         let clear = &parsed.cues[1];
         assert_eq!(clear.start, Some(4.0));
         assert_eq!(clear.lines, [""]);
-        assert!(clear.words.is_empty());
+        assert_eq!(clear.words.len(), 0);
     }
 
     #[test]
@@ -370,7 +370,7 @@ mod tests {
         let parsed = parse("\u{feff}[ti:x]\r\n[00:01.00]a b\r\n[00:02.00]c\r\n");
         assert_eq!(starts(&parsed), [1.0, 2.0]);
         assert_eq!(parsed.cues[0].lines, ["a b"]);
-        assert!(parsed.problems.is_empty());
+        assert_eq!(parsed.problems.len(), 0);
     }
 
     #[test]

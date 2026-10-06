@@ -553,7 +553,7 @@ mod tests {
         let config = OscConfig::default();
         assert!(config.enabled);
         assert_eq!(config.in_port, 9000);
-        assert!(config.feedback_targets.is_empty());
+        assert_eq!(config.feedback_targets.len(), 0);
     }
 
     #[test]
@@ -577,7 +577,7 @@ mod tests {
         let config: OscConfig = serde_json::from_str(json).unwrap();
         assert!(config.enabled);
         assert_eq!(config.in_port, 7000);
-        assert!(config.feedback_targets.is_empty());
+        assert_eq!(config.feedback_targets.len(), 0);
     }
 
     #[test]

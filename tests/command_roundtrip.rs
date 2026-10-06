@@ -456,7 +456,7 @@ fn solid_color_deck_source_kind() {
     assert_eq!(state.mixer.channels[0].decks.len(), 1);
     assert_eq!(state.mixer.channels[0].decks[0].uuid, deck);
     // Solid color deck name is the hex color, not "Solid Color"
-    assert!(!state.mixer.channels[0].decks[0].name.is_empty());
+    assert_ne!(state.mixer.channels[0].decks[0].name, "");
 }
 
 // ── Presets & ToggleParam ───────────────────────────────────────────

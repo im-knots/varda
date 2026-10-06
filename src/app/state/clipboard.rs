@@ -203,7 +203,7 @@ impl VardaApp {
             uuid: effect.uuid().to_owned(),
             path: effect.shader.file_path.clone().unwrap_or_default(),
             enabled: effect.enabled,
-            params: effect.params.values.clone(),
+            params: effect.params.saved_values(),
         };
         let modulation = extract_modulation_recipes(
             self.mixer.modulation(),

@@ -668,7 +668,7 @@ mod tests {
     #[test]
     fn a_zero_width_selection_touches_nothing() {
         let regions = vec![RegionConfig::new(0.0, 5.0), RegionConfig::new(8.0, 12.0)];
-        assert!(regions_in_span(&regions, 3.0, 3.0).is_empty());
+        assert_eq!(regions_in_span(&regions, 3.0, 3.0).len(), 0);
         assert!(region_slice(&regions[0], 3.0, 3.0).is_none());
     }
 
@@ -718,7 +718,7 @@ mod tests {
         let sliced = region_slice(&region, 0.0, 20.0).expect("the selection contains the region");
 
         assert_eq!(sliced.selected, region);
-        assert!(sliced.remainders.is_empty());
+        assert_eq!(sliced.remainders.len(), 0);
     }
 
     /// Synthesized edges read the value the renderer draws at those instants, so a

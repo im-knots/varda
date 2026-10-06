@@ -34,7 +34,7 @@ Surfaces are optional. Each surface is a named polygon region in the stage edito
 
 ### Output
 
-Renders its assigned surfaces to a target such as a monitor or projector window, NDI sender, SRT stream, HLS/DASH stream, or recording file. Each output applies per-surface warp calibration (corner-pin or mesh warp), edge blending, and optional rotation. Assigning surfaces to outputs completes the routing chain. See [Outputs](07-outputs.md).
+Renders its assigned surfaces to a target such as a monitor or projector window, NDI sender, SRT stream, HLS/DASH stream, or recording file. Each output applies per-surface warp calibration (corner-pin or mesh warp), edge blending, and optional rotation. Assigning surfaces to outputs completes the routing chain. See [Outputs](10-outputs.md).
 
 ### Triggering Decks with Opacity
 
@@ -112,7 +112,7 @@ Three stages shape the picture:
    resolved contract.
 
 Each output's format (8-bit SDR, 10-bit SDR, HDR10, HLG, or EDR) is set per output. See
-[Output Format](07-outputs.md#output-format).
+[Output Format](10-outputs.md#output-format).
 
 ### Tonemap
 
@@ -134,7 +134,7 @@ presets:
 
 Select a preset in the **🎨 Tonemap** section of the right panel, under the main output preview, or with `PUT /api/mixer/tonemap`. This sets the show-wide curve used by every output and the previews.
 
-Any output can override it on its own card, for example to grade a projector and a master recording differently. See [Per-output tonemap](07-outputs.md#per-output-tonemap).
+Any output can override it on its own card, for example to grade a projector and a master recording differently. See [Per-output tonemap](10-outputs.md#per-output-tonemap).
 
 Only **Bypass** and **Reinhard Extended** have defined HDR forms. The other curves have shoulders fitted to an SDR target, so an HDR output uses Bypass in their place. The output card reports the substitution.
 
@@ -162,7 +162,7 @@ Any numeric parameter in the hierarchy can be automated by modulation sources:
 | **Step Sequencer** | N-step pattern at configurable rate, with interpolation modes |
 | **Analyzer** | Scalar outputs derived from analysis of a deck's input frame (e.g. brightness, contrast) |
 
-Create sources in the modulation panel and assign them to any parameter with its **〰** button. Several sources can target the same parameter; their values are summed. Modulators can modulate other modulators up to 4 levels deep, for example an LFO modulating the frequency of another LFO. See [Modulation & Audio Reactivity](05-modulation.md) for the assignment workflow.
+Create sources in the modulation panel and assign them to any parameter with its **〰** button. Several sources can target the same parameter; their values are summed. Modulators can modulate other modulators up to 4 levels deep, for example an LFO modulating the frequency of another LFO. See [Modulation & Audio Reactivity](06-modulation.md) for the assignment workflow.
 
 Parameter paths use the format `deck/<uuid>/param/<name>`, `crossfader`, `ch/<uuid>/opacity`, etc.
 

@@ -10,8 +10,6 @@
 //!
 //! Skips without a GPU adapter.
 
-use std::sync::mpsc;
-
 use varda::{
     BlendMode,
     audio::AudioData,
@@ -29,22 +27,7 @@ const H: u32 = 16;
 
 mod common;
 use common::headless_gpu;
-
-/// Decode an IEEE-754 half-precision float (as raw bits) to f32.
-fn f16_to_f32(bits: u16) -> f32 {
-    let sign = (bits >> 15) & 1;
-    let exp = (bits >> 10) & 0x1f;
-    let frac = bits & 0x3ff;
-    let sign_f = if sign == 1 { -1.0 } else { 1.0 };
-    let mag = if exp == 0 {
-        f32::from(frac) * 2f32.powi(-24) // subnormal
-    } else if exp == 0x1f {
-        if frac == 0 { f32::INFINITY } else { f32::NAN }
-    } else {
-        (1.0 + f32::from(frac) / 1024.0) * 2f32.powi(i32::from(exp) - 15)
-    };
-    sign_f * mag
-}
+use varda::testing::read_rgba16f;
 
 /// Advance the mixer by one frame with silent audio and no modulation, on the
 /// wall clock.
@@ -97,94 +80,10 @@ fn render_frame(ctx: &GpuContext, mixer: &mut Mixer, free_run_time: Option<f32>)
     mixer.render(ctx, &inputs, 60, &[]).expect("render");
 }
 
-/// Read back the mixer composite (`Rgba16Float`) as linear-light RGBA f32,
-/// row-major, `w*h` pixels. Blocks on `poll(Wait)`.
-fn read_back(ctx: &GpuContext, mixer: &Mixer, width: u32, height: u32) -> Vec<[f32; 4]> {
-    read_texture(ctx, mixer.composite_texture(), width, height)
-}
-
-/// Read back any `Rgba16Float` target as linear-light RGBA f32.
-fn read_texture(ctx: &GpuContext, tex: &wgpu::Texture, width: u32, height: u32) -> Vec<[f32; 4]> {
-    let bytes_per_pixel = 8u32; // Rgba16Float
-    let unpadded = width * bytes_per_pixel;
-    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-    let padded = unpadded.div_ceil(align) * align;
-
-    let buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("render-test readback"),
-        size: u64::from(padded * height),
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-
-    let mut encoder = ctx
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-    encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture: tex,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(padded),
-                rows_per_image: Some(height),
-            },
-        },
-        wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-    );
-    ctx.queue.submit(std::iter::once(encoder.finish()));
-
-    let (tx, rx) = mpsc::channel();
-    buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-        let _ = tx.send(r);
-    });
-    ctx.device
-        .poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        })
-        .ok();
-    rx.recv().expect("map channel").expect("map ok");
-
-    let mut out = Vec::with_capacity((width * height) as usize);
-    {
-        let data = buffer
-            .slice(..)
-            .get_mapped_range()
-            .expect("render correctness readback must be mapped");
-        let channel = |px: usize, i: usize| {
-            f16_to_f32(u16::from_le_bytes([data[px + i * 2], data[px + i * 2 + 1]]))
-        };
-        for row in 0..height {
-            let base = (row * padded) as usize;
-            for col in 0..width {
-                let px = base + (col as usize) * 8;
-                out.push([
-                    channel(px, 0),
-                    channel(px, 1),
-                    channel(px, 2),
-                    channel(px, 3),
-                ]);
-            }
-        }
-    }
-    buffer.unmap();
-    out
-}
-
 /// Render one frame and read it back at the default test size.
 fn render_and_read(ctx: &GpuContext, mixer: &mut Mixer) -> Vec<[f32; 4]> {
     render_once(ctx, mixer);
-    read_back(ctx, mixer, W, H)
+    read_rgba16f(ctx, mixer.composite_texture(), W, H)
 }
 
 /// Center pixel of the readback, representative for uniform solid composites.
@@ -894,7 +793,7 @@ fn dull_skull_stays_in_frame_for_the_whole_sway() {
             continue;
         }
 
-        let lum: Vec<f32> = read_back(&ctx, &mixer, SW, SH)
+        let lum: Vec<f32> = read_rgba16f(&ctx, mixer.composite_texture(), SW, SH)
             .iter()
             .map(|p| encode(0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]))
             .collect();
@@ -967,7 +866,7 @@ fn liquid_light_agitation_survives_being_automated() {
     let shader = varda::isf::ISFShader::from_file(&path).expect("parse liquid_light.fs");
 
     let luminance = |ctx: &GpuContext, mixer: &Mixer| -> Vec<f32> {
-        read_back(ctx, mixer, SW, SH)
+        read_rgba16f(ctx, mixer.composite_texture(), SW, SH)
             .iter()
             .map(|p| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2])
             .collect()
@@ -1090,7 +989,7 @@ fn liquid_light_dish_rotation_changes_speed_rather_than_position() {
     mixer.channel_mut(0).unwrap().decks[0].render_fps = varda::channel::DeckRenderFps::Fixed(0);
 
     let luminance = |ctx: &GpuContext, mixer: &Mixer| -> Vec<f32> {
-        read_back(ctx, mixer, SW, SH)
+        read_rgba16f(ctx, mixer.composite_texture(), SW, SH)
             .iter()
             .map(|p| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2])
             .collect()
@@ -1246,7 +1145,7 @@ fn chroma_flow_auto_palette_does_not_lurch_on_smooth_input() {
     let fx_shader = varda::isf::ISFShader::from_file(&fx_path).expect("parse chroma_flow.fs");
 
     let luminance = |ctx: &GpuContext, mixer: &Mixer| -> Vec<f32> {
-        read_back(ctx, mixer, SW, SH)
+        read_rgba16f(ctx, mixer.composite_texture(), SW, SH)
             .iter()
             .map(|p| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2])
             .collect()
@@ -1437,7 +1336,7 @@ fn chroma_flow_auto_palette_is_carried_between_frames() {
     }
 
     let luminance = |ctx: &GpuContext, mixer: &Mixer| -> Vec<f32> {
-        read_back(ctx, mixer, W, H)
+        read_rgba16f(ctx, mixer.composite_texture(), W, H)
             .iter()
             .map(|p| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2])
             .collect()
@@ -1511,7 +1410,7 @@ fn tie_bait_jitter(ctx: &GpuContext, mixer: &mut Mixer, size: (u32, u32)) -> f32
     let (w, h) = size;
 
     let luminance = |mixer: &Mixer| -> Vec<f32> {
-        read_back(ctx, mixer, w, h)
+        read_rgba16f(ctx, mixer.composite_texture(), w, h)
             .iter()
             .map(|p| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2])
             .collect()
@@ -1685,7 +1584,7 @@ fn chroma_flow_frames(
         render_at(ctx, &mut mixer, frame);
         if capture_at.contains(&frame) {
             out.push(
-                read_back(ctx, &mixer, w, h)
+                read_rgba16f(ctx, mixer.composite_texture(), w, h)
                     .iter()
                     .map(|p| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2])
                     .collect(),
@@ -2141,7 +2040,7 @@ fn tap_shows_the_previous_frame_not_the_current_one() {
     mixer.set_crossfader(1.0);
 
     render_frame_with_taps(&ctx, &mut mixer);
-    let first = center(&read_back(&ctx, &mixer, W, H));
+    let first = center(&read_rgba16f(&ctx, mixer.composite_texture(), W, H));
     assert_lo(
         first[0],
         "frame 1 tap must be black — channel 0 composited earlier in this same \
@@ -2149,7 +2048,7 @@ fn tap_shows_the_previous_frame_not_the_current_one() {
     );
 
     render_frame_with_taps(&ctx, &mut mixer);
-    let second = center(&read_back(&ctx, &mixer, W, H));
+    let second = center(&read_rgba16f(&ctx, mixer.composite_texture(), W, H));
     assert_hi(second[0], "frame 2 tap must show frame 1's red");
 }
 
@@ -2171,13 +2070,13 @@ fn tap_latency_does_not_depend_on_channel_order() {
 
     render_frame_with_taps(&ctx, &mut mixer);
     assert_lo(
-        center(&read_back(&ctx, &mixer, W, H))[0],
+        center(&read_rgba16f(&ctx, mixer.composite_texture(), W, H))[0],
         "frame 1 tap must be black in the earlier-channel direction too",
     );
 
     render_frame_with_taps(&ctx, &mut mixer);
     assert_hi(
-        center(&read_back(&ctx, &mixer, W, H))[0],
+        center(&read_rgba16f(&ctx, mixer.composite_texture(), W, H))[0],
         "frame 2 tap must show frame 1's red, exactly as in the other direction",
     );
 }
@@ -2201,7 +2100,7 @@ fn master_tap_shows_the_previous_frame() {
     mixer.set_crossfader(0.0);
 
     let tap_texture = |m: &Mixer| -> Vec<[f32; 4]> {
-        read_texture(&ctx, &m.channel(0).unwrap().decks[0].deck.texture, W, H)
+        read_rgba16f(&ctx, &m.channel(0).unwrap().decks[0].deck.texture, W, H)
     };
 
     render_frame_with_taps(&ctx, &mut mixer);
@@ -2236,7 +2135,7 @@ fn self_tapping_deck_converges_rather_than_diverging() {
 
     for frame in 0..12 {
         render_frame_with_taps(&ctx, &mut mixer);
-        let px = center(&read_back(&ctx, &mixer, W, H));
+        let px = center(&read_rgba16f(&ctx, mixer.composite_texture(), W, H));
         for (i, v) in px.iter().enumerate() {
             assert!(
                 v.is_finite(),
@@ -2509,8 +2408,9 @@ fn a_shader_binding_more_textures_than_the_device_allows_fails_by_name() {
         ctx.compositing_format,
         false,
         &too_many,
-        &[],
+        &varda::renderer::PassPlan::default(),
         0,
+        &[],
         &[],
     )
     .err()
@@ -2518,5 +2418,256 @@ fn a_shader_binding_more_textures_than_the_device_allows_fails_by_name() {
     assert!(
         format!("{err:#}").contains(&format!("this GPU allows {limit}")),
         "{err:#}"
+    );
+}
+
+/// A generator whose one `SPECIALIZE` input picks its color through a
+/// specialization constant, or declares `constant` in place of it.
+fn specialized_shader(constant: &str) -> varda::isf::ISFShader {
+    let source = format!(
+        r#"/*{{
+    "ISFVSN": "2.0",
+    "CATEGORIES": ["Generator"],
+    "INPUTS": [
+        {{"NAME": "mode", "TYPE": "long", "DEFAULT": 1, "VALUES": [1, 2, 3], "SPECIALIZE": true}}
+    ]
+}}*/
+
+#version 450
+
+layout(location = 0) in vec2 uv;
+layout(location = 0) out vec4 fragColor;
+{constant}
+void main() {{
+    fragColor = vec4(float(MODE) * 0.25, 0.0, 0.0, 1.0);
+}}
+"#
+    );
+    varda::isf::ISFShader::from_string(&source).expect("parse")
+}
+
+#[test]
+fn a_specialized_input_rebuilds_the_pipeline_with_its_value() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    let shader = specialized_shader("layout(constant_id = 0) const int MODE = 1;");
+    let mut mixer = new_mixer(&ctx);
+    let deck = Deck::from_shader(&ctx, shader, W, H).expect("deck");
+    mixer.channel_mut(0).unwrap().add_deck(deck);
+    // Offline frames build the new pipelines before drawing.
+    let set_mode = |mixer: &mut varda::mixer::Mixer, mode: i32| {
+        set_long(mixer, "mode", mode);
+        render_at(&ctx, mixer, 0);
+        center(&read_rgba16f(&ctx, mixer.composite_texture(), W, H))[0]
+    };
+    assert_near(set_mode(&mut mixer, 1), 0.25, 0.002, "the default");
+    assert_near(set_mode(&mut mixer, 3), 0.75, 0.002, "mode 3 rebuilds");
+    assert_near(
+        set_mode(&mut mixer, 1),
+        0.25,
+        0.002,
+        "back to the cached default",
+    );
+}
+
+#[test]
+fn a_live_specialized_input_keeps_drawing_until_its_pipeline_is_built() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    let shader = specialized_shader("layout(constant_id = 0) const int MODE = 1;");
+    let mut mixer = new_mixer(&ctx);
+    let deck = Deck::from_shader(&ctx, shader, W, H).expect("deck");
+    mixer.channel_mut(0).unwrap().add_deck(deck);
+    assert_near(
+        center(&render_and_read(&ctx, &mut mixer))[0],
+        0.25,
+        0.002,
+        "the default",
+    );
+
+    // The frame that asks for mode 3 starts the build and draws mode 1.
+    set_long(&mut mixer, "mode", 3);
+    assert_near(
+        center(&render_and_read(&ctx, &mut mixer))[0],
+        0.25,
+        0.002,
+        "the current pipelines while mode 3 builds",
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        let red = center(&render_and_read(&ctx, &mut mixer))[0];
+        if (red - 0.75).abs() < 0.002 {
+            break;
+        }
+        assert_near(red, 0.25, 0.002, "mode 1 until mode 3 is ready");
+        assert!(std::time::Instant::now() < deadline, "mode 3 never built");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    // A cached combination switches on the frame that asks for it.
+    set_long(&mut mixer, "mode", 1);
+    assert_near(
+        center(&render_and_read(&ctx, &mut mixer))[0],
+        0.25,
+        0.002,
+        "back to the cached default",
+    );
+}
+
+fn set_long(mixer: &mut Mixer, name: &str, value: i32) {
+    mixer.channel_mut(0).unwrap().decks[0]
+        .deck
+        .generator_params
+        .set_long(name, value);
+}
+
+#[test]
+fn a_specialized_input_without_its_constant_fails_to_load() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    let shader = specialized_shader("const int MODE = 1;");
+    let err = Deck::from_shader(&ctx, shader, W, H)
+        .err()
+        .expect("no constant_id 0");
+    assert!(format!("{err:#}").contains("constant_id"), "{err:#}");
+}
+
+#[test]
+fn specialized_passes_each_see_their_own_pass_index() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    // Branches on the constant only: with a wrong constant both pipelines
+    // would run the same branch.
+    let source = format!(
+        r#"/*{{
+    "ISFVSN": "2.0",
+    "CATEGORIES": ["Generator"],
+    "SPECIALIZE_PASSES": true,
+    "PASSES": [{{"TARGET": "first"}}, {{}}]
+}}*/
+
+#version 450
+
+layout(location = 0) in vec2 uv;
+{ISF_UNIFORMS_WITH_HISTORY}
+layout(set = 0, binding = 1) uniform sampler texSampler;
+layout(set = 0, binding = 2) uniform texture2D first;
+layout(location = 0) out vec4 fragColor;
+layout(constant_id = 0) const int PASS_CONSTANT = -1;
+
+// A comparison on the constant itself would not translate.
+int specialized(int value) {{
+    return value;
+}}
+
+void main() {{
+    if (specialized(PASS_CONSTANT) == 0) {{
+        fragColor = vec4(0.25, 0.0, 0.0, 1.0);
+    }} else {{
+        float previous = texelFetch(sampler2D(first, texSampler), ivec2(gl_FragCoord.xy), 0).r;
+        fragColor = vec4(previous + 0.5, 0.0, 0.0, 1.0);
+    }}
+}}
+"#
+    );
+    let shader = varda::isf::ISFShader::from_string(&source).expect("parse");
+    let mut mixer = new_mixer(&ctx);
+    let deck = Deck::from_shader(&ctx, shader, W, H).expect("deck");
+    mixer.channel_mut(0).unwrap().add_deck(deck);
+    let value = center(&render_and_read(&ctx, &mut mixer))[0];
+    assert_near(
+        value,
+        0.75,
+        0.002,
+        "pass 0 wrote 0.25, the output pass added 0.5",
+    );
+}
+
+#[test]
+fn a_missing_imported_image_binds_a_placeholder_instead_of_shifting_the_layout() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    let source = r#"/*{
+    "ISFVSN": "2.0",
+    "CATEGORIES": ["Generator"],
+    "IMPORTED": {
+        "missing": {"PATH": "no_such_image_anywhere.png"}
+    }
+}*/
+
+#version 450
+
+layout(location = 0) in vec2 uv;
+layout(set = 0, binding = 1) uniform sampler texSampler;
+layout(set = 0, binding = 2) uniform texture2D missing;
+layout(location = 0) out vec4 fragColor;
+
+void main() {
+    fragColor = vec4(texture(sampler2D(missing, texSampler), vec2(0.5)).rgb, 1.0);
+}
+"#;
+    let shader = varda::isf::ISFShader::from_string(source).expect("parse");
+    let mut mixer = new_mixer(&ctx);
+    let deck = Deck::from_shader(&ctx, shader, W, H).expect("deck");
+    mixer.channel_mut(0).unwrap().add_deck(deck);
+    let px = center(&render_and_read(&ctx, &mut mixer));
+    // Magenta: the placeholder, visibly a missing texture.
+    assert_near(px[0], 1.0, 0.01, "red");
+    assert_near(px[1], 0.0, 0.01, "green");
+    assert_near(px[2], 1.0, 0.01, "blue");
+}
+
+#[test]
+fn a_pass_sized_by_an_input_follows_the_input() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    // The output pass reports the scaled pass's width as a fraction of W.
+    let source = format!(
+        r#"/*{{
+    "ISFVSN": "2.0",
+    "CATEGORIES": ["Generator"],
+    "INPUTS": [{{"NAME": "scale", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.25, "MAX": 1.0}}],
+    "PASSES": [{{"TARGET": "scaled", "WIDTH": "$WIDTH*$scale", "HEIGHT": "$HEIGHT*$scale"}}, {{}}]
+}}*/
+
+#version 450
+
+layout(location = 0) in vec2 uv;
+{ISF_UNIFORMS_WITH_HISTORY}
+layout(set = 0, binding = 1) uniform sampler texSampler;
+layout(set = 0, binding = 2) uniform texture2D scaled;
+layout(location = 0) out vec4 fragColor;
+
+void main() {{
+    float width = float(textureSize(sampler2D(scaled, texSampler), 0).x);
+    fragColor = vec4(width / {W}.0, 0.0, 0.0, 1.0);
+}}
+"#
+    );
+    let shader = varda::isf::ISFShader::from_string(&source).expect("parse");
+    let mut mixer = new_mixer(&ctx);
+    let deck = Deck::from_shader(&ctx, shader, W, H).expect("deck");
+    mixer.channel_mut(0).unwrap().add_deck(deck);
+    assert_near(
+        center(&render_and_read(&ctx, &mut mixer))[0],
+        1.0,
+        0.002,
+        "full size at scale 1",
+    );
+    mixer.channel_mut(0).unwrap().decks[0]
+        .deck
+        .generator_params
+        .set_float("scale", 0.5);
+    assert_near(
+        center(&render_and_read(&ctx, &mut mixer))[0],
+        0.5,
+        0.002,
+        "half size once the input changes",
     );
 }

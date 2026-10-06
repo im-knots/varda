@@ -1,6 +1,6 @@
 # Outputs
 
-An **output** sends its assigned surfaces, or the master mix, to a window, a fullscreen display, a network stream, a sender, or a recording file. You can run many outputs at once. For surfaces, warp and edge blending see [Projection Mapping](08-projection.md); for stream protocols see [Streaming & I/O](09-streaming-and-io.md).
+An **output** sends its assigned surfaces, or the master mix, to a window, a fullscreen display, a network stream, a sender, or a recording file. You can run many outputs at once. For surfaces, warp and edge blending see [Projection Mapping](11-projection.md); for stream protocols see [Streaming & I/O](12-streaming-and-io.md).
 
 ## Creating an Output
 
@@ -58,7 +58,7 @@ The available formats depend on the output type and its codec:
 - **Streams** (SRT, HLS, DASH, RTMP) default to H.264, which is 8-bit. Set **Codec** to H.265 to unlock 10-bit SDR, HDR10 and HLG.
 - **Recordings** need HEVC or AV1 for HDR. Switching a recording to H.264 greys out HDR10.
 - **NDI** has no codec setting, so its formats are fixed.
-- **Spout** offers 8-bit and 10-bit SDR. **Syphon** offers 8-bit only. Neither offers HDR. See [Spout](09-streaming-and-io.md#spout-windows) and [Syphon](09-streaming-and-io.md#syphon-macos).
+- **Spout** offers 8-bit and 10-bit SDR. **Syphon** offers 8-bit only. Neither offers HDR. See [Spout](12-streaming-and-io.md#spout-windows) and [Syphon](12-streaming-and-io.md#syphon-macos).
 - **EDR** is available on display outputs only.
 
 Varda keeps the format you picked. If the output cannot deliver it, the picker shows what it is sending and the card says why (for example `HDR10 fallback: the configured codec is eight-bit`). Change the codec back and your choice applies again.
@@ -85,7 +85,7 @@ Varda composites in linear **Rec.709**. HDR10 output is labeled BT.2020 because 
 | **NDI, Syphon, Spout** | No | No | No |
 | **ProRes, H.264, HAP** | No. HAP is always 8-bit. | No | No |
 
-An output that cannot deliver the requested format sends the best it can and names the reason, for example `H.264 cannot carry HDR10; HEVC or AV1 is required`. See [HDR Delivery](09-streaming-and-io.md#hdr-delivery) for streaming and for checking a stream.
+An output that cannot deliver the requested format sends the best it can and names the reason, for example `H.264 cannot carry HDR10; HEVC or AV1 is required`. See [HDR Delivery](12-streaming-and-io.md#hdr-delivery) for streaming and for checking a stream.
 
 ### LUTs on HDR outputs
 
@@ -95,7 +95,7 @@ There are two LUT slots. The **Look LUT** applies before the tonemap, in scene-l
 
 Each card has a **Tonemap** picker. The default, `Show (<curve>)`, uses the curve set in the 🎨 Tonemap panel. Pick another curve to change this output only, or **Show default** to go back. Outputs using the same curve share one pass.
 
-Over HTTP: `PUT /api/outputs/{uuid}/tonemap` with `{"mode": "AgX"}`, or `{"mode": null}` to use the show curve. See the [API reference](13-api.md).
+Over HTTP: `PUT /api/outputs/{uuid}/tonemap` with `{"mode": "AgX"}`, or `{"mode": null}` to use the show curve. See the [API reference](15-api.md).
 
 On HDR outputs only **Bypass** and **Reinhard Extended** apply. The other curves (ACES, AgX, Hable, Uchimura, Lottes, PBR Neutral, Reinhard) are fitted for SDR, so an HDR output uses Bypass instead and the card says so.
 
@@ -111,7 +111,7 @@ measured content light over 5400 frames: MaxCLL 380 cd/m², MaxFALL 96 cd/m².
 
 Set Peak close to the measured MaxCLL for the next recording. Declaring 1000 cd/m² for a show that peaks at 380 makes displays tone-map more than needed. HLG outputs carry no such metadata and show no line.
 
-Recordings and streams apply the chosen format to their codec. See [10-bit delivery](09-streaming-and-io.md#10-bit-sdr-delivery) for supported combinations.
+Recordings and streams apply the chosen format to their codec. See [10-bit delivery](12-streaming-and-io.md#10-bit-sdr-delivery) for supported combinations.
 
 ## Rotation
 
@@ -137,9 +137,9 @@ Tick several channels in the source picker to mix them using each channel's opac
 
 ## Recording
 
-**+ Output → Recording** adds a recording. Each recording runs its own ffmpeg process, so several can record at once. See [Recording](09-streaming-and-io.md#recording) for codecs and file paths.
+**+ Output → Recording** adds a recording. Each recording runs its own ffmpeg process, so several can record at once. See [Recording](12-streaming-and-io.md#recording) for codecs and file paths.
 
-Recordings and streams can include audio from a capture device, chosen in the output's **Audio** dropdown. See [Audio Passthrough](09-streaming-and-io.md#audio-passthrough).
+Recordings and streams can include audio from a capture device, chosen in the output's **Audio** dropdown. See [Audio Passthrough](12-streaming-and-io.md#audio-passthrough).
 
 ## Saving
 
@@ -147,4 +147,4 @@ Outputs are saved in `stage.json` (the venue layout), separate from the scene: t
 
 ---
 
-[← Prev: Control Surfaces & Macros](06-control-surfaces.md) · [Home](README.md) · [Next: Projection Mapping →](08-projection.md)
+[← Prev: Fractal Explorer](09-fractal-explorer.md) · [Home](README.md) · [Next: Projection Mapping →](11-projection.md)

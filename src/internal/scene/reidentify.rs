@@ -321,7 +321,7 @@ mod tests {
     fn an_entity_with_no_identity_is_left_without_one() {
         let mut config = a_deck("");
         deck(&mut config, &everything_is_taken);
-        assert!(config.uuid.is_empty());
+        assert_eq!(config.uuid, "");
     }
 
     /// Modulation keys that are not effect params survive a copy unchanged.

@@ -35,13 +35,13 @@ To play only part of a clip:
 
 Click **Clear In/Out** to go back to the full clip.
 
-Play/pause, speed, seek, loop mode, in/out points and clear can all be mapped to MIDI, OSC and keys, and driven by a macro. To bind one, enter learn mode and click the control in the deck detail panel. See [Parameter Paths](06-control-surfaces.md#parameter-paths).
+Play/pause, speed, seek, loop mode, in/out points and clear can all be mapped to MIDI, OSC and keys, and driven by a macro. To bind one, enter learn mode and click the control in the deck detail panel. See [Parameter Paths](07-control-surfaces.md#parameter-paths).
 
 Loop mode uses **fader bucketing**: sweeping a fader or knob steps through Loop → Ping-Pong → One Shot → Hold Last.
 
-Transport chase (Auto / Always / Never, offset, delay) is set on the clip. See [Arrangement Mode](15-arrangement.md#video-chase).
+Transport chase (Auto / Always / Never, offset, delay) is set on the clip. See [Arrangement Mode](05-arrangement.md#video-chase).
 
-Play, speed, seek and loop mode are also **modulation targets**. For example, an LFO can time-warp a clip and an audio band can gate it. In and out points are not modulation targets, because the playhead offset is measured against them. See [Video Playback](05-modulation.md#video-playback) for how each target behaves and the decode cost of modulating the playhead.
+Play, speed, seek and loop mode are also **modulation targets**. For example, an LFO can time-warp a clip and an audio band can gate it. In and out points are not modulation targets, because the playhead offset is measured against them. See [Video Playback](06-modulation.md#video-playback) for how each target behaves and the decode cost of modulating the playhead.
 
 A modulated playhead also moves a **paused** clip. Pause stops the clip advancing on its own, but a modulator still scrubs it, with the swing centered on where you parked the playhead. A paused clip with a playhead assignment keeps decoding, so it has the same seek cost as a playing clip.
 
@@ -106,7 +106,7 @@ Inactive → Playing → Transitioning → Done
 
 With the **ClipEnd** trigger on video decks, each video plays to the end before transitioning. Use it for pre-edited clip sequences.
 
-While the arrangement drives a deck, that deck's auto-transition is suspended. See [Arrangement Mode](15-arrangement.md#performance-sequencers-while-the-arrangement-runs).
+While the arrangement drives a deck, that deck's auto-transition is suspended. See [Arrangement Mode](05-arrangement.md#performance-sequencers-while-the-arrangement-runs).
 
 ---
 
@@ -124,7 +124,7 @@ Transition sequences automate crossfades between channels over time. Deck auto-t
 
 ### Duration Units
 
-Durations can be in **seconds**, **minutes**, **hours** or **beats**. Beats use the current BPM (see [Clock Synchronization](06-control-surfaces.md#clock-synchronization)).
+Durations can be in **seconds**, **minutes**, **hours** or **beats**. Beats use the current BPM (see [Clock Synchronization](07-control-surfaces.md#clock-synchronization)).
 
 ### Building a Sequence
 
@@ -228,7 +228,7 @@ Three buttons under the parameter list in the params column of the deck detail p
 
 Random and Mutate are each a single undo step, so one Ctrl/Cmd+Z restores the previous look however many parameters changed. A typical loop: mutate, look, **Save Preset** if it is good, undo if it is not.
 
-If the shader [groups its parameters](12-isf-authoring.md), a second row has a scope selector. Leave it on **Everything** to change the whole image, or pick one group to change only that group. For example, change the formula while keeping the lighting and grade.
+If the shader [groups its parameters](14-isf-authoring.md), a second row has a scope selector. Leave it on **Everything** to change the whole image, or pick one group to change only that group. For example, change the formula while keeping the lighting and grade.
 
 Random and Mutate do not change:
 
@@ -241,4 +241,4 @@ Over HTTP: `POST /api/decks/{uuid}/params/randomize` and `/params/mutate`. Each 
 
 ---
 
-[← Prev: Library Panel](03-library-panel.md) · [Home](README.md) · [Next: Modulation & Audio Reactivity →](05-modulation.md)
+[← Prev: Library Panel](03-library-panel.md) · [Home](README.md) · [Next: Arrangement Mode →](05-arrangement.md)

@@ -290,14 +290,11 @@ pub(crate) trait Analyzer: Send + 'static {
 
 /// One rendered frame, as a host-inline preprocessor sees it.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // read by host-inline implementations; none is built in yet
 pub(crate) struct HostFrame<'a> {
-    /// Seconds since the deck's previous frame. `TIMEDELTA`.
-    pub time_delta: f32,
-    /// The deck's frame counter. `FRAMEINDEX`.
-    pub frame_index: u32,
-    /// The deck's render size in pixels.
-    pub render_size: (u32, u32),
+    /// Seconds the deck's previous frame took on the wall clock, when frames
+    /// are paced by it. Offline renders pass their fixed step (`TIMEDELTA`),
+    /// so their output does not depend on the machine.
+    pub frame_seconds: f32,
     /// Live parameter and phase values bound by `PARAM_BINDINGS` and
     /// `PHASE_BINDINGS`.
     pub state: &'a AnalyzerStateSnapshot,
@@ -333,6 +330,12 @@ pub(crate) trait HostInlinePreprocessor: Send + 'static {
     /// it and keeps the current state.
     fn restore_state(&mut self, _state: &serde_json::Value) -> anyhow::Result<()> {
         Ok(())
+    }
+
+    /// Something to tell the performer once. Taking it clears it, so one
+    /// event gives one toast.
+    fn take_message(&mut self) -> Option<String> {
+        None
     }
 
     /// Called when the deck drops the preprocessor.

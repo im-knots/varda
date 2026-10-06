@@ -2311,9 +2311,9 @@ mod tests {
 
     #[test]
     fn ear_clip_triangulate_degenerate_is_empty() {
-        assert!(ear_clip_triangulate(&[]).is_empty());
-        assert!(ear_clip_triangulate(&[[0.0, 0.0]]).is_empty());
-        assert!(ear_clip_triangulate(&[[0.0, 0.0], [1.0, 0.0]]).is_empty());
+        assert_eq!(ear_clip_triangulate(&[]).len(), 0);
+        assert_eq!(ear_clip_triangulate(&[[0.0, 0.0]]).len(), 0);
+        assert_eq!(ear_clip_triangulate(&[[0.0, 0.0], [1.0, 0.0]]).len(), 0);
     }
 
     #[test]

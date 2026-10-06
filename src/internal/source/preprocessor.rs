@@ -14,6 +14,8 @@ pub struct PreprocessorSlot {
     pub param_bindings: HashMap<String, String>,
     /// Analyzer value name to phase-accumulator index.
     pub phase_bindings: HashMap<String, usize>,
+    /// Inputs set each frame from the scalar outputs of the same name.
+    pub writes: Vec<String>,
     /// Starts as 1×1 black.
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,

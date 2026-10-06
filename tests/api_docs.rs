@@ -1,4 +1,4 @@
-//! Generates the route reference in `docs/13-api.md` from `api_doc()` and
+//! Generates the route reference in `docs/15-api.md` from `api_doc()` and
 //! fails when the committed file differs.
 //!
 //! The generated block sits between the `BEGIN GENERATED ROUTES` /
@@ -119,10 +119,10 @@ fn render_reference() -> String {
 fn splice(existing: &str, generated: &str) -> String {
     let begin = existing
         .find(BEGIN)
-        .unwrap_or_else(|| panic!("docs/13-api.md is missing the `{BEGIN}` marker"));
+        .unwrap_or_else(|| panic!("docs/15-api.md is missing the `{BEGIN}` marker"));
     let end = existing
         .find(END)
-        .unwrap_or_else(|| panic!("docs/13-api.md is missing the `{END}` marker"))
+        .unwrap_or_else(|| panic!("docs/15-api.md is missing the `{END}` marker"))
         + END.len();
     format!("{}{}{}", &existing[..begin], generated, &existing[end..])
 }
@@ -136,8 +136,8 @@ fn normalize(s: &str) -> String {
 
 #[test]
 fn route_reference_is_up_to_date() {
-    let path = manifest_path("docs/13-api.md");
-    let existing = std::fs::read_to_string(&path).expect("read docs/13-api.md");
+    let path = manifest_path("docs/15-api.md");
+    let existing = std::fs::read_to_string(&path).expect("read docs/15-api.md");
     let updated = splice(&existing, &render_reference());
 
     if normalize(&existing) == normalize(&updated) {
@@ -145,11 +145,11 @@ fn route_reference_is_up_to_date() {
     }
     if std::env::var_os("UPDATE_API_DOCS").is_some() {
         // LF on write, matching `.gitattributes`.
-        std::fs::write(&path, normalize(&updated)).expect("write docs/13-api.md");
+        std::fs::write(&path, normalize(&updated)).expect("write docs/15-api.md");
         return;
     }
     panic!(
-        "docs/13-api.md route reference is out of date with the OpenAPI spec.\n\
+        "docs/15-api.md route reference is out of date with the OpenAPI spec.\n\
          Regenerate with: UPDATE_API_DOCS=1 cargo test --test api_docs"
     );
 }

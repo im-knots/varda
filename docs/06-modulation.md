@@ -27,11 +27,11 @@ LFOs and step sequencers have a **timebase**, which sets the clock their rate is
 
 On the Beat timebase, a rate of `1.0` is one cycle per beat, `0.25` is one cycle per bar in 4/4, and `4.0` is four cycles per beat. When the tempo changes, every beat-locked source follows it with no change to its settings.
 
-Beat time comes from the resolved clock (MIDI clock, OSC, or detected audio tempo; see [Control Surfaces](06-control-surfaces.md)). It resets to zero on MIDI Start.
+Beat time comes from the resolved clock (MIDI clock, OSC, or detected audio tempo; see [Control Surfaces](07-control-surfaces.md)). It resets to zero on MIDI Start.
 
 **If no clock source is active, a Beat-locked source freezes at its last value** and the card shows a ⚠ marker. It does not fall back to free-running, so a lost clock shows up as a frozen source instead of a show that silently drifts out of sync.
 
-The **Show** timebase follows the transport position described in [Control Surfaces](06-control-surfaces.md#transport). Its value depends only on that position. A Show source gives the same value at 00:04:12 tonight as it did in yesterday's rehearsal, however you got there. When you rewind the transport, the source rewinds with it.
+The **Show** timebase follows the transport position described in [Control Surfaces](07-control-surfaces.md#transport). Its value depends only on that position. A Show source gives the same value at 00:04:12 tonight as it did in yesterday's rehearsal, however you got there. When you rewind the transport, the source rewinds with it.
 
 A Show-locked source also **freezes** while the transport is not moving, including before the transport has ever been started. If the transport never runs, nothing on the Show timebase moves.
 
@@ -149,7 +149,7 @@ An analyzer runs on a background thread at its own rate and never blocks the ren
 
 Several modulation sources can share one running analyzer on a deck (it is reference-counted), so mapping several outputs costs one analysis pass.
 
-> The same engine also feeds depth and face textures to shaders. For the full subsystem (complete output tables, the depth sensor, lifecycle, and the HTTP API) see [Frame Analysis & Preprocessors](14-frame-analysis.md).
+> The same engine also feeds depth and face textures to shaders. For the full subsystem (complete output tables, the depth sensor, lifecycle, and the HTTP API) see [Analyzers & Preprocessors](16-analyzers-and-preprocessors.md).
 
 ---
 
@@ -173,7 +173,7 @@ The same dropdown offers **＋ Automation lane**, which draws the parameter as a
 
 When a parameter is modulated, a thin **vertical line in the source's color** is drawn across the slider. It marks the *effective* value (base value + combined modulation offset) and moves in real time. With several sources on one parameter, the line shows their combined effect in the color of the first source. Open the `〰` checklist to see which sources are assigned.
 
-> Assignments use the same parameter paths as MIDI and OSC (`deck/<uuid>/param/<name>`, `crossfader`, `ch/<uuid>/opacity`, `fx/<uuid>/param/<name>`, etc.; see [Parameter Paths](06-control-surfaces.md#parameter-paths)). The UI assigns each modulation at a default depth. The per-assignment **amount** (a signed scale; negative values invert) is set through the [HTTP API](13-api.md). The slider dropdown does not show it.
+> Assignments use the same parameter paths as MIDI and OSC (`deck/<uuid>/param/<name>`, `crossfader`, `ch/<uuid>/opacity`, `fx/<uuid>/param/<name>`, etc.; see [Parameter Paths](07-control-surfaces.md#parameter-paths)). The UI assigns each modulation at a default depth. The per-assignment **amount** (a signed scale; negative values invert) is set through the [HTTP API](15-api.md). The slider dropdown does not show it.
 
 **Channel faders** have their own `〰`, so an LFO or a recorded curve can sweep a whole channel without changing the decks inside it. The crossfader is not a modulation target. You can still map it and drive it from macros.
 
@@ -201,8 +201,8 @@ Playhead modulation can be expensive. Video decoders run forward. A forward nudg
 Other rules for playback parameters:
 
 - **Play, loop mode, and scaling mode are set directly.** A modulator assigned to one of them sets its value instead of adding to it. `play` uses a threshold with a deadband around the middle, so a source hovering near the middle holds the current state instead of stuttering. Loop mode and scaling mode step through their options by [fader bucketing](04-performance.md#video-playback), so a continuous source switches them rapidly. Choose a source whose timing fits the music.
-- **Chase overrides speed and playhead modulation.** A deck chasing the transport takes its whole timeline from the transport. Its speed and playhead assignments are ignored while it chases, and the deck panel names whichever of them you have assigned. The speed *slider* still works, because a fixed rate keeps a stable relationship to the show ("this clip runs at twice show rate"). A changing rate does not, because the chasing clip's position is computed from show position. Set **Chase** to **Never** for audio-reactive time-warping. See [Arrangement](15-arrangement.md).
-- **Manual control overrides a curve.** Touching the scrub bar, speed slider, play button, loop buttons, or scaling combo takes that parameter back from the curve driving it, with no confirmation. The automation row shows an amber dot while you hold it. Click the dot to give control back to the curve. Deck and channel faders work the same way. This applies whether the gesture comes from the bottom bar, a MIDI controller, or the API. With **⏺** armed and the transport running, the gesture is recorded instead. See [Arrangement](15-arrangement.md).
+- **Chase overrides speed and playhead modulation.** A deck chasing the transport takes its whole timeline from the transport. Its speed and playhead assignments are ignored while it chases, and the deck panel names whichever of them you have assigned. The speed *slider* still works, because a fixed rate keeps a stable relationship to the show ("this clip runs at twice show rate"). A changing rate does not, because the chasing clip's position is computed from show position. Set **Chase** to **Never** for audio-reactive time-warping. See [Arrangement](05-arrangement.md).
+- **Manual control overrides a curve.** Touching the scrub bar, speed slider, play button, loop buttons, or scaling combo takes that parameter back from the curve driving it, with no confirmation. The automation row shows an amber dot while you hold it. Click the dot to give control back to the curve. Deck and channel faders work the same way. This applies whether the gesture comes from the bottom bar, a MIDI controller, or the API. With **⏺** armed and the transport running, the gesture is recorded instead. See [Arrangement](05-arrangement.md).
 
 ### Stacking Multiple Sources
 
@@ -235,13 +235,13 @@ You draw curves in Arrangement mode, where each lane sits under its channel. Cur
 
 ### Recording a Curve
 
-You can also record a curve. Arm **⏺** in the transport strip or the top bar, then move any control while the show runs. Your movement is written into the arrangement as a curve. If the parameter has no lane, one is created. See [Recording a pass](15-arrangement.md#recording-a-pass).
+You can also record a curve. Arm **⏺** in the transport strip or the top bar, then move any control while the show runs. Your movement is written into the arrangement as a curve. If the parameter has no lane, one is created. See [Recording a pass](05-arrangement.md#recording-a-pass).
 
 ### One Curve, One Parameter
 
 A curve belongs to the parameter it was drawn for. The `〰` dropdown does not list existing curves as sources for other parameters.
 
-To reuse a shape, copy and paste it between lanes. Right-click the lane, choose **Copy curve**, then choose **Paste curve** at the point on the other parameter's lane where the shape should start. Each paste is an independent copy, so editing one lane does not change the other. See [Reusing a shape](15-arrangement.md#reusing-a-shape).
+To reuse a shape, copy and paste it between lanes. Right-click the lane, choose **Copy curve**, then choose **Paste curve** at the point on the other parameter's lane where the shape should start. Each paste is an independent copy, so editing one lane does not change the other. See [Reusing a shape](05-arrangement.md#reusing-a-shape).
 
 ### Curves Replace the Value
 
@@ -339,8 +339,8 @@ All shaders receive audio data automatically, with no setup:
 | `audio_bpm` | Detected BPM (0.0 if unavailable) |
 | `audio_beat_phase` | Phase within current beat cycle (0.0–1.0, 0.0 = on beat) |
 
-Use these in ISF shaders for audio-reactive visuals without the modulation engine. See [ISF Authoring](12-isf-authoring.md) for shader writing details.
+Use these in ISF shaders for audio-reactive visuals without the modulation engine. See [ISF Authoring](14-isf-authoring.md) for shader writing details.
 
 ---
 
-[← Prev: Performance & Automation](04-performance.md) · [Home](README.md) · [Next: Control Surfaces →](06-control-surfaces.md)
+[← Prev: Arrangement Mode](05-arrangement.md) · [Home](README.md) · [Next: Control Surfaces & Macros →](07-control-surfaces.md)

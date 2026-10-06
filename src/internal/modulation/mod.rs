@@ -1644,7 +1644,7 @@ mod tests {
         // Update with 0 sources → no crash
         engine.update_free_running(0.0, &audio, &empty_analyzers());
         assert_eq!(engine.source_count(), 0);
-        assert!(engine.current_values().is_empty());
+        assert_eq!(engine.current_values().len(), 0);
     }
 
     #[test]

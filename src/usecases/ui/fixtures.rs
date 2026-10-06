@@ -131,6 +131,7 @@ impl UIData {
             transparent: false,
             generator: ShaderParamsUI {
                 shader_name: "test_generator_a".to_string(),
+                columns: Vec::new(),
                 params: vec![ParamUIInfo {
                     name: "speed".to_string(),
                     label: Some("Speed".to_string()),
@@ -139,6 +140,7 @@ impl UIData {
                     max: Some(5.0),
                     group: None,
                     choices: Vec::new(),
+                    event: false,
                 }],
             },
             effects: vec![(
@@ -147,6 +149,7 @@ impl UIData {
                 true,
                 ShaderParamsUI {
                     shader_name: "test_effect".to_string(),
+                    columns: Vec::new(),
                     params: vec![ParamUIInfo {
                         name: "amount".to_string(),
                         label: Some("Amount".to_string()),
@@ -155,6 +158,7 @@ impl UIData {
                         max: Some(1.0),
                         group: None,
                         choices: Vec::new(),
+                        event: false,
                     }],
                 },
             )],
@@ -180,6 +184,7 @@ impl UIData {
             transparent: false,
             generator: ShaderParamsUI {
                 shader_name: "test_generator_b".to_string(),
+                columns: Vec::new(),
                 params: vec![],
             },
             effects: vec![],
@@ -203,6 +208,7 @@ impl UIData {
                 true,
                 ShaderParamsUI {
                     shader_name: "ch_effect".to_string(),
+                    columns: Vec::new(),
                     params: vec![],
                 },
             )],
@@ -223,6 +229,7 @@ impl UIData {
             transparent: false,
             generator: ShaderParamsUI {
                 shader_name: "test_generator_c".to_string(),
+                columns: Vec::new(),
                 params: vec![],
             },
             effects: vec![],
@@ -248,6 +255,7 @@ impl UIData {
             transparent: false,
             generator: ShaderParamsUI {
                 shader_name: "test_generator_d".to_string(),
+                columns: Vec::new(),
                 params: vec![],
             },
             effects: vec![],
@@ -282,6 +290,7 @@ impl UIData {
                 true,
                 ShaderParamsUI {
                     shader_name: "master_effect".to_string(),
+                    columns: Vec::new(),
                     params: vec![],
                 },
             )],

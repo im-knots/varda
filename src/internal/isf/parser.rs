@@ -344,7 +344,7 @@ void main() {}
         let passes = parse_passes(
             r#"[
                 {"TARGET": "taa", "HISTORY": true, "FORMAT": "rgba32float"},
-                {"TARGETS": ["gA", "gB"], "FORMATS": ["rgba32float", "r32float"]},
+                {"TARGETS": ["gA", "gB", "gC"], "FORMATS": ["rgba32float", "r32float", "rg32float"]},
                 {"TARGET": "plain"},
                 {}
             ]"#,
@@ -353,10 +353,14 @@ void main() {}
         assert!(passes[0].is_history());
         assert_eq!(passes[0].target_names(), ["taa"]);
         assert_eq!(passes[0].target_formats(), [Some(PassFormat::Rgba32Float)]);
-        assert_eq!(passes[1].target_names(), ["gA", "gB"]);
+        assert_eq!(passes[1].target_names(), ["gA", "gB", "gC"]);
         assert_eq!(
             passes[1].target_formats(),
-            [Some(PassFormat::Rgba32Float), Some(PassFormat::R32Float)]
+            [
+                Some(PassFormat::Rgba32Float),
+                Some(PassFormat::R32Float),
+                Some(PassFormat::Rg32Float)
+            ]
         );
         assert_eq!(passes[2].target_formats(), [None]);
         assert!(!passes[3].is_targeted());

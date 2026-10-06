@@ -32,6 +32,7 @@ Varda applies broadcast video workflows to live visuals. Sources (video, cameras
 
 Experimental:
 - **Dome projection**: fisheye to equirectangular (360°) and cubemap (3D) rendering with configurable lens correction and chromatic aberration.
+- **3D Fractal Explorer**: fly through Mandelbulb3D-style hybrid fractals built from up to six formulas, with ready-made stacks and looks, collision, and an upscaler that holds a target frame rate. It is one ISF shader plus a preprocessor, an example of a full visual engine built on Varda's shader and preprocessor system ([docs](docs/09-fractal-explorer.md)).
 
 ## Install
 
@@ -204,9 +205,9 @@ varda [OPTIONS]
     --shader-dir <DIR>        Extra shader library directory (repeatable)
 ```
 
-`--shader-dir` is repeatable and layers on top of the built-in shader directories in a fixed precedence order. see [Shader Authoring → File Location](docs/12-isf-authoring.md#file-location) for the full hierarchy and override/hot-reload behavior.
+`--shader-dir` is repeatable and layers on top of the built-in shader directories in a fixed precedence order. see [Shader Authoring → File Location](docs/14-isf-authoring.md#file-location) for the full hierarchy and override/hot-reload behavior.
 
-> **Shader format:** Varda uses ISF's JSON metadata header with GLSL 450 (Vulkan) shader bodies, not ISF's GLSL ES dialect. Shaders from isf.video need a short mechanical port — see [Porting an ISF Shader](docs/12-isf-authoring.md#porting-an-isf-shader).
+> **Shader format:** Varda uses ISF's JSON metadata header with GLSL 450 (Vulkan) shader bodies, not ISF's GLSL ES dialect. Shaders from isf.video need a short mechanical port — see [Porting an ISF Shader](docs/14-isf-authoring.md#porting-an-isf-shader).
 
 Headless mode runs the full engine without a UI window — controlled via the HTTP API. Outputs defined in `stage.json` auto-start on launch. Graceful shutdown on Ctrl-C or `POST /api/shutdown`.
 

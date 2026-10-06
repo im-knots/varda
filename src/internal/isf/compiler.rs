@@ -111,7 +111,7 @@ in vec2 isf_FragNormCoord;
     for input in inputs {
         let uniform_decl = match input.input_type.as_str() {
             "float" => format!("uniform float {};", input.name),
-            "bool" => format!("uniform bool {};", input.name),
+            "bool" | "event" => format!("uniform bool {};", input.name),
             "long" => format!("uniform int {};", input.name),
             "color" => format!("uniform vec4 {};", input.name),
             "point2D" => format!("uniform vec2 {};", input.name),
@@ -148,7 +148,7 @@ pub fn generate_user_params_block(inputs: &[super::ISFInput]) -> Option<String> 
     for input in inputs {
         let member = match input.input_type.as_str() {
             "float" => format!("    float {};", input.name),
-            "bool" => format!("    uint {};  // bool stored as uint", input.name),
+            "bool" | "event" => format!("    uint {};  // bool stored as uint", input.name),
             "long" => format!("    int {};", input.name),
             "color" => format!("    vec4 {};", input.name),
             "point2D" => format!("    vec2 {};", input.name),
@@ -190,7 +190,7 @@ void main() {
         }
         assert!(spirv.is_ok());
         let spirv_data = spirv.unwrap();
-        assert!(!spirv_data.is_empty());
+        assert_ne!(spirv_data.len(), 0);
 
         // SPIR-V magic number.
         assert_eq!(spirv_data[0], 0x0723_0203);
@@ -336,7 +336,7 @@ void main() {
         }
         assert!(spirv.is_ok());
         let spirv_data = spirv.unwrap();
-        assert!(!spirv_data.is_empty());
+        assert_ne!(spirv_data.len(), 0);
         assert_eq!(spirv_data[0], 0x0723_0203);
     }
 

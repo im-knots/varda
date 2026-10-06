@@ -571,14 +571,14 @@ mod tests {
     fn a_disabled_manager_is_unavailable_everywhere() {
         let mgr = SpoutManager::new_disabled();
         assert!(!mgr.is_available());
-        assert!(mgr.sources().is_empty());
+        assert_eq!(mgr.sources(), []);
     }
 
     #[test]
     fn discovery_on_an_unavailable_manager_finds_nothing_and_does_not_panic() {
         let mut mgr = SpoutManager::new_disabled();
         mgr.discover();
-        assert!(mgr.discovered_sources().is_empty());
+        assert_eq!(mgr.discovered_sources().len(), 0);
     }
 
     #[test]

@@ -125,6 +125,8 @@ pub struct SourceFrame<'a> {
     pub frame_index: u32,
     /// The deck's phase accumulators.
     pub phase_times: [f32; 4],
+    /// Whether the wall clock paces this frame. Offline frames are not live.
+    pub live: bool,
     pub audio: &'a AudioData,
     pub modulation: &'a ModulationEngine,
     /// Modulation key prefix of the deck's generator parameters.

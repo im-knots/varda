@@ -818,7 +818,7 @@ mod tests {
         let cues = cues(&["a", "b"]);
         let mut f = frame(Mode::Crawl);
         f.scroll = 3.0;
-        assert!(run(&cues, Unit::Line, &view(0), &f).is_empty());
+        assert_eq!(run(&cues, Unit::Line, &view(0), &f).len(), 0);
     }
 
     #[test]
@@ -854,7 +854,7 @@ mod tests {
         let cues = cues(&["a"]);
         let mut v = view(0);
         v.current = None;
-        assert!(run(&cues, Unit::Line, &v, &frame(Mode::Step)).is_empty());
+        assert_eq!(run(&cues, Unit::Line, &v, &frame(Mode::Step)).len(), 0);
     }
 
     #[test]

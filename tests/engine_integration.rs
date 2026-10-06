@@ -2498,8 +2498,8 @@ fn add_and_remove_surface_hole_workflow() {
     assert!(matches!(r, CommandResult::Ok));
     let snap = app.build_engine_state().outputs.surfaces;
     let s = snap.iter().find(|s| s.uuid == uuid).unwrap();
-    assert!(s.holes.is_empty());
-    assert!(s.hole_contours.is_empty());
+    assert_eq!(s.holes.len(), 0);
+    assert_eq!(s.hole_contours.len(), 0);
 
     // Out-of-range removal is a validation error.
     let r = send_cmd(
@@ -3029,12 +3029,13 @@ fn re_arming_returns_the_parameter_to_the_arrangement() {
         (deck_snapshot(&mut app, &deck).opacity - 1.0).abs() < 1e-4,
         "after re-arming the envelope should drive the deck again"
     );
-    assert!(
+    assert_eq!(
         app.build_engine_state()
             .arrangement
             .expect("arrangement")
             .overridden_params
-            .is_empty()
+            .len(),
+        0
     );
 }
 
@@ -3390,12 +3391,13 @@ fn re_arming_everything_hands_back_every_parameter() {
     fire(&mut app, EngineCommand::RearmAll { seconds: Some(0.0) });
     step(&mut app);
 
-    assert!(
+    assert_eq!(
         app.build_engine_state()
             .arrangement
             .expect("arrangement")
             .overridden_params
-            .is_empty()
+            .len(),
+        0
     );
     for uuid in [&deck, &second] {
         assert!(
@@ -3490,12 +3492,13 @@ fn a_route_write_to_an_unknown_path_holds_nothing() {
     app.note_live_route_write("not/a/path/at/all", 0.25);
     step(&mut app);
 
-    assert!(
+    assert_eq!(
         app.build_engine_state()
             .arrangement
             .expect("arrangement")
             .overridden_params
-            .is_empty()
+            .len(),
+        0
     );
 }
 

@@ -1,7 +1,6 @@
 //! `UIActions`: everything a frame of UI emits, plus the drag payload types.
 
-use super::{ParamUIInfo, UISession};
-use crate::ShaderParams;
+use super::UISession;
 
 /// All UI output collected during a frame.
 ///
@@ -70,30 +69,4 @@ pub enum EffectDrag {
 pub struct SequenceStepDrag {
     pub sequence_uuid: String,
     pub step_idx: usize,
-}
-
-/// Extract params from `ShaderParams` for UI display.
-pub fn collect_params(params: &ShaderParams) -> Vec<ParamUIInfo> {
-    params
-        .param_order
-        .iter()
-        .filter_map(|name| {
-            let value = params.values.get(name)?;
-            let def = params.definitions.get(name);
-            Some(ParamUIInfo {
-                name: name.clone(),
-                label: def.and_then(|d| d.label.clone()),
-                value: *value,
-                min: def.and_then(|d| d.min),
-                max: def.and_then(|d| d.max),
-                group: def.and_then(|d| d.group.clone()),
-                choices: def
-                    .map(crate::isf::ISFInput::choices)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|(value, label)| crate::usecases::ui::data::ParamChoiceUI { value, label })
-                    .collect(),
-            })
-        })
-        .collect()
 }

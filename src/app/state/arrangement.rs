@@ -19,6 +19,9 @@ impl VardaApp {
 
     /// Take a parameter back from the arrangement. Called by every live write path.
     pub fn note_live_param_write(&mut self, param_key: &str, normalized: f32) {
+        if crate::param_router::names_transient(&self.mixer, param_key) {
+            return;
+        }
         // Before the authority gate: a scene with only curves never engages the
         // arrangement, so its first pass must still be recorded.
         self.record_param_write(param_key, normalized);

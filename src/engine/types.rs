@@ -473,6 +473,15 @@ pub struct EffectSnapshot {
 pub struct ShaderParamsSnapshot {
     pub shader_name: String,
     pub params: Vec<ParamSnapshot>,
+    /// The shader's `COLUMNS`: groups laid out as columns of their own.
+    pub columns: Vec<ParamColumnSnapshot>,
+}
+
+/// One column of a generator's controls: a title and the groups it holds.
+#[derive(Clone, Serialize)]
+pub struct ParamColumnSnapshot {
+    pub title: String,
+    pub groups: Vec<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -487,6 +496,8 @@ pub struct ParamSnapshot {
     pub group: Option<String>,
     /// Selectable values for a `long` input, paired with their labels.
     pub choices: Option<Vec<ParamChoice>>,
+    /// An `event` input: setting it true fires it for one rendered frame.
+    pub event: bool,
 }
 
 /// One option of a `long` (enum) parameter.
@@ -1156,6 +1167,7 @@ mod tests {
             generator: ShaderParamsSnapshot {
                 shader_name: "Sine".into(),
                 params: vec![],
+                columns: vec![],
             },
             effects: vec![],
             auto_transition: None,

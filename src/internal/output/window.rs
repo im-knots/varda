@@ -533,6 +533,6 @@ mod tests {
         assert!(sink.patch(&SinkConfig::new(WINDOWED), &crate::source::Services::new()));
         assert_eq!(sink.sink_type(), WINDOWED);
         assert_eq!(sink.config().str("name"), None);
-        assert!(sink.schema().is_empty());
+        assert_eq!(sink.schema(), []);
     }
 }
