@@ -9,7 +9,7 @@ Varda can analyze a picture and turn the result into data: the average brightnes
 
 The `brightness` modulation source and the `face_detect` preprocessor use the same engine. An analyzer runs once per deck, and its output can go to modulation, to shaders, or both. Analyzers are **reference-counted per deck**, so connecting several modulation sources or shaders to one analyzer costs one analysis pass.
 
-Analysis runs **off the render thread**. Each analyzer has a background worker that receives a downscaled copy of the deck's frame and publishes results through a lock-free snapshot. If analysis is slower than the frame rate, consumers read the latest result. The render loop does not wait for it.
+Analysis runs **off the render thread**. Each analyzer has a background worker that receives a downscaled copy of the deck's frame and publishes results through a lock-free snapshot. The GPU reduces the frame to the size each analyzer asks for (256 pixels on the long side for `brightness`, up to 1920 for `face_detect`), so a 4K deck costs the render thread no more than a 1080p one. If analysis is slower than the frame rate, consumers read the latest result. The render loop does not wait for it.
 
 ## What's implemented
 

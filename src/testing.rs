@@ -657,6 +657,137 @@ pub fn gui_view(app: &crate::app::VardaApp) -> usize {
         .len()
 }
 
+/// An analyzer that reads pixels and discards them at once, so its channel always has room.
+struct SinkAnalyzer;
+
+impl crate::analyzer::traits::Analyzer for SinkAnalyzer {
+    fn analyzer_type(&self) -> &'static str {
+        "sink"
+    }
+
+    fn output_schema(&self) -> crate::analyzer::traits::AnalyzerSchema {
+        crate::analyzer::traits::AnalyzerSchema {
+            scalars: Vec::new(),
+            textures: Vec::new(),
+        }
+    }
+
+    fn init(&mut self, _options: &serde_json::Value) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// The largest frame a built-in analyzer reads.
+    fn frame_size(&self) -> Option<u32> {
+        Some(1920)
+    }
+
+    fn analyze(
+        &mut self,
+        input: &crate::analyzer::traits::AnalyzerInput,
+    ) -> anyhow::Result<crate::analyzer::traits::AnalyzerSnapshot> {
+        std::hint::black_box(input.frame.len());
+        Ok(crate::analyzer::traits::AnalyzerSnapshot::from_defaults(
+            &self.output_schema(),
+        ))
+    }
+}
+
+/// Analyzer frame capture on `decks` decks of a `width` x `height` color-path
+/// texture, each with one pixel-reading analyzer. `capture` is the render
+/// thread's share; `wait` lets the GPU finish and is not.
+pub struct AnalyzerCaptureBench {
+    context: crate::renderer::context::GpuContext,
+    decks: Vec<(wgpu::Texture, crate::analyzer::DeckAnalyzers)>,
+    states: std::collections::HashMap<String, crate::analyzer::traits::AnalyzerStateSnapshot>,
+}
+
+impl AnalyzerCaptureBench {
+    /// Decks holding a half-float gradient, each running a sink analyzer.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the sink analyzer cannot start.
+    pub fn new(
+        context: crate::renderer::context::GpuContext,
+        width: u32,
+        height: u32,
+        decks: usize,
+    ) -> Self {
+        let registry = crate::analyzer::AnalyzerRegistry::new().register("sink", || {
+            Box::new(SinkAnalyzer) as Box<dyn crate::analyzer::traits::Analyzer>
+        });
+        let pixels: Vec<u8> = (0..width * height)
+            .flat_map(|i| {
+                let x = (i % width) as f32 / width as f32;
+                let y = (i / width) as f32 / height as f32;
+                [x, y, 0.5, 1.0]
+                    .into_iter()
+                    .flat_map(|v| half::f16::from_f32(v).to_bits().to_le_bytes())
+            })
+            .collect();
+        let decks = (0..decks)
+            .map(|_| {
+                let texture = context.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("analyzer capture bench deck"),
+                    size: wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: crate::renderer::context::COLOR_PATH_FORMAT,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING
+                        | wgpu::TextureUsages::COPY_SRC
+                        | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                context.queue.write_texture(
+                    texture.as_image_copy(),
+                    &pixels,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(width * 8),
+                        rows_per_image: Some(height),
+                    },
+                    texture.size(),
+                );
+                let mut analyzers = crate::analyzer::DeckAnalyzers::new();
+                analyzers
+                    .request("sink", &registry, &serde_json::Value::Null)
+                    .expect("the sink analyzer starts");
+                (texture, analyzers)
+            })
+            .collect();
+        Self {
+            context,
+            decks,
+            states: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Capture every deck and submit the readbacks, as the render loop does.
+    pub fn capture(&mut self) {
+        let commands: Vec<wgpu::CommandBuffer> = self
+            .decks
+            .iter_mut()
+            .filter_map(|(texture, analyzers)| {
+                analyzers.capture_frame(&self.context.device, texture, &self.states)
+            })
+            .collect();
+        self.context.queue.submit(commands);
+    }
+
+    /// Let the GPU finish what has been submitted. Not render-thread time.
+    pub fn wait(&self) {
+        let _ = self
+            .context
+            .device
+            .poll(wgpu::PollType::wait_indefinitely());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
