@@ -686,8 +686,7 @@ pub(crate) fn build_modulation_snapshot(app: &VardaApp) -> ModulationSnapshot {
         .collect();
     let assignments = m
         .modulation()
-        .assignments
-        .iter()
+        .assignments_iter()
         .map(|(k, v)| {
             (
                 k.clone(),

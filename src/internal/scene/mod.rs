@@ -115,24 +115,15 @@ impl SceneConfig {
     /// Pre-v8 scenes used the `opacity` key for the deck's opacity, not a
     /// shader parameter. Unrecognized keys are kept.
     fn migrate_v7_modulation_keys(&mut self) {
-        let assignments = std::mem::take(&mut self.modulation.assignments);
-        let mut rekeyed = 0;
-        for (key, mods) in assignments {
-            let key = if let Some(address) =
-                crate::engine::value::param::ParamAddress::from_legacy_modulation_key(&key)
-            {
-                rekeyed += 1;
-                address.to_string()
-            } else {
-                log::warn!("Scene migration v7→v8: kept unrecognized modulation key '{key}'");
-                key
-            };
-            self.modulation
-                .assignments
-                .entry(key)
-                .or_default()
-                .extend(mods);
-        }
+        let rekeyed = self.modulation.rekey_assignments(|key| {
+            crate::engine::value::param::ParamAddress::from_legacy_modulation_key(key).map_or_else(
+                || {
+                    log::warn!("Scene migration v7→v8: kept unrecognized modulation key '{key}'");
+                    key.to_string()
+                },
+                |address| address.to_string(),
+            )
+        });
         if rekeyed > 0 {
             log::info!("Scene migration v7→v8: re-keyed {rekeyed} modulation target(s)");
         }
@@ -1011,29 +1002,44 @@ mod tests {
     }
 
     fn assignment_keys(scene: &SceneConfig) -> Vec<String> {
-        let mut keys: Vec<String> = scene.modulation.assignments.keys().cloned().collect();
+        let mut keys: Vec<String> = scene
+            .modulation
+            .assignments_iter()
+            .map(|(k, _)| k.clone())
+            .collect();
         keys.sort();
         keys
+    }
+
+    /// Give `scene` empty assignments on `keys`, loaded as a saved scene's are.
+    fn with_assignment_keys(scene: &mut SceneConfig, keys: &[&str]) {
+        let assignments: serde_json::Map<String, serde_json::Value> = keys
+            .iter()
+            .map(|k| ((*k).to_string(), serde_json::json!([])))
+            .collect();
+        scene.modulation = serde_json::from_value(serde_json::json!({
+            "sources": [],
+            "assignments": assignments,
+        }))
+        .expect("an engine with only assignments loads");
     }
 
     /// Each pre-v8 key form becomes the router path for its target.
     #[test]
     fn migration_v8_rekeys_modulation_by_router_path() {
         let mut scene = scene_with_sources(7, vec![]);
-        for key in [
-            "deck_d1:speed",
-            "deck_d1:opacity",
-            "deck_d1:video_position",
-            "fx_f1:warp",
-            "ch_c1:opacity",
-            "macro_k1:value",
-            "mod:m1:frequency",
-        ] {
-            scene
-                .modulation
-                .assignments
-                .insert(key.to_string(), Vec::new());
-        }
+        with_assignment_keys(
+            &mut scene,
+            &[
+                "deck_d1:speed",
+                "deck_d1:opacity",
+                "deck_d1:video_position",
+                "fx_f1:warp",
+                "ch_c1:opacity",
+                "macro_k1:value",
+                "mod:m1:frequency",
+            ],
+        );
         scene.migrate();
         assert_eq!(
             assignment_keys(&scene),
@@ -1054,10 +1060,7 @@ mod tests {
     #[test]
     fn migration_v8_keeps_unrecognized_keys() {
         let mut scene = scene_with_sources(7, vec![]);
-        scene
-            .modulation
-            .assignments
-            .insert("something_else".to_string(), Vec::new());
+        with_assignment_keys(&mut scene, &["something_else"]);
         scene.migrate();
         assert_eq!(assignment_keys(&scene), ["something_else"]);
     }
@@ -1082,10 +1085,7 @@ mod tests {
     #[test]
     fn migration_v8_does_not_rerun_on_current_scenes() {
         let mut scene = scene_with_sources(SceneConfig::CURRENT_VERSION, vec![]);
-        scene
-            .modulation
-            .assignments
-            .insert("deck/d1/param/speed".to_string(), Vec::new());
+        with_assignment_keys(&mut scene, &["deck/d1/param/speed"]);
         scene.migrate();
         assert_eq!(assignment_keys(&scene), ["deck/d1/param/speed"]);
     }
