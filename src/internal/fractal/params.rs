@@ -33,19 +33,21 @@ pub const STACK_PARAMS: [&str; 11] = [
 
 /// Values used when a parameter is missing, the shader's defaults: a scale
 /// 2.2 Amazing Box turned by its slot rotation. Slot 2 is off but keeps
-/// Gnarl's parameters for when it is turned on.
+/// Gnarl's parameters for when it is turned on. The Julia seed is (1, 0.5,
+/// 0.25): seed 0 is a fixed point of a box fold, and the set reduces to the
+/// fold planes.
 pub fn default_param(name: &str) -> f64 {
     match name {
         "slot1_formula" => f64::from(FormulaId::Box as i32),
         "slot1_a" => 2.2,
-        "slot1_b" => 0.5,
-        "slot1_rot_x" => 0.25,
+        "slot1_b" | "julia_y" => 0.5,
+        "slot1_rot_x" | "julia_z" => 0.25,
         "slot1_rot_y" | "slot2_a" => 0.15,
         "slot3_a" | "slot4_a" | "slot5_a" | "slot6_a" => 2.0,
         "slot1_count" | "slot1_c" | "slot1_d" | "slot2_count" | "slot2_b" | "slot2_c"
         | "slot2_d" | "slot3_count" | "slot3_b" | "slot3_d" | "slot4_count" | "slot4_b"
         | "slot4_d" | "slot5_count" | "slot5_b" | "slot5_d" | "slot6_count" | "slot6_b"
-        | "slot6_d" | "repeat_from" => 1.0,
+        | "slot6_d" | "repeat_from" | "julia_x" => 1.0,
         "combine_split" | "combine_width" => 4.0,
         "max_iterations" => 16.0,
         "bailout" => 100.0,
@@ -137,7 +139,11 @@ mod tests {
         assert_eq!(stack.hybrid, HybridMode::Combine);
         assert_eq!(stack.combine_split, 1);
         assert_eq!(stack.repeat_from, 1);
-        assert_eq!(stack.julia, Some(Vec3::new(0.0, 0.25, 0.0)));
+        assert_eq!(
+            stack.julia,
+            Some(Vec3::new(1.0, 0.25, 0.25)),
+            "unset parts take the default seed"
+        );
         assert_eq!(stack.combine_op, CombineOp::Fillet);
     }
 

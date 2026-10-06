@@ -158,6 +158,11 @@ pub struct ISFPreprocessor {
     /// never `texture()`.
     #[serde(rename = "FORMAT", default = "default_preprocessor_format")]
     pub format: String,
+
+    /// `SPECIALIZE` inputs the deck sets each frame from the scalar outputs
+    /// of the same name, a Varda extension.
+    #[serde(rename = "WRITES", default, skip_serializing_if = "Vec::is_empty")]
+    pub writes: Vec<String>,
 }
 
 fn default_preprocessor_format() -> String {
@@ -213,6 +218,11 @@ pub struct ISFInput {
     /// input's position among the specialized inputs.
     #[serde(rename = "SPECIALIZE", default, skip_serializing_if = "is_false")]
     pub specialize: bool,
+
+    /// Values written into other inputs when this `long` input changes, one
+    /// object per entry of `VALUES`, a Varda extension.
+    #[serde(rename = "PRESETS", skip_serializing_if = "Option::is_none")]
+    pub presets: Option<Vec<serde_json::Map<String, serde_json::Value>>>,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if passes a reference
@@ -251,6 +261,16 @@ impl ISFInput {
                 (value, label)
             })
             .collect()
+    }
+
+    /// The `PRESETS` entry for `value`, matched by its position in `VALUES`.
+    pub fn preset(&self, value: i32) -> Option<&serde_json::Map<String, serde_json::Value>> {
+        let presets = self.presets.as_ref()?;
+        let index = self
+            .choices()
+            .iter()
+            .position(|(choice, _)| *choice == value)?;
+        presets.get(index)
     }
 }
 
@@ -496,8 +516,53 @@ impl ISFMetadata {
                     input.input_type
                 );
             }
+            if let Some(presets) = &input.presets {
+                if input.input_type != "long" {
+                    anyhow::bail!(
+                        "input {} is a {}; PRESETS needs a long",
+                        input.name,
+                        input.input_type
+                    );
+                }
+                let values = input.values.as_ref().map_or(0, Vec::len);
+                if presets.len() != values {
+                    anyhow::bail!(
+                        "input {} declares {} PRESETS for {values} VALUES",
+                        input.name,
+                        presets.len()
+                    );
+                }
+            }
         }
+        self.validate_writes()?;
         self.validate_columns()
+    }
+
+    /// Every `WRITES` name must be a `SPECIALIZE` input.
+    fn validate_writes(&self) -> anyhow::Result<()> {
+        for preprocessor in &self.preprocessors {
+            for name in &preprocessor.writes {
+                let specialized = self
+                    .inputs
+                    .iter()
+                    .flatten()
+                    .any(|input| input.name == *name && input.specialize);
+                if !specialized {
+                    anyhow::bail!(
+                        "preprocessor {} WRITES {name}, which is not a SPECIALIZE input",
+                        preprocessor.name
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The inputs a preprocessor writes.
+    pub fn written_inputs(&self) -> impl Iterator<Item = &str> {
+        self.preprocessors
+            .iter()
+            .flat_map(|p| p.writes.iter().map(String::as_str))
     }
 
     /// A `COLUMNS` mistake is almost always a typo, so it fails the load.
@@ -607,6 +672,61 @@ mod tests {
         .unwrap();
         let err = color.validate().unwrap_err().to_string();
         assert!(err.contains("tint") && err.contains("SPECIALIZE"), "{err}");
+    }
+
+    #[test]
+    fn writes_must_name_specialize_inputs() {
+        let with_writes = |writes: &str| -> ISFMetadata {
+            serde_json::from_str(&format!(
+                r#"{{"INPUTS": [
+                    {{"NAME": "track", "TYPE": "bool", "SPECIALIZE": true}},
+                    {{"NAME": "gain", "TYPE": "float"}}
+                ], "PREPROCESSORS": [{{"NAME": "f", "TYPE": "flight", "WRITES": {writes}}}]}}"#
+            ))
+            .unwrap()
+        };
+        let meta = with_writes(r#"["track"]"#);
+        meta.validate().unwrap();
+        assert_eq!(meta.preprocessors[0].writes, ["track"]);
+        for name in ["gain", "missing"] {
+            let err = with_writes(&format!(r#"["{name}"]"#))
+                .validate()
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains(name) && err.contains("WRITES"), "{err}");
+        }
+    }
+
+    #[test]
+    fn presets_pair_with_values_by_position() {
+        let meta: ISFMetadata = serde_json::from_str(
+            r#"{"INPUTS": [{"NAME": "look", "TYPE": "long", "VALUES": [3, 7],
+                "PRESETS": [{"gain": 1.0}, {"gain": 2.0}]}]}"#,
+        )
+        .unwrap();
+        meta.validate().unwrap();
+        let look = &meta.inputs.as_ref().unwrap()[0];
+        assert_eq!(look.preset(7).unwrap()["gain"], 2.0);
+        assert!(look.preset(0).is_none());
+    }
+
+    #[test]
+    fn presets_reject_a_count_mismatch_and_non_long_inputs() {
+        for (input, expect) in [
+            (
+                r#"{"NAME": "look", "TYPE": "long", "VALUES": [1, 2], "PRESETS": [{}]}"#,
+                "1 PRESETS for 2 VALUES",
+            ),
+            (
+                r#"{"NAME": "gain", "TYPE": "float", "PRESETS": [{}]}"#,
+                "needs a long",
+            ),
+        ] {
+            let meta: ISFMetadata =
+                serde_json::from_str(&format!(r#"{{"INPUTS": [{input}]}}"#)).unwrap();
+            let err = meta.validate().unwrap_err().to_string();
+            assert!(err.contains(expect) && err.contains("PRESETS"), "{err}");
+        }
     }
 
     fn with_columns(columns: &str) -> ISFMetadata {
@@ -824,6 +944,7 @@ mod tests {
         assert_eq!(meta.preprocessors[1].options, serde_json::Value::Null);
         assert!(meta.preprocessors[1].param_bindings.is_empty());
         assert!(meta.preprocessors[1].phase_bindings.is_empty());
+        assert!(meta.preprocessors[1].writes.is_empty());
     }
 
     #[test]

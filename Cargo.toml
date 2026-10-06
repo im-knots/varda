@@ -236,6 +236,10 @@ name = "shader_params"
 harness = false
 
 [[bench]]
+name = "fractal_host"
+harness = false
+
+[[bench]]
 name = "audio_analysis"
 harness = false
 

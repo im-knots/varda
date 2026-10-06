@@ -27,6 +27,7 @@ const H: u32 = 16;
 
 mod common;
 use common::headless_gpu;
+use varda::testing::read_rgba16f;
 
 /// Advance the mixer by one frame with silent audio and no modulation, on the
 /// wall clock.
@@ -79,21 +80,10 @@ fn render_frame(ctx: &GpuContext, mixer: &mut Mixer, free_run_time: Option<f32>)
     mixer.render(ctx, &inputs, 60, &[]).expect("render");
 }
 
-/// Read back the mixer composite (`Rgba16Float`) as linear-light RGBA f32,
-/// row-major, `w*h` pixels. Blocks on `poll(Wait)`.
-fn read_back(ctx: &GpuContext, mixer: &Mixer, width: u32, height: u32) -> Vec<[f32; 4]> {
-    read_texture(ctx, mixer.composite_texture(), width, height)
-}
-
-/// Read back any `Rgba16Float` target as linear-light RGBA f32.
-fn read_texture(ctx: &GpuContext, tex: &wgpu::Texture, width: u32, height: u32) -> Vec<[f32; 4]> {
-    common::read_rgba16f(ctx, tex, width, height)
-}
-
 /// Render one frame and read it back at the default test size.
 fn render_and_read(ctx: &GpuContext, mixer: &mut Mixer) -> Vec<[f32; 4]> {
     render_once(ctx, mixer);
-    read_back(ctx, mixer, W, H)
+    read_rgba16f(ctx, mixer.composite_texture(), W, H)
 }
 
 /// Center pixel of the readback, representative for uniform solid composites.
@@ -803,7 +793,7 @@ fn dull_skull_stays_in_frame_for_the_whole_sway() {
             continue;
         }
 
-        let lum: Vec<f32> = read_back(&ctx, &mixer, SW, SH)
+        let lum: Vec<f32> = read_rgba16f(&ctx, mixer.composite_texture(), SW, SH)
             .iter()
             .map(|p| encode(0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]))
             .collect();
@@ -876,7 +866,7 @@ fn liquid_light_agitation_survives_being_automated() {
     let shader = varda::isf::ISFShader::from_file(&path).expect("parse liquid_light.fs");
 
     let luminance = |ctx: &GpuContext, mixer: &Mixer| -> Vec<f32> {
-        read_back(ctx, mixer, SW, SH)
+        read_rgba16f(ctx, mixer.composite_texture(), SW, SH)
             .iter()
             .map(|p| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2])
             .collect()
@@ -999,7 +989,7 @@ fn liquid_light_dish_rotation_changes_speed_rather_than_position() {
     mixer.channel_mut(0).unwrap().decks[0].render_fps = varda::channel::DeckRenderFps::Fixed(0);
 
     let luminance = |ctx: &GpuContext, mixer: &Mixer| -> Vec<f32> {
-        read_back(ctx, mixer, SW, SH)
+        read_rgba16f(ctx, mixer.composite_texture(), SW, SH)
             .iter()
             .map(|p| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2])
             .collect()
@@ -1155,7 +1145,7 @@ fn chroma_flow_auto_palette_does_not_lurch_on_smooth_input() {
     let fx_shader = varda::isf::ISFShader::from_file(&fx_path).expect("parse chroma_flow.fs");
 
     let luminance = |ctx: &GpuContext, mixer: &Mixer| -> Vec<f32> {
-        read_back(ctx, mixer, SW, SH)
+        read_rgba16f(ctx, mixer.composite_texture(), SW, SH)
             .iter()
             .map(|p| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2])
             .collect()
@@ -1346,7 +1336,7 @@ fn chroma_flow_auto_palette_is_carried_between_frames() {
     }
 
     let luminance = |ctx: &GpuContext, mixer: &Mixer| -> Vec<f32> {
-        read_back(ctx, mixer, W, H)
+        read_rgba16f(ctx, mixer.composite_texture(), W, H)
             .iter()
             .map(|p| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2])
             .collect()
@@ -1420,7 +1410,7 @@ fn tie_bait_jitter(ctx: &GpuContext, mixer: &mut Mixer, size: (u32, u32)) -> f32
     let (w, h) = size;
 
     let luminance = |mixer: &Mixer| -> Vec<f32> {
-        read_back(ctx, mixer, w, h)
+        read_rgba16f(ctx, mixer.composite_texture(), w, h)
             .iter()
             .map(|p| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2])
             .collect()
@@ -1594,7 +1584,7 @@ fn chroma_flow_frames(
         render_at(ctx, &mut mixer, frame);
         if capture_at.contains(&frame) {
             out.push(
-                read_back(ctx, &mixer, w, h)
+                read_rgba16f(ctx, mixer.composite_texture(), w, h)
                     .iter()
                     .map(|p| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2])
                     .collect(),
@@ -2050,7 +2040,7 @@ fn tap_shows_the_previous_frame_not_the_current_one() {
     mixer.set_crossfader(1.0);
 
     render_frame_with_taps(&ctx, &mut mixer);
-    let first = center(&read_back(&ctx, &mixer, W, H));
+    let first = center(&read_rgba16f(&ctx, mixer.composite_texture(), W, H));
     assert_lo(
         first[0],
         "frame 1 tap must be black — channel 0 composited earlier in this same \
@@ -2058,7 +2048,7 @@ fn tap_shows_the_previous_frame_not_the_current_one() {
     );
 
     render_frame_with_taps(&ctx, &mut mixer);
-    let second = center(&read_back(&ctx, &mixer, W, H));
+    let second = center(&read_rgba16f(&ctx, mixer.composite_texture(), W, H));
     assert_hi(second[0], "frame 2 tap must show frame 1's red");
 }
 
@@ -2080,13 +2070,13 @@ fn tap_latency_does_not_depend_on_channel_order() {
 
     render_frame_with_taps(&ctx, &mut mixer);
     assert_lo(
-        center(&read_back(&ctx, &mixer, W, H))[0],
+        center(&read_rgba16f(&ctx, mixer.composite_texture(), W, H))[0],
         "frame 1 tap must be black in the earlier-channel direction too",
     );
 
     render_frame_with_taps(&ctx, &mut mixer);
     assert_hi(
-        center(&read_back(&ctx, &mixer, W, H))[0],
+        center(&read_rgba16f(&ctx, mixer.composite_texture(), W, H))[0],
         "frame 2 tap must show frame 1's red, exactly as in the other direction",
     );
 }
@@ -2110,7 +2100,7 @@ fn master_tap_shows_the_previous_frame() {
     mixer.set_crossfader(0.0);
 
     let tap_texture = |m: &Mixer| -> Vec<[f32; 4]> {
-        read_texture(&ctx, &m.channel(0).unwrap().decks[0].deck.texture, W, H)
+        read_rgba16f(&ctx, &m.channel(0).unwrap().decks[0].deck.texture, W, H)
     };
 
     render_frame_with_taps(&ctx, &mut mixer);
@@ -2145,7 +2135,7 @@ fn self_tapping_deck_converges_rather_than_diverging() {
 
     for frame in 0..12 {
         render_frame_with_taps(&ctx, &mut mixer);
-        let px = center(&read_back(&ctx, &mixer, W, H));
+        let px = center(&read_rgba16f(&ctx, mixer.composite_texture(), W, H));
         for (i, v) in px.iter().enumerate() {
             assert!(
                 v.is_finite(),
@@ -2465,12 +2455,11 @@ fn a_specialized_input_rebuilds_the_pipeline_with_its_value() {
     let mut mixer = new_mixer(&ctx);
     let deck = Deck::from_shader(&ctx, shader, W, H).expect("deck");
     mixer.channel_mut(0).unwrap().add_deck(deck);
+    // Offline frames build the new pipelines before drawing.
     let set_mode = |mixer: &mut varda::mixer::Mixer, mode: i32| {
-        mixer.channel_mut(0).unwrap().decks[0]
-            .deck
-            .generator_params
-            .set_long("mode", mode);
-        center(&render_and_read(&ctx, mixer))[0]
+        set_long(mixer, "mode", mode);
+        render_at(&ctx, mixer, 0);
+        center(&read_rgba16f(&ctx, mixer.composite_texture(), W, H))[0]
     };
     assert_near(set_mode(&mut mixer, 1), 0.25, 0.002, "the default");
     assert_near(set_mode(&mut mixer, 3), 0.75, 0.002, "mode 3 rebuilds");
@@ -2480,6 +2469,58 @@ fn a_specialized_input_rebuilds_the_pipeline_with_its_value() {
         0.002,
         "back to the cached default",
     );
+}
+
+#[test]
+fn a_live_specialized_input_keeps_drawing_until_its_pipeline_is_built() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    let shader = specialized_shader("layout(constant_id = 0) const int MODE = 1;");
+    let mut mixer = new_mixer(&ctx);
+    let deck = Deck::from_shader(&ctx, shader, W, H).expect("deck");
+    mixer.channel_mut(0).unwrap().add_deck(deck);
+    assert_near(
+        center(&render_and_read(&ctx, &mut mixer))[0],
+        0.25,
+        0.002,
+        "the default",
+    );
+
+    // The frame that asks for mode 3 starts the build and draws mode 1.
+    set_long(&mut mixer, "mode", 3);
+    assert_near(
+        center(&render_and_read(&ctx, &mut mixer))[0],
+        0.25,
+        0.002,
+        "the current pipelines while mode 3 builds",
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        let red = center(&render_and_read(&ctx, &mut mixer))[0];
+        if (red - 0.75).abs() < 0.002 {
+            break;
+        }
+        assert_near(red, 0.25, 0.002, "mode 1 until mode 3 is ready");
+        assert!(std::time::Instant::now() < deadline, "mode 3 never built");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    // A cached combination switches on the frame that asks for it.
+    set_long(&mut mixer, "mode", 1);
+    assert_near(
+        center(&render_and_read(&ctx, &mut mixer))[0],
+        0.25,
+        0.002,
+        "back to the cached default",
+    );
+}
+
+fn set_long(mixer: &mut Mixer, name: &str, value: i32) {
+    mixer.channel_mut(0).unwrap().decks[0]
+        .deck
+        .generator_params
+        .set_long(name, value);
 }
 
 #[test]

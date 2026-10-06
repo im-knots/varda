@@ -138,7 +138,7 @@ curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks \
 
 ### Capture a display or window as a deck
 
-Capture targets are addressed by name, never by platform handle. Varda matches the name against the last scan, so rescan first if you are not sure what is available. See [Screen & Window Capture](09-streaming-and-io.md#screen--window-capture).
+Capture targets are addressed by name, never by platform handle. Varda matches the name against the last scan, so rescan first if you are not sure what is available. See [Screen & Window Capture](12-streaming-and-io.md#screen--window-capture).
 
 ```sh
 curl -X POST http://localhost:8080/api/sources/ScreenCapture/actions/rescan
@@ -192,7 +192,7 @@ curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks \
   -d '{"type": "Tap", "source": {"kind": "master_program"}}'
 ```
 
-A tap shows the previous frame. See [Program Tap](09-streaming-and-io.md#program-tap).
+A tap shows the previous frame. See [Program Tap](12-streaming-and-io.md#program-tap).
 
 ### Add an effect, then tweak it
 
@@ -326,7 +326,7 @@ curl -X DELETE http://localhost:8080/api/mixer/lut
 
 ### Create a macro and bind a target
 
-A macro drives many parameters from one control. Create it, add a target, then drive it live, or map `macro/<uuid>/value` to MIDI/OSC. See [Control Surfaces & Macros](06-control-surfaces.md#macros).
+A macro drives many parameters from one control. Create it, add a target, then drive it live, or map `macro/<uuid>/value` to MIDI/OSC. See [Control Surfaces & Macros](07-control-surfaces.md#macros).
 
 ```sh
 # Create a knob macro (returns its uuid)
@@ -506,7 +506,7 @@ The engine state changed shape with no transition release:
 
 For request and response schemas, see the Swagger UI at `/api/docs`.
 
-Analyzer routes cover frame analysis (brightness, face detection, depth sensor). For request bodies and workflow, see [Frame Analysis & Preprocessors](14-frame-analysis.md#analyzer-http-api).
+Analyzer routes cover frame analysis (brightness, face detection, depth sensor). For request bodies and workflow, see [Analyzers & Preprocessors](16-analyzers-and-preprocessors.md#analyzer-http-api).
 
 <!-- BEGIN GENERATED ROUTES -->
 
@@ -971,4 +971,4 @@ Browser-based control panels work from any origin with no setup. The API has no 
 
 ---
 
-[← Prev: ISF Shader Authoring](12-isf-authoring.md) · [Home](README.md) · [Next: Frame Analysis & Preprocessors →](14-frame-analysis.md)
+[← Prev: Shader Authoring](14-isf-authoring.md) · [Home](README.md) · [Next: Analyzers & Preprocessors →](16-analyzers-and-preprocessors.md)

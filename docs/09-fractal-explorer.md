@@ -7,12 +7,33 @@ Library onto a channel.
 Every control is an ordinary shader parameter, so you can map it to MIDI, OSC or a keyboard shortcut,
 automate it in Arrangement mode, or modulate it.
 
-It starts on a scale 2.2 Amazing Box turned a little in slot 1, a stack with rooms to fly through.
+It starts on a scale 2.2 Amazing Box turned a little in slot 1, a stack with open spaces to fly through.
 Press **Find Inside** to drop into one.
+
+## How it's built
+
+The Fractal Explorer is an example of a full visual engine running inside Varda, built only from
+the parts any shader author has. It is one ISF shader and one preprocessor:
+
+- **The shader** (`shaders/fractal_explorer.fs`) draws. It is a multi-pass ISF generator: it
+  marches the fractal into a G-buffer, computes shadows and occlusion, lights the scene, builds up
+  detail over frames, and finishes with depth of field, bloom and the grade. Its formula stack is
+  compiled per stack, its Look and Stack dropdowns write the sliders, and its camera buttons are
+  momentary events. [Shader Authoring](14-isf-authoring.md) covers each of these features:
+  multi-pass rendering with history, `SPECIALIZE` inputs, input presets and event inputs.
+- **The `fractal_flight` preprocessor** holds the state and runs the logic. Every frame, before
+  the shader draws, it reads the shader's inputs, flies the camera against its own copy of the
+  fractal, runs Find Inside, the autopilot and the saved locations, and sets the render scale
+  that holds your target frame rate. It hands the shader the camera as a texture, saves the camera
+  and locations with your scene, and tells the shader which build it needs.
+
+[Analyzers & Preprocessors](16-analyzers-and-preprocessors.md#preprocessors) explains the preprocessor system
+this relies on and walks through the explorer as its example. The same split, a shader that draws
+and a preprocessor that keeps state, is how to build other instruments in Varda.
 
 ## Flying
 
-The four controls above the sections fly the camera:
+The five controls above the sections fly the camera:
 
 | Control | Does |
 |---|---|
@@ -57,6 +78,22 @@ Locations are saved with the scene and with deck presets.
 
 ## Building the fractal
 
+**Stack**, at the top of **Form**, starts you from a ready-made formula stack: picking one sets
+every slot, the hybrid settings, the iteration cap and Julia, then moves the camera to Find
+Inside. Tune the sliders from there. The stacks after the default come from Julius Horsthuis's
+tutorials:
+
+| Stack | Formulas | Speed |
+|---|---|---|
+| Turned Box | Amazing Box scale 2.2, turned (the default) | Fast |
+| Goldcape | Lin Combine, Rotate 4D, Amazing Box x4, Koch Cube, JCube, Reciprocal | Medium |
+| Blue Sphere Temple | Goldcape with Koch Cube x16 | Medium |
+| Goldcape Temple 2016 | Rotate 4D, Amazing Box x4, Koch Cube, JCube, Reciprocal, Transform | Medium |
+| Dark Gate | Rotate 4D, ModKali box x4, SinY, Koch Cube, Reciprocal | Slow |
+
+Medium stacks run at about half the frame rate of the default; Dark Gate at about a seventh,
+since its Sine slot bends space in a way that costs more to draw.
+
 **Slot 1** to **Slot 6** each hold one formula:
 
 | Formula | Variants | A | B | C | D |
@@ -84,51 +121,47 @@ Locations are saved with the scene and with deck presets.
 | ABoxMod2 | | Scale (2) | Min R (0.5) | Fold XY (1) | Fold Z (1.5) |
 | msltoe Sym4 | | XZ Sym-Mul (1) | XY Sym-Mul (1) | YZ Sym-Mul (1) | |
 
-Each slot also has **Iterations** (how many times it runs per visit) and **Rotate X, Y, Z**.
+Each slot also has **Iterations** (how many times it runs per visit, 1 to 16) and **Rotate X, Y,
+Z**. To turn a slot off, set its Formula to Empty.
 
 The renderer is compiled for the stack you build: Formula, Variant and Iterations, and the
 Hybrid, Repeat From Slot and Part 2 From Slot settings. Changing one recompiles it, which takes a
 moment the first time; going back to a stack you used recently is instant. These controls are
 not modulated. For motion, map and modulate the A to D parameters and the rotations, which are free
 to change every frame.
+
 Helispiral and Gnarl are the symmetry breakers: put one after a Box or Menger slot, in the part
 that repeats, to bend its straight lines. A slot's Rotate X to Z break symmetry too, at no extra
 cost; the default stack uses them. Small values go far: Gnarl step 0.1 to 0.2 with alpha,
 beta and scale at 1, or Helispiral 0.1 per radius and 0.2 per height. A Gnarl scale of 0 counts
 as 1.
 
-These formulas stretch space unevenly, so the explorer tracks how the whole space is stretched
-(the Jacobian) to measure distance. This also applies to Sine, Reciprocal, Bulbox, KIFS with a fold
-intensity other than 0 or 1, Repeat with a warp, and whole-space Sphere Inversion, when they are
-in the part that repeats. There it costs three to four times the frame time of a stack without
-them, and close up to a surface many times more; Target FPS lowers the render scale, but only so
-far. In a slot that runs once, such as Repeat in slot 1, it
-costs almost nothing.
+Sine, Reciprocal, Bulbox, KIFS with a fold intensity other than 0 or 1, Repeat with a warp, and
+whole-space Sphere Inversion cost much more per frame when they are in the part that repeats, and
+more again close to a surface. In a slot that runs once, such as Repeat in slot 1, they cost
+little.
 
-**Koch Cube, JCube, Lin Combine, Rotate 4D, ABoxMod2 and msltoe Sym4** are the MB3D formulas of
-Julius Horsthuis's named stacks. Each slot keeps its own parameter values when you change its
-formula, so after choosing one of these, dial in the defaults shown in brackets above. Koch Cube and
-JCube never add the seed: they are folding IFS shapes on their own (Koch Cube wants at least 10
-iterations), the Goldcape temples' building blocks. Lin Combine scales each axis before the slot
-rotation; Julius animates its X multiplier. Rotate 4D turns the point through a fourth axis: two
-angles at 1 (half turns, so 180 degrees), as in his Goldcape stacks, mirror two axes. ABoxMod2 is the Amazing Box with a
-cylinder in place of the sphere, and Sym4 is a power-2 bulb with a four-fold symmetry; both are in
-his forest piece.
+**Koch Cube, JCube, Lin Combine, Rotate 4D, ABoxMod2 and msltoe Sym4** are MB3D formulas. Each slot
+keeps its own parameter values when you change its formula, so after choosing one of these, dial in
+the defaults shown in brackets above. Koch Cube and JCube never add the seed: they are folding IFS
+shapes on their own (Koch Cube needs at least 10 iterations). Lin Combine scales each axis before
+the slot rotation. Rotate 4D turns the point through a fourth axis: two angles at 1 (half turns, so
+180 degrees) mirror two axes. ABoxMod2 is the Amazing Box with a cylinder in place of the sphere,
+and Sym4 is a power-2 bulb with a four-fold symmetry.
 
-**Bulbox P-2** is the lace formula: a box fold, then an inverse power near the center, blended to
-plain scaling further out. It is discontinuous on purpose. After an Amazing Surf slot in Julia mode
-it gives the intricate lace surfaces of Julius Horsthuis's HDR piece.
+**Bulbox P-2** applies a box fold, then an inverse power near the center, blended to plain scaling
+further out. It is discontinuous. It works well after an Amazing Surf slot in Julia mode.
 
-**Polyfold Sym** folds space into Order slices around the z axis, like a kaleidoscope. In slot 1
-it makes the whole world symmetric; in a later slot it acts only on parts. Animating Angle Shift
-from 0 to 360 / Order is a seamless loop. **Sine** bends one axis through a sine wave (Julius's
-SinY); animating Offset 1 slides along an endless chain. **Reciprocal** pulls one axis toward a
-limit, which cleans up and stretches forms.
+**Polyfold Sym** folds space into Order slices around the z axis, like a kaleidoscope. In slot 1 it
+makes the whole world symmetric; in a later slot it acts only on parts. Animating Angle Shift from 0
+to 360 / Order is a seamless loop. **Sine** bends one axis through a sine wave (SinY). Animating
+Offset 1 slides along an endless chain. **Reciprocal** pulls one axis toward a limit, which cleans
+up and stretches forms.
 
 **Repeat** tiles the world into cells so it never ends: put it in slot 1, the fractal in slot 2,
 and set **Repeat From Slot** to 2. A cell a little smaller than the fractal packs copies into
 each other; larger leaves open space between them. **Mirror** flips every other cell so the joins
-are seamless. The slot's rotation turns the whole lattice.
+match. The slot's rotation turns the whole lattice.
 
 **Warp** bends the grid before tiling, so no two cells match and the rows stop lining up. Its
 waves have golden-ratio and silver-ratio lengths, so the pattern never repeats. Try 0.1 to 0.3.
@@ -144,20 +177,21 @@ free to animate, so mapping or modulating them moves the sphere through the frac
   **Repeat From Slot**. Slots before that run once, as a set-up transform.
 - **Hybrid: Combine** splits the slots at **Part 2 From Slot** into two fractals and combines them:
   Union, Intersect, Subtract (part 2 with part 1 carved out), Chamfer or Fillet. **Combine Width**
-  sets the bevel, in pixels. A Box temple in part 1 and an organic hybrid in part 2 is the classic
+  sets the bevel, in pixels. A Box temple in part 1 and an organic hybrid in part 2 is a common
   use.
 - **Iterations** caps the total, **Bailout** is the escape radius, and **Julia** replaces the
-  sample point with a fixed seed (**Julia X, Y, Z**).
+  sample point with a fixed seed (**Julia X, Y, Z**). Turning Julia on or off moves the camera to
+  Find Inside, because the Julia set is a different shape.
 
 ## Look
 
-**Look**, at the top of **Lighting**, switches the whole look at once: **Stone Hall** (the
-default, grey stone with a moss accent under a soft sun), **Desert Sunbeams** (a low warm sun with
-light shafts), **Moonlit** (a cold light from behind and a warm lantern at the camera) and **Teal &
-Gold**. Each sets the lighting, the palette colors and materials, the fog, the sky and the grade.
-While one is selected those sliders do nothing; choose **Custom** to use them. The sliders start at
-Stone Hall's values, so Custom begins from the default picture. Look is a parameter like any other,
-so you can map it to a MIDI control and change it with the music.
+**Look**, at the top of **Lighting**, sets the whole look at once: **Stone Hall** (the default,
+gray stone with a moss accent under a soft sun), **Desert Sunbeams** (a low warm sun with light
+shafts), **Moonlit** (a cold light from behind and a warm lantern at the camera) and **Teal &
+Gold**. Picking one moves the lighting, palette, material, fog, sky and grade sliders to its
+values. Adjust any of them from there; picking the same look again keeps your changes, and picking
+another replaces them. A saved scene or preset keeps the sliders as you left them. Look is a
+parameter like any other, so you can map it to a MIDI control and change it with the music.
 
 | Section | Controls |
 |---|---|
@@ -186,9 +220,8 @@ In **Detail**:
 
 - **Detail (px)**: how close a ray must come to the surface to count as a hit. Higher is faster and
   softer.
-- **Geometry Band (px)**: stops iterating where detail gets finer than this many pixels. Off (0)
-  by default: the cut fills the holes it skips, so porous fractals turn into rounded blobs and
-  can even render slower. Try 1 to 2 for solid fractals that shimmer.
+- **Geometry Band (px)**: stops iterating where detail is finer than this many pixels. Off (0)
+  by default. Try 1 to 2 on solid fractals that shimmer; porous ones turn blobby.
 - **Ray Steps** and **Step Size**: the march budget. Lower Step Size if thin structure disappears.
 - **Temporal Smoothing**: blends frames to remove noise. Turn it off only to compare.
 - **Tile Prepass**: skips empty space in 8x8 tiles.
@@ -198,16 +231,19 @@ In **Detail**:
   fractal costs about a quarter. Set Target FPS to 0 to render at Max Render Scale always. The
   live scale is published as `render_scale_live`. It follows the whole app's frame time, so a heavy
   deck elsewhere also lowers it.
-- **Sharpness**: contrast-adaptive sharpening after temporal smoothing (AMD's RCAS). 0 is off; the
-  default 0.85 brings fine detail close to a supersampled render without halos.
+- **Sharpness**: contrast-adaptive sharpening after temporal smoothing (AMD RCAS). 0 is off. The
+  default is 0.85.
 - **Still Samples**: how many jittered samples a pixel averages while the camera holds still.
-  Detail keeps sharpening for that many frames, past the deck's resolution; moving pixels average
-  8. Hits are measured in output pixels, so geometry looks the same at every render scale.
+  Detail improves for that many frames, past the deck's resolution; moving pixels average
+  8. Geometry looks the same at every render scale.
 
 **Diagnostic** shows what the renderer is doing: steps and work, normals, depth, exit cause
 (green hit, yellow closest approach, blue miss, red work limit), iterations, shadow and
-occlusion, and shade reuse (white where shadow and occlusion were computed this frame; held still,
-about one 8x8 block in four).
+occlusion, and shade reuse (white where shadow and occlusion were computed this frame).
 
 A magenta and black checkerboard means the shader and the running Varda do not agree on the
 camera data format. Restart Varda after updating the shader file.
+
+---
+
+[← Prev: Shader Library](08-shader-library.md) · [Home](README.md) · [Next: Outputs →](10-outputs.md)

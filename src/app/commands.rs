@@ -85,6 +85,22 @@ fn transport_rejected(err: crate::transport::TransportError) -> CommandResult {
 }
 
 impl VardaApp {
+    /// [`modulation_target`] for a source or lane that drives the target. An
+    /// event input is refused, being a trigger, and so is a preprocessor-written input.
+    fn drivable_target(&self, target: &str) -> Result<String, CommandResult> {
+        let key = modulation_target(target)?;
+        if crate::param_router::names_transient(&self.mixer, &key) {
+            return Err(CommandResult::Err {
+                code: ErrorCode::InvalidInput,
+                message: format!(
+                    "{target} is an event or preprocessor-written input, which cannot be \
+                     modulated"
+                ),
+            });
+        }
+        Ok(key)
+    }
+
     /// Execute a command for the GUI, returning a typed [`CommandOutcome`]
     /// instead of the wire [`CommandResult`]. Deck-creating commands report
     /// location and UUID so the runner can register a preview texture; the rest
@@ -372,7 +388,7 @@ impl VardaApp {
                 CommandResult::Ok
             }
             EngineCommand::AddAutomationLane { target, timebase } => {
-                let target = match modulation_target(&target) {
+                let target = match self.drivable_target(&target) {
                     Ok(target) => target,
                     Err(e) => return e,
                 };
@@ -406,7 +422,7 @@ impl VardaApp {
                 target,
                 source_id,
                 amount,
-            } => match modulation_target(&target) {
+            } => match self.drivable_target(&target) {
                 Ok(target) => {
                     self.mixer
                         .modulation_mut()

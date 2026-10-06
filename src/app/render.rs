@@ -193,8 +193,7 @@ impl VardaApp {
                 format!("Deck '{name}': {warning}"),
             );
         }
-        // Toast what decks' preprocessors have to say (Find Inside found no
-        // rooms), once per event.
+        // Toast the messages the decks' preprocessors report, once per event.
         let messages: Vec<String> = self
             .mixer
             .channels_mut()

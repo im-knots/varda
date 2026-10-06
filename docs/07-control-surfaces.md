@@ -210,7 +210,7 @@ These features use the resolved BPM and beat phase:
 - **Deck auto-transitions**: play duration is set in beats.
 - **Transition sequences**: step durations are in beats.
 - **ISF shaders**: the `audio_bpm` and `audio_beat_phase` uniforms.
-- **LFOs and step sequencers** set to the **Beat** timebase: rate is in cycles per beat and follows the tempo. By default they run on wall-clock time. See [Modulation](05-modulation.md).
+- **LFOs and step sequencers** set to the **Beat** timebase: rate is in cycles per beat and follows the tempo. By default they run on wall-clock time. See [Modulation](06-modulation.md).
 
 The `clock/bpm` parameter path is MIDI-mappable (0.0–1.0 → 20–300 BPM).
 
@@ -231,7 +231,7 @@ The position is always shown in the top bar, beside the BPM readout. Click it to
 | **Source** | Whether the position advances internally or chases incoming timecode. |
 | **Rate** | The frame rate the position is counted and displayed at: 24, 25, 29.97, 29.97 drop-frame, or 30. |
 
-Arrangement mode has its own strip with the same controls plus **⏹ Stop** and the cue arrows. Stop holds the position. Stop again returns to 00:00:00:00. Use this to return to zero in Arrangement mode, because the back arrow steps through cue points. See [Arrangement Mode](15-arrangement.md#cue-points).
+Arrangement mode has its own strip with the same controls plus **⏹ Stop** and the cue arrows. Stop holds the position. Stop again returns to 00:00:00:00. Use this to return to zero in Arrangement mode, because the back arrow steps through cue points. See [Arrangement Mode](05-arrangement.md#cue-points).
 
 ### Status
 
@@ -283,7 +283,7 @@ Varda detects the frame rate from the signal, so a 25 fps master reads as 25 fps
 
 The timecode input setup is saved with the venue in `stage.json`, alongside surfaces and outputs, not with the show. Devices are remembered by name, so they are found again on a different port. If a saved device is missing at load, the notification bar says so.
 
-Timecode is also sent over OSC as `/varda/timecode/position` (seconds) and `/varda/timecode/string` (`HH:MM:SS:FF`). Read it over HTTP at `GET /api/state/timecode`, which reports every input and which one is in use. See [API](13-api.md).
+Timecode is also sent over OSC as `/varda/timecode/position` (seconds) and `/varda/timecode/string` (`HH:MM:SS:FF`). Read it over HTTP at `GET /api/state/timecode`, which reports every input and which one is in use. See [API](15-api.md).
 
 ### BPM and Timecode Readouts
 
@@ -302,7 +302,7 @@ Hover either readout to see how many modulators follow it. This helps when somet
 - **Beat** modulators move whenever a clock is present.
 - **Transport** modulators wait for Play.
 
-See [Timebase](05-modulation.md#timebase).
+See [Timebase](06-modulation.md#timebase).
 
 ### Frame Rates and Drop-Frame
 
@@ -310,8 +310,8 @@ See [Timebase](05-modulation.md#timebase).
 
 ### What Uses the Transport
 
-- **Show timebase**: LFOs and step sequencers set to **Show** are computed from the position alone. See [Modulation](05-modulation.md).
-- **Arrangement mode**: regions and automation curves are placed against this position, and take control of their decks once it has run. See [Arrangement Mode](15-arrangement.md).
+- **Show timebase**: LFOs and step sequencers set to **Show** are computed from the position alone. See [Modulation](06-modulation.md).
+- **Arrangement mode**: regions and automation curves are placed against this position, and take control of their decks once it has run. See [Arrangement Mode](05-arrangement.md).
 
 ---
 
@@ -375,7 +375,7 @@ In the macro's detail editor (bottom bar), the **Mod** section lists each assign
 Modulation is added to the base. Turn the knob to move the center of the sweep, as with a modulated effect parameter. Each target still applies its own min, max, curve and invert to the modulated value, so one LFO can open one effect while closing another.
 
 - Only **Knob** and **Fader** macros can be modulated. **Button** macros are on/off and cannot.
-- Create modulators in the **Modulation** panel (see [Modulation](05-modulation.md)). Any source there can be assigned to a macro.
+- Create modulators in the **Modulation** panel (see [Modulation](06-modulation.md)). Any source there can be assigned to a macro.
 - Macro modulation assignments are saved **per scene** (in `scene.json`) and can be undone.
 
 > Tip: you can also modulate a macro's target parameters directly from their deck or effect panels. Modulating the macro moves all its targets together; modulating a target moves only that one.
@@ -448,9 +448,9 @@ MIDI, OSC and keyboard shortcuts all use the same parameter paths:
 | `action/undo` | Trigger undo |
 | `action/redo` | Trigger redo |
 | `action/save` | Trigger save |
-| `action/record` | Arm or disarm automation recording (> 0.5). See [Recording a pass](15-arrangement.md#recording-a-pass) |
-| `cue/<uuid>/fire` | Take the show to that cue (> 0.5). See [Cue pads](15-arrangement.md#cue-pads-in-performance-mode) |
+| `action/record` | Arm or disarm automation recording (> 0.5). See [Recording a pass](05-arrangement.md#recording-a-pass) |
+| `cue/<uuid>/fire` | Take the show to that cue (> 0.5). See [Cue pads](05-arrangement.md#cue-pads-in-performance-mode) |
 
 ---
 
-[← Prev: Modulation & Audio Reactivity](05-modulation.md) · [Home](README.md) · [Next: Outputs →](07-outputs.md)
+[← Prev: Modulation & Audio Reactivity](06-modulation.md) · [Home](README.md) · [Next: Shader Library →](08-shader-library.md)

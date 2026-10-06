@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::sync::{Arc, mpsc};
 use wgpu::util::DeviceExt;
 
 /// ISF automatic uniforms. 16-byte aligned for the GPU.
@@ -65,11 +66,18 @@ pub struct UnifiedPipeline {
     /// Pipelines built for other constants, most recent last, so returning to
     /// an earlier combination does not rebuild.
     other_variants: Vec<Variant>,
-    /// What a variant is built from.
-    fragment_module: wgpu::ShaderModule,
-    vertex_module: wgpu::ShaderModule,
-    pipeline_layout: wgpu::PipelineLayout,
-    passes: PassPlan,
+    /// The constants [`Self::new`] built with, the inputs' defaults. Their
+    /// variant is never evicted.
+    pinned: Vec<f64>,
+    /// What a variant is built from, shared with the build thread.
+    recipe: Arc<Recipe>,
+    /// The variant a worker thread is building for live frames.
+    building: Option<Build>,
+    /// Constants whose worker build failed. Live frames do not retry them.
+    failed: Vec<Vec<f64>>,
+    /// Write-locked by a test to hold worker builds before they start.
+    #[cfg(test)]
+    build_gate: Arc<std::sync::RwLock<()>>,
     pub bind_group_layout: wgpu::BindGroupLayout,
     /// Uniforms, one slot per pass.
     uniforms: super::pass_uniforms::PassUniforms,
@@ -86,7 +94,7 @@ pub struct UnifiedPipeline {
     pub surface_format: wgpu::TextureFormat,
 }
 
-/// Variants kept besides the current one.
+/// Variants kept besides the current one, the pinned one included.
 const MAX_OTHER_VARIANTS: usize = 8;
 
 /// The passes a shader renders, for choosing its pipelines.
@@ -103,12 +111,31 @@ pub struct PassPlan {
     pub specialize: bool,
 }
 
+/// Render pipelines keyed by `PASSINDEX` when passes are specialized, and by
+/// target formats.
+type Pipelines = Vec<(Option<i32>, Vec<wgpu::TextureFormat>, wgpu::RenderPipeline)>;
+
 /// The render pipelines of one set of specialization constants.
 struct Variant {
     constants: Vec<f64>,
-    /// Keyed by `PASSINDEX` when passes are specialized, and by target
-    /// formats.
-    pipelines: Vec<(Option<i32>, Vec<wgpu::TextureFormat>, wgpu::RenderPipeline)>,
+    pipelines: Pipelines,
+}
+
+/// What every variant of a shader is built from.
+struct Recipe {
+    fragment_module: wgpu::ShaderModule,
+    vertex_module: wgpu::ShaderModule,
+    pipeline_layout: wgpu::PipelineLayout,
+    passes: PassPlan,
+    output_format: wgpu::TextureFormat,
+}
+
+/// A variant being built on a worker thread.
+struct Build {
+    constants: Vec<f64>,
+    /// The pipelines, or the error that stopped the build. Disconnected if
+    /// the thread panicked.
+    result: mpsc::Receiver<std::result::Result<Pipelines, String>>,
 }
 
 impl UnifiedPipeline {
@@ -123,7 +150,8 @@ impl UnifiedPipeline {
     ///   false for `texelFetch`-only float data (`FORMAT: "rgba32float"`)
     /// - `surface_format`: always `COLOR_PATH_FORMAT`
     /// - `constants`: the specialization constants to build with, by
-    ///   `constant_id`; see [`Self::specialize`]
+    ///   `constant_id`, the `SPECIALIZE` inputs' defaults; their pipelines stay
+    ///   cached for the pipeline's life. See [`Self::specialize`]
     ///
     /// # Errors
     ///
@@ -344,16 +372,25 @@ impl UnifiedPipeline {
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/fullscreen.wgsl").into()),
         });
 
-        let mut pipeline = Self {
-            variant: Variant {
-                constants: constants.to_vec(),
-                pipelines: Vec::new(),
-            },
-            other_variants: Vec::new(),
+        let recipe = Recipe {
             fragment_module: shader_module,
             vertex_module,
             pipeline_layout,
             passes: passes.clone(),
+            output_format: surface_format,
+        };
+        Ok(Self {
+            variant: Variant {
+                constants: constants.to_vec(),
+                pipelines: recipe.build(device, constants),
+            },
+            other_variants: Vec::new(),
+            pinned: constants.to_vec(),
+            recipe: Arc::new(recipe),
+            building: None,
+            failed: Vec::new(),
+            #[cfg(test)]
+            build_gate: Arc::default(),
             bind_group_layout,
             uniforms,
             sampler,
@@ -364,80 +401,131 @@ impl UnifiedPipeline {
             default_user_params_buffer,
             user_params_binding,
             surface_format,
-        };
-        pipeline.variant.pipelines = pipeline.build(device, constants);
-        Ok(pipeline)
+        })
     }
 
     /// Use the pipelines built with `constants`, the values of the shader's
-    /// specialization constants by `constant_id`. Builds them the first time a
-    /// combination is seen, which compiles the shader again.
-    pub fn specialize(&mut self, device: &wgpu::Device, constants: impl Iterator<Item = f64>) {
+    /// specialization constants by `constant_id`. The first time a
+    /// combination is seen its pipelines are built, which compiles the shader
+    /// again.
+    ///
+    /// On a `live` frame the build runs on a worker thread and the current
+    /// pipelines stay in use until a later call finds it done. While a build
+    /// runs, the constants of the latest call are built next. Offline frames
+    /// build in place.
+    pub fn specialize(
+        &mut self,
+        device: &wgpu::Device,
+        constants: impl Iterator<Item = f64>,
+        live: bool,
+    ) {
         let mut constants = constants.peekable();
         if constants.peek().is_none() && self.variant.constants.is_empty() {
             return;
         }
         let constants: Vec<f64> = constants.collect();
+        self.finish_build();
         if constants == self.variant.constants {
             return;
         }
-        let cached = self
+        if let Some(index) = self
             .other_variants
             .iter()
-            .position(|v| v.constants == constants);
-        let variant = if let Some(index) = cached {
-            self.other_variants.remove(index)
-        } else {
+            .position(|v| v.constants == constants)
+        {
+            let variant = self.other_variants.remove(index);
+            self.install(variant);
+        } else if !live {
             let started = std::time::Instant::now();
-            let variant = Variant {
-                pipelines: self.build(device, &constants),
-                constants,
-            };
+            let pipelines = self.recipe.build(device, &constants);
             log::info!("specialized shader pipeline in {:.0?}", started.elapsed());
-            variant
-        };
+            self.install(Variant {
+                constants,
+                pipelines,
+            });
+        } else if self.building.is_none() && !self.failed.contains(&constants) {
+            self.start_build(device, constants);
+        }
+    }
+
+    /// Make `variant` current, keeping the previous one. Past the limit the
+    /// oldest variant that is not pinned is dropped.
+    fn install(&mut self, variant: Variant) {
         let previous = std::mem::replace(&mut self.variant, variant);
         self.other_variants.push(previous);
-        if self.other_variants.len() > MAX_OTHER_VARIANTS {
-            self.other_variants.remove(0);
+        if self.other_variants.len() > MAX_OTHER_VARIANTS
+            && let Some(oldest) = self
+                .other_variants
+                .iter()
+                .position(|v| v.constants != self.pinned)
+        {
+            self.other_variants.remove(oldest);
         }
+    }
+
+    /// Build the pipelines for `constants` on a worker thread.
+    fn start_build(&mut self, device: &wgpu::Device, constants: Vec<f64>) {
+        let (sender, result) = mpsc::channel();
+        let recipe = Arc::clone(&self.recipe);
+        let device = device.clone();
+        let job = constants.clone();
+        #[cfg(test)]
+        let gate = Arc::clone(&self.build_gate);
+        let spawned = std::thread::Builder::new()
+            .name("shader specialize".to_owned())
+            .spawn(move || {
+                #[cfg(test)]
+                let _open = gate.read();
+                let started = std::time::Instant::now();
+                let outcome = recipe.build_checked(&device, &job);
+                if outcome.is_ok() {
+                    log::info!("specialized shader pipeline in {:.0?}", started.elapsed());
+                }
+                // Fails only when the pipeline was dropped, which discards the result.
+                let _ = sender.send(outcome);
+            });
+        match spawned {
+            Ok(_) => self.building = Some(Build { constants, result }),
+            Err(e) => self.fail(constants, &e.to_string()),
+        }
+    }
+
+    /// Use the worker's pipelines if its build has finished. Never blocks.
+    fn finish_build(&mut self) {
+        let Some(build) = &self.building else {
+            return;
+        };
+        let outcome = match build.result.try_recv() {
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => Err("the build thread panicked".to_owned()),
+            Ok(outcome) => outcome,
+        };
+        let Some(Build { constants, .. }) = self.building.take() else {
+            return;
+        };
+        match outcome {
+            // An offline frame may have built the same constants meanwhile.
+            Ok(_) if self.constants() == constants.as_slice() => {}
+            Ok(_) if self.other_variants.iter().any(|v| v.constants == constants) => {}
+            Ok(pipelines) => self.install(Variant {
+                constants,
+                pipelines,
+            }),
+            Err(message) => self.fail(constants, &message),
+        }
+    }
+
+    fn fail(&mut self, constants: Vec<f64>, message: &str) {
+        log::warn!(
+            "specializing shader pipeline for {constants:?} failed, keeping the current one: \
+             {message}"
+        );
+        self.failed.push(constants);
     }
 
     /// The specialization constants the current pipelines were built with.
     pub fn constants(&self) -> &[f64] {
         &self.variant.constants
-    }
-
-    /// Every pipeline the passes need, for one set of input constants.
-    fn build(
-        &self,
-        device: &wgpu::Device,
-        constants: &[f64],
-    ) -> Vec<(Option<i32>, Vec<wgpu::TextureFormat>, wgpu::RenderPipeline)> {
-        let output = (self.passes.output_index, vec![self.surface_format]);
-        let mut pipelines: Vec<(Option<i32>, Vec<wgpu::TextureFormat>, wgpu::RenderPipeline)> =
-            Vec::new();
-        for (index, formats) in self.passes.targeted.iter().chain(std::iter::once(&output)) {
-            let key = self.passes.specialize.then_some(*index);
-            if pipelines.iter().any(|(k, f, _)| *k == key && f == formats) {
-                continue;
-            }
-            let mut values = constants.to_vec();
-            if self.passes.specialize {
-                values.push(f64::from(*index));
-            }
-            let pipeline = create_pipeline(
-                device,
-                &self.pipeline_layout,
-                &self.vertex_module,
-                &self.fragment_module,
-                formats,
-                &values,
-                "ISF Unified Render Pipeline",
-            );
-            pipelines.push((key, formats.clone(), pipeline));
-        }
-        pipelines
     }
 
     /// Create a bind group for rendering.
@@ -605,7 +693,7 @@ impl UnifiedPipeline {
         pass_index: i32,
         formats: &[wgpu::TextureFormat],
     ) -> &wgpu::RenderPipeline {
-        let key = self.passes.specialize.then_some(pass_index);
+        let key = self.recipe.passes.specialize.then_some(pass_index);
         self.variant
             .pipelines
             .iter()
@@ -627,6 +715,60 @@ impl UnifiedPipeline {
     /// Write one pass's uniforms into `slot`.
     pub fn write_pass_uniforms(&self, queue: &wgpu::Queue, slot: usize, uniforms: &ISFUniforms) {
         self.uniforms.write(queue, slot, uniforms);
+    }
+}
+
+impl Recipe {
+    /// Every pipeline the passes need, for one set of input constants.
+    fn build(&self, device: &wgpu::Device, constants: &[f64]) -> Pipelines {
+        let output = (self.passes.output_index, vec![self.output_format]);
+        let mut pipelines: Pipelines = Vec::new();
+        for (index, formats) in self.passes.targeted.iter().chain(std::iter::once(&output)) {
+            let key = self.passes.specialize.then_some(*index);
+            if pipelines.iter().any(|(k, f, _)| *k == key && f == formats) {
+                continue;
+            }
+            let mut values = constants.to_vec();
+            if self.passes.specialize {
+                values.push(f64::from(*index));
+            }
+            let pipeline = create_pipeline(
+                device,
+                &self.pipeline_layout,
+                &self.vertex_module,
+                &self.fragment_module,
+                formats,
+                &values,
+                "ISF Unified Render Pipeline",
+            );
+            pipelines.push((key, formats.clone(), pipeline));
+        }
+        pipelines
+    }
+
+    /// [`Self::build`], returning the first GPU error it raised. Error scopes
+    /// are per thread, so this catches only this build's errors.
+    fn build_checked(
+        &self,
+        device: &wgpu::Device,
+        constants: &[f64],
+    ) -> std::result::Result<Pipelines, String> {
+        let scopes = [
+            wgpu::ErrorFilter::OutOfMemory,
+            wgpu::ErrorFilter::Internal,
+            wgpu::ErrorFilter::Validation,
+        ]
+        .map(|filter| device.push_error_scope(filter));
+        let pipelines = self.build(device, constants);
+        let errors: Vec<wgpu::Error> = scopes
+            .into_iter()
+            .rev()
+            .filter_map(|scope| pollster::block_on(scope.pop()))
+            .collect();
+        match errors.first() {
+            Some(error) => Err(error.to_string()),
+            None => Ok(pipelines),
+        }
     }
 }
 
@@ -717,4 +859,157 @@ fn create_pipeline(
         multiview_mask: None,
         cache: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    /// A single-pass generator with one specialization constant.
+    fn specialized_pipeline(gpu: &crate::renderer::context::GpuContext) -> UnifiedPipeline {
+        let spirv = crate::isf::compile_glsl_to_spirv(
+            "#version 450
+layout(location = 0) in vec2 uv;
+layout(location = 0) out vec4 fragColor;
+layout(constant_id = 0) const int MODE = 1;
+void main() {
+    fragColor = vec4(float(MODE) * 0.25, 0.0, 0.0, 1.0);
+}
+",
+            "specialized",
+        )
+        .expect("compiles");
+        UnifiedPipeline::new(
+            &gpu.device,
+            &spirv,
+            gpu.compositing_format,
+            false,
+            &[],
+            &PassPlan::default(),
+            0,
+            &[],
+            &[1.0],
+        )
+        .expect("pipeline")
+    }
+
+    /// Call `specialize` on live frames until `pipeline` uses `want`.
+    fn live_until(pipeline: &mut UnifiedPipeline, device: &wgpu::Device, want: &[f64]) {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while pipeline.constants() != want {
+            assert!(Instant::now() < deadline, "{want:?} never built");
+            std::thread::sleep(Duration::from_millis(5));
+            pipeline.specialize(device, want.iter().copied(), true);
+        }
+    }
+
+    /// Call `specialize` on live frames until no build runs.
+    fn live_until_idle(pipeline: &mut UnifiedPipeline, device: &wgpu::Device, request: &[f64]) {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while pipeline.building.is_some() {
+            assert!(Instant::now() < deadline, "the build never finished");
+            std::thread::sleep(Duration::from_millis(5));
+            pipeline.specialize(device, request.iter().copied(), true);
+        }
+    }
+
+    #[test]
+    fn offline_frames_switch_on_the_call() {
+        let Some(gpu) = crate::testing::headless_gpu() else {
+            return;
+        };
+        let mut pipeline = specialized_pipeline(&gpu);
+        pipeline.specialize(&gpu.device, [3.0].into_iter(), false);
+        assert_eq!(pipeline.constants(), [3.0]);
+        pipeline.specialize(&gpu.device, [1.0].into_iter(), false);
+        assert_eq!(pipeline.constants(), [1.0]);
+    }
+
+    #[test]
+    fn live_frames_keep_the_current_pipelines_until_the_build_is_done() {
+        let Some(gpu) = crate::testing::headless_gpu() else {
+            return;
+        };
+        let mut pipeline = specialized_pipeline(&gpu);
+        let gate = Arc::clone(&pipeline.build_gate);
+        let held = gate.write().expect("gate");
+        for _ in 0..3 {
+            pipeline.specialize(&gpu.device, [3.0].into_iter(), true);
+            assert_eq!(pipeline.constants(), [1.0]);
+        }
+        drop(held);
+        live_until(&mut pipeline, &gpu.device, &[3.0]);
+
+        // A cached combination switches on the call.
+        pipeline.specialize(&gpu.device, [1.0].into_iter(), true);
+        assert_eq!(pipeline.constants(), [1.0]);
+    }
+
+    #[test]
+    fn a_newer_request_during_a_build_supersedes_the_waiting_one() {
+        let Some(gpu) = crate::testing::headless_gpu() else {
+            return;
+        };
+        let mut pipeline = specialized_pipeline(&gpu);
+        let gate = Arc::clone(&pipeline.build_gate);
+        let held = gate.write().expect("gate");
+        pipeline.specialize(&gpu.device, [2.0].into_iter(), true);
+        pipeline.specialize(&gpu.device, [3.0].into_iter(), true);
+        pipeline.specialize(&gpu.device, [4.0].into_iter(), true);
+        drop(held);
+        live_until(&mut pipeline, &gpu.device, &[4.0]);
+
+        // The running build was kept; the superseded request was never built.
+        let built: Vec<&[f64]> = pipeline
+            .other_variants
+            .iter()
+            .map(|v| v.constants.as_slice())
+            .collect();
+        assert_eq!(built, [[1.0].as_slice(), &[2.0]]);
+    }
+
+    #[test]
+    fn the_default_variant_is_never_evicted() {
+        let Some(gpu) = crate::testing::headless_gpu() else {
+            return;
+        };
+        let mut pipeline = specialized_pipeline(&gpu);
+        for value in 2..(MAX_OTHER_VARIANTS + 4) {
+            pipeline.specialize(&gpu.device, [value as f64].into_iter(), false);
+        }
+        assert!(pipeline.other_variants.len() <= MAX_OTHER_VARIANTS);
+        assert!(
+            pipeline.other_variants.iter().any(|v| v.constants == [1.0]),
+            "the defaults stay cached"
+        );
+        assert!(
+            !pipeline.other_variants.iter().any(|v| v.constants == [2.0]),
+            "the oldest other variant was evicted"
+        );
+
+        // Switching back is instant on a live frame.
+        pipeline.specialize(&gpu.device, [1.0].into_iter(), true);
+        assert_eq!(pipeline.constants(), [1.0]);
+        assert!(pipeline.building.is_none());
+    }
+
+    #[test]
+    fn a_failed_build_keeps_the_current_pipelines() {
+        let Some(gpu) = crate::testing::headless_gpu() else {
+            return;
+        };
+        let mut pipeline = specialized_pipeline(&gpu);
+        // The shader declares one constant; a second one fails validation.
+        let bad = [3.0, 7.0];
+        pipeline.specialize(&gpu.device, bad.into_iter(), true);
+        assert!(pipeline.building.is_some());
+        live_until_idle(&mut pipeline, &gpu.device, &bad);
+        assert_eq!(pipeline.constants(), [1.0]);
+
+        // Not retried.
+        pipeline.specialize(&gpu.device, bad.into_iter(), true);
+        assert!(pipeline.building.is_none());
+        assert_eq!(gpu.errors.fault_count(), 0);
+    }
 }

@@ -10,21 +10,17 @@ mod common;
 
 use std::collections::HashMap;
 
-use common::{headless_gpu, read_rgba16f};
+use common::headless_gpu;
 use varda::{
     audio::AudioData,
     deck::Deck,
-    fractal::{
-        Vec3, default_param,
-        params::{SLOT_FIELDS, slot_param},
-        stack_from_params,
-    },
+    fractal::{SLOT_FIELDS, STACK_PARAMS, Vec3, default_param, slot_param, stack_from_params},
     isf::ISFShader,
     mixer::Mixer,
     modulation::{AnalyzerValues, AudioValues},
-    params::ShaderParams,
     renderer::context::GpuContext,
     renderer::tonemap::TonemapMode,
+    testing::{fractal_scenes, read_rgba16f, set_param, srgb8},
 };
 
 const W: u32 = 48;
@@ -44,21 +40,6 @@ fn parity_point(x: u32, y: u32) -> Vec3 {
     let qx = (f64::from(x) + 0.5) / f64::from(W);
     let qy = (f64::from(y) + 0.5) / f64::from(H);
     Vec3::new(-3.0 + 6.0 * qx, -3.0 + 6.0 * qy, 0.37)
-}
-
-/// Set an input on the deck the way `--set` does.
-fn set(params: &mut ShaderParams, name: &str, value: f64) {
-    let kind = params
-        .definitions
-        .get(name)
-        .unwrap_or_else(|| panic!("shader has no input {name}"))
-        .input_type
-        .clone();
-    match kind.as_str() {
-        "long" => params.set_long(name, value as i32),
-        "bool" => params.set_bool(name, value > 0.5),
-        _ => params.set_float(name, value as f32),
-    }
 }
 
 /// Render the explorer with `values` set, after restoring `state`, for
@@ -83,8 +64,16 @@ fn render_colored(
     frames: u32,
 ) -> Vec<[f32; 4]> {
     let mut deck = Deck::from_shader(ctx, shader(), width, height).expect("deck");
-    for (name, value) in values {
-        set(&mut deck.generator_params, name, *value);
+    // Inputs with presets first, so a preset does not overwrite the other values.
+    let mut ordered: Vec<_> = values.iter().collect();
+    ordered.sort_by_key(|(name, _)| {
+        deck.generator_params
+            .definitions
+            .get(**name)
+            .is_none_or(|d| d.presets.is_none())
+    });
+    for (name, value) in ordered {
+        set_param(&mut deck.generator_params, name, *value).unwrap_or_else(|e| panic!("{e}"));
     }
     for (name, color) in colors {
         assert!(
@@ -608,6 +597,18 @@ fn every_formula_matches_the_host_evaluator() {
             ],
         ),
         (
+            "box with inverted bounds",
+            &[
+                ("slot1_formula", 1.0),
+                ("slot1_a", 2.0),
+                ("slot1_b", 1.2),
+                ("slot1_c", -0.3),
+                ("slot1_d", 0.8),
+                ("slot2_formula", 0.0),
+                ("max_iterations", 10.0),
+            ],
+        ),
+        (
             "rotate 4d then box",
             &[
                 ("slot1_formula", 1.0),
@@ -661,46 +662,8 @@ fn every_formula_matches_the_host_evaluator() {
 
 // ── Acceptance scenes ─────────────────────────────────────────────────────
 
-struct Scene {
-    name: String,
-    params: HashMap<String, f64>,
-    state: serde_json::Map<String, serde_json::Value>,
-}
-
-fn scenes() -> Vec<Scene> {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/fractal_scenes.json"
-    );
-    let text = std::fs::read_to_string(path).expect("scene fixture");
-    let list: Vec<serde_json::Value> = serde_json::from_str(&text).expect("scene JSON");
-    list.into_iter()
-        .map(|scene| Scene {
-            name: scene["name"].as_str().expect("name").to_owned(),
-            params: scene["params"]
-                .as_object()
-                .expect("params")
-                .iter()
-                .map(|(k, v)| (k.clone(), v.as_f64().expect("numeric param")))
-                .collect(),
-            state: scene["state"].as_object().expect("state").clone(),
-        })
-        .collect()
-}
-
 fn luma(p: [f32; 4]) -> f64 {
     f64::from(0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2])
-}
-
-/// sRGB 8-bit value of a linear channel, as a PNG would store it.
-fn srgb8(v: f32) -> f64 {
-    let v = f64::from(v.clamp(0.0, 1.0));
-    let e = if v <= 0.003_130_8 {
-        v * 12.92
-    } else {
-        1.055 * v.powf(1.0 / 2.4) - 0.055
-    };
-    e * 255.0
 }
 
 const SCENE_SIZE: (u32, u32) = (320, 180);
@@ -712,7 +675,7 @@ fn acceptance_scenes_render_structure() {
     let Some(ctx) = headless_gpu() else {
         return;
     };
-    for scene in scenes() {
+    for scene in fractal_scenes() {
         let values: HashMap<&str, f64> =
             scene.params.iter().map(|(k, v)| (k.as_str(), *v)).collect();
         let pixels = render(&ctx, SCENE_SIZE, &values, Some(&scene.state), 20);
@@ -721,6 +684,7 @@ fn acceptance_scenes_render_structure() {
         let spread =
             (lumas.iter().map(|l| (l - mean).powi(2)).sum::<f64>() / lumas.len() as f64).sqrt();
         eprintln!("{}: mean luma {mean:.4}, spread {spread:.4}", scene.name);
+        // A standard deviation of at least 2% of the mean, with a floor for dark scenes.
         assert!(
             spread > 0.02 * mean.max(0.01),
             "{}: flat frame, mean {mean:.4} spread {spread:.4}",
@@ -734,9 +698,8 @@ fn acceptance_scenes_render_structure() {
 /// fewer than 1% of 4x4 cells may differ by more than 16/255.
 ///
 /// Not met yet: with an approximate distance estimate, which points a ray
-/// samples decides where it stops, worst on grazing silhouettes. Measured
-/// 1% to 20% by scene at the default geometry band, 0.1% to 11% without it.
-/// Run with `--ignored` to measure.
+/// samples decides where it stops, worst on grazing silhouettes. Run with
+/// `--ignored` to print each scene's share.
 #[test]
 #[ignore = "acceptance gate not met yet; see the doc comment"]
 fn the_hit_does_not_depend_on_where_the_march_starts() {
@@ -745,7 +708,7 @@ fn the_hit_does_not_depend_on_where_the_march_starts() {
     };
     let (width, height) = SCENE_SIZE;
     let mut results = Vec::new();
-    for scene in scenes() {
+    for scene in fractal_scenes() {
         let mut values: HashMap<&str, f64> =
             scene.params.iter().map(|(k, v)| (k.as_str(), *v)).collect();
         for (name, value) in [
@@ -793,9 +756,9 @@ fn the_hit_does_not_depend_on_where_the_march_starts() {
 
 // ── Dynamic resolution and detail accumulation ────────────────────────────
 
-/// Mean absolute 4-neighbor Laplacian of luma: how much fine detail a frame has.
-fn laplacian(pixels: &[[f32; 4]], (width, height): (u32, u32)) -> f64 {
-    let at = |x: u32, y: u32| luma(pixels[(y * width + x) as usize]);
+/// Mean absolute 4-neighbor Laplacian of `at` over the interior of a
+/// `width` by `height` frame.
+fn mean_laplacian((width, height): (u32, u32), at: impl Fn(u32, u32) -> f64) -> f64 {
     let mut sum = 0.0;
     for y in 1..height - 1 {
         for x in 1..width - 1 {
@@ -804,6 +767,21 @@ fn laplacian(pixels: &[[f32; 4]], (width, height): (u32, u32)) -> f64 {
         }
     }
     sum / f64::from((width - 2) * (height - 2))
+}
+
+/// Mean absolute Laplacian of luma: how much fine detail a frame has.
+fn laplacian(pixels: &[[f32; 4]], (width, height): (u32, u32)) -> f64 {
+    mean_laplacian((width, height), |x, y| {
+        luma(pixels[(y * width + x) as usize])
+    })
+}
+
+/// Mean absolute Laplacian of the sRGB 8-bit green channel: fine detail as a
+/// viewer sees it.
+fn srgb_detail(pixels: &[[f32; 4]], (width, height): (u32, u32)) -> f64 {
+    mean_laplacian((width, height), |x, y| {
+        srgb8(pixels[(y * width + x) as usize][1])
+    })
 }
 
 /// Mean luma over the pixels with `x0 <= x < x1`, `y0 <= y < y1`.
@@ -817,6 +795,16 @@ fn region_luma(pixels: &[[f32; 4]], width: u32, (x0, x1): (u32, u32), (y0, y1): 
     sum / f64::from((x1 - x0) * (y1 - y0))
 }
 
+/// RMS difference of the sRGB 8-bit values, red and green.
+fn srgb_error(a: &[[f32; 4]], b: &[[f32; 4]]) -> f64 {
+    let sum: f64 = a
+        .iter()
+        .zip(b)
+        .map(|(p, q)| (srgb8(p[0]) - srgb8(q[0])).powi(2) + (srgb8(p[1]) - srgb8(q[1])).powi(2))
+        .sum();
+    (sum / (2 * a.len()) as f64).sqrt()
+}
+
 /// Post effects that add noise or blur of their own.
 const PLAIN: [(&str, f64); 5] = [
     ("dof_mode", 0.0),
@@ -826,9 +814,8 @@ const PLAIN: [(&str, f64); 5] = [
     ("aberration", 0.0),
 ];
 
-/// The gnarled temple in Teal & Gold, the default stack and look until
-/// 2026-10-02: the scene the upscaler and accumulation tests were calibrated
-/// on, pinned whatever the default is.
+/// The gnarled temple in Teal & Gold, pinned so these tests do not follow the
+/// default stack and look.
 const TEMPLE: [(&str, f64); 14] = [
     ("look", 4.0),
     ("slot1_formula", 1.0),
@@ -846,379 +833,30 @@ const TEMPLE: [(&str, f64); 14] = [
     ("max_iterations", 16.0),
 ];
 
+/// The Box 2.2 interior's smooth walls, unturned, with nothing after the box.
+const BOX_INTERIOR: [(&str, f64); 4] = [
+    ("slot1_a", 2.2),
+    ("slot1_rot_x", 0.0),
+    ("slot1_rot_y", 0.0),
+    ("slot2_formula", 0.0),
+];
+
 /// The temple with the post effects that add noise or blur off.
 fn plain_temple() -> HashMap<&'static str, f64> {
     PLAIN.into_iter().chain(TEMPLE).collect()
 }
 
-/// Out of reach, the target drives the live scale to its floor: the frame is
-/// still filled edge to edge, with less fine detail than at the ceiling.
-#[test]
-fn dynamic_resolution_at_its_floor_fills_the_frame_with_less_detail() {
-    let Some(ctx) = headless_gpu() else {
-        return;
-    };
-    let size = (256, 144);
-    let with = |target_fps: f64| {
-        let mut values = plain_temple();
-        values.insert("temporal", 0.0);
-        values.insert("render_scale", 1.0);
-        values.insert("target_fps", target_fps);
-        render(&ctx, size, &values, None, 60)
-    };
-    let ceiling = with(0.0);
-    let floor = with(1000.0);
-    let (detail_ceiling, detail_floor) = (laplacian(&ceiling, size), laplacian(&floor, size));
-    eprintln!("detail: ceiling {detail_ceiling:.5}, floor {detail_floor:.5}");
-    assert!(
-        detail_floor < 0.8 * detail_ceiling,
-        "the floor renders fewer pixels"
-    );
-    let (w, h) = size;
-    for (label, xs, ys) in [
-        ("right third", (2 * w / 3, w), (0, h)),
-        ("bottom third", (0, w), (2 * h / 3, h)),
-    ] {
-        let (a, b) = (
-            region_luma(&ceiling, w, xs, ys),
-            region_luma(&floor, w, xs, ys),
-        );
-        assert!(
-            (a - b).abs() < 0.15 * a + 0.005,
-            "{label}: ceiling {a:.4}, floor {b:.4}"
-        );
-    }
-}
-
-/// A still camera keeps gathering jittered samples: each new frame moves the
-/// image less as the average grows (about 1/N), where a fixed blend weight
-/// kept moving it by the same amount.
-#[test]
-fn a_still_camera_keeps_sharpening() {
-    let Some(ctx) = headless_gpu() else {
-        return;
-    };
-    let size = (192, 108);
-    let mut values = plain_temple();
-    values.insert("target_fps", 0.0);
-    values.insert("render_scale", 0.5);
-    values.insert("find_inside", 1.0);
-    let change = |frames: u32| {
-        let a = render(&ctx, size, &values, None, frames);
-        let b = render(&ctx, size, &values, None, frames + 1);
-        let sum: f64 = a
-            .iter()
-            .zip(&b)
-            .map(|(p, q)| (luma(*p) - luma(*q)).powi(2))
-            .sum();
-        (sum / a.len() as f64).sqrt()
-    };
-    let (early, late) = (change(16), change(64));
-    eprintln!("change per frame: at 16 frames {early:.6}, at 64 {late:.6}");
-    assert!(
-        late < 0.6 * early,
-        "at 16 frames {early:.6}, at 64 {late:.6}"
-    );
-}
-
-/// The temple held still, rendered at twice the size with `detail` 2
-/// so rays stop at the same shell, then averaged down: what an ideal
-/// upsampler converges to.
-fn supersampled_truth(ctx: &GpuContext, (w, h): (u32, u32)) -> Vec<[f32; 4]> {
-    let mut values = plain_temple();
+/// `base` with the camera held still (no frame-rate target, the start found
+/// inside), then `extra` on top.
+fn held_still(
+    base: impl IntoIterator<Item = (&'static str, f64)>,
+    extra: &[(&'static str, f64)],
+) -> HashMap<&'static str, f64> {
+    let mut values: HashMap<&str, f64> = base.into_iter().collect();
     values.insert("target_fps", 0.0);
     values.insert("find_inside", 1.0);
-    values.insert("render_scale", 1.0);
-    values.insert("temporal", 0.0);
-    values.insert("detail", 2.0);
-    let big = render(ctx, (2 * w, 2 * h), &values, None, 64);
-    (0..h)
-        .flat_map(|y| (0..w).map(move |x| (x, y)))
-        .map(|(x, y)| {
-            let mut sum = [0.0f32; 4];
-            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                let p = big[((2 * y + dy) * 2 * w + 2 * x + dx) as usize];
-                for c in 0..4 {
-                    sum[c] += 0.25 * p[c];
-                }
-            }
-            sum
-        })
-        .collect()
-}
-
-/// The temple held still for 64 frames at `scale`.
-fn held(ctx: &GpuContext, size: (u32, u32), scale: f64, temporal: f64) -> Vec<[f32; 4]> {
-    let mut values = plain_temple();
-    values.insert("target_fps", 0.0);
-    values.insert("find_inside", 1.0);
-    values.insert("render_scale", scale);
-    values.insert("temporal", temporal);
-    render(ctx, size, &values, None, 64)
-}
-
-/// RMS difference of the sRGB 8-bit values, red and green.
-fn srgb_error(a: &[[f32; 4]], b: &[[f32; 4]]) -> f64 {
-    let sum: f64 = a
-        .iter()
-        .zip(b)
-        .map(|(p, q)| (srgb8(p[0]) - srgb8(q[0])).powi(2) + (srgb8(p[1]) - srgb8(q[1])).powi(2))
-        .sum();
-    (sum / (2 * a.len()) as f64).sqrt()
-}
-
-/// Held still, half render scale comes close to native: the upsampler gathers
-/// neighboring render pixels' samples, and shading measures in output
-/// pixels at full render size. Before, the half-scale image converged to
-/// blocks one render pixel wide, 1.38 times native's error.
-#[test]
-fn a_held_shot_at_half_scale_approaches_native() {
-    let Some(ctx) = headless_gpu() else {
-        return;
-    };
-    let size = (320, 180);
-    let truth = supersampled_truth(&ctx, size);
-    let half = srgb_error(&held(&ctx, size, 0.5, 1.0), &truth);
-    let bilinear = srgb_error(&held(&ctx, size, 0.5, 0.0), &truth);
-    let native = srgb_error(&held(&ctx, size, 1.0, 1.0), &truth);
-    eprintln!("error against truth: half {half:.3}, bilinear {bilinear:.3}, native {native:.3}");
-    assert!(
-        half < 0.9 * bilinear,
-        "half {half:.3}, bilinear {bilinear:.3}"
-    );
-    assert!(half < 1.25 * native, "half {half:.3}, native {native:.3}");
-}
-
-/// At a render scale whose size rounds short of the output's aspect ratio
-/// (320 x 0.7 is 223.99 in f32), a held shot still gains from accumulation:
-/// history is reprojected in the output's aspect, so a still camera finds it
-/// in place. Reprojecting in the render aspect made it worse than one frame.
-#[test]
-fn accumulation_helps_at_a_rounded_render_scale() {
-    let Some(ctx) = headless_gpu() else {
-        return;
-    };
-    let size = (320, 180);
-    let truth = supersampled_truth(&ctx, size);
-    let accumulated = srgb_error(&held(&ctx, size, 0.7, 1.0), &truth);
-    let single = srgb_error(&held(&ctx, size, 0.7, 0.0), &truth);
-    eprintln!("error against truth at 0.7: accumulated {accumulated:.3}, single {single:.3}");
-    assert!(
-        accumulated < 0.9 * single,
-        "accumulated {accumulated:.3}, single {single:.3}"
-    );
-}
-
-/// Mean absolute Laplacian of the sRGB 8-bit green channel: fine detail as a
-/// viewer sees it.
-fn srgb_detail(pixels: &[[f32; 4]], (w, h): (u32, u32)) -> f64 {
-    let at = |x: u32, y: u32| srgb8(pixels[(y * w + x) as usize][1]);
-    let mut sum = 0.0;
-    for y in 1..h - 1 {
-        for x in 1..w - 1 {
-            sum +=
-                (4.0 * at(x, y) - at(x - 1, y) - at(x + 1, y) - at(x, y - 1) - at(x, y + 1)).abs();
-        }
-    }
-    sum / f64::from((w - 2) * (h - 2))
-}
-
-/// Sharpening brings fine detail toward the supersampled reference's without
-/// passing it, which would be halos and ringing, and without moving the
-/// image away from the reference.
-#[test]
-fn sharpening_approaches_the_reference_detail() {
-    let Some(ctx) = headless_gpu() else {
-        return;
-    };
-    let size = (320u32, 180u32);
-    let truth = supersampled_truth(&ctx, size);
-    let with = |sharpness: f64| {
-        let mut values = plain_temple();
-        values.insert("target_fps", 0.0);
-        values.insert("find_inside", 1.0);
-        values.insert("render_scale", 0.5);
-        values.insert("sharpness", sharpness);
-        render(&ctx, size, &values, None, 64)
-    };
-    let (soft, sharp) = (with(0.0), with(1.0));
-    let reference = srgb_detail(&truth, size);
-    let (soft_detail, sharp_detail) = (
-        srgb_detail(&soft, size) / reference,
-        srgb_detail(&sharp, size) / reference,
-    );
-    let (soft_error, sharp_error) = (srgb_error(&soft, &truth), srgb_error(&sharp, &truth));
-    eprintln!(
-        "detail / reference: unsharpened {soft_detail:.3}, sharpened {sharp_detail:.3}; \
-         error: unsharpened {soft_error:.3}, sharpened {sharp_error:.3}"
-    );
-    assert!(
-        sharp_detail > soft_detail + 0.1,
-        "detail {soft_detail:.3} -> {sharp_detail:.3}"
-    );
-    assert!(
-        sharp_detail <= 1.0,
-        "sharper than the reference: {sharp_detail:.3}"
-    );
-    assert!(
-        sharp_error < 1.05 * soft_error,
-        "error {soft_error:.3} -> {sharp_error:.3}"
-    );
-}
-
-/// The temple held still or flown slowly for 64 frames.
-fn shot(ctx: &GpuContext, size: (u32, u32), throttle: f64, truth: bool) -> Vec<[f32; 4]> {
-    let mut values = plain_temple();
-    values.insert("target_fps", 0.0);
-    values.insert("find_inside", 1.0);
-    values.insert("throttle", throttle);
-    if truth {
-        // Twice the size with `detail` 2 stops at the same shell; averaged
-        // 2x2 down below.
-        values.insert("render_scale", 1.0);
-        values.insert("temporal", 0.0);
-        values.insert("detail", 2.0);
-        let (w, h) = size;
-        let big = render(ctx, (2 * w, 2 * h), &values, None, 64);
-        return (0..h)
-            .flat_map(|y| (0..w).map(move |x| (x, y)))
-            .map(|(x, y)| {
-                let mut sum = [0.0f32; 4];
-                for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                    let p = big[((2 * y + dy) * 2 * w + 2 * x + dx) as usize];
-                    for c in 0..4 {
-                        sum[c] += 0.25 * p[c];
-                    }
-                }
-                sum
-            })
-            .collect();
-    }
-    values.insert("render_scale", 0.5);
-    render(ctx, size, &values, None, 64)
-}
-
-/// The upscaler at render scale 0.5 keeps most of the supersampled
-/// reference's fine detail held still, and more of it in slow flight than
-/// before RCAS and the clamp fade (held 0.39, flight 0.20 of the reference).
-#[test]
-fn the_upscaler_keeps_fine_detail() {
-    let Some(ctx) = headless_gpu() else {
-        return;
-    };
-    let size = (320, 180);
-    for (label, throttle, floor) in [("held", 0.0, 0.6), ("slow flight", 0.3, 0.25)] {
-        let truth = shot(&ctx, size, throttle, true);
-        let image = shot(&ctx, size, throttle, false);
-        let detail = srgb_detail(&image, size) / srgb_detail(&truth, size);
-        let error = srgb_error(&image, &truth);
-        eprintln!("{label}: detail / reference {detail:.3}, error {error:.3}");
-        assert!(
-            detail > floor && detail <= 1.0,
-            "{label}: detail {detail:.3}"
-        );
-    }
-}
-
-/// Flying forward, the sky does not move on screen, so its history keeps
-/// whatever a filtered read picked up beside geometry unless the clamp
-/// removes it. Where a single frame shows open sky (sky across 5x5 pixels),
-/// the accumulated frame must not show geometry's color: no trails. The
-/// palette is pinned warm and the sky cool, so blue over red tells them apart
-/// whatever the default look.
-#[test]
-fn a_forward_flight_leaves_no_trails_in_the_sky() {
-    let Some(ctx) = headless_gpu() else {
-        return;
-    };
-    let (w, h) = (640u32, 360u32);
-    let with = |temporal: f64| {
-        let mut values = plain_temple();
-        values.insert("target_fps", 0.0);
-        values.insert("find_inside", 1.0);
-        values.insert("render_scale", 0.5);
-        values.insert("throttle", 1.0);
-        values.insert("speed", 3.0);
-        values.insert("temporal", temporal);
-        let warm = [0.75, 0.45, 0.25, 1.0];
-        let colors = [
-            ("color1", warm),
-            ("color2", warm),
-            ("color3", warm),
-            ("color4", warm),
-            ("amb_top", [0.15, 0.2, 0.35, 1.0]),
-            ("amb_bottom", [0.05, 0.05, 0.1, 1.0]),
-            ("fog_color", [0.2, 0.25, 0.4, 1.0]),
-        ];
-        render_colored(&ctx, (w, h), &values, &colors, None, 100)
-    };
-    let (single, accumulated) = (with(0.0), with(1.0));
-    let skyish = |p: [f32; 4]| p[2] > p[0];
-    let at = |x: u32, y: u32| (y * w + x) as usize;
-    let (mut open, mut trails) = (0, 0);
-    for y in 2..h - 2 {
-        for x in 2..w - 2 {
-            let all_sky =
-                (0..5).all(|dy| (0..5).all(|dx| skyish(single[at(x + dx - 2, y + dy - 2)])));
-            if all_sky {
-                open += 1;
-                if !skyish(accumulated[at(x, y)]) {
-                    trails += 1;
-                }
-            }
-        }
-    }
-    eprintln!("trail pixels {trails} of {open} open sky");
-    assert!(open > 1000, "the view should show sky");
-    assert!(
-        trails * 2000 < open,
-        "{trails} of {open} open-sky pixels carry geometry"
-    );
-}
-
-/// A surface texture shows from where the camera flies: with the default
-/// mapping, turning one on adds fine detail to a held inside view. The orbit
-/// mappings faded it to its mean color, which took detail away (-11%). The
-/// palette and lighting are pinned plain.
-#[test]
-fn a_surface_texture_is_visible_inside() {
-    let Some(ctx) = headless_gpu() else {
-        return;
-    };
-    let size = (320u32, 180u32);
-    let with = |surface: f64| {
-        let mut values: HashMap<&str, f64> = PLAIN.into_iter().collect();
-        values.insert("target_fps", 0.0);
-        values.insert("find_inside", 1.0);
-        values.insert("render_scale", 1.0);
-        values.insert("surface", surface);
-        // The Box 2.2 interior's smooth walls, and a plain palette, so the
-        // texture is what adds detail, whatever the default stack and look.
-        values.insert("slot1_a", 2.2);
-        values.insert("slot1_rot_x", 0.0);
-        values.insert("slot1_rot_y", 0.0);
-        values.insert("slot2_formula", 0.0);
-        values.insert("color_source", 0.0);
-        values.insert("metallic", 0.0);
-        values.insert("roughness", 0.6);
-        values.insert("specular", 0.5);
-        values.insert("exposure", 0.0);
-        values.insert("sun_intensity", 4.0);
-        let plain = [0.6, 0.55, 0.5, 1.0];
-        let colors = [
-            ("color1", plain),
-            ("color2", plain),
-            ("color3", plain),
-            ("color4", plain),
-        ];
-        render_colored(&ctx, size, &values, &colors, None, 32)
-    };
-    let (bare, textured) = (srgb_detail(&with(0.0), size), srgb_detail(&with(1.0), size));
-    eprintln!("detail: no surface {bare:.3}, stone {textured:.3}");
-    assert!(
-        textured > 1.1 * bare,
-        "no surface {bare:.3}, stone {textured:.3}"
-    );
+    values.extend(extra.iter().copied());
+    values
 }
 
 /// `values` rendered at `factor` times `size` for `frames` frames and box
@@ -1249,10 +887,323 @@ fn downsampled(
         .collect()
 }
 
-/// A palette cycling faster than the pixels does not alias: one frame at
-/// `palette_scale` 8 is about as close to a supersampled reference as one at
-/// 0.3. Before, single samples of sub-pixel rings landed on any of the four
-/// stops, and showed as moire.
+/// The temple held still with `extra` set, rendered at twice the size with
+/// `detail` 2 so rays stop at the same shell, then averaged down: what an
+/// ideal upsampler converges to.
+fn supersampled_truth(
+    ctx: &GpuContext,
+    size: (u32, u32),
+    extra: &[(&'static str, f64)],
+) -> Vec<[f32; 4]> {
+    let mut values = held_still(
+        plain_temple(),
+        &[("render_scale", 1.0), ("temporal", 0.0), ("detail", 2.0)],
+    );
+    values.extend(extra.iter().copied());
+    downsampled(ctx, size, 2, &values, 64)
+}
+
+/// The temple held still for 64 frames at `scale`.
+fn held(ctx: &GpuContext, size: (u32, u32), scale: f64, temporal: f64) -> Vec<[f32; 4]> {
+    let values = held_still(
+        plain_temple(),
+        &[("render_scale", scale), ("temporal", temporal)],
+    );
+    render(ctx, size, &values, None, 64)
+}
+
+/// The temple at render scale 0.5, held still or flown slowly for 64 frames.
+fn shot(ctx: &GpuContext, size: (u32, u32), throttle: f64) -> Vec<[f32; 4]> {
+    let values = held_still(
+        plain_temple(),
+        &[("throttle", throttle), ("render_scale", 0.5)],
+    );
+    render(ctx, size, &values, None, 64)
+}
+
+/// Out of reach, the target drives the live scale to its floor: the frame is
+/// still filled edge to edge, with less fine detail than at the ceiling.
+#[test]
+fn dynamic_resolution_at_its_floor_fills_the_frame_with_less_detail() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    let size = (256, 144);
+    let with = |target_fps: f64| {
+        let mut values = plain_temple();
+        values.insert("temporal", 0.0);
+        values.insert("render_scale", 1.0);
+        values.insert("target_fps", target_fps);
+        render(&ctx, size, &values, None, 60)
+    };
+    let ceiling = with(0.0);
+    let floor = with(1000.0);
+    let (detail_ceiling, detail_floor) = (laplacian(&ceiling, size), laplacian(&floor, size));
+    eprintln!("detail: ceiling {detail_ceiling:.5}, floor {detail_floor:.5}");
+    // At least 20% less detail.
+    assert!(
+        detail_floor < 0.8 * detail_ceiling,
+        "the floor renders fewer pixels"
+    );
+    let (w, h) = size;
+    // The far edges keep their brightness within 15%: nothing is left unfilled.
+    for (label, xs, ys) in [
+        ("right third", (2 * w / 3, w), (0, h)),
+        ("bottom third", (0, w), (2 * h / 3, h)),
+    ] {
+        let (a, b) = (
+            region_luma(&ceiling, w, xs, ys),
+            region_luma(&floor, w, xs, ys),
+        );
+        assert!(
+            (a - b).abs() < 0.15 * a + 0.005,
+            "{label}: ceiling {a:.4}, floor {b:.4}"
+        );
+    }
+}
+
+/// A still camera keeps gathering jittered samples: each new frame moves the
+/// image less as the average grows (about 1/N).
+#[test]
+fn a_still_camera_keeps_sharpening() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    let size = (192, 108);
+    let values = held_still(plain_temple(), &[("render_scale", 0.5)]);
+    let change = |frames: u32| {
+        let a = render(&ctx, size, &values, None, frames);
+        let b = render(&ctx, size, &values, None, frames + 1);
+        let sum: f64 = a
+            .iter()
+            .zip(&b)
+            .map(|(p, q)| (luma(*p) - luma(*q)).powi(2))
+            .sum();
+        (sum / a.len() as f64).sqrt()
+    };
+    let (early, late) = (change(16), change(64));
+    eprintln!("change per frame: at 16 frames {early:.6}, at 64 {late:.6}");
+    // A 1/N average moves a quarter as much at four times the frames; 0.6
+    // leaves room for noise.
+    assert!(
+        late < 0.6 * early,
+        "at 16 frames {early:.6}, at 64 {late:.6}"
+    );
+}
+
+/// Held still, half render scale comes close to native: the upsampler gathers
+/// neighboring render pixels' samples, and shading measures in output pixels
+/// at full render size, so the image does not converge to blocks one render
+/// pixel wide.
+#[test]
+fn a_held_shot_at_half_scale_approaches_native() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    let size = (320, 180);
+    let truth = supersampled_truth(&ctx, size, &[]);
+    let half = srgb_error(&held(&ctx, size, 0.5, 1.0), &truth);
+    let bilinear = srgb_error(&held(&ctx, size, 0.5, 0.0), &truth);
+    let native = srgb_error(&held(&ctx, size, 1.0, 1.0), &truth);
+    eprintln!("error against truth: half {half:.3}, bilinear {bilinear:.3}, native {native:.3}");
+    // At least 10% closer than one bilinear upscaled frame.
+    assert!(
+        half < 0.9 * bilinear,
+        "half {half:.3}, bilinear {bilinear:.3}"
+    );
+    // Within 25% of native's error.
+    assert!(half < 1.25 * native, "half {half:.3}, native {native:.3}");
+}
+
+/// At a render scale whose size rounds short of the output's aspect ratio
+/// (320 x 0.7 is 223.99 in f32), a held shot still gains from accumulation:
+/// history is reprojected in the output's aspect, so a still camera finds it
+/// in place.
+#[test]
+fn accumulation_helps_at_a_rounded_render_scale() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    let size = (320, 180);
+    let truth = supersampled_truth(&ctx, size, &[]);
+    let accumulated = srgb_error(&held(&ctx, size, 0.7, 1.0), &truth);
+    let single = srgb_error(&held(&ctx, size, 0.7, 0.0), &truth);
+    eprintln!("error against truth at 0.7: accumulated {accumulated:.3}, single {single:.3}");
+    // At least 10% closer than a single frame.
+    assert!(
+        accumulated < 0.9 * single,
+        "accumulated {accumulated:.3}, single {single:.3}"
+    );
+}
+
+/// Sharpening brings fine detail toward the supersampled reference's without
+/// passing it, which would be halos and ringing, and without moving the
+/// image away from the reference.
+#[test]
+fn sharpening_approaches_the_reference_detail() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    let size = (320u32, 180u32);
+    let truth = supersampled_truth(&ctx, size, &[]);
+    let with = |sharpness: f64| {
+        let values = held_still(
+            plain_temple(),
+            &[("render_scale", 0.5), ("sharpness", sharpness)],
+        );
+        render(&ctx, size, &values, None, 64)
+    };
+    let (soft, sharp) = (with(0.0), with(1.0));
+    let reference = srgb_detail(&truth, size);
+    let (soft_detail, sharp_detail) = (
+        srgb_detail(&soft, size) / reference,
+        srgb_detail(&sharp, size) / reference,
+    );
+    let (soft_error, sharp_error) = (srgb_error(&soft, &truth), srgb_error(&sharp, &truth));
+    eprintln!(
+        "detail / reference: unsharpened {soft_detail:.3}, sharpened {sharp_detail:.3}; \
+         error: unsharpened {soft_error:.3}, sharpened {sharp_error:.3}"
+    );
+    // At least a tenth of the reference's detail gained.
+    assert!(
+        sharp_detail > soft_detail + 0.1,
+        "detail {soft_detail:.3} -> {sharp_detail:.3}"
+    );
+    assert!(
+        sharp_detail <= 1.0,
+        "sharper than the reference: {sharp_detail:.3}"
+    );
+    // The error grows by at most 5%.
+    assert!(
+        sharp_error < 1.05 * soft_error,
+        "error {soft_error:.3} -> {sharp_error:.3}"
+    );
+}
+
+/// The upscaler at render scale 0.5 keeps most of the supersampled
+/// reference's fine detail held still, and at least a quarter of it in slow
+/// flight, without passing the reference.
+#[test]
+fn the_upscaler_keeps_fine_detail() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    let size = (320, 180);
+    for (label, throttle, floor) in [("held", 0.0, 0.6), ("slow flight", 0.3, 0.25)] {
+        let truth = supersampled_truth(&ctx, size, &[("throttle", throttle)]);
+        let image = shot(&ctx, size, throttle);
+        let detail = srgb_detail(&image, size) / srgb_detail(&truth, size);
+        let error = srgb_error(&image, &truth);
+        eprintln!("{label}: detail / reference {detail:.3}, error {error:.3}");
+        assert!(
+            detail > floor && detail <= 1.0,
+            "{label}: detail {detail:.3}"
+        );
+    }
+}
+
+/// Flying forward, the sky does not move on screen, so its history keeps
+/// whatever a filtered read picked up beside geometry unless the clamp
+/// removes it. Where a single frame shows open sky (sky across 5x5 pixels),
+/// the accumulated frame must not show geometry's color: no trails. The
+/// palette is pinned warm and the sky cool, so blue over red tells them apart
+/// whatever the default look.
+#[test]
+fn a_forward_flight_leaves_no_trails_in_the_sky() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    let (w, h) = (640u32, 360u32);
+    let with = |temporal: f64| {
+        let values = held_still(
+            plain_temple(),
+            &[
+                ("render_scale", 0.5),
+                ("throttle", 1.0),
+                ("speed", 3.0),
+                ("temporal", temporal),
+            ],
+        );
+        let warm = [0.75, 0.45, 0.25, 1.0];
+        let colors = [
+            ("color1", warm),
+            ("color2", warm),
+            ("color3", warm),
+            ("color4", warm),
+            ("amb_top", [0.15, 0.2, 0.35, 1.0]),
+            ("amb_bottom", [0.05, 0.05, 0.1, 1.0]),
+            ("fog_color", [0.2, 0.25, 0.4, 1.0]),
+        ];
+        render_colored(&ctx, (w, h), &values, &colors, None, 100)
+    };
+    let (single, accumulated) = (with(0.0), with(1.0));
+    let skyish = |p: [f32; 4]| p[2] > p[0];
+    let at = |x: u32, y: u32| (y * w + x) as usize;
+    let (mut open, mut trails) = (0, 0);
+    for y in 2..h - 2 {
+        for x in 2..w - 2 {
+            let all_sky =
+                (0..5).all(|dy| (0..5).all(|dx| skyish(single[at(x + dx - 2, y + dy - 2)])));
+            if all_sky {
+                open += 1;
+                if !skyish(accumulated[at(x, y)]) {
+                    trails += 1;
+                }
+            }
+        }
+    }
+    eprintln!("trail pixels {trails} of {open} open sky");
+    assert!(open > 1000, "the view should show sky");
+    // Fewer than one open-sky pixel in 2000.
+    assert!(
+        trails * 2000 < open,
+        "{trails} of {open} open-sky pixels carry geometry"
+    );
+}
+
+/// A surface texture shows from where the camera flies: with the default
+/// mapping, turning one on adds at least 10% fine detail to a held inside
+/// view. The palette and lighting are pinned plain.
+#[test]
+fn a_surface_texture_is_visible_inside() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    let size = (320u32, 180u32);
+    let with = |surface: f64| {
+        // The box interior and a plain palette, so the texture is what adds
+        // detail, whatever the default stack and look.
+        let mut values = held_still(PLAIN, &[("render_scale", 1.0), ("surface", surface)]);
+        values.extend(BOX_INTERIOR);
+        values.extend([
+            ("color_source", 0.0),
+            ("metallic", 0.0),
+            ("roughness", 0.6),
+            ("specular", 0.5),
+            ("exposure", 0.0),
+            ("sun_intensity", 4.0),
+        ]);
+        let plain = [0.6, 0.55, 0.5, 1.0];
+        let colors = [
+            ("color1", plain),
+            ("color2", plain),
+            ("color3", plain),
+            ("color4", plain),
+        ];
+        render_colored(&ctx, size, &values, &colors, None, 32)
+    };
+    let (bare, textured) = (srgb_detail(&with(0.0), size), srgb_detail(&with(1.0), size));
+    eprintln!("detail: no surface {bare:.3}, stone {textured:.3}");
+    assert!(
+        textured > 1.1 * bare,
+        "no surface {bare:.3}, stone {textured:.3}"
+    );
+}
+
+/// A palette cycling faster than the pixels does not alias: against a
+/// supersampled reference, one frame at `palette_scale` 8 has at most 1.5
+/// times the error of one at 0.3, so rings narrower than a pixel are filtered
+/// rather than point-sampled into moire.
 #[test]
 fn a_fine_palette_does_not_alias() {
     let Some(ctx) = headless_gpu() else {
@@ -1260,17 +1211,12 @@ fn a_fine_palette_does_not_alias() {
     };
     let size = (160u32, 90u32);
     let error = |scale: f64| {
-        let mut values: HashMap<&str, f64> = PLAIN.into_iter().collect();
-        values.insert("target_fps", 0.0);
-        values.insert("find_inside", 1.0);
-        values.insert("render_scale", 1.0);
-        values.insert("surface", 0.0);
-        // The Box 2.2 interior's smooth walls, unturned as measured: the
-        // palette is the only fine detail.
-        values.insert("slot1_a", 2.2);
-        values.insert("slot1_rot_x", 0.0);
-        values.insert("slot1_rot_y", 0.0);
-        values.insert("slot2_formula", 0.0);
+        // The box interior: the palette is the only fine detail.
+        let mut values = held_still(PLAIN, &[("render_scale", 1.0), ("surface", 0.0)]);
+        values.extend(BOX_INTERIOR);
+        // The Teal & Gold palette the threshold was set on: its stops differ
+        // more than Stone Hall's, so rings alias more.
+        values.insert("look", 4.0);
         values.insert("color_source", 1.0);
         values.insert("palette_scale", scale);
         let mut frame = values.clone();
@@ -1305,10 +1251,9 @@ fn gnarled_crust() -> (
     (values, state.as_object().expect("object").clone())
 }
 
-/// Held still inside dense geometry, the shade pass computes about one 8x8
-/// block in four per frame. Before, one bilinear history tap blended depths
-/// across pixel-scale relief, a quarter of the pixels failed the depth test
-/// under jitter, and almost every block held one and ran the full cost.
+/// Held still inside dense geometry, at most 35% of 8x8 blocks run the shade
+/// pass per frame: the history depth test holds across pixel-scale relief
+/// under jitter, so most blocks reuse their shading.
 #[test]
 fn shading_reuse_survives_dense_geometry() {
     let Some(ctx) = headless_gpu() else {
@@ -1341,7 +1286,6 @@ fn shading_reuse_survives_dense_geometry() {
 /// parameter's shader default is the host's.
 #[test]
 fn the_host_defaults_match_the_shader() {
-    use varda::fractal::params::{SLOT_FIELDS, STACK_PARAMS, slot_param};
     let shader = shader();
     let inputs = shader.metadata.inputs.as_ref().expect("inputs");
     let names = (0..6)
@@ -1364,37 +1308,26 @@ fn the_host_defaults_match_the_shader() {
     }
 }
 
-/// A look preset sets the look whatever the sliders say; Custom follows the
-/// sliders, whose defaults are Stone Hall's.
+/// Picking a look sets the sliders, which then adjust from there.
 #[test]
-fn a_look_preset_overrides_the_sliders_and_custom_follows_them() {
+fn a_look_sets_the_sliders_and_they_adjust_from_there() {
     let Some(ctx) = headless_gpu() else {
         return;
     };
     let size = (160u32, 90u32);
     let with = |look: f64, exposure: Option<f64>| {
-        let mut values: HashMap<&str, f64> = PLAIN.into_iter().collect();
-        values.insert("target_fps", 0.0);
-        values.insert("find_inside", 1.0);
-        values.insert("temporal", 0.0);
-        values.insert("look", look);
+        let mut values = held_still(PLAIN, &[("temporal", 0.0), ("look", look)]);
         if let Some(exposure) = exposure {
             values.insert("exposure", exposure);
         }
         render(&ctx, size, &values, None, 8)
     };
+    // In sRGB 8-bit units: over 5 is a visible change.
     let stone = with(1.0, None);
+    let desert = with(2.0, None);
     assert!(
-        srgb_error(&stone, &with(0.0, None)) < 0.5,
-        "Custom with default sliders is Stone Hall"
-    );
-    assert!(
-        srgb_error(&stone, &with(1.0, Some(2.0))) < 0.5,
-        "a named look ignores the sliders"
-    );
-    assert!(
-        srgb_error(&stone, &with(0.0, Some(2.0))) > 5.0,
-        "Custom follows the sliders"
+        srgb_error(&desert, &with(2.0, Some(2.0))) > 5.0,
+        "a slider changes the picture after a look is picked"
     );
     let warmth = |pixels: &[[f32; 4]]| {
         let (r, b) = pixels.iter().fold((0.0, 0.0), |(r, b), p| {
@@ -1402,7 +1335,106 @@ fn a_look_preset_overrides_the_sliders_and_custom_follows_them() {
         });
         r / b.max(1e-9)
     };
-    let (stone_warmth, desert_warmth) = (warmth(&stone), warmth(&with(2.0, None)));
+    let (stone_warmth, desert_warmth) = (warmth(&stone), warmth(&desert));
     eprintln!("red over blue: stone hall {stone_warmth:.3}, desert sunbeams {desert_warmth:.3}");
-    assert!(desert_warmth > 1.2 * stone_warmth);
+    assert!(
+        desert_warmth > 1.2 * stone_warmth,
+        "Desert Sunbeams should be at least 20% warmer than Stone Hall: \
+         red over blue {desert_warmth:.3} against {stone_warmth:.3}"
+    );
+}
+
+/// Where the distance estimate is flat, its gradient is zero; the normal
+/// still comes out finite. The turned box in Julia mode with seed 0 reduces
+/// to its fold planes, where this happens, and a non-finite normal spread
+/// into black squares through shading.
+#[test]
+fn a_flat_distance_estimate_gives_a_finite_normal() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    let state: serde_json::Value = serde_json::from_str(
+        r#"{"fractal_flight": {"version": 1,
+            "position": [3.46875, -0.4334705075445817, 0.748800000000001],
+            "orientation": [0.8804762392171493, -0.27984814233312133, -0.3647051996310009, -0.11591689595929516],
+            "scale": 0.107571864668547, "locations": []}}"#,
+    )
+    .expect("pose JSON");
+    let mut values: HashMap<&str, f64> = PLAIN.into_iter().collect();
+    values.insert("target_fps", 0.0);
+    values.insert("temporal", 0.0);
+    values.insert("julia_mode", 1.0);
+    values.insert("debug_view", 2.0);
+    let pixels = render(
+        &ctx,
+        (1280, 720),
+        &values,
+        Some(state.as_object().expect("object")),
+        30,
+    );
+    let bad = pixels
+        .iter()
+        .filter(|p| p.iter().any(|c| !c.is_finite()))
+        .count();
+    assert_eq!(bad, 0, "{bad} pixels with a non-finite normal");
+}
+
+/// Each preset selector's default entry is the slider defaults it names, so
+/// picking it again restores the shader's starting state.
+#[test]
+fn each_selectors_default_entry_is_the_slider_defaults() {
+    let shader = shader();
+    let inputs = shader.metadata.inputs.as_ref().expect("inputs");
+    let default_of = |name: &str| {
+        inputs
+            .iter()
+            .find(|input| input.name == name)
+            .and_then(|input| input.default.clone())
+            .unwrap_or_else(|| panic!("no default for {name}"))
+    };
+    let as_numbers = |v: &serde_json::Value| -> Vec<f64> {
+        match v {
+            serde_json::Value::Array(a) => a.iter().filter_map(serde_json::Value::as_f64).collect(),
+            serde_json::Value::Bool(b) => vec![f64::from(u8::from(*b))],
+            other => vec![other.as_f64().expect("numeric")],
+        }
+    };
+    for selector in ["look", "stack"] {
+        let input = inputs
+            .iter()
+            .find(|input| input.name == selector)
+            .unwrap_or_else(|| panic!("shader has no {selector} input"));
+        let value = input
+            .default
+            .as_ref()
+            .and_then(serde_json::Value::as_i64)
+            .expect("default") as i32;
+        let preset = input.preset(value).expect("a preset for the default");
+        for (name, preset_value) in preset {
+            let (a, b) = (as_numbers(preset_value), as_numbers(&default_of(name)));
+            assert_eq!(a.len(), b.len(), "{selector}: {name}");
+            for (x, y) in a.iter().zip(&b) {
+                assert!(
+                    (x - y).abs() < 1e-4,
+                    "{selector}: {name} is {x}, default {y}"
+                );
+            }
+        }
+    }
+}
+
+/// Picking a stack writes its formula slots into the sliders.
+#[test]
+fn picking_a_stack_sets_its_slots() {
+    let shader = shader();
+    let mut params = varda::params::ShaderParams::from_metadata(&shader.metadata);
+    params.set("stack", varda::params::ParamValue::Long(2));
+    let long = |name: &str| match params.values.get(name) {
+        Some(varda::params::ParamValue::Long(v)) => *v,
+        other => panic!("{name}: {other:?}"),
+    };
+    // Goldcape: Lin Combine, Rotate 4D, Amazing Box x4, Koch Cube, JCube, Reciprocal.
+    let formulas: Vec<i32> = (0..6).map(|s| long(&slot_param(s, "formula"))).collect();
+    assert_eq!(formulas, [19, 20, 1, 17, 18, 15]);
+    assert_eq!(long("slot3_count"), 4);
 }

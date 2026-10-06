@@ -27,6 +27,8 @@ pub struct ParamUIInfo {
     pub group: Option<String>,
     /// Options for a `long` param, empty for every other type.
     pub choices: Vec<ParamChoiceUI>,
+    /// An `event` input, drawn as a button.
+    pub event: bool,
 }
 
 /// One option of a `long` (enum) parameter.

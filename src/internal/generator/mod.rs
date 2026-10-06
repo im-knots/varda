@@ -246,7 +246,11 @@ impl Shader {
             frame.modulation,
             Some(frame.param_prefix),
         );
-        pipeline.specialize(&frame.gpu.device, frame.params.specialization_constants());
+        pipeline.specialize(
+            &frame.gpu.device,
+            frame.params.specialization_constants(),
+            frame.live,
+        );
         passes.update_sizes(frame.gpu, &|name| frame.params.base_number(name));
         let pipeline = &*pipeline;
         let Some(user_params) = frame.params.buffer() else {

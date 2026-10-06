@@ -83,7 +83,7 @@ does not write it, so Varda's playlists have none. The HDR information is in the
 which is where players read it. A player that requires `VIDEO-RANGE` will not detect HDR; this is a
 known gap, not a setting you missed.
 
-See [Output Format](07-outputs.md#output-format) for the peak-luminance control, the gamut
+See [Output Format](10-outputs.md#output-format) for the peak-luminance control, the gamut
 caveat, and the current limits on LUTs, tonemap curves, and mastering metadata.
 
 ## NDI
@@ -231,7 +231,7 @@ Every ffmpeg output (Recording, SRT, HLS, DASH, RTMP) can mux audio from a captu
 
 If a scene selects a device that is missing at load (unplugged or renamed), the output starts **video-only** and a notification says why. The video recording or stream still runs.
 
-> **Scope.** Audio passthrough sends one device's audio to your outputs. There is no audio-file playback, mixing, or per-output gain. For audio reactivity, see the [modulation system](05-modulation.md).
+> **Scope.** Audio passthrough sends one device's audio to your outputs. There is no audio-file playback, mixing, or per-output gain. For audio reactivity, see the [modulation system](06-modulation.md).
 
 ---
 
@@ -455,13 +455,13 @@ Select a capture deck to see its controls in the deck detail panel (bottom bar):
 | **Cursor** | `deck/<deck_uuid>/capture/cursor` | Include the mouse pointer. Fixed once the capture opens on Wayland. Not available on X11 |
 | **Exclude Varda** | `deck/<deck_uuid>/capture/exclude_varda` | Leave out Varda's own windows. Display targets only. macOS only (see below) |
 
-Each control has a parameter path, so you can MIDI-learn it, address it over OSC, and drive it from a macro. You cannot modulate these controls directly: a modulation target is re-evaluated every frame, and only shader inputs, opacity, macro values, and [video playback](05-modulation.md#video-playback) support that so far. To modulate a capture control, assign the modulator to a macro and point the macro at the capture path. See [Parameter Paths](06-control-surfaces.md#parameter-paths).
+Each control has a parameter path, so you can MIDI-learn it, address it over OSC, and drive it from a macro. You cannot modulate these controls directly: a modulation target is re-evaluated every frame, and only shader inputs, opacity, macro values, and [video playback](06-modulation.md#video-playback) support that so far. To modulate a capture control, assign the modulator to a macro and point the macro at the capture path. See [Parameter Paths](07-control-surfaces.md#parameter-paths).
 
 ### Capturing Varda itself
 
 You can capture one of Varda's own windows, for example to record Varda for content. Varda's UI window contains deck and channel previews, so a capture of it contains a nested preview of itself. This is a video feedback loop, which is often the effect you want.
 
-For a clean recording of the program without the interface, use a [Program Tap](#program-tap) to read the program directly, capture a windowed [output](07-outputs.md) instead of the main window, or use a [recording output](#recording).
+For a clean recording of the program without the interface, use a [Program Tap](#program-tap) to read the program directly, capture a windowed [output](10-outputs.md) instead of the main window, or use a [recording output](#recording).
 
 For a full-display capture, **Exclude Varda** is on by default, so pointing a deck at your main monitor does not create an infinite mirror.
 
@@ -564,8 +564,8 @@ All stream **input** protocols (SRT, HLS, DASH, and RTMP) behave the same way:
 
 ## Headless Mode
 
-All streaming, recording, and network I/O features work the same in headless mode. Outputs defined in `stage.json` start at launch. See [HTTP API & Headless Mode](13-api.md#headless-mode).
+All streaming, recording, and network I/O features work the same in headless mode. Outputs defined in `stage.json` start at launch. See [HTTP API & Headless Mode](15-api.md#headless-mode).
 
 ---
 
-[← Prev: Projection Mapping](08-projection.md) · [Home](README.md) · [Next: Resolution, Settings & Monitoring →](10-resolution-and-monitoring.md)
+[← Prev: Projection Mapping](11-projection.md) · [Home](README.md) · [Next: Resolution, Settings & Monitoring →](13-resolution-and-monitoring.md)

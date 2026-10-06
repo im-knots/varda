@@ -743,7 +743,7 @@ impl VardaApp {
             )
             .ok()
         }) {
-            slot.deck.generator_params.values = params;
+            slot.deck.generator_params.restore(&params);
         }
 
         Self::diff_effects(
@@ -807,7 +807,7 @@ impl VardaApp {
                 .filter(|eff| eff.shader.file_path.as_deref().unwrap_or("") == cfg.path);
             if let Some(mut eff) = reused {
                 eff.enabled = cfg.enabled;
-                eff.params.values.clone_from(&cfg.params);
+                eff.params.restore(&cfg.params);
                 effects.push(eff);
                 continue;
             }

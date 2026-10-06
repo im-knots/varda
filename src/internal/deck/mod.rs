@@ -13,6 +13,26 @@ use crate::renderer::UnifiedPipeline;
 use crate::source::DeckSourceInstance;
 use std::time::Instant;
 
+/// How a deck's clocks advance per render.
+///
+/// `step` is the fixed time step the deck's clocks advance by. `live` frames also measure the
+/// wall time between frames for preprocessors that move in real time. Offline renders use `step`
+/// so their output does not depend on the machine.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FramePacing {
+    pub step: f32,
+    pub live: bool,
+}
+
+/// Longest wall interval between two frames still taken as a real frame time, in seconds.
+/// Longer gaps (stalls, sleeps) fall back to the fixed step.
+const MAX_WALL_INTERVAL_SECS: f32 = 1.0;
+
+/// `dt` when it is a plausible wall interval between frames.
+fn plausible_wall_interval(dt: f32) -> Option<f32> {
+    (dt > 0.0 && dt < MAX_WALL_INTERVAL_SECS).then_some(dt)
+}
+
 /// A shader deck's depth-sensor preprocessor as saved under the source config's
 /// `depth_prepro` key.
 ///
@@ -149,18 +169,13 @@ pub struct Deck {
     /// frames don't cause jumps.
     render_time: f32,
 
-    /// Fixed time step per render (`1/target_fps`), set by the channel.
-    render_dt: f32,
+    /// How this deck's clocks advance per render, set by the channel.
+    pacing: FramePacing,
 
     frame_count: u32,
 
     /// Last wall-clock render instant (for FPS measurement only, not for TIME uniform)
     last_frame_time: Instant,
-
-    /// Whether frames are paced by the wall clock, as live frames are. Then
-    /// host-inline preprocessors get the measured frame time; offline they
-    /// get `render_dt`.
-    wall_paced: bool,
 
     /// Depth-sensor shader preprocessor, present when this deck's shader or one of its effects
     /// declared a `depth_sensor` PREPROCESSOR and the device was acquired.
@@ -256,7 +271,7 @@ impl Deck {
     pub fn source_config(&self) -> crate::source::SourceConfig {
         let mut config = self.source.config();
         if !self.generator_params.values.is_empty() {
-            config.set("params", &self.generator_params.values);
+            config.set("params", self.generator_params.saved_values());
         }
         if let Some(state) = &self.depth_prepro {
             let p = &state.params;
@@ -443,15 +458,9 @@ impl Deck {
         self.transparent = transparent;
     }
 
-    /// Set the fixed time step used for the TIME uniform.
-    /// Called by the channel to keep `render_dt` in sync with the target FPS.
-    pub fn set_render_dt(&mut self, dt: f32) {
-        self.render_dt = dt;
-    }
-
-    /// Set by the channel each frame: whether the wall clock paces frames.
-    pub fn set_wall_paced(&mut self, wall_paced: bool) {
-        self.wall_paced = wall_paced;
+    /// Set how the next renders advance this deck's clocks.
+    pub fn set_pacing(&mut self, pacing: FramePacing) {
+        self.pacing = pacing;
     }
 
     /// Get the smoothed FPS derived from actual render pipeline timing
@@ -460,13 +469,13 @@ impl Deck {
     }
 }
 
-/// The generator parameters and phase inputs a source's ISF `INPUTS` declare.
+/// The generator parameters and phase inputs a source's ISF metadata declares.
 fn generator_params_for(
     source: &dyn DeckSourceInstance,
 ) -> (ShaderParams, Option<Vec<crate::isf::PhaseInput>>) {
     match source.shader() {
         Some(shader) => (
-            ShaderParams::from_inputs(shader.metadata.inputs.as_deref().unwrap_or(&[])),
+            ShaderParams::from_metadata(&shader.metadata),
             shader.metadata.phase_inputs.clone(),
         ),
         None => (ShaderParams::from_inputs(&[]), None),

@@ -6,17 +6,18 @@
 //! autopilot probes, autofocus) and tests that hold the shader to the same
 //! math.
 
-pub mod camera;
-pub mod formula;
-pub mod navigation;
-pub mod params;
-pub mod resolution;
-pub mod stack;
-pub mod vec3;
+mod camera;
+mod formula;
+mod navigation;
+mod params;
+mod resolution;
+mod stack;
+mod vec3;
 
 pub use camera::{Controls, Flight, FlightMode, Pose, Quat, StepReport};
-pub use formula::{FormulaId, Orbit, Slot};
+pub use formula::{FormulaId, Slot};
 pub use navigation::{Autopilot, Inside, Location, Recall, RecallFrame, Steering, find_inside};
-pub use params::{default_param, stack_from_params};
-pub use stack::{CombineOp, DistanceKind, HybridMode, Sample, Schedule, Stack};
+pub use params::{SLOT_FIELDS, STACK_PARAMS, default_param, slot_param, stack_from_params};
+pub use resolution::Governor;
+pub use stack::{CombineOp, DistanceKind, HybridMode, SLOTS, Sample, Schedule, Stack};
 pub use vec3::{Mat3, Vec3};

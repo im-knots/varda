@@ -31,7 +31,7 @@ For a wider timeline, collapse the library with **L** and the right panel with *
 | **Automation row** | One automated parameter, drawn as a curve under whatever owns it. |
 | **Master row** | The mixer, below every channel, holding master effect automation. |
 
-The transport strip duplicates the top bar readout. Both send the same commands, and both are visible in both modes. See [Transport](06-control-surfaces.md#transport).
+The transport strip duplicates the top bar readout. Both send the same commands, and both are visible in both modes. See [Transport](07-control-surfaces.md#transport).
 
 ### Navigating
 
@@ -134,7 +134,7 @@ An edge can be grabbed from a few pixels outside the region; pressing there resi
 
 **Snap** rounds every edit to a whole frame at the show's timecode rate. It is on by default. Turn it off for continuous positions.
 
-Snapping applies to the edit gesture only. Varda stores continuous positions, so changing the show's frame rate relabels the ruler without moving any region. See [Frame rates](06-control-surfaces.md#frame-rates-and-drop-frame).
+Snapping applies to the edit gesture only. Varda stores continuous positions, so changing the show's frame rate relabels the ruler without moving any region. See [Frame rates](07-control-surfaces.md#frame-rates-and-drop-frame).
 
 ## Selecting a Slice
 
@@ -190,7 +190,7 @@ To create a curve, open the **`〰`** dropdown on any modulatable parameter and 
 | A channel effect | Under that channel's group header |
 | A master effect | Under the **Master** row at the bottom |
 
-Effect parameters are labeled `effect · parameter`, so two effects with the same parameter name stay separate. See [Automation Curves](05-modulation.md#automation-curves) for how a curve sets a value.
+Effect parameters are labeled `effect · parameter`, so two effects with the same parameter name stay separate. See [Automation Curves](06-modulation.md#automation-curves) for how a curve sets a value.
 
 You can bend the segment between two breakpoints. Grab the line itself (the pointer turns into a vertical arrow) and drag toward the side you want it to bulge. A bent segment can start slowly and finish fast, or the reverse, on rising and falling segments alike. To straighten it, right-click the breakpoint at the start of the segment and pick **Linear**. **Smooth** and **Hold** replace the bend with those shapes.
 
@@ -311,7 +311,7 @@ A lane is a deck, and a deck holds one source. Loading a different video into a 
 - Every timeline drag is **one** undo entry. Cmd+Z returns the region or breakpoint to where it was before the drag.
 - The arrangement is saved in `scene.json` with the rest of the scene. Each lane is a deck and each curve is a modulation source in the scene, so there is no separate arrangement file.
 - This is **scene version 7**. Older scenes open unchanged, but a scene containing an arrangement will not open on an older build.
-- Every deck stays in memory for the whole show. The monitoring cluster at the bottom of the right panel shows the deck count and an estimate of the color-target memory they hold. See [Performance Monitoring](10-resolution-and-monitoring.md#performance-monitoring).
+- Every deck stays in memory for the whole show. The monitoring cluster at the bottom of the right panel shows the deck count and an estimate of the color-target memory they hold. See [Performance Monitoring](13-resolution-and-monitoring.md#performance-monitoring).
 
 ## Sleeping Clips
 
@@ -351,8 +351,8 @@ curl -X POST http://localhost:8080/api/arrangement/cues \
 curl -X POST http://localhost:8080/api/transport/cue/next
 ```
 
-Transport control (`/api/transport/play`, `/locate`, `/loop`, `/rate`, `/source`) and curve editing (`PUT /api/modulation/<uuid>/breakpoints`) are documented with their own subsystems. See [HTTP API](13-api.md#route-reference).
+Transport control (`/api/transport/play`, `/locate`, `/loop`, `/rate`, `/source`) and curve editing (`PUT /api/modulation/<uuid>/breakpoints`) are documented with their own subsystems. See [HTTP API](15-api.md#route-reference).
 
 ---
 
-[← Prev: Frame Analysis & Preprocessors](14-frame-analysis.md) · [Home](README.md)
+[← Prev: Performance & Automation](04-performance.md) · [Home](README.md) · [Next: Modulation & Audio Reactivity →](06-modulation.md)

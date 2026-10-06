@@ -1,6 +1,6 @@
 //! Deck rendering: the source, then the effect chain, then analyzer capture.
 
-use super::{Deck, Effect, PreprocessorSlot};
+use super::{Deck, Effect, PreprocessorSlot, plausible_wall_interval};
 use crate::analyzer::traits::{AnalyzerStateSnapshot, TextureData};
 use crate::analyzer::{AnalyzerRegistry, DeckAnalyzers, PreprocessorCategory};
 use crate::audio::AudioData;
@@ -384,7 +384,7 @@ impl Deck {
         }
 
         // Advance render_time by a fixed dt so skipped frames don't cause animation jumps.
-        let time_delta = self.render_dt;
+        let time_delta = self.pacing.step;
         self.render_time += time_delta;
         let time = self.render_time;
         self.frame_count += 1;
@@ -393,12 +393,12 @@ impl Deck {
         let now = Instant::now();
         let wall_dt = (now - self.last_frame_time).as_secs_f32();
         self.last_frame_time = now;
-        let frame_seconds = if self.wall_paced && wall_dt > 0.0 && wall_dt < 1.0 {
-            wall_dt
-        } else {
-            time_delta
+        let wall_dt = plausible_wall_interval(wall_dt);
+        let frame_seconds = match wall_dt {
+            Some(wall_dt) if self.pacing.live => wall_dt,
+            _ => time_delta,
         };
-        if wall_dt > 0.0 && wall_dt < 1.0 {
+        if let Some(wall_dt) = wall_dt {
             let instant_fps = 1.0 / wall_dt;
             self.fps_smoothed = 0.1 * instant_fps + 0.9 * self.fps_smoothed;
         }
@@ -455,6 +455,7 @@ impl Deck {
             time_delta,
             frame_index: self.frame_count,
             phase_times: generator_phase_times,
+            live: self.pacing.live,
             audio: audio_data,
             modulation,
             param_prefix,
@@ -505,6 +506,7 @@ impl Deck {
                 output_view,
                 &uniforms,
                 Some(modulation),
+                self.pacing.live,
                 cmd_buffers,
             )?;
             read_from_b = !read_from_b;
@@ -539,6 +541,9 @@ impl Deck {
         {
             cmd_buffers.push(readback_cmd);
         }
+
+        // This frame used the events; a trigger while the deck skips frames stays pending.
+        self.generator_params.clear_events();
 
         // Write end GPU timestamp if timing is enabled
         if let Some((query_set, _, end_idx)) = gpu_timing {
@@ -600,6 +605,18 @@ impl Deck {
         }
         for effect in &mut self.effects {
             upload(&mut effect.preprocessor_textures);
+        }
+        write_derived_inputs(
+            host_inline,
+            self.source.preprocessor_slots(),
+            &mut self.generator_params,
+        );
+        for effect in &mut self.effects {
+            write_derived_inputs(
+                host_inline,
+                &effect.preprocessor_textures,
+                &mut effect.params,
+            );
         }
     }
 
@@ -673,6 +690,24 @@ impl Deck {
     /// Get the final output texture view (after effect chain)
     pub fn output_view(&self) -> &wgpu::TextureView {
         &self.texture_view
+    }
+}
+
+/// Set each slot's `WRITES` inputs from its preprocessor's scalar outputs of the same name.
+fn write_derived_inputs(
+    host_inline: &crate::analyzer::HostInlineSet,
+    slots: &[PreprocessorSlot],
+    params: &mut ShaderParams,
+) {
+    for slot in slots.iter().filter(|slot| !slot.writes.is_empty()) {
+        let Some(snapshot) = host_inline.latest(&slot.analyzer_type) else {
+            continue;
+        };
+        for name in &slot.writes {
+            if let Some(value) = snapshot.scalars.get(name) {
+                params.write_derived(name, *value);
+            }
+        }
     }
 }
 
@@ -758,6 +793,7 @@ mod tests {
             identity: None,
             group: None,
             specialize: false,
+            presets: None,
         }
     }
 
@@ -1170,13 +1206,17 @@ mod tests {
         deck.resize(&gpu, 128, 128);
     }
 
-    /// A generator whose `step` parameter is bound into the test counter.
+    /// A generator whose `step` and `reset` inputs are bound into the test counter.
     fn counter_deck(gpu: &GpuContext) -> crate::deck::Deck {
         use crate::analyzer::host_inline::tests::{COUNTER, registry};
         let source = format!(
             r#"/*{{
-    "INPUTS": [{{"NAME": "step", "TYPE": "float", "DEFAULT": 2.0, "MIN": 0.0, "MAX": 10.0}}],
-    "PREPROCESSORS": [{{"NAME": "count", "TYPE": "{COUNTER}", "PARAM_BINDINGS": {{"step": "step"}}}}]
+    "INPUTS": [
+        {{"NAME": "step", "TYPE": "float", "DEFAULT": 2.0, "MIN": 0.0, "MAX": 10.0}},
+        {{"NAME": "reset", "TYPE": "event"}}
+    ],
+    "PREPROCESSORS": [{{"NAME": "count", "TYPE": "{COUNTER}",
+        "PARAM_BINDINGS": {{"step": "step", "reset": "reset"}}}}]
 }}*/
 #version 450
 layout(location = 0) out vec4 fragColor;
@@ -1235,6 +1275,147 @@ void main() {{ fragColor = vec4(1.0); }}
             deck.take_preprocessor_messages(),
             vec!["standing still".to_owned()]
         );
+    }
+
+    #[test]
+    fn an_event_is_true_for_one_rendered_frame() {
+        let Some(gpu) = crate::testing::headless_gpu() else {
+            return;
+        };
+        let mut deck = counter_deck(&gpu);
+        render(&mut deck, &gpu);
+        render(&mut deck, &gpu);
+        deck.generator_params.set("reset", ParamValue::Bool(true));
+        // No render here: a frame the deck skips leaves the trigger pending.
+        assert_eq!(deck.generator_params.get_bool("reset"), Some(true));
+        render(&mut deck, &gpu);
+        assert_eq!(count(&deck), 2.0, "the preprocessor saw the trigger");
+        assert_eq!(deck.generator_params.get_bool("reset"), Some(false));
+        render(&mut deck, &gpu);
+        assert_eq!(count(&deck), 4.0, "and only on that frame");
+    }
+
+    #[test]
+    fn an_effect_event_clears_after_the_effect_renders() {
+        let Some(gpu) = crate::testing::headless_gpu() else {
+            return;
+        };
+        let source = r#"/*{
+    "INPUTS": [{"NAME": "inputImage", "TYPE": "image"}, {"NAME": "flash", "TYPE": "event"}]
+}*/
+#version 450
+layout(location = 0) out vec4 fragColor;
+void main() { fragColor = vec4(1.0); }
+"#;
+        let shader = crate::isf::ISFShader::from_string(source).expect("parse");
+        let mut deck = counter_deck(&gpu);
+        deck.add_effect(crate::deck::Effect::new(&gpu, shader).expect("effect"));
+        deck.effects[0].enabled = false;
+        deck.effects[0].params.set("flash", ParamValue::Bool(true));
+        render(&mut deck, &gpu);
+        assert_eq!(
+            deck.effects[0].params.get_bool("flash"),
+            Some(true),
+            "pending while the effect is off"
+        );
+        deck.effects[0].enabled = true;
+        render(&mut deck, &gpu);
+        assert_eq!(deck.effects[0].params.get_bool("flash"), Some(false));
+    }
+
+    /// A shader whose `SPECIALIZE` input `count` the test counter writes. The
+    /// output's red is a tenth of the constant.
+    fn written_source(image: &str) -> String {
+        use crate::analyzer::host_inline::tests::COUNTER;
+        format!(
+            r#"/*{{
+    "INPUTS": [{image}
+        {{"NAME": "step", "TYPE": "float", "DEFAULT": 2.0, "MIN": 0.0, "MAX": 10.0}},
+        {{"NAME": "count", "TYPE": "long", "DEFAULT": 0, "MIN": 0, "MAX": 5, "SPECIALIZE": true}}
+    ],
+    "PREPROCESSORS": [{{"NAME": "counter", "TYPE": "{COUNTER}",
+        "PARAM_BINDINGS": {{"step": "step"}}, "WRITES": ["count"]}}]
+}}*/
+#version 450
+layout(location = 0) out vec4 fragColor;
+layout(constant_id = 0) const int SC_COUNT = 0;
+void main() {{ fragColor = vec4(float(SC_COUNT) * 0.1, 0.0, 0.0, 1.0); }}
+"#
+        )
+    }
+
+    #[test]
+    fn a_preprocessor_writes_a_specialized_input_before_the_shader_renders() {
+        use crate::analyzer::host_inline::tests::registry;
+        let Some(gpu) = crate::testing::headless_gpu() else {
+            return;
+        };
+        let shader = crate::isf::ISFShader::from_string(&written_source("")).expect("parse");
+        let mut deck = crate::deck::Deck::from_shader(&gpu, shader, 8, 8).expect("deck");
+        deck.ensure_preprocessor_analyzers(&registry());
+        assert_eq!(
+            deck.generator_params.get_long("count"),
+            Some(0),
+            "the default"
+        );
+
+        render(&mut deck, &gpu);
+        assert_eq!(deck.generator_params.get_long("count"), Some(2));
+        let constants: Vec<f64> = deck.generator_params.specialization_constants().collect();
+        assert_eq!(constants, [2.0]);
+        let pixels = crate::testing::read_rgba16f(&gpu, &deck.texture, 8, 8);
+        assert!((pixels[0][0] - 0.2).abs() < 0.01, "{:?}", pixels[0]);
+
+        render(&mut deck, &gpu);
+        assert_eq!(
+            deck.generator_params.get_long("count"),
+            Some(4),
+            "follows each frame"
+        );
+        render(&mut deck, &gpu);
+        assert_eq!(
+            deck.generator_params.get_long("count"),
+            Some(5),
+            "clamped to MAX"
+        );
+    }
+
+    #[test]
+    fn a_preprocessor_writes_an_effect_input() {
+        use crate::analyzer::host_inline::tests::registry;
+        let Some(gpu) = crate::testing::headless_gpu() else {
+            return;
+        };
+        let image = r#"{"NAME": "inputImage", "TYPE": "image"},"#;
+        let shader = crate::isf::ISFShader::from_string(&written_source(image)).expect("parse");
+        let mut deck = crate::deck::Deck::solid_color(&gpu, [0.0; 4], 8, 8);
+        deck.add_effect(crate::deck::Effect::new(&gpu, shader).expect("effect"));
+        deck.ensure_preprocessor_analyzers(&registry());
+        render(&mut deck, &gpu);
+        assert_eq!(deck.effects[0].params.get_long("count"), Some(2));
+        assert_eq!(
+            deck.effects[0]
+                .params
+                .specialization_constants()
+                .collect::<Vec<_>>(),
+            [2.0]
+        );
+    }
+
+    #[test]
+    fn event_values_are_not_saved_with_the_source_config() {
+        let Some(gpu) = crate::testing::headless_gpu() else {
+            return;
+        };
+        let mut deck = counter_deck(&gpu);
+        deck.generator_params.set("reset", ParamValue::Bool(true));
+        let saved = deck.source_config();
+        let params = saved
+            .get("params")
+            .and_then(serde_json::Value::as_object)
+            .expect("params saved");
+        assert!(params.contains_key("step"));
+        assert!(!params.contains_key("reset"));
     }
 
     #[test]

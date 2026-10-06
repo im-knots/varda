@@ -12,6 +12,9 @@ pub struct Vec3 {
 
 impl Vec3 {
     pub const ZERO: Self = Self::new(0.0, 0.0, 0.0);
+    pub const X: Self = Self::new(1.0, 0.0, 0.0);
+    pub const Y: Self = Self::new(0.0, 1.0, 0.0);
+    pub const Z: Self = Self::new(0.0, 0.0, 1.0);
 
     pub const fn new(x: f64, y: f64, z: f64) -> Self {
         Self { x, y, z }
@@ -45,17 +48,13 @@ impl Vec3 {
         self * (1.0 / self.length())
     }
 
-    /// Component-wise clamp to `[-limit, limit]`.
+    /// Component-wise clamp to `[-limit, limit]`, as [`clamp_unbounded`].
     pub fn clamp_sym(self, limit: f64) -> Self {
         Self::new(
-            self.x.clamp(-limit, limit),
-            self.y.clamp(-limit, limit),
-            self.z.clamp(-limit, limit),
+            clamp_unbounded(self.x, -limit, limit),
+            clamp_unbounded(self.y, -limit, limit),
+            clamp_unbounded(self.z, -limit, limit),
         )
-    }
-
-    pub fn min_component(self) -> f64 {
-        self.x.min(self.y).min(self.z)
     }
 }
 
@@ -95,11 +94,7 @@ pub struct Mat3 {
 
 impl Mat3 {
     pub const IDENTITY: Self = Self {
-        rows: [
-            Vec3::new(1.0, 0.0, 0.0),
-            Vec3::new(0.0, 1.0, 0.0),
-            Vec3::new(0.0, 0.0, 1.0),
-        ],
+        rows: [Vec3::X, Vec3::Y, Vec3::Z],
     };
 
     /// Rotation by Euler angles in radians, applied X, then Y, then Z. The
@@ -127,6 +122,13 @@ impl Mat3 {
     }
 }
 
+/// `x` clamped to `[lo, hi]` as GLSL computes it, `min(max(x, lo), hi)`:
+/// bounds from sliders may be inverted (a negative fold limit), which gives
+/// `hi` instead of a panic, and the shader matches.
+pub fn clamp_unbounded(x: f64, lo: f64, hi: f64) -> f64 {
+    x.max(lo).min(hi)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,14 +143,8 @@ mod tests {
         let v = Vec3::new(1.0, 2.0, -0.5);
         assert!((m.apply(v).length() - v.length()).abs() < 1e-12);
         let x_only = Mat3::from_euler(std::f64::consts::FRAC_PI_2, 0.0, 0.0);
-        assert!(close(
-            x_only.apply(Vec3::new(0.0, 1.0, 0.0)),
-            Vec3::new(0.0, 0.0, 1.0)
-        ));
+        assert!(close(x_only.apply(Vec3::Y), Vec3::Z));
         let z_only = Mat3::from_euler(0.0, 0.0, std::f64::consts::FRAC_PI_2);
-        assert!(close(
-            z_only.apply(Vec3::new(1.0, 0.0, 0.0)),
-            Vec3::new(0.0, 1.0, 0.0)
-        ));
+        assert!(close(z_only.apply(Vec3::X), Vec3::Y));
     }
 }

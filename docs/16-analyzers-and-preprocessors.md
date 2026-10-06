@@ -1,11 +1,11 @@
-# Frame Analysis & Preprocessors
+# Analyzers & Preprocessors
 
 Varda can analyze a picture and turn the result into data: the average brightness of a deck, the position of a performer's face, a live depth silhouette. The **analyzer engine** does all of this and feeds two workflows:
 
 | Path | What it produces | Who uses it | Set up in |
 |------|------------------|-------------|-----------|
-| **Analysis → modulation** | normalized **scalars** (`brightness`, `face_x`, …) that drive *any* parameter | **performers** | the deck's analyzer setup → [Modulation](05-modulation.md) |
-| **Preprocessors → shaders** | **data textures** (face landmarks, depth, mask, motion) injected into a shader | **shader authors** | a shader's ISF `PREPROCESSORS` block → [Shader Authoring](12-isf-authoring.md#analyzer-preprocessors) |
+| **Analysis → modulation** | normalized **scalars** (`brightness`, `face_x`, …) that drive *any* parameter | **performers** | the deck's analyzer setup → [Modulation](06-modulation.md) |
+| **Preprocessors → shaders** | **data textures** (face landmarks, depth, mask, motion) injected into a shader | **shader authors** | a shader's ISF `PREPROCESSORS` block → [Shader Authoring](14-isf-authoring.md#analyzer-preprocessors) |
 
 The `brightness` modulation source and the `face_detect` preprocessor use the same engine. An analyzer runs once per deck, and its output can go to modulation, to shaders, or both. Analyzers are **reference-counted per deck**, so connecting several modulation sources or shaders to one analyzer costs one analysis pass.
 
@@ -27,7 +27,7 @@ These analyzer types are **planned** and not yet implemented: `depth_estimate`, 
 
 Any analyzer scalar can drive any parameter, like an LFO or an audio band. For example, brighten one deck to open another deck's blur, or move your face left to rotate a generator.
 
-Add an **Analyzer** modulation source from the deck's analyzer setup, not from the Modulation panel's `➕` row. It then works like any other source: assign it with a slider's `〰` button, stack it, smooth it. See [Modulation → Analyzer](05-modulation.md#analyzer) for how to assign it.
+Add an **Analyzer** modulation source from the deck's analyzer setup, not from the Modulation panel's `➕` row. It then works like any other source: assign it with a slider's `〰` button, stack it, smooth it. See [Modulation → Analyzer](06-modulation.md#analyzer) for how to assign it.
 
 ### `brightness` outputs (always available)
 
@@ -73,21 +73,80 @@ As a performer, you pick a shader built for depth (for example a silhouette or d
 
 **Depth shaders require the hardware.** A shader that declares `depth_sensor` **does not load** if no sensor is attached, and an error toast names the shader. (A black fallback would be useless for a look made entirely of a silhouette.) The `depth` feature is not built on Windows or macOS Intel, so these shaders never load there.
 
-For the shader-author side of depth (texture formats, GLSL access), see [Shader Authoring → Depth Sensor](12-isf-authoring.md#depth_sensor-live-depth-camera).
+For the shader-author side of depth (texture formats, GLSL access), see [Shader Authoring → Depth Sensor](14-isf-authoring.md#depth_sensor-live-depth-camera).
 
 ---
 
-## Preprocessors (concept)
+## Preprocessors
 
-Some effects need data the fragment shader can't compute itself, such as face landmarks, a depth map or a segmentation mask. The shader declares a **preprocessor** in its ISF header. Varda runs the named analyzer and binds its output as a **texture** next to the shader's other inputs. The shader reads it with ordinary texture samples.
+A preprocessor computes data a fragment shader cannot compute itself and hands it to the shader
+every frame. A shader declares the preprocessors it needs in its ISF header (see
+[Shader Authoring → Analyzer Preprocessors](14-isf-authoring.md#analyzer-preprocessors)), and
+Varda runs them. As a performer you don't need to do anything: drop the shader on a deck and its
+preprocessors start with it.
 
-As a performer you don't need to do anything: drop the effect on a deck and it runs the analysis it needs. For the `PREPROCESSORS` JSON block, binding order and `texelFetch` access patterns, see [Shader Authoring → Analyzer Preprocessors](12-isf-authoring.md#analyzer-preprocessors).
+There are three kinds:
+
+| Kind | Reads | Runs | Publishes | Shipped types |
+|---|---|---|---|---|
+| **Analyzer** | a downscaled copy of the deck's frame | on its own worker thread, at its own pace | textures and scalars; the shader reads the latest result | `face_detect`, `brightness` |
+| **GPU** | textures already on the GPU: the deck's frame, or a device | on the render thread, as GPU passes | textures it owns | `depth_sensor` |
+| **Host-inline** | the shader's inputs and the frame time | on the render thread, once per rendered frame, before the shader | textures, scalars and input values | `fractal_flight` |
+
+An analyzer never holds up the render loop: if analysis takes longer than a frame, the shader
+reads the most recent result. A host-inline preprocessor is the opposite: the deck runs its step
+before drawing, so its outputs always belong to the frame on screen. That makes it the place for
+anything that moves with the picture, such as a camera. A step should take under 1 ms; a slower
+one logs a warning once per deck.
+
+### What a host-inline preprocessor can do
+
+A host-inline preprocessor is a small program that lives in the deck next to its shader. It can:
+
+- **Read the shader's inputs**, with their live, modulated values: the ones named in
+  `PARAM_BINDINGS`, or all of them with `"OPTIONS": {"bind_all_inputs": true}`. That includes
+  [event inputs](14-isf-authoring.md#event-inputs), which are true for one frame when their
+  button is pressed.
+- **Publish textures** that the shader reads like any other texture, and **scalars** that appear
+  as modulation sources, like analyzer scalars.
+- **Keep state that is saved** with the scene and with deck presets, such as a camera position
+  or a list of saved places. Shader parameters cannot hold this: they are fixed-size numbers.
+- **Tell the performer something**: a message shows as a notification, once per event.
+- **Choose the shader's build**: it can set `SPECIALIZE` inputs listed under `WRITES`, so the
+  shader compiles only the code the current state needs (see
+  [Shader Authoring → Inputs a preprocessor writes](14-isf-authoring.md#inputs-a-preprocessor-writes)).
+
+Preprocessor types are written in Rust inside Varda: a type implements the
+`HostInlinePreprocessor` trait (`src/internal/analyzer/traits.rs`) and is registered in the
+analyzer registry (`src/internal/analyzer/mod.rs`). Shaders then declare it by its `TYPE`.
+`src/internal/analyzer/fractal_flight.rs` is a complete example.
+
+### Worked example: the Fractal Explorer
+
+The [Fractal Explorer](09-fractal-explorer.md) is a full visual engine built from these parts: one
+ISF shader and one host-inline preprocessor.
+
+- **The shader** (`shaders/fractal_explorer.fs`) is the renderer. Its passes march the fractal
+  into a G-buffer, compute shadows and occlusion, light the scene, and accumulate and upscale the
+  result over frames, then apply depth of field, bloom and the grade. Its formula stack is
+  compiled per stack with `SPECIALIZE` inputs, and its Look and Stack dropdowns are
+  [input presets](14-isf-authoring.md#input-presets).
+- **The preprocessor** (`fractal_flight`) is the engine's state and logic. Each frame it reads
+  every input, flies the camera with collision against its own double-precision copy of the
+  fractal, runs Find Inside, the autopilot, saved locations and tours, and sets the render scale
+  that holds the target frame rate. It publishes the camera and formula data as a texture the
+  shader reads, scalars such as the distance to the nearest surface (which can drive modulation),
+  a notification when Find Inside finds no enclosed space, and the `track_jacobian` build input.
+  The camera and saved locations are saved with the scene.
+
+The split is the pattern to copy for other instruments: the shader draws, the preprocessor holds
+the state and runs the logic that a fragment shader cannot.
 
 ---
 
 ## Analyzer HTTP API
 
-All analyzer operations are in the [HTTP API](13-api.md) under the **Analyzers** and **Modulation** tags.
+All analyzer operations are in the [HTTP API](15-api.md) under the **Analyzers** and **Modulation** tags.
 
 ### List available analyzers
 
@@ -122,8 +181,8 @@ curl -X PUT http://localhost:8080/api/modulation/<source_uuid>/analyzer/smoothin
   -H "Content-Type: application/json" -d '{"value": 0.4}'
 ```
 
-Assign the returned source to any parameter with `POST /api/modulation/assign`, as with an LFO. See [HTTP API](13-api.md) and [Modulation](05-modulation.md#routing).
+Assign the returned source to any parameter with `POST /api/modulation/assign`, as with an LFO. See [HTTP API](15-api.md) and [Modulation](06-modulation.md#routing).
 
 ---
 
-[← Prev: HTTP API & Headless Mode](13-api.md) · [Home](README.md) · [Next: Arrangement Mode →](15-arrangement.md)
+[← Prev: HTTP API & Headless Mode](15-api.md) · [Home](README.md)

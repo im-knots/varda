@@ -219,7 +219,7 @@ use utoipa_swagger_ui::SwaggerUi;
     )
 )]
 /// The assembled `OpenAPI` spec. Public so `tests/api_docs.rs` can render the
-/// route reference in `docs/13-api.md` from it.
+/// route reference in `docs/15-api.md` from it.
 pub struct ApiDoc;
 
 /// The served `OpenAPI` document: [`ApiDoc`], the deprecated per-source-type

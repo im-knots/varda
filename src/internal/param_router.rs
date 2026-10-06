@@ -170,6 +170,25 @@ pub fn read_param(mixer: &Mixer, address: &ParamAddress) -> Option<f32> {
     }
 }
 
+/// Whether `path` names an event or a preprocessor-written input of a deck or effect shader
+/// ([`crate::ShaderParams::is_transient`]). Neither is modulated, automated or recorded.
+pub fn names_transient(mixer: &Mixer, path: &str) -> bool {
+    match path.parse::<ParamAddress>() {
+        Ok(ParamAddress::Deck {
+            deck,
+            target: DeckTarget::Param(name),
+        }) => mixer
+            .find_deck_by_uuid(&deck)
+            .and_then(|(ch, dk)| mixer.channel(ch)?.decks.get(dk))
+            .is_some_and(|slot| slot.deck.generator_params.is_transient(&name)),
+        Ok(ParamAddress::EffectParam { effect, param }) => mixer
+            .find_effect_by_uuid(&effect)
+            .and_then(|location| mixer.effect_at(location))
+            .is_some_and(|effect| effect.params.is_transient(&param)),
+        _ => false,
+    }
+}
+
 fn toggle_transparent(mixer: &mut Mixer, uuid: &str) -> Result<(), ParamRouteError> {
     let (ch, dk) = mixer
         .find_deck_by_uuid(uuid)
@@ -385,7 +404,7 @@ pub fn apply_param_by_path(
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
-            apply_float_param_scaled(
+            apply_normalized_param(
                 &mut mixer.channels_mut()[ch].decks[dk].deck.generator_params,
                 name,
                 value,
@@ -396,7 +415,7 @@ pub fn apply_param_by_path(
             effect,
             param: name,
         } => {
-            apply_float_param_scaled(effect_params_mut(mixer, effect)?, name, value);
+            apply_normalized_param(effect_params_mut(mixer, effect)?, name, value);
             Ok(())
         }
         ParamAddress::ChannelOpacity { channel: ch_uuid } => {
@@ -524,8 +543,8 @@ pub fn param_value_to_norm_f32(value: &ParamValue) -> f32 {
 /// Set a typed value on a shader param, coerced to the param's declared ISF type.
 ///
 /// The stored variant is the declared type: a `long` takes a choice index, a
-/// `bool` a flag, a `float` a normalized fraction of its range. `Color` and
-/// `Point2D` keep all channels.
+/// `bool` a flag, a `float` a normalized fraction of its range. An `event`
+/// fires on true; false does nothing. `Color` and `Point2D` keep all channels.
 ///
 /// [`ParamValue`] is untagged with `Float` first, so every JSON number arrives
 /// as `Float`. It must be converted before writing to a `long`, or the shader
@@ -701,6 +720,16 @@ fn apply_mod_param(
     Ok(())
 }
 
+/// Apply a normalized write from a fader, pad or key to a shader param. An event fires on the
+/// press; anything else is scaled like a fader.
+fn apply_normalized_param(params: &mut crate::ShaderParams, name: &str, normalized: f32) {
+    if params.is_event(name) {
+        params.press_event(name, normalized);
+    } else {
+        apply_float_param_scaled(params, name, normalized);
+    }
+}
+
 /// Apply a normalized 0.0–1.0 value to a float param, scaled to its range.
 fn apply_float_param_scaled(params: &mut crate::ShaderParams, name: &str, normalized: f32) {
     // `tint/r`: one channel of a color or axis of a point.
@@ -708,6 +737,14 @@ fn apply_float_param_scaled(params: &mut crate::ShaderParams, name: &str, normal
         && params.component_kind(base) == Some(component.kind())
     {
         params.set_component(base, component, normalized);
+        return;
+    }
+    if let Some(choice) = params
+        .definitions
+        .get(name)
+        .and_then(|def| choice_at(def, normalized))
+    {
+        params.set(name, ParamValue::Long(choice));
         return;
     }
     if let Some(def) = params.definitions.get(name) {
@@ -718,6 +755,17 @@ fn apply_float_param_scaled(params: &mut crate::ShaderParams, name: &str, normal
     } else {
         params.set(name, ParamValue::Float(normalized));
     }
+}
+
+/// The value of a `long` input with declared `VALUES` that a normalized
+/// 0.0–1.0 write selects: the range splits into one equal bucket per value.
+fn choice_at(def: &crate::isf::ISFInput, normalized: f32) -> Option<i32> {
+    if def.input_type != "long" {
+        return None;
+    }
+    let values = def.values.as_ref().filter(|v| !v.is_empty())?;
+    let index = ((normalized.clamp(0.0, 1.0) * values.len() as f32) as usize).min(values.len() - 1);
+    values[index].as_i64().and_then(|v| i32::try_from(v).ok())
 }
 
 /// Clamp to 0.0–1.0. Non-finite input becomes `1.0`, so a bad opacity value
@@ -806,32 +854,16 @@ pub fn toggle_param_by_path(mixer: &mut Mixer, path: &str) -> Result<(), ParamRo
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
-            let val = mixer.channels_mut()[ch].decks[dk]
-                .deck
-                .generator_params
-                .values
-                .get_mut(name.as_str())
-                .ok_or_else(|| ParamRouteError::UnknownParam {
-                    scope: "deck",
-                    name: name.clone(),
-                })?;
-            toggle_param_value(val);
-            Ok(())
+            toggle_shader_param(
+                &mut mixer.channels_mut()[ch].decks[dk].deck.generator_params,
+                "deck",
+                name,
+            )
         }
         ParamAddress::EffectParam {
             effect,
             param: name,
-        } => {
-            let val = effect_params_mut(mixer, effect)?
-                .values
-                .get_mut(name.as_str())
-                .ok_or_else(|| ParamRouteError::UnknownParam {
-                    scope: "effect",
-                    name: name.clone(),
-                })?;
-            toggle_param_value(val);
-            Ok(())
-        }
+        } => toggle_shader_param(effect_params_mut(mixer, effect)?, "effect", name),
         ParamAddress::Deck {
             deck: uuid,
             target: DeckTarget::Transparent,
@@ -863,6 +895,31 @@ pub fn toggle_param_by_path(mixer: &mut Mixer, path: &str) -> Result<(), ParamRo
             path: path.to_string(),
         }),
     }
+}
+
+/// Toggle a shader param for a key press. An event fires instead; a written input ignores it.
+fn toggle_shader_param(
+    params: &mut crate::ShaderParams,
+    scope: &'static str,
+    name: &str,
+) -> Result<(), ParamRouteError> {
+    if params.is_written(name) {
+        return Ok(());
+    }
+    if params.is_event(name) {
+        params.set(name, ParamValue::Bool(true));
+        return Ok(());
+    }
+    let val = params
+        .values
+        .get_mut(name)
+        .ok_or_else(|| ParamRouteError::UnknownParam {
+            scope,
+            name: name.to_string(),
+        })?;
+    toggle_param_value(val);
+    params.mark_dirty();
+    Ok(())
 }
 
 /// Floats snap between 0.0 and 1.0. Bools invert. Other variants are left as-is.
@@ -1061,6 +1118,28 @@ mod tests {
         }))
     }
 
+    /// A MIDI fader or OSC value on a choice spreads across the choices, so
+    /// the whole travel reaches every one: the top of the range picks the last.
+    #[test]
+    fn a_normalized_write_to_a_choice_spreads_across_its_values() {
+        let mut params = mode_params();
+        for (normalized, expected) in [
+            (0.0, 0),
+            (0.19, 0),
+            (0.21, 1),
+            (0.5, 2),
+            (0.79, 3),
+            (1.0, 4),
+        ] {
+            apply_normalized_param(&mut params, "mode", normalized);
+            assert!(
+                matches!(params.values.get("mode"), Some(ParamValue::Long(v)) if *v == expected),
+                "{normalized} gave {:?}, expected {expected}",
+                params.values.get("mode")
+            );
+        }
+    }
+
     #[test]
     fn long_param_survives_a_json_number_arriving_as_float() {
         // `{"value": 2}` from the API deserializes as `Float(2.0)` and must
@@ -1113,6 +1192,68 @@ mod tests {
             params.values.get("flip_side"),
             Some(ParamValue::Bool(false))
         ));
+    }
+
+    #[test]
+    fn a_mapped_control_changing_a_long_applies_its_preset() {
+        let inputs: Vec<crate::isf::ISFInput> = serde_json::from_value(serde_json::json!([
+            {"NAME": "look", "TYPE": "long", "DEFAULT": 0, "VALUES": [0, 1],
+             "PRESETS": [{"gain": 0.25}, {"gain": 0.75}]},
+            {"NAME": "gain", "TYPE": "float", "DEFAULT": 0.25}
+        ]))
+        .unwrap();
+        let mut params = crate::ShaderParams::from_inputs(&inputs);
+        apply_normalized_param(&mut params, "look", 1.0);
+        assert_eq!(params.get_long("look"), Some(1));
+        assert_eq!(params.get_float("gain"), Some(0.75));
+    }
+
+    fn event_params() -> crate::ShaderParams {
+        params_from(serde_json::json!({"NAME": "reset", "TYPE": "event"}))
+    }
+
+    #[test]
+    fn a_mapped_event_fires_on_the_press_only() {
+        let mut params = event_params();
+        apply_normalized_param(&mut params, "reset", 1.0);
+        assert_eq!(params.get_bool("reset"), Some(true), "note on");
+        params.clear_events();
+        apply_normalized_param(&mut params, "reset", 0.9);
+        assert_eq!(params.get_bool("reset"), Some(false), "held");
+        apply_normalized_param(&mut params, "reset", 0.0);
+        assert!(matches!(params.values["reset"], ParamValue::Bool(false)));
+        apply_normalized_param(&mut params, "reset", 0.7);
+        assert_eq!(params.get_bool("reset"), Some(true), "rose past one half");
+    }
+
+    #[test]
+    fn the_api_fires_an_event_with_true_and_false_does_nothing() {
+        let mut params = event_params();
+        apply_typed_param(&mut params, "reset", ParamValue::Bool(true)).unwrap();
+        apply_typed_param(&mut params, "reset", ParamValue::Bool(false)).unwrap();
+        assert_eq!(params.get_bool("reset"), Some(true));
+    }
+
+    #[test]
+    fn a_key_press_fires_an_event_instead_of_toggling_it() {
+        let mut params = event_params();
+        toggle_shader_param(&mut params, "deck", "reset").unwrap();
+        toggle_shader_param(&mut params, "deck", "reset").unwrap();
+        assert_eq!(params.get_bool("reset"), Some(true));
+    }
+
+    #[test]
+    fn mapped_key_and_api_writes_to_a_written_input_do_nothing() {
+        let meta: crate::isf::ISFMetadata = serde_json::from_value(serde_json::json!({
+            "INPUTS": [{"NAME": "track", "TYPE": "bool", "DEFAULT": true, "SPECIALIZE": true}],
+            "PREPROCESSORS": [{"NAME": "f", "TYPE": "flight", "WRITES": ["track"]}]
+        }))
+        .unwrap();
+        let mut params = crate::ShaderParams::from_metadata(&meta);
+        apply_normalized_param(&mut params, "track", 0.0);
+        apply_typed_param(&mut params, "track", ParamValue::Bool(false)).unwrap();
+        toggle_shader_param(&mut params, "deck", "track").unwrap();
+        assert_eq!(params.get_bool("track"), Some(true));
     }
 
     #[test]

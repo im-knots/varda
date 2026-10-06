@@ -88,8 +88,7 @@ impl Schedule {
     }
 }
 
-/// How a chain's end state becomes a distance. The shader reads the
-/// discriminant as a code: 0 linear, 1 power, 2 Kleinian, 3 Jacobian.
+/// How a chain's end state becomes a distance. The shader reads `code()`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DistanceKind {
     /// `|z| / dr`, for conformal fold stacks.
@@ -147,13 +146,16 @@ pub struct Sample {
     /// Minimum `|z|^2` over the orbit.
     pub trap: f64,
     pub log2_dr: f64,
-    /// Which chain decided the distance: 0, or 1 for part 2 of a combine.
+    /// Which chain gave the distance: 0, or 1 for part 2 of a combine.
     pub part: u8,
     pub escaped: bool,
 }
 
 /// A Kleinian chain's distance estimate below which a point counts as solid.
 const KLEINIAN_SOLID: f64 = 1e-6;
+/// Floor for `dr` and `|z|`, so the distance never divides by zero or takes
+/// the log of zero.
+const TINY: f64 = 1e-300;
 
 impl Stack {
     /// The schedules of part 1 and part 2. Part 2 is empty in `Alternate`
@@ -201,7 +203,7 @@ impl Stack {
                 let bends = schedule
                     .cycle
                     .iter()
-                    .any(|&i| !self.slots[usize::from(i)].is_conformal());
+                    .any(|&i| self.slots[usize::from(i)].needs_jacobian());
                 if bends {
                     DistanceKind::Jacobian
                 } else {
@@ -261,10 +263,10 @@ impl Stack {
         } else {
             orbit.dr.abs()
         }
-        .max(1e-300);
+        .max(TINY);
         let distance = match kind {
             DistanceKind::Linear | DistanceKind::Jacobian => r / dr,
-            DistanceKind::Power => 0.5 * r.max(1e-300).ln() * r / dr,
+            DistanceKind::Power => 0.5 * r.max(TINY).ln() * r / dr,
             DistanceKind::Kleinian { plane_z } => 0.5 * (orbit.z.z - plane_z).abs() / dr,
         };
         Sample {
@@ -283,8 +285,6 @@ impl Stack {
         }
     }
 
-    /// The distance estimate and coloring values at `p`. `footprint` is the
-    /// world size of one pixel at `p`, which scales the combine width.
     /// Whether `p` lies in the solid. An escape-time chain is solid where
     /// the orbit stays bounded. A Kleinian chain never escapes, so its solid
     /// is where the distance estimate vanishes.
@@ -296,6 +296,8 @@ impl Stack {
         }
     }
 
+    /// The distance estimate and coloring values at `p`. `footprint` is the
+    /// world size of one pixel at `p`, which scales the combine width.
     pub fn sample(&self, p: Vec3, footprint: f64) -> Sample {
         let [first, second] = self.schedules();
         let a = self.run_chain(&first, p);
@@ -576,6 +578,23 @@ mod tests {
         assert_eq!(plain.distance_kinds()[0], DistanceKind::Linear);
         plain.slots[1].params[2] = 0.2;
         assert_eq!(plain.distance_kinds()[0], DistanceKind::Jacobian);
+    }
+
+    /// Reciprocal and an uneven Lin Combine stretch each axis on its own, so
+    /// their scalar slope bounds the step and the chain keeps the scalar
+    /// distance. A bend that mixes axes still takes the Jacobian.
+    #[test]
+    fn axis_wise_bends_keep_the_scalar_distance() {
+        let mut slots = [Slot::EMPTY; SLOTS];
+        slots[0] = slot(FormulaId::Box, 1, [2.0, 0.5, 1.0, 1.0]);
+        slots[1] = slot(FormulaId::Reciprocal, 1, [0.5, 0.0, 0.0, 0.0]);
+        slots[2] = slot(FormulaId::LinCombine, 1, [1.2, 0.9, 1.0, 0.0]);
+        let s = stack(&slots);
+        assert!(!s.slots[1].is_conformal() && !s.slots[2].is_conformal());
+        assert_eq!(s.distance_kinds()[0], DistanceKind::Linear);
+        let mut mixed = s.clone();
+        mixed.slots[2] = slot(FormulaId::Sine, 1, [0.0, 1.5, 1.0, 0.0]);
+        assert_eq!(mixed.distance_kinds()[0], DistanceKind::Jacobian);
     }
 
     /// `|z|` over the Frobenius norm of the Jacobian of `z`, both by central

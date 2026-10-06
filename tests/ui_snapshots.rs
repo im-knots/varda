@@ -278,6 +278,7 @@ fn grouped_param_fixture() -> UIData {
         max: Some(10.0),
         group: group.map(ToString::to_string),
         choices: Vec::new(),
+        event: false,
     };
 
     let mut data = UIData::test_fixture();

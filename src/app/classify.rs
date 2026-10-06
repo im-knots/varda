@@ -135,25 +135,43 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
 impl VardaApp {
     /// Whether `cmd` starts an undo step: [`command_is_undoable`], plus deck
     /// source controls, which are undoable unless they belong to a clip transport.
+    /// A write to an event or a written input is not: it changes nothing a snapshot holds.
     pub(crate) fn is_undoable(&self, cmd: &EngineCommand) -> bool {
+        use crate::param_router::names_transient;
         if !command_is_undoable(cmd) {
             return false;
         }
-        let EngineCommand::SetSourceParam {
-            deck_uuid, name, ..
-        } = cmd
-        else {
-            return true;
-        };
-        let Some((ch, dk)) = self.mixer.find_deck_by_uuid(deck_uuid) else {
-            return true;
-        };
-        !self.mixer.channels()[ch].decks[dk]
-            .deck
-            .source()
-            .schema()
-            .iter()
-            .any(|s| s.name == *name && s.widget == Some(crate::source::WidgetHint::Transport))
+        match cmd {
+            EngineCommand::SetSourceParam {
+                deck_uuid, name, ..
+            } => {
+                let Some((ch, dk)) = self.mixer.find_deck_by_uuid(deck_uuid) else {
+                    return true;
+                };
+                !self.mixer.channels()[ch].decks[dk]
+                    .deck
+                    .source()
+                    .schema()
+                    .iter()
+                    .any(|s| {
+                        s.name == *name && s.widget == Some(crate::source::WidgetHint::Transport)
+                    })
+            }
+            EngineCommand::SetGeneratorParam {
+                deck_uuid, name, ..
+            } => !names_transient(
+                &self.mixer,
+                &ParamAddress::deck_param(deck_uuid, name).to_string(),
+            ),
+            EngineCommand::SetEffectParam {
+                effect_uuid, name, ..
+            } => !names_transient(
+                &self.mixer,
+                &ParamAddress::effect_param(effect_uuid, name).to_string(),
+            ),
+            EngineCommand::SetParam { path, .. } => !names_transient(&self.mixer, path),
+            _ => true,
+        }
     }
 
     /// Every parameter a command writes as a live gesture, as (modulation key,
@@ -697,6 +715,128 @@ mod tests {
             assert!(
                 app.show.recorder.recording_params().contains(&key),
                 "{label} did not reach the recorder as {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn event_inputs_are_not_undone_recorded_modulated_or_automated() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        let source = r#"/*{"INPUTS": [{"NAME": "reset", "TYPE": "event"}]}*/
+#version 450
+layout(location = 0) out vec4 fragColor;
+void main() { fragColor = vec4(1.0); }
+"#;
+        let shader = crate::isf::ISFShader::from_string(source).expect("parse");
+        let deck = crate::deck::Deck::from_shader(&app.render.context, shader, 64, 64)
+            .expect("event deck");
+        let uuid = deck.uuid().to_string();
+        let path = ParamAddress::deck_param(&uuid, "reset").to_string();
+        app.mixer.channels_mut()[0].add_deck(deck);
+        app.set_record_armed(true);
+        assert!(!app.is_undoable(&C::SetGeneratorParam {
+            deck_uuid: uuid,
+            name: "reset".into(),
+            value: ParamValue::Bool(true),
+        }));
+
+        let fired = app.execute_command(C::SetParam {
+            path: path.clone(),
+            value: ParamValue::Bool(true),
+        });
+        assert!(!matches!(fired, crate::engine::CommandResult::Err { .. }));
+        assert!(app.show.recorder.recording_params().is_empty());
+
+        let source_id = app.mixer.modulation_mut().add_source(
+            crate::modulation::ModulationSource::StepSequencer {
+                steps: vec![1.0; 2],
+                rate: 0.0,
+                interpolation: crate::modulation::StepInterpolation::None,
+                bipolar: false,
+            },
+        );
+        for cmd in [
+            C::AssignModulation {
+                target: path.clone(),
+                source_id,
+                amount: 1.0,
+            },
+            C::AddAutomationLane {
+                target: path.clone(),
+                timebase: crate::timebase::Timebase::Transport,
+            },
+        ] {
+            let label = format!("{cmd:?}");
+            assert!(
+                matches!(
+                    app.execute_command(cmd),
+                    crate::engine::CommandResult::Err { .. }
+                ),
+                "{label} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn written_inputs_are_not_undone_recorded_modulated_or_automated() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        let source = r#"/*{
+    "INPUTS": [{"NAME": "track", "TYPE": "bool", "DEFAULT": true, "SPECIALIZE": true}],
+    "PREPROCESSORS": [{"NAME": "f", "TYPE": "flight", "WRITES": ["track"]}]
+}*/
+#version 450
+layout(location = 0) out vec4 fragColor;
+layout(constant_id = 0) const int SC_TRACK = 1;
+void main() { fragColor = vec4(float(SC_TRACK)); }
+"#;
+        let shader = crate::isf::ISFShader::from_string(source).expect("parse");
+        let deck = crate::deck::Deck::from_shader(&app.render.context, shader, 64, 64)
+            .expect("written deck");
+        let uuid = deck.uuid().to_string();
+        let path = ParamAddress::deck_param(&uuid, "track").to_string();
+        app.mixer.channels_mut()[0].add_deck(deck);
+        app.set_record_armed(true);
+        assert!(!app.is_undoable(&C::SetGeneratorParam {
+            deck_uuid: uuid,
+            name: "track".into(),
+            value: ParamValue::Bool(false),
+        }));
+        app.execute_command(C::SetParam {
+            path: path.clone(),
+            value: ParamValue::Bool(false),
+        });
+        assert!(app.show.recorder.recording_params().is_empty());
+
+        let source_id = app.mixer.modulation_mut().add_source(
+            crate::modulation::ModulationSource::StepSequencer {
+                steps: vec![1.0; 2],
+                rate: 0.0,
+                interpolation: crate::modulation::StepInterpolation::None,
+                bipolar: false,
+            },
+        );
+        for cmd in [
+            C::AssignModulation {
+                target: path.clone(),
+                source_id,
+                amount: 1.0,
+            },
+            C::AddAutomationLane {
+                target: path.clone(),
+                timebase: crate::timebase::Timebase::Transport,
+            },
+        ] {
+            let label = format!("{cmd:?}");
+            assert!(
+                matches!(
+                    app.execute_command(cmd),
+                    crate::engine::CommandResult::Err { .. }
+                ),
+                "{label} was accepted"
             );
         }
     }

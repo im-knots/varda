@@ -8,8 +8,8 @@
 use std::sync::Arc;
 
 use crate::fractal::{
-    Autopilot, Controls, DistanceKind, Flight, FlightMode, Location, Pose, Quat, Recall, Stack,
-    Vec3, find_inside, resolution::Governor, stack_from_params,
+    Autopilot, Controls, DistanceKind, Flight, FlightMode, Governor, Location, Pose, Quat, Recall,
+    Stack, StepReport, Vec3, find_inside, stack_from_params,
 };
 use crate::params::ParamValue;
 
@@ -39,6 +39,20 @@ const INSIDE_RADII: [f64; 2] = [4.0, 16.0];
 /// Find Inside's message when the stack has no rooms.
 const NO_ROOMS: &str = "No enclosed space in this stack; showing the most open spot nearby.";
 
+/// Speed when `speed` is unbound; the shader's default.
+const DEFAULT_SPEED: f64 = 0.5;
+/// Field of view when `fov` is unbound; the shader's default.
+const DEFAULT_FOV: f64 = 1.0;
+/// Render scale ceiling when `render_scale` is unbound: full resolution.
+const DEFAULT_RENDER_SCALE: f64 = 1.0;
+/// Seconds a recall flight takes when `recall_time` is unbound.
+const DEFAULT_RECALL_SECONDS: f64 = 4.0;
+/// Seconds per tour stop when `tour_seconds` is unbound.
+const DEFAULT_TOUR_SECONDS: f64 = 8.0;
+/// A tour stop lasts at least this many seconds longer than the recall
+/// flight, so the camera arrives before it leaves.
+const MIN_TOUR_DWELL: f64 = 0.1;
+
 /// Texel layout, one `vec4` each:
 ///
 /// | Texel | Content |
@@ -56,7 +70,7 @@ const NO_ROOMS: &str = "No enclosed space in this stack; showing the most open s
 /// The schedule is not here: the shader derives it from its specialized
 /// structure inputs.
 pub(crate) const ROTATION_TEXEL: usize = 11;
-pub(crate) const KIND_TEXEL: usize = ROTATION_TEXEL + 3 * crate::fractal::stack::SLOTS;
+pub(crate) const KIND_TEXEL: usize = ROTATION_TEXEL + 3 * crate::fractal::SLOTS;
 pub(crate) const RESOLUTION_TEXEL: usize = KIND_TEXEL + 1;
 pub(crate) const TEXELS: usize = RESOLUTION_TEXEL + 1;
 
@@ -67,6 +81,30 @@ fn number(value: &ParamValue) -> Option<f64> {
         ParamValue::Long(v) => Some(f64::from(*v)),
         ParamValue::Bool(v) => Some(if *v { 1.0 } else { 0.0 }),
         ParamValue::Color(_) | ParamValue::Point2D(_) => None,
+    }
+}
+
+/// Whether the button or toggle `name` is on.
+fn pressed(get: &impl Fn(&str) -> Option<f64>, name: &str) -> bool {
+    get(name).is_some_and(|v| v > 0.5)
+}
+
+/// This frame's flight controls.
+fn controls(get: &impl Fn(&str) -> Option<f64>) -> Controls {
+    let control = |name: &str| get(name).unwrap_or(0.0);
+    Controls {
+        throttle: control("throttle"),
+        strafe_x: control("strafe_x"),
+        strafe_y: control("strafe_y"),
+        yaw_rate: control("yaw_rate"),
+        pitch_rate: control("pitch_rate"),
+        roll_rate: control("roll_rate"),
+        speed: get("speed").unwrap_or(DEFAULT_SPEED),
+        mode: if pressed(get, "flight_mode") {
+            FlightMode::Dive
+        } else {
+            FlightMode::Walk
+        },
     }
 }
 
@@ -81,7 +119,7 @@ fn split(v: f64) -> (f32, f32) {
 struct SavedPose {
     position: [f64; 3],
     orientation: [f64; 4],
-    /// Scene scale; absent in scenes saved before it existed.
+    /// Scene scale; 0 when unknown.
     #[serde(default, skip_serializing_if = "is_zero")]
     scale: f64,
 }
@@ -145,10 +183,10 @@ pub(crate) struct FractalFlight {
     location_index: Option<usize>,
     /// Last frame's `location` parameter, to notice a change.
     last_location_param: Option<i64>,
-    /// Last frame's `save_location`, to catch the rising edge.
-    was_saving: bool,
-    /// Last frame's `find_inside`, to catch the rising edge.
-    was_finding: bool,
+    /// Last frame's `julia_mode`; `None` before the first frame.
+    last_julia: Option<bool>,
+    /// Last frame's `stack` preset; `None` before the first frame.
+    last_stack_preset: Option<f64>,
     /// A message for the performer, until taken.
     message: Option<String>,
     /// Seconds spent at the current tour stop.
@@ -175,8 +213,8 @@ impl FractalFlight {
             recall: None,
             location_index: None,
             last_location_param: None,
-            was_saving: false,
-            was_finding: false,
+            last_julia: None,
+            last_stack_preset: None,
             message: None,
             tour_clock: 0.0,
             autopilot: Autopilot::default(),
@@ -234,17 +272,17 @@ impl FractalFlight {
 
     /// Saving, recalling and touring, from this frame's parameters.
     fn navigate(&mut self, get: &impl Fn(&str) -> Option<f64>, dt: f64) {
-        let saving = get("save_location").is_some_and(|v| v > 0.5);
-        if saving && !self.was_saving {
+        if pressed(get, "save_location") {
             self.locations.push(Location {
                 name: format!("Location {}", self.locations.len() + 1),
                 pose: self.flight.pose,
                 scale: self.flight.scale,
             });
         }
-        self.was_saving = saving;
 
-        let recall_time = get("recall_time").unwrap_or(4.0).max(0.0);
+        let recall_time = get("recall_time")
+            .unwrap_or(DEFAULT_RECALL_SECONDS)
+            .max(0.0);
         let wanted = get("location").map(|v| v.round() as i64);
         if wanted != self.last_location_param {
             if let (Some(index), Some(_)) = (wanted, self.last_location_param)
@@ -255,9 +293,11 @@ impl FractalFlight {
             self.last_location_param = wanted;
         }
 
-        if get("tour").is_some_and(|v| v > 0.5) && !self.locations.is_empty() {
+        if pressed(get, "tour") && !self.locations.is_empty() {
             self.tour_clock += dt;
-            let stop = get("tour_seconds").unwrap_or(8.0).max(recall_time + 0.1);
+            let stop = get("tour_seconds")
+                .unwrap_or(DEFAULT_TOUR_SECONDS)
+                .max(recall_time + MIN_TOUR_DWELL);
             if self.tour_clock >= stop || self.location_index.is_none() {
                 let next = self
                     .location_index
@@ -265,6 +305,130 @@ impl FractalFlight {
                 self.start_recall(next, recall_time);
             }
         }
+    }
+
+    /// Reset Camera and Find Inside, events true for one frame per press, and
+    /// Find Inside when Julia is turned on or off or a stack preset is picked.
+    fn handle_buttons(&mut self, get: &impl Fn(&str) -> Option<f64>, stack: &Stack) {
+        if pressed(get, "reset_camera") {
+            self.flight = Flight::new(Pose::default());
+            self.recall = None;
+        }
+        let finding = pressed(get, "find_inside");
+        // The camera's place in one set means nothing in the other.
+        let julia = pressed(get, "julia_mode");
+        let toggled = self.last_julia.is_some_and(|last| last != julia);
+        self.last_julia = Some(julia);
+        // So does a picked stack preset.
+        let preset = get("stack");
+        let picked = self.last_stack_preset.is_some() && preset != self.last_stack_preset;
+        self.last_stack_preset = preset;
+        if (finding || toggled || picked)
+            && let Some(inside) = find_inside(stack, &self.inside_balls(stack))
+        {
+            self.flight = Flight::new(inside.pose);
+            self.flight.scale = inside.scale;
+            self.recall = None;
+            if !inside.enclosed {
+                self.message = Some(NO_ROOMS.to_owned());
+            }
+        }
+    }
+
+    /// Move the camera one frame: along a recall flight if one is under way,
+    /// otherwise by the controls blended toward the autopilot's steering.
+    /// Returns the step's report and the autopilot's confidence, 0 when it
+    /// did not steer.
+    fn advance(
+        &mut self,
+        stack: &Stack,
+        mut controls: Controls,
+        autopilot: f64,
+        dt: f64,
+    ) -> (StepReport, f64) {
+        if let Some(recall) = &mut self.recall {
+            let frame = recall.step(dt);
+            if frame.arrived {
+                self.recall = None;
+            }
+            self.flight.scale = frame.scale;
+            return (self.flight.place(stack, frame.pose, dt), 0.0);
+        }
+        let mut confidence = 0.0;
+        if autopilot > 0.0 {
+            let distance = stack.sample(self.flight.pose.position, 0.0).distance;
+            let steering = self.autopilot.step(stack, &self.flight.pose, distance, dt);
+            confidence = steering.confidence;
+            controls.yaw_rate += (steering.yaw_rate - controls.yaw_rate) * autopilot;
+            controls.pitch_rate += (steering.pitch_rate - controls.pitch_rate) * autopilot;
+            controls.throttle += (1.0 - controls.throttle) * autopilot;
+        }
+        (self.flight.step(stack, &controls, dt), confidence)
+    }
+
+    /// How far last frame's image is out of date where the formula or the
+    /// look changed; TAA trusts its history less by this rate.
+    fn change_rate(&mut self, state: &AnalyzerStateSnapshot, stack: &Stack) -> f32 {
+        let look = look_values(state);
+        let morph = morph_rate(self.last_stack.as_ref(), stack)
+            .max(look_rate(self.last_look_values.as_deref(), &look));
+        self.last_look_values = Some(look);
+        morph
+    }
+
+    /// This frame's live render scale and last frame's.
+    fn render_scales(
+        &mut self,
+        frame_seconds: f32,
+        get: &impl Fn(&str) -> Option<f64>,
+    ) -> [f64; 2] {
+        let live = self.governor.step(
+            f64::from(frame_seconds),
+            get("target_fps").unwrap_or(0.0),
+            get("render_scale").unwrap_or(DEFAULT_RENDER_SCALE),
+        );
+        let previous = self.last_live.replace(live).unwrap_or(live);
+        [live, previous]
+    }
+
+    /// The scalars and the packed flight texture.
+    fn publish(
+        &self,
+        report: &StepReport,
+        live: f64,
+        confidence: f64,
+        jacobian: bool,
+        data: Vec<u8>,
+    ) -> AnalyzerSnapshot {
+        let mut snapshot = AnalyzerSnapshot::from_defaults(&self.output_schema());
+        let scalars = [
+            ("camera_distance", report.distance),
+            ("speed_actual", report.speed),
+            ("focus_distance", self.flight.focus),
+            ("scene_scale", self.flight.scale),
+            ("render_scale_live", live),
+            ("location_count", self.locations.len() as f64),
+            (
+                "location_index",
+                self.location_index.map_or(-1.0, |i| i as f64),
+            ),
+            ("autopilot_confidence", confidence),
+            ("track_jacobian", f64::from(u8::from(jacobian))),
+        ];
+        for (name, value) in scalars {
+            snapshot.scalars.insert(name.into(), value as f32);
+        }
+        snapshot.textures.insert(
+            TEXTURE.into(),
+            TextureData {
+                generation: 0,
+                width: TEXELS as u32,
+                height: 1,
+                format: "rgba32float".into(),
+                data: Arc::from(data),
+            },
+        );
+        snapshot
     }
 }
 
@@ -463,6 +627,16 @@ impl HostInlinePreprocessor for FractalFlight {
                     "How open and detailed the autopilot's chosen way looks",
                     (0.0, 1.0),
                 ),
+                // Written into the shader's `track_jacobian` input; 1, the
+                // general pipeline, until the first step.
+                ScalarOutputDef {
+                    default: 1.0,
+                    ..scalar(
+                        "track_jacobian",
+                        "1 while a part of the stack needs the Jacobian distance",
+                        (0.0, 1.0),
+                    )
+                },
             ],
             textures: vec![TextureOutputDef {
                 name: TEXTURE.into(),
@@ -479,38 +653,8 @@ impl HostInlinePreprocessor for FractalFlight {
     fn step(&mut self, frame: &HostFrame<'_>) -> AnalyzerSnapshot {
         let get = |name: &str| frame.state.values.get(name).and_then(number);
         let stack = stack_from_params(get);
-        let control = |name: &str| get(name).unwrap_or(0.0);
-        let controls = Controls {
-            throttle: control("throttle"),
-            strafe_x: control("strafe_x"),
-            strafe_y: control("strafe_y"),
-            yaw_rate: control("yaw_rate"),
-            pitch_rate: control("pitch_rate"),
-            roll_rate: control("roll_rate"),
-            speed: get("speed").unwrap_or(0.5),
-            mode: if get("flight_mode").is_some_and(|v| v > 0.5) {
-                FlightMode::Dive
-            } else {
-                FlightMode::Walk
-            },
-        };
-        if get("reset_camera").is_some_and(|v| v > 0.5) {
-            self.flight = Flight::new(Pose::default());
-            self.recall = None;
-        }
-        let finding = get("find_inside").is_some_and(|v| v > 0.5);
-        if finding
-            && !self.was_finding
-            && let Some(inside) = find_inside(&stack, &self.inside_balls(&stack))
-        {
-            self.flight = Flight::new(inside.pose);
-            self.flight.scale = inside.scale;
-            self.recall = None;
-            if !inside.enclosed {
-                self.message = Some(NO_ROOMS.to_owned());
-            }
-        }
-        self.was_finding = finding;
+        let controls = controls(&get);
+        self.handle_buttons(&get, &stack);
         // Flight moves in wall-clock time, so a slow frame still covers its
         // share of a second. Capped so a hitch cannot throw the camera.
         let dt = f64::from(frame.frame_seconds).min(MAX_FLIGHT_STEP);
@@ -521,89 +665,17 @@ impl HostInlinePreprocessor for FractalFlight {
         let before = self.flight.pose;
         self.look(&get);
         self.navigate(&get, dt);
-
         let autopilot = get("autopilot").unwrap_or(0.0).clamp(0.0, 1.0);
-        let mut confidence = 0.0;
-        let report = if let Some(recall) = &mut self.recall {
-            let frame = recall.step(dt);
-            if frame.arrived {
-                self.recall = None;
-            }
-            self.flight.scale = frame.scale;
-            self.flight.place(&stack, frame.pose, dt)
-        } else {
-            let mut controls = controls;
-            if autopilot > 0.0 {
-                let distance = stack.sample(self.flight.pose.position, 0.0).distance;
-                let steering = self.autopilot.step(&stack, &self.flight.pose, distance, dt);
-                confidence = steering.confidence;
-                controls.yaw_rate += (steering.yaw_rate - controls.yaw_rate) * autopilot;
-                controls.pitch_rate += (steering.pitch_rate - controls.pitch_rate) * autopilot;
-                controls.throttle += (1.0 - controls.throttle) * autopilot;
-            }
-            self.flight.step(&stack, &controls, dt)
-        };
+        let (report, confidence) = self.advance(&stack, controls, autopilot, dt);
         self.flight.previous = before;
-        // Last frame's image is out of date where the formula or the look
-        // changed; TAA trusts its history less by this rate.
-        let look = look_values(frame.state);
-        let morph = morph_rate(self.last_stack.as_ref(), &stack)
-            .max(look_rate(self.last_look_values.as_deref(), &look));
-        self.last_look_values = Some(look);
-        let fov = get("fov").unwrap_or(1.0) as f32;
-        let live = self.governor.step(
-            f64::from(frame.frame_seconds),
-            get("target_fps").unwrap_or(0.0),
-            get("render_scale").unwrap_or(1.0),
-        );
-        let previous = self.last_live.replace(live).unwrap_or(live);
-        let data = pack(
-            &self.flight,
-            fov,
-            morph,
-            report.distance,
-            &stack,
-            [live, previous],
-        );
-        self.last_stack = Some(stack);
 
-        let mut snapshot = AnalyzerSnapshot::from_defaults(&self.output_schema());
-        snapshot
-            .scalars
-            .insert("camera_distance".into(), report.distance as f32);
-        snapshot
-            .scalars
-            .insert("speed_actual".into(), report.speed as f32);
-        snapshot
-            .scalars
-            .insert("focus_distance".into(), self.flight.focus as f32);
-        snapshot
-            .scalars
-            .insert("scene_scale".into(), self.flight.scale as f32);
-        snapshot
-            .scalars
-            .insert("render_scale_live".into(), live as f32);
-        snapshot
-            .scalars
-            .insert("location_count".into(), self.locations.len() as f32);
-        snapshot.scalars.insert(
-            "location_index".into(),
-            self.location_index.map_or(-1.0, |i| i as f32),
-        );
-        snapshot
-            .scalars
-            .insert("autopilot_confidence".into(), confidence as f32);
-        snapshot.textures.insert(
-            TEXTURE.into(),
-            TextureData {
-                generation: 0,
-                width: TEXELS as u32,
-                height: 1,
-                format: "rgba32float".into(),
-                data: Arc::from(data),
-            },
-        );
-        snapshot
+        let morph = self.change_rate(frame.state, &stack);
+        let fov = get("fov").unwrap_or(DEFAULT_FOV) as f32;
+        let scales = self.render_scales(frame.frame_seconds, &get);
+        let data = pack(&self.flight, fov, morph, report.distance, &stack, scales);
+        let jacobian = stack.distance_kinds().contains(&DistanceKind::Jacobian);
+        self.last_stack = Some(stack);
+        self.publish(&report, scales[0], confidence, jacobian, data)
     }
 
     fn take_message(&mut self) -> Option<String> {
@@ -825,6 +897,29 @@ mod tests {
             .collect()
     }
 
+    /// The shader compiles the Jacobian code out while no part of the stack
+    /// needs it; before the first step the general pipeline stays.
+    #[test]
+    fn publishes_whether_the_stack_needs_the_jacobian() {
+        let mut flight = FractalFlight::new();
+        let schema = AnalyzerSnapshot::from_defaults(&flight.output_schema());
+        assert_eq!(schema.scalar("track_jacobian"), 1.0, "general by default");
+        let plain = step(&mut flight, &[]);
+        assert_eq!(
+            plain.scalar("track_jacobian"),
+            0.0,
+            "the turned box is conformal"
+        );
+        let gnarled = step(
+            &mut flight,
+            &[
+                ("slot2_formula", ParamValue::Long(10)),
+                ("slot2_count", ParamValue::Long(1)),
+            ],
+        );
+        assert_eq!(gnarled.scalar("track_jacobian"), 1.0, "Gnarl mixes axes");
+    }
+
     #[test]
     fn publishes_the_camera_and_the_layout_version() {
         let mut flight = FractalFlight::new();
@@ -1014,8 +1109,8 @@ mod tests {
         assert!((up - 20.0).abs() < 1e-6, "{up}");
     }
 
-    /// A value already set when the flight starts, as in a loaded scene, is
-    /// where the view is, not a turn to make.
+    /// A value already set when the flight starts, as in a loaded scene,
+    /// leaves the view where it is.
     #[test]
     fn a_starting_slider_value_does_not_turn() {
         let mut flight = FractalFlight::new();
@@ -1024,8 +1119,68 @@ mod tests {
         assert!((heading(&flight) - start).abs() < 1e-9);
     }
 
+    /// Picking a stack preset runs Find Inside; holding it does not search
+    /// again, and the first frame is not a pick.
     #[test]
-    fn find_inside_moves_the_camera_into_the_structure_once_per_press() {
+    fn picking_a_stack_finds_inside() {
+        let stack = |value: i32| [("stack", ParamValue::Long(value))];
+        let mut flight = FractalFlight::new();
+        step(&mut flight, &stack(2));
+        assert_eq!(
+            flight.flight.pose,
+            Pose::default(),
+            "the first frame is not a pick"
+        );
+        step(&mut flight, &stack(1));
+        let picked = flight.flight.pose.position;
+        assert!(
+            (picked - Pose::default().position).length() > 1.0,
+            "picking moved"
+        );
+        let mut held = flight.flight.pose;
+        held.position = held.position + Vec3::new(1e-3, 0.0, 0.0);
+        flight.flight.pose = held;
+        step(&mut flight, &stack(1));
+        assert!(
+            (flight.flight.pose.position - picked).length() > 5e-4,
+            "held, no search"
+        );
+    }
+
+    /// The camera's place in one set means nothing in the other, so turning
+    /// Julia on or off runs Find Inside. Holding the state does not search
+    /// again, and the first frame is not a toggle.
+    #[test]
+    fn turning_julia_on_or_off_finds_inside() {
+        let julia = |on: bool| [("julia_mode", ParamValue::Bool(on))];
+        let mut flight = FractalFlight::new();
+        step(&mut flight, &julia(true));
+        assert_eq!(
+            flight.flight.pose,
+            Pose::default(),
+            "the first frame is not a toggle"
+        );
+        step(&mut flight, &julia(false));
+        let off = flight.flight.pose.position;
+        assert!(
+            (off - Pose::default().position).length() > 1.0,
+            "turning off moved"
+        );
+        step(&mut flight, &julia(true));
+        let on = flight.flight.pose.position;
+        assert!((on - off).length() > 1e-6, "turning on moved");
+        let mut held = flight.flight.pose;
+        held.position = held.position + Vec3::new(1e-3, 0.0, 0.0);
+        flight.flight.pose = held;
+        step(&mut flight, &julia(true));
+        assert!(
+            (flight.flight.pose.position - on).length() > 5e-4,
+            "held, no search"
+        );
+    }
+
+    #[test]
+    fn find_inside_moves_the_camera_into_the_structure() {
         let mut flight = FractalFlight::new();
         step(&mut flight, &[]);
         let outside = flight.flight.pose.position;
@@ -1034,12 +1189,6 @@ mod tests {
         assert!((inside - outside).length() > 1.0, "did not move");
         assert!(inside.length() < INSIDE_RADII[1]);
         assert!(flight.flight.scale > 0.0);
-        // Held down, it does not search again and pull the camera back.
-        let mut held = flight.flight.pose;
-        held.position = held.position + Vec3::new(1e-3, 0.0, 0.0);
-        flight.flight.pose = held;
-        step(&mut flight, &[("find_inside", ParamValue::Bool(true))]);
-        assert!((flight.flight.pose.position - inside).length() > 5e-4);
     }
 
     /// Find Inside says when the stack has no rooms, and only then.

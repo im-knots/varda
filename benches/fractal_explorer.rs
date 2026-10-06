@@ -1,8 +1,8 @@
 //! Frame cost of `shaders/fractal_explorer.fs` on the acceptance scenes in
 //! `tests/fixtures/fractal_scenes.json`, at 720p and 1080p.
 //!
-//!   `<size>/<scene>` — the scene with every look setting as saved.
-//!   `<size>/<scene>/geometry` — temporal smoothing, depth of field, bloom and
+//!   `<size>/<scene>`: the scene with every look setting as saved.
+//!   `<size>/<scene>/geometry`: temporal smoothing, depth of field, bloom and
 //!                    light shafts off, which separates the march from the look.
 //!
 //! Each case renders 30 frames before timing, so the history passes are full.
@@ -20,56 +20,21 @@ use varda::{
     mixer::{FrameInputs, Mixer},
     modulation::{AnalyzerValues, AudioValues},
     renderer::context::GpuContext,
+    testing::{FractalScene, fractal_scenes, set_param},
 };
-
-struct Scene {
-    name: String,
-    params: Vec<(String, f64)>,
-    state: serde_json::Map<String, serde_json::Value>,
-}
-
-fn scenes() -> Vec<Scene> {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/fractal_scenes.json"
-    );
-    let text = std::fs::read_to_string(path).expect("scene fixture");
-    let list: Vec<serde_json::Value> = serde_json::from_str(&text).expect("scene JSON");
-    list.into_iter()
-        .map(|scene| Scene {
-            name: scene["name"].as_str().expect("name").to_owned(),
-            params: scene["params"]
-                .as_object()
-                .expect("params")
-                .iter()
-                .map(|(k, v)| (k.clone(), v.as_f64().expect("numeric")))
-                .collect(),
-            state: scene["state"].as_object().expect("state").clone(),
-        })
-        .collect()
-}
 
 struct Case {
     mixer: Mixer,
     frame: u32,
 }
 
-fn set(deck: &mut Deck, name: &str, value: f64) {
-    let kind = deck.generator_params.definitions[name].input_type.clone();
-    match kind.as_str() {
-        "long" => deck.generator_params.set_long(name, value as i32),
-        "bool" => deck.generator_params.set_bool(name, value > 0.5),
-        _ => deck.generator_params.set_float(name, value as f32),
-    }
-}
-
 impl Case {
-    fn new(ctx: &GpuContext, scene: &Scene, size: (u32, u32), geometry_only: bool) -> Self {
+    fn new(ctx: &GpuContext, scene: &FractalScene, size: (u32, u32), geometry_only: bool) -> Self {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/shaders/fractal_explorer.fs");
         let shader = ISFShader::from_file(path).expect("shader");
         let mut deck = Deck::from_shader(ctx, shader, size.0, size.1).expect("deck");
         for (name, value) in &scene.params {
-            set(&mut deck, name, *value);
+            set_param(&mut deck.generator_params, name, *value).expect("scene input");
         }
         if geometry_only {
             for (name, value) in [
@@ -78,7 +43,7 @@ impl Case {
                 ("bloom", 0.0),
                 ("shafts", 0.0),
             ] {
-                set(&mut deck, name, value);
+                set_param(&mut deck.generator_params, name, value).expect("look input");
             }
         }
         deck.start_declared_preprocessors();
@@ -128,7 +93,7 @@ fn bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("fractal_explorer");
     group.sample_size(20);
     for (label, size) in [("720p", (1280, 720)), ("1080p", (1920, 1080))] {
-        for scene in scenes() {
+        for scene in fractal_scenes() {
             for geometry_only in [false, true] {
                 let mut case = Case::new(&ctx, &scene, size, geometry_only);
                 let name = if geometry_only {

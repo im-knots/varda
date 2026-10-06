@@ -1,8 +1,8 @@
 //! Moving the camera without a hand on the stick: recall flights to saved
-//! locations, a tour through them, and an autopilot that steers toward open,
-//! detailed space.
+//! locations, a search for open space enclosed by the fractal (Find Inside),
+//! and an autopilot that steers toward open, detailed space.
 
-use super::camera::{MIN_DISTANCE, Pose, Quat, sphere_trace};
+use super::camera::{MIN_DISTANCE, Pose, Quat, follow, sphere_trace};
 use super::stack::Stack;
 use super::vec3::Vec3;
 
@@ -112,17 +112,21 @@ const INSIDE_CANDIDATES: u32 = 256;
 const INSIDE_REACH: f64 = 8.0;
 /// Enclosure a point needs to count as inside the structure.
 const INSIDE_ENCLOSED: f64 = 0.6;
+/// Sphere-tracing steps for each Find Inside probe.
+const INSIDE_STEPS: usize = 64;
+/// A probe that stops short of this fraction of its reach hit a surface.
+const HIT_FRACTION: f64 = 0.99;
 
 /// The 6 axis and 8 diagonal directions Find Inside probes.
 pub fn probe_directions() -> [Vec3; 14] {
     let d = 1.0 / 3f64.sqrt();
     [
-        Vec3::new(1.0, 0.0, 0.0),
-        Vec3::new(-1.0, 0.0, 0.0),
-        Vec3::new(0.0, 1.0, 0.0),
-        Vec3::new(0.0, -1.0, 0.0),
-        Vec3::new(0.0, 0.0, 1.0),
-        Vec3::new(0.0, 0.0, -1.0),
+        Vec3::X,
+        -Vec3::X,
+        Vec3::Y,
+        -Vec3::Y,
+        Vec3::Z,
+        -Vec3::Z,
         Vec3::new(d, d, d),
         Vec3::new(d, d, -d),
         Vec3::new(d, -d, d),
@@ -204,8 +208,8 @@ pub fn find_inside(stack: &Stack, balls: &[(Vec3, f64)]) -> Option<Inside> {
         let mut view = probes[0];
         let mut longest = -1.0;
         for dir in probes {
-            let free = sphere_trace(stack, position, dir, 64, reach);
-            if free < reach * 0.99 {
+            let free = sphere_trace(stack, position, dir, INSIDE_STEPS, reach);
+            if free < reach * HIT_FRACTION {
                 hits += 1;
                 if free > longest {
                     longest = free;
@@ -237,16 +241,28 @@ const PROBES: usize = 17;
 const PROBES_PER_FRAME: usize = 4;
 /// Turn rate per radian between the heading and the goal.
 const STEER_GAIN: f64 = 2.0;
+/// `STEER_GAIN` is multiplied by this when boxed in.
+const BOXED_GAIN: f64 = 4.0;
+/// Autopilot probes reach this many distances to the surface.
+const PROBE_REACH: f64 = 16.0;
+/// Sphere-tracing steps for each autopilot probe.
+const PROBE_STEPS: usize = 32;
+/// Score weights for room to fly, reaching structure, and detail; they sum
+/// to 1.
+const ROOM_WEIGHT: f64 = 0.4;
+const STRUCTURE_WEIGHT: f64 = 0.3;
+const DETAIL_WEIGHT: f64 = 0.3;
+/// Structure score for a probe that reaches no surface.
+const SKY_STRUCTURE: f64 = 0.3;
 /// How sharply the goal favors the best-scoring probes. Scores are 0 to 1;
 /// a probe this much worse than the best counts `1/e` as much.
 const SCORE_TEMPERATURE: f64 = 0.05;
 /// Score bonus for a probe pointing along the current goal, at full
-/// alignment. Between two equally good ways the autopilot keeps the one it
-/// chose instead of switching back and forth.
+/// alignment. Between two equally good ways the goal stays where it is.
 const GOAL_LOYALTY: f64 = 0.08;
 /// Probes further than this from the best one do not pull the goal (cosine
-/// of about 25 degrees). Averaging good ways on both sides of a wall would
-/// aim at the wall.
+/// of about 25 degrees), so good ways on both sides of a wall do not average
+/// into the wall.
 const MODE_COS: f64 = 0.9;
 /// Seconds for the goal heading to follow a change in the scores.
 const GOAL_SMOOTHING: f64 = 0.6;
@@ -278,12 +294,10 @@ pub struct Steering {
 /// reaches structure, and how much detail is where it lands, and steers
 /// toward the good ones.
 ///
-/// Picking the single best probe makes the turn rate jump whenever the
-/// leader changes, and scores in a fractal change all the time. Instead the
-/// goal is the score-weighted mean of the directions near the best (a soft
-/// maximum around one mode), with a bonus for staying on the current goal;
-/// the goal and then the turn rates each follow through a first-order lag,
-/// so the camera's turning is smooth to the second order.
+/// The goal is the score-weighted mean of the directions near the best (a
+/// soft maximum around one mode), with a bonus for staying on the current
+/// goal. The goal and then the turn rates each follow through a first-order
+/// lag, so the camera's turning is smooth to the second order.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Autopilot {
     scores: [f64; PROBES],
@@ -312,11 +326,6 @@ impl Default for Autopilot {
     }
 }
 
-/// The fraction of the way a first-order lag of `seconds` moves in `dt`.
-fn follow(dt: f64, seconds: f64) -> f64 {
-    1.0 - (-dt.max(0.0) / seconds).exp()
-}
-
 /// With less free space than this along every probe (in distances to the
 /// surface), the autopilot turns hard toward the most open one.
 const BOXED_IN: f64 = 2.0;
@@ -325,56 +334,69 @@ impl Autopilot {
     /// Score some probes and steer toward the good ones, over a frame of `dt`
     /// seconds. `distance` is the distance from the camera to the surface.
     pub fn step(&mut self, stack: &Stack, pose: &Pose, distance: f64, dt: f64) -> Steering {
-        let reach = 16.0 * distance.max(MIN_DISTANCE);
         for _ in 0..PROBES_PER_FRAME {
             let i = self.next;
             self.next = (self.next + 1) % PROBES;
-            let dir = direction(pose, probe_offset(i));
-            let free = sphere_trace(stack, pose.position, dir, 32, reach);
-            // Room: a few distances to the surface of free space ahead, so
-            // the camera does not fly into a wall.
-            let ratio = free / distance.max(MIN_DISTANCE);
-            self.room[i] = ratio;
-            self.directions[i] = Some(dir);
-            let room = ((ratio - 1.5) / 4.5).clamp(0.0, 1.0);
-            // Structure: the probe reached a surface rather than empty sky.
-            let structure = if free < reach * 0.99 { 1.0 } else { 0.3 };
-            // Detail: how much the escape count varies around where the
-            // probe stopped. A smooth blob varies little.
-            let hit = pose.position + dir * free;
-            let spread = 0.25 * free.max(distance);
-            let centre = stack.sample(hit, 0.0).smooth_iteration;
-            let variation = [
-                Vec3::new(spread, 0.0, 0.0),
-                Vec3::new(0.0, spread, 0.0),
-                Vec3::new(0.0, 0.0, spread),
-            ]
-            .iter()
-            .map(|e| (stack.sample(hit + *e, 0.0).smooth_iteration - centre).abs())
-            .sum::<f64>()
-                / 3.0;
-            let detail = (variation / 4.0).min(1.0);
-            self.scores[i] = 0.4 * room + 0.3 * structure + 0.3 * detail;
+            self.score_probe(stack, pose, distance, i);
         }
         let confidence = self.scores.iter().copied().fold(f64::MIN, f64::max);
-        let most_room = self
-            .room
+        let (most_room, room) = self.most_room();
+        let boxed_in = room < BOXED_IN;
+        let wanted = if boxed_in {
+            // Boxed in: head for the most open probe, or, if that is
+            // straight ahead, turn anyway.
+            let i = if most_room == 0 { 1 } else { most_room };
+            self.directions[i].unwrap_or_else(|| direction(pose, probe_offset(i)))
+        } else {
+            self.soft_best(pose)
+        };
+        let goal = self.follow_goal(wanted, boxed_in, dt);
+        self.steer_toward(pose, goal, boxed_in, dt);
+        Steering {
+            yaw_rate: self.rates.0,
+            pitch_rate: self.rates.1,
+            confidence: confidence.clamp(0.0, 1.0),
+        }
+    }
+
+    /// Traces probe `i` from `pose` and records its direction, its free
+    /// distance in distances to the surface, and its score.
+    fn score_probe(&mut self, stack: &Stack, pose: &Pose, distance: f64, i: usize) {
+        let reach = PROBE_REACH * distance.max(MIN_DISTANCE);
+        let dir = direction(pose, probe_offset(i));
+        let free = sphere_trace(stack, pose.position, dir, PROBE_STEPS, reach);
+        // Room: a few distances to the surface of free space ahead, so the
+        // camera does not fly into a wall.
+        let ratio = free / distance.max(MIN_DISTANCE);
+        self.room[i] = ratio;
+        self.directions[i] = Some(dir);
+        let room = ((ratio - 1.5) / 4.5).clamp(0.0, 1.0);
+        // Structure: the probe reached a surface rather than empty sky.
+        let structure = if free < reach * HIT_FRACTION {
+            1.0
+        } else {
+            SKY_STRUCTURE
+        };
+        let detail = detail_at(stack, pose.position + dir * free, 0.25 * free.max(distance));
+        self.scores[i] = ROOM_WEIGHT * room + STRUCTURE_WEIGHT * structure + DETAIL_WEIGHT * detail;
+    }
+
+    /// The index and free distance of the probe with the most room; the
+    /// first one on a tie.
+    fn most_room(&self) -> (usize, f64) {
+        self.room
             .iter()
             .copied()
             .enumerate()
             .fold(
                 (0, f64::MIN),
                 |acc, (i, r)| if r > acc.1 { (i, r) } else { acc },
-            );
-        let boxed_in = most_room.1 < BOXED_IN;
-        let wanted = if boxed_in {
-            // Boxed in: head for the most open probe, or, if that is
-            // straight ahead, turn anyway.
-            let i = if most_room.0 == 0 { 1 } else { most_room.0 };
-            self.directions[i].unwrap_or_else(|| direction(pose, probe_offset(i)))
-        } else {
-            self.soft_best(pose)
-        };
+            )
+    }
+
+    /// Moves the goal toward `wanted` by the goal lag, faster when boxed in,
+    /// and returns it. The first frame takes `wanted` as is.
+    fn follow_goal(&mut self, wanted: Vec3, boxed_in: bool, dt: f64) -> Vec3 {
         let smoothing = if boxed_in {
             BOXED_GOAL_SMOOTHING
         } else {
@@ -392,14 +414,19 @@ impl Autopilot {
             None => wanted,
         };
         self.goal = Some(goal);
+        goal
+    }
 
+    /// Moves the turn rates toward the yaw and pitch that face `goal` from
+    /// `pose`, by the `RATE_SMOOTHING` lag. The gain is higher when boxed in.
+    fn steer_toward(&mut self, pose: &Pose, goal: Vec3, boxed_in: bool, dt: f64) {
         // Angles to the goal in the camera's frame. Pitching positive turns
         // the view down.
         let ahead = goal.dot(pose.forward());
         let yaw = goal.dot(pose.right()).atan2(ahead);
         let pitch = -goal.dot(pose.up()).atan2(ahead);
         let gain = if boxed_in {
-            4.0 * STEER_GAIN
+            BOXED_GAIN * STEER_GAIN
         } else {
             STEER_GAIN
         };
@@ -410,11 +437,6 @@ impl Autopilot {
         let k = follow(dt, RATE_SMOOTHING);
         self.rates.0 += (target.0 - self.rates.0) * k;
         self.rates.1 += (target.1 - self.rates.1) * k;
-        Steering {
-            yaw_rate: self.rates.0,
-            pitch_rate: self.rates.1,
-            confidence: confidence.clamp(0.0, 1.0),
-        }
     }
 
     /// The score-weighted mean direction of the probes near the best one,
@@ -445,6 +467,23 @@ impl Autopilot {
     }
 }
 
+/// Detail near `hit`: the mean change in escape count `spread` away along
+/// each axis, scaled to 0 to 1. A smooth blob has little.
+fn detail_at(stack: &Stack, hit: Vec3, spread: f64) -> f64 {
+    let center = stack.sample(hit, 0.0).smooth_iteration;
+    let variation = [
+        Vec3::new(spread, 0.0, 0.0),
+        Vec3::new(0.0, spread, 0.0),
+        Vec3::new(0.0, 0.0, spread),
+    ]
+    .iter()
+    .map(|e| (stack.sample(hit + *e, 0.0).smooth_iteration - center).abs())
+    .sum::<f64>()
+        / 3.0;
+    (variation / 4.0).min(1.0)
+}
+
+/// The unit direction `right` and `up` off the camera's forward axis.
 fn direction(pose: &Pose, (right, up): (f64, f64)) -> Vec3 {
     (pose.forward() + pose.right() * right + pose.up() * up).normalize()
 }
@@ -464,19 +503,13 @@ mod tests {
     #[test]
     fn slerp_ends_at_both_poses_and_keeps_unit_length() {
         let a = Quat::IDENTITY;
-        let b = Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), 1.2);
+        let b = Quat::from_axis_angle(Vec3::Y, 1.2);
         assert_eq!(slerp(a, b, 0.0), a);
         let end = slerp(a, b, 1.0);
-        assert!(close(
-            end.rotate(Vec3::new(0.0, 0.0, 1.0)),
-            b.rotate(Vec3::new(0.0, 0.0, 1.0))
-        ));
+        assert!(close(end.rotate(Vec3::Z), b.rotate(Vec3::Z)));
         let mid = slerp(a, b, 0.5);
-        let expect = Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), 0.6);
-        assert!(close(
-            mid.rotate(Vec3::new(0.0, 0.0, 1.0)),
-            expect.rotate(Vec3::new(0.0, 0.0, 1.0))
-        ));
+        let expect = Quat::from_axis_angle(Vec3::Y, 0.6);
+        assert!(close(mid.rotate(Vec3::Z), expect.rotate(Vec3::Z)));
     }
 
     #[test]
@@ -484,7 +517,7 @@ mod tests {
         let from = Pose::default();
         let to = Pose {
             position: Vec3::new(1.0, 2.0, 3.0),
-            orientation: Quat::from_axis_angle(Vec3::new(1.0, 0.0, 0.0), 0.5),
+            orientation: Quat::from_axis_angle(Vec3::X, 0.5),
         };
         let mut recall = Recall::new((from, 1.0), (to, 100.0), 1.0);
         let early = recall.step(0.1);
@@ -536,9 +569,7 @@ mod tests {
         let d = stack.sample(p, 0.0).distance;
         let hits = probe_directions()
             .iter()
-            .filter(|dir| {
-                crate::fractal::camera::sphere_trace(stack, p, **dir, 64, 8.0 * d) < 8.0 * d * 0.99
-            })
+            .filter(|dir| sphere_trace(stack, p, **dir, 64, 8.0 * d) < 8.0 * d * 0.99)
             .count();
         hits as f64 / 14.0
     }
@@ -558,13 +589,7 @@ mod tests {
         let enclosed = enclosure(&stack, pose.position);
         assert!(enclosed >= 0.6, "enclosure {enclosed}");
         // It looks down a way that ends in structure.
-        let ahead = crate::fractal::camera::sphere_trace(
-            &stack,
-            pose.position,
-            pose.forward(),
-            64,
-            8.0 * scale,
-        );
+        let ahead = sphere_trace(&stack, pose.position, pose.forward(), 64, 8.0 * scale);
         assert!(ahead < 8.0 * scale * 0.99, "looks into the void");
         assert!(pose.up().y > 0.0, "upside down");
     }
@@ -636,13 +661,7 @@ mod tests {
     #[test]
     fn autopilot_turns_away_from_a_wall() {
         let stack = default_box();
-        let near = crate::fractal::camera::sphere_trace(
-            &stack,
-            Vec3::new(0.0, 0.0, -12.0),
-            Vec3::new(0.0, 0.0, 1.0),
-            200,
-            20.0,
-        );
+        let near = sphere_trace(&stack, Vec3::new(0.0, 0.0, -12.0), Vec3::Z, 200, 20.0);
         let pose = Pose {
             position: Vec3::new(0.0, 0.0, -12.0 + near * 0.99),
             orientation: Quat::IDENTITY,

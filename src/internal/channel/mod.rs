@@ -1,7 +1,7 @@
 //! Channel: groups decks into a composited layer with its own effect chain.
 
 use crate::arrangement::SourceDemand;
-use crate::deck::{Deck, Effect};
+use crate::deck::{Deck, Effect, FramePacing};
 use crate::isf::ISFShader;
 use crate::modulation::ModulationEngine;
 use crate::params::ShaderParams;
@@ -437,13 +437,21 @@ impl GpuTimingFrame {
     }
 }
 
+/// One frame's timing as the mixer hands it to a channel.
+#[derive(Debug, Clone, Copy)]
+pub struct FrameClock {
+    /// Mixer time in seconds.
+    pub time: f32,
+    /// Frame delta in seconds.
+    pub dt: f32,
+    /// Whether the wall clock paces this frame. Offline renders are not live.
+    pub live: bool,
+}
+
 /// Channel: groups decks into a composited layer.
 pub struct Channel {
     /// Stable UUID for this channel (8-char hex, persists across saves)
     uuid: String,
-
-    /// Whether the wall clock paces frames, set by the mixer each frame.
-    wall_paced: bool,
 
     /// Channel name (A, B, C, ...)
     pub name: String,
@@ -488,11 +496,6 @@ pub struct Channel {
 }
 
 impl Channel {
-    /// Set by the mixer each frame: whether the wall clock paces frames.
-    pub fn set_wall_paced(&mut self, wall_paced: bool) {
-        self.wall_paced = wall_paced;
-    }
-
     /// Stable UUID for this channel.
     pub fn uuid(&self) -> &str {
         &self.uuid
@@ -526,7 +529,6 @@ impl Channel {
         )?;
 
         Ok(Self {
-            wall_paced: false,
             uuid: crate::ids::generate_short_uuid(),
             name,
             decks: Vec::new(),
@@ -637,7 +639,7 @@ impl Channel {
 
     /// Render all decks in this channel, composite them, then apply channel effects.
     /// `channel_idx` identifies the channel's GPU timing queries.
-    /// `dt` is the frame delta in seconds (for auto-transition tick).
+    /// `clock.dt` ticks auto-transitions and paces decks when `target_fps` is 0.
     /// `target_fps` is the global target FPS for the adaptive skip budget.
     /// `total_active_decks` is the active deck count across all channels, from the last frame.
     /// `gpu_load_ratio` scales CPU-measured render costs to estimate GPU time; >1.0 means
@@ -655,8 +657,7 @@ impl Channel {
         audio_data: &crate::audio::AudioData,
         modulation: &ModulationEngine,
         channel_idx: usize,
-        time: f32,
-        dt: f32,
+        clock: FrameClock,
         target_fps: u32,
         total_active_decks: u32,
         gpu_load_ratio: f32,
@@ -671,6 +672,7 @@ impl Channel {
             transition_progress: Option<f64>, // Some = transitioning with shader
         }
 
+        let FrameClock { time, dt, live } = clock;
         let render_start = std::time::Instant::now();
 
         // Tick auto-transition state before rendering
@@ -739,13 +741,12 @@ impl Channel {
                 if should_render {
                     // Set the fixed time step so the shader TIME uniform advances
                     // by consistent increments regardless of skip gaps.
-                    let render_dt = if target_fps > 0 {
+                    let step = if target_fps > 0 {
                         1.0 / target_fps as f32
                     } else {
                         dt // uncapped: use actual frame delta
                     };
-                    slot.deck.set_render_dt(render_dt);
-                    slot.deck.set_wall_paced(self.wall_paced);
+                    slot.deck.set_pacing(FramePacing { step, live });
 
                     // Allocate GPU timing queries for this deck
                     let gpu_timing = match (&mut timing, query_set) {
@@ -996,6 +997,7 @@ impl Channel {
                     output_view,
                     &uniforms,
                     Some(modulation),
+                    live,
                     &mut fx_cmd_buffers,
                 ) {
                     log::warn!("Effect {eff_idx} failed, skipping: {e}");

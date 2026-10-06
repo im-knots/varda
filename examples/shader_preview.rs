@@ -15,6 +15,9 @@
 //! - `--size WxH`, `--frame N`, `--set name=value` (clamped to the declared
 //!   `MIN`/`MAX`, with a warning). A color takes four values: `--set
 //!   fog_color=0.1,0.2,0.3,1`.
+//! - `--fps N`: the frame rate time steps at (default 60). A lower rate moves a
+//!   flying camera further per frame and, with a target frame rate set, makes
+//!   dynamic resolution lower the render scale, as on a slow live machine.
 //! - `--warmup N` and `--settle MS`: extra frames at time 0, each followed by a
 //!   pause, so background preprocessors can publish before the capture.
 //! - `--time N`: after the capture, render N more frames and report ms/frame for
@@ -51,7 +54,7 @@ use varda::{
 };
 
 /// Authoring rate. A frame index names a point on this clock.
-const FPS: f32 = 60.0;
+const FPS: u32 = 60;
 
 /// Linear RGB, row-major.
 type Pixels = Vec<[f32; 3]>;
@@ -90,6 +93,7 @@ struct Options {
     warmup: u32,
     settle: u64,
     frame: u32,
+    fps: u32,
     time: u32,
     probe: bool,
     pair: bool,
@@ -127,6 +131,7 @@ fn parse_args() -> Result<Options> {
         warmup: 0,
         settle: 8,
         frame: 90,
+        fps: FPS,
         time: 0,
         probe: false,
         pair: false,
@@ -150,6 +155,7 @@ fn parse_args() -> Result<Options> {
             "--warmup" => opts.warmup = next(&mut args, "--warmup")?,
             "--settle" => opts.settle = next(&mut args, "--settle")?,
             "--frame" => opts.frame = next(&mut args, "--frame")?,
+            "--fps" => opts.fps = next::<u32>(&mut args, "--fps")?.max(1),
             "--time" => opts.time = next(&mut args, "--time")?,
             "--probe" => opts.probe = true,
             "--pair" => opts.pair = true,
@@ -222,90 +228,20 @@ fn apply_override(params: &mut ShaderParams, name: &str, value: f32) -> Result<(
     if !(lo..=hi).contains(&value) {
         eprintln!("warning: --set {name}={value} is outside [{lo}, {hi}]; using {clamped}");
     }
-    match definition.input_type.as_str() {
-        "float" => params.set_float(name, clamped),
-        "bool" => params.set_bool(name, clamped > 0.5),
-        "long" => params.set_long(name, clamped as i32),
-        other => bail!("`{name}` is a {other}, which --set cannot express"),
-    }
-    Ok(())
+    varda::testing::set_param(params, name, f64::from(clamped))
 }
 
 /// Read the composite back as linear RGB. Blocking is fine in a one-shot tool.
 fn read_composite(context: &GpuContext, mixer: &Mixer, width: u32, height: u32) -> Pixels {
-    let bytes_per_pixel = 8u32; // Rgba16Float
-    let padded = (width * bytes_per_pixel).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
-        * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-    let buffer = context.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("shader_preview readback"),
-        size: u64::from(padded * height),
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    let mut encoder = context
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-    encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture: mixer.composite_texture(),
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(padded),
-                rows_per_image: Some(height),
-            },
-        },
-        wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-    );
-    context.queue.submit(std::iter::once(encoder.finish()));
-
-    let slice = buffer.slice(..);
-    let (tx, rx) = std::sync::mpsc::channel();
-    slice.map_async(wgpu::MapMode::Read, move |r| {
-        let _ = tx.send(r);
-    });
-    let _ = context.device.poll(wgpu::PollType::Wait {
-        submission_index: None,
-        timeout: None,
-    });
-    rx.recv().expect("map callback").expect("map succeeded");
-
-    let data = slice.get_mapped_range().expect("mapped range");
-    let mut pixels = Vec::with_capacity((width * height) as usize);
-    for y in 0..height {
-        let row = (y * padded) as usize;
-        for x in 0..width {
-            let at = row + (x * bytes_per_pixel) as usize;
-            let channel = |i: usize| -> f32 {
-                let bits = u16::from_le_bytes([data[at + i * 2], data[at + i * 2 + 1]]);
-                f32::from(half::f16::from_bits(bits))
-            };
-            pixels.push([channel(0), channel(1), channel(2)]);
-        }
-    }
-    drop(data);
-    buffer.unmap();
-    pixels
+    varda::testing::read_rgba16f(context, mixer.composite_texture(), width, height)
+        .into_iter()
+        .map(|[r, g, b, _]| [r, g, b])
+        .collect()
 }
 
 /// sRGB display encoding: the composite is linear light, a PNG is not.
 fn encode_srgb(value: f32) -> u8 {
-    let v = value.clamp(0.0, 1.0);
-    let encoded = if v <= 0.003_130_8 {
-        v * 12.92
-    } else {
-        1.055 * v.powf(1.0 / 2.4) - 0.055
-    };
-    (encoded * 255.0).round() as u8
+    varda::testing::srgb8(value).round() as u8
 }
 
 fn to_image(pixels: &Pixels, width: u32, height: u32) -> image::RgbImage {
@@ -401,6 +337,7 @@ struct Shot<'a> {
     width: u32,
     height: u32,
     frame: u32,
+    fps: u32,
     warmup: u32,
     settle: u64,
     capture_previous: bool,
@@ -434,8 +371,13 @@ fn frame_inputs<'a>(
     }
 }
 
-fn render_frame(context: &GpuContext, mixer: &mut Mixer, inputs: &FrameInputs<'_>) -> Result<()> {
-    mixer.render(context, inputs, 60, &[])?;
+fn render_frame(
+    context: &GpuContext,
+    mixer: &mut Mixer,
+    inputs: &FrameInputs<'_>,
+    fps: u32,
+) -> Result<()> {
+    mixer.render(context, inputs, fps, &[])?;
     let _ = context.device.poll(wgpu::PollType::Wait {
         submission_index: None,
         timeout: None,
@@ -487,6 +429,7 @@ fn render_shot(context: &GpuContext, shot: &Shot<'_>) -> Result<Captured> {
             context,
             &mut mixer,
             &frame_inputs(&audio, &audio_values, &analyzer_values, 0.0),
+            shot.fps,
         )?;
         std::thread::sleep(std::time::Duration::from_millis(shot.settle));
     }
@@ -496,7 +439,13 @@ fn render_shot(context: &GpuContext, shot: &Shot<'_>) -> Result<Captured> {
         render_frame(
             context,
             &mut mixer,
-            &frame_inputs(&audio, &audio_values, &analyzer_values, step as f32 / FPS),
+            &frame_inputs(
+                &audio,
+                &audio_values,
+                &analyzer_values,
+                step as f32 / shot.fps as f32,
+            ),
+            shot.fps,
         )?;
         if shot.capture_previous && step + 1 == shot.frame {
             previous = Some(read_composite(context, &mixer, shot.width, shot.height));
@@ -507,11 +456,12 @@ fn render_shot(context: &GpuContext, shot: &Shot<'_>) -> Result<Captured> {
     if shot.timed_frames > 0 {
         let started = std::time::Instant::now();
         for step in 1..=shot.timed_frames {
-            let time = (shot.frame + step) as f32 / FPS;
+            let time = (shot.frame + step) as f32 / shot.fps as f32;
             render_frame(
                 context,
                 &mut mixer,
                 &frame_inputs(&audio, &audio_values, &analyzer_values, time),
+                shot.fps,
             )?;
         }
         let elapsed = started.elapsed().as_secs_f64() * 1000.0;
@@ -554,6 +504,7 @@ fn single_shot(context: &GpuContext, opts: &Options) -> Result<()> {
             width: opts.width,
             height: opts.height,
             frame: opts.frame,
+            fps: opts.fps,
             warmup: opts.warmup,
             settle: opts.settle,
             capture_previous: opts.pair,
@@ -621,6 +572,7 @@ fn contact_sheet(context: &GpuContext, opts: &Options) -> Result<()> {
                     width: cell_w,
                     height: cell_h,
                     frame: opts.frame,
+                    fps: opts.fps,
                     warmup: opts.warmup,
                     settle: opts.settle,
                     capture_previous: false,

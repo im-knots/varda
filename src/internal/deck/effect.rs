@@ -68,8 +68,7 @@ impl Effect {
             "Effect Pass Buffer",
         );
 
-        let inputs = shader.metadata.inputs.as_deref().unwrap_or(&[]);
-        let params = ShaderParams::from_inputs(inputs);
+        let params = ShaderParams::from_metadata(&shader.metadata);
         let phase_inputs_config = shader.metadata.phase_inputs.clone();
 
         let uuid = crate::ids::generate_short_uuid();
@@ -108,8 +107,8 @@ impl Effect {
         self.uuid = uuid;
     }
 
-    /// Apply this effect to an input texture, writing to the target texture. Optionally modulates
-    /// parameters under the given prefix.
+    /// Apply this effect to an input texture, writing to the target texture. `live` is whether
+    /// the wall clock paces the frame.
     ///
     /// # Errors
     ///
@@ -120,6 +119,7 @@ impl Effect {
         input_view: &wgpu::TextureView,
         output_view: &wgpu::TextureView,
         uniforms: &ISFUniforms,
+        live: bool,
         cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
     ) -> Result<()> {
         self.apply_with_modulation(
@@ -128,11 +128,14 @@ impl Effect {
             output_view,
             uniforms,
             None,
+            live,
             cmd_buffers,
         )
     }
 
-    /// Apply this effect with modulation support
+    /// Apply this effect with modulation support. Its events reset to false afterwards. A `live`
+    /// frame builds new specialized pipelines in the background (see
+    /// [`UnifiedPipeline::specialize`]).
     ///
     /// # Errors
     ///
@@ -142,6 +145,8 @@ impl Effect {
     ///
     /// Panics if the user parameter buffer is absent immediately after
     /// `ensure_buffer` created it.
+    // One per frame input the effect reads.
+    #[allow(clippy::too_many_arguments)]
     pub fn apply_with_modulation(
         &mut self,
         context: &GpuContext,
@@ -149,6 +154,7 @@ impl Effect {
         output_view: &wgpu::TextureView,
         uniforms: &ISFUniforms,
         modulation: Option<&crate::modulation::ModulationEngine>,
+        live: bool,
         cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
     ) -> Result<()> {
         if !self.enabled {
@@ -166,8 +172,11 @@ impl Effect {
         } else {
             self.params.update_buffer(&context.queue);
         }
-        self.pipeline
-            .specialize(&context.device, self.params.specialization_constants());
+        self.pipeline.specialize(
+            &context.device,
+            self.params.specialization_constants(),
+            live,
+        );
         self.passes
             .update_sizes(context, &|name| self.params.base_number(name));
         let user_params_buffer = self
@@ -218,6 +227,7 @@ impl Effect {
             .encode_output(&mut encoder, &bindings, slot, final_uniforms, output_view);
         cmd_buffers.push(encoder.finish());
         self.passes.finish_frame();
+        self.params.clear_events();
 
         Ok(())
     }

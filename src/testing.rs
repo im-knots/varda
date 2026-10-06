@@ -102,6 +102,7 @@ pub fn render_source_pixels(
         time_delta: 0.0,
         frame_index: 0,
         phase_times: [0.0; 4],
+        live: false,
         audio: &audio,
         modulation: &modulation,
         param_prefix: "deck/test/param",
@@ -111,11 +112,26 @@ pub fn render_source_pixels(
     source.render(&mut frame).expect("source renders");
     gpu.queue.submit(cmd_buffers);
 
-    let unpadded = width * 8;
-    let padded =
-        unpadded.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    read_rgba16f(gpu, &texture, width, height)
+}
+
+/// Read an `Rgba16Float` texture back as linear RGBA, row-major. Blocks on
+/// the GPU.
+///
+/// # Panics
+///
+/// Panics if the readback cannot be mapped.
+pub fn read_rgba16f(
+    gpu: &crate::renderer::context::GpuContext,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+) -> Vec<[f32; 4]> {
+    let bytes_per_pixel = 8u32;
+    let padded = (width * bytes_per_pixel).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+        * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("test source readback"),
+        label: Some("test readback"),
         size: u64::from(padded * height),
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
@@ -125,7 +141,7 @@ pub fn render_source_pixels(
         .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
-            texture: &texture,
+            texture,
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
@@ -156,21 +172,93 @@ pub fn render_source_pixels(
         })
         .ok();
     rx.recv().expect("map channel").expect("map ok");
-    let data = buffer.slice(..).get_mapped_range().expect("mapped");
-    let channel = |at: usize| half::f16::from_le_bytes([data[at], data[at + 1]]).to_f32();
     let mut out = Vec::with_capacity((width * height) as usize);
-    for row in 0..height as usize {
-        for col in 0..width as usize {
-            let at = row * padded as usize + col * 8;
-            out.push([
-                channel(at),
-                channel(at + 2),
-                channel(at + 4),
-                channel(at + 6),
-            ]);
+    {
+        let data = buffer
+            .slice(..)
+            .get_mapped_range()
+            .expect("mapped readback");
+        for row in 0..height {
+            let base = (row * padded) as usize;
+            for col in 0..width {
+                let px = base + (col * bytes_per_pixel) as usize;
+                out.push(std::array::from_fn(|i| {
+                    half::f16::from_le_bytes([data[px + i * 2], data[px + i * 2 + 1]]).to_f32()
+                }));
+            }
         }
     }
+    buffer.unmap();
     out
+}
+
+/// The sRGB 8-bit value of a linear channel, unrounded, as a PNG would store it.
+pub fn srgb8(value: f32) -> f64 {
+    let v = f64::from(value.clamp(0.0, 1.0));
+    let encoded = if v <= 0.003_130_8 {
+        v * 12.92
+    } else {
+        1.055 * v.powf(1.0 / 2.4) - 0.055
+    };
+    encoded * 255.0
+}
+
+/// Set a numeric shader input through the setter that matches its declared
+/// type: `long` truncates, `bool` is true above 0.5, and an `event` fires above 0.5.
+///
+/// # Errors
+///
+/// Fails if the shader has no input `name`, or it is not a float, long, bool or event.
+pub fn set_param(
+    params: &mut crate::params::ShaderParams,
+    name: &str,
+    value: f64,
+) -> anyhow::Result<()> {
+    let Some(definition) = params.definitions.get(name) else {
+        anyhow::bail!("shader has no input `{name}`");
+    };
+    match definition.input_type.as_str() {
+        "float" => params.set_float(name, value as f32),
+        "long" => params.set_long(name, value as i32),
+        "bool" | "event" => params.set_bool(name, value > 0.5),
+        other => anyhow::bail!("`{name}` is a {other}, not a number"),
+    }
+    Ok(())
+}
+
+/// One acceptance scene from `tests/fixtures/fractal_scenes.json`.
+pub struct FractalScene {
+    pub name: String,
+    /// Shader inputs, in file order.
+    pub params: Vec<(String, f64)>,
+    /// Preprocessor state, such as the camera pose.
+    pub state: serde_json::Map<String, serde_json::Value>,
+}
+
+/// The fractal explorer's acceptance scenes.
+///
+/// # Panics
+///
+/// Panics if the fixture is missing or malformed.
+pub fn fractal_scenes() -> Vec<FractalScene> {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/fractal_scenes.json"
+    );
+    let text = std::fs::read_to_string(path).expect("scene fixture");
+    let list: Vec<serde_json::Value> = serde_json::from_str(&text).expect("scene JSON");
+    list.into_iter()
+        .map(|scene| FractalScene {
+            name: scene["name"].as_str().expect("name").to_owned(),
+            params: scene["params"]
+                .as_object()
+                .expect("params")
+                .iter()
+                .map(|(k, v)| (k.clone(), v.as_f64().expect("numeric param")))
+                .collect(),
+            state: scene["state"].as_object().expect("state").clone(),
+        })
+        .collect()
 }
 
 /// An engine built with `config` on a headless GPU, or `None` when there is no GPU.

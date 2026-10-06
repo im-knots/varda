@@ -223,6 +223,12 @@ pub(crate) mod tests {
                 Some(ParamValue::Float(v)) => *v,
                 _ => 1.0,
             };
+            if matches!(
+                frame.state.values.get("reset"),
+                Some(ParamValue::Bool(true))
+            ) {
+                self.count = 0.0;
+            }
             self.count += step;
             if step == 0.0 {
                 self.message = Some("standing still".into());

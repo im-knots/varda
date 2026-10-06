@@ -92,28 +92,22 @@ pub struct Pose {
 
 impl Pose {
     pub fn right(&self) -> Vec3 {
-        self.orientation.rotate(Vec3::new(1.0, 0.0, 0.0))
+        self.orientation.rotate(Vec3::X)
     }
 
     pub fn up(&self) -> Vec3 {
-        self.orientation.rotate(Vec3::new(0.0, 1.0, 0.0))
+        self.orientation.rotate(Vec3::Y)
     }
 
     pub fn forward(&self) -> Vec3 {
-        self.orientation.rotate(Vec3::new(0.0, 0.0, 1.0))
+        self.orientation.rotate(Vec3::Z)
     }
-}
 
-impl Pose {
     /// At `position`, facing `forward`, with up as close to world +y as
     /// `forward` allows. Straight up or down, up falls back to world +z.
     pub fn looking(position: Vec3, forward: Vec3) -> Self {
         let f = forward.normalize();
-        let world_up = if f.y.abs() > 0.999 {
-            Vec3::new(0.0, 0.0, 1.0)
-        } else {
-            Vec3::new(0.0, 1.0, 0.0)
-        };
+        let world_up = if f.y.abs() > 0.999 { Vec3::Z } else { Vec3::Y };
         let r = world_up.cross(f).normalize();
         let u = f.cross(r);
         // Rotation matrix with columns right, up, forward, to a quaternion.
@@ -209,6 +203,8 @@ pub const SLIDE_AHEAD: f64 = 0.05;
 pub const SLIDE_RANGE: f64 = 8.0;
 /// Distance-estimate samples in one clearance march.
 pub const CLEARANCE_STEPS: usize = 48;
+/// A heading shorter than this has no direction.
+const MIN_HEADING: f64 = 1e-9;
 /// Distance floor, so a camera touching the surface can still back away.
 pub const MIN_DISTANCE: f64 = 1e-6;
 /// Seconds for autofocus to settle on a new distance.
@@ -291,11 +287,7 @@ impl Flight {
     /// by central differences `e` apart.
     fn normal(stack: &Stack, p: Vec3, e: f64) -> Vec3 {
         let d = |v: Vec3| Self::distance(stack, p + v * e) - Self::distance(stack, p - v * e);
-        let g = Vec3::new(
-            d(Vec3::new(1.0, 0.0, 0.0)),
-            d(Vec3::new(0.0, 1.0, 0.0)),
-            d(Vec3::new(0.0, 0.0, 1.0)),
-        );
+        let g = Vec3::new(d(Vec3::X), d(Vec3::Y), d(Vec3::Z));
         if g.length() > 0.0 {
             g.normalize()
         } else {
@@ -303,12 +295,9 @@ impl Flight {
         }
     }
 
-    /// Whether `p` touches the drawn surface: its distance estimate is
-    /// under `CONTACT` of the scene scale, as the renderer's hit test is a
-    /// small distance, not an orbit that stays bounded. Bounded orbits reach
-    /// far past what is drawn (Gnarl leaves wide bands of them in what renders
-    /// as open space), and colliding with them stopped the camera at
-    /// invisible walls.
+    /// True when the distance estimate at `p` is under `contact()`. The
+    /// renderer draws a surface where the distance is small, and bounded
+    /// orbits reach into open space (Gnarl), so they do not count.
     fn inside(&self, stack: &Stack, p: Vec3) -> bool {
         Self::distance(stack, p) < self.contact()
     }
@@ -322,110 +311,24 @@ impl Flight {
     pub fn step(&mut self, stack: &Stack, controls: &Controls, dt: f64) -> StepReport {
         self.previous = self.pose;
         let dt = dt.max(0.0);
-
-        // Turn in the camera's own frame.
-        let turn = |axis: Vec3, rate: f64| {
-            Quat::from_axis_angle(axis, rate.clamp(-1.0, 1.0) * TURN_RATE * dt)
-        };
-        self.pose.orientation = self
-            .pose
-            .orientation
-            .compose(turn(Vec3::new(0.0, 1.0, 0.0), controls.yaw_rate))
-            .compose(turn(Vec3::new(1.0, 0.0, 0.0), controls.pitch_rate))
-            .compose(turn(Vec3::new(0.0, 0.0, 1.0), controls.roll_rate))
-            .normalize();
+        self.turn(controls, dt);
 
         let distance = Self::distance(stack, self.pose.position);
         if self.scale <= 0.0 {
             self.scale = self.natural_scale(distance);
         }
-        let mut heading = self.pose.forward() * controls.throttle.clamp(-1.0, 1.0)
-            + self.pose.right() * controls.strafe_x.clamp(-1.0, 1.0)
-            + self.pose.up() * controls.strafe_y.clamp(-1.0, 1.0);
-        // Steering into a surface close ahead turns along it, so the brake
-        // below measures the way the camera will actually go.
-        if heading.length() > 1e-9 {
-            let ahead = self.clearance(stack, self.pose.position, heading.normalize(), self.scale);
-            if ahead < SLIDE_AHEAD * self.scale {
-                let n = Self::normal(stack, self.pose.position, distance.max(self.contact()));
-                let into = heading.dot(n);
-                if into < 0.0 {
-                    heading = heading - n * into;
-                }
-            }
-        }
-        let reach = match controls.mode {
-            // Walking brakes for what is ahead, not the nearest surface in
-            // any direction, which a floor or wall alongside would be.
-            FlightMode::Walk => {
-                let ahead = if heading.length() > 1e-9 {
-                    self.clearance(stack, self.pose.position, heading.normalize(), self.scale)
-                } else {
-                    distance
-                };
-                self.scale.min(WALK_BRAKE * ahead)
-            }
-            FlightMode::Dive => distance,
-        };
-        let speed = controls.speed.max(0.0) * reach;
-        let wanted = heading * speed;
-        let blend = if dt > 0.0 {
-            1.0 - (-dt / VELOCITY_SMOOTHING).exp()
-        } else {
-            0.0
-        };
-        self.velocity = self.velocity + (wanted - self.velocity) * blend;
+        let heading = self.heading(stack, controls, distance);
+        let reach = self.reach(stack, controls.mode, heading, distance);
+        self.accelerate(heading * (controls.speed.max(0.0) * reach), dt);
 
-        let mut step = self.velocity * dt;
-        // Near a surface, motion into it turns into motion along it: the
-        // camera slides along walls and around specks instead of stopping.
-        if step.length() > 0.0 {
-            let ahead = self.clearance(
-                stack,
-                self.pose.position,
-                step.normalize(),
-                2.0 * step.length(),
-            );
-            if ahead < 2.0 * step.length() || distance < SLIDE_RANGE * self.contact() {
-                let n = Self::normal(stack, self.pose.position, distance.max(self.contact()));
-                let into = step.dot(n);
-                if into < 0.0 {
-                    step = step - n * into;
-                }
-                let pushing = self.velocity.dot(n);
-                if pushing < 0.0 {
-                    self.velocity = self.velocity - n * pushing;
-                }
-            }
-        }
-        let length = step.length();
-        if length > 0.0 {
-            // At most half the free distance along the step itself.
-            let free = self.clearance(
-                stack,
-                self.pose.position,
-                step * (1.0 / length),
-                2.0 * length,
-            );
-            let limit = MAX_STEP_FRACTION * free;
-            if length > limit {
-                step = step * (limit / length);
-            }
-        }
-        let was_inside = self.inside(stack, self.pose.position);
-        let target = self.pose.position + step;
-        let blocked = !was_inside && self.inside(stack, target);
-        if blocked {
-            self.velocity = Vec3::ZERO;
-        } else {
-            self.pose.position = target;
-        }
+        let step = self.slide_step(stack, distance, dt);
+        let step = self.cap_step(stack, step);
+        let blocked = self.advance(stack, step);
 
         self.update_focus(stack, dt);
         let distance = Self::distance(stack, self.pose.position);
         if controls.mode == FlightMode::Dive {
-            let target = self.natural_scale(distance);
-            self.scale += (target - self.scale) * (1.0 - (-dt / SCALE_SMOOTHING).exp());
+            self.update_scale(distance, dt);
         }
 
         StepReport {
@@ -437,6 +340,123 @@ impl Flight {
             },
             blocked,
         }
+    }
+
+    /// Rotates the orientation by the yaw, pitch and roll rates over `dt`, in
+    /// the camera's own frame.
+    fn turn(&mut self, controls: &Controls, dt: f64) {
+        let turn = |axis: Vec3, rate: f64| {
+            Quat::from_axis_angle(axis, rate.clamp(-1.0, 1.0) * TURN_RATE * dt)
+        };
+        self.pose.orientation = self
+            .pose
+            .orientation
+            .compose(turn(Vec3::Y, controls.yaw_rate))
+            .compose(turn(Vec3::X, controls.pitch_rate))
+            .compose(turn(Vec3::Z, controls.roll_rate))
+            .normalize();
+    }
+
+    /// The stick direction in world space. Steering into a surface closer
+    /// ahead than `SLIDE_AHEAD` of the scale turns along it, so the brake
+    /// measures the way the camera will actually go.
+    fn heading(&self, stack: &Stack, controls: &Controls, distance: f64) -> Vec3 {
+        let heading = self.pose.forward() * controls.throttle.clamp(-1.0, 1.0)
+            + self.pose.right() * controls.strafe_x.clamp(-1.0, 1.0)
+            + self.pose.up() * controls.strafe_y.clamp(-1.0, 1.0);
+        if heading.length() > MIN_HEADING {
+            let ahead = self.clearance(stack, self.pose.position, heading.normalize(), self.scale);
+            if ahead < SLIDE_AHEAD * self.scale {
+                let n = Self::normal(stack, self.pose.position, distance.max(self.contact()));
+                return along_surface(heading, n);
+            }
+        }
+        heading
+    }
+
+    /// The length that full speed covers per second. Walking brakes for the
+    /// free distance along `heading`, not the nearest surface in any
+    /// direction; diving uses the distance to the surface.
+    fn reach(&self, stack: &Stack, mode: FlightMode, heading: Vec3, distance: f64) -> f64 {
+        match mode {
+            FlightMode::Walk => {
+                let ahead = if heading.length() > MIN_HEADING {
+                    self.clearance(stack, self.pose.position, heading.normalize(), self.scale)
+                } else {
+                    distance
+                };
+                self.scale.min(WALK_BRAKE * ahead)
+            }
+            FlightMode::Dive => distance,
+        }
+    }
+
+    /// Moves the velocity toward `wanted` by the `VELOCITY_SMOOTHING` lag.
+    fn accelerate(&mut self, wanted: Vec3, dt: f64) {
+        self.velocity = self.velocity + (wanted - self.velocity) * follow(dt, VELOCITY_SMOOTHING);
+    }
+
+    /// This frame's step from the velocity. Near a surface, or with one
+    /// within two steps ahead, the part of the step and of the velocity into
+    /// the surface is removed, so the camera slides along walls and around
+    /// specks.
+    fn slide_step(&mut self, stack: &Stack, distance: f64, dt: f64) -> Vec3 {
+        let step = self.velocity * dt;
+        if step.length() > 0.0 {
+            let ahead = self.clearance(
+                stack,
+                self.pose.position,
+                step.normalize(),
+                2.0 * step.length(),
+            );
+            if ahead < 2.0 * step.length() || distance < SLIDE_RANGE * self.contact() {
+                let n = Self::normal(stack, self.pose.position, distance.max(self.contact()));
+                self.velocity = along_surface(self.velocity, n);
+                return along_surface(step, n);
+            }
+        }
+        step
+    }
+
+    /// `step` shortened to at most `MAX_STEP_FRACTION` of the free distance
+    /// along it.
+    fn cap_step(&self, stack: &Stack, step: Vec3) -> Vec3 {
+        let length = step.length();
+        if length > 0.0 {
+            let free = self.clearance(
+                stack,
+                self.pose.position,
+                step * (1.0 / length),
+                2.0 * length,
+            );
+            let limit = MAX_STEP_FRACTION * free;
+            if length > limit {
+                return step * (limit / length);
+            }
+        }
+        step
+    }
+
+    /// Moves the camera by `step` unless that takes it from outside the
+    /// surface to inside it, in which case the velocity stops instead.
+    /// Returns whether the step was blocked.
+    fn advance(&mut self, stack: &Stack, step: Vec3) -> bool {
+        let was_inside = self.inside(stack, self.pose.position);
+        let target = self.pose.position + step;
+        let blocked = !was_inside && self.inside(stack, target);
+        if blocked {
+            self.velocity = Vec3::ZERO;
+        } else {
+            self.pose.position = target;
+        }
+        blocked
+    }
+
+    /// Moves the scale toward the natural scale for `distance` by the
+    /// `SCALE_SMOOTHING` lag.
+    fn update_scale(&mut self, distance: f64, dt: f64) {
+        let target = self.natural_scale(distance);
+        self.scale += (target - self.scale) * follow(dt, SCALE_SMOOTHING);
     }
 
     /// Move straight to `pose`, as a recall flight does. Last frame's pose
@@ -458,6 +478,8 @@ impl Flight {
         }
     }
 
+    /// Moves the focus toward the traced distance ahead by the
+    /// `FOCUS_SMOOTHING` lag, or sets it on the first frame.
     fn update_focus(&mut self, stack: &Stack, dt: f64) {
         let focus = sphere_trace(
             stack,
@@ -469,9 +491,21 @@ impl Flight {
         self.focus = if self.focus <= 0.0 || dt <= 0.0 {
             focus
         } else {
-            self.focus + (focus - self.focus) * (1.0 - (-dt / FOCUS_SMOOTHING).exp())
+            self.focus + (focus - self.focus) * follow(dt, FOCUS_SMOOTHING)
         };
     }
+}
+
+/// The fraction of the way a first-order lag of `seconds` moves in `dt`; 0
+/// when `dt` is not positive.
+pub(super) fn follow(dt: f64, seconds: f64) -> f64 {
+    1.0 - (-dt.max(0.0) / seconds).exp()
+}
+
+/// `v` without its component into the surface with outward normal `n`.
+fn along_surface(v: Vec3, n: Vec3) -> Vec3 {
+    let into = v.dot(n);
+    if into < 0.0 { v - n * into } else { v }
 }
 
 /// Distance along `dir` to the surface, by sphere tracing: at most `steps`
@@ -647,9 +681,9 @@ mod tests {
 
     #[test]
     fn quaternion_rotation_matches_axis_angle() {
-        let q = Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), std::f64::consts::FRAC_PI_2);
-        let v = q.rotate(Vec3::new(0.0, 0.0, 1.0));
-        assert!((v - Vec3::new(1.0, 0.0, 0.0)).length() < 1e-12);
+        let q = Quat::from_axis_angle(Vec3::Y, std::f64::consts::FRAC_PI_2);
+        let v = q.rotate(Vec3::Z);
+        assert!((v - Vec3::X).length() < 1e-12);
     }
 
     #[test]
@@ -703,8 +737,7 @@ mod tests {
         for _ in 0..60 {
             flight.step(&stack, &controls, 1.0 / 60.0);
         }
-        let expect = Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), TURN_RATE)
-            .rotate(Vec3::new(0.0, 0.0, 1.0));
+        let expect = Quat::from_axis_angle(Vec3::Y, TURN_RATE).rotate(Vec3::Z);
         assert!((flight.pose.forward() - expect).length() < 1e-9);
         assert_eq!(flight.pose.position, Pose::default().position);
     }

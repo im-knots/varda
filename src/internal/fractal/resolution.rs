@@ -77,7 +77,8 @@ mod tests {
 
     #[test]
     fn converges_to_the_scale_that_meets_the_target() {
-        // 80 ms at full scale against 20 ms: a quarter of the pixels.
+        // Full scale costs four times the frame budget, so the scale settles
+        // at one half: a quarter of the pixels.
         let live = run(&mut Governor::default(), 0.08, 50.0, 1.0, 400);
         assert!((live - 0.5).abs() < 0.03, "{live}");
     }

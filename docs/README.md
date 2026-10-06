@@ -4,7 +4,7 @@ Varda is a free, open-source live visual mixer and broadcast router for Linux, m
 
 Varda is built for live VJ performance, dome projection, multi-projector installations, and headless media serving. You control it with MIDI, OSC, keyboard shortcuts, or a full REST/WebSocket API.
 
-You can work on a scene in two modes. Both edit the same scene. **Performance mode** is the mixer: channels, decks and faders, all by hand. **[Arrangement mode](15-arrangement.md)** lays the same scene out against show time. Regions set when a deck is up, curves automate any parameter, cue points mark moments to return to, and the transport can follow SMPTE timecode. Use either mode alone or both together. When both are running, your hand wins: touch an automated control and it follows you until you re-arm it.
+You can work on a scene in two modes. Both edit the same scene. **Performance mode** is the mixer: channels, decks and faders, all by hand. **[Arrangement mode](05-arrangement.md)** lays the same scene out against show time. Regions set when a deck is up, curves automate any parameter, cue points mark moments to return to, and the transport can follow SMPTE timecode. Use either mode alone or both together. When both are running, your hand wins: touch an automated control and it follows you until you re-arm it.
 
 This manual covers everything you need to get started.
 
@@ -49,102 +49,102 @@ This manual covers everything you need to get started.
   - [Transition Sequences](04-performance.md#transition-sequences) (multi-step channel automation, easing, simultaneous sequences)
   - [Undo / Redo](04-performance.md#undo--redo) (50-level snapshot history)
   - [Presets](04-performance.md#presets) (save/load deck and channel configurations)
-- **5. [Modulation & Audio Reactivity](05-modulation.md)**
-  - [Creating Sources](05-modulation.md#creating-sources) (the ➕ buttons, source colors)
-  - [Modulation Sources](05-modulation.md#modulation-sources) (LFO, Audio, ADSR, Step Sequencer, Analyzer)
-  - [Routing](05-modulation.md#routing) (the 〰 assign button, live ghost indicator, stacking)
-  - [Modulator-on-Modulator](05-modulation.md#modulator-on-modulator) (recursive chaining up to 4 levels)
-  - [Audio System](05-modulation.md#audio-system) (FFT analysis, beat detection, ISF audio uniforms)
-- **6. [Control Surfaces & Macros](06-control-surfaces.md)**
-  - [MIDI](06-control-surfaces.md#midi) (learn mode, APC Mini, multi-device)
-  - [OSC](06-control-surfaces.md#osc) (input/output, bidirectional feedback)
-  - [Keyboard Shortcuts](06-control-surfaces.md#keyboard-shortcuts) (learn mode, default bindings, param toggle)
-  - [Clock Synchronization](06-control-surfaces.md#clock-synchronization) (MIDI/OSC/audio/manual BPM, priority resolution)
-  - [Parameter Paths](06-control-surfaces.md#parameter-paths)
-  - [Macros](06-control-surfaces.md#macros) (one knob/fader/button drives many parameters)
-    - [Creating a Macro](06-control-surfaces.md#creating-a-macro) (knob, fader, button cards)
-    - [Binding Targets](06-control-surfaces.md#binding-targets) (per-target range, curve, invert)
-    - [Buttons](06-control-surfaces.md#buttons) (momentary, toggle, trigger actions)
-    - [Mapping to MIDI / OSC / Keyboard](06-control-surfaces.md#mapping-a-macro-to-midi--osc--keyboard)
-    - [Mapping a Macro (MIDI, OSC, HTTP)](06-control-surfaces.md#mapping-a-macro-to-midi--osc--keyboard)
+- **5. [Arrangement Mode](05-arrangement.md)** (the mixer laid out against show time)
+  - [What Changes and What Doesn't](05-arrangement.md#shared-panels) (only the central area changes)
+  - [Anatomy](05-arrangement.md#anatomy) (transport strip, ruler, groups, lanes, navigation)
+  - [Cue Points](05-arrangement.md#cue-points) (mark a moment, step through cues with the arrows, fire a cue from a pad in Performance mode)
+  - [Reordering Decks](05-arrangement.md#reordering-decks) (drag a lane header, shared with the mixer's order)
+  - [Regions](05-arrangement.md#regions) (draw, move, resize, fades, frame snapping)
+  - [Automation Lanes](05-arrangement.md#automation-lanes) (breakpoints, curve shapes, copy/paste)
+  - [Reusing a Shape](05-arrangement.md#reusing-a-shape) (one curve per parameter, copied between lanes)
+  - [Authority and Override](05-arrangement.md#authority-and-override) (grabbing a control back, re-arm)
+  - [Chasing a clip to the show](05-arrangement.md#video-chase) (lock a video deck to the transport)
+  - [Idle Behavior](05-arrangement.md#idle-behavior) (what plays before the show starts)
+  - [Undo, Saving, and Load](05-arrangement.md#undo-saving-and-load) (scene version 7, memory)
+  - [Sleeping Clips](05-arrangement.md#sleeping-clips) (why a distant clip stops decoding, and its effects)
+- **6. [Modulation & Audio Reactivity](06-modulation.md)**
+  - [Creating Sources](06-modulation.md#creating-sources) (the ➕ buttons, source colors)
+  - [Modulation Sources](06-modulation.md#modulation-sources) (LFO, Audio, ADSR, Step Sequencer, Analyzer)
+  - [Routing](06-modulation.md#routing) (the 〰 assign button, live ghost indicator, stacking)
+  - [Modulator-on-Modulator](06-modulation.md#modulator-on-modulator) (recursive chaining up to 4 levels)
+  - [Audio System](06-modulation.md#audio-system) (FFT analysis, beat detection, ISF audio uniforms)
+- **7. [Control Surfaces & Macros](07-control-surfaces.md)**
+  - [MIDI](07-control-surfaces.md#midi) (learn mode, APC Mini, multi-device)
+  - [OSC](07-control-surfaces.md#osc) (input/output, bidirectional feedback)
+  - [Keyboard Shortcuts](07-control-surfaces.md#keyboard-shortcuts) (learn mode, default bindings, param toggle)
+  - [Clock Synchronization](07-control-surfaces.md#clock-synchronization) (MIDI/OSC/audio/manual BPM, priority resolution)
+  - [Parameter Paths](07-control-surfaces.md#parameter-paths)
+  - [Macros](07-control-surfaces.md#macros) (one knob/fader/button drives many parameters)
+    - [Creating a Macro](07-control-surfaces.md#creating-a-macro) (knob, fader, button cards)
+    - [Binding Targets](07-control-surfaces.md#binding-targets) (per-target range, curve, invert)
+    - [Buttons](07-control-surfaces.md#buttons) (momentary, toggle, trigger actions)
+    - [Mapping to MIDI / OSC / Keyboard](07-control-surfaces.md#mapping-a-macro-to-midi--osc--keyboard)
+    - [Mapping a Macro (MIDI, OSC, HTTP)](07-control-surfaces.md#mapping-a-macro-to-midi--osc--keyboard)
 
-### Part III: Output & Display
+### Part III: Content
 
-- **7. [Outputs](07-outputs.md)**
-  - [Creating an Output](07-outputs.md#creating-an-output) (output types, choosing a monitor)
-  - [Output Format](07-outputs.md#output-format) (8-bit, 10-bit, HDR10, HLG, EDR)
-  - [Rotation](07-outputs.md#rotation)
-  - [Surface Sources](07-outputs.md#surface-sources) (Master, Channel, Channels sub-mix, Deck)
-  - [Recording](07-outputs.md#recording)
-- **8. [Projection Mapping](08-projection.md)**
-  - [Basic Projection](08-projection.md#basic-projection) (drawing tools, surfaces, corner-pin warp, combine/multi-contour)
-  - [Advanced Projection](08-projection.md#advanced-projection) (multi-output edge blending (auto/manual), multi-channel routing, mesh warp)
-  - [Dome Projection](08-projection.md#dome-projection) 🧪 (domemaster, slicer presets, 3D preview navigation, content rotation)
-  - [Surface Auto-Detection](08-projection.md#surface-auto-detection) 🧪 (file import and live camera detection)
-- **9. [Streaming, Recording & Network I/O](09-streaming-and-io.md)**
-  - [NDI](09-streaming-and-io.md#ndi)
-  - [SRT](09-streaming-and-io.md#srt-secure-reliable-transport)
-  - [HLS & DASH](09-streaming-and-io.md#hls--dash)
-  - [Recording](09-streaming-and-io.md#recording)
-  - [Stream Input Reliability](09-streaming-and-io.md#stream-input-reliability) (dedup, stall detection, reconnect)
-  - [HTML / Web Content](09-streaming-and-io.md#html--web-content)
-  - [Syphon](09-streaming-and-io.md#syphon-macos) (send and receive, shared-memory in both directions, color handling, framework install)
-  - [Spout](09-streaming-and-io.md#spout-windows) (send and receive, color handling, 8-bit and 10-bit)
-  - [Screen & Window Capture](09-streaming-and-io.md#screen--window-capture) (displays and windows as decks, permissions, crop and rate, capturing Varda itself)
-  - [Program Tap](09-streaming-and-io.md#program-tap) (Varda's own output as a source, one frame behind, feedback loops)
-- **10. [Resolution, Settings & Monitoring](10-resolution-and-monitoring.md)**
-  - [Render Resolution](10-resolution-and-monitoring.md#render-resolution) (presets, custom sizes)
-  - [Per-Deck Scaling](10-resolution-and-monitoring.md#per-deck-scaling) (fill, fit, stretch, center)
-  - [Performance Monitoring](10-resolution-and-monitoring.md#performance-monitoring) (FPS, GPU, CPU/RAM)
+- **8. [Shader Library](08-shader-library.md)** (catalog of bundled generators, filters, transitions, and compute shaders)
+- **9. [Fractal Explorer](09-fractal-explorer.md)** (flying through 3D fractals)
+  - [How It's Built](09-fractal-explorer.md#how-its-built) (one shader and one preprocessor: a visual engine inside Varda)
+  - [Flying](09-fractal-explorer.md#flying) (throttle, distance-scaled speed, autopilot, saved locations, tours)
+  - [Building the Fractal](09-fractal-explorer.md#building-the-fractal) (six formula slots, alternate and combine hybrids)
+  - [Look](09-fractal-explorer.md#look) (lighting, palette, atmosphere, lens, grade)
+  - [Quality and Speed](09-fractal-explorer.md#quality-and-speed) (detail, geometry band, diagnostics)
 
-### Part IV: Reference
+### Part IV: Output & Display
 
-- **11. [Shader Library](11-shader-library.md)** (catalog of bundled generators, filters, transitions, and compute shaders)
-- **12. [Shader Authoring](12-isf-authoring.md)**
-  - [Shader Types](12-isf-authoring.md#shader-types) (generator, filter, transition)
-  - [Metadata Format](12-isf-authoring.md#metadata-format) (JSON header, input types)
-  - [Built-in Uniforms](12-isf-authoring.md#built-in-uniforms) (TIME, RENDERSIZE, audio, phase accumulators)
-  - [Porting an ISF Shader](12-isf-authoring.md#porting-an-isf-shader) (dialect differences, the vertical flip, what isn't supported)
-  - [Multi-Pass Rendering](12-isf-authoring.md#multi-pass-rendering) (persistent buffers, feedback loops, substepping)
-  - [Compute Shaders](12-isf-authoring.md#compute-shaders) (`.comp` shaders, storage buffers, dispatch)
-  - [Hot-Reload](12-isf-authoring.md#hot-reload) (live editing workflow)
-  - [File Location](12-isf-authoring.md#file-location) (shader directory precedence hierarchy, `--shader-dir`)
-- **13. [HTTP API & Headless Mode](13-api.md)**
-  - [Swagger UI](13-api.md#swagger-ui)
-  - [Headless Mode](13-api.md#headless-mode)
-  - [WebSocket](13-api.md#websocket)
-  - [Common Patterns](13-api.md#common-patterns)
-  - [Route Reference](13-api.md#route-reference)
-- **14. [Frame Analysis & Preprocessors](14-frame-analysis.md)** (one analyzer engine for modulation and shaders)
-  - [What's Implemented](14-frame-analysis.md#whats-implemented) (brightness, face_detect, depth_sensor; planned types)
-  - [Analysis as Modulation](14-frame-analysis.md#analysis-as-modulation-performers) (brightness/face scalars drive any parameter)
-  - [Depth Sensor](14-frame-analysis.md#depth-sensor-performers) (near/far framing, per-deck controls)
-  - [Preprocessors](14-frame-analysis.md#preprocessors-concept) (structured data as shader textures)
-  - [Analyzer HTTP API](14-frame-analysis.md#analyzer-http-api)
+- **10. [Outputs](10-outputs.md)**
+  - [Creating an Output](10-outputs.md#creating-an-output) (output types, choosing a monitor)
+  - [Output Format](10-outputs.md#output-format) (8-bit, 10-bit, HDR10, HLG, EDR)
+  - [Rotation](10-outputs.md#rotation)
+  - [Surface Sources](10-outputs.md#surface-sources) (Master, Channel, Channels sub-mix, Deck)
+  - [Recording](10-outputs.md#recording)
+- **11. [Projection Mapping](11-projection.md)**
+  - [Basic Projection](11-projection.md#basic-projection) (drawing tools, surfaces, corner-pin warp, combine/multi-contour)
+  - [Advanced Projection](11-projection.md#advanced-projection) (multi-output edge blending (auto/manual), multi-channel routing, mesh warp)
+  - [Dome Projection](11-projection.md#dome-projection) 🧪 (domemaster, slicer presets, 3D preview navigation, content rotation)
+  - [Surface Auto-Detection](11-projection.md#surface-auto-detection) 🧪 (file import and live camera detection)
+- **12. [Streaming, Recording & Network I/O](12-streaming-and-io.md)**
+  - [NDI](12-streaming-and-io.md#ndi)
+  - [SRT](12-streaming-and-io.md#srt-secure-reliable-transport)
+  - [HLS & DASH](12-streaming-and-io.md#hls--dash)
+  - [Recording](12-streaming-and-io.md#recording)
+  - [Stream Input Reliability](12-streaming-and-io.md#stream-input-reliability) (dedup, stall detection, reconnect)
+  - [HTML / Web Content](12-streaming-and-io.md#html--web-content)
+  - [Syphon](12-streaming-and-io.md#syphon-macos) (send and receive, shared-memory in both directions, color handling, framework install)
+  - [Spout](12-streaming-and-io.md#spout-windows) (send and receive, color handling, 8-bit and 10-bit)
+  - [Screen & Window Capture](12-streaming-and-io.md#screen--window-capture) (displays and windows as decks, permissions, crop and rate, capturing Varda itself)
+  - [Program Tap](12-streaming-and-io.md#program-tap) (Varda's own output as a source, one frame behind, feedback loops)
+- **13. [Resolution, Settings & Monitoring](13-resolution-and-monitoring.md)**
+  - [Render Resolution](13-resolution-and-monitoring.md#render-resolution) (presets, custom sizes)
+  - [Per-Deck Scaling](13-resolution-and-monitoring.md#per-deck-scaling) (fill, fit, stretch, center)
+  - [Performance Monitoring](13-resolution-and-monitoring.md#performance-monitoring) (FPS, GPU, CPU/RAM)
 
-### Part V: Arranging
+### Part V: Reference
 
-- **15. [Arrangement Mode](15-arrangement.md)** (the mixer laid out against show time)
-  - [What Changes and What Doesn't](15-arrangement.md#shared-panels) (only the central area changes)
-  - [Anatomy](15-arrangement.md#anatomy) (transport strip, ruler, groups, lanes, navigation)
-  - [Cue Points](15-arrangement.md#cue-points) (mark a moment, step through cues with the arrows, fire a cue from a pad in Performance mode)
-  - [Reordering Decks](15-arrangement.md#reordering-decks) (drag a lane header, shared with the mixer's order)
-  - [Regions](15-arrangement.md#regions) (draw, move, resize, fades, frame snapping)
-  - [Automation Lanes](15-arrangement.md#automation-lanes) (breakpoints, curve shapes, copy/paste)
-  - [Reusing a Shape](15-arrangement.md#reusing-a-shape) (one curve per parameter, copied between lanes)
-  - [Authority and Override](15-arrangement.md#authority-and-override) (grabbing a control back, re-arm)
-  - [Chasing a clip to the show](15-arrangement.md#video-chase) (lock a video deck to the transport)
-  - [Idle Behavior](15-arrangement.md#idle-behavior) (what plays before the show starts)
-  - [Undo, Saving, and Load](15-arrangement.md#undo-saving-and-load) (scene version 7, memory)
-  - [Sleeping Clips](15-arrangement.md#sleeping-clips) (why a distant clip stops decoding, and its effects)
-
-### Part VI: Showcase
-
-- **16. [Fractal Explorer](16-fractal-explorer.md)** (flying through 3D fractals)
-  - [Flying](16-fractal-explorer.md#flying) (throttle, distance-scaled speed, autopilot, saved locations, tours)
-  - [Building the Fractal](16-fractal-explorer.md#building-the-fractal) (six formula slots, alternate and combine hybrids)
-  - [Look](16-fractal-explorer.md#look) (lighting, palette, atmosphere, lens, grade)
-  - [Quality and Speed](16-fractal-explorer.md#quality-and-speed) (detail, geometry band, diagnostics)
+- **14. [Shader Authoring](14-isf-authoring.md)**
+  - [Shader Types](14-isf-authoring.md#shader-types) (generator, filter, transition)
+  - [Metadata Format](14-isf-authoring.md#metadata-format) (JSON header, input types)
+  - [Built-in Uniforms](14-isf-authoring.md#built-in-uniforms) (TIME, RENDERSIZE, audio, phase accumulators)
+  - [Porting an ISF Shader](14-isf-authoring.md#porting-an-isf-shader) (dialect differences, the vertical flip, what isn't supported)
+  - [Multi-Pass Rendering](14-isf-authoring.md#multi-pass-rendering) (persistent buffers, feedback loops, substepping)
+  - [Compute Shaders](14-isf-authoring.md#compute-shaders) (`.comp` shaders, storage buffers, dispatch)
+  - [Hot-Reload](14-isf-authoring.md#hot-reload) (live editing workflow)
+  - [File Location](14-isf-authoring.md#file-location) (shader directory precedence hierarchy, `--shader-dir`)
+- **15. [HTTP API & Headless Mode](15-api.md)**
+  - [Swagger UI](15-api.md#swagger-ui)
+  - [Headless Mode](15-api.md#headless-mode)
+  - [WebSocket](15-api.md#websocket)
+  - [Common Patterns](15-api.md#common-patterns)
+  - [Route Reference](15-api.md#route-reference)
+- **16. [Analyzers & Preprocessors](16-analyzers-and-preprocessors.md)** (frame analysis for modulation, and preprocessors that feed shaders)
+  - [What's Implemented](16-analyzers-and-preprocessors.md#whats-implemented) (brightness, face_detect, depth_sensor; planned types)
+  - [Analysis as Modulation](16-analyzers-and-preprocessors.md#analysis-as-modulation-performers) (brightness/face scalars drive any parameter)
+  - [Depth Sensor](16-analyzers-and-preprocessors.md#depth-sensor-performers) (near/far framing, per-deck controls)
+  - [Preprocessors](16-analyzers-and-preprocessors.md#preprocessors) (analyzer, GPU and host-inline kinds)
+  - [What a Host-Inline Preprocessor Can Do](16-analyzers-and-preprocessors.md#what-a-host-inline-preprocessor-can-do) (inputs, outputs, saved state, notifications, build inputs)
+  - [Worked Example: the Fractal Explorer](16-analyzers-and-preprocessors.md#worked-example-the-fractal-explorer) (a visual engine from one shader and one preprocessor)
+  - [Analyzer HTTP API](16-analyzers-and-preprocessors.md#analyzer-http-api)
 
 ---
 

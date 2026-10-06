@@ -16,28 +16,29 @@
         {"NAME": "strafe_x", "LABEL": "Strafe X", "TYPE": "float", "DEFAULT": 0.0, "MIN": -1.0, "MAX": 1.0, "GROUP": "Camera"},
         {"NAME": "strafe_y", "LABEL": "Strafe Y", "TYPE": "float", "DEFAULT": 0.0, "MIN": -1.0, "MAX": 1.0, "GROUP": "Camera"},
         {"NAME": "fov", "LABEL": "Field of View", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.3, "MAX": 2.5, "GROUP": "Camera"},
-        {"NAME": "reset_camera", "LABEL": "Reset Camera", "TYPE": "bool", "DEFAULT": false, "GROUP": "Camera"},
-        {"NAME": "find_inside", "LABEL": "Find Inside", "TYPE": "bool", "DEFAULT": false, "GROUP": "Camera"},
+        {"NAME": "reset_camera", "LABEL": "Reset Camera", "TYPE": "event", "GROUP": "Camera"},
+        {"NAME": "find_inside", "LABEL": "Find Inside", "TYPE": "event", "GROUP": "Camera"},
         {"NAME": "autopilot", "LABEL": "Autopilot", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 1.0, "GROUP": "Motion"},
-        {"NAME": "save_location", "LABEL": "Save Location", "TYPE": "bool", "DEFAULT": false, "GROUP": "Motion"},
+        {"NAME": "save_location", "LABEL": "Save Location", "TYPE": "event", "GROUP": "Motion"},
         {"NAME": "location", "LABEL": "Location", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 31.0, "GROUP": "Motion"},
         {"NAME": "recall_time", "LABEL": "Recall Seconds", "TYPE": "float", "DEFAULT": 4.0, "MIN": 0.0, "MAX": 16.0, "GROUP": "Motion"},
         {"NAME": "tour", "LABEL": "Tour Locations", "TYPE": "bool", "DEFAULT": false, "GROUP": "Motion"},
         {"NAME": "tour_seconds", "LABEL": "Seconds per Stop", "TYPE": "float", "DEFAULT": 8.0, "MIN": 1.0, "MAX": 60.0, "GROUP": "Motion"},
+        {"NAME": "stack", "LABEL": "Stack", "TYPE": "long", "DEFAULT": 1, "VALUES": [1, 2, 3, 4, 5], "LABELS": ["Turned Box", "Goldcape", "Blue Sphere Temple", "Goldcape Temple 2016", "Dark Gate"], "PRESETS": [{"slot1_formula": 1, "slot1_mode": 0, "slot1_count": 1, "slot1_a": 2.2, "slot1_b": 0.5, "slot1_c": 1.0, "slot1_d": 1.0, "slot1_rot_x": 0.25, "slot1_rot_y": 0.15, "slot1_rot_z": 0.0, "slot2_formula": 0, "slot2_mode": 0, "slot2_count": 1, "slot2_a": 0.15, "slot2_b": 1.0, "slot2_c": 1.0, "slot2_d": 1.0, "slot2_rot_x": 0.0, "slot2_rot_y": 0.0, "slot2_rot_z": 0.0, "slot3_formula": 0, "slot3_mode": 0, "slot3_count": 1, "slot3_a": 2.0, "slot3_b": 1.0, "slot3_c": 0.0, "slot3_d": 1.0, "slot3_rot_x": 0.0, "slot3_rot_y": 0.0, "slot3_rot_z": 0.0, "slot4_formula": 0, "slot4_mode": 0, "slot4_count": 1, "slot4_a": 2.0, "slot4_b": 1.0, "slot4_c": 0.0, "slot4_d": 1.0, "slot4_rot_x": 0.0, "slot4_rot_y": 0.0, "slot4_rot_z": 0.0, "slot5_formula": 0, "slot5_mode": 0, "slot5_count": 1, "slot5_a": 2.0, "slot5_b": 1.0, "slot5_c": 0.0, "slot5_d": 1.0, "slot5_rot_x": 0.0, "slot5_rot_y": 0.0, "slot5_rot_z": 0.0, "slot6_formula": 0, "slot6_mode": 0, "slot6_count": 1, "slot6_a": 2.0, "slot6_b": 1.0, "slot6_c": 0.0, "slot6_d": 1.0, "slot6_rot_x": 0.0, "slot6_rot_y": 0.0, "slot6_rot_z": 0.0, "hybrid_mode": 0, "repeat_from": 1, "max_iterations": 16.0, "julia_mode": 0}, {"slot1_formula": 19, "slot1_mode": 0, "slot1_count": 1, "slot1_a": 1.0, "slot1_b": 1.0, "slot1_c": 1.0, "slot1_d": 0.0, "slot1_rot_x": 0.0, "slot1_rot_y": 0.0, "slot1_rot_z": 0.0, "slot2_formula": 20, "slot2_mode": 0, "slot2_count": 1, "slot2_a": 1.0, "slot2_b": 1.0, "slot2_c": 0.0, "slot2_d": 0.0, "slot2_rot_x": 0.0, "slot2_rot_y": 0.0, "slot2_rot_z": 0.0, "slot3_formula": 1, "slot3_mode": 0, "slot3_count": 4, "slot3_a": 2.0, "slot3_b": 0.5, "slot3_c": 1.0, "slot3_d": 1.0, "slot3_rot_x": 0.0, "slot3_rot_y": 0.0, "slot3_rot_z": 0.0, "slot4_formula": 17, "slot4_mode": 0, "slot4_count": 1, "slot4_a": 1.0, "slot4_b": 1.0, "slot4_c": 1.0, "slot4_d": 0.0, "slot4_rot_x": 0.0, "slot4_rot_y": 0.0, "slot4_rot_z": 0.0, "slot5_formula": 18, "slot5_mode": 0, "slot5_count": 1, "slot5_a": 0.414, "slot5_b": 3.0, "slot5_c": 1.0, "slot5_d": 1.0, "slot5_rot_x": 0.0, "slot5_rot_y": 0.0, "slot5_rot_z": 0.0, "slot6_formula": 15, "slot6_mode": 0, "slot6_count": 1, "slot6_a": 0.5, "slot6_b": 0.0, "slot6_c": 0.0, "slot6_d": 0.0, "slot6_rot_x": 0.0, "slot6_rot_y": 0.0, "slot6_rot_z": 0.0, "hybrid_mode": 0, "repeat_from": 1, "max_iterations": 24.0, "julia_mode": false}, {"slot1_formula": 19, "slot1_mode": 0, "slot1_count": 1, "slot1_a": 1.0, "slot1_b": 1.0, "slot1_c": 1.0, "slot1_d": 0.0, "slot1_rot_x": 0.0, "slot1_rot_y": 0.0, "slot1_rot_z": 0.0, "slot2_formula": 20, "slot2_mode": 0, "slot2_count": 1, "slot2_a": 1.0, "slot2_b": 1.0, "slot2_c": 0.0, "slot2_d": 0.0, "slot2_rot_x": 0.0, "slot2_rot_y": 0.0, "slot2_rot_z": 0.0, "slot3_formula": 1, "slot3_mode": 0, "slot3_count": 4, "slot3_a": 2.0, "slot3_b": 0.5, "slot3_c": 1.0, "slot3_d": 1.0, "slot3_rot_x": 0.0, "slot3_rot_y": 0.0, "slot3_rot_z": 0.0, "slot4_formula": 17, "slot4_mode": 0, "slot4_count": 16, "slot4_a": 1.0, "slot4_b": 1.0, "slot4_c": 1.0, "slot4_d": 0.0, "slot4_rot_x": 0.0, "slot4_rot_y": 0.0, "slot4_rot_z": 0.0, "slot5_formula": 18, "slot5_mode": 0, "slot5_count": 1, "slot5_a": 0.414, "slot5_b": 3.0, "slot5_c": 1.0, "slot5_d": 1.0, "slot5_rot_x": 0.0, "slot5_rot_y": 0.0, "slot5_rot_z": 0.0, "slot6_formula": 15, "slot6_mode": 0, "slot6_count": 1, "slot6_a": 0.5, "slot6_b": 0.0, "slot6_c": 0.0, "slot6_d": 0.0, "slot6_rot_x": 0.0, "slot6_rot_y": 0.0, "slot6_rot_z": 0.0, "hybrid_mode": 0, "repeat_from": 1, "max_iterations": 40.0, "julia_mode": false}, {"slot1_formula": 20, "slot1_mode": 0, "slot1_count": 1, "slot1_a": 1.0, "slot1_b": 1.0, "slot1_c": 0.0, "slot1_d": 0.0, "slot1_rot_x": 0.0, "slot1_rot_y": 0.0, "slot1_rot_z": 0.0, "slot2_formula": 1, "slot2_mode": 0, "slot2_count": 4, "slot2_a": 2.0, "slot2_b": 0.5, "slot2_c": 1.0, "slot2_d": 1.0, "slot2_rot_x": 0.0, "slot2_rot_y": 0.0, "slot2_rot_z": 0.0, "slot3_formula": 17, "slot3_mode": 0, "slot3_count": 1, "slot3_a": 1.0, "slot3_b": 1.0, "slot3_c": 1.0, "slot3_d": 0.0, "slot3_rot_x": 0.0, "slot3_rot_y": 0.0, "slot3_rot_z": 0.0, "slot4_formula": 18, "slot4_mode": 0, "slot4_count": 1, "slot4_a": 0.414, "slot4_b": 3.0, "slot4_c": 1.0, "slot4_d": 1.0, "slot4_rot_x": 0.0, "slot4_rot_y": 0.0, "slot4_rot_z": 0.0, "slot5_formula": 15, "slot5_mode": 0, "slot5_count": 1, "slot5_a": 0.5, "slot5_b": 0.0, "slot5_c": 0.0, "slot5_d": 0.0, "slot5_rot_x": 0.0, "slot5_rot_y": 0.0, "slot5_rot_z": 0.0, "slot6_formula": 8, "slot6_mode": 0, "slot6_count": 1, "slot6_a": 1.0, "slot6_b": 0.2, "slot6_c": 0.0, "slot6_d": 0.0, "slot6_rot_x": 0.0, "slot6_rot_y": 0.0, "slot6_rot_z": 0.0, "hybrid_mode": 0, "repeat_from": 1, "max_iterations": 24.0, "julia_mode": false}, {"slot1_formula": 20, "slot1_mode": 0, "slot1_count": 1, "slot1_a": 1.0, "slot1_b": 1.0, "slot1_c": 0.0, "slot1_d": 0.0, "slot1_rot_x": 0.0, "slot1_rot_y": 0.0, "slot1_rot_z": 0.0, "slot2_formula": 1, "slot2_mode": 3, "slot2_count": 4, "slot2_a": 2.0, "slot2_b": 0.5, "slot2_c": 1.0, "slot2_d": 1.0, "slot2_rot_x": 0.0, "slot2_rot_y": 0.0, "slot2_rot_z": 0.0, "slot3_formula": 14, "slot3_mode": 0, "slot3_count": 1, "slot3_a": 0.0, "slot3_b": 1.5, "slot3_c": 1.0, "slot3_d": 0.0, "slot3_rot_x": 0.0, "slot3_rot_y": 0.0, "slot3_rot_z": 0.0, "slot4_formula": 17, "slot4_mode": 0, "slot4_count": 1, "slot4_a": 1.0, "slot4_b": 1.0, "slot4_c": 1.0, "slot4_d": 0.0, "slot4_rot_x": 0.0, "slot4_rot_y": 0.0, "slot4_rot_z": 0.0, "slot5_formula": 15, "slot5_mode": 0, "slot5_count": 1, "slot5_a": 0.5, "slot5_b": 0.0, "slot5_c": 0.0, "slot5_d": 0.0, "slot5_rot_x": 0.0, "slot5_rot_y": 0.0, "slot5_rot_z": 0.0, "slot6_formula": 0, "slot6_mode": 0, "slot6_count": 1, "slot6_a": 2.0, "slot6_b": 1.0, "slot6_c": 0.0, "slot6_d": 1.0, "slot6_rot_x": 0.0, "slot6_rot_y": 0.0, "slot6_rot_z": 0.0, "hybrid_mode": 0, "repeat_from": 1, "max_iterations": 24.0, "julia_mode": false}], "GROUP": "Form"},
         {"NAME": "hybrid_mode", "SPECIALIZE": true, "LABEL": "Hybrid", "TYPE": "long", "DEFAULT": 0, "VALUES": [0, 1], "LABELS": ["Alternate", "Combine"], "GROUP": "Form"},
         {"NAME": "repeat_from", "SPECIALIZE": true, "LABEL": "Repeat From Slot", "TYPE": "long", "DEFAULT": 1, "VALUES": [1, 2, 3, 4, 5, 6], "LABELS": ["1", "2", "3", "4", "5", "6"], "GROUP": "Form"},
         {"NAME": "max_iterations", "LABEL": "Iterations", "TYPE": "float", "DEFAULT": 16.0, "MIN": 1.0, "MAX": 64.0, "GROUP": "Form"},
         {"NAME": "bailout", "LABEL": "Bailout", "TYPE": "float", "DEFAULT": 100.0, "MIN": 2.0, "MAX": 1000.0, "GROUP": "Form"},
         {"NAME": "julia_mode", "LABEL": "Julia", "TYPE": "bool", "DEFAULT": false, "GROUP": "Form"},
-        {"NAME": "julia_x", "LABEL": "Julia X", "TYPE": "float", "DEFAULT": 0.0, "MIN": -2.0, "MAX": 2.0, "GROUP": "Form"},
-        {"NAME": "julia_y", "LABEL": "Julia Y", "TYPE": "float", "DEFAULT": 0.0, "MIN": -2.0, "MAX": 2.0, "GROUP": "Form"},
-        {"NAME": "julia_z", "LABEL": "Julia Z", "TYPE": "float", "DEFAULT": 0.0, "MIN": -2.0, "MAX": 2.0, "GROUP": "Form"},
+        {"NAME": "julia_x", "LABEL": "Julia X", "TYPE": "float", "DEFAULT": 1.0, "MIN": -2.0, "MAX": 2.0, "GROUP": "Form"},
+        {"NAME": "julia_y", "LABEL": "Julia Y", "TYPE": "float", "DEFAULT": 0.5, "MIN": -2.0, "MAX": 2.0, "GROUP": "Form"},
+        {"NAME": "julia_z", "LABEL": "Julia Z", "TYPE": "float", "DEFAULT": 0.25, "MIN": -2.0, "MAX": 2.0, "GROUP": "Form"},
         {"NAME": "combine_split", "SPECIALIZE": true, "LABEL": "Part 2 From Slot", "TYPE": "long", "DEFAULT": 4, "VALUES": [2, 3, 4, 5, 6], "LABELS": ["2", "3", "4", "5", "6"], "GROUP": "Form"},
         {"NAME": "combine_op", "LABEL": "Combine", "TYPE": "long", "DEFAULT": 0, "VALUES": [0, 1, 2, 3, 4], "LABELS": ["Union", "Intersect", "Subtract", "Chamfer", "Fillet"], "GROUP": "Form"},
         {"NAME": "combine_width", "LABEL": "Combine Width", "TYPE": "float", "DEFAULT": 4.0, "MIN": 0.0, "MAX": 64.0, "GROUP": "Form"},
         {"NAME": "slot1_formula", "SPECIALIZE": true, "LABEL": "Slot 1 Formula", "TYPE": "long", "DEFAULT": 1, "VALUES": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22], "LABELS": ["Empty", "Box", "Menger", "Sierpinski", "KIFS", "Pseudo-Kleinian", "Kaliset", "Mandelbulb", "Transform", "Helispiral", "Gnarl", "Bulbox P-2", "Sphere Inversion", "Polyfold Sym", "Sine", "Reciprocal", "Repeat", "Koch Cube", "JCube", "Lin Combine", "Rotate 4D", "ABoxMod2", "msltoe Sym4"], "GROUP": "Slot 1"},
         {"NAME": "slot1_mode", "SPECIALIZE": true, "LABEL": "Slot 1 Variant", "TYPE": "long", "DEFAULT": 0, "VALUES": [0, 1, 2, 3, 4], "LABELS": ["Variant 1", "Variant 2", "Variant 3", "Variant 4", "Variant 5"], "GROUP": "Slot 1"},
-        {"NAME": "slot1_count", "SPECIALIZE": true, "LABEL": "Slot 1 Iterations", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 16.0, "GROUP": "Slot 1"},
+        {"NAME": "slot1_count", "SPECIALIZE": true, "LABEL": "Slot 1 Iterations", "TYPE": "long", "DEFAULT": 1, "MIN": 1, "MAX": 16, "GROUP": "Slot 1"},
         {"NAME": "slot1_a", "LABEL": "Slot 1 A", "TYPE": "float", "DEFAULT": 2.2, "MIN": -4.0, "MAX": 16.0, "GROUP": "Slot 1"},
         {"NAME": "slot1_b", "LABEL": "Slot 1 B", "TYPE": "float", "DEFAULT": 0.5, "MIN": -4.0, "MAX": 4.0, "GROUP": "Slot 1"},
         {"NAME": "slot1_c", "LABEL": "Slot 1 C", "TYPE": "float", "DEFAULT": 1.0, "MIN": -4.0, "MAX": 4.0, "GROUP": "Slot 1"},
@@ -47,7 +48,7 @@
         {"NAME": "slot1_rot_z", "LABEL": "Slot 1 Rotate Z", "TYPE": "float", "DEFAULT": 0.0, "MIN": -3.14159, "MAX": 3.14159, "GROUP": "Slot 1"},
         {"NAME": "slot2_formula", "SPECIALIZE": true, "LABEL": "Slot 2 Formula", "TYPE": "long", "DEFAULT": 0, "VALUES": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22], "LABELS": ["Empty", "Box", "Menger", "Sierpinski", "KIFS", "Pseudo-Kleinian", "Kaliset", "Mandelbulb", "Transform", "Helispiral", "Gnarl", "Bulbox P-2", "Sphere Inversion", "Polyfold Sym", "Sine", "Reciprocal", "Repeat", "Koch Cube", "JCube", "Lin Combine", "Rotate 4D", "ABoxMod2", "msltoe Sym4"], "GROUP": "Slot 2"},
         {"NAME": "slot2_mode", "SPECIALIZE": true, "LABEL": "Slot 2 Variant", "TYPE": "long", "DEFAULT": 0, "VALUES": [0, 1, 2, 3, 4], "LABELS": ["Variant 1", "Variant 2", "Variant 3", "Variant 4", "Variant 5"], "GROUP": "Slot 2"},
-        {"NAME": "slot2_count", "SPECIALIZE": true, "LABEL": "Slot 2 Iterations", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 16.0, "GROUP": "Slot 2"},
+        {"NAME": "slot2_count", "SPECIALIZE": true, "LABEL": "Slot 2 Iterations", "TYPE": "long", "DEFAULT": 1, "MIN": 1, "MAX": 16, "GROUP": "Slot 2"},
         {"NAME": "slot2_a", "LABEL": "Slot 2 A", "TYPE": "float", "DEFAULT": 0.15, "MIN": -4.0, "MAX": 16.0, "GROUP": "Slot 2"},
         {"NAME": "slot2_b", "LABEL": "Slot 2 B", "TYPE": "float", "DEFAULT": 1.0, "MIN": -4.0, "MAX": 4.0, "GROUP": "Slot 2"},
         {"NAME": "slot2_c", "LABEL": "Slot 2 C", "TYPE": "float", "DEFAULT": 1.0, "MIN": -4.0, "MAX": 4.0, "GROUP": "Slot 2"},
@@ -57,7 +58,7 @@
         {"NAME": "slot2_rot_z", "LABEL": "Slot 2 Rotate Z", "TYPE": "float", "DEFAULT": 0.0, "MIN": -3.14159, "MAX": 3.14159, "GROUP": "Slot 2"},
         {"NAME": "slot3_formula", "SPECIALIZE": true, "LABEL": "Slot 3 Formula", "TYPE": "long", "DEFAULT": 0, "VALUES": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22], "LABELS": ["Empty", "Box", "Menger", "Sierpinski", "KIFS", "Pseudo-Kleinian", "Kaliset", "Mandelbulb", "Transform", "Helispiral", "Gnarl", "Bulbox P-2", "Sphere Inversion", "Polyfold Sym", "Sine", "Reciprocal", "Repeat", "Koch Cube", "JCube", "Lin Combine", "Rotate 4D", "ABoxMod2", "msltoe Sym4"], "GROUP": "Slot 3"},
         {"NAME": "slot3_mode", "SPECIALIZE": true, "LABEL": "Slot 3 Variant", "TYPE": "long", "DEFAULT": 0, "VALUES": [0, 1, 2, 3, 4], "LABELS": ["Variant 1", "Variant 2", "Variant 3", "Variant 4", "Variant 5"], "GROUP": "Slot 3"},
-        {"NAME": "slot3_count", "SPECIALIZE": true, "LABEL": "Slot 3 Iterations", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 16.0, "GROUP": "Slot 3"},
+        {"NAME": "slot3_count", "SPECIALIZE": true, "LABEL": "Slot 3 Iterations", "TYPE": "long", "DEFAULT": 1, "MIN": 1, "MAX": 16, "GROUP": "Slot 3"},
         {"NAME": "slot3_a", "LABEL": "Slot 3 A", "TYPE": "float", "DEFAULT": 2.0, "MIN": -4.0, "MAX": 16.0, "GROUP": "Slot 3"},
         {"NAME": "slot3_b", "LABEL": "Slot 3 B", "TYPE": "float", "DEFAULT": 1.0, "MIN": -4.0, "MAX": 4.0, "GROUP": "Slot 3"},
         {"NAME": "slot3_c", "LABEL": "Slot 3 C", "TYPE": "float", "DEFAULT": 0.0, "MIN": -4.0, "MAX": 4.0, "GROUP": "Slot 3"},
@@ -67,7 +68,7 @@
         {"NAME": "slot3_rot_z", "LABEL": "Slot 3 Rotate Z", "TYPE": "float", "DEFAULT": 0.0, "MIN": -3.14159, "MAX": 3.14159, "GROUP": "Slot 3"},
         {"NAME": "slot4_formula", "SPECIALIZE": true, "LABEL": "Slot 4 Formula", "TYPE": "long", "DEFAULT": 0, "VALUES": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22], "LABELS": ["Empty", "Box", "Menger", "Sierpinski", "KIFS", "Pseudo-Kleinian", "Kaliset", "Mandelbulb", "Transform", "Helispiral", "Gnarl", "Bulbox P-2", "Sphere Inversion", "Polyfold Sym", "Sine", "Reciprocal", "Repeat", "Koch Cube", "JCube", "Lin Combine", "Rotate 4D", "ABoxMod2", "msltoe Sym4"], "GROUP": "Slot 4"},
         {"NAME": "slot4_mode", "SPECIALIZE": true, "LABEL": "Slot 4 Variant", "TYPE": "long", "DEFAULT": 0, "VALUES": [0, 1, 2, 3, 4], "LABELS": ["Variant 1", "Variant 2", "Variant 3", "Variant 4", "Variant 5"], "GROUP": "Slot 4"},
-        {"NAME": "slot4_count", "SPECIALIZE": true, "LABEL": "Slot 4 Iterations", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 16.0, "GROUP": "Slot 4"},
+        {"NAME": "slot4_count", "SPECIALIZE": true, "LABEL": "Slot 4 Iterations", "TYPE": "long", "DEFAULT": 1, "MIN": 1, "MAX": 16, "GROUP": "Slot 4"},
         {"NAME": "slot4_a", "LABEL": "Slot 4 A", "TYPE": "float", "DEFAULT": 2.0, "MIN": -4.0, "MAX": 16.0, "GROUP": "Slot 4"},
         {"NAME": "slot4_b", "LABEL": "Slot 4 B", "TYPE": "float", "DEFAULT": 1.0, "MIN": -4.0, "MAX": 4.0, "GROUP": "Slot 4"},
         {"NAME": "slot4_c", "LABEL": "Slot 4 C", "TYPE": "float", "DEFAULT": 0.0, "MIN": -4.0, "MAX": 4.0, "GROUP": "Slot 4"},
@@ -77,7 +78,7 @@
         {"NAME": "slot4_rot_z", "LABEL": "Slot 4 Rotate Z", "TYPE": "float", "DEFAULT": 0.0, "MIN": -3.14159, "MAX": 3.14159, "GROUP": "Slot 4"},
         {"NAME": "slot5_formula", "SPECIALIZE": true, "LABEL": "Slot 5 Formula", "TYPE": "long", "DEFAULT": 0, "VALUES": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22], "LABELS": ["Empty", "Box", "Menger", "Sierpinski", "KIFS", "Pseudo-Kleinian", "Kaliset", "Mandelbulb", "Transform", "Helispiral", "Gnarl", "Bulbox P-2", "Sphere Inversion", "Polyfold Sym", "Sine", "Reciprocal", "Repeat", "Koch Cube", "JCube", "Lin Combine", "Rotate 4D", "ABoxMod2", "msltoe Sym4"], "GROUP": "Slot 5"},
         {"NAME": "slot5_mode", "SPECIALIZE": true, "LABEL": "Slot 5 Variant", "TYPE": "long", "DEFAULT": 0, "VALUES": [0, 1, 2, 3, 4], "LABELS": ["Variant 1", "Variant 2", "Variant 3", "Variant 4", "Variant 5"], "GROUP": "Slot 5"},
-        {"NAME": "slot5_count", "SPECIALIZE": true, "LABEL": "Slot 5 Iterations", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 16.0, "GROUP": "Slot 5"},
+        {"NAME": "slot5_count", "SPECIALIZE": true, "LABEL": "Slot 5 Iterations", "TYPE": "long", "DEFAULT": 1, "MIN": 1, "MAX": 16, "GROUP": "Slot 5"},
         {"NAME": "slot5_a", "LABEL": "Slot 5 A", "TYPE": "float", "DEFAULT": 2.0, "MIN": -4.0, "MAX": 16.0, "GROUP": "Slot 5"},
         {"NAME": "slot5_b", "LABEL": "Slot 5 B", "TYPE": "float", "DEFAULT": 1.0, "MIN": -4.0, "MAX": 4.0, "GROUP": "Slot 5"},
         {"NAME": "slot5_c", "LABEL": "Slot 5 C", "TYPE": "float", "DEFAULT": 0.0, "MIN": -4.0, "MAX": 4.0, "GROUP": "Slot 5"},
@@ -87,7 +88,7 @@
         {"NAME": "slot5_rot_z", "LABEL": "Slot 5 Rotate Z", "TYPE": "float", "DEFAULT": 0.0, "MIN": -3.14159, "MAX": 3.14159, "GROUP": "Slot 5"},
         {"NAME": "slot6_formula", "SPECIALIZE": true, "LABEL": "Slot 6 Formula", "TYPE": "long", "DEFAULT": 0, "VALUES": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22], "LABELS": ["Empty", "Box", "Menger", "Sierpinski", "KIFS", "Pseudo-Kleinian", "Kaliset", "Mandelbulb", "Transform", "Helispiral", "Gnarl", "Bulbox P-2", "Sphere Inversion", "Polyfold Sym", "Sine", "Reciprocal", "Repeat", "Koch Cube", "JCube", "Lin Combine", "Rotate 4D", "ABoxMod2", "msltoe Sym4"], "GROUP": "Slot 6"},
         {"NAME": "slot6_mode", "SPECIALIZE": true, "LABEL": "Slot 6 Variant", "TYPE": "long", "DEFAULT": 0, "VALUES": [0, 1, 2, 3, 4], "LABELS": ["Variant 1", "Variant 2", "Variant 3", "Variant 4", "Variant 5"], "GROUP": "Slot 6"},
-        {"NAME": "slot6_count", "SPECIALIZE": true, "LABEL": "Slot 6 Iterations", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 16.0, "GROUP": "Slot 6"},
+        {"NAME": "slot6_count", "SPECIALIZE": true, "LABEL": "Slot 6 Iterations", "TYPE": "long", "DEFAULT": 1, "MIN": 1, "MAX": 16, "GROUP": "Slot 6"},
         {"NAME": "slot6_a", "LABEL": "Slot 6 A", "TYPE": "float", "DEFAULT": 2.0, "MIN": -4.0, "MAX": 16.0, "GROUP": "Slot 6"},
         {"NAME": "slot6_b", "LABEL": "Slot 6 B", "TYPE": "float", "DEFAULT": 1.0, "MIN": -4.0, "MAX": 4.0, "GROUP": "Slot 6"},
         {"NAME": "slot6_c", "LABEL": "Slot 6 C", "TYPE": "float", "DEFAULT": 0.0, "MIN": -4.0, "MAX": 4.0, "GROUP": "Slot 6"},
@@ -106,7 +107,12 @@
         {"NAME": "still_samples", "LABEL": "Still Samples", "TYPE": "float", "DEFAULT": 32.0, "MIN": 4.0, "MAX": 64.0, "GROUP": "Detail"},
         {"NAME": "sharpness", "LABEL": "Sharpness", "TYPE": "float", "DEFAULT": 0.85, "MIN": 0.0, "MAX": 1.0, "GROUP": "Detail"},
         {"NAME": "debug_view", "LABEL": "Diagnostic", "TYPE": "long", "DEFAULT": 0, "VALUES": [0, 1, 2, 3, 4, 5, 6, 7, 8], "LABELS": ["Off", "Steps", "Normals", "Depth", "Exit Cause", "Iterations", "Parity Grid", "Shadow and Occlusion", "Shade Reuse"], "GROUP": "Detail"},
-        {"NAME": "look", "LABEL": "Look", "TYPE": "long", "DEFAULT": 1, "VALUES": [0, 1, 2, 3, 4], "LABELS": ["Custom", "Stone Hall", "Desert Sunbeams", "Moonlit", "Teal & Gold"], "GROUP": "Lighting"},
+        {"NAME": "look", "LABEL": "Look", "TYPE": "long", "DEFAULT": 1, "VALUES": [1, 2, 3, 4], "LABELS": ["Stone Hall", "Desert Sunbeams", "Moonlit", "Teal & Gold"], "GROUP": "Lighting", "PRESETS": [
+            {"sun_elev": 0.6, "sun_azim": 2.4, "sun_color": [1.0, 0.92, 0.8, 1.0], "sun_intensity": 4.0, "fill_elev": 0.5, "fill_azim": -2.2, "fill_color": [0.35, 0.45, 0.7, 1.0], "fill_intensity": 0.6, "headlight_intensity": 0.3, "headlight_color": [1.0, 0.9, 0.75, 1.0], "amb_top": [0.45, 0.48, 0.5, 1.0], "amb_bottom": [0.12, 0.14, 0.1, 1.0], "ao_strength": 1.0, "bounce": 0.3, "palette_offset": 0.0, "palette_scale": 0.3, "color1": [0.5, 0.49, 0.46, 1.0], "color2": [0.62, 0.6, 0.56, 1.0], "color3": [0.38, 0.37, 0.35, 1.0], "color4": [0.3, 0.42, 0.25, 1.0], "roughness": 0.7, "metallic": 0.0, "specular": 0.5, "fog_density": 0.06, "fog_color": [0.62, 0.64, 0.66, 1.0], "dyn_fog": 0.0, "dyn_fog_color": [0.9, 0.6, 0.35, 1.0], "sky_brightness": 0.8, "shafts": 0.0, "shaft_anisotropy": 0.3, "exposure": 0.6, "contrast": 1.1, "saturation": 1.0, "bloom": 0.15},
+            {"sun_elev": 0.3, "sun_azim": 1.2, "sun_color": [1.0, 0.75, 0.4499, 1.0], "sun_intensity": 8.0, "fill_elev": 0.5, "fill_azim": -2.2, "fill_color": [0.35, 0.4499, 0.7, 1.0], "fill_intensity": 0.4, "headlight_intensity": 0.2, "headlight_color": [1.0, 0.9, 0.75, 1.0], "amb_top": [0.2, 0.2799, 0.38, 1.0], "amb_bottom": [0.0999, 0.0702, 0.0401, 1.0], "ao_strength": 0.8, "bounce": 0.5, "palette_offset": 0.0, "palette_scale": 0.3, "color1": [0.42, 0.3599, 0.2999, 1.0], "color2": [0.55, 0.48, 0.38, 1.0], "color3": [0.2999, 0.2701, 0.2401, 1.0], "color4": [0.62, 0.38, 0.2201, 1.0], "roughness": 0.6, "metallic": 0.0, "specular": 0.6, "fog_density": 0.08, "fog_color": [0.42, 0.3599, 0.2999, 1.0], "dyn_fog": 0.0, "dyn_fog_color": [0.9, 0.6, 0.35, 1.0], "sky_brightness": 0.8, "shafts": 0.8, "shaft_anisotropy": 0.5, "exposure": 0.8, "contrast": 1.15, "saturation": 1.05, "bloom": 0.25},
+            {"sun_elev": 0.35, "sun_azim": -2.6, "sun_color": [0.65, 0.78, 1.0, 1.0], "sun_intensity": 9.0, "fill_elev": 0.5, "fill_azim": -2.2, "fill_color": [0.35, 0.4499, 0.7, 1.0], "fill_intensity": 0.3, "headlight_intensity": 0.4, "headlight_color": [1.0, 0.8, 0.55, 1.0], "amb_top": [0.0999, 0.1401, 0.2, 1.0], "amb_bottom": [0.0297, 0.0297, 0.0401, 1.0], "ao_strength": 0.9, "bounce": 0.2, "palette_offset": 0.0, "palette_scale": 0.3, "color1": [0.2999, 0.3199, 0.3399, 1.0], "color2": [0.4499, 0.47, 0.48, 1.0], "color3": [0.2, 0.2201, 0.2401, 1.0], "color4": [0.55, 0.57, 0.58, 1.0], "roughness": 0.5, "metallic": 0.1, "specular": 0.8, "fog_density": 0.1, "fog_color": [0.0999, 0.1401, 0.2201, 1.0], "dyn_fog": 0.0, "dyn_fog_color": [0.9, 0.6, 0.35, 1.0], "sky_brightness": 0.6, "shafts": 0.0, "shaft_anisotropy": 0.3, "exposure": 1.6, "contrast": 1.15, "saturation": 0.9, "bloom": 0.2},
+            {"sun_elev": 0.25, "sun_azim": 2.4, "sun_color": [1.0, 0.85, 0.6, 1.0], "sun_intensity": 5.0, "fill_elev": 0.5, "fill_azim": -2.2, "fill_color": [0.35, 0.4499, 0.7, 1.0], "fill_intensity": 0.8, "headlight_intensity": 0.3, "headlight_color": [1.0, 0.9, 0.75, 1.0], "amb_top": [0.18, 0.38, 0.4499, 1.0], "amb_bottom": [0.0401, 0.06, 0.0702, 1.0], "ao_strength": 0.8, "bounce": 0.3, "palette_offset": 0.0, "palette_scale": 0.3, "color1": [0.0401, 0.2201, 0.2701, 1.0], "color2": [0.85, 0.62, 0.2999, 1.0], "color3": [0.0194, 0.0897, 0.1097, 1.0], "color4": [0.7, 0.8, 0.78, 1.0], "roughness": 0.35, "metallic": 0.4, "specular": 1.2, "fog_density": 0.15, "fog_color": [0.0999, 0.2201, 0.2701, 1.0], "dyn_fog": 0.0, "dyn_fog_color": [0.9, 0.6, 0.35, 1.0], "sky_brightness": 0.8, "shafts": 0.0, "shaft_anisotropy": 0.3, "exposure": 0.7, "contrast": 1.1, "saturation": 1.0, "bloom": 0.15}
+        ]},
         {"NAME": "sun_elev", "LABEL": "Sun Elevation", "TYPE": "float", "DEFAULT": 0.6, "MIN": -1.5, "MAX": 1.5, "GROUP": "Lighting"},
         {"NAME": "sun_azim", "LABEL": "Sun Azimuth", "TYPE": "float", "DEFAULT": 2.4, "MIN": -3.14159, "MAX": 3.14159, "GROUP": "Lighting"},
         {"NAME": "sun_color", "LABEL": "Sun Color", "TYPE": "color", "DEFAULT": [1.0, 0.92, 0.8, 1.0], "GROUP": "Lighting"},
@@ -161,13 +167,14 @@
         {"NAME": "surface_scale", "LABEL": "Scale", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.05, "MAX": 8.0, "GROUP": "Surface"},
         {"NAME": "surface_amount", "LABEL": "Amount", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 1.0, "GROUP": "Surface"},
         {"NAME": "surface_bump", "LABEL": "Bump", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 4.0, "GROUP": "Surface"},
-        {"NAME": "surface_depth", "LABEL": "Depth", "TYPE": "float", "DEFAULT": 2.0, "MIN": 1.0, "MAX": 16.0, "GROUP": "Surface"}
+        {"NAME": "surface_depth", "LABEL": "Depth", "TYPE": "float", "DEFAULT": 2.0, "MIN": 1.0, "MAX": 16.0, "GROUP": "Surface"},
+        {"NAME": "track_jacobian", "SPECIALIZE": true, "LABEL": "Track Jacobian", "TYPE": "long", "DEFAULT": 1, "MIN": 0, "MAX": 1, "GROUP": "Detail"}
     ],
     "IMPORTED": {
         "surfaces": {"PATH": "fractal_textures/surfaces.png"}
     },
     "PREPROCESSORS": [
-        {"NAME": "flight", "TYPE": "fractal_flight", "FORMAT": "rgba32float", "OPTIONS": {"bind_all_inputs": true}}
+        {"NAME": "flight", "TYPE": "fractal_flight", "FORMAT": "rgba32float", "OPTIONS": {"bind_all_inputs": true}, "WRITES": ["track_jacobian"]}
     ],
     "SPECIALIZE_PASSES": true,
     "COLUMNS": [
@@ -250,9 +257,9 @@ layout(set = 0, binding = 12) uniform texture2D dof;
 layout(set = 0, binding = 13) uniform texture2D bloom1;
 layout(set = 0, binding = 14) uniform texture2D bloom2;
 layout(set = 0, binding = 15) uniform texture2D bloom3;
-// Camera and formula schedule from the fractal_flight preprocessor.
 // Imported: six ambientCG CC0 materials, 3 x 2; RGB color, A height.
 layout(set = 0, binding = 16) uniform texture2D surfaces;
+// Camera and formula schedule from the fractal_flight preprocessor.
 layout(set = 0, binding = 17) uniform texture2D flight;
 
 const int PASS_TILES = 0;
@@ -267,6 +274,12 @@ const int PASS_BLOOM1 = 8;
 const int PASS_BLOOM2 = 9;
 const int PASS_BLOOM3 = 10;
 const int TILE = 8;
+
+const float PI = 3.14159265358979;
+const float TAU = 6.28318530717959;
+const float GOLDEN_ANGLE = 2.3999632;
+// Rec. 709 luminance weights.
+const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 
 layout(set = 0, binding = 18) uniform UserParams {
     float throttle;
@@ -289,6 +302,7 @@ layout(set = 0, binding = 18) uniform UserParams {
     float recall_time;
     uint tour;
     float tour_seconds;
+    int stack;
     int hybrid_mode;
     int repeat_from;
     float max_iterations;
@@ -302,7 +316,7 @@ layout(set = 0, binding = 18) uniform UserParams {
     float combine_width;
     int slot1_formula;
     int slot1_mode;
-    float slot1_count;
+    int slot1_count;
     float slot1_a;
     float slot1_b;
     float slot1_c;
@@ -312,7 +326,7 @@ layout(set = 0, binding = 18) uniform UserParams {
     float slot1_rot_z;
     int slot2_formula;
     int slot2_mode;
-    float slot2_count;
+    int slot2_count;
     float slot2_a;
     float slot2_b;
     float slot2_c;
@@ -322,7 +336,7 @@ layout(set = 0, binding = 18) uniform UserParams {
     float slot2_rot_z;
     int slot3_formula;
     int slot3_mode;
-    float slot3_count;
+    int slot3_count;
     float slot3_a;
     float slot3_b;
     float slot3_c;
@@ -332,7 +346,7 @@ layout(set = 0, binding = 18) uniform UserParams {
     float slot3_rot_z;
     int slot4_formula;
     int slot4_mode;
-    float slot4_count;
+    int slot4_count;
     float slot4_a;
     float slot4_b;
     float slot4_c;
@@ -342,7 +356,7 @@ layout(set = 0, binding = 18) uniform UserParams {
     float slot4_rot_z;
     int slot5_formula;
     int slot5_mode;
-    float slot5_count;
+    int slot5_count;
     float slot5_a;
     float slot5_b;
     float slot5_c;
@@ -352,7 +366,7 @@ layout(set = 0, binding = 18) uniform UserParams {
     float slot5_rot_z;
     int slot6_formula;
     int slot6_mode;
-    float slot6_count;
+    int slot6_count;
     float slot6_a;
     float slot6_b;
     float slot6_c;
@@ -427,265 +441,8 @@ layout(set = 0, binding = 18) uniform UserParams {
     float surface_amount;
     float surface_bump;
     float surface_depth;
+    int track_jacobian;
 };
-
-// ── Look presets ─────────────────────────────────────────────────────────
-
-// The look inputs as this pass uses them: the sliders under Custom, or one
-// of the looks below. Colors are linear, as the engine uploads the sliders'
-// sRGB values. applyLook() fills them at the start of every pass; the
-// defines after it point the rest of the shader here.
-float look_sun_elev;
-float look_sun_azim;
-vec4 look_sun_color;
-float look_sun_intensity;
-float look_fill_elev;
-float look_fill_azim;
-vec4 look_fill_color;
-float look_fill_intensity;
-float look_headlight_intensity;
-vec4 look_headlight_color;
-vec4 look_amb_top;
-vec4 look_amb_bottom;
-float look_ao_strength;
-float look_bounce;
-float look_palette_offset;
-float look_palette_scale;
-vec4 look_color1;
-vec4 look_color2;
-vec4 look_color3;
-vec4 look_color4;
-float look_roughness;
-float look_metallic;
-float look_specular;
-float look_fog_density;
-vec4 look_fog_color;
-float look_dyn_fog;
-vec4 look_dyn_fog_color;
-float look_sky_brightness;
-float look_shafts;
-float look_shaft_anisotropy;
-float look_exposure;
-float look_contrast;
-float look_saturation;
-float look_bloom;
-
-void applyLook() {
-    look_sun_elev = sun_elev;
-    look_sun_azim = sun_azim;
-    look_sun_color = sun_color;
-    look_sun_intensity = sun_intensity;
-    look_fill_elev = fill_elev;
-    look_fill_azim = fill_azim;
-    look_fill_color = fill_color;
-    look_fill_intensity = fill_intensity;
-    look_headlight_intensity = headlight_intensity;
-    look_headlight_color = headlight_color;
-    look_amb_top = amb_top;
-    look_amb_bottom = amb_bottom;
-    look_ao_strength = ao_strength;
-    look_bounce = bounce;
-    look_palette_offset = palette_offset;
-    look_palette_scale = palette_scale;
-    look_color1 = color1;
-    look_color2 = color2;
-    look_color3 = color3;
-    look_color4 = color4;
-    look_roughness = roughness;
-    look_metallic = metallic;
-    look_specular = specular;
-    look_fog_density = fog_density;
-    look_fog_color = fog_color;
-    look_dyn_fog = dyn_fog;
-    look_dyn_fog_color = dyn_fog_color;
-    look_sky_brightness = sky_brightness;
-    look_shafts = shafts;
-    look_shaft_anisotropy = shaft_anisotropy;
-    look_exposure = exposure;
-    look_contrast = contrast;
-    look_saturation = saturation;
-    look_bloom = bloom;
-    if (look == 1) {
-        // Stone Hall.
-        look_sun_elev = 0.6;
-        look_sun_azim = 2.4;
-        look_sun_color = vec4(1.0, 0.8276, 0.6038, 1.0);
-        look_sun_intensity = 4.0;
-        look_fill_elev = 0.5;
-        look_fill_azim = -2.2;
-        look_fill_color = vec4(0.1005, 0.1706, 0.448, 1.0);
-        look_fill_intensity = 0.6;
-        look_headlight_intensity = 0.3;
-        look_headlight_color = vec4(1.0, 0.7874, 0.5225, 1.0);
-        look_amb_top = vec4(0.1706, 0.196, 0.214, 1.0);
-        look_amb_bottom = vec4(0.0134, 0.0174, 0.01, 1.0);
-        look_ao_strength = 1.0;
-        look_bounce = 0.3;
-        look_palette_offset = 0.0;
-        look_palette_scale = 0.3;
-        look_color1 = vec4(0.214, 0.2049, 0.1789, 1.0);
-        look_color2 = vec4(0.3424, 0.3185, 0.2738, 1.0);
-        look_color3 = vec4(0.1193, 0.1128, 0.1005, 1.0);
-        look_color4 = vec4(0.0732, 0.1473, 0.0509, 1.0);
-        look_roughness = 0.7;
-        look_metallic = 0.0;
-        look_specular = 0.5;
-        look_fog_density = 0.06;
-        look_fog_color = vec4(0.3424, 0.3672, 0.3931, 1.0);
-        look_dyn_fog = 0.0;
-        look_dyn_fog_color = vec4(0.7874, 0.3185, 0.1005, 1.0);
-        look_sky_brightness = 0.8;
-        look_shafts = 0.0;
-        look_shaft_anisotropy = 0.3;
-        look_exposure = 0.6;
-        look_contrast = 1.1;
-        look_saturation = 1.0;
-        look_bloom = 0.15;
-    } else if (look == 2) {
-        // Desert Sunbeams.
-        look_sun_elev = 0.3;
-        look_sun_azim = 1.2;
-        look_sun_color = vec4(1.0, 0.5225, 0.1706, 1.0);
-        look_sun_intensity = 8.0;
-        look_fill_elev = 0.5;
-        look_fill_azim = -2.2;
-        look_fill_color = vec4(0.1005, 0.1706, 0.448, 1.0);
-        look_fill_intensity = 0.4;
-        look_headlight_intensity = 0.2;
-        look_headlight_color = vec4(1.0, 0.7874, 0.5225, 1.0);
-        look_amb_top = vec4(0.0331, 0.0637, 0.1193, 1.0);
-        look_amb_bottom = vec4(0.01, 0.006, 0.0031, 1.0);
-        look_ao_strength = 0.8;
-        look_bounce = 0.5;
-        look_palette_offset = 0.0;
-        look_palette_scale = 0.3;
-        look_color1 = vec4(0.1473, 0.1065, 0.0732, 1.0);
-        look_color2 = vec4(0.2633, 0.196, 0.1193, 1.0);
-        look_color3 = vec4(0.0732, 0.0593, 0.047, 1.0);
-        look_color4 = vec4(0.3424, 0.1193, 0.0397, 1.0);
-        look_roughness = 0.6;
-        look_metallic = 0.0;
-        look_specular = 0.6;
-        look_fog_density = 0.08;
-        look_fog_color = vec4(0.1473, 0.1065, 0.0732, 1.0);
-        look_dyn_fog = 0.0;
-        look_dyn_fog_color = vec4(0.7874, 0.3185, 0.1005, 1.0);
-        look_sky_brightness = 0.8;
-        look_shafts = 0.8;
-        look_shaft_anisotropy = 0.5;
-        look_exposure = 0.8;
-        look_contrast = 1.15;
-        look_saturation = 1.05;
-        look_bloom = 0.25;
-    } else if (look == 3) {
-        // Moonlit.
-        look_sun_elev = 0.35;
-        look_sun_azim = -2.6;
-        look_sun_color = vec4(0.3801, 0.5705, 1.0, 1.0);
-        look_sun_intensity = 9.0;
-        look_fill_elev = 0.5;
-        look_fill_azim = -2.2;
-        look_fill_color = vec4(0.1005, 0.1706, 0.448, 1.0);
-        look_fill_intensity = 0.3;
-        look_headlight_intensity = 0.4;
-        look_headlight_color = vec4(1.0, 0.6038, 0.2633, 1.0);
-        look_amb_top = vec4(0.01, 0.0174, 0.0331, 1.0);
-        look_amb_bottom = vec4(0.0023, 0.0023, 0.0031, 1.0);
-        look_ao_strength = 0.9;
-        look_bounce = 0.2;
-        look_palette_offset = 0.0;
-        look_palette_scale = 0.3;
-        look_color1 = vec4(0.0732, 0.0835, 0.0946, 1.0);
-        look_color2 = vec4(0.1706, 0.1873, 0.196, 1.0);
-        look_color3 = vec4(0.0331, 0.0397, 0.047, 1.0);
-        look_color4 = vec4(0.2633, 0.2846, 0.2957, 1.0);
-        look_roughness = 0.5;
-        look_metallic = 0.1;
-        look_specular = 0.8;
-        look_fog_density = 0.1;
-        look_fog_color = vec4(0.01, 0.0174, 0.0397, 1.0);
-        look_dyn_fog = 0.0;
-        look_dyn_fog_color = vec4(0.7874, 0.3185, 0.1005, 1.0);
-        look_sky_brightness = 0.6;
-        look_shafts = 0.0;
-        look_shaft_anisotropy = 0.3;
-        look_exposure = 1.6;
-        look_contrast = 1.15;
-        look_saturation = 0.9;
-        look_bloom = 0.2;
-    } else if (look == 4) {
-        // Teal & Gold.
-        look_sun_elev = 0.25;
-        look_sun_azim = 2.4;
-        look_sun_color = vec4(1.0, 0.6921, 0.3185, 1.0);
-        look_sun_intensity = 5.0;
-        look_fill_elev = 0.5;
-        look_fill_azim = -2.2;
-        look_fill_color = vec4(0.1005, 0.1706, 0.448, 1.0);
-        look_fill_intensity = 0.8;
-        look_headlight_intensity = 0.3;
-        look_headlight_color = vec4(1.0, 0.7874, 0.5225, 1.0);
-        look_amb_top = vec4(0.0272, 0.1193, 0.1706, 1.0);
-        look_amb_bottom = vec4(0.0031, 0.0049, 0.006, 1.0);
-        look_ao_strength = 0.8;
-        look_bounce = 0.3;
-        look_palette_offset = 0.0;
-        look_palette_scale = 0.3;
-        look_color1 = vec4(0.0031, 0.0397, 0.0593, 1.0);
-        look_color2 = vec4(0.6921, 0.3424, 0.0732, 1.0);
-        look_color3 = vec4(0.0015, 0.0085, 0.0116, 1.0);
-        look_color4 = vec4(0.448, 0.6038, 0.5705, 1.0);
-        look_roughness = 0.35;
-        look_metallic = 0.4;
-        look_specular = 1.2;
-        look_fog_density = 0.15;
-        look_fog_color = vec4(0.01, 0.0397, 0.0593, 1.0);
-        look_dyn_fog = 0.0;
-        look_dyn_fog_color = vec4(0.7874, 0.3185, 0.1005, 1.0);
-        look_sky_brightness = 0.8;
-        look_shafts = 0.0;
-        look_shaft_anisotropy = 0.3;
-        look_exposure = 0.7;
-        look_contrast = 1.1;
-        look_saturation = 1.0;
-        look_bloom = 0.15;
-    }
-}
-
-#define sun_elev look_sun_elev
-#define sun_azim look_sun_azim
-#define sun_color look_sun_color
-#define sun_intensity look_sun_intensity
-#define fill_elev look_fill_elev
-#define fill_azim look_fill_azim
-#define fill_color look_fill_color
-#define fill_intensity look_fill_intensity
-#define headlight_intensity look_headlight_intensity
-#define headlight_color look_headlight_color
-#define amb_top look_amb_top
-#define amb_bottom look_amb_bottom
-#define ao_strength look_ao_strength
-#define bounce look_bounce
-#define palette_offset look_palette_offset
-#define palette_scale look_palette_scale
-#define color1 look_color1
-#define color2 look_color2
-#define color3 look_color3
-#define color4 look_color4
-#define roughness look_roughness
-#define metallic look_metallic
-#define specular look_specular
-#define fog_density look_fog_density
-#define fog_color look_fog_color
-#define dyn_fog look_dyn_fog
-#define dyn_fog_color look_dyn_fog_color
-#define sky_brightness look_sky_brightness
-#define shafts look_shafts
-#define shaft_anisotropy look_shaft_anisotropy
-#define exposure look_exposure
-#define contrast look_contrast
-#define saturation look_saturation
-#define bloom look_bloom
 
 // The formula stack's structure, as specialization constants set from the
 // SPECIALIZE inputs of the same name. The compiler keeps only the formulas
@@ -741,10 +498,15 @@ layout(constant_id = 19) const int SPEC_SLOT6_MODE = 0;
 #define SC_SLOT6_MODE specialized(SPEC_SLOT6_MODE)
 layout(constant_id = 20) const int SPEC_SLOT6_COUNT = 1;
 #define SC_SLOT6_COUNT specialized(SPEC_SLOT6_COUNT)
+// Written by the flight preprocessor: 0 while no part of the stack needs the
+// Jacobian, which compiles its code out; 1 compiles it in and the distance
+// kind decides at run time.
+layout(constant_id = 21) const int SPEC_TRACK_JACOBIAN = 1;
+#define SC_TRACK_JACOBIAN specialized(SPEC_TRACK_JACOBIAN)
 
 // This pipeline's pass (SPECIALIZE_PASSES), so each pass compiles alone and
 // runs with the registers it needs, not those of the largest pass.
-layout(constant_id = 21) const int SPEC_PASSINDEX = 0;
+layout(constant_id = 22) const int SPEC_PASSINDEX = 0;
 #define PASS specialized(SPEC_PASSINDEX)
 
 // ── Flight texture ───────────────────────────────────────────────────────
@@ -799,10 +561,10 @@ vec2 previousFrameSize() {
     return liveSize(flightTexel(RESOLUTION_TEXEL).y);
 }
 
-// Whether this fragment of a pass at 1/divisor of render size lies outside
-// the part drawn this frame.
-bool outsideLive(float divisor) {
-    return any(greaterThanEqual(gl_FragCoord.xy, ceil(frameSize() / divisor)));
+// Whether this fragment of a pass at 1/divisor of render size lies inside
+// the part drawn this frame. Render-size passes draw only that part.
+bool insideLive(float divisor) {
+    return all(lessThan(gl_FragCoord.xy, ceil(frameSize() / divisor)));
 }
 
 // Where a point of the live frame, in render pixels, lies in a texture at
@@ -899,6 +661,8 @@ float frobenius(mat3 m) {
 
 const float MIN_RADIUS2 = 1e-8;
 const float PHI = 1.618033988749895;
+// 1 + sqrt 2.
+const float SILVER = 2.414213562373095;
 
 float planeReflect(inout vec3 z, vec3 n, float intensity, inout mat3 J, bool jac) {
     float h = dot(z, n);
@@ -957,7 +721,7 @@ float gnarlSlope(float from, float step, float alpha, float beta) {
 float repeatCell(float a, float size, float count) {
     float cell = floor(a / size + 0.5);
     if (count >= 1.0) {
-        cell = clamp(cell, -floor(count), floor(count));
+        cell = min(max(cell, -floor(count)), floor(count));
     }
     return cell;
 }
@@ -973,21 +737,32 @@ float repeatAxis(float a, float size, float count, bool mirror) {
 
 // Repeat's warp: sines with wavelengths in irrational ratio (in cells,
 // 2 phi and 2 (1 + sqrt 2)), so the bend never repeats and every cell
-// differs. Returns the stretch bound in `stretch`.
+// differs. Each output axis adds a sine of the next axis at frequency k.x
+// and one of the axis after that at k.y, with fixed phase offsets.
+const vec3 WARP_OFFSET1 = vec3(0.0, 2.3, 4.1);
+const vec3 WARP_OFFSET2 = vec3(0.0, 0.6, 3.3);
+const float WARP_PHASE2 = 1.7;
+
+// The warp's frequencies and the arguments of its two sines per axis.
+void warpArgs(vec3 v, float size, float phase, out vec2 k, out vec3 arg1, out vec3 arg2) {
+    k = TAU / (size * 2.0 * vec2(PHI, SILVER));
+    arg1 = k.x * v.yzx + WARP_OFFSET1 + phase;
+    arg2 = k.y * v.zxy + WARP_OFFSET2 + WARP_PHASE2 * phase;
+}
+
+// Returns the warped point and the stretch bound in `stretch`.
 vec3 quasiWarp(vec3 v, float size, float amount, float phase, out float stretch) {
     if (amount == 0.0) {
         stretch = 1.0;
         return v;
     }
     float a = 0.5 * amount * size;
-    float k1 = 6.283185307179586 / (size * 2.0 * PHI);
-    float k2 = 6.283185307179586 / (size * 2.0 * 2.414213562373095);
-    float p2 = 1.7 * phase;
-    stretch = 1.0 + 2.0 * abs(a) * (k1 + k2);
-    return v + a * vec3(
-        sin(k1 * v.y + phase) + sin(k2 * v.z + p2),
-        sin(k1 * v.z + 2.3 + phase) + sin(k2 * v.x + 0.6 + p2),
-        sin(k1 * v.x + 4.1 + phase) + sin(k2 * v.y + 3.3 + p2));
+    vec2 k;
+    vec3 arg1;
+    vec3 arg2;
+    warpArgs(v, size, phase, k, arg1, arg2);
+    stretch = 1.0 + 2.0 * abs(a) * (k.x + k.y);
+    return v + a * (sin(arg1) + sin(arg2));
 }
 
 vec3 repeatCells(vec3 v, float size, float count, bool mirror) {
@@ -1001,14 +776,17 @@ mat3 repeatColumns(mat3 m, vec3 v, float size, float count, bool mirror, float a
     mat3 warp = mat3(1.0);
     if (amount != 0.0) {
         float a = 0.5 * amount * size;
-        float k1 = 6.283185307179586 / (size * 2.0 * PHI);
-        float k2 = 6.283185307179586 / (size * 2.0 * 2.414213562373095);
-        float p2 = 1.7 * phase;
+        vec2 k;
+        vec3 arg1;
+        vec3 arg2;
+        warpArgs(v, size, phase, k, arg1, arg2);
+        vec3 c1 = a * k.x * cos(arg1);
+        vec3 c2 = a * k.y * cos(arg2);
         // Columns: the change of the moved point per unit of x, y, z.
         warp = mat3(
-            1.0, a * k2 * cos(k2 * v.x + 0.6 + p2), a * k1 * cos(k1 * v.x + 4.1 + phase),
-            a * k1 * cos(k1 * v.y + phase), 1.0, a * k2 * cos(k2 * v.y + 3.3 + p2),
-            a * k2 * cos(k2 * v.z + p2), a * k1 * cos(k1 * v.z + 2.3 + phase), 1.0);
+            1.0, c2.y, c1.z,
+            c1.x, 1.0, c2.z,
+            c2.x, c1.y, 1.0);
     }
     float unused;
     vec3 w = quasiWarp(v, size, amount, phase, unused);
@@ -1045,7 +823,7 @@ void applyFormula(int f, int mode, vec4 p, Rot rot, inout vec3 z, inout float dr
         vec3 folds;
         if (surf) {
             folds = vec3(foldSigns(z, fold).xy, 1.0);
-            z.xy = clamp(z.xy, -fold, fold) * 2.0 - z.xy;
+            z.xy = min(max(z.xy, -fold), fold) * 2.0 - z.xy;
         } else if (mode == 3) {
             folds = -signs(z);
             z = vec3(fold) - abs(z);
@@ -1054,24 +832,24 @@ void applyFormula(int f, int mode, vec4 p, Rot rot, inout vec3 z, inout float dr
             z = abs(z) + vec3(fold);
         } else {
             folds = foldSigns(z, fold);
-            z = clamp(z, -fold, fold) * 2.0 - z;
+            z = min(max(z, -fold), fold) * 2.0 - z;
         }
         vec3 q = mode == 2 ? vec3(z.xy, 0.0) : z;
         float rr = dot(q, q);
         float min2 = max(p.y * p.y, MIN_RADIUS2);
         float fixed2 = max(p.w * p.w, min2);
-        float m = p.x * fixed2 / clamp(rr, min2, fixed2);
+        float m = p.x * fixed2 / min(max(rr, min2), fixed2);
         vec3 sd = surf ? seed.yxz : seed;
         if (jac) {
             mat3 d = timesEach(J, folds);
             if (rr > min2 && rr < fixed2) {
                 d = radialColumns(d, z, q, rr);
             }
-            mat3 sd = S;
+            mat3 seedJ = S;
             if (surf) {
-                sd = exchangeRows(S, 0, 1, false);
+                seedJ = exchangeRows(S, 0, 1, false);
             }
-            J = rotateColumns(rot, d * m + sd);
+            J = rotateColumns(rot, d * m + seedJ);
         }
         z = rotateBy(rot, z * m + sd);
         dr = dr * abs(m) + seedDr;
@@ -1162,7 +940,7 @@ void applyFormula(int f, int mode, vec4 p, Rot rot, inout vec3 z, inout float dr
     } else if (f == 5) {
         // Pseudo-Kleinian: box size, inversion size.
         vec3 folds = foldSigns(z, p.x);
-        z = clamp(z, -p.x, p.x) * 2.0 - z;
+        z = min(max(z, -p.x), p.x) * 2.0 - z;
         float rr = dot(z, z);
         float k = max(p.y / max(rr, MIN_RADIUS2), 1.0);
         if (jac) {
@@ -1324,8 +1102,8 @@ void applyFormula(int f, int mode, vec4 p, Rot rot, inout vec3 z, inout float dr
         float y = z.y + p.w;
         float order = abs(p.x) < 1e-9 ? 1.0 : p.x;
         float shift = radians(p.y);
-        float n = roundEven((atan(y, x) + shift) * order / 6.283185307179586);
-        float a = shift - n * 6.283185307179586 / order;
+        float n = roundEven((atan(y, x) + shift) * order / TAU);
+        float a = shift - n * TAU / order;
         float sa = sin(a);
         float ca = cos(a);
         float turnedY = x * sa + y * ca;
@@ -1501,11 +1279,11 @@ void applyFormula(int f, int mode, vec4 p, Rot rot, inout vec3 z, inout float dr
         // ABoxMod2: scale, min R, fold XY, fold Z; an inversion in a capped
         // cylinder of half size 0.5.
         vec3 folds = vec3(foldSigns(z, p.z).xy, foldSigns(z, p.w).z);
-        vec3 folded = vec3(clamp(z.xy, -p.z, p.z) * 2.0 - z.xy, clamp(z.z, -p.w, p.w) * 2.0 - z.z);
+        vec3 folded = vec3(min(max(z.xy, -p.z), p.z) * 2.0 - z.xy, min(max(z.z, -p.w), p.w) * 2.0 - z.z);
         float cap = abs(folded.z) - 0.5;
         float rr = dot(folded.xy, folded.xy) + (cap > 0.0 ? cap * cap : 0.0);
         float min2 = max(p.y * p.y, MIN_RADIUS2);
-        float m = p.x / clamp(rr, min2, 1.0);
+        float m = p.x / min(max(rr, min2), 1.0);
         if (jac) {
             mat3 moved = timesEach(J, folds);
             if (rr > min2 && rr < 1.0) {
@@ -1553,7 +1331,6 @@ struct Sample {
     vec3 trapPoint;
     float log2dr;
     float part;
-    bool escaped;
 };
 
 // Fold bodies run by this pixel, for the work cap.
@@ -1573,8 +1350,14 @@ float smoothIteration(float n, bool escaped, float prevR2, float r2) {
     return n + (log(log(bailout)) - d) / (d - dPrev);
 }
 
-// Visits per pass of slot K when it lies in [lo, end): 0 when empty.
-#define VISITS(K, FORMULA, COUNT) ((FORMULA != 0 && K >= lo && K < end) ? max(COUNT, 0) : 0)
+// Visits per pass of slot K when it lies in [LO, end): 0 when empty.
+#define VISITS(K, FORMULA, COUNT, LO) ((FORMULA != 0 && K >= LO && K < end) ? max(COUNT, 0) : 0)
+
+// Visits per pass of all slots in [LO, end).
+#define VISITS_FROM(LO) \
+    (VISITS(0, SC_SLOT1_FORMULA, SC_SLOT1_COUNT, LO) + VISITS(1, SC_SLOT2_FORMULA, SC_SLOT2_COUNT, LO) \
+    + VISITS(2, SC_SLOT3_FORMULA, SC_SLOT3_COUNT, LO) + VISITS(3, SC_SLOT4_FORMULA, SC_SLOT4_COUNT, LO) \
+    + VISITS(4, SC_SLOT5_FORMULA, SC_SLOT5_COUNT, LO) + VISITS(5, SC_SLOT6_FORMULA, SC_SLOT6_COUNT, LO))
 
 // Find the slot of visit t into the pass starting at slot `from`.
 #define PICK(K, FORMULA, COUNT) \
@@ -1595,9 +1378,10 @@ float smoothIteration(float n, bool escaped, float prevR2, float r2) {
         applyFormula(FORMULA, MODE, vec4(PA, PB, PC, PD), rot, z, dr, seed, seedDr, J, S, jac && i >= leadLen, jac && trackSeed, w4, Jw); \
     }
 
-// Whether a formula may bend space unevenly, so its chain can need the
-// Jacobian. The host decides from the parameters (distance kind 3).
-#define BENDS(F) (F == 4 || (F >= 9 && F <= 12) || (F >= 14 && F <= 17) || (F >= 19 && F <= 21))
+// Whether a formula may bend space and mix axes, so its chain can need the
+// Jacobian. Reciprocal and Lin Combine stretch each axis on its own and keep
+// the scalar bound. The host decides from the parameters (distance kind 3).
+#define BENDS(F) (F == 4 || (F >= 9 && F <= 12) || F == 14 || F == 16 || F == 17 || F == 20 || F == 21)
 #define CYCLE_BENDS(K, F) (BENDS(F) && K >= repeat && K < end)
 
 // Steps that act on the whole space, moving the seed with the point.
@@ -1649,14 +1433,8 @@ Sample runChain(int part, vec3 p, float lodFootprint, vec4 kinds) {
     int first = (SC_HYBRID_MODE == 1 && part == 1) ? split : 0;
     int end = (SC_HYBRID_MODE == 1 && part == 0) ? split : 6;
     int repeat = part == 0 ? clamp(SC_REPEAT_FROM - 1, first, end) : first;
-    int lo = first;
-    int prefixLen = VISITS(0, SC_SLOT1_FORMULA, SC_SLOT1_COUNT) + VISITS(1, SC_SLOT2_FORMULA, SC_SLOT2_COUNT)
-        + VISITS(2, SC_SLOT3_FORMULA, SC_SLOT3_COUNT) + VISITS(3, SC_SLOT4_FORMULA, SC_SLOT4_COUNT)
-        + VISITS(4, SC_SLOT5_FORMULA, SC_SLOT5_COUNT) + VISITS(5, SC_SLOT6_FORMULA, SC_SLOT6_COUNT);
-    lo = repeat;
-    int cycleLen = VISITS(0, SC_SLOT1_FORMULA, SC_SLOT1_COUNT) + VISITS(1, SC_SLOT2_FORMULA, SC_SLOT2_COUNT)
-        + VISITS(2, SC_SLOT3_FORMULA, SC_SLOT3_COUNT) + VISITS(3, SC_SLOT4_FORMULA, SC_SLOT4_COUNT)
-        + VISITS(4, SC_SLOT5_FORMULA, SC_SLOT5_COUNT) + VISITS(5, SC_SLOT6_FORMULA, SC_SLOT6_COUNT);
+    int prefixLen = VISITS_FROM(first);
+    int cycleLen = VISITS_FROM(repeat);
     if (cycleLen == 0) {
         repeat = first;
         cycleLen = prefixLen;
@@ -1666,7 +1444,7 @@ Sample runChain(int part, vec3 p, float lodFootprint, vec4 kinds) {
     bool bends = CYCLE_BENDS(0, SC_SLOT1_FORMULA) || CYCLE_BENDS(1, SC_SLOT2_FORMULA)
         || CYCLE_BENDS(2, SC_SLOT3_FORMULA) || CYCLE_BENDS(3, SC_SLOT4_FORMULA)
         || CYCLE_BENDS(4, SC_SLOT5_FORMULA) || CYCLE_BENDS(5, SC_SLOT6_FORMULA);
-    bool jac = bends && kind > 2.5;
+    bool jac = SC_TRACK_JACOBIAN != 0 && bends && kind > 2.5;
     // Leading space steps move the point and the seed alike: after them J
     // restarts from the identity, and their stretch, dr so far, is a factor.
     // Only constants decide trackSeed, so S folds away when it is false; a
@@ -1746,7 +1524,6 @@ Sample runChain(int part, vec3 p, float lodFootprint, vec4 kinds) {
     smp.trapPoint = trapPoint;
     smp.log2dr = log2(adr);
     smp.part = float(part);
-    smp.escaped = escaped;
     return smp;
 }
 
@@ -1823,17 +1600,6 @@ vec3 rayPoint(Camera c, vec3 dir, float t) {
     return c.high + (c.low + dir * t);
 }
 
-vec3 tetraNormal(Camera c, vec3 dir, float t, float footprint) {
-    vec3 p = rayPoint(c, dir, t);
-    float e = 0.5 * footprint;
-    const vec2 k = vec2(1.0, -1.0);
-    return normalize(
-        k.xyy * stackSample(p + k.xyy * e, footprint, lod).d +
-        k.yyx * stackSample(p + k.yyx * e, footprint, lod).d +
-        k.yxy * stackSample(p + k.yxy * e, footprint, lod).d +
-        k.xxx * stackSample(p + k.xxx * e, footprint, lod).d);
-}
-
 // Parity grid: the stack at a fixed lattice, for the host comparison test.
 vec3 parityPoint(vec2 frag, vec2 size) {
     vec2 q = frag / size;
@@ -1877,12 +1643,12 @@ void tilesPass() {
     out0 = vec4(0.9 * t, 0.0, 0.0, 1.0);
 }
 
-// Texture coordinates from the orbit, the way Machina maps its PBR textures:
-// they follow the fractal's own structure instead of world space.
+// Texture coordinates from the orbit, so textures follow the fractal's own
+// structure, not world space.
 vec2 surfaceUv(vec3 trapPoint, float smoothIt) {
     if (surface_mapping == 1) {
         float r = max(length(trapPoint), 1e-6);
-        return vec2(atan(trapPoint.y, trapPoint.x) / 6.283185307, acos(clamp(trapPoint.z / r, -1.0, 1.0)) / 3.14159265) * 4.0;
+        return vec2(atan(trapPoint.y, trapPoint.x) / TAU, acos(clamp(trapPoint.z / r, -1.0, 1.0)) / PI) * 4.0;
     }
     if (surface_mapping == 2) {
         return vec2(smoothIt * 0.25, length(trapPoint));
@@ -1890,35 +1656,45 @@ vec2 surfaceUv(vec3 trapPoint, float smoothIt) {
     return trapPoint.xy;
 }
 
-void gbufferPass() {
-    vec2 size = frameSize();
-    if (debug_view == 6) {
-        Sample s = stackSample(parityPoint(gl_FragCoord.xy, size), 0.0, 0.0);
-        // Alpha stays 1: the composite would drop a transparent pixel.
-        out0 = vec4(s.d, s.smoothIt, s.log2dr, 1.0);
-        out1 = vec4(0.0);
-        return;
-    }
-    Camera c = camera();
-    float pixelAngle;
-    vec3 dir = viewRay(c, jittered(gl_FragCoord.xy), size, pixelAngle);
-    // Hits, detail and the normal are measured in output pixels, so geometry
-    // keeps its thickness as the live render scale moves; TAA gathers the
-    // sparser samples.
-    pixelAngle *= size.y / outputSize().y;
+// Why a march stopped.
+const float EXIT_HIT = 0.0;
+const float EXIT_SOFT_HIT = 1.0;
+const float EXIT_MISS = 2.0;
+const float EXIT_BUDGET = 3.0;
 
-    float t = 0.0;
+struct March {
+    float t;
+    // Length of the last step, the bracket the bisection searches.
+    float lastStep;
+    float steps;
+    float exitCause;
+    // Closest approach as distance over stop distance, and where it was.
+    float closestRatio;
+    float closestT;
+    // Iteration fog: march steps counted. Steps shortened by the relaxation
+    // count as a fraction.
+    float fogCount;
+    // The sample at the hit, or at the closest approach.
+    Sample hit;
+};
+
+// Where the march starts: the tile prepass's open-space distance, if on.
+float tileStart() {
     if (tile_prepass != 0u) {
-        t = texelFetch(sampler2D(tiles, texSampler), ivec2(gl_FragCoord.xy) / TILE, 0).r;
+        return texelFetch(sampler2D(tiles, texSampler), ivec2(gl_FragCoord.xy) / TILE, 0).r;
     }
+    return 0.0;
+}
+
+// Sphere-trace from `t` until the ray reaches the stop shell, leaves the
+// scene, or runs out of steps or work.
+March marchRay(Camera c, vec3 dir, float pixelAngle, float t) {
     float lastD = MISS;
     float lastStep = 0.0;
     float steps = 0.0;
-    float exitCause = 2.0; // 0 hit, 1 soft hit, 2 miss, 3 budget
+    float exitCause = EXIT_MISS;
     float closestRatio = MISS;
     float closestT = 0.0;
-    // Iteration fog: march steps counted, MB3D style. Steps shortened by
-    // the relaxation count as a fraction.
     float fogCount = 0.0;
     int fogIteration = int(fog_on_iteration);
     Sample hit;
@@ -1926,7 +1702,7 @@ void gbufferPass() {
     int maxSteps = int(max_steps);
     for (int i = 0; i < 512; i++) {
         if (i >= maxSteps || g_work > WORK_CAP) {
-            exitCause = g_work > WORK_CAP ? 3.0 : 2.0;
+            exitCause = g_work > WORK_CAP ? EXIT_BUDGET : EXIT_MISS;
             break;
         }
         float footprint = max(t, 1e-6) * pixelAngle;
@@ -1938,7 +1714,7 @@ void gbufferPass() {
         }
         steps += 1.0;
         if (d < stopDist) {
-            exitCause = 0.0;
+            exitCause = EXIT_HIT;
             hit = s;
             break;
         }
@@ -1957,56 +1733,123 @@ void gbufferPass() {
         lastStep = safe;
         t += safe;
         if (t > FAR) {
-            exitCause = 2.0;
+            exitCause = EXIT_MISS;
             break;
         }
     }
+    return March(t, lastStep, steps, exitCause, closestRatio, closestT, fogCount, hit);
+}
 
-    if (exitCause != 0.0 && closestRatio < 4.0) {
-        // Out of steps in a crevice: use the closest approach.
-        exitCause = exitCause == 3.0 ? 3.0 : 1.0;
-        t = closestT;
-    } else if (exitCause == 0.0) {
-        // Bisect toward the stop shell between the last two positions.
-        float lo = max(t - lastStep, 0.0);
-        float hi = t;
-        for (int k = 0; k < 6; k++) {
-            float mid = 0.5 * (lo + hi);
-            float footprint = max(mid, 1e-6) * pixelAngle;
-            if (stackSample(rayPoint(c, dir, mid), footprint, lod).d < detail * footprint) {
-                hi = mid;
-            } else {
-                lo = mid;
-            }
-        }
-        t = hi;
-    }
+// Debug view 6: the stack on the parity grid.
+void writeParity() {
+    Sample s = stackSample(parityPoint(gl_FragCoord.xy, frameSize()), 0.0, 0.0);
+    // Alpha stays 1: the composite would drop a transparent pixel.
+    out0 = vec4(s.d, s.smoothIt, s.log2dr, 1.0);
+    out1 = vec4(0.0);
+}
 
-    bool surface = exitCause < 1.5;
-    float footprint = max(t, 1e-6) * pixelAngle;
-    vec3 n = surface ? tetraNormal(c, dir, t, footprint) : -dir;
-    if (surface && dot(n, dir) > 0.0) {
-        n = -n;
-    }
-
+// Debug views 1 (steps and work) and 4 (exit cause).
+void writeDiagnostic(March m, bool surface) {
+    out0 = vec4(surface ? m.t : MISS, 0.0, 0.0, m.steps);
     if (debug_view == 1) {
-        out0 = vec4(surface ? t : MISS, 0.0, 0.0, steps);
-        out1 = vec4(steps / float(maxSteps), g_work / WORK_CAP, 0.0, 0.0);
+        out1 = vec4(m.steps / float(int(max_steps)), g_work / WORK_CAP, 0.0, 0.0);
         return;
     }
-    if (debug_view == 4) {
-        out0 = vec4(surface ? t : MISS, 0.0, 0.0, steps);
-        vec3 cause = exitCause == 0.0 ? vec3(0.0, 1.0, 0.0)
-            : exitCause == 1.0 ? vec3(1.0, 1.0, 0.0)
-            : exitCause == 2.0 ? vec3(0.0, 0.0, 1.0)
-            : vec3(1.0, 0.0, 0.0);
-        out1 = vec4(cause, 0.0);
-        return;
-    }
-    out0 = vec4(surface ? t : MISS, hit.smoothIt, hit.trap, fogCount);
+    vec3 cause = m.exitCause == EXIT_HIT ? vec3(0.0, 1.0, 0.0)
+        : m.exitCause == EXIT_SOFT_HIT ? vec3(1.0, 1.0, 0.0)
+        : m.exitCause == EXIT_MISS ? vec3(0.0, 0.0, 1.0)
+        : vec3(1.0, 0.0, 0.0);
+    out1 = vec4(cause, 0.0);
+}
+
+void writeGBuffer(March m, bool surface, vec3 n) {
+    Sample hit = m.hit;
+    out0 = vec4(surface ? m.t : MISS, hit.smoothIt, hit.trap, m.fogCount);
     out2 = vec4(surfaceUv(hit.trapPoint, hit.smoothIt) * surface_scale, 0.0, 0.0);
     float partSign = hit.part > 0.5 ? -1.0 : 1.0;
     out1 = vec4(n, partSign * max(hit.log2dr, 1e-3));
+}
+
+
+// Bisection steps that refine a hit, and samples of the tetrahedral normal.
+const int BISECT_STEPS = 6;
+const int NORMAL_SAMPLES = 4;
+
+// One corner of the tetrahedron the normal samples.
+vec3 tetraCorner(int k) {
+    return k == 0 ? vec3(1.0, -1.0, -1.0)
+        : k == 1 ? vec3(-1.0, -1.0, 1.0)
+        : k == 2 ? vec3(-1.0, 1.0, -1.0)
+        : vec3(1.0);
+}
+
+// After the march: a ray out of steps or work in a crevice takes its closest
+// approach; a hit is bisected onto the stop shell; then the normal is
+// sampled. Bisection and normal share one loop, so the formula chain is
+// compiled once for both: each inlined copy of it slows every pixel. Returns
+// the normal facing the camera, or -dir when the march found no surface.
+vec3 refineHit(Camera c, vec3 dir, float pixelAngle, inout March m) {
+    bool bisect = m.exitCause == EXIT_HIT;
+    if (!bisect && m.closestRatio < 4.0) {
+        m.exitCause = m.exitCause == EXIT_BUDGET ? EXIT_BUDGET : EXIT_SOFT_HIT;
+        m.t = m.closestT;
+    }
+    if (m.exitCause > EXIT_SOFT_HIT) {
+        return -dir;
+    }
+    float lo = max(m.t - m.lastStep, 0.0);
+    float hi = m.t;
+    vec3 g = vec3(0.0);
+    int first = bisect ? 0 : BISECT_STEPS;
+    for (int i = first; i < BISECT_STEPS + NORMAL_SAMPLES; i++) {
+        bool bisecting = i < BISECT_STEPS;
+        float at = bisecting ? 0.5 * (lo + hi) : m.t;
+        float footprint = max(at, 1e-6) * pixelAngle;
+        int corner = i - BISECT_STEPS;
+        vec3 offset = bisecting ? vec3(0.0) : tetraCorner(corner) * (0.5 * footprint);
+        float d = stackSample(rayPoint(c, dir, at) + offset, footprint, lod).d;
+        if (bisecting) {
+            if (d < detail * footprint) {
+                hi = at;
+            } else {
+                lo = at;
+            }
+            if (i == BISECT_STEPS - 1) {
+                m.t = hi;
+            }
+        } else {
+            g += tetraCorner(corner) * d;
+        }
+    }
+    // A flat or non-finite estimate has no direction; face the camera.
+    float g2 = dot(g, g);
+    vec3 n = g2 > 1e-30 && g2 < 1e30 ? g * inversesqrt(g2) : -dir;
+    return dot(n, dir) > 0.0 ? -n : n;
+}
+
+void gbufferPass() {
+    if (debug_view == 6) {
+        writeParity();
+        return;
+    }
+    vec2 size = frameSize();
+    Camera c = camera();
+    float pixelAngle;
+    vec3 dir = viewRay(c, jittered(gl_FragCoord.xy), size, pixelAngle);
+    // Hits, detail and the normal are measured in output pixels, so geometry
+    // keeps its thickness as the live render scale moves; TAA gathers the
+    // sparser samples.
+    pixelAngle *= size.y / outputSize().y;
+
+    March m = marchRay(c, dir, pixelAngle, tileStart());
+    // Before the diagnostics: view 1 counts the normal's work.
+    vec3 n = refineHit(c, dir, pixelAngle, m);
+    bool surface = m.exitCause <= EXIT_SOFT_HIT;
+    if (debug_view == 1 || debug_view == 4) {
+        writeDiagnostic(m, surface);
+        return;
+    }
+    writeGBuffer(m, surface, n);
 }
 
 // ── Reprojection ─────────────────────────────────────────────────────────
@@ -2052,15 +1895,20 @@ float newFrameWeight(float base) {
 
 // ── Shade pass: key-light shadow and occlusion, render size ──────────────
 
+// Unit direction toward a light at elevation `elev` and azimuth `azim`.
+vec3 lightDirection(float elev, float azim) {
+    return normalize(vec3(cos(elev) * sin(azim), sin(elev), cos(elev) * cos(azim)));
+}
+
 vec3 sunDirection() {
-    return normalize(vec3(cos(sun_elev) * sin(sun_azim), sin(sun_elev), cos(sun_elev) * cos(sun_azim)));
+    return lightDirection(sun_elev, sun_azim);
 }
 
 vec3 fillDirection() {
-    return normalize(vec3(cos(fill_elev) * sin(fill_azim), sin(fill_elev), cos(fill_elev) * cos(fill_azim)));
+    return lightDirection(fill_elev, fill_azim);
 }
 
-// Soft shadow toward `l`, MB3D's min(k h / t) penumbra with a far fade.
+// Soft shadow toward `l`: a min(k h / t) penumbra with a far fade.
 float softShadow(vec3 p, vec3 l, float footprint, float maxT) {
     float res = 1.0;
     float t = 2.0 * footprint;
@@ -2079,8 +1927,7 @@ float softShadow(vec3 p, vec3 l, float footprint, float maxT) {
 }
 
 // Three cone rays at 30 degrees from the normal, rotated per frame, each
-// stepping outward geometrically (MB3D DEAO, lowest quality, accumulated
-// over frames instead).
+// stepping outward geometrically; frames accumulate the result.
 float occlusion(vec3 p, vec3 n, float footprint, float spin) {
     vec3 a = normalize(abs(n.x) < 0.9 ? cross(n, vec3(1.0, 0.0, 0.0)) : cross(n, vec3(0.0, 1.0, 0.0)));
     vec3 b = cross(n, a);
@@ -2098,6 +1945,11 @@ float occlusion(vec3 p, vec3 n, float footprint, float spin) {
         total += clamp(occ, 0.0, 1.0);
     }
     return total / 3.0;
+}
+
+// Weight of corner (i, j) of a 2x2 bilinear footprint at fraction f.
+float bilinearWeight(vec2 f, int i, int j) {
+    return (i == 0 ? 1.0 - f.x : f.x) * (j == 0 ? 1.0 - f.y : f.y);
 }
 
 // Last frame's shadow and occlusion where a point was, from the four
@@ -2123,7 +1975,7 @@ bool shadeHistory(vec2 prevUv, float prevDist, out vec2 history) {
                 history = h.xy;
             }
             if (gap < 0.05 * prevDist) {
-                float bilinear = (i == 0 ? 1.0 - f.x : f.x) * (j == 0 ? 1.0 - f.y : f.y) + 1e-5;
+                float bilinear = bilinearWeight(f, i, j) + 1e-5;
                 sum += h.xy * bilinear;
                 weight += bilinear;
             }
@@ -2175,7 +2027,7 @@ void shadePass() {
     float footprint = max(a.x, 1e-6) * pixelAngle;
     vec3 p = rayPoint(c, dir, a.x) + n * (2.0 * footprint);
 
-    float spin = float(JITTERINDEX) * 2.3999632;
+    float spin = float(JITTERINDEX) * GOLDEN_ANGLE;
     vec3 sun = sunDirection();
     float maxT = shadow_length * max(a.x, sceneScale());
     float shadow = dot(n, sun) > 0.0 ? softShadow(p, sun, footprint, maxT) : 0.0;
@@ -2211,7 +2063,7 @@ vec3 paletteIntegral(float u) {
 
 // Four-stop cyclic palette, box filtered over `cycles`, the palette cycles
 // one pixel spans: stripe edges are antialiased, and rings finer than a pixel
-// show as their average instead of moire.
+// show as their average, not moire.
 vec3 palette(float x, float cycles) {
     float u = (x * palette_scale + palette_offset) * 4.0;
     float width = max(cycles * 4.0, 1e-3);
@@ -2263,7 +2115,7 @@ vec2 upsampleShade(vec2 fragTopLeft, float t) {
     for (int j = 0; j < 2; j++) {
         for (int i = 0; i < 2; i++) {
             vec4 s = texelFetch(sampler2D(shade, texSampler), clamp(base + ivec2(i, j), ivec2(0), limit), 0);
-            float bilinear = (i == 0 ? 1.0 - f.x : f.x) * (j == 0 ? 1.0 - f.y : f.y);
+            float bilinear = bilinearWeight(f, i, j);
             float w = bilinear * exp(-abs(s.z - t) / (0.02 * t + 1e-6)) + 1e-5;
             sum += s.xy * w;
             weight += w;
@@ -2285,7 +2137,7 @@ vec3 shaftLight() {
 float ggx(float nh, float rough) {
     float a2 = rough * rough * rough * rough;
     float d = nh * nh * (a2 - 1.0) + 1.0;
-    return a2 / (3.14159265 * d * d);
+    return a2 / (PI * d * d);
 }
 
 vec3 sky(vec3 dir) {
@@ -2300,10 +2152,6 @@ const vec3 SURFACE_MEAN[6] = vec3[6](
     vec3(0.0800, 0.0918, 0.1055), vec3(0.1868, 0.1624, 0.0749), vec3(0.3301, 0.2814, 0.2561),
     vec3(0.1994, 0.1389, 0.0858), vec3(0.3241, 0.2990, 0.1062), vec3(0.0771, 0.1088, 0.1104));
 
-// Texture the surface: color, a roughness from the height, and a bump by
-// Mikkelsen's surface gradient, which needs no tangents. Where a pixel
-// covers more texels than it can show (the atlas has no mipmaps), the
-// texture fades to its mean color instead of shimmering.
 // One material's color and height at uv, repeating.
 vec4 surfaceSample(int tile, vec2 uv) {
     // Inset by a texel so bilinear taps never reach the neighboring tile.
@@ -2312,7 +2160,10 @@ vec4 surfaceSample(int tile, vec2 uv) {
     return texture(sampler2D(surfaces, texSampler), atlas);
 }
 
-
+// Texture the surface: color, a roughness from the height, and a bump by
+// Mikkelsen's surface gradient, which needs no tangents. Where a pixel
+// covers more texels than it can show (the atlas has no mipmaps), the
+// texture fades to its mean color so it does not shimmer.
 void applySurface(ivec2 texel, vec3 position, inout vec3 albedo, inout float rough, inout vec3 n) {
     int tile = clamp(surface - 1, 0, 5);
     vec4 s;
@@ -2331,8 +2182,8 @@ void applySurface(ivec2 texel, vec3 position, inout vec3 albedo, inout float rou
         vec3 w = pow(abs(n), vec3(4.0));
         w /= max(w.x + w.y + w.z, 1e-6);
         // Where tiles fall below a pixel, take the texture at a coarser
-        // octave instead of fading it: tiles grow with distance, blended
-        // between neighboring octaves so no step shows, as mipmaps would.
+        // octave: tiles grow with distance, blended between neighboring
+        // octaves so no step shows, as mipmaps would.
         vec2 footprint = max(max(fwidth(p.yz), fwidth(p.zx)), fwidth(p.xy)) * SURFACE_TILE;
         float octave = max(log2(max(max(footprint.x, footprint.y), 1e-6)), 0.0);
         float k = floor(octave);
@@ -2443,7 +2294,7 @@ void lightPass() {
 
 float henyeyGreenstein(float cosTheta, float g) {
     float g2 = g * g;
-    return (1.0 - g2) / (4.0 * 3.14159265 * pow(1.0 + g2 - 2.0 * g * cosTheta, 1.5));
+    return (1.0 - g2) / (4.0 * PI * pow(1.0 + g2 - 2.0 * g * cosTheta, 1.5));
 }
 
 // Whether the key light reaches p: a short, coarse shadow march.
@@ -2490,7 +2341,7 @@ void volumePass() {
     // saturates over a few distances to the surface), times the phase
     // function normalized so isotropic scattering is 1.
     float path = 1.0 - exp(-endT / (8.0 * scale));
-    float phase = 4.0 * 3.14159265 * henyeyGreenstein(dot(dir, l), shaft_anisotropy);
+    float phase = 4.0 * PI * henyeyGreenstein(dot(dir, l), shaft_anisotropy);
     float amount = lit / float(SAMPLES) * path * phase;
     float w = newFrameWeight(0.1);
     vec2 prevUv;
@@ -2601,7 +2452,7 @@ void dofPass() {
     for (int i = 0; i < TAPS; i++) {
         // Golden-angle spiral over the disc.
         float r = sqrt((float(i) + 0.5) / float(TAPS));
-        float a = float(i) * 2.3999632;
+        float a = float(i) * GOLDEN_ANGLE;
         vec2 offset = vec2(cos(a), sin(a)) * r * coc;
         ivec2 at = clamp(full + ivec2(offset), ivec2(0), limit);
         float tapT = min(texelFetch(sampler2D(gA, texSampler), toRender(at), 0).x, 1e6);
@@ -2655,7 +2506,7 @@ void bloomPass(int level) {
     vec3 c;
     if (level == 1) {
         c = downsample(SOURCE_IMAGE);
-        float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+        float luma = dot(c, LUMA);
         c *= max(luma - bloom_threshold, 0.0) / max(luma, 1e-4);
     } else if (level == 2) {
         c = downsample(SOURCE_BLOOM1);
@@ -2771,7 +2622,7 @@ void taaPass() {
             float wk = exp(-dot(away, away) / (2.0 * 0.4 * 0.4));
             gathered += color * wk;
             gatherWeight += wk;
-            lumas[(j + 1) * 3 + (i + 1)] = dot(color, vec3(0.2126, 0.7152, 0.0722));
+            lumas[(j + 1) * 3 + (i + 1)] = dot(color, LUMA);
             vec3 n = toYCoCg(color);
             lo = min(lo, n);
             hi = max(hi, n);
@@ -2786,8 +2637,7 @@ void taaPass() {
     }
     // A silhouette: the jittered sample lands on sky one frame and on the
     // surface the next. Its history must survive that flip, or the edge
-    // never accumulates coverage and stays a hard stair step. The color
-    // clamp still keeps other surfaces from ghosting in.
+    // never accumulates coverage and stays a hard stair step.
     bool silhouette = anySky && tLo < MISS * 0.5;
     float t = texelFetch(sampler2D(gA, texSampler), center, 0).x;
     bool sky = t >= MISS * 0.5;
@@ -2819,13 +2669,16 @@ void taaPass() {
         // For a still camera prevDist is t; a moving one shifts the range by
         // how far the point moved relative to the camera.
         float shift = prevDist - t;
-        bool depthMatch = silhouette || (sky
+        float motion = length(prevUv * size - gl_FragCoord.xy);
+        // At a silhouette the color clamp spans both sides, so it cannot stop
+        // a moving edge's history from trailing; skip the depth test there
+        // only while the edge moves under a pixel a frame.
+        bool depthMatch = (silhouette && motion < 1.0) || (sky
             ? historySky
             : (!historySky && history.a >= 0.95 * tLo + shift && history.a <= 1.05 * tHi + shift));
         if (depthMatch) {
             // Samples gathered so far. A still pixel keeps up to Still
             // Samples of them; one moving 2 output pixels a frame, 8.
-            float motion = length(prevUv * size - gl_FragCoord.xy);
             float cap = mix(still_samples, 8.0, smoothstep(0.1, 2.0, motion));
             ivec2 prevTexel = clamp(ivec2(prevUv * size), ivec2(0), ivec2(size) - 1);
             float n = min(texelFetch(sampler2D(taaN, texSampler), prevTexel, 0).r * trust, cap);
@@ -2847,10 +2700,9 @@ void taaPass() {
             // A running average, each term weighted by inverse luminance
             // (Karis) so a pixel bright in only some frames, a rim sparkle,
             // cannot dominate it.
-            vec3 luma = vec3(0.2126, 0.7152, 0.0722);
-            float wc = coverage / (1.0 + dot(current, luma));
-            float wh = n / (1.0 + dot(clamped, luma));
-            float ws = 0.25 * max(1.0 - n, 0.0) / (1.0 + dot(smoothed, luma));
+            float wc = coverage / (1.0 + dot(current, LUMA));
+            float wh = n / (1.0 + dot(clamped, LUMA));
+            float ws = 0.25 * max(1.0 - n, 0.0) / (1.0 + dot(smoothed, LUMA));
             result = (current * wc + clamped * wh + smoothed * ws) / max(wc + wh + ws, 1e-6);
             samples = min(n + coverage, cap);
         }
@@ -2890,10 +2742,10 @@ vec3 composite(ivec2 texel) {
         color += glowSum * bloom;
     }
     color *= exp2(exposure);
-    // Contrast about middle grey, so it does not darken everything.
+    // Contrast about middle gray, so it does not darken everything.
     const float PIVOT = 0.18;
     color = PIVOT * pow(max(color, vec3(0.0)) / PIVOT, vec3(contrast));
-    float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    float luma = dot(color, LUMA);
     color = mix(vec3(luma), color, saturation);
     vec2 centered = uv - 0.5;
     color *= 1.0 - vignette * dot(centered, centered) * 2.0;
@@ -2946,49 +2798,61 @@ void outputPass() {
 }
 
 void main() {
-    applyLook();
     if (!flightValid()) {
         vec3 c = alarm(gl_FragCoord.xy);
         out0 = vec4(c, 1.0);
         out1 = vec4(0.0);
         return;
     }
+    out0 = vec4(0.0);
     out1 = vec4(0.0);
     out2 = vec4(0.0);
-    // Render-size passes draw only the live part of their targets.
-    float divisor = PASS == PASS_TILES ? float(TILE)
-        : PASS == PASS_SHADE ? 1.0
-        : PASS == PASS_VOLUME ? 4.0
-        : (PASS == PASS_GBUFFER || PASS == PASS_LIGHT) ? 1.0 : 0.0;
-    if (divisor > 0.0 && outsideLive(divisor)) {
-        out0 = vec4(0.0);
-        return;
-    }
-    if (PASS == PASS_GBUFFER) {
-        gbufferPass();
-        return;
-    }
-    if (PASS == PASS_TILES) {
-        tilesPass();
-    } else if (PASS == PASS_VOLUME) {
-        volumePass();
-    } else if (PASS == PASS_TAA) {
+    switch (PASS) {
+    case PASS_TILES:
+        if (insideLive(float(TILE))) {
+            tilesPass();
+        }
+        break;
+    case PASS_GBUFFER:
+        if (insideLive(1.0)) {
+            gbufferPass();
+        }
+        break;
+    case PASS_SHADE:
+        if (insideLive(1.0)) {
+            shadePass();
+        }
+        break;
+    case PASS_VOLUME:
+        if (insideLive(4.0)) {
+            volumePass();
+        }
+        break;
+    case PASS_LIGHT:
+        if (insideLive(1.0)) {
+            lightPass();
+        }
+        break;
+    case PASS_TAA:
         taaPass();
-    } else if (PASS == PASS_SHARP) {
+        break;
+    case PASS_SHARP:
         sharpPass();
-    } else if (PASS == PASS_DOF) {
+        break;
+    case PASS_DOF:
         dofPass();
-    } else if (PASS == PASS_BLOOM1) {
+        break;
+    case PASS_BLOOM1:
         bloomPass(1);
-    } else if (PASS == PASS_BLOOM2) {
+        break;
+    case PASS_BLOOM2:
         bloomPass(2);
-    } else if (PASS == PASS_BLOOM3) {
+        break;
+    case PASS_BLOOM3:
         bloomPass(3);
-    } else if (PASS == PASS_SHADE) {
-        shadePass();
-    } else if (PASS == PASS_LIGHT) {
-        lightPass();
-    } else {
+        break;
+    default:
         outputPass();
+        break;
     }
 }

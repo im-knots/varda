@@ -140,6 +140,7 @@ impl UIData {
                     max: Some(5.0),
                     group: None,
                     choices: Vec::new(),
+                    event: false,
                 }],
             },
             effects: vec![(
@@ -157,6 +158,7 @@ impl UIData {
                         max: Some(1.0),
                         group: None,
                         choices: Vec::new(),
+                        event: false,
                     }],
                 },
             )],

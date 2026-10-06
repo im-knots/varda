@@ -586,6 +586,7 @@ fn params_snapshot_to_ui(snap: &ShaderParamsSnapshot) -> ShaderParamsUI {
                         label: c.label.clone(),
                     })
                     .collect(),
+                event: p.event,
             })
             .collect(),
     }

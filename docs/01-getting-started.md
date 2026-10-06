@@ -218,7 +218,7 @@ To load **video or images**, use the Video or Image sections in the Library. A f
 
 To use a floating window instead, choose **+ Output → Window**.
 
-For rotation, source routing, and multi-output recording, see [Outputs](07-outputs.md).
+For rotation, source routing, and multi-output recording, see [Outputs](10-outputs.md).
 
 ## Audio Reactivity
 
@@ -231,20 +231,20 @@ Varda analyzes audio input to detect beats and to drive frequency-band modulatio
 
 Beat detection starts on its own from the audio input. The BPM appears in the top bar and drives beat-synced transitions and auto-crossfades.
 
-ISF shaders also get audio data directly through built-in uniforms (`audio_bass`, `audio_mid`, `audio_treble`, `audio_bpm`, `audio_beat_phase`), with no modulation setup. See [Modulation & Audio Reactivity](05-modulation.md) for the full guide.
+ISF shaders also get audio data directly through built-in uniforms (`audio_bass`, `audio_mid`, `audio_treble`, `audio_bpm`, `audio_beat_phase`), with no modulation setup. See [Modulation & Audio Reactivity](06-modulation.md) for the full guide.
 
 ## Next Steps
 
 Once you have content playing on a display, see:
 
 - **[Performance & Automation](04-performance.md)**: video playback controls, deck auto-transitions, transition sequences, undo/redo, presets
-- **[Modulation & Audio Reactivity](05-modulation.md)**: LFO, audio bands, ADSR, step sequencer, mod-on-mod chaining
-- **[Control Surfaces](06-control-surfaces.md)**: MIDI learn, OSC, keyboard shortcuts, clock sync
-- **[Projection Mapping](08-projection.md)**: surfaces, corner-pin warp, multi-projector edge blending, dome projection
-- **[Outputs](07-outputs.md)**: display targets, rotation, source routing, multi-output recording
-- **[Streaming & I/O](09-streaming-and-io.md)**: NDI, SRT, HLS/DASH, recording
-- **[ISF Shader Authoring](12-isf-authoring.md)**: write your own generators, filters and transitions
-- **[HTTP API](13-api.md)**: REST/WebSocket control, headless mode
+- **[Modulation & Audio Reactivity](06-modulation.md)**: LFO, audio bands, ADSR, step sequencer, mod-on-mod chaining
+- **[Control Surfaces](07-control-surfaces.md)**: MIDI learn, OSC, keyboard shortcuts, clock sync
+- **[Projection Mapping](11-projection.md)**: surfaces, corner-pin warp, multi-projector edge blending, dome projection
+- **[Outputs](10-outputs.md)**: display targets, rotation, source routing, multi-output recording
+- **[Streaming & I/O](12-streaming-and-io.md)**: NDI, SRT, HLS/DASH, recording
+- **[ISF Shader Authoring](14-isf-authoring.md)**: write your own generators, filters and transitions
+- **[HTTP API](15-api.md)**: REST/WebSocket control, headless mode
 
 ## Save Your Work
 

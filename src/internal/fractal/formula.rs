@@ -6,7 +6,7 @@
 //! (`shaders/fractal_explorer.fs`) implements the same sequences; parameters
 //! mean the same thing in both.
 
-use super::vec3::{Mat3, Vec3};
+use super::vec3::{Mat3, Vec3, clamp_unbounded};
 
 /// Formula ids, as the `slotN_formula` parameter stores them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,6 +83,8 @@ impl FormulaId {
 /// `Box` fold and radial variants, as `slotN_mode` stores them.
 pub mod box_mode {
     /// Tglad fold on all axes, sphere radial fold (Amazing Box, Mandelbox).
+    /// The default, reached by the fallback branch.
+    #[cfg(test)]
     pub const AMAZING: i32 = 0;
     /// Fold on x and y only, seed components x and y swapped (Amazing Surf).
     pub const SURF: i32 = 1;
@@ -94,17 +96,17 @@ pub mod box_mode {
     pub const KALIBOX: i32 = 4;
 }
 
-/// `Bulbox` variants, as `slotN_mode` stores them.
+/// `Bulbox` variants, as `slotN_mode` stores them. 1 continues the blend
+/// toward the negative power outside radius 1.
 pub mod bulbox_mode {
     /// Outside radius 1 the point is only scaled and seeded: the boxy part.
     pub const BOX: i32 = 0;
-    /// The blend toward the negative power continues outside radius 1.
-    pub const NO_BOX: i32 = 1;
 }
 
 /// `Inversion` variants, as `slotN_mode` stores them.
 pub mod inversion_mode {
-    /// Invert the point.
+    /// Invert the point. The default, reached by the fallback branch.
+    #[cfg(test)]
     pub const POINT: i32 = 0;
     /// Invert the point and the seed, which inverts the whole space the
     /// following slots see (MB3D `_SphereInvC`).
@@ -138,10 +140,9 @@ fn with_component(v: Vec3, axis: usize, value: f64) -> Vec3 {
     }
 }
 
-/// `Repeat` variants, as `slotN_mode` stores them.
+/// `Repeat` variants, as `slotN_mode` stores them. 0, the default, mirrors
+/// every other cell, so neighbors meet without a seam.
 pub mod repeat_mode {
-    /// Every other cell mirrored, so neighbors meet without a seam.
-    pub const MIRROR: i32 = 0;
     /// Plain copies; cell borders show.
     pub const PLAIN: i32 = 1;
 }
@@ -156,7 +157,7 @@ fn repeat_cell(a: f64, size: f64, count: f64) -> f64 {
     let cell = (a / size + 0.5).floor();
     if count >= 1.0 {
         let limit = count.floor();
-        cell.clamp(-limit, limit)
+        clamp_unbounded(cell, -limit, limit)
     } else {
         cell
     }
@@ -164,7 +165,7 @@ fn repeat_cell(a: f64, size: f64, count: f64) -> f64 {
 
 /// -1 in a mirrored cell, else 1: the derivative of [`repeat_axis`].
 fn repeat_sign(a: f64, size: f64, count: f64, mirror: bool) -> f64 {
-    // The cell is integer-valued; its parity decides the mirror.
+    // The cell is integer-valued; its parity selects the mirror.
     if mirror && (repeat_cell(a, size, count) as i64).rem_euclid(2) == 1 {
         -1.0
     } else {
@@ -284,6 +285,8 @@ fn radial(c: Vec3, z: Vec3, q: Vec3, rr: f64) -> Vec3 {
 
 /// `Kifs` plane sets, as `slotN_mode` stores them.
 pub mod kifs_mode {
+    /// The default, reached by the fallback branch.
+    #[cfg(test)]
     pub const TETRA: i32 = 0;
     pub const OCTA: i32 = 1;
     pub const ICOSA: i32 = 2;
@@ -314,6 +317,15 @@ impl Slot {
     /// Whether this slot does anything.
     pub fn is_active(&self) -> bool {
         self.formula != FormulaId::Empty && self.count > 0
+    }
+
+    /// Whether the chain needs the Jacobian distance for this step: it bends
+    /// space and mixes axes. Reciprocal and Lin Combine stretch each axis on
+    /// its own; their scalar `dr`, the largest per-axis slope, bounds the
+    /// step exactly.
+    pub fn needs_jacobian(&self) -> bool {
+        !self.is_conformal()
+            && !matches!(self.formula, FormulaId::Reciprocal | FormulaId::LinCombine)
     }
 
     /// Whether the step scales every direction alike, so a scalar `dr`
@@ -471,379 +483,492 @@ const PHI: f64 = 1.618_033_988_749_895;
 /// | Sine | offset 1 | scale 1 | scale 2 | offset 2 |
 /// | Reciprocal | limiter | | | |
 /// | Repeat | cell size | copies each way (0: endless) | warp | warp phase |
+/// | Koch Cube | post-scale | XY stretch | Z fold | X add |
+/// | `JCube` | alpha | G scale | edge center | corner center |
+/// | Lin Combine | x scale | y scale | z scale | |
+/// | Rotate 4D | XW turn | YW turn | ZW turn | |
+/// | `ABoxMod2` | scale | min radius | fold XY | fold Z |
+/// | msltoe Sym4 | XZ sym-mul | XY sym-mul | YZ sym-mul | |
+///
+/// Rotate 4D turns are in half turns (1 is 180 degrees).
 ///
 /// `Inversion` in its `SPACE` variant and `Repeat` change `seed`, rotation
 /// included: they act on the whole space.
 pub fn apply(slot: &Slot, orbit: &mut Orbit, seed: &mut Vec3) {
     let seed_in = *seed;
-    let [pa, pb, pc, pd] = slot.params;
-    let rot = &slot.rotation;
-    let z = &mut orbit.z;
     match slot.formula {
         FormulaId::Empty => {}
-        FormulaId::Box => {
-            let (scale, min_r, fold, fixed_r) = (pa, pb, pc, pd);
-            let folds = match slot.mode {
-                box_mode::SURF | box_mode::SURF_CYLINDER => {
-                    let folds = Vec3::new(fold_sign(z.x, fold), fold_sign(z.y, fold), 1.0);
-                    z.x = z.x.clamp(-fold, fold) * 2.0 - z.x;
-                    z.y = z.y.clamp(-fold, fold) * 2.0 - z.y;
-                    folds
-                }
-                box_mode::MOD_KALI => {
-                    let folds = -signs(*z);
-                    *z = Vec3::splat(fold) - z.abs();
-                    folds
-                }
-                box_mode::KALIBOX => {
-                    let folds = signs(*z);
-                    *z = z.abs() + Vec3::splat(fold);
-                    folds
-                }
-                _ => {
-                    let folds = fold_signs(*z, fold);
-                    *z = z.clamp_sym(fold) * 2.0 - *z;
-                    folds
-                }
-            };
-            let measured = if slot.mode == box_mode::SURF_CYLINDER {
-                Vec3::new(z.x, z.y, 0.0)
-            } else {
-                *z
-            };
-            let rr = measured.dot(measured);
-            // Floored so a zero min radius cannot divide by zero, and the
-            // fixed radius never falls below the min radius.
-            let min2 = (min_r * min_r).max(MIN_RADIUS2);
-            let fixed2 = (fixed_r * fixed_r).max(min2);
-            let m = scale * fixed2 / rr.clamp(min2, fixed2);
-            let surf = matches!(slot.mode, box_mode::SURF | box_mode::SURF_CYLINDER);
-            let seed = if surf {
-                exchanged(seed_in, 0, 1, false)
-            } else {
-                seed_in
-            };
-            let inverting = rr > min2 && rr < fixed2;
-            let folded = *z;
-            for (column, seed_column) in orbit.jac.iter_mut().zip(orbit.seed_jac) {
-                let mut moved = times(*column, folds);
-                if inverting {
-                    moved = radial(moved, folded, measured, rr);
-                }
-                let seed_column = if surf {
-                    exchanged(seed_column, 0, 1, false)
-                } else {
-                    seed_column
-                };
-                *column = rot.apply(moved * m + seed_column);
-            }
-            *z = rot.apply(*z * m + seed);
-            orbit.dr = orbit.dr * m.abs() + orbit.seed_dr;
-        }
-        FormulaId::Menger => {
-            let (scale, offset) = (pa, pb);
-            let abs = signs(*z);
-            *z = z.abs();
-            map_columns(&mut orbit.jac, |c| times(c, abs));
-            for (i, j) in [(0, 1), (0, 2), (1, 2)] {
-                let (mut a, mut b) = (component(*z, i), component(*z, j));
-                if swap_if_less(&mut a, &mut b) {
-                    *z = with_component(with_component(*z, i, a), j, b);
-                    map_columns(&mut orbit.jac, |c| exchanged(c, i, j, false));
-                }
-            }
-            *z = rot.apply(*z);
-            let h = 0.5 * offset * (scale - 1.0) / scale;
-            let fold_z = -slope_sign(z.z - h);
-            z.z = h - (z.z - h).abs();
-            z.x = scale * z.x - offset * (scale - 1.0);
-            z.y = scale * z.y - offset * (scale - 1.0);
-            z.z *= scale;
-            map_columns(&mut orbit.jac, |c| {
-                let c = rot.apply(c);
-                Vec3::new(c.x, c.y, c.z * fold_z) * scale
-            });
-            orbit.dr *= scale.abs();
-        }
-        FormulaId::Sierpinski => {
-            let (scale, offset) = (pa, pb);
-            for (i, j) in [(0, 1), (0, 2), (1, 2)] {
-                let (mut a, mut b) = (component(*z, i), component(*z, j));
-                if reflect_pair(&mut a, &mut b) {
-                    *z = with_component(with_component(*z, i, a), j, b);
-                    map_columns(&mut orbit.jac, |c| exchanged(c, i, j, true));
-                }
-            }
-            *z = rot.apply(*z);
-            map_columns(&mut orbit.jac, |c| rot.apply(c) * scale);
-            *z = *z * scale - Vec3::splat(offset * (scale - 1.0));
-            orbit.dr *= scale.abs();
-        }
-        FormulaId::Kifs => {
-            let (scale, offset, abs_first, intensity) = (pa, pb, pc, pd);
-            let mut stretch = 1.0;
-            match slot.mode {
-                kifs_mode::OCTA => {
-                    let abs = signs(*z);
-                    *z = z.abs();
-                    map_columns(&mut orbit.jac, |c| times(c, abs));
-                    for n in [
-                        Vec3::new(1.0, -1.0, 0.0),
-                        Vec3::new(1.0, 0.0, -1.0),
-                        Vec3::new(0.0, 1.0, -1.0),
-                    ] {
-                        stretch *= plane_reflect(z, n.normalize(), intensity, &mut orbit.jac);
-                    }
-                }
-                kifs_mode::ICOSA => {
-                    let abs = signs(*z);
-                    *z = z.abs();
-                    map_columns(&mut orbit.jac, |c| times(c, abs));
-                    let n1 = Vec3::new(-1.0, PHI - 1.0, 1.0 / (PHI - 1.0)).normalize();
-                    let n2 = Vec3::new(PHI - 1.0, 1.0 / (PHI - 1.0), -1.0).normalize();
-                    let n3 = Vec3::new(1.0 / (PHI - 1.0), -1.0, PHI - 1.0).normalize();
-                    for n in [n1, n2, n3, n2] {
-                        stretch *= plane_reflect(z, n, intensity, &mut orbit.jac);
-                    }
-                }
-                _ => {
-                    if abs_first > 0.5 {
-                        let abs = signs(*z);
-                        *z = z.abs();
-                        map_columns(&mut orbit.jac, |c| times(c, abs));
-                    }
-                    for n in [
-                        Vec3::new(1.0, 1.0, 0.0),
-                        Vec3::new(1.0, 0.0, 1.0),
-                        Vec3::new(0.0, 1.0, 1.0),
-                    ] {
-                        stretch *= plane_reflect(z, n.normalize(), intensity, &mut orbit.jac);
-                    }
-                }
-            }
-            *z = rot.apply(*z);
-            *z = *z * scale - Vec3::splat(offset * (scale - 1.0));
-            map_columns(&mut orbit.jac, |c| rot.apply(c) * scale);
-            orbit.dr *= scale.abs() * stretch;
-        }
-        FormulaId::PseudoKleinian => {
-            let (box_size, size) = (pa, pb);
-            let folds = fold_signs(*z, box_size);
-            *z = z.clamp_sym(box_size) * 2.0 - *z;
-            let rr = z.dot(*z);
-            let k = (size / rr.max(MIN_RADIUS2)).max(1.0);
-            let inverting = rr > MIN_RADIUS2 && size > rr;
-            let folded = *z;
-            map_columns(&mut orbit.jac, |c| {
-                let d = times(c, folds);
-                let d = if inverting {
-                    radial(d, folded, folded, rr)
-                } else {
-                    d
-                };
-                rot.apply(d * k)
-            });
-            *z = rot.apply(*z * k);
-            orbit.dr *= k;
-        }
-        FormulaId::Kaliset => {
-            let (scale, offset) = (pa, pb);
-            let abs = signs(*z);
-            *z = z.abs();
-            let denominator = z.dot(*z) + offset;
-            let m = scale / denominator.max(MIN_RADIUS2);
-            let folded = *z;
-            for (column, seed_column) in orbit.jac.iter_mut().zip(orbit.seed_jac) {
-                let moved = times(*column, abs);
-                let moved = if denominator > MIN_RADIUS2 {
-                    radial(moved, folded, folded, denominator)
-                } else {
-                    moved
-                };
-                *column = rot.apply(moved * m + seed_column);
-            }
-            *z = rot.apply(*z * m + seed_in);
-            orbit.dr = orbit.dr * m.abs() + orbit.seed_dr;
-        }
+        FormulaId::Box => box_fold(slot, orbit, seed_in),
+        FormulaId::Menger => menger(slot, orbit),
+        FormulaId::Sierpinski => sierpinski(slot, orbit),
+        FormulaId::Kifs => kifs(slot, orbit),
+        FormulaId::PseudoKleinian => pseudo_kleinian(slot, orbit),
+        FormulaId::Kaliset => kaliset(slot, orbit, seed_in),
         FormulaId::KochCube => koch_cube(slot, orbit),
         FormulaId::JCube => jcube(slot, orbit),
-        FormulaId::LinCombine => {
-            let axes = Vec3::new(pa, pb, pc);
-            *z = rot.apply(times(*z, axes));
-            map_columns(&mut orbit.jac, |c| rot.apply(times(c, axes)));
-            orbit.dr *= pa.abs().max(pb.abs()).max(pc.abs());
-        }
+        FormulaId::LinCombine => lin_combine(slot, orbit),
         FormulaId::Rotate4D => rotate_4d(slot, orbit),
         FormulaId::ABoxMod2 => abox_mod2(slot, orbit, seed_in),
         FormulaId::MsltoeSym4 => msltoe_sym4(slot, orbit, seed_in),
-        FormulaId::Mandelbulb => {
-            let (power, z_mul) = (pa, pb);
-            let r = z.length().max(1e-12);
-            let theta = z.y.atan2(z.x) * power;
-            let phi = (z.z / r).clamp(-1.0, 1.0).asin() * power;
-            let rp = r.powf(power);
-            orbit.dr = power * r.powf(power - 1.0) * orbit.dr + orbit.seed_dr;
-            let bulb = Vec3::new(
-                phi.cos() * theta.cos(),
-                phi.cos() * theta.sin(),
-                z_mul * phi.sin(),
-            );
-            *z = rot.apply(bulb * rp + seed_in);
-        }
-        FormulaId::Transform => {
-            *z = rot.apply(*z) * pa + Vec3::new(pb, pc, pd);
-            map_columns(&mut orbit.jac, |c| rot.apply(c) * pa);
-            orbit.dr *= pa.abs();
-        }
-        FormulaId::Helispiral => {
-            let (per_radius, per_height, fixed) = (pa, pb, pc);
-            let rho = (z.x * z.x + z.y * z.y).sqrt();
-            let angle = fixed + per_radius * rho + per_height * z.z;
-            let (s, co) = angle.sin_cos();
-            // The turn, plus the turn's own change along each column.
-            let across = Vec3::new(-s * z.x - co * z.y, co * z.x - s * z.y, 0.0);
-            let outward = if rho > 1e-12 {
-                Vec3::new(z.x / rho, z.y / rho, 0.0)
-            } else {
-                Vec3::ZERO
-            };
-            let slope = outward * per_radius + Vec3::new(0.0, 0.0, per_height);
-            map_columns(&mut orbit.jac, |c| {
-                let turned = Vec3::new(co * c.x - s * c.y, s * c.x + co * c.y, c.z);
-                rot.apply(turned + across * slope.dot(c))
-            });
-            *z = rot.apply(Vec3::new(co * z.x - s * z.y, s * z.x + co * z.y, z.z));
-            orbit.dr *= 1.0 + rho * per_radius.hypot(per_height);
-        }
+        FormulaId::Mandelbulb => mandelbulb(slot, orbit, seed_in),
+        FormulaId::Transform => transform(slot, orbit),
+        FormulaId::Helispiral => helispiral(slot, orbit),
         FormulaId::Bulbox => bulbox(slot, orbit, seed_in),
-        FormulaId::Inversion => {
-            let (radius, center) = (pa, Vec3::new(pb, pc, pd));
-            let invert = |v: Vec3| {
-                let d = v - center;
-                center + d * (radius * radius / d.dot(d).max(MIN_RADIUS2))
-            };
-            let inverted = |columns: &mut Columns, v: Vec3| {
-                let d = v - center;
-                let dd = d.dot(d);
-                let k = radius * radius / dd.max(MIN_RADIUS2);
-                map_columns(columns, |c| {
-                    if dd > MIN_RADIUS2 {
-                        radial(c, d, d, dd) * k
-                    } else {
-                        c * k
-                    }
-                });
-            };
-            let d = *z - center;
-            orbit.dr *= radius * radius / d.dot(d).max(MIN_RADIUS2);
-            inverted(&mut orbit.jac, *z);
-            map_columns(&mut orbit.jac, |c| rot.apply(c));
-            *z = rot.apply(invert(*z));
-            if slot.mode == inversion_mode::SPACE {
-                let ds = seed_in - center;
-                orbit.seed_dr *= radius * radius / ds.dot(ds).max(MIN_RADIUS2);
-                inverted(&mut orbit.seed_jac, seed_in);
-                map_columns(&mut orbit.seed_jac, |c| rot.apply(c));
-                *seed = rot.apply(invert(seed_in));
-            }
-        }
-        FormulaId::Polyfold => {
-            let (folded, turn) = polyfold(*z, pa, pb, pc, pd);
-            map_columns(&mut orbit.jac, |c| rot.apply(by_rows(&turn, c)));
-            *z = rot.apply(folded);
-        }
-        FormulaId::Repeat => {
-            // Machina's "mirror distance" and "chaos": the world tiled into
-            // cells. The seed moves too, so every cell holds the same fractal.
-            // Warping space first hides the tiling's symmetry.
-            let size = pa.abs().max(1e-6);
-            let mirror = slot.mode != repeat_mode::PLAIN;
-            let tile = |v: Vec3| {
-                let (v, stretch) = quasi_warp(v, size, pc, pd);
-                let tiled = Vec3::new(
-                    repeat_axis(v.x, size, pb, mirror),
-                    repeat_axis(v.y, size, pb, mirror),
-                    repeat_axis(v.z, size, pb, mirror),
-                );
-                (tiled, stretch)
-            };
-            // The warp's Jacobian, then each axis's mirror.
-            let tile_columns = |columns: &mut Columns, v: Vec3| {
-                let rows = quasi_warp_rows(v, size, pc, pd);
-                let (w, _) = quasi_warp(v, size, pc, pd);
-                let mirrors = Vec3::new(
-                    repeat_sign(w.x, size, pb, mirror),
-                    repeat_sign(w.y, size, pb, mirror),
-                    repeat_sign(w.z, size, pb, mirror),
-                );
-                map_columns(columns, |c| times(by_rows(&rows, c), mirrors));
-            };
-            tile_columns(&mut orbit.jac, *z);
-            map_columns(&mut orbit.jac, |c| rot.apply(c));
-            tile_columns(&mut orbit.seed_jac, seed_in);
-            map_columns(&mut orbit.seed_jac, |c| rot.apply(c));
-            let (tiled, stretch) = tile(*z);
-            *z = rot.apply(tiled);
-            orbit.dr *= stretch;
-            let (tiled_seed, seed_stretch) = tile(seed_in);
-            orbit.seed_dr *= seed_stretch;
-            *seed = rot.apply(tiled_seed);
-        }
-        FormulaId::Sine => {
-            // MB3D `_SinY` and its siblings: one component through a sine.
-            let axis = axis_of(slot.formula, slot.mode);
-            let a = component(*z, axis);
-            let slope = pb * pc * ((a - pa) * pb).cos();
-            map_columns(&mut orbit.jac, |c| {
-                rot.apply(with_component(c, axis, component(c, axis) * slope))
-            });
-            *z = rot.apply(with_component(*z, axis, ((a - pa) * pb).sin() * pc + pd));
-            orbit.dr *= (pb * pc).abs().max(1.0);
-        }
-        FormulaId::Reciprocal => {
-            // MB3D `_reciprocalX3`: continuous, and gentle on the DE.
-            let axis = axis_of(slot.formula, slot.mode);
-            let limiter = pa.abs().max(1e-3);
-            let a = component(*z, axis);
-            let bent = a.signum() * (1.0 / limiter - 1.0 / (a.abs() + limiter));
-            let slope = 1.0 / ((a.abs() + limiter) * (a.abs() + limiter));
-            map_columns(&mut orbit.jac, |c| {
-                rot.apply(with_component(c, axis, component(c, axis) * slope))
-            });
-            *z = rot.apply(with_component(*z, axis, bent));
-            orbit.dr *= (1.0 / ((a.abs() + limiter) * (a.abs() + limiter))).max(1.0);
-        }
-        FormulaId::Gnarl => {
-            // A zero scale would collapse space to a point.
-            let (step, alpha, beta) = (pa, pb, pc);
-            let scale = if pd == 0.0 { 1.0 } else { pd };
-            let p = *z;
-            let warped = Vec3::new(
-                gnarl_axis(p.x, p.z, step, alpha, beta),
-                gnarl_axis(p.y, p.x, step, alpha, beta),
-                gnarl_axis(p.z, p.y, step, alpha, beta),
-            );
-            let slopes = Vec3::new(
-                gnarl_slope(p.z, step, alpha, beta),
-                gnarl_slope(p.x, step, alpha, beta),
-                gnarl_slope(p.y, step, alpha, beta),
-            );
-            map_columns(&mut orbit.jac, |c| {
-                let d = c - times(slopes, Vec3::new(c.z, c.x, c.y));
-                rot.apply(d * scale)
-            });
-            *z = rot.apply(warped * scale);
-            orbit.dr *= scale.abs() * (1.0 + step.abs() * (1.0 + alpha.abs() * (1.0 + beta.abs())));
-        }
+        FormulaId::Inversion => inversion(slot, orbit, seed),
+        FormulaId::Polyfold => polyfold(slot, orbit),
+        FormulaId::Repeat => repeat(slot, orbit, seed),
+        FormulaId::Sine => sine(slot, orbit),
+        FormulaId::Reciprocal => reciprocal(slot, orbit),
+        FormulaId::Gnarl => gnarl(slot, orbit),
     }
     orbit.trap = orbit.trap.min(orbit.z.dot(orbit.z));
+}
+
+/// Box (Mandelbox): a box fold, a sphere fold between the min and fixed
+/// radius, scale, then the seed. The mode picks the fold (`box_mode`); the
+/// surf modes fold only x and y and add the seed with x and y swapped.
+/// Params: scale, min radius, fold limit, fixed radius.
+fn box_fold(slot: &Slot, orbit: &mut Orbit, seed: Vec3) {
+    let [scale, min_r, fold, fixed_r] = slot.params;
+    let rot = &slot.rotation;
+    let z = &mut orbit.z;
+    let folds = match slot.mode {
+        box_mode::SURF | box_mode::SURF_CYLINDER => {
+            let folds = Vec3::new(fold_sign(z.x, fold), fold_sign(z.y, fold), 1.0);
+            z.x = clamp_unbounded(z.x, -fold, fold) * 2.0 - z.x;
+            z.y = clamp_unbounded(z.y, -fold, fold) * 2.0 - z.y;
+            folds
+        }
+        box_mode::MOD_KALI => {
+            let folds = -signs(*z);
+            *z = Vec3::splat(fold) - z.abs();
+            folds
+        }
+        box_mode::KALIBOX => {
+            let folds = signs(*z);
+            *z = z.abs() + Vec3::splat(fold);
+            folds
+        }
+        _ => {
+            let folds = fold_signs(*z, fold);
+            *z = z.clamp_sym(fold) * 2.0 - *z;
+            folds
+        }
+    };
+    let measured = if slot.mode == box_mode::SURF_CYLINDER {
+        Vec3::new(z.x, z.y, 0.0)
+    } else {
+        *z
+    };
+    let rr = measured.dot(measured);
+    // Floored so a zero min radius cannot divide by zero, and the
+    // fixed radius never falls below the min radius.
+    let min2 = (min_r * min_r).max(MIN_RADIUS2);
+    let fixed2 = (fixed_r * fixed_r).max(min2);
+    let m = scale * fixed2 / clamp_unbounded(rr, min2, fixed2);
+    let surf = matches!(slot.mode, box_mode::SURF | box_mode::SURF_CYLINDER);
+    let seed = if surf {
+        exchanged(seed, 0, 1, false)
+    } else {
+        seed
+    };
+    let inverting = rr > min2 && rr < fixed2;
+    let folded = *z;
+    for (column, seed_column) in orbit.jac.iter_mut().zip(orbit.seed_jac) {
+        let mut moved = times(*column, folds);
+        if inverting {
+            moved = radial(moved, folded, measured, rr);
+        }
+        let seed_column = if surf {
+            exchanged(seed_column, 0, 1, false)
+        } else {
+            seed_column
+        };
+        *column = rot.apply(moved * m + seed_column);
+    }
+    *z = rot.apply(*z * m + seed);
+    orbit.dr = orbit.dr * m.abs() + orbit.seed_dr;
+}
+
+/// Menger sponge: abs, sort descending, rotate, fold z about the center
+/// plane, scale toward the corner. The seed is never added. Params: scale,
+/// center offset.
+fn menger(slot: &Slot, orbit: &mut Orbit) {
+    let [scale, offset, _, _] = slot.params;
+    let rot = &slot.rotation;
+    let z = &mut orbit.z;
+    let abs = signs(*z);
+    *z = z.abs();
+    map_columns(&mut orbit.jac, |c| times(c, abs));
+    for (i, j) in [(0, 1), (0, 2), (1, 2)] {
+        let (mut a, mut b) = (component(*z, i), component(*z, j));
+        if swap_if_less(&mut a, &mut b) {
+            *z = with_component(with_component(*z, i, a), j, b);
+            map_columns(&mut orbit.jac, |c| exchanged(c, i, j, false));
+        }
+    }
+    *z = rot.apply(*z);
+    let h = 0.5 * offset * (scale - 1.0) / scale;
+    let fold_z = -slope_sign(z.z - h);
+    z.z = h - (z.z - h).abs();
+    z.x = scale * z.x - offset * (scale - 1.0);
+    z.y = scale * z.y - offset * (scale - 1.0);
+    z.z *= scale;
+    map_columns(&mut orbit.jac, |c| {
+        let c = rot.apply(c);
+        Vec3::new(c.x, c.y, c.z * fold_z) * scale
+    });
+    orbit.dr *= scale.abs();
+}
+
+/// Sierpinski tetrahedron: the three pair reflections, rotate, scale toward
+/// the corner. The seed is never added. Params: scale, offset.
+fn sierpinski(slot: &Slot, orbit: &mut Orbit) {
+    let [scale, offset, _, _] = slot.params;
+    let rot = &slot.rotation;
+    let z = &mut orbit.z;
+    for (i, j) in [(0, 1), (0, 2), (1, 2)] {
+        let (mut a, mut b) = (component(*z, i), component(*z, j));
+        if reflect_pair(&mut a, &mut b) {
+            *z = with_component(with_component(*z, i, a), j, b);
+            map_columns(&mut orbit.jac, |c| exchanged(c, i, j, true));
+        }
+    }
+    *z = rot.apply(*z);
+    map_columns(&mut orbit.jac, |c| rot.apply(c) * scale);
+    *z = *z * scale - Vec3::splat(offset * (scale - 1.0));
+    orbit.dr *= scale.abs();
+}
+
+/// KIFS: plane reflections of the tetrahedral, octahedral or icosahedral
+/// set (`kifs_mode`), rotate, scale toward the corner. The seed is never
+/// added. Params: scale, offset, abs first (tetrahedral only, on above 0.5),
+/// fold intensity.
+fn kifs(slot: &Slot, orbit: &mut Orbit) {
+    let [scale, offset, abs_first, intensity] = slot.params;
+    let rot = &slot.rotation;
+    let z = &mut orbit.z;
+    let mut stretch = 1.0;
+    match slot.mode {
+        kifs_mode::OCTA => {
+            let abs = signs(*z);
+            *z = z.abs();
+            map_columns(&mut orbit.jac, |c| times(c, abs));
+            for n in [
+                Vec3::new(1.0, -1.0, 0.0),
+                Vec3::new(1.0, 0.0, -1.0),
+                Vec3::new(0.0, 1.0, -1.0),
+            ] {
+                stretch *= plane_reflect(z, n.normalize(), intensity, &mut orbit.jac);
+            }
+        }
+        kifs_mode::ICOSA => {
+            let abs = signs(*z);
+            *z = z.abs();
+            map_columns(&mut orbit.jac, |c| times(c, abs));
+            let n1 = Vec3::new(-1.0, PHI - 1.0, 1.0 / (PHI - 1.0)).normalize();
+            let n2 = Vec3::new(PHI - 1.0, 1.0 / (PHI - 1.0), -1.0).normalize();
+            let n3 = Vec3::new(1.0 / (PHI - 1.0), -1.0, PHI - 1.0).normalize();
+            for n in [n1, n2, n3, n2] {
+                stretch *= plane_reflect(z, n, intensity, &mut orbit.jac);
+            }
+        }
+        _ => {
+            if abs_first > 0.5 {
+                let abs = signs(*z);
+                *z = z.abs();
+                map_columns(&mut orbit.jac, |c| times(c, abs));
+            }
+            for n in [
+                Vec3::new(1.0, 1.0, 0.0),
+                Vec3::new(1.0, 0.0, 1.0),
+                Vec3::new(0.0, 1.0, 1.0),
+            ] {
+                stretch *= plane_reflect(z, n.normalize(), intensity, &mut orbit.jac);
+            }
+        }
+    }
+    *z = rot.apply(*z);
+    *z = *z * scale - Vec3::splat(offset * (scale - 1.0));
+    map_columns(&mut orbit.jac, |c| rot.apply(c) * scale);
+    orbit.dr *= scale.abs() * stretch;
+}
+
+/// Pseudo-Kleinian: a box fold, then an inversion that only pushes points
+/// out of the sphere of squared radius `size`. The seed is never added.
+/// Params: box size, inversion size; the end plane z is read by the distance
+/// estimate, not here.
+fn pseudo_kleinian(slot: &Slot, orbit: &mut Orbit) {
+    let [box_size, size, _, _] = slot.params;
+    let rot = &slot.rotation;
+    let z = &mut orbit.z;
+    let folds = fold_signs(*z, box_size);
+    *z = z.clamp_sym(box_size) * 2.0 - *z;
+    let rr = z.dot(*z);
+    let k = (size / rr.max(MIN_RADIUS2)).max(1.0);
+    let inverting = rr > MIN_RADIUS2 && size > rr;
+    let folded = *z;
+    map_columns(&mut orbit.jac, |c| {
+        let d = times(c, folds);
+        let d = if inverting {
+            radial(d, folded, folded, rr)
+        } else {
+            d
+        };
+        rot.apply(d * k)
+    });
+    *z = rot.apply(*z * k);
+    orbit.dr *= k;
+}
+
+/// Kaliset: `abs(z) * scale / (|z|^2 + offset) + seed`. Params: scale,
+/// radius offset.
+fn kaliset(slot: &Slot, orbit: &mut Orbit, seed: Vec3) {
+    let [scale, offset, _, _] = slot.params;
+    let rot = &slot.rotation;
+    let z = &mut orbit.z;
+    let abs = signs(*z);
+    *z = z.abs();
+    let denominator = z.dot(*z) + offset;
+    let m = scale / denominator.max(MIN_RADIUS2);
+    let folded = *z;
+    for (column, seed_column) in orbit.jac.iter_mut().zip(orbit.seed_jac) {
+        let moved = times(*column, abs);
+        let moved = if denominator > MIN_RADIUS2 {
+            radial(moved, folded, folded, denominator)
+        } else {
+            moved
+        };
+        *column = rot.apply(moved * m + seed_column);
+    }
+    *z = rot.apply(*z * m + seed);
+    orbit.dr = orbit.dr * m.abs() + orbit.seed_dr;
+}
+
+/// Lin Combine: each component times its own scale, then the rotation.
+/// Params: x scale, y scale, z scale.
+fn lin_combine(slot: &Slot, orbit: &mut Orbit) {
+    let [pa, pb, pc, _] = slot.params;
+    let rot = &slot.rotation;
+    let axes = Vec3::new(pa, pb, pc);
+    orbit.z = rot.apply(times(orbit.z, axes));
+    map_columns(&mut orbit.jac, |c| rot.apply(times(c, axes)));
+    orbit.dr *= pa.abs().max(pb.abs()).max(pc.abs());
+}
+
+/// Mandelbulb: the triplex power of `z` plus the seed, with the z component
+/// multiplied. Chains with it use the power DE, so `J` is left alone.
+/// Params: power, z multiplier.
+fn mandelbulb(slot: &Slot, orbit: &mut Orbit, seed: Vec3) {
+    let [power, z_mul, _, _] = slot.params;
+    let z = &mut orbit.z;
+    let r = z.length().max(1e-12);
+    let theta = z.y.atan2(z.x) * power;
+    let phi = (z.z / r).clamp(-1.0, 1.0).asin() * power;
+    let rp = r.powf(power);
+    orbit.dr = power * r.powf(power - 1.0) * orbit.dr + orbit.seed_dr;
+    let bulb = Vec3::new(
+        phi.cos() * theta.cos(),
+        phi.cos() * theta.sin(),
+        z_mul * phi.sin(),
+    );
+    *z = slot.rotation.apply(bulb * rp + seed);
+}
+
+/// Transform: rotate, scale, then add a fixed offset. Params: scale,
+/// offset x, y and z.
+fn transform(slot: &Slot, orbit: &mut Orbit) {
+    let [pa, pb, pc, pd] = slot.params;
+    let rot = &slot.rotation;
+    orbit.z = rot.apply(orbit.z) * pa + Vec3::new(pb, pc, pd);
+    map_columns(&mut orbit.jac, |c| rot.apply(c) * pa);
+    orbit.dr *= pa.abs();
+}
+
+/// Helispiral: a turn about the z axis by an angle that grows with the
+/// distance from the axis and with height. Params: twist per radius, twist
+/// per height, fixed twist.
+fn helispiral(slot: &Slot, orbit: &mut Orbit) {
+    let [per_radius, per_height, fixed, _] = slot.params;
+    let rot = &slot.rotation;
+    let z = &mut orbit.z;
+    let rho = (z.x * z.x + z.y * z.y).sqrt();
+    let angle = fixed + per_radius * rho + per_height * z.z;
+    let (s, co) = angle.sin_cos();
+    // The turn, plus the turn's own change along each column.
+    let across = Vec3::new(-s * z.x - co * z.y, co * z.x - s * z.y, 0.0);
+    let outward = if rho > 1e-12 {
+        Vec3::new(z.x / rho, z.y / rho, 0.0)
+    } else {
+        Vec3::ZERO
+    };
+    let slope = outward * per_radius + Vec3::new(0.0, 0.0, per_height);
+    map_columns(&mut orbit.jac, |c| {
+        let turned = Vec3::new(co * c.x - s * c.y, s * c.x + co * c.y, c.z);
+        rot.apply(turned + across * slope.dot(c))
+    });
+    *z = rot.apply(Vec3::new(co * z.x - s * z.y, s * z.x + co * z.y, z.z));
+    orbit.dr *= 1.0 + rho * per_radius.hypot(per_height);
+}
+
+/// Sphere inversion about a center. The `SPACE` variant inverts the seed
+/// too. Params: radius, center x, y and z.
+fn inversion(slot: &Slot, orbit: &mut Orbit, seed: &mut Vec3) {
+    let seed_in = *seed;
+    let [radius, pb, pc, pd] = slot.params;
+    let center = Vec3::new(pb, pc, pd);
+    let rot = &slot.rotation;
+    let z = &mut orbit.z;
+    let invert = |v: Vec3| {
+        let d = v - center;
+        center + d * (radius * radius / d.dot(d).max(MIN_RADIUS2))
+    };
+    let inverted = |columns: &mut Columns, v: Vec3| {
+        let d = v - center;
+        let dd = d.dot(d);
+        let k = radius * radius / dd.max(MIN_RADIUS2);
+        map_columns(columns, |c| {
+            if dd > MIN_RADIUS2 {
+                radial(c, d, d, dd) * k
+            } else {
+                c * k
+            }
+        });
+    };
+    let d = *z - center;
+    orbit.dr *= radius * radius / d.dot(d).max(MIN_RADIUS2);
+    inverted(&mut orbit.jac, *z);
+    map_columns(&mut orbit.jac, |c| rot.apply(c));
+    *z = rot.apply(invert(*z));
+    if slot.mode == inversion_mode::SPACE {
+        let ds = seed_in - center;
+        orbit.seed_dr *= radius * radius / ds.dot(ds).max(MIN_RADIUS2);
+        inverted(&mut orbit.seed_jac, seed_in);
+        map_columns(&mut orbit.seed_jac, |c| rot.apply(c));
+        *seed = rot.apply(invert(seed_in));
+    }
+}
+
+/// Polyfold Sym: [`polyfold_point`] then the rotation. An isometry, so `dr`
+/// is untouched. Params: order, angle shift (degrees), shift x, shift y.
+fn polyfold(slot: &Slot, orbit: &mut Orbit) {
+    let [pa, pb, pc, pd] = slot.params;
+    let rot = &slot.rotation;
+    let (folded, turn) = polyfold_point(orbit.z, pa, pb, pc, pd);
+    map_columns(&mut orbit.jac, |c| rot.apply(by_rows(&turn, c)));
+    orbit.z = rot.apply(folded);
+}
+
+/// Repeat: space tiled into cells, after a warp that hides the tiling's
+/// symmetry. The seed moves too, so every cell holds the same fractal. The
+/// mode mirrors alternate cells (`repeat_mode`). Params: cell size, copies
+/// each way (0: endless), warp, warp phase.
+fn repeat(slot: &Slot, orbit: &mut Orbit, seed: &mut Vec3) {
+    let seed_in = *seed;
+    let [pa, pb, pc, pd] = slot.params;
+    let rot = &slot.rotation;
+    let size = pa.abs().max(1e-6);
+    let mirror = slot.mode != repeat_mode::PLAIN;
+    let tile = |v: Vec3| {
+        let (v, stretch) = quasi_warp(v, size, pc, pd);
+        let tiled = Vec3::new(
+            repeat_axis(v.x, size, pb, mirror),
+            repeat_axis(v.y, size, pb, mirror),
+            repeat_axis(v.z, size, pb, mirror),
+        );
+        (tiled, stretch)
+    };
+    // The warp's Jacobian, then each axis's mirror.
+    let tile_columns = |columns: &mut Columns, v: Vec3| {
+        let rows = quasi_warp_rows(v, size, pc, pd);
+        let (w, _) = quasi_warp(v, size, pc, pd);
+        let mirrors = Vec3::new(
+            repeat_sign(w.x, size, pb, mirror),
+            repeat_sign(w.y, size, pb, mirror),
+            repeat_sign(w.z, size, pb, mirror),
+        );
+        map_columns(columns, |c| times(by_rows(&rows, c), mirrors));
+    };
+    tile_columns(&mut orbit.jac, orbit.z);
+    map_columns(&mut orbit.jac, |c| rot.apply(c));
+    tile_columns(&mut orbit.seed_jac, seed_in);
+    map_columns(&mut orbit.seed_jac, |c| rot.apply(c));
+    let (tiled, stretch) = tile(orbit.z);
+    orbit.z = rot.apply(tiled);
+    orbit.dr *= stretch;
+    let (tiled_seed, seed_stretch) = tile(seed_in);
+    orbit.seed_dr *= seed_stretch;
+    *seed = rot.apply(tiled_seed);
+}
+
+/// Sine (MB3D `_SinY` and its siblings): one component, picked by the mode,
+/// becomes `sin((a - offset 1) * scale 1) * scale 2 + offset 2`. Params:
+/// offset 1, scale 1, scale 2, offset 2.
+fn sine(slot: &Slot, orbit: &mut Orbit) {
+    let [pa, pb, pc, pd] = slot.params;
+    let rot = &slot.rotation;
+    let axis = axis_of(slot.formula, slot.mode);
+    let a = component(orbit.z, axis);
+    let slope = pb * pc * ((a - pa) * pb).cos();
+    map_columns(&mut orbit.jac, |c| {
+        rot.apply(with_component(c, axis, component(c, axis) * slope))
+    });
+    orbit.z = rot.apply(with_component(
+        orbit.z,
+        axis,
+        ((a - pa) * pb).sin() * pc + pd,
+    ));
+    orbit.dr *= (pb * pc).abs().max(1.0);
+}
+
+/// Reciprocal (MB3D `_reciprocalX3`): one component, picked by the mode,
+/// bent by `sign(a) (1 / limiter - 1 / (|a| + limiter))`. Continuous, and
+/// gentle on the DE. Params: limiter.
+fn reciprocal(slot: &Slot, orbit: &mut Orbit) {
+    let rot = &slot.rotation;
+    let axis = axis_of(slot.formula, slot.mode);
+    let limiter = slot.params[0].abs().max(1e-3);
+    let a = component(orbit.z, axis);
+    let bent = a.signum() * (1.0 / limiter - 1.0 / (a.abs() + limiter));
+    let slope = 1.0 / ((a.abs() + limiter) * (a.abs() + limiter));
+    map_columns(&mut orbit.jac, |c| {
+        rot.apply(with_component(c, axis, component(c, axis) * slope))
+    });
+    orbit.z = rot.apply(with_component(orbit.z, axis, bent));
+    orbit.dr *= (1.0 / ((a.abs() + limiter) * (a.abs() + limiter))).max(1.0);
+}
+
+/// Gnarl: each component moved by [`gnarl_axis`] of the one before it, then
+/// scaled. Params: step, alpha, beta, scale (0 means 1, since a zero scale
+/// would collapse space to a point).
+fn gnarl(slot: &Slot, orbit: &mut Orbit) {
+    let [step, alpha, beta, pd] = slot.params;
+    let rot = &slot.rotation;
+    let scale = if pd == 0.0 { 1.0 } else { pd };
+    let p = orbit.z;
+    let warped = Vec3::new(
+        gnarl_axis(p.x, p.z, step, alpha, beta),
+        gnarl_axis(p.y, p.x, step, alpha, beta),
+        gnarl_axis(p.z, p.y, step, alpha, beta),
+    );
+    let slopes = Vec3::new(
+        gnarl_slope(p.z, step, alpha, beta),
+        gnarl_slope(p.x, step, alpha, beta),
+        gnarl_slope(p.y, step, alpha, beta),
+    );
+    map_columns(&mut orbit.jac, |c| {
+        let d = c - times(slopes, Vec3::new(c.z, c.x, c.y));
+        rot.apply(d * scale)
+    });
+    orbit.z = rot.apply(warped * scale);
+    orbit.dr *= scale.abs() * (1.0 + step.abs() * (1.0 + alpha.abs() * (1.0 + beta.abs())));
 }
 
 /// Koch Cube (Luca G.N. 2011, MB3D `koch_cube.m3f`): three times the folded
 /// point, sorted descending, a Koch-curve step in the XY plane with an XY
 /// stretch, and a fold in z. The seed is never added. Params: post-scale,
 /// XY stretch, Z fold, X add; Y and Z add are 0. The slot rotation runs
-/// mid-map, where MB3D's own rotation does.
+/// mid-map.
 fn koch_cube(slot: &Slot, orbit: &mut Orbit) {
     let [post, stretch, fold, x_add] = slot.params;
     let stretch = if stretch == 0.0 { 1.0 } else { stretch };
@@ -892,11 +1017,10 @@ fn koch_cube(slot: &Slot, orbit: &mut Orbit) {
     orbit.dr *= 3.0 * post.abs() * (1.0 / stretch.abs()).max(1.0);
 }
 
-/// `JCube` (MB3D `JCube3.m3f`), a brute-force IFS for the Jerusalem cube,
-/// decoded from its machine code: fold to the first octant, take the
-/// smallest component first, then scale toward an edge cube by `s0 /
-/// alpha` or toward a corner cube by `s0 = G - 1 + alpha`. Its author calls
-/// it discontinuous. The seed is never added. Params: alpha, `GScale` (G),
+/// `JCube` (MB3D `JCube3.m3f`), a brute-force IFS for the Jerusalem cube:
+/// fold to the first octant, take the smallest component first, then scale
+/// toward an edge cube by `s0 / alpha` or toward a corner cube by
+/// `s0 = G - 1 + alpha`. It is discontinuous. The seed is never added. Params: alpha, `GScale` (G),
 /// edge center (0, c, c), corner center (d, d, d).
 fn jcube(slot: &Slot, orbit: &mut Orbit) {
     let [alpha, g, edge_c, corner_c] = slot.params;
@@ -904,7 +1028,7 @@ fn jcube(slot: &Slot, orbit: &mut Orbit) {
     let abs = signs(orbit.z);
     let p = orbit.z.abs();
     map_columns(&mut orbit.jac, |c| times(c, abs));
-    // MB3D's partial sort: x' the smallest, y' = max(min(x, y), z),
+    // Partial sort: x' the smallest, y' = max(min(x, y), z),
     // z' = max(x, y).
     let lower = usize::from(p.x >= p.y);
     let upper = 1 - lower;
@@ -941,8 +1065,7 @@ fn jcube(slot: &Slot, orbit: &mut Orbit) {
 
 /// Rotate 4D (MB3D `_Rotate4d.m3f`): `(x, y, z, w)` turned in the XW, YW and
 /// ZW planes by the first three params in half turns (1 is 180 degrees),
-/// then by the slot
-/// rotation in the YZ, XZ and XY planes. An isometry on `(z, w)`.
+/// then by the slot rotation in the YZ, XZ and XY planes. An isometry on `(z, w)`.
 fn rotate_4d(slot: &Slot, orbit: &mut Orbit) {
     let [xw, yw, zw, _] = slot.params;
     let mut point = [orbit.z.x, orbit.z.y, orbit.z.z, orbit.w];
@@ -987,14 +1110,14 @@ fn abox_mod2(slot: &Slot, orbit: &mut Orbit, seed: Vec3) {
         fold_sign(z.z, fold_z),
     );
     let folded = Vec3::new(
-        z.x.clamp(-fold, fold) * 2.0 - z.x,
-        z.y.clamp(-fold, fold) * 2.0 - z.y,
-        z.z.clamp(-fold_z, fold_z) * 2.0 - z.z,
+        clamp_unbounded(z.x, -fold, fold) * 2.0 - z.x,
+        clamp_unbounded(z.y, -fold, fold) * 2.0 - z.y,
+        clamp_unbounded(z.z, -fold_z, fold_z) * 2.0 - z.z,
     );
     let cap = folded.z.abs() - ABOX_MOD2_HALF_SIZE;
     let rr = folded.x * folded.x + folded.y * folded.y + if cap > 0.0 { cap * cap } else { 0.0 };
     let min2 = (min_r * min_r).max(MIN_RADIUS2);
-    let m = scale / rr.clamp(min2, 1.0);
+    let m = scale / clamp_unbounded(rr, min2, 1.0);
     let inverting = rr > min2 && rr < 1.0;
     // The gradient of rr, which m falls with between min R and 1.
     let grad = Vec3::new(
@@ -1051,12 +1174,11 @@ fn msltoe_sym4(slot: &Slot, orbit: &mut Orbit, seed: Vec3) {
     orbit.dr = 2.0 * r * orbit.dr + orbit.seed_dr;
 }
 
-/// Polyfold Sym (Luca GN, MB3D `_PolyFold-sym.m3f`), as its machine code
-/// runs: each of `order` sectors around the z axis is turned back onto the
-/// first, rotated when its index is even and mirrored when odd, which keeps
-/// even orders continuous. An isometry, so `dr` is untouched. Returns the
+/// Polyfold Sym (Luca GN, MB3D `_PolyFold-sym.m3f`): each of `order`
+/// sectors around the z axis is turned back onto the first, rotated when its
+/// index is even and mirrored when odd, which keeps even orders continuous. An isometry, so `dr` is untouched. Returns the
 /// point and the rows of the step's Jacobian.
-fn polyfold(
+fn polyfold_point(
     point: Vec3,
     order: f64,
     shift_deg: f64,
@@ -1072,7 +1194,7 @@ fn polyfold(
     let (sin, cos) = turn.sin_cos();
     let new_x = py * sin - px * cos;
     let turned_y = px * sin + py * cos;
-    // `sector` is an integer-valued float; its parity decides the mirror.
+    // `sector` is an integer-valued float; its parity selects the mirror.
     let mirror = if sector.rem_euclid(2.0) == 0.0 {
         -1.0
     } else {
@@ -1089,12 +1211,10 @@ fn polyfold(
     )
 }
 
-/// Bulbox P-2 (Luca GN, MB3D `BulboxP-2.m3f`), as its machine code runs:
-/// Tglad fold; the radius of the folded point; scale; then plain seeding
-/// outside radius 1, a W/N power -2 inside the inner radius, and a linear
-/// blend between. The blend removes the branch cuts; what is left is
-/// discontinuous on purpose. The file's description says `-2 x y` for the
-/// second component; the code computes `-x y`.
+/// Bulbox P-2 (Luca GN, MB3D `BulboxP-2.m3f`): Tglad fold; the radius of the
+/// folded point; scale; then plain seeding outside radius 1, a W/N power -2
+/// inside the inner radius, and a linear blend between. The blend removes the branch cuts; what is left is
+/// discontinuous on purpose. The second component is `-x y`.
 fn bulbox(slot: &Slot, orbit: &mut Orbit, seed: Vec3) {
     let [scale, inner_r, inner_scale, fold] = slot.params;
     let start = orbit.z;
@@ -1197,6 +1317,30 @@ mod tests {
             count: 1,
             params,
             rotation: Mat3::IDENTITY,
+        }
+    }
+
+    /// Sliders reach any value, including inverted bounds (a negative fold
+    /// limit, a min radius above the fixed radius). No formula panics on
+    /// them; the shader computes the same values without checking.
+    #[test]
+    fn no_formula_panics_on_inverted_bounds() {
+        let params = [
+            [2.0, 0.6, -0.01, 0.3],
+            [-1.5, 2.0, -1.0, 0.5],
+            [2.2, -0.5, 0.0, -1.0],
+            [0.0, 0.0, 0.0, 0.0],
+        ];
+        for formula in FormulaId::ALL {
+            for mode in 0..5 {
+                for p in params {
+                    run(
+                        &slot(formula, mode, p),
+                        Vec3::new(0.3, -0.7, 0.2),
+                        Vec3::ZERO,
+                    );
+                }
+            }
         }
     }
 

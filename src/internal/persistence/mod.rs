@@ -445,7 +445,7 @@ pub fn snapshot_scene(
                             uuid: eff.uuid().to_owned(),
                             path: eff.shader.file_path.clone().unwrap_or_default(),
                             enabled: eff.enabled,
-                            params: eff.params.values.clone(),
+                            params: eff.params.saved_values(),
                         })
                         .collect();
 
@@ -494,7 +494,7 @@ pub fn snapshot_scene(
                     uuid: eff.uuid().to_owned(),
                     path: eff.shader.file_path.clone().unwrap_or_default(),
                     enabled: eff.enabled,
-                    params: eff.params.values.clone(),
+                    params: eff.params.saved_values(),
                 })
                 .collect();
 
@@ -519,7 +519,7 @@ pub fn snapshot_scene(
             uuid: eff.uuid().to_owned(),
             path: eff.shader.file_path.clone().unwrap_or_default(),
             enabled: eff.enabled,
-            params: eff.params.values.clone(),
+            params: eff.params.saved_values(),
         })
         .collect();
 
@@ -945,9 +945,7 @@ pub(crate) fn restore_deck(
         )
         .ok()
     }) {
-        for (name, value) in params {
-            deck.generator_params.set(&name, value);
-        }
+        deck.generator_params.restore(&params);
     }
 
     // Host-inline preprocessor state, stored under `preprocessor_state`. Applied when each
@@ -1009,9 +1007,7 @@ pub(crate) fn restore_effect(
     let mut effect = Effect::new_with_format(context, shader, target_format)?;
     effect.set_uuid(config.uuid.clone());
     effect.enabled = config.enabled;
-    for (name, value) in &config.params {
-        effect.params.set(name, *value);
-    }
+    effect.params.restore(&config.params);
     Ok(effect)
 }
 

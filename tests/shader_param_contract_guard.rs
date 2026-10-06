@@ -1,5 +1,5 @@
 //! Every shader declares its ISF params with the GLSL types the engine writes.
-//! See `docs/12-isf-authoring.md` § Input Types.
+//! See `docs/14-isf-authoring.md` § Input Types.
 //!
 //! A mismatch compiles, builds a valid pipeline, and misbehaves only at
 //! runtime. For example, `ParamValue::Bool` is written as a `u32`; read as a
@@ -12,11 +12,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// ISF type → the GLSL scalar/vector type the engine's byte encoding requires.
-/// Mirrors the table in `docs/12-isf-authoring.md` and `ParamValue::write_bytes`.
+/// Mirrors the table in `docs/14-isf-authoring.md` and `ParamValue::write_bytes`.
 fn required_glsl_type(isf_type: &str) -> Option<&'static str> {
     match isf_type {
         "float" => Some("float"),
-        "bool" => Some("uint"),
+        "bool" | "event" => Some("uint"),
         "long" => Some("int"),
         "color" => Some("vec4"),
         "point2D" => Some("vec2"),

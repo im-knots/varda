@@ -223,6 +223,7 @@ fn build_shader_params(
     let params_vec = params
         .param_order
         .iter()
+        .filter(|name| !params.is_written(name))
         .filter_map(|name| {
             let value = params.values.get(name)?;
             let def = params.definitions.get(name);
@@ -240,6 +241,7 @@ fn build_shader_params(
                             .collect()
                     })
                 }),
+                event: params.is_event(name),
             })
         })
         .collect();
@@ -1061,6 +1063,21 @@ mod tests {
         assert!(p.label.is_none());
         assert!(p.min.is_none());
         assert!(p.max.is_none());
+    }
+
+    #[test]
+    fn written_inputs_are_left_out_of_the_snapshot() {
+        let meta: crate::isf::ISFMetadata = serde_json::from_str(
+            r#"{"INPUTS": [
+                {"NAME": "gain", "TYPE": "float"},
+                {"NAME": "track", "TYPE": "bool", "SPECIALIZE": true}
+            ], "PREPROCESSORS": [{"NAME": "f", "TYPE": "flight", "WRITES": ["track"]}]}"#,
+        )
+        .unwrap();
+        let params = crate::params::ShaderParams::from_metadata(&meta);
+        let snap = build_shader_params("test_shader", &params, &[]);
+        let names: Vec<&str> = snap.params.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["gain"]);
     }
 
     #[test]

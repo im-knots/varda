@@ -19,6 +19,27 @@ pub enum ParamValue {
 }
 
 impl ParamValue {
+    /// `self` converted to the variant of `like`: numbers and bools convert
+    /// between each other (a float rounds to a long; above one half is true),
+    /// and a color or point needs the same shape. `None` when they cannot.
+    /// Saved JSON numbers carry no type, so a long reads back as a float.
+    pub fn as_type_of(self, like: &ParamValue) -> Option<ParamValue> {
+        let number = match self {
+            ParamValue::Float(v) => Some(f64::from(v)),
+            ParamValue::Long(v) => Some(f64::from(v)),
+            ParamValue::Bool(v) => Some(f64::from(u8::from(v))),
+            ParamValue::Color(_) | ParamValue::Point2D(_) => None,
+        };
+        match (like, number) {
+            (ParamValue::Float(_), Some(v)) => Some(ParamValue::Float(v as f32)),
+            (ParamValue::Long(_), Some(v)) => Some(ParamValue::Long(v.round() as i32)),
+            (ParamValue::Bool(_), Some(v)) => Some(ParamValue::Bool(v > 0.5)),
+            (ParamValue::Color(_), None) if matches!(self, ParamValue::Color(_)) => Some(self),
+            (ParamValue::Point2D(_), None) if matches!(self, ParamValue::Point2D(_)) => Some(self),
+            _ => None,
+        }
+    }
+
     /// Create from ISF input default value
     pub fn from_isf_input(input: &ISFInput) -> Self {
         match input.input_type.as_str() {
@@ -30,6 +51,8 @@ impl ParamValue {
                     .unwrap_or(0.0) as f32;
                 ParamValue::Float(val)
             }
+            // An event takes no default: it is false at rest.
+            "event" => ParamValue::Bool(false),
             "bool" => {
                 let val = input
                     .default
@@ -76,6 +99,23 @@ impl ParamValue {
             }
             _ => ParamValue::Float(0.0), // Default fallback
         }
+    }
+}
+
+/// A preset's JSON value: a number, a bool, or an array of 4 (color) or 2 (point) numbers.
+fn param_value_from_json(json: &serde_json::Value) -> Option<ParamValue> {
+    let numbers = |array: &[serde_json::Value]| -> Option<Vec<f32>> {
+        array.iter().map(|v| v.as_f64().map(|n| n as f32)).collect()
+    };
+    match json {
+        serde_json::Value::Number(n) => Some(ParamValue::Float(n.as_f64()? as f32)),
+        serde_json::Value::Bool(b) => Some(ParamValue::Bool(*b)),
+        serde_json::Value::Array(array) => match *numbers(array)?.as_slice() {
+            [r, g, b, a] => Some(ParamValue::Color([r, g, b, a])),
+            [x, y] => Some(ParamValue::Point2D([x, y])),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -196,6 +236,17 @@ pub struct ShaderParams {
     mod_key_scratch: String,
     /// The `SPECIALIZE` inputs, in `INPUTS` order.
     specialized: Vec<String>,
+    /// The `event` inputs, in `INPUTS` order.
+    events: Vec<EventInput>,
+    /// The inputs a preprocessor writes (`WRITES`).
+    written: Vec<String>,
+}
+
+/// A momentary `event` input. Its value is true for one rendered frame after a trigger.
+struct EventInput {
+    name: String,
+    /// The last normalized write was above one half.
+    held: bool,
 }
 
 impl ShaderParams {
@@ -208,12 +259,12 @@ impl ShaderParams {
         for input in inputs {
             // Skip non-parameter types (image, audio, audioFFT handled separately)
             match input.input_type.as_str() {
-                "float" | "bool" | "long" | "color" | "point2D" => {
+                "float" | "bool" | "event" | "long" | "color" | "point2D" => {
                     param_order.push(input.name.clone());
                     values.insert(input.name.clone(), ParamValue::from_isf_input(input));
                     definitions.insert(input.name.clone(), input.clone());
                 }
-                _ => {} // Skip image, audio, audioFFT, event
+                _ => {} // Skip image, audio, audioFFT
             }
         }
 
@@ -221,6 +272,14 @@ impl ShaderParams {
             .iter()
             .filter(|name| definitions[*name].specialize)
             .cloned()
+            .collect();
+        let events = param_order
+            .iter()
+            .filter(|name| definitions[*name].input_type == "event")
+            .map(|name| EventInput {
+                name: name.clone(),
+                held: false,
+            })
             .collect();
         Self {
             param_order,
@@ -231,6 +290,97 @@ impl ShaderParams {
             scratch: Vec::new(),
             mod_key_scratch: String::new(),
             specialized,
+            events,
+            written: Vec::new(),
+        }
+    }
+
+    /// The parameters of a shader's `INPUTS`, with the inputs its preprocessors write.
+    pub fn from_metadata(metadata: &crate::isf::ISFMetadata) -> Self {
+        let mut params = Self::from_inputs(metadata.inputs.as_deref().unwrap_or(&[]));
+        params.written = metadata
+            .written_inputs()
+            .filter(|name| params.values.contains_key(*name))
+            .map(str::to_owned)
+            .collect();
+        params
+    }
+
+    /// Whether a preprocessor writes `name`. Only [`Self::write_derived`] changes it.
+    pub fn is_written(&self, name: &str) -> bool {
+        self.written.iter().any(|w| w == name)
+    }
+
+    /// Whether `name` is an event or a written input. Neither is a setting: they are not
+    /// saved, restored, explored, modulated or recorded.
+    pub fn is_transient(&self, name: &str) -> bool {
+        self.is_event(name) || self.is_written(name)
+    }
+
+    /// Set a written input from a preprocessor output, converted to its type and clamped to
+    /// its declared range. Other inputs are left alone.
+    pub fn write_derived(&mut self, name: &str, value: f32) {
+        if !self.is_written(name) {
+            return;
+        }
+        let value = match self.definitions.get(name) {
+            Some(ISFInput {
+                min: Some(lo),
+                max: Some(hi),
+                ..
+            }) if lo <= hi => value.clamp(*lo, *hi),
+            _ => value,
+        };
+        self.store(name, ParamValue::Float(value));
+    }
+
+    /// Whether `name` is an `event` input.
+    pub fn is_event(&self, name: &str) -> bool {
+        self.events.iter().any(|e| e.name == name)
+    }
+
+    /// A normalized write to an event: fires when the value rises past one half. A falling
+    /// value sets nothing.
+    pub fn press_event(&mut self, name: &str, value: f32) {
+        let Some(event) = self.events.iter_mut().find(|e| e.name == name) else {
+            return;
+        };
+        let pressed = value > 0.5;
+        let fire = pressed && !event.held;
+        event.held = pressed;
+        if fire {
+            self.set(name, ParamValue::Bool(true));
+        }
+    }
+
+    /// Reset every event to false. Called once a frame has used them.
+    pub fn clear_events(&mut self) {
+        for event in &self.events {
+            if let Some(ParamValue::Bool(v)) = self.values.get_mut(&event.name)
+                && *v
+            {
+                *v = false;
+                self.dirty = true;
+            }
+        }
+    }
+
+    /// The values a scene or preset saves. Events and written inputs are left out.
+    pub fn saved_values(&self) -> HashMap<String, ParamValue> {
+        self.values
+            .iter()
+            .filter(|(name, _)| !self.is_transient(name))
+            .map(|(name, value)| (name.clone(), *value))
+            .collect()
+    }
+
+    /// Apply saved values. Events and written inputs are skipped, so a loaded event stays
+    /// false. Input presets are not applied: the saved values already hold their result.
+    pub fn restore(&mut self, saved: &HashMap<String, ParamValue>) {
+        for (name, value) in saved {
+            if !self.is_transient(name) {
+                self.write(name, *value);
+            }
         }
     }
 
@@ -363,8 +513,11 @@ impl ShaderParams {
         }
     }
 
-    /// Set a bool value
+    /// Set a bool value. An event only accepts true.
     pub fn set_bool(&mut self, name: &str, value: bool) {
+        if !value && self.is_event(name) {
+            return;
+        }
         if let Some(ParamValue::Bool(v)) = self.values.get_mut(name) {
             *v = value;
             self.dirty = true;
@@ -395,11 +548,18 @@ impl ShaderParams {
         }
     }
 
-    /// Set a long value
+    /// Set a long value. A new value applies the input's preset.
     pub fn set_long(&mut self, name: &str, value: i32) {
+        let value = self
+            .long_range(name)
+            .map_or(value, |(lo, hi)| value.clamp(lo, hi));
         if let Some(ParamValue::Long(v)) = self.values.get_mut(name) {
+            let changed = *v != value;
             *v = value;
             self.dirty = true;
+            if changed {
+                self.apply_preset(name, value);
+            }
         }
     }
 
@@ -518,11 +678,67 @@ impl ShaderParams {
         self.dirty = true;
     }
 
-    /// Generic set method for any parameter value
+    /// Generic set method for any parameter value. An event only accepts `Bool(true)`, which
+    /// fires it. A `long` input that changes value applies its preset.
     pub fn set(&mut self, name: &str, value: ParamValue) {
-        if self.values.contains_key(name) {
-            self.values.insert(name.to_string(), value);
+        let before = self.get_long(name);
+        self.write(name, value);
+        if let Some(after) = self.get_long(name)
+            && before != Some(after)
+        {
+            self.apply_preset(name, after);
+        }
+    }
+
+    /// `set` without input presets. A written input ignores it.
+    fn write(&mut self, name: &str, value: ParamValue) {
+        if self.is_written(name)
+            || (self.is_event(name) && !matches!(value, ParamValue::Bool(true)))
+        {
+            return;
+        }
+        self.store(name, value);
+    }
+
+    /// Store `value` as the declared type of `name`, a `long` clamped to its range.
+    fn store(&mut self, name: &str, value: ParamValue) {
+        let range = self.long_range(name);
+        let Some(current) = self.values.get_mut(name) else {
+            return;
+        };
+        if let Some(typed) = value.as_type_of(current) {
+            *current = match (typed, range) {
+                (ParamValue::Long(v), Some((lo, hi))) => ParamValue::Long(v.clamp(lo, hi)),
+                (typed, _) => typed,
+            };
             self.dirty = true;
+        }
+    }
+
+    /// The declared `MIN` and `MAX` of a `long` input, when it has both and
+    /// they are in order.
+    fn long_range(&self, name: &str) -> Option<(i32, i32)> {
+        let def = self.definitions.get(name)?;
+        if def.input_type != "long" {
+            return None;
+        }
+        let (lo, hi) = (def.min? as i32, def.max? as i32);
+        (lo <= hi).then_some((lo, hi))
+    }
+
+    /// Write the `PRESETS` entry for `value` of input `name` into the other inputs. Names that
+    /// are not inputs and values of the wrong shape are skipped.
+    fn apply_preset(&mut self, name: &str, value: i32) {
+        let Some(preset) = self.definitions.get(name).and_then(|d| d.preset(value)) else {
+            return;
+        };
+        let writes: Vec<(String, ParamValue)> = preset
+            .iter()
+            .filter(|(target, _)| target.as_str() != name)
+            .filter_map(|(target, json)| Some((target.clone(), param_value_from_json(json)?)))
+            .collect();
+        for (target, value) in writes {
+            self.write(&target, value);
         }
     }
 
@@ -583,11 +799,15 @@ impl ShaderParams {
     /// Whether exploration may touch this parameter.
     ///
     /// A parameter with no declared range has nothing to draw from. Colors are excluded because
-    /// random colors look muddy and palettes are deliberate choices.
+    /// random colors look muddy and palettes are deliberate choices. Events and written inputs
+    /// are not settings.
     fn is_explorable(&self, name: &str) -> bool {
         let Some(def) = self.definitions.get(name) else {
             return false;
         };
+        if self.is_transient(name) {
+            return false;
+        }
         let bounded = def.min.is_some() && def.max.is_some();
         match self.values.get(name) {
             Some(ParamValue::Bool(_)) => true,
@@ -896,6 +1116,7 @@ mod tests {
             identity: None,
             group: None,
             specialize: false,
+            presets: None,
         }
     }
 
@@ -912,6 +1133,24 @@ mod tests {
             identity: None,
             group: None,
             specialize: false,
+            presets: None,
+        }
+    }
+
+    fn make_event_input(name: &str) -> ISFInput {
+        ISFInput {
+            name: name.to_string(),
+            input_type: "event".to_string(),
+            default: None,
+            min: None,
+            max: None,
+            label: None,
+            values: None,
+            labels: None,
+            identity: None,
+            group: None,
+            specialize: false,
+            presets: None,
         }
     }
 
@@ -928,6 +1167,7 @@ mod tests {
             identity: None,
             group: None,
             specialize: false,
+            presets: None,
         }
     }
 
@@ -948,6 +1188,7 @@ mod tests {
             identity: None,
             group: None,
             specialize: false,
+            presets: None,
         }
     }
 
@@ -964,6 +1205,7 @@ mod tests {
             identity: None,
             group: None,
             specialize: false,
+            presets: None,
         }
     }
 
@@ -1088,10 +1330,274 @@ mod tests {
                 identity: None,
                 group: None,
                 specialize: false,
+                presets: None,
             },
         ];
         let params = ShaderParams::from_inputs(&inputs);
         assert_eq!(params.param_order.len(), 1); // image skipped
+    }
+
+    fn typed_input(name: &str, input_type: &str, default: serde_json::Value) -> ISFInput {
+        ISFInput {
+            name: name.to_string(),
+            input_type: input_type.to_string(),
+            default: Some(default),
+            min: None,
+            max: None,
+            label: None,
+            values: None,
+            labels: None,
+            identity: None,
+            group: None,
+            specialize: false,
+            presets: None,
+        }
+    }
+
+    fn look_params() -> ShaderParams {
+        let inputs: Vec<ISFInput> = serde_json::from_value(serde_json::json!([
+            {"NAME": "look", "TYPE": "long", "DEFAULT": 1, "VALUES": [1, 2],
+             "PRESETS": [
+                {"gain": 0.5, "steps": 4.0, "tint": [0.1, 0.2, 0.3, 1.0], "at": [0.5, 0.25]},
+                {"gain": 2.0, "steps": 8.0, "tint": [0.9, 0.8, 0.7, 1.0], "at": [1.0, 1.0],
+                 "missing": 1.0, "label": [0.0, 0.0]}
+             ]},
+            {"NAME": "gain", "TYPE": "float", "DEFAULT": 0.5, "MIN": 0.0, "MAX": 4.0},
+            {"NAME": "steps", "TYPE": "long", "DEFAULT": 4},
+            {"NAME": "tint", "TYPE": "color", "DEFAULT": [0.1, 0.2, 0.3, 1.0]},
+            {"NAME": "at", "TYPE": "point2D", "DEFAULT": [0.5, 0.25]},
+            {"NAME": "label", "TYPE": "float", "DEFAULT": 0.75}
+        ]))
+        .unwrap();
+        ShaderParams::from_inputs(&inputs)
+    }
+
+    #[test]
+    fn choosing_a_value_applies_its_preset() {
+        let mut params = look_params();
+        params.set("look", ParamValue::Long(2));
+        assert_eq!(params.get_float("gain"), Some(2.0));
+        assert_eq!(
+            params.get_long("steps"),
+            Some(8),
+            "a number lands as the declared long"
+        );
+        assert_eq!(params.get_color("tint"), Some([0.9, 0.8, 0.7, 1.0]));
+        assert_eq!(params.get_point2d("at"), Some([1.0, 1.0]));
+        assert_eq!(
+            params.get_float("label"),
+            Some(0.75),
+            "a wrong shape is skipped"
+        );
+        assert!(!params.values.contains_key("missing"));
+
+        params.set_long("look", 1);
+        assert_eq!(params.get_float("gain"), Some(0.5));
+        assert_eq!(params.get_color("tint"), Some([0.1, 0.2, 0.3, 1.0]));
+    }
+
+    #[test]
+    fn a_number_selecting_the_value_applies_its_preset() {
+        let mut params = look_params();
+        params.set("look", ParamValue::Float(2.0));
+        assert_eq!(params.get_float("gain"), Some(2.0));
+    }
+
+    #[test]
+    fn the_same_value_again_keeps_slider_changes() {
+        let mut params = look_params();
+        params.set("look", ParamValue::Long(2));
+        params.set("gain", ParamValue::Float(3.0));
+        params.set("look", ParamValue::Long(2));
+        params.set_long("look", 2);
+        assert_eq!(params.get_float("gain"), Some(3.0));
+    }
+
+    #[test]
+    fn restore_applies_no_preset() {
+        let mut params = look_params();
+        let saved = HashMap::from([
+            ("look".to_string(), ParamValue::Float(2.0)),
+            ("gain".to_string(), ParamValue::Float(3.0)),
+        ]);
+        params.restore(&saved);
+        assert_eq!(params.get_long("look"), Some(2));
+        assert_eq!(params.get_float("gain"), Some(3.0));
+        assert_eq!(params.get_long("steps"), Some(4));
+    }
+
+    /// A `long` with `MIN` and `MAX` stays in that range on every write,
+    /// scene loads included.
+    #[test]
+    fn a_ranged_long_stays_in_its_range() {
+        let mut input = typed_input("count", "long", serde_json::json!(1));
+        input.min = Some(1.0);
+        input.max = Some(16.0);
+        let mut params = ShaderParams::from_inputs(&[input]);
+        let saved: HashMap<String, ParamValue> =
+            serde_json::from_str(r#"{"count": 0.0}"#).expect("saved values");
+        params.restore(&saved);
+        assert!(matches!(params.values["count"], ParamValue::Long(1)));
+        params.set("count", ParamValue::Long(40));
+        assert!(matches!(params.values["count"], ParamValue::Long(16)));
+        params.set_long("count", 5);
+        assert!(matches!(params.values["count"], ParamValue::Long(5)));
+    }
+
+    /// Saved JSON numbers carry no type: `3` reads back as a float. Values
+    /// keep the type the shader declares, so a `long` stays a dropdown and
+    /// a `bool` a checkbox after a scene loads.
+    #[test]
+    fn restored_values_keep_their_declared_type() {
+        let mut params = ShaderParams::from_inputs(&[
+            typed_input("pick", "long", serde_json::json!(0)),
+            typed_input("on", "bool", serde_json::json!(false)),
+            typed_input("amount", "float", serde_json::json!(0.5)),
+        ]);
+        let saved: HashMap<String, ParamValue> =
+            serde_json::from_str(r#"{"pick": 3, "on": 1.0, "amount": 2}"#).expect("saved values");
+        params.restore(&saved);
+        assert!(matches!(params.values["pick"], ParamValue::Long(3)));
+        assert!(matches!(params.values["on"], ParamValue::Bool(true)));
+        assert!(matches!(params.values["amount"], ParamValue::Float(v) if (v - 2.0).abs() < 1e-6));
+        // A value of another shape is ignored.
+        params.set("pick", ParamValue::Color([1.0; 4]));
+        assert!(matches!(params.values["pick"], ParamValue::Long(3)));
+    }
+
+    fn event_params() -> ShaderParams {
+        ShaderParams::from_inputs(&[
+            make_float_input("a", 0.5, 0.0, 1.0),
+            make_event_input("reset"),
+            make_float_input("b", 0.25, 0.0, 1.0),
+        ])
+    }
+
+    #[test]
+    fn an_event_input_is_a_bool_param_false_at_rest() {
+        let mut params = event_params();
+        assert_eq!(params.param_order, ["a", "reset", "b"]);
+        assert!(matches!(params.values["reset"], ParamValue::Bool(false)));
+        assert_eq!(params.definitions["reset"].input_type, "event");
+        assert!(params.is_event("reset"));
+        assert!(!params.is_event("a"));
+        let data = params.build_buffer_data();
+        assert_eq!(u32::from_le_bytes([data[4], data[5], data[6], data[7]]), 0);
+        let b = f32::from_le_bytes([data[8], data[9], data[10], data[11]]);
+        assert!((b - 0.25).abs() < 1e-6, "laid out as a bool");
+    }
+
+    #[test]
+    fn setting_an_event_true_fires_it_and_false_does_nothing() {
+        let mut params = event_params();
+        params.set("reset", ParamValue::Bool(true));
+        assert_eq!(params.get_bool("reset"), Some(true));
+        params.set("reset", ParamValue::Bool(false));
+        params.set_bool("reset", false);
+        assert_eq!(params.get_bool("reset"), Some(true), "false does nothing");
+        params.clear_events();
+        assert_eq!(params.get_bool("reset"), Some(false));
+        params.set("reset", ParamValue::Float(1.0));
+        assert!(matches!(params.values["reset"], ParamValue::Bool(false)));
+    }
+
+    #[test]
+    fn a_pressed_event_fires_when_the_value_rises_past_one_half() {
+        let mut params = event_params();
+        params.press_event("reset", 1.0);
+        assert_eq!(params.get_bool("reset"), Some(true), "note on");
+        params.clear_events();
+        params.press_event("reset", 0.8);
+        assert_eq!(params.get_bool("reset"), Some(false), "still held");
+        params.press_event("reset", 0.0);
+        assert_eq!(
+            params.get_bool("reset"),
+            Some(false),
+            "release sets nothing"
+        );
+        params.press_event("reset", 0.6);
+        assert_eq!(params.get_bool("reset"), Some(true), "pressed again");
+    }
+
+    #[test]
+    fn events_are_not_saved_restored_or_explored() {
+        let mut params = event_params();
+        params.set("reset", ParamValue::Bool(true));
+        let saved = params.saved_values();
+        assert!(!saved.contains_key("reset"));
+        assert!(saved.contains_key("a"));
+
+        params.clear_events();
+        let mut stale = saved.clone();
+        stale.insert("reset".into(), ParamValue::Bool(true));
+        params.restore(&stale);
+        assert_eq!(params.get_bool("reset"), Some(false));
+
+        for seed in 0..8 {
+            params.randomize(None, seed);
+            params.mutate(None, 1.0, seed);
+            assert_eq!(params.get_bool("reset"), Some(false));
+        }
+    }
+
+    fn written_params() -> ShaderParams {
+        let meta: crate::isf::ISFMetadata = serde_json::from_str(
+            r#"{"INPUTS": [
+                {"NAME": "a", "TYPE": "float", "DEFAULT": 0.5, "MIN": 0.0, "MAX": 1.0},
+                {"NAME": "track", "TYPE": "long", "DEFAULT": 1, "MIN": 0, "MAX": 3,
+                 "SPECIALIZE": true},
+                {"NAME": "look", "TYPE": "long", "DEFAULT": 0, "VALUES": [0, 1],
+                 "PRESETS": [{"track": 1}, {"track": 0}]}
+            ], "PREPROCESSORS": [{"NAME": "f", "TYPE": "flight", "WRITES": ["track"]}]}"#,
+        )
+        .unwrap();
+        ShaderParams::from_metadata(&meta)
+    }
+
+    #[test]
+    fn a_written_input_takes_only_derived_writes() {
+        let mut params = written_params();
+        assert!(params.is_written("track") && !params.is_written("a"));
+        assert!(params.is_transient("track") && !params.is_transient("a"));
+        params.set("track", ParamValue::Long(0));
+        params.set("look", ParamValue::Long(1));
+        assert_eq!(
+            params.get_long("track"),
+            Some(1),
+            "user and preset writes do nothing"
+        );
+
+        params.write_derived("track", 2.4);
+        assert_eq!(params.get_long("track"), Some(2), "rounded to the long");
+        assert_eq!(params.specialization_constants().collect::<Vec<_>>(), [2.0]);
+        params.write_derived("track", 9.0);
+        assert_eq!(params.get_long("track"), Some(3), "clamped to MAX");
+        params.write_derived("a", 0.9);
+        assert_eq!(
+            params.get_float("a"),
+            Some(0.5),
+            "only written inputs take it"
+        );
+    }
+
+    #[test]
+    fn written_inputs_are_not_saved_restored_or_explored() {
+        let mut params = written_params();
+        params.write_derived("track", 0.0);
+        let saved = params.saved_values();
+        assert!(!saved.contains_key("track"));
+        assert!(saved.contains_key("a"));
+
+        let mut stale = saved.clone();
+        stale.insert("track".into(), ParamValue::Long(3));
+        params.restore(&stale);
+        assert_eq!(params.get_long("track"), Some(0));
+
+        for seed in 0..8 {
+            params.randomize(None, seed);
+            params.mutate(None, 1.0, seed);
+            assert_eq!(params.get_long("track"), Some(0));
+        }
     }
 
     #[test]
@@ -1326,6 +1832,7 @@ mod tests {
                 identity: None,
                 group: None,
                 specialize: false,
+                presets: None,
             },
         ]);
         params.randomize(None, 5);

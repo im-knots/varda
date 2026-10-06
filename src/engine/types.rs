@@ -496,6 +496,8 @@ pub struct ParamSnapshot {
     pub group: Option<String>,
     /// Selectable values for a `long` input, paired with their labels.
     pub choices: Option<Vec<ParamChoice>>,
+    /// An `event` input: setting it true fires it for one rendered frame.
+    pub event: bool,
 }
 
 /// One option of a `long` (enum) parameter.

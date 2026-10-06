@@ -332,8 +332,8 @@ pub(crate) trait HostInlinePreprocessor: Send + 'static {
         Ok(())
     }
 
-    /// Something to tell the performer once, for example that a search found
-    /// nothing. Taking it clears it, so one event gives one toast.
+    /// Something to tell the performer once. Taking it clears it, so one
+    /// event gives one toast.
     fn take_message(&mut self) -> Option<String> {
         None
     }

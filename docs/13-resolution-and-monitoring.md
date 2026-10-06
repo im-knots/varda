@@ -14,7 +14,7 @@ This page covers render resolution and per-deck scaling, which you set from the 
 | Clock source | Top bar → BPM display | Auto priority + manual override |
 | Transport | Top bar → position readout | Play/stop, return to zero, source, timecode rate |
 | Tonemap curve and 3D LUT | Right panel → 🎨 Tonemap | Pick a curve; LUTs are read from `.varda/luts/` |
-| OSC port / feedback | `.varda/osc.json` or `--osc-port` | Config file (see [Control Surfaces](06-control-surfaces.md#osc)) |
+| OSC port / feedback | `.varda/osc.json` or `--osc-port` | Config file (see [Control Surfaces](07-control-surfaces.md#osc)) |
 | Shader library | `shaders/` directory | Filesystem convention, hot-reloaded |
 
 ## Render Resolution
@@ -53,7 +53,7 @@ All outputs follow the current render resolution.
 
 **Output windows** letterbox. The window keeps the size you or the OS gave it, so a 9:16 project on a 16:9 projector is centered with black bars. The projector calibration card still covers the full output, so alignment is correct. Surfaces you place on the stage have their own shape and are not letterboxed. A new output window opens at the master's aspect ratio. Once you resize it, that size is saved with the stage and used from then on.
 
-**The dome** does not follow the master resolution. A domemaster is always square, so it has its own size setting (1K/2K/4K) in the Stage Editor's dome toolbar. See [Projection Mapping](08-projection.md).
+**The dome** does not follow the master resolution. A domemaster is always square, so it has its own size setting (1K/2K/4K) in the Stage Editor's dome toolbar. See [Projection Mapping](11-projection.md).
 
 ### Outputs and frame rate
 
@@ -105,8 +105,8 @@ CPU percentage and RAM usage (used/total), both color-coded. They are sampled on
 
 The deck count across every channel, followed by an estimate of the GPU memory their color targets use at the current render resolution. Video decoders and camera buffers use additional memory that is not included. Use it to judge whether a scene is getting heavy, not as an exact total.
 
-This readout matters most in [Arrangement Mode](15-arrangement.md), where every deck in the show holds its targets for the whole show, whether or not a region covers it. A deck the arrangement has put to sleep stops decoding but keeps its memory, so the number does not change when a deck sleeps. Hover for the channel count and the target size.
+This readout matters most in [Arrangement Mode](05-arrangement.md), where every deck in the show holds its targets for the whole show, whether or not a region covers it. A deck the arrangement has put to sleep stops decoding but keeps its memory, so the number does not change when a deck sleeps. Hover for the channel count and the target size.
 
 ---
 
-[← Prev: Streaming, Recording & Network I/O](09-streaming-and-io.md) · [Home](README.md) · [Next: Shader Library →](11-shader-library.md)
+[← Prev: Streaming, Recording & Network I/O](12-streaming-and-io.md) · [Home](README.md) · [Next: Shader Authoring →](14-isf-authoring.md)

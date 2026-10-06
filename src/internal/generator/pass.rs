@@ -513,6 +513,7 @@ pub fn create_preprocessor_slots(
                 options: pp.options.clone(),
                 param_bindings: pp.param_bindings.clone(),
                 phase_bindings: pp.phase_bindings.clone(),
+                writes: pp.writes.clone(),
                 texture,
                 view,
                 format,
