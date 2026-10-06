@@ -747,7 +747,7 @@ void main() { fragColor = vec4(1.0); }
             value: ParamValue::Bool(true),
         });
         assert!(!matches!(fired, crate::engine::CommandResult::Err { .. }));
-        assert!(app.show.recorder.recording_params().is_empty());
+        assert_eq!(app.show.recorder.recording_params().len(), 0);
 
         let source_id = app.mixer.modulation_mut().add_source(
             crate::modulation::ModulationSource::StepSequencer {
@@ -809,7 +809,7 @@ void main() { fragColor = vec4(float(SC_TRACK)); }
             path: path.clone(),
             value: ParamValue::Bool(false),
         });
-        assert!(app.show.recorder.recording_params().is_empty());
+        assert_eq!(app.show.recorder.recording_params().len(), 0);
 
         let source_id = app.mixer.modulation_mut().add_source(
             crate::modulation::ModulationSource::StepSequencer {
@@ -862,7 +862,7 @@ void main() { fragColor = vec4(float(SC_TRACK)); }
             deck_uuid: solid,
             mode: BlendMode::Add,
         });
-        assert!(app.show.recorder.recording_params().is_empty());
+        assert_eq!(app.show.recorder.recording_params().len(), 0);
     }
 
     #[test]

@@ -744,7 +744,7 @@ mod tests {
     #[test]
     fn columns_are_optional_and_list_groups() {
         let none: ISFMetadata = serde_json::from_str(r#"{"INPUTS": []}"#).unwrap();
-        assert!(none.columns.is_empty());
+        assert_eq!(none.columns.len(), 0);
         let meta = with_columns(r#"[{"TITLE": "Light", "GROUPS": ["Lighting", "Palette"]}]"#);
         meta.validate().unwrap();
         assert_eq!(meta.columns[0].title, "Light");
@@ -944,7 +944,7 @@ mod tests {
         assert_eq!(meta.preprocessors[1].options, serde_json::Value::Null);
         assert!(meta.preprocessors[1].param_bindings.is_empty());
         assert!(meta.preprocessors[1].phase_bindings.is_empty());
-        assert!(meta.preprocessors[1].writes.is_empty());
+        assert_eq!(meta.preprocessors[1].writes.len(), 0);
     }
 
     #[test]

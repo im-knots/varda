@@ -342,8 +342,8 @@ mod tests {
     #[test]
     fn a_tiny_source_still_produces_a_level() {
         // An empty chain would silently skip the measurement.
-        assert!(!ContentLightMeter::level_sizes(1, 1).is_empty());
-        assert!(!ContentLightMeter::level_sizes(0, 0).is_empty());
+        assert_ne!(ContentLightMeter::level_sizes(1, 1).len(), 0);
+        assert_ne!(ContentLightMeter::level_sizes(0, 0).len(), 0);
     }
 
     #[test]

@@ -936,11 +936,11 @@ mod tests {
         assert!(config.scene_path.is_none());
         assert!(config.stage_path.is_none());
         assert!(config.osc_port.is_none());
-        assert!(config.osc_targets.is_empty());
+        assert_eq!(config.osc_targets.len(), 0);
         assert!(!config.osc_disabled);
         assert!(!config.ndi_disabled);
         assert!(!config.syphon_disabled);
-        assert!(config.shader_dirs.is_empty());
+        assert_eq!(config.shader_dirs.len(), 0);
     }
 
     #[test]

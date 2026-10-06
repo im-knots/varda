@@ -1897,7 +1897,7 @@ mod tests {
         ] {
             let offered = available(&caps(formats));
             assert!(offered.contains(&PresentationMode::Sdr8));
-            assert!(!offered.is_empty());
+            assert_ne!(offered.len(), 0);
         }
     }
 

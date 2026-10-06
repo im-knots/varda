@@ -485,6 +485,6 @@ mod tests {
     #[test]
     fn active_ids_on_empty_manager_returns_empty() {
         let mgr = CameraManager::new();
-        assert!(mgr.active_ids().is_empty());
+        assert_eq!(mgr.active_ids().len(), 0);
     }
 }

@@ -264,7 +264,7 @@ mod tests {
         let old = serde_json::json!({"crossfader": 0.0, "channels": []});
         let new = serde_json::json!({"crossfader": 0.75, "channels": []});
         let patch = json_patch::diff(&old, &new);
-        assert!(!patch.0.is_empty());
+        assert_ne!(patch.0.len(), 0);
         let patched = {
             let mut v = old.clone();
             json_patch::patch(&mut v, &patch).unwrap();
@@ -277,7 +277,7 @@ mod tests {
     fn test_json_patch_no_change_produces_empty_patch() {
         let state = serde_json::json!({"crossfader": 0.5, "channels": [{"name": "A"}]});
         let patch = json_patch::diff(&state, &state);
-        assert!(patch.0.is_empty());
+        assert_eq!(patch.0.len(), 0);
     }
 
     #[test]

@@ -267,7 +267,7 @@ mod tests {
 
         app.settle_deck_loads();
         assert!(has_deck(&app, &uuid));
-        assert!(app.build_engine_state().deck_loads.is_empty());
+        assert_eq!(app.build_engine_state().deck_loads.len(), 0);
     }
 
     #[test]
@@ -366,6 +366,6 @@ mod tests {
             app.add_deck(&ch, &crate::still::Image::config_for(missing))
                 .is_err()
         );
-        assert!(app.build_engine_state().deck_loads.is_empty());
+        assert_eq!(app.build_engine_state().deck_loads.len(), 0);
     }
 }

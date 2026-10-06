@@ -1379,6 +1379,6 @@ mod tests {
             app.input.timecode.preference(),
             crate::timecode::TimecodePreference::ForceMtc { device_id: id }
         );
-        assert!(warnings(&app).is_empty());
+        assert_eq!(warnings(&app).len(), 0);
     }
 }

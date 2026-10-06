@@ -1172,7 +1172,7 @@ mod tests {
     #[test]
     fn validate_stage_prefs_valid() {
         let prefs = StagePrefs::default();
-        assert!(prefs.validate().is_empty());
+        assert_eq!(prefs.validate().len(), 0);
     }
 
     #[test]

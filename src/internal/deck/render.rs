@@ -1268,7 +1268,7 @@ void main() {{ fragColor = vec4(1.0); }}
         };
         let mut deck = counter_deck(&gpu);
         render(&mut deck, &gpu);
-        assert!(deck.take_preprocessor_messages().is_empty());
+        assert_eq!(deck.take_preprocessor_messages().len(), 0);
         deck.generator_params.set_float("step", 0.0);
         render(&mut deck, &gpu);
         assert_eq!(

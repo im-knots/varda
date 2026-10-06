@@ -392,11 +392,11 @@ fn add_and_remove_hole_regenerates_contours() {
     s.add_hole(square_hole(0.2, 0.2, 0.4, 0.4));
     assert_eq!(s.holes.len(), 1);
     assert_eq!(s.hole_contours.len(), 1);
-    assert!(!s.hole_contours[0].is_empty());
+    assert_ne!(s.hole_contours[0].len(), 0);
     assert!(s.has_holes());
     assert!(s.remove_hole(0));
     assert!(!s.has_holes());
-    assert!(s.hole_contours.is_empty());
+    assert_eq!(s.hole_contours.len(), 0);
     assert!(!s.remove_hole(0));
 }
 
@@ -417,7 +417,7 @@ fn hole_uv_contours_normalizes_to_bounding_box() {
 #[test]
 fn hole_uv_contours_empty_without_holes() {
     let s = Surface::new_rect("R".into(), 0.0, 0.0, 1.0, 1.0, master_source());
-    assert!(s.hole_uv_contours().is_empty());
+    assert_eq!(s.hole_uv_contours().len(), 0);
 }
 
 #[test]

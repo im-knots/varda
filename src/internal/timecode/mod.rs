@@ -1217,7 +1217,7 @@ mod tests {
             |name| (name == "Tascam DA-6400").then_some(2),
         );
 
-        assert!(warnings.is_empty());
+        assert_eq!(warnings.len(), 0);
         assert_eq!(
             restored.ltc_input(),
             Some(LtcInput {

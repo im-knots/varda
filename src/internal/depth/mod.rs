@@ -446,7 +446,7 @@ mod tests {
     #[test]
     fn empty_manager_has_no_active_sensors() {
         let mgr = DepthSensorManager::new();
-        assert!(mgr.active_ids().is_empty());
+        assert_eq!(mgr.active_ids().len(), 0);
         assert!(!mgr.is_active(0));
         assert_eq!(mgr.ref_count(0), 0);
         assert!(mgr.depth_view(0).is_none());

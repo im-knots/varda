@@ -144,7 +144,7 @@ mod tests {
     #[test]
     fn a_block_is_one_cue_with_start_end_and_lines() {
         let parsed = parse("1\n00:00:01,500 --> 00:00:04,250\nHello world\nsecond line\n");
-        assert!(parsed.problems.is_empty());
+        assert_eq!(parsed.problems.len(), 0);
         let cue = &parsed.cues[0];
         assert_eq!(cue.start, Some(1.5));
         assert_eq!(cue.end, Some(4.25));
@@ -184,7 +184,7 @@ mod tests {
             "1\n00:00:01,000 --> 00:00:02,000\na\n\n\n  \n2\n00:00:03,000 --> 00:00:04,000\nb",
         );
         assert_eq!(parsed.cues.len(), 2);
-        assert!(parsed.problems.is_empty());
+        assert_eq!(parsed.problems.len(), 0);
     }
 
     #[test]
@@ -197,14 +197,14 @@ mod tests {
     fn coordinates_after_the_end_time_are_ignored() {
         let parsed = parse("1\n00:00:01,000 --> 00:00:02,000  X1:100 X2:600 Y1:10 Y2:50\na");
         assert_eq!(parsed.cues[0].end, Some(2.0));
-        assert!(parsed.problems.is_empty());
+        assert_eq!(parsed.problems.len(), 0);
     }
 
     #[test]
     fn a_missing_index_is_fine() {
         let parsed = parse("00:00:01,000 --> 00:00:02,000\na\n\n00:00:03,000 --> 00:00:04,000\nb");
         assert_eq!(starts(&parsed), [1.0, 3.0]);
-        assert!(parsed.problems.is_empty());
+        assert_eq!(parsed.problems.len(), 0);
     }
 
     #[test]
@@ -245,7 +245,7 @@ mod tests {
     #[test]
     fn out_of_range_or_backward_times_are_bad_timing() {
         let parsed = parse("00:00:61,000 --> 00:00:62,000\na\n\n00:00:05,000 --> 00:00:01,000\nb");
-        assert!(parsed.cues.is_empty());
+        assert_eq!(parsed.cues.len(), 0);
         assert_eq!(parsed.problems.len(), 2);
     }
 
@@ -291,7 +291,7 @@ mod tests {
         let parsed = parse(
             "\u{feff}1\r\n00:00:01,000 --> 00:00:02,000\r\na b\r\n\r\n2\r\n00:00:03,000 --> 00:00:04,000\r\nc\r\n",
         );
-        assert!(parsed.problems.is_empty());
+        assert_eq!(parsed.problems.len(), 0);
         assert_eq!(starts(&parsed), [1.0, 3.0]);
         assert_eq!(parsed.cues[0].lines, ["a b"]);
     }

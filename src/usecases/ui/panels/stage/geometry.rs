@@ -155,9 +155,9 @@ mod tests {
 
     #[test]
     fn triangulate_degenerate_is_empty() {
-        assert!(triangulate_polygon(&[]).is_empty());
-        assert!(triangulate_polygon(&[p(0.0, 0.0)]).is_empty());
-        assert!(triangulate_polygon(&[p(0.0, 0.0), p(1.0, 0.0)]).is_empty());
+        assert_eq!(triangulate_polygon(&[]).len(), 0);
+        assert_eq!(triangulate_polygon(&[p(0.0, 0.0)]).len(), 0);
+        assert_eq!(triangulate_polygon(&[p(0.0, 0.0), p(1.0, 0.0)]).len(), 0);
     }
 
     #[test]

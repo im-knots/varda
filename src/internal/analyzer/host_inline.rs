@@ -283,7 +283,7 @@ pub(crate) mod tests {
         let mut set = HostInlineSet::new();
         set.ensure(COUNTER, &registry(), &serde_json::Value::Null);
         step_once(&mut set, Some(1.0));
-        assert!(set.take_messages().is_empty());
+        assert_eq!(set.take_messages().len(), 0);
         step_once(&mut set, Some(0.0));
         assert_eq!(set.take_messages(), vec!["standing still".to_owned()]);
         assert!(set.take_messages().is_empty(), "taking clears it");

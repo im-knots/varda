@@ -1059,7 +1059,7 @@ mod tests {
                 param_path: "ch/aabbccdd/opacity".into(),
             }],
         };
-        assert!(config.validate().is_empty());
+        assert_eq!(config.validate().len(), 0);
     }
 
     #[test]

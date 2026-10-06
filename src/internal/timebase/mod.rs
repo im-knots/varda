@@ -371,7 +371,7 @@ mod tests {
     fn every_variant_is_offered_and_labelled() {
         assert_eq!(Timebase::ALL.len(), 3);
         for tb in Timebase::ALL {
-            assert!(!tb.label().is_empty());
+            assert_ne!(tb.label(), "");
         }
         let mut labels: Vec<&str> = Timebase::ALL.iter().map(|t| t.label()).collect();
         labels.sort_unstable();

@@ -1323,7 +1323,7 @@ mod tests {
             arrangement: None,
             transport: crate::scene::TransportConfig::default(),
         };
-        assert!(scene.validate().is_empty());
+        assert_eq!(scene.validate().len(), 0);
     }
 
     #[test]
@@ -1418,7 +1418,7 @@ mod tests {
             params: HashMap::new(),
         };
         let errors = fx.validate("fx[0]");
-        assert!(!errors.is_empty());
+        assert_ne!(errors.len(), 0);
     }
 
     #[test]

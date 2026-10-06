@@ -214,8 +214,8 @@ mod tests {
             .map(|w| w.text.as_str())
             .collect();
         assert_eq!(words, ["hello", "world"]);
-        assert!(parsed.cues[1].words.is_empty());
-        assert!(parsed.problems.is_empty());
+        assert_eq!(parsed.cues[1].words.len(), 0);
+        assert_eq!(parsed.problems.len(), 0);
     }
 
     #[test]

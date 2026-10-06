@@ -973,7 +973,7 @@ mod tests {
         assert!(!state.keymap.bindings.is_empty(), "the default bindings");
         assert_eq!(state.render.width, app.render.width);
         assert!(state.render.max_dimension >= state.render.width);
-        assert!(!state.system.gpu.name.is_empty());
+        assert_ne!(state.system.gpu.name, "");
         let _json = serde_json::to_value(&state).expect("the state serializes");
     }
 

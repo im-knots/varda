@@ -356,7 +356,7 @@ mod tests {
     fn the_header_may_carry_text_and_metadata() {
         let parsed = parse("WEBVTT - my captions\nKind: captions\n\n00:01.000 --> 00:02.000\na");
         assert_eq!(parsed.cues.len(), 1);
-        assert!(parsed.problems.is_empty());
+        assert_eq!(parsed.problems.len(), 0);
     }
 
     #[test]
@@ -379,7 +379,7 @@ mod tests {
                           REGION\nid:fred\n\nNOTE\n\n00:01.000 --> 00:02.000\na",
         );
         assert_eq!(parsed.cues.len(), 1);
-        assert!(parsed.problems.is_empty());
+        assert_eq!(parsed.problems.len(), 0);
     }
 
     #[test]
@@ -409,7 +409,7 @@ mod tests {
     #[test]
     fn a_block_without_timing_is_reported() {
         let parsed = vtt("just\ntext");
-        assert!(parsed.cues.is_empty());
+        assert_eq!(parsed.cues.len(), 0);
         assert_eq!(parsed.problems[0].line, 3);
         let parsed = vtt("lonely id");
         assert_eq!(parsed.problems[0].line, 3);
@@ -418,7 +418,7 @@ mod tests {
     #[test]
     fn a_cue_that_ends_before_it_starts_is_bad_timing() {
         let parsed = vtt("00:05.000 --> 00:02.000\na");
-        assert!(parsed.cues.is_empty());
+        assert_eq!(parsed.cues.len(), 0);
         assert_eq!(parsed.problems[0].message, "bad cue timing");
     }
 
@@ -505,10 +505,9 @@ mod tests {
             placement_of("color:red line:x size:150% position:abc junk"),
             None
         );
-        assert!(
-            vtt("00:01.000 --> 00:02.000 color:red\nhi")
-                .problems
-                .is_empty()
+        assert_eq!(
+            vtt("00:01.000 --> 00:02.000 color:red\nhi").problems.len(),
+            0
         );
     }
 
@@ -588,7 +587,7 @@ mod tests {
     fn only_a_voice_tag_that_opens_the_cue_counts() {
         let parsed = vtt("00:01.000 --> 00:02.000\nsaid <v Ann>hi");
         assert_eq!(parsed.cues[0].voice, None);
-        assert!(parsed.voices.is_empty());
+        assert_eq!(parsed.voices.len(), 0);
         let parsed = vtt("00:01.000 --> 00:02.000\n<v Ann>hi <v Ben>there");
         assert_eq!(parsed.voices, ["Ann"]);
     }
@@ -631,7 +630,7 @@ mod tests {
     #[test]
     fn crlf_endings_and_a_bom_are_accepted() {
         let parsed = parse("\u{feff}WEBVTT\r\n\r\n1\r\n00:01.000 --> 00:02.000\r\na b\r\n\r\n");
-        assert!(parsed.problems.is_empty());
+        assert_eq!(parsed.problems.len(), 0);
         assert_eq!(parsed.cues.len(), 1);
         assert_eq!(parsed.cues[0].lines, ["a b"]);
     }
@@ -639,7 +638,7 @@ mod tests {
     #[test]
     fn a_cue_with_no_text_has_no_lines() {
         let cue = one("00:01.000 --> 00:02.000");
-        assert!(cue.lines.is_empty());
-        assert!(cue.words.is_empty());
+        assert_eq!(cue.lines.len(), 0);
+        assert_eq!(cue.words.len(), 0);
     }
 }
