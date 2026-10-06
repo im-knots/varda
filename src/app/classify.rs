@@ -1044,17 +1044,25 @@ void main() { fragColor = vec4(float(SC_TRACK)); }
                 .with("mode", mode);
             let deck = app.add_deck(&channel, &config).expect("text deck");
             app.settle_deck_loads();
-            for _ in 0..30 {
+            // Motion follows the wall clock, so stop at the first frame that moved: a slow
+            // adapter would scroll a fixed frame count past the last line.
+            let mut probe = (0.0, 0);
+            for _ in 0..300 {
                 app.begin_frame();
                 app.render_frame();
+                let (ch, dk) = app.mixer.find_deck_by_uuid(&deck).expect("deck");
+                let text = crate::source::downcast_ref::<crate::text::TextDeck>(
+                    app.mixer.channels()[ch].decks[dk].deck.source(),
+                )
+                .expect("a text deck");
+                probe = text.probe(1920.0, 1080.0);
+                if probe.0 != 0.0 {
+                    break;
+                }
             }
-            let (ch, dk) = app.mixer.find_deck_by_uuid(&deck).expect("deck");
-            let text = crate::source::downcast_ref::<crate::text::TextDeck>(
-                app.mixer.channels()[ch].decks[dk].deck.source(),
-            )
-            .expect("a text deck");
-            let (position, quads) = text.probe(1920.0, 1080.0);
+            let (position, quads) = probe;
             assert!(position.is_finite(), "{mode}: {position}");
+            assert!(position > 0.0, "{mode} moves");
             assert!(quads > 0, "{mode} lays out something at {position}");
         }
     }

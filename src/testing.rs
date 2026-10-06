@@ -59,6 +59,26 @@ pub fn headless_gpu() -> Option<crate::renderer::context::GpuContext> {
     }
 }
 
+/// A headless GPU context on a hardware adapter, or `None` on a CPU rasterizer.
+///
+/// For tests too heavy for WARP or lavapipe, such as the raymarched fractal
+/// explorer: CI's runners have only those, and a frame there costs minutes.
+/// Shader translation and pipeline creation stay covered by the guards that
+/// build every shader.
+///
+/// # Panics
+///
+/// Panics if no context can be created while `VARDA_REQUIRE_GPU` is set.
+pub fn hardware_gpu() -> Option<crate::renderer::context::GpuContext> {
+    let gpu = headless_gpu()?;
+    let info = gpu.adapter.get_info();
+    if info.device_type == wgpu::DeviceType::Cpu {
+        eprintln!("{} is a CPU rasterizer, skipping", info.name);
+        return None;
+    }
+    Some(gpu)
+}
+
 /// Render one frame of `source` into a new `width` by `height` target of the
 /// compositing format and read it back as linear RGBA, row-major.
 ///

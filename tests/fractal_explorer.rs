@@ -5,12 +5,14 @@
 //! and compared point by point with the `f64` evaluator. A transcription
 //! mistake in any formula shows up as a large difference; `f32` against `f64`
 //! and the `f16` composite stay well under the tolerance.
+//!
+//! The GPU tests skip on a CPU rasterizer, where one frame takes minutes.
 
 mod common;
 
 use std::collections::HashMap;
 
-use common::headless_gpu;
+use common::hardware_gpu;
 use varda::{
     audio::AudioData,
     deck::Deck,
@@ -203,7 +205,7 @@ fn assert_parity(ctx: &GpuContext, label: &str, values: &[(&str, f64)]) {
 
 #[test]
 fn every_formula_matches_the_host_evaluator() {
-    let Some(ctx) = headless_gpu() else {
+    let Some(ctx) = hardware_gpu() else {
         return;
     };
     let cases: &[(&str, &[(&str, f64)])] = &[
@@ -672,7 +674,7 @@ const SCENE_SIZE: (u32, u32) = (320, 180);
 /// of being a flat field of sky or fog.
 #[test]
 fn acceptance_scenes_render_structure() {
-    let Some(ctx) = headless_gpu() else {
+    let Some(ctx) = hardware_gpu() else {
         return;
     };
     for scene in fractal_scenes() {
@@ -703,7 +705,7 @@ fn acceptance_scenes_render_structure() {
 #[test]
 #[ignore = "acceptance gate not met yet; see the doc comment"]
 fn the_hit_does_not_depend_on_where_the_march_starts() {
-    let Some(ctx) = headless_gpu() else {
+    let Some(ctx) = hardware_gpu() else {
         return;
     };
     let (width, height) = SCENE_SIZE;
@@ -925,7 +927,7 @@ fn shot(ctx: &GpuContext, size: (u32, u32), throttle: f64) -> Vec<[f32; 4]> {
 /// still filled edge to edge, with less fine detail than at the ceiling.
 #[test]
 fn dynamic_resolution_at_its_floor_fills_the_frame_with_less_detail() {
-    let Some(ctx) = headless_gpu() else {
+    let Some(ctx) = hardware_gpu() else {
         return;
     };
     let size = (256, 144);
@@ -966,7 +968,7 @@ fn dynamic_resolution_at_its_floor_fills_the_frame_with_less_detail() {
 /// image less as the average grows (about 1/N).
 #[test]
 fn a_still_camera_keeps_sharpening() {
-    let Some(ctx) = headless_gpu() else {
+    let Some(ctx) = hardware_gpu() else {
         return;
     };
     let size = (192, 108);
@@ -997,7 +999,7 @@ fn a_still_camera_keeps_sharpening() {
 /// pixel wide.
 #[test]
 fn a_held_shot_at_half_scale_approaches_native() {
-    let Some(ctx) = headless_gpu() else {
+    let Some(ctx) = hardware_gpu() else {
         return;
     };
     let size = (320, 180);
@@ -1021,7 +1023,7 @@ fn a_held_shot_at_half_scale_approaches_native() {
 /// in place.
 #[test]
 fn accumulation_helps_at_a_rounded_render_scale() {
-    let Some(ctx) = headless_gpu() else {
+    let Some(ctx) = hardware_gpu() else {
         return;
     };
     let size = (320, 180);
@@ -1041,7 +1043,7 @@ fn accumulation_helps_at_a_rounded_render_scale() {
 /// image away from the reference.
 #[test]
 fn sharpening_approaches_the_reference_detail() {
-    let Some(ctx) = headless_gpu() else {
+    let Some(ctx) = hardware_gpu() else {
         return;
     };
     let size = (320u32, 180u32);
@@ -1085,7 +1087,7 @@ fn sharpening_approaches_the_reference_detail() {
 /// flight, without passing the reference.
 #[test]
 fn the_upscaler_keeps_fine_detail() {
-    let Some(ctx) = headless_gpu() else {
+    let Some(ctx) = hardware_gpu() else {
         return;
     };
     let size = (320, 180);
@@ -1110,7 +1112,7 @@ fn the_upscaler_keeps_fine_detail() {
 /// whatever the default look.
 #[test]
 fn a_forward_flight_leaves_no_trails_in_the_sky() {
-    let Some(ctx) = headless_gpu() else {
+    let Some(ctx) = hardware_gpu() else {
         return;
     };
     let (w, h) = (640u32, 360u32);
@@ -1166,7 +1168,7 @@ fn a_forward_flight_leaves_no_trails_in_the_sky() {
 /// view. The palette and lighting are pinned plain.
 #[test]
 fn a_surface_texture_is_visible_inside() {
-    let Some(ctx) = headless_gpu() else {
+    let Some(ctx) = hardware_gpu() else {
         return;
     };
     let size = (320u32, 180u32);
@@ -1206,7 +1208,7 @@ fn a_surface_texture_is_visible_inside() {
 /// rather than point-sampled into moire.
 #[test]
 fn a_fine_palette_does_not_alias() {
-    let Some(ctx) = headless_gpu() else {
+    let Some(ctx) = hardware_gpu() else {
         return;
     };
     let size = (160u32, 90u32);
@@ -1256,7 +1258,7 @@ fn gnarled_crust() -> (
 /// under jitter, so most blocks reuse their shading.
 #[test]
 fn shading_reuse_survives_dense_geometry() {
-    let Some(ctx) = headless_gpu() else {
+    let Some(ctx) = hardware_gpu() else {
         return;
     };
     let size = (320u32, 176u32);
@@ -1311,7 +1313,7 @@ fn the_host_defaults_match_the_shader() {
 /// Picking a look sets the sliders, which then adjust from there.
 #[test]
 fn a_look_sets_the_sliders_and_they_adjust_from_there() {
-    let Some(ctx) = headless_gpu() else {
+    let Some(ctx) = hardware_gpu() else {
         return;
     };
     let size = (160u32, 90u32);
@@ -1350,7 +1352,7 @@ fn a_look_sets_the_sliders_and_they_adjust_from_there() {
 /// into black squares through shading.
 #[test]
 fn a_flat_distance_estimate_gives_a_finite_normal() {
-    let Some(ctx) = headless_gpu() else {
+    let Some(ctx) = hardware_gpu() else {
         return;
     };
     let state: serde_json::Value = serde_json::from_str(
