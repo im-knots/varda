@@ -1175,6 +1175,12 @@ impl Mixer {
 
     /// The graded program for `key`, or the linear program when that key needs
     /// no grading of its own.
+    /// Whether a graded program is prepared for `key`.
+    #[cfg(test)]
+    pub(crate) fn has_graded_program(&self, key: ProgramKey) -> bool {
+        self.program_cache.contains_key(&key)
+    }
+
     pub fn program_view(&self, key: ProgramKey) -> &wgpu::TextureView {
         self.program_cache
             .get(&key)

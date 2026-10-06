@@ -256,6 +256,10 @@ name = "uuid_resolution"
 harness = false
 
 [[bench]]
+name = "preview_encode"
+harness = false
+
+[[bench]]
 name = "analyzer_capture"
 harness = false
 

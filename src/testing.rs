@@ -788,6 +788,71 @@ impl AnalyzerCaptureBench {
     }
 }
 
+/// UI preview encoding for `count` 1080p deck previews.
+pub struct PreviewEncodeBench {
+    context: crate::renderer::context::GpuContext,
+    encoder: crate::usecases::ui::runner::preview::PreviewEncoder,
+    sources: Vec<(String, wgpu::TextureView)>,
+}
+
+impl PreviewEncodeBench {
+    /// `count` color-path deck textures, each with a preview target.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the preview pipeline cannot be built.
+    pub fn new(context: crate::renderer::context::GpuContext, count: usize) -> Self {
+        let mut encoder =
+            crate::usecases::ui::runner::preview::PreviewEncoder::new(&context.device)
+                .expect("the preview pipeline builds");
+        let sources = (0..count)
+            .map(|i| {
+                let texture = context.create_compositing_texture(1920, 1080);
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                let uuid = format!("{i:08x}");
+                let key =
+                    crate::usecases::ui::runner::preview::PreviewSlot::Deck(uuid.clone()).key();
+                encoder.ensure_target(&context, &key, 1920, 1080);
+                (uuid, view)
+            })
+            .collect();
+        Self {
+            context,
+            encoder,
+            sources,
+        }
+    }
+
+    /// One frame's preview encoding with the first `drawn` previews on screen,
+    /// drained.
+    pub fn frame(&mut self, drawn: usize) {
+        use crate::usecases::ui::runner::preview::{PreviewSlot, is_drawn};
+        let ids: std::collections::HashMap<PreviewSlot, egui::TextureId> = self
+            .sources
+            .iter()
+            .enumerate()
+            .map(|(i, (uuid, _))| {
+                (
+                    PreviewSlot::Deck(uuid.clone()),
+                    egui::TextureId::User(i as u64),
+                )
+            })
+            .collect();
+        let on_screen = (0..drawn as u64).map(egui::TextureId::User).collect();
+        let sources: Vec<_> = self
+            .sources
+            .iter()
+            .map(|(uuid, view)| (PreviewSlot::Deck(uuid.clone()), view, 1920, 1080))
+            .filter(|(slot, ..)| is_drawn(slot, |s| ids.get(s).copied(), &on_screen))
+            .collect();
+        self.encoder.encode_all(&self.context, &sources);
+        let _ = self
+            .context
+            .device
+            .poll(wgpu::PollType::wait_indefinitely());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
