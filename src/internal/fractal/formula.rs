@@ -458,7 +458,7 @@ fn gnarl_slope(from: f64, step: f64, alpha: f64, beta: f64) -> f64 {
 pub const MIN_RADIUS2: f64 = 1e-8;
 
 /// The golden ratio, for the icosahedral fold.
-const PHI: f64 = 1.618_033_988_749_895;
+const PHI: f64 = std::f64::consts::GOLDEN_RATIO;
 
 /// Run one iteration of `slot` on `orbit`, adding `seed` where the formula
 /// adds one.
