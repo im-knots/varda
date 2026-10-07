@@ -781,10 +781,8 @@ impl VardaApp {
                     .transition_shader_name
                     .clone_from(&shader_name);
                 match shader {
-                    Some(shader) => {
-                        let _ = slot.set_transition_shader(&self.render.context, shader);
-                    }
-                    None => slot.transition_effect = None,
+                    Some(shader) => slot.set_transition_shader(&self.render.context, shader),
+                    None => slot.clear_transition_shader(),
                 }
                 CommandResult::Ok
             }

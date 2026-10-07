@@ -1589,7 +1589,7 @@ pub(super) fn render_selected_deck_detail(
 
             // Effect chain: drag-and-drop reordering and library drops.
             {
-                for (eff_idx, (eff_uuid, eff_name, eff_enabled, eff_params)) in deck.effects.iter().enumerate() {
+                for (eff_idx, crate::usecases::ui::EffectInfo { uuid: eff_uuid, name: eff_name, enabled: eff_enabled, status: eff_status, params: eff_params }) in deck.effects.iter().enumerate() {
                     // Drop zone before this effect, for reordering.
                     render_effect_drop_zone(ui, &format!("deck_{}", deck.uuid), eff_idx);
 
@@ -1602,6 +1602,7 @@ pub(super) fn render_selected_deck_detail(
                         .corner_radius(4.0)
                         .fill(ui.visuals().faint_bg_color)
                         .show(ui, |ui| {
+                            super::effects::dim_while_building(ui, eff_status);
                             ui.set_min_width(180.0);
                             ui.set_max_width(250.0);
                             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
@@ -1616,6 +1617,7 @@ pub(super) fn render_selected_deck_detail(
                                         });
                                     }
                                     ui.label(egui::RichText::new(eff_name).strong());
+                                    super::effects::build_status_note(ui, eff_status);
                                 });
 
                                 if !eff_params.params.is_empty() {

@@ -809,7 +809,8 @@ pub(super) fn render_channel_column(
                             if fx_resp.clicked() {
                                 actions.session.select_channel = Some(ch_idx);
                             }
-                            for (_uuid, name, enabled, _) in &ch.effects {
+                            for crate::usecases::ui::EffectInfo { name, enabled, .. } in &ch.effects
+                            {
                                 ui.horizontal(|ui| {
                                     let label = if *enabled {
                                         egui::RichText::new(name).small()

@@ -1,10 +1,9 @@
 //! Crossfade, transition, and sequence types, and the mixer's transition controls.
 
 use super::Mixer;
-use crate::isf::{ISFShader, compile_glsl_to_spirv};
+use crate::isf::ISFShader;
 use crate::params::ShaderParams;
-use crate::renderer::{GpuContext, TransitionPipeline};
-use anyhow::{Context as _, Result};
+use crate::renderer::{GpuContext, PendingTransition, TransitionPipeline};
 
 /// Easing curve for crossfade transitions
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
@@ -255,33 +254,41 @@ impl Mixer {
             || self.beat_sync_crossfade.as_ref().is_some_and(|b| b.started)
     }
 
-    /// Set the active transition shader. Compiles the shader and creates the pipeline.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the shader's GLSL fails to compile to SPIR-V or if the
-    /// transition render pipeline cannot be created from the resulting module.
-    pub fn set_transition(&mut self, context: &GpuContext, shader: ISFShader) -> Result<()> {
-        let name = shader.name();
-        let spirv = compile_glsl_to_spirv(&shader.fragment_source, &name)
-            .context("Failed to compile transition shader")?;
+    /// Pick the transition shader. It builds off the render thread; the current transition stays
+    /// in use until [`Self::poll_transition_build`] finds the new one ready. A later pick replaces
+    /// one still building.
+    pub fn set_transition(&mut self, context: &GpuContext, shader: ISFShader) {
+        self.pending_transition = Some(PendingTransition::spawn(context, shader));
+    }
 
-        let target_format = context.compositing_format;
-        let pipeline = TransitionPipeline::new(&context.device, &spirv, target_format)
-            .context("Failed to create transition pipeline")?;
-
-        let inputs = shader.metadata.inputs.as_deref().unwrap_or(&[]);
-        let mut params = ShaderParams::from_inputs(inputs);
-        params.ensure_buffer(&context.device);
-
-        log::info!("Active transition set: {name}");
-        self.active_transition = Some(TransitionEffect {
-            shader,
-            pipeline,
-            params,
-            name,
-        });
-        Ok(())
+    /// Make a finished transition build the active transition.
+    pub(super) fn poll_transition_build(&mut self, context: &GpuContext) {
+        let Some(result) = self
+            .pending_transition
+            .as_ref()
+            .and_then(PendingTransition::poll)
+        else {
+            return;
+        };
+        let Some(pending) = self.pending_transition.take() else {
+            return;
+        };
+        let name = pending.shader.name();
+        match result {
+            Ok(pipeline) => {
+                let inputs = pending.shader.metadata.inputs.as_deref().unwrap_or(&[]);
+                let mut params = ShaderParams::from_inputs(inputs);
+                params.ensure_buffer(&context.device);
+                log::info!("Active transition set: {name}");
+                self.active_transition = Some(TransitionEffect {
+                    shader: pending.shader,
+                    pipeline,
+                    params,
+                    name,
+                });
+            }
+            Err(e) => log::warn!("Transition '{name}' failed to build: {e:#}"),
+        }
     }
 
     /// Clear the active transition (revert to opacity-based crossfade)
@@ -290,6 +297,7 @@ impl Mixer {
             log::info!("Transition cleared, reverting to opacity crossfade");
         }
         self.active_transition = None;
+        self.pending_transition = None;
     }
 
     /// Sync the transition's `progress` parameter with the crossfader value.

@@ -165,8 +165,16 @@ pub struct ModAssignmentUI {
     pub amount: f32,
 }
 
-/// Effect info for the UI: (uuid, name, enabled, params).
-pub type EffectInfo = (String, String, bool, ShaderParamsUI);
+/// One effect in a chain, for the UI.
+#[derive(Clone)]
+pub struct EffectInfo {
+    pub uuid: String,
+    pub name: String,
+    pub enabled: bool,
+    /// Building effects draw grayed out in the chain; failed ones show their error.
+    pub status: crate::engine::value::effect::EffectStatus,
+    pub params: ShaderParamsUI,
+}
 
 /// Auto-transition state snapshot for the UI.
 // Mirrors independent engine-side flags one-for-one; collapsing them would obscure the mapping.

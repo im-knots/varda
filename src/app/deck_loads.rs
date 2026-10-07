@@ -140,7 +140,7 @@ impl DeckLoader {
         loading.chain(failed).collect()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub(crate) fn in_flight(&self) -> usize {
         self.in_flight.len()
     }
@@ -210,7 +210,101 @@ impl VardaApp {
     }
 }
 
-#[cfg(test)]
+/// A deck's new source, building off the render thread.
+pub(crate) struct PendingSwap {
+    deck_uuid: String,
+    build: mpsc::Receiver<anyhow::Result<Box<dyn crate::source::DeckSourceInstance>>>,
+    /// A later swap of the same deck replaced this one; its result is released.
+    superseded: bool,
+}
+
+impl VardaApp {
+    /// Start building `loader`'s source for `deck_uuid`. The deck keeps its
+    /// current source until the new one attaches; an earlier pending swap of
+    /// the same deck is superseded.
+    pub(crate) fn spawn_source_swap(&mut self, deck_uuid: &str, loader: SourceLoader) {
+        self.supersede_source_swaps(deck_uuid);
+        let context = self.render.context.clone();
+        let (width, height) = (self.render.width, self.render.height);
+        let build = crate::renderer::builds::spawn(move || loader(&context, width, height));
+        self.sources.pending_swaps.push(PendingSwap {
+            deck_uuid: deck_uuid.to_string(),
+            build,
+            superseded: false,
+        });
+    }
+
+    /// Mark every pending swap of `deck_uuid` as replaced.
+    pub(crate) fn supersede_source_swaps(&mut self, deck_uuid: &str) {
+        for swap in &mut self.sources.pending_swaps {
+            if swap.deck_uuid == deck_uuid {
+                swap.superseded = true;
+            }
+        }
+    }
+
+    /// Whether `deck_uuid` has a swap still building.
+    pub(crate) fn source_swap_pending(&self, deck_uuid: &str) -> bool {
+        self.sources
+            .pending_swaps
+            .iter()
+            .any(|s| s.deck_uuid == deck_uuid && !s.superseded)
+    }
+
+    /// Swap in every source whose build finished, and release the ones nothing
+    /// wants any more.
+    pub(crate) fn attach_finished_source_swaps(&mut self) {
+        let mut finished = Vec::new();
+        self.sources
+            .pending_swaps
+            .retain(|swap| match swap.build.try_recv() {
+                Ok(result) => {
+                    finished.push((swap.deck_uuid.clone(), swap.superseded, result));
+                    false
+                }
+                Err(mpsc::TryRecvError::Empty) => true,
+                Err(mpsc::TryRecvError::Disconnected) => false,
+            });
+        for (deck_uuid, superseded, result) in finished {
+            match result {
+                Ok(instance) => self.attach_swapped_source(&deck_uuid, superseded, instance),
+                Err(e) if !superseded => self
+                    .session
+                    .notifications
+                    .error(format!("Failed to swap the deck's source: {e:#}")),
+                Err(_) => {}
+            }
+        }
+    }
+
+    fn attach_swapped_source(
+        &mut self,
+        deck_uuid: &str,
+        superseded: bool,
+        instance: Box<dyn crate::source::DeckSourceInstance>,
+    ) {
+        let labels = self.mixer.channel_labels();
+        let (width, height) = (self.render.width, self.render.height);
+        let live = (!superseded)
+            .then(|| self.mixer.find_deck_by_uuid(deck_uuid))
+            .flatten();
+        // Release the source swapped out, or the new one if nothing wants it: replaced or
+        // removed while it built.
+        let mut released = if let Some((ch, dk)) = live {
+            self.mixer.channels_mut()[ch].decks[dk]
+                .deck
+                .replace_source(instance)
+        } else {
+            instance
+        };
+        let (providers, mut env) = self
+            .sources
+            .env(&self.render.context, width, height, &labels);
+        providers.release(released.as_mut(), &mut env);
+    }
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
 impl VardaApp {
     /// Run frames until no deck load is in flight.
     pub(crate) fn settle_deck_loads(&mut self) {

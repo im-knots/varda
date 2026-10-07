@@ -725,11 +725,7 @@ pub fn restore_scene(
                         .iter()
                         .find(|s| s.name() == *shader_name)
                     {
-                        if let Err(e) = slot.set_transition_shader(context, (*shader).clone()) {
-                            log::warn!(
-                                "Failed to restore deck transition shader '{shader_name}': {e}"
-                            );
-                        }
+                        slot.set_transition_shader(context, (*shader).clone());
                     } else {
                         log::warn!("Deck transition shader '{shader_name}' not found in registry");
                     }
@@ -798,14 +794,7 @@ pub fn restore_scene(
             .iter()
             .find(|s| s.name() == *transition_name)
         {
-            match mixer.set_transition(context, (*shader).clone()) {
-                Ok(()) => {}
-                Err(e) => {
-                    let msg = format!("Failed to restore transition '{transition_name}': {e}");
-                    log::warn!("{msg}");
-                    warnings.push(msg);
-                }
-            }
+            mixer.set_transition(context, (*shader).clone());
         } else {
             warnings.push(format!(
                 "Transition '{transition_name}' not found in registry"
@@ -996,7 +985,8 @@ pub(crate) fn restore_deck(
 }
 
 /// Restore one effect from config. `target_format` is
-/// `context.compositing_format` for deck, channel and master effects alike.
+/// `context.compositing_format` for deck, channel and master effects alike. Its
+/// shader builds off the render thread; see [`Effect::pending`].
 pub(crate) fn restore_effect(
     config: &EffectConfig,
     context: &GpuContext,
@@ -1004,7 +994,7 @@ pub(crate) fn restore_effect(
 ) -> Result<Effect> {
     let shader = ISFShader::from_file(&config.path)
         .with_context(|| format!("Failed to load effect shader: {}", config.path))?;
-    let mut effect = Effect::new_with_format(context, shader, target_format)?;
+    let mut effect = Effect::pending(context, shader, target_format);
     effect.set_uuid(config.uuid.clone());
     effect.enabled = config.enabled;
     effect.params.restore(&config.params);

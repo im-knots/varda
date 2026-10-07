@@ -498,6 +498,7 @@ mod tests {
         };
         let mut types = (*data.sources).clone();
         types.push(crate::engine::value::provider::ProviderTypeSnapshot {
+            library_group: None,
             type_id: provider.id().into(),
             label: provider.label().into(),
             icon: provider.icon().into(),
@@ -583,6 +584,7 @@ mod tests {
         };
         let mut types = (*data.sources).clone();
         types.push(crate::engine::value::provider::ProviderTypeSnapshot {
+            library_group: None,
             type_id: provider.id().into(),
             label: provider.label().into(),
             icon: provider.icon().into(),

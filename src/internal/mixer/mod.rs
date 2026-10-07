@@ -233,6 +233,8 @@ pub struct Mixer {
 
     /// Active transition effect (replaces opacity-based crossfade when set)
     active_transition: Option<TransitionEffect>,
+    /// A picked transition still building; see [`Mixer::set_transition`].
+    pending_transition: Option<crate::renderer::PendingTransition>,
 
     /// Transition sequences (channel-to-channel automation). Multiple named sequences supported.
     transition_sequences: Vec<TransitionSequence>,
@@ -341,6 +343,7 @@ impl Mixer {
             look_lut: None,
             look_texture: None,
             active_transition: None,
+            pending_transition: None,
             transition_sequences: Vec::new(),
             sub_mix_cache: std::collections::HashMap::new(),
             tonemapped_channel_cache: std::collections::HashMap::new(),

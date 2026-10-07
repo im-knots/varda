@@ -388,13 +388,8 @@ impl VardaApp {
                             .iter()
                             .find(|s| s.name() == name)
                         {
-                            if let Err(e) = self
-                                .mixer
-                                .set_transition(&self.render.context, (*shader).clone())
-                            {
-                                warnings
-                                    .push(format!("Failed to restore transition '{name}': {e}"));
-                            }
+                            self.mixer
+                                .set_transition(&self.render.context, (*shader).clone());
                         } else {
                             warnings.push(format!("Transition '{name}' not found in registry"));
                         }
@@ -769,25 +764,21 @@ impl VardaApp {
             slot.auto_transition = Some(at);
 
             if let Some(shader_name) = &at_config.transition_shader {
-                let needs_compile = slot
-                    .transition_effect
-                    .as_ref()
-                    .is_none_or(|te| te.shader.name() != *shader_name);
+                let needs_compile = slot.chosen_transition_shader().as_ref() != Some(shader_name);
                 if needs_compile
                     && let Some(shader) = registry
                         .transitions()
                         .iter()
                         .find(|s| s.name() == *shader_name)
-                    && let Err(e) = slot.set_transition_shader(context, (*shader).clone())
                 {
-                    log::warn!("Failed to restore deck transition shader '{shader_name}': {e}");
+                    slot.set_transition_shader(context, (*shader).clone());
                 }
             } else {
-                slot.transition_effect = None;
+                slot.clear_transition_shader();
             }
         } else {
+            slot.clear_transition_shader();
             slot.auto_transition = None;
-            slot.transition_effect = None;
         }
     }
 

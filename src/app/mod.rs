@@ -256,6 +256,8 @@ pub(crate) struct DeckSources {
     pub analyzer_registry: crate::analyzer::AnalyzerRegistry,
     /// Decks being built off the render thread. See `deck_loads`.
     pub deck_loader: deck_loads::DeckLoader,
+    /// Source swaps being built off the render thread. See `deck_loads`.
+    pub pending_swaps: Vec<deck_loads::PendingSwap>,
     /// Every deck source type. See `sources.rs`.
     pub providers: crate::source::SourceRegistry,
     /// Device managers shared with the rest of the engine; outputs use the
@@ -319,6 +321,21 @@ pub struct VardaApp {
     shutdown_requested: bool,
 }
 
+/// Build every transition once in the background, so picking one later finds
+/// its SPIR-V cached and the driver's pipeline cache warm. Once per process.
+fn warm_transitions(gpu: &GpuContext, registry: &ShaderRegistry) {
+    static WARMED: std::sync::Once = std::sync::Once::new();
+    WARMED.call_once(|| {
+        for shader in registry.transitions() {
+            // Dropped at once: the build only fills the caches.
+            drop(crate::renderer::PendingTransition::spawn(
+                gpu,
+                shader.clone(),
+            ));
+        }
+    });
+}
+
 impl VardaApp {
     /// Create a `VardaApp` with a default two-channel mixer.
     ///
@@ -378,6 +395,7 @@ impl VardaApp {
         if let Err(e) = registry.start_watching() {
             log::warn!("Failed to start shader hot-reload: {e}");
         }
+        warm_transitions(&gpu, &registry);
 
         let mut osc_config = if workspace.has_osc() {
             OscConfig::load(workspace.osc_path()).unwrap_or_else(|e| {
@@ -503,6 +521,7 @@ impl VardaApp {
                 registry,
                 analyzer_registry: crate::deck::analyzer_registry(),
                 deck_loader: deck_loads::DeckLoader::new(),
+                pending_swaps: Vec::new(),
                 providers: sources::source_providers(),
                 services: sources::source_services(config),
                 detection_camera: None,
@@ -583,6 +602,7 @@ impl VardaApp {
     /// Process all queued cross-thread commands. Called once per frame.
     pub fn process_commands(&mut self) {
         self.attach_finished_deck_loads();
+        self.attach_finished_source_swaps();
         while let Ok((cmd, reply_tx)) = self.bus.command_rx.try_recv() {
             // Record undo state for bus commands (the GUI records its own). A
             // recording pass already has its entry. Kept only on success, so a
@@ -904,6 +924,25 @@ impl VardaApp {
                 stopped.join(", ")
             ));
         }
+    }
+
+    /// Record `snapshot` as the state an undo returns to.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub(crate) fn push_history(&mut self, snapshot: history::HistorySnapshot) {
+        self.session.history.push(snapshot);
+    }
+
+    /// Whether the effect `uuid` exists and is built.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub(crate) fn effect_is_ready(&self, uuid: &str) -> bool {
+        let channels = self.mixer.channels();
+        channels
+            .iter()
+            .flat_map(|c| c.decks.iter().flat_map(|d| d.deck.effects.iter()))
+            .chain(channels.iter().flat_map(|c| c.effects.iter()))
+            .chain(self.mixer.master_effects().iter())
+            .find(|e| e.uuid() == uuid)
+            .is_some_and(|e| e.status() == crate::engine::value::effect::EffectStatus::Ready)
     }
 
     /// Set the target FPS. 0 = uncapped.

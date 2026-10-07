@@ -2139,6 +2139,7 @@ mod tests {
     async fn gui_parity_state_routes_serve_their_subtrees() {
         let mut state = make_test_state();
         let mut hls = crate::engine::value::provider::ProviderTypeSnapshot {
+            library_group: None,
             type_id: "Hls".into(),
             label: "HLS".into(),
             icon: String::new(),

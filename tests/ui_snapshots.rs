@@ -180,6 +180,7 @@ fn snapshot_bottom_bar_video_playback() {
     // The video source type and a clip deck, as the engine would report them.
     let provider = varda::video::provider::VideoProvider;
     std::sync::Arc::make_mut(&mut data.sources).push(varda::source::ProviderTypeSnapshot {
+        library_group: None,
         type_id: provider.id().into(),
         label: provider.label().into(),
         icon: provider.icon().into(),

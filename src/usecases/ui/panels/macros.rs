@@ -760,7 +760,13 @@ fn collect_target_paths(data: &UIData) -> Vec<(String, String)> {
             format!("{} · opacity", ch.name),
             ParamAddress::channel_opacity(&ch.uuid).to_string(),
         ));
-        for (fx_uuid, fx_name, _enabled, params) in &ch.effects {
+        for crate::usecases::ui::EffectInfo {
+            uuid: fx_uuid,
+            name: fx_name,
+            params,
+            ..
+        } in &ch.effects
+        {
             for p in &params.params {
                 if matches!(p.value, ParamValue::Float(_)) {
                     out.push((
@@ -783,7 +789,13 @@ fn collect_target_paths(data: &UIData) -> Vec<(String, String)> {
                     ));
                 }
             }
-            for (fx_uuid, fx_name, _enabled, params) in &d.effects {
+            for crate::usecases::ui::EffectInfo {
+                uuid: fx_uuid,
+                name: fx_name,
+                params,
+                ..
+            } in &d.effects
+            {
                 for p in &params.params {
                     if matches!(p.value, ParamValue::Float(_)) {
                         out.push((
@@ -812,7 +824,13 @@ fn collect_target_paths(data: &UIData) -> Vec<(String, String)> {
         }
     }
 
-    for (fx_uuid, fx_name, _enabled, params) in &data.master_effect_info {
+    for crate::usecases::ui::EffectInfo {
+        uuid: fx_uuid,
+        name: fx_name,
+        params,
+        ..
+    } in &data.master_effect_info
+    {
         for p in &params.params {
             if matches!(p.value, ParamValue::Float(_)) {
                 out.push((

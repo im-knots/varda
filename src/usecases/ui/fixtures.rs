@@ -78,6 +78,7 @@ fn fixture_shader_type(generators: &[&str]) -> ProviderTypeSnapshot {
                 .collect(),
             ..LibrarySection::default()
         },
+        library_group: None,
     }
 }
 
@@ -143,11 +144,12 @@ impl UIData {
                     event: false,
                 }],
             },
-            effects: vec![(
-                "dfx00001".to_string(),
-                "test_effect".to_string(),
-                true,
-                ShaderParamsUI {
+            effects: vec![crate::usecases::ui::EffectInfo {
+                uuid: "dfx00001".to_string(),
+                name: "test_effect".to_string(),
+                enabled: true,
+                status: crate::engine::value::effect::EffectStatus::Ready,
+                params: ShaderParamsUI {
                     shader_name: "test_effect".to_string(),
                     columns: Vec::new(),
                     params: vec![ParamUIInfo {
@@ -161,7 +163,7 @@ impl UIData {
                         event: false,
                     }],
                 },
-            )],
+            }],
             auto_transition: None,
             render_fps: DeckRenderFps::Auto,
             effective_render_fps: 0.0,
@@ -202,16 +204,17 @@ impl UIData {
             opacity: 1.0,
             blend_mode: BlendMode::Normal,
             decks: vec![alpha_lower, alpha_upper],
-            effects: vec![(
-                "cfx00001".to_string(),
-                "ch_effect".to_string(),
-                true,
-                ShaderParamsUI {
+            effects: vec![crate::usecases::ui::EffectInfo {
+                uuid: "cfx00001".to_string(),
+                name: "ch_effect".to_string(),
+                enabled: true,
+                status: crate::engine::value::effect::EffectStatus::Ready,
+                params: ShaderParamsUI {
                     shader_name: "ch_effect".to_string(),
                     columns: Vec::new(),
                     params: vec![],
                 },
-            )],
+            }],
         };
 
         let beta_lower = DeckUIInfo {
@@ -284,16 +287,17 @@ impl UIData {
             ],
             shader_count: 7,
             channels: vec![channel_a, channel_b],
-            master_effect_info: vec![(
-                "mfx00001".to_string(),
-                "master_effect".to_string(),
-                true,
-                ShaderParamsUI {
+            master_effect_info: vec![crate::usecases::ui::EffectInfo {
+                uuid: "mfx00001".to_string(),
+                name: "master_effect".to_string(),
+                enabled: true,
+                status: crate::engine::value::effect::EffectStatus::Ready,
+                params: ShaderParamsUI {
                     shader_name: "master_effect".to_string(),
                     columns: Vec::new(),
                     params: vec![],
                 },
-            )],
+            }],
             modulation_sources: vec![ModSourceUIEntry {
                 uuid: "mod00001".to_string(),
                 source: ModSourceUI::LFO {

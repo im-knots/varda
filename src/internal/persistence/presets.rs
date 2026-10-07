@@ -67,7 +67,10 @@ impl PresetLibrary {
             .collect();
         self.deck_presets
             .retain(|p| !p.built_in || !user.contains(&p.name));
-        self.deck_presets.sort_by(|a, b| a.name.cmp(&b.name));
+        self.deck_presets
+            .sort_by_cached_key(|p| p.name.to_lowercase());
+        self.channel_presets
+            .sort_by_cached_key(|p| p.name.to_lowercase());
     }
 
     /// Save a deck preset to disk.
@@ -256,6 +259,26 @@ mod tests {
         assert_eq!(lib.deck_presets[0].name, "my_deck");
         assert_eq!(lib.deck_presets[0].config.name, "test_deck");
         assert_eq!(lib.deck_presets[0].config.opacity, 0.8);
+    }
+
+    /// Both preset lists are alphabetical, ignoring case.
+    #[test]
+    fn presets_are_listed_alphabetically() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path().to_path_buf());
+        for name in ["zed", "Alpha", "mid"] {
+            PresetLibrary::save_deck_preset(&ws, name, &sample_deck_config()).unwrap();
+            PresetLibrary::save_channel_preset(&ws, name, &sample_channel_config()).unwrap();
+        }
+        let lib = PresetLibrary::load(&ws);
+        let decks: Vec<&str> = lib.deck_presets.iter().map(|p| p.name.as_str()).collect();
+        let channels: Vec<&str> = lib
+            .channel_presets
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
+        assert_eq!(decks, ["Alpha", "mid", "zed"]);
+        assert_eq!(channels, ["Alpha", "mid", "zed"]);
     }
 
     #[test]

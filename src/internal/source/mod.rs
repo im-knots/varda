@@ -311,6 +311,12 @@ pub trait DeckSourceProvider: 'static {
         LibrarySection::default()
     }
 
+    /// The header the library shows this type under with its neighbors.
+    /// Types sharing a group are registered next to each other.
+    fn library_group(&self) -> Option<crate::engine::value::provider::LibraryGroup> {
+        None
+    }
+
     /// Run a library action: `rescan`, or one a [`LibraryNotice`] offered.
     ///
     /// # Errors

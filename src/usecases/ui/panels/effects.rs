@@ -6,6 +6,7 @@ use super::utils::{
     channel_color, render_effect_drag_ghost, render_effect_drag_handle, render_effect_drop_zone,
 };
 use crate::engine::EngineCommand;
+use crate::engine::value::effect::EffectStatus;
 use crate::modulation::DEFAULT_ASSIGNMENT_AMOUNT;
 use crate::params::ParamValue;
 
@@ -58,7 +59,7 @@ pub(super) fn render_master_effect_detail(
         .show(ui, |ui| {
             ui.horizontal_top(|ui| {
                 {
-                    for (eff_idx, (eff_uuid, eff_name, eff_enabled, eff_params)) in
+                    for (eff_idx, crate::usecases::ui::EffectInfo { uuid: eff_uuid, name: eff_name, enabled: eff_enabled, status: eff_status, params: eff_params }) in
                         data.master_effect_info.iter().enumerate()
                     {
                         let eff_uuid_master = eff_uuid.clone();
@@ -75,6 +76,7 @@ pub(super) fn render_master_effect_detail(
                             .corner_radius(4.0)
                             .fill(ui.visuals().faint_bg_color)
                             .show(ui, |ui| {
+                                dim_while_building(ui, eff_status);
                                 ui.set_min_width(180.0);
                                 ui.set_max_width(250.0);
                                 ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
@@ -102,6 +104,7 @@ pub(super) fn render_master_effect_detail(
                                                     );
                                                 }
                                                 ui.label(egui::RichText::new(eff_name).strong());
+                                                build_status_note(ui, eff_status);
                                             });
 
                                             if !eff_params.params.is_empty() {
@@ -340,7 +343,7 @@ pub(super) fn render_channel_effect_detail(
                 }
                 let ch_chain_key = format!("ch_{}", ch.uuid);
                 {
-                    for (eff_idx, (eff_uuid, eff_name, eff_enabled, eff_params)) in
+                    for (eff_idx, crate::usecases::ui::EffectInfo { uuid: eff_uuid, name: eff_name, enabled: eff_enabled, status: eff_status, params: eff_params }) in
                         ch.effects.iter().enumerate()
                     {
                         let eff_uuid_ch_assign = eff_uuid.clone();
@@ -357,6 +360,7 @@ pub(super) fn render_channel_effect_detail(
                             .corner_radius(4.0)
                             .fill(ui.visuals().faint_bg_color)
                             .show(ui, |ui| {
+                                dim_while_building(ui, eff_status);
                                 ui.set_min_width(180.0);
                                 ui.set_max_width(250.0);
                                 ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
@@ -388,6 +392,7 @@ pub(super) fn render_channel_effect_detail(
                                                         .strong()
                                                         .color(accent),
                                                 );
+                                                build_status_note(ui, eff_status);
                                             });
 
                                             if !eff_params.params.is_empty() {
@@ -540,4 +545,30 @@ pub(super) fn render_channel_effect_detail(
                 });
             });
         });
+}
+
+/// Dim an effect card's contents while its shader builds; the effect passes the
+/// picture through until it is ready.
+pub(crate) fn dim_while_building(ui: &mut egui::Ui, status: &EffectStatus) {
+    if *status == EffectStatus::Building {
+        ui.multiply_opacity(0.4);
+    }
+}
+
+/// A note beside an effect's name: building, or failed with its error on hover.
+pub(crate) fn build_status_note(ui: &mut egui::Ui, status: &EffectStatus) {
+    match status {
+        EffectStatus::Ready => {}
+        EffectStatus::Building => {
+            ui.label(egui::RichText::new("building…").small().weak());
+        }
+        EffectStatus::Failed { message } => {
+            ui.label(
+                egui::RichText::new("failed")
+                    .small()
+                    .color(ui.visuals().error_fg_color),
+            )
+            .on_hover_text(message);
+        }
+    }
 }

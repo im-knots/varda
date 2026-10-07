@@ -593,12 +593,13 @@ fn params_snapshot_to_ui(snap: &ShaderParamsSnapshot) -> ShaderParamsUI {
 }
 
 fn effect_snapshot_to_ui(snap: &EffectSnapshot) -> EffectInfo {
-    (
-        snap.uuid.clone(),
-        snap.name.clone(),
-        snap.enabled,
-        params_snapshot_to_ui(&snap.params),
-    )
+    EffectInfo {
+        uuid: snap.uuid.clone(),
+        name: snap.name.clone(),
+        enabled: snap.enabled,
+        status: snap.status.clone(),
+        params: params_snapshot_to_ui(&snap.params),
+    }
 }
 
 /// How long a LUT listing stays fresh. LUTs are copied into `.varda/luts/` by

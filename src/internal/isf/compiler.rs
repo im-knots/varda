@@ -1,80 +1,102 @@
 use anyhow::{Context, Result};
 use shaderc::{Compiler, ShaderKind};
 
-/// Compiles a GLSL fragment shader to SPIR-V.
+/// Compiled SPIR-V by shader kind and a hash of the GLSL, so a shader used
+/// twice compiles once.
+type SpirvCache = std::collections::HashMap<(u8, u64), Vec<u32>>;
+
+/// Entries kept before the cache starts over. Each is tens of kilobytes; hot
+/// reload adds one per edit.
+const SPIRV_CACHE_LIMIT: usize = 512;
+
+fn spirv_cache() -> &'static std::sync::Mutex<SpirvCache> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<SpirvCache>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+fn cache_key(kind: ShaderKind, glsl_source: &str) -> (u8, u64) {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    glsl_source.hash(&mut hasher);
+    let kind = match kind {
+        ShaderKind::Compute => 1,
+        _ => 0,
+    };
+    (kind, hasher.finish())
+}
+
+/// Whether the fragment shader `glsl_source` is in the cache.
+#[cfg(test)]
+pub(crate) fn fragment_is_cached(glsl_source: &str) -> bool {
+    is_cached(ShaderKind::Fragment, glsl_source)
+}
+
+/// Whether `glsl_source` of `kind` is in the cache.
+#[cfg(test)]
+fn is_cached(kind: ShaderKind, glsl_source: &str) -> bool {
+    spirv_cache()
+        .lock()
+        .is_ok_and(|cache| cache.contains_key(&cache_key(kind, glsl_source)))
+}
+
+/// Compile `glsl_source` as `kind`, or return the SPIR-V compiled for it before.
+fn compile(glsl_source: &str, shader_name: &str, kind: ShaderKind) -> Result<Vec<u32>> {
+    let key = cache_key(kind, glsl_source);
+    if let Some(spirv) = spirv_cache().lock().ok().and_then(|c| c.get(&key).cloned()) {
+        return Ok(spirv);
+    }
+
+    let compiler = Compiler::new().context("Failed to create shaderc compiler")?;
+    let mut options = shaderc::CompileOptions::new().context("Failed to create compile options")?;
+    options.set_source_language(shaderc::SourceLanguage::GLSL);
+    options.set_target_env(
+        shaderc::TargetEnv::Vulkan,
+        shaderc::EnvVersion::Vulkan1_2 as u32,
+    );
+    let what = if kind == ShaderKind::Compute {
+        "compute shader"
+    } else {
+        "shader"
+    };
+    let binary_result = compiler
+        .compile_into_spirv(glsl_source, kind, shader_name, "main", Some(&options))
+        .with_context(|| format!("Failed to compile {what} '{shader_name}'"))?;
+    if binary_result.get_num_warnings() > 0 {
+        log::warn!(
+            "{what} '{}' compiled with warnings:\n{}",
+            shader_name,
+            binary_result.get_warning_messages()
+        );
+    }
+
+    let spirv = binary_result.as_binary().to_vec();
+    if let Ok(mut cache) = spirv_cache().lock() {
+        if cache.len() >= SPIRV_CACHE_LIMIT {
+            cache.clear();
+        }
+        cache.insert(key, spirv.clone());
+    }
+    Ok(spirv)
+}
+
+/// Compiles a GLSL fragment shader to SPIR-V, once per distinct source.
 ///
 /// # Errors
 ///
 /// Returns an error if shaderc cannot be set up or `glsl_source` fails to
 /// compile (the diagnostic is attached as context).
 pub fn compile_glsl_to_spirv(glsl_source: &str, shader_name: &str) -> Result<Vec<u32>> {
-    let compiler = Compiler::new().context("Failed to create shaderc compiler")?;
-
-    let mut options = shaderc::CompileOptions::new().context("Failed to create compile options")?;
-
-    options.set_source_language(shaderc::SourceLanguage::GLSL);
-    options.set_target_env(
-        shaderc::TargetEnv::Vulkan,
-        shaderc::EnvVersion::Vulkan1_2 as u32,
-    );
-
-    let binary_result = compiler
-        .compile_into_spirv(
-            glsl_source,
-            ShaderKind::Fragment,
-            shader_name,
-            "main",
-            Some(&options),
-        )
-        .with_context(|| format!("Failed to compile shader '{shader_name}'"))?;
-
-    if binary_result.get_num_warnings() > 0 {
-        log::warn!(
-            "Shader '{}' compiled with warnings:\n{}",
-            shader_name,
-            binary_result.get_warning_messages()
-        );
-    }
-
-    Ok(binary_result.as_binary().to_vec())
+    compile(glsl_source, shader_name, ShaderKind::Fragment)
 }
 
-/// Compiles a GLSL compute shader to SPIR-V.
+/// Compiles a GLSL compute shader to SPIR-V, once per distinct source.
 ///
 /// # Errors
 ///
 /// Returns an error if shaderc cannot be set up or `glsl_source` fails to
 /// compile (the diagnostic is attached as context).
 pub fn compile_glsl_compute_to_spirv(glsl_source: &str, shader_name: &str) -> Result<Vec<u32>> {
-    let compiler = Compiler::new().context("Failed to create shaderc compiler")?;
-
-    let mut options = shaderc::CompileOptions::new().context("Failed to create compile options")?;
-
-    options.set_source_language(shaderc::SourceLanguage::GLSL);
-    options.set_target_env(
-        shaderc::TargetEnv::Vulkan,
-        shaderc::EnvVersion::Vulkan1_2 as u32,
-    );
-
-    let binary_result = compiler
-        .compile_into_spirv(
-            glsl_source,
-            ShaderKind::Compute,
-            shader_name,
-            "main",
-            Some(&options),
-        )
-        .with_context(|| format!("Failed to compile compute shader '{shader_name}'"))?;
-
-    if binary_result.get_num_warnings() > 0 {
-        log::warn!(
-            "Compute shader '{}' compiled with warnings:\n{}",
-            shader_name,
-            binary_result.get_warning_messages()
-        );
-    }
-
-    Ok(binary_result.as_binary().to_vec())
+    compile(glsl_source, shader_name, ShaderKind::Compute)
 }
 
 /// Injects the ISF automatic uniforms into GLSL source:
@@ -172,6 +194,27 @@ pub fn generate_user_params_block(inputs: &[super::ISFInput]) -> Option<String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A source compiled once is served from the cache after; another source
+    /// is not.
+    #[test]
+    fn a_compiled_source_is_cached_and_others_are_not() {
+        let glsl = "#version 450
+layout(location = 0) out vec4 fragColor;
+void main() { fragColor = vec4(0.125, 0.25, 0.5, 1.0); }
+";
+        let other = glsl.replace("0.125", "0.375");
+        let first = compile_glsl_to_spirv(glsl, "cached").expect("compiles");
+        assert!(is_cached(ShaderKind::Fragment, glsl));
+        assert!(!is_cached(ShaderKind::Fragment, &other));
+        assert!(!is_cached(ShaderKind::Compute, glsl));
+        let started = std::time::Instant::now();
+        assert_eq!(
+            compile_glsl_to_spirv(glsl, "cached").expect("compiles"),
+            first
+        );
+        assert!(started.elapsed() < std::time::Duration::from_millis(5));
+    }
 
     #[test]
     fn test_compile_simple_shader() {

@@ -927,6 +927,97 @@ impl VideoDecodeBench {
     }
 }
 
+/// Render-thread cost of commands that build shaders, on a headless engine
+/// with one deck.
+pub struct CommandHitchBench {
+    app: crate::app::VardaApp,
+    deck: String,
+}
+
+impl CommandHitchBench {
+    /// # Panics
+    ///
+    /// Panics if the engine or its deck cannot be built.
+    pub fn new() -> Option<Self> {
+        let mut app = headless_app()?;
+        let channel = app.mixer_ref().channels()[0].uuid().to_string();
+        let deck = app
+            .add_deck(
+                &channel,
+                &crate::solid_color::SolidColor::config_for([1.0, 0.5, 0.0, 1.0]),
+            )
+            .expect("a deck");
+        app.settle_deck_loads();
+        Some(Self { app, deck })
+    }
+
+    fn frame(&mut self) {
+        self.app.begin_frame();
+        self.app.render_frame();
+    }
+
+    /// Whether the effect is built and drawing.
+    fn effect_ready(&self, uuid: &str) -> bool {
+        self.app.effect_is_ready(uuid)
+    }
+
+    /// Render frames until `uuid` is ready.
+    fn until_ready(&mut self, uuid: &str) {
+        while !self.effect_ready(uuid) {
+            self.frame();
+        }
+    }
+
+    fn add(&mut self, shader: &str) -> String {
+        match self
+            .app
+            .execute_command(crate::engine::EngineCommand::AddEffect {
+                target: crate::engine::EffectTarget::Deck(self.deck.clone()),
+                shader_name: shader.to_string(),
+            }) {
+            crate::engine::CommandResult::OkWithId { uuid } => uuid,
+            other => panic!("effect not added: {other:?}"),
+        }
+    }
+
+    fn remove(&mut self, uuid: String) {
+        let _ = self
+            .app
+            .execute_command(crate::engine::EngineCommand::RemoveEffect { effect_uuid: uuid });
+    }
+
+    /// Render-thread time of one `AddEffect`, and the time until the effect
+    /// draws. The effect is removed afterwards, untimed.
+    pub fn add_effect(&mut self, shader: &str) -> (std::time::Duration, std::time::Duration) {
+        let start = std::time::Instant::now();
+        let uuid = self.add(shader);
+        let command = start.elapsed();
+        self.until_ready(&uuid);
+        let ready = start.elapsed();
+        self.remove(uuid);
+        self.frame();
+        (command, ready)
+    }
+
+    /// Render-thread time of undoing an effect's removal.
+    pub fn undo_effect_removal(&mut self, shader: &str) -> std::time::Duration {
+        let uuid = self.add(shader);
+        self.until_ready(&uuid);
+        let before = self.app.history_snapshot();
+        self.app.push_history(before);
+        self.remove(uuid.clone());
+        self.frame();
+        let start = std::time::Instant::now();
+        let current = self.app.history_snapshot();
+        self.app.history_undo(current);
+        let undo = start.elapsed();
+        self.until_ready(&uuid);
+        self.remove(uuid);
+        self.frame();
+        undo
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

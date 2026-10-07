@@ -57,7 +57,6 @@ pub(crate) fn source_providers() -> SourceRegistry {
         .register(crate::camera::provider::CameraProvider::new())
         .register(crate::depth::provider::DepthSensorProvider)
         .register(crate::screen_capture::provider::ScreenCaptureProvider::new())
-        .register(crate::tap::TapProvider)
         .register(crate::ndi::provider::NdiProvider)
         .register(crate::stream::provider::StreamProvider::new(
             crate::stream::provider::StreamKind::Srt,
@@ -72,11 +71,12 @@ pub(crate) fn source_providers() -> SourceRegistry {
             crate::stream::provider::StreamKind::Rtmp,
         ))
         .register(crate::html::provider::HtmlProvider::new())
-        .register(crate::spout::provider())
-        .register(crate::solid_color::SolidColorProvider)
-        .register(crate::text::TextProvider);
+        .register(crate::spout::provider());
     #[cfg(target_os = "macos")]
     r.register(crate::syphon::provider());
+    r.register(crate::tap::TapProvider)
+        .register(crate::solid_color::SolidColorProvider)
+        .register(crate::text::TextProvider);
     r
 }
 
@@ -208,6 +208,27 @@ impl DeckSources {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The library order: generators first, then media and devices, the
+    /// stream types together, the texture-sharing types together, and the
+    /// utility types last.
+    #[test]
+    fn the_library_lists_types_in_its_order() {
+        let ids: Vec<&str> = source_providers()
+            .iter()
+            .map(crate::source::DeckSourceProvider::id)
+            .collect();
+        let at = |id: &str| ids.iter().position(|i| *i == id).expect(id);
+        assert_eq!(ids[0], "Shader");
+        let streams: Vec<usize> = ["Ndi", "Srt", "Hls", "Dash", "Rtmp"]
+            .iter()
+            .map(|id| at(id))
+            .collect();
+        assert!(streams.windows(2).all(|w| w[1] == w[0] + 1), "{ids:?}");
+        #[cfg(target_os = "macos")]
+        assert_eq!(at("Syphon"), at("Spout") + 1, "{ids:?}");
+        assert_eq!(&ids[ids.len() - 3..], ["Tap", "SolidColor", "Text"]);
+    }
 
     #[test]
     fn every_provider_registers_once_under_its_saved_tag() {

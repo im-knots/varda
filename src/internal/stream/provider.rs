@@ -158,6 +158,10 @@ impl DeckSourceProvider for StreamProvider {
         &PARAMS
     }
 
+    fn library_group(&self) -> Option<crate::engine::value::provider::LibraryGroup> {
+        Some(crate::engine::value::provider::LibraryGroup::streams())
+    }
+
     fn library(&self, query: &SourceQuery) -> LibrarySection {
         let streams = query.services.get::<StreamManager>();
         let entries = self

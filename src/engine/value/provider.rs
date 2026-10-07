@@ -552,6 +552,26 @@ pub struct ProviderTypeSnapshot {
     pub listed: bool,
     pub params: Vec<ControlSpec>,
     pub library: LibrarySection,
+    /// The library header this type sits under with its neighbors, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub library_group: Option<LibraryGroup>,
+}
+
+/// Source types the library shows together under one header.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+pub struct LibraryGroup {
+    pub label: String,
+    pub icon: String,
+}
+
+impl LibraryGroup {
+    /// Network streams: NDI, SRT, HLS, DASH and RTMP.
+    pub fn streams() -> Self {
+        Self {
+            label: "Stream Sources".into(),
+            icon: "📡".into(),
+        }
+    }
 }
 
 #[cfg(test)]

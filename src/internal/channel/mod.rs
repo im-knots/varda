@@ -8,7 +8,7 @@ use crate::params::ShaderParams;
 use crate::renderer::{
     BlitPipeline, CompositeBlitPipeline, GpuContext, ISFUniforms, TransitionPipeline,
 };
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 
 /// Blend modes for compositing decks and channels
 #[derive(
@@ -311,6 +311,8 @@ pub struct DeckSlot {
     pub auto_transition: Option<DeckAutoTransition>,
     /// Compiled transition effect for this deck's auto-transition.
     pub transition_effect: Option<DeckTransitionEffect>,
+    /// A picked transition shader still building.
+    pending_transition: Option<crate::renderer::PendingTransition>,
     /// Per-deck render FPS setting (Auto = adaptive skipping)
     pub render_fps: DeckRenderFps,
     /// Smoothed render cost in microseconds (EMA)
@@ -339,6 +341,7 @@ impl DeckSlot {
             z_index: 0,
             auto_transition: None,
             transition_effect: None,
+            pending_transition: None,
             render_fps: DeckRenderFps::default(),
             render_cost_us: 0.0,
             skip_counter: 0,
@@ -348,42 +351,59 @@ impl DeckSlot {
         }
     }
 
-    /// Set the transition shader for this deck's auto-transition.
-    /// Compiles the shader and stores the pipeline.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the shader's GLSL fails to compile to SPIR-V or if the
-    /// transition render pipeline cannot be created from the resulting module.
-    pub fn set_transition_shader(&mut self, context: &GpuContext, shader: ISFShader) -> Result<()> {
-        let spirv = crate::isf::compile_glsl_to_spirv(&shader.fragment_source, &shader.name())
-            .context("Failed to compile transition shader to SPIR-V")?;
-        let pipeline =
-            TransitionPipeline::new(&context.device, &spirv, context.compositing_format)?;
-        let name = shader.name();
-        let inputs = shader.metadata.inputs.as_deref().unwrap_or(&[]);
-        let mut params = ShaderParams::from_inputs(inputs);
-        params.ensure_buffer(&context.device);
+    /// Pick the transition shader for this deck's auto-transition. The choice is recorded at
+    /// once; the shader builds off the render thread and the current one stays in use until
+    /// [`Self::poll_transition_build`] finds it ready.
+    pub fn set_transition_shader(&mut self, context: &GpuContext, shader: ISFShader) {
+        let at = self
+            .auto_transition
+            .get_or_insert_with(DeckAutoTransition::new);
+        at.transition_shader_name = Some(shader.name());
+        self.pending_transition = Some(crate::renderer::PendingTransition::spawn(context, shader));
+    }
 
-        // Ensure auto_transition config exists
-        if self.auto_transition.is_none() {
-            self.auto_transition = Some(DeckAutoTransition::new());
-        }
-        if let Some(at) = &mut self.auto_transition {
-            at.transition_shader_name = Some(name);
-        }
+    /// The transition shader picked last: one still building, else the one in use.
+    pub fn chosen_transition_shader(&self) -> Option<String> {
+        self.pending_transition
+            .as_ref()
+            .map(|p| p.shader.name())
+            .or_else(|| self.transition_effect.as_ref().map(|t| t.shader.name()))
+    }
 
-        self.transition_effect = Some(DeckTransitionEffect {
-            shader,
-            pipeline,
-            params,
-        });
-        Ok(())
+    /// Use a finished transition build.
+    pub fn poll_transition_build(&mut self, context: &GpuContext) {
+        let Some(result) = self
+            .pending_transition
+            .as_ref()
+            .and_then(crate::renderer::PendingTransition::poll)
+        else {
+            return;
+        };
+        let Some(pending) = self.pending_transition.take() else {
+            return;
+        };
+        match result {
+            Ok(pipeline) => {
+                let inputs = pending.shader.metadata.inputs.as_deref().unwrap_or(&[]);
+                let mut params = ShaderParams::from_inputs(inputs);
+                params.ensure_buffer(&context.device);
+                self.transition_effect = Some(DeckTransitionEffect {
+                    shader: pending.shader,
+                    pipeline,
+                    params,
+                });
+            }
+            Err(e) => log::warn!(
+                "Transition '{}' failed to build: {e:#}",
+                pending.shader.name()
+            ),
+        }
     }
 
     /// Clear the transition shader (revert to opacity fade).
     pub fn clear_transition_shader(&mut self) {
         self.transition_effect = None;
+        self.pending_transition = None;
         if let Some(at) = &mut self.auto_transition {
             at.transition_shader_name = None;
         }
@@ -981,7 +1001,7 @@ impl Channel {
             let mut fx_cmd_buffers: Vec<wgpu::CommandBuffer> = Vec::new();
 
             for (eff_idx, effect) in self.effects.iter_mut().enumerate() {
-                if !effect.enabled {
+                if !effect.is_active() {
                     continue;
                 }
 

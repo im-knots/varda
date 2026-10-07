@@ -1,5 +1,6 @@
 pub mod acescct;
 pub mod blit;
+pub mod builds;
 pub mod compute_pipeline;
 pub mod config;
 pub mod context;

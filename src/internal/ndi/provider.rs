@@ -44,6 +44,10 @@ impl DeckSourceProvider for NdiProvider {
         &PARAMS
     }
 
+    fn library_group(&self) -> Option<crate::engine::value::provider::LibraryGroup> {
+        Some(crate::engine::value::provider::LibraryGroup::streams())
+    }
+
     fn library(&self, query: &SourceQuery) -> LibrarySection {
         let Some(ndi) = manager(query.services) else {
             return LibrarySection::default();
