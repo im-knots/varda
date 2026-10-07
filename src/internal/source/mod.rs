@@ -256,6 +256,18 @@ impl<'a> SourceControl<'a> {
     }
 }
 
+/// Most threads one source's decoder uses, so several decks do not each ask
+/// for every core.
+const MAX_DECODE_THREADS: usize = 8;
+
+/// Threads a deck source's decoder runs on: one per core, up to
+/// [`MAX_DECODE_THREADS`].
+pub(crate) fn decode_threads() -> usize {
+    std::thread::available_parallelism()
+        .map_or(1, std::num::NonZero::get)
+        .min(MAX_DECODE_THREADS)
+}
+
 /// A normalized base value with resolved modulation applied: an absolute
 /// source replaces the base, additive sources add to it.
 pub fn apply_modulation(base: f32, resolved: &ResolvedModulation) -> f32 {

@@ -418,13 +418,20 @@ fn stream_receive_thread(
                         None
                     })?
                     .parameters();
-                let codec_ctx = ffmpeg_next::codec::Context::from_parameters(codec_params)
+                let mut codec_ctx = ffmpeg_next::codec::Context::from_parameters(codec_params)
                     .map_err(|e| {
                         log::warn!(
                             "Stream '{url_display}': failed to create codec context: {e}, retrying in {backoff_ms}ms..."
                         );
                     })
                     .ok()?;
+                // Slice threading only: frame threading holds a frame per
+                // thread before output, latency a live input should not pay.
+                let mut threading = ffmpeg_next::codec::threading::Config::kind(
+                    ffmpeg_next::codec::threading::Type::Slice,
+                );
+                threading.count = crate::source::decode_threads();
+                codec_ctx.set_threading(threading);
                 let decoder = codec_ctx
                     .decoder()
                     .video()

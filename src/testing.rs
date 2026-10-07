@@ -853,6 +853,80 @@ impl PreviewEncodeBench {
     }
 }
 
+/// A generated H.264 clip with B-frames, cached in the temp directory, or
+/// `None` without the ffmpeg CLI. The picture changes every frame, with grain
+/// so the bitrate is realistic.
+pub fn generated_clip(width: u32, height: u32, seconds: u32, bitrate: &str) -> Option<PathBuf> {
+    let dir = std::env::temp_dir().join("varda-test-clips");
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join(format!("clip_{width}x{height}_{seconds}s_{bitrate}.mp4"));
+    if path.exists() {
+        return Some(path);
+    }
+    // Tests may generate the same clip at once, and encodes differ run to run.
+    // Each writes its own file and the first to link it publishes it; a
+    // published clip never changes under a test that has it open.
+    let partial = dir.join(format!(
+        "{}.{}.{:?}.partial.mp4",
+        path.file_stem()?.to_string_lossy(),
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let status = std::process::Command::new("ffmpeg")
+        .args(["-v", "error", "-y", "-f", "lavfi", "-i"])
+        .arg(format!(
+            "testsrc2=size={width}x{height}:rate=30,noise=alls=6:allf=t"
+        ))
+        .args([
+            "-t",
+            &seconds.to_string(),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-bf",
+            "3",
+        ])
+        .args(["-b:v", bitrate, "-maxrate", bitrate, "-bufsize", bitrate])
+        .args(["-pix_fmt", "yuv420p"])
+        .arg(&partial)
+        .status()
+        .ok()?;
+    if !status.success() {
+        return None;
+    }
+    let published = std::fs::hard_link(&partial, &path);
+    let _ = std::fs::remove_file(&partial);
+    (published.is_ok() || path.exists()).then_some(path)
+}
+
+/// The ffmpeg decode thread's CPU work per frame on one clip: decode the owed
+/// frame and convert it to RGBA. The thread then hands the frame to the GPU.
+pub struct VideoDecodeBench {
+    player: crate::video::VideoPlayer,
+}
+
+impl VideoDecodeBench {
+    /// # Panics
+    ///
+    /// Panics if the clip cannot be opened.
+    pub fn new(path: &std::path::Path) -> Self {
+        Self {
+            player: crate::video::VideoPlayer::new(path).expect("the clip opens"),
+        }
+    }
+
+    /// Decode and convert one frame, as the decode thread does each tick.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a decode error.
+    pub fn frame(&mut self) {
+        self.player.playback.owe_one_frame();
+        std::hint::black_box(self.player.next_frame().expect("decodes"));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
