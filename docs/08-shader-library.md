@@ -88,8 +88,12 @@ Varda sorts shaders by type automatically:
 | `color_correction.fs` | Brightness, contrast, saturation, hue shift grading |
 | `color_replace.fs` | Match a source color and replace with a target color |
 | `colorize.fs` | Maps luminance to a color palette |
+| `contour.fs` | Topographic lines that trace levels of brightness, flowing at a set speed |
 | `crop.fs` | Mask/crop with adjustable edges |
+| `curves.fs` | Master and per-channel tone curves, with highlight headroom kept above 1.0 |
 | `displace.fs` | Luminance-based displacement mapping |
+| `dither.fs` | Ordered and noise dithering with Mono, Two Color, Game Boy, CGA, PICO-8 and quantized source palettes. Also covers posterizing (Source Quantized, Spread 0) |
+| `droste.fs` | The frame contains itself, nested forever, with an endless zoom and an optional Escher spiral |
 | `duotone.fs` | Two-color toning based on luminance |
 | `edge_detect.fs` | Clean Sobel edge detection with color options |
 | `edge_glow.fs` | Edge detection with glow |
@@ -97,7 +101,7 @@ Varda sorts shaders by type automatically:
 | `feedback_trails.fs` | Moving regions leave ghostly color-shifted trails that linger and fade |
 | `film_grain.fs` | Analog film grain noise overlay |
 | `flip.fs` | Mirror/flip horizontally or vertically |
-| `freeze.fs` | Holds/freezes the current frame |
+| `freeze.fs` | Holds a frame, grabs a new one on demand, or re-grabs at a set rate for a stutter |
 | `glow_bloom.fs` | Soft glow around bright areas |
 | `goo.fs` | Goo / liquid distortion |
 | `gradient_map.fs` | Maps luminance to a 4-stop color gradient |
@@ -107,24 +111,31 @@ Varda sorts shaders by type automatically:
 | `hue_shift.fs` | Hue rotation / color cycling |
 | `invert.fs` | Color inversion with blend control |
 | `kaleidoscope.fs` | Kaleidoscope mirror effect |
+| `lens_streaks.fs` | Anamorphic streaks and ghost reflections from bright areas |
 | `levels.fs` | Input/output levels with gamma curve |
+| `light_rays.fs` | Volumetric light shafts streaming from bright areas away from a light position |
 | `luma_key.fs` | Keys out pixels based on brightness |
+| `matte_tools.fs` | Erode, dilate, open, close, median and feather the alpha of a key. Place it after a key effect |
 | `melt_drip.fs` | Makes the image look like it's melting and dripping down |
 | `mirror.fs` | Mirror / flip with various modes |
 | `mirror_kaleidoscope.fs` | Mirror and kaleidoscope with multiple reflection modes |
+| `mosaic.fs` | Square, hexagon, Voronoi, triangle and diamond cell mosaics with grout and bevel. Square with no edge is a pixelate |
 | `motion_blur.fs` | Directional blur along an angle |
 | `old_film.fs` | Vintage projector look with scratches and flicker |
 | `outline.fs` | Edge detection with filled or outline rendering |
+| `paint.fs` | Oil paint look from an edge-preserving anisotropic Kuwahara filter |
 | `pinch_bulge.fs` | Radial pinch or bulge distortion |
-| `pixelate.fs` | Pixelation / mosaic |
+| `pixel_sort.fs` | Sorts runs of pixels inside a brightness band into streaks, horizontally or vertically |
 | `point_cloud.fs` | Reprojects the image into a pseudo-3D cloud of soft splats (brightness = depth) with parallax orbit, depth fade, and Source/Depth/Thermal/Mono color modes; a persistent motion-reactive disturbance field lets live camera/video motion (wave a hand, Kinect/TouchDesigner style) scatter and recolor the points |
+| `polar.fs` | Wraps the image around a center point or into an endless tunnel (Radius Mode: Tunnel), or unwraps it into a strip |
 | `polkadot.fs` | Circular dot pattern overlay |
-| `posterize.fs` | Reduces color count for a graphic poster look |
 | `rgb_shift.fs` | Chromatic aberration / RGB shift |
 | `ripple.fs` | Animated circular wave distortion |
+| `rutt_etra.fs` | Scanlines lifted by brightness and drawn as glowing lines on black |
 | `scanlines.fs` | CRT-style horizontal scan lines |
 | `scatter_popup.fs` | Shrinks input into small copies that pop up randomly |
 | `sepia.fs` | Warm vintage sepia tone |
+| `shake.fs` | Handheld camera shake with smooth noise, rotation, zoom to cover and motion blur |
 | `shape_mask.fs` | Mask area with selectable shape, position, size, feather |
 | `sharpen.fs` | Unsharp mask sharpening |
 | `shift_glitch.fs` | Digital glitch / shift glitch |
@@ -135,10 +146,10 @@ Varda sorts shaders by type automatically:
 | `tilt_shift.fs` | Fake miniature/selective focus blur |
 | `tint.fs` | Color tint overlay |
 | `transform.fs` | 2D translate, rotate, scale |
-| `tunnel.fs` | Infinite zoom tunnel distortion |
 | `twist.fs` | Rotational twist/twirl from center |
 | `vhs_crt.fs` | Retro video distortion with tracking errors |
 | `vignette.fs` | Darkens edges of frame |
+| `water_ripples.fs` | A simulated water surface, disturbed by drops or motion, that refracts the image |
 | `wave_warp.fs` | Wave warp distortion |
 | `zoom.fs` | Scales the image from a center point |
 | `zoom_blur.fs` | Radial blur from center point |

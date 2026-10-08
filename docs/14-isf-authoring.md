@@ -784,6 +784,8 @@ and tonemap path.
 
 | Option | Does |
 |---|---|
+| `--input PATH` | Preview the shader as an effect on a deck rendered from PATH, a generator shader or a still image. `--set` and the sweeps then address the effect |
+| `--before PATH` | With `--input`, run another effect ahead of the previewed one, at its defaults. Repeat to chain several |
 | `--set NAME=VALUE` | Override an input, clamped to its `MIN`/`MAX` with a warning |
 | `--fps N` | Step time at N frames per second. A lower rate moves a flying camera further per frame and, with a target frame rate set, lowers the render scale, as a slow live machine would |
 | `--warmup N`, `--settle MS` | Extra frames at time 0, each followed by a pause, so background preprocessors can publish first |
