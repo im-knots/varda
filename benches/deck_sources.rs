@@ -4,6 +4,10 @@
 /// `headless_frame` measures.
 ///
 ///   `mixed_frame` — one full headless frame with all five decks visible.
+///   `video_1080p`, `video_4k` — one frame with a single playing ffmpeg video
+///                     deck, paced at the clip's 30 fps (untimed) so each timed
+///                     frame carries a newly decoded frame. Clips are generated
+///                     with the ffmpeg CLI; skipped without it.
 ///   `text_static`, `text_crawl_40`, `text_step_fade`, `text_step_modulated` —
 ///   one frame with a single text deck: one line, a 40-line crawl, stepping
 ///   with a fade, and stepping with size and weight modulated across raster
@@ -162,5 +166,68 @@ fn bench_text_decks(c: &mut Criterion) {
     g.finish();
 }
 
-criterion_group!(benches, bench_deck_sources, bench_text_decks);
+/// An app with one ffmpeg video deck playing `clip`, once its first frame
+/// has arrived.
+fn video_app(clip: &std::path::Path) -> Option<VardaApp> {
+    let mut app = varda::testing::headless_app()?;
+    let channel = app.build_engine_state().mixer.channels[0].uuid.clone();
+    let _ = app.command_sender().send((
+        EngineCommand::AddDeck {
+            channel_uuid: channel,
+            source: SourceConfig::new("Video").with("path", clip.to_string_lossy().as_ref()),
+        },
+        None,
+    ));
+    for _ in 0..600 {
+        frame(&mut app);
+        if app.build_engine_state().mixer.channels[0].decks.len() == 1 {
+            for _ in 0..30 {
+                frame(&mut app);
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            return Some(app);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    None
+}
+
+fn bench_video_decks(c: &mut Criterion) {
+    let mut g = c.benchmark_group("deck_sources");
+    g.sample_size(10);
+    g.measurement_time(std::time::Duration::from_secs(12));
+    for (name, width, height, bitrate) in [
+        ("video_1080p", 1920, 1080, "12M"),
+        ("video_4k", 3840, 2160, "45M"),
+    ] {
+        let Some(clip) = varda::testing::generated_clip(width, height, 5, bitrate) else {
+            eprintln!("deck_sources: no ffmpeg CLI, skipping video");
+            return;
+        };
+        let Some(mut app) = video_app(&clip) else {
+            eprintln!("deck_sources: no GPU adapter or the deck did not load, skipping");
+            return;
+        };
+        g.bench_function(name, |b| {
+            b.iter_custom(|iterations| {
+                let mut total = std::time::Duration::ZERO;
+                for _ in 0..iterations {
+                    std::thread::sleep(std::time::Duration::from_millis(33));
+                    let start = std::time::Instant::now();
+                    frame(std::hint::black_box(&mut app));
+                    total += start.elapsed();
+                }
+                total
+            });
+        });
+    }
+    g.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_deck_sources,
+    bench_text_decks,
+    bench_video_decks
+);
 criterion_main!(benches);

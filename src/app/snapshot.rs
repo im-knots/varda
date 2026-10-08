@@ -56,6 +56,7 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                             uuid: e.uuid().to_owned(),
                             name: e.shader.name(),
                             enabled: e.enabled,
+                            status: e.status(),
                             params: build_shader_params(&e.shader.name(), &e.params, &[]),
                         })
                         .collect();
@@ -132,6 +133,7 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                         gpu_render_cost_us: slot.gpu_render_cost_us,
                         fps: slot.deck.fps(),
                         source_asleep: !slot.source_demand.wants_frames(),
+                        source_pending: app.source_swap_pending(slot.deck.uuid()),
                         running_analyzers: slot
                             .deck
                             .analyzers
@@ -150,6 +152,7 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                     uuid: e.uuid().to_owned(),
                     name: e.shader.name(),
                     enabled: e.enabled,
+                    status: e.status(),
                     params: build_shader_params(&e.shader.name(), &e.params, &[]),
                 })
                 .collect();
@@ -175,6 +178,7 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
             uuid: e.uuid().to_owned(),
             name: e.shader.name(),
             enabled: e.enabled,
+            status: e.status(),
             params: build_shader_params(&e.shader.name(), &e.params, &[]),
         })
         .collect();
@@ -686,8 +690,7 @@ pub(crate) fn build_modulation_snapshot(app: &VardaApp) -> ModulationSnapshot {
         .collect();
     let assignments = m
         .modulation()
-        .assignments
-        .iter()
+        .assignments_iter()
         .map(|(k, v)| {
             (
                 k.clone(),

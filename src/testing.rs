@@ -657,6 +657,367 @@ pub fn gui_view(app: &crate::app::VardaApp) -> usize {
         .len()
 }
 
+/// An analyzer that reads pixels and discards them at once, so its channel always has room.
+struct SinkAnalyzer;
+
+impl crate::analyzer::traits::Analyzer for SinkAnalyzer {
+    fn analyzer_type(&self) -> &'static str {
+        "sink"
+    }
+
+    fn output_schema(&self) -> crate::analyzer::traits::AnalyzerSchema {
+        crate::analyzer::traits::AnalyzerSchema {
+            scalars: Vec::new(),
+            textures: Vec::new(),
+        }
+    }
+
+    fn init(&mut self, _options: &serde_json::Value) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// The largest frame a built-in analyzer reads.
+    fn frame_size(&self) -> Option<u32> {
+        Some(1920)
+    }
+
+    fn analyze(
+        &mut self,
+        input: &crate::analyzer::traits::AnalyzerInput,
+    ) -> anyhow::Result<crate::analyzer::traits::AnalyzerSnapshot> {
+        std::hint::black_box(input.frame.len());
+        Ok(crate::analyzer::traits::AnalyzerSnapshot::from_defaults(
+            &self.output_schema(),
+        ))
+    }
+}
+
+/// Analyzer frame capture on `decks` decks of a `width` x `height` color-path
+/// texture, each with one pixel-reading analyzer. `capture` is the render
+/// thread's share; `wait` lets the GPU finish and is not.
+pub struct AnalyzerCaptureBench {
+    context: crate::renderer::context::GpuContext,
+    decks: Vec<(wgpu::Texture, crate::analyzer::DeckAnalyzers)>,
+    states: std::collections::HashMap<String, crate::analyzer::traits::AnalyzerStateSnapshot>,
+}
+
+impl AnalyzerCaptureBench {
+    /// Decks holding a half-float gradient, each running a sink analyzer.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the sink analyzer cannot start.
+    pub fn new(
+        context: crate::renderer::context::GpuContext,
+        width: u32,
+        height: u32,
+        decks: usize,
+    ) -> Self {
+        let registry = crate::analyzer::AnalyzerRegistry::new().register("sink", || {
+            Box::new(SinkAnalyzer) as Box<dyn crate::analyzer::traits::Analyzer>
+        });
+        let pixels: Vec<u8> = (0..width * height)
+            .flat_map(|i| {
+                let x = (i % width) as f32 / width as f32;
+                let y = (i / width) as f32 / height as f32;
+                [x, y, 0.5, 1.0]
+                    .into_iter()
+                    .flat_map(|v| half::f16::from_f32(v).to_bits().to_le_bytes())
+            })
+            .collect();
+        let decks = (0..decks)
+            .map(|_| {
+                let texture = context.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("analyzer capture bench deck"),
+                    size: wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: crate::renderer::context::COLOR_PATH_FORMAT,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING
+                        | wgpu::TextureUsages::COPY_SRC
+                        | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                context.queue.write_texture(
+                    texture.as_image_copy(),
+                    &pixels,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(width * 8),
+                        rows_per_image: Some(height),
+                    },
+                    texture.size(),
+                );
+                let mut analyzers = crate::analyzer::DeckAnalyzers::new();
+                analyzers
+                    .request("sink", &registry, &serde_json::Value::Null)
+                    .expect("the sink analyzer starts");
+                (texture, analyzers)
+            })
+            .collect();
+        Self {
+            context,
+            decks,
+            states: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Capture every deck and submit the readbacks, as the render loop does.
+    pub fn capture(&mut self) {
+        let commands: Vec<wgpu::CommandBuffer> = self
+            .decks
+            .iter_mut()
+            .filter_map(|(texture, analyzers)| {
+                analyzers.capture_frame(&self.context.device, texture, &self.states)
+            })
+            .collect();
+        self.context.queue.submit(commands);
+    }
+
+    /// Let the GPU finish what has been submitted. Not render-thread time.
+    pub fn wait(&self) {
+        let _ = self
+            .context
+            .device
+            .poll(wgpu::PollType::wait_indefinitely());
+    }
+}
+
+/// UI preview encoding for `count` 1080p deck previews.
+pub struct PreviewEncodeBench {
+    context: crate::renderer::context::GpuContext,
+    encoder: crate::usecases::ui::runner::preview::PreviewEncoder,
+    sources: Vec<(String, wgpu::TextureView)>,
+}
+
+impl PreviewEncodeBench {
+    /// `count` color-path deck textures, each with a preview target.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the preview pipeline cannot be built.
+    pub fn new(context: crate::renderer::context::GpuContext, count: usize) -> Self {
+        let mut encoder =
+            crate::usecases::ui::runner::preview::PreviewEncoder::new(&context.device)
+                .expect("the preview pipeline builds");
+        let sources = (0..count)
+            .map(|i| {
+                let texture = context.create_compositing_texture(1920, 1080);
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                let uuid = format!("{i:08x}");
+                let key =
+                    crate::usecases::ui::runner::preview::PreviewSlot::Deck(uuid.clone()).key();
+                encoder.ensure_target(&context, &key, 1920, 1080);
+                (uuid, view)
+            })
+            .collect();
+        Self {
+            context,
+            encoder,
+            sources,
+        }
+    }
+
+    /// One frame's preview encoding with the first `drawn` previews on screen,
+    /// drained.
+    pub fn frame(&mut self, drawn: usize) {
+        use crate::usecases::ui::runner::preview::{PreviewSlot, is_drawn};
+        let ids: std::collections::HashMap<PreviewSlot, egui::TextureId> = self
+            .sources
+            .iter()
+            .enumerate()
+            .map(|(i, (uuid, _))| {
+                (
+                    PreviewSlot::Deck(uuid.clone()),
+                    egui::TextureId::User(i as u64),
+                )
+            })
+            .collect();
+        let on_screen = (0..drawn as u64).map(egui::TextureId::User).collect();
+        let sources: Vec<_> = self
+            .sources
+            .iter()
+            .map(|(uuid, view)| (PreviewSlot::Deck(uuid.clone()), view, 1920, 1080))
+            .filter(|(slot, ..)| is_drawn(slot, |s| ids.get(s).copied(), &on_screen))
+            .collect();
+        self.encoder.encode_all(&self.context, &sources);
+        let _ = self
+            .context
+            .device
+            .poll(wgpu::PollType::wait_indefinitely());
+    }
+}
+
+/// A generated H.264 clip with B-frames, cached in the temp directory, or
+/// `None` without the ffmpeg CLI. The picture changes every frame, with grain
+/// so the bitrate is realistic.
+pub fn generated_clip(width: u32, height: u32, seconds: u32, bitrate: &str) -> Option<PathBuf> {
+    let dir = std::env::temp_dir().join("varda-test-clips");
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join(format!("clip_{width}x{height}_{seconds}s_{bitrate}.mp4"));
+    if path.exists() {
+        return Some(path);
+    }
+    // Tests may generate the same clip at once, and encodes differ run to run.
+    // Each writes its own file and the first to link it publishes it; a
+    // published clip never changes under a test that has it open.
+    let partial = dir.join(format!(
+        "{}.{}.{:?}.partial.mp4",
+        path.file_stem()?.to_string_lossy(),
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let status = std::process::Command::new("ffmpeg")
+        .args(["-v", "error", "-y", "-f", "lavfi", "-i"])
+        .arg(format!(
+            "testsrc2=size={width}x{height}:rate=30,noise=alls=6:allf=t"
+        ))
+        .args([
+            "-t",
+            &seconds.to_string(),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-bf",
+            "3",
+        ])
+        .args(["-b:v", bitrate, "-maxrate", bitrate, "-bufsize", bitrate])
+        .args(["-pix_fmt", "yuv420p"])
+        .arg(&partial)
+        .status()
+        .ok()?;
+    if !status.success() {
+        return None;
+    }
+    let published = std::fs::hard_link(&partial, &path);
+    let _ = std::fs::remove_file(&partial);
+    (published.is_ok() || path.exists()).then_some(path)
+}
+
+/// The ffmpeg decode thread's CPU work per frame on one clip: decode the owed
+/// frame and convert it to RGBA. The thread then hands the frame to the GPU.
+pub struct VideoDecodeBench {
+    player: crate::video::VideoPlayer,
+}
+
+impl VideoDecodeBench {
+    /// # Panics
+    ///
+    /// Panics if the clip cannot be opened.
+    pub fn new(path: &std::path::Path) -> Self {
+        Self {
+            player: crate::video::VideoPlayer::new(path).expect("the clip opens"),
+        }
+    }
+
+    /// Decode and convert one frame, as the decode thread does each tick.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a decode error.
+    pub fn frame(&mut self) {
+        self.player.playback.owe_one_frame();
+        std::hint::black_box(self.player.next_frame().expect("decodes"));
+    }
+}
+
+/// Render-thread cost of commands that build shaders, on a headless engine
+/// with one deck.
+pub struct CommandHitchBench {
+    app: crate::app::VardaApp,
+    deck: String,
+}
+
+impl CommandHitchBench {
+    /// # Panics
+    ///
+    /// Panics if the engine or its deck cannot be built.
+    pub fn new() -> Option<Self> {
+        let mut app = headless_app()?;
+        let channel = app.mixer_ref().channels()[0].uuid().to_string();
+        let deck = app
+            .add_deck(
+                &channel,
+                &crate::solid_color::SolidColor::config_for([1.0, 0.5, 0.0, 1.0]),
+            )
+            .expect("a deck");
+        app.settle_deck_loads();
+        Some(Self { app, deck })
+    }
+
+    fn frame(&mut self) {
+        self.app.begin_frame();
+        self.app.render_frame();
+    }
+
+    /// Whether the effect is built and drawing.
+    fn effect_ready(&self, uuid: &str) -> bool {
+        self.app.effect_is_ready(uuid)
+    }
+
+    /// Render frames until `uuid` is ready.
+    fn until_ready(&mut self, uuid: &str) {
+        while !self.effect_ready(uuid) {
+            self.frame();
+        }
+    }
+
+    fn add(&mut self, shader: &str) -> String {
+        match self
+            .app
+            .execute_command(crate::engine::EngineCommand::AddEffect {
+                target: crate::engine::EffectTarget::Deck(self.deck.clone()),
+                shader_name: shader.to_string(),
+            }) {
+            crate::engine::CommandResult::OkWithId { uuid } => uuid,
+            other => panic!("effect not added: {other:?}"),
+        }
+    }
+
+    fn remove(&mut self, uuid: String) {
+        let _ = self
+            .app
+            .execute_command(crate::engine::EngineCommand::RemoveEffect { effect_uuid: uuid });
+    }
+
+    /// Render-thread time of one `AddEffect`, and the time until the effect
+    /// draws. The effect is removed afterwards, untimed.
+    pub fn add_effect(&mut self, shader: &str) -> (std::time::Duration, std::time::Duration) {
+        let start = std::time::Instant::now();
+        let uuid = self.add(shader);
+        let command = start.elapsed();
+        self.until_ready(&uuid);
+        let ready = start.elapsed();
+        self.remove(uuid);
+        self.frame();
+        (command, ready)
+    }
+
+    /// Render-thread time of undoing an effect's removal.
+    pub fn undo_effect_removal(&mut self, shader: &str) -> std::time::Duration {
+        let uuid = self.add(shader);
+        self.until_ready(&uuid);
+        let before = self.app.history_snapshot();
+        self.app.push_history(before);
+        self.remove(uuid.clone());
+        self.frame();
+        let start = std::time::Instant::now();
+        let current = self.app.history_snapshot();
+        self.app.history_undo(current);
+        let undo = start.elapsed();
+        self.until_ready(&uuid);
+        self.remove(uuid);
+        self.frame();
+        undo
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

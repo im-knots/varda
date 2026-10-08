@@ -143,7 +143,8 @@ impl VardaApp {
     }
 
     /// Swap a deck's source, keeping its UUID, effects, opacity and modulation.
-    /// The new source is built on the render thread.
+    /// A slow source builds off the render thread and replaces the current one
+    /// on a later frame; the deck draws its current source until then.
     pub(crate) fn replace_deck_source(
         &mut self,
         deck_uuid: &str,
@@ -151,6 +152,12 @@ impl VardaApp {
     ) -> Result<()> {
         let (ch, dk) = self.mixer.resolve_deck(deck_uuid)?;
         let labels = self.mixer.channel_labels();
+        let query = self.sources.query(&labels);
+        if let Some(loader) = self.sources.providers.loader(source, &query) {
+            self.spawn_source_swap(deck_uuid, loader?);
+            return Ok(());
+        }
+        self.supersede_source_swaps(deck_uuid);
         let (width, height) = (self.render.width, self.render.height);
         let (providers, mut env) = self
             .sources
@@ -316,7 +323,11 @@ impl VardaApp {
                     self.acquire_depth_preprocessor(&metadata, shader_name)?
                 };
 
-                let effect = Effect::new(&self.render.context, shader)?;
+                let effect = Effect::pending(
+                    &self.render.context,
+                    shader,
+                    self.render.context.compositing_format,
+                );
                 let uuid = effect.uuid().to_owned();
                 let ch = self
                     .mixer
@@ -345,11 +356,11 @@ impl VardaApp {
                          available on deck effect chains — not channel or master chains."
                     );
                 }
-                let effect = Effect::new_with_format(
+                let effect = Effect::pending(
                     &self.render.context,
                     (*shader).clone(),
                     self.render.context.compositing_format,
-                )?;
+                );
                 let uuid = effect.uuid().to_owned();
                 let ch = self
                     .mixer
@@ -366,11 +377,11 @@ impl VardaApp {
                          available on deck effect chains — not channel or master chains."
                     );
                 }
-                let effect = Effect::new_with_format(
+                let effect = Effect::pending(
                     &self.render.context,
                     (*shader).clone(),
                     self.render.context.compositing_format,
-                )?;
+                );
                 let uuid = effect.uuid().to_owned();
                 self.mixer.add_master_effect(effect);
                 log::info!("Added master effect {shader_name} ({uuid})");
@@ -402,7 +413,8 @@ impl VardaApp {
                     .get(name)
                     .context("Transition shader not found")?;
                 self.mixer
-                    .set_transition(&self.render.context, shader.clone())
+                    .set_transition(&self.render.context, shader.clone());
+                Ok(())
             }
         }
     }
@@ -726,5 +738,313 @@ mod tests {
             app.set_param("ch99/deck99/nonexistent_param", ParamValue::Float(0.5)),
             Err(crate::param_router::ParamRouteError::UnknownPath { .. })
         ));
+    }
+
+    // ── Effects build off the render thread ─────────────────────────────────
+
+    /// A headless engine with one solid orange deck on channel 0.
+    fn app_with_orange_deck() -> Option<(super::super::VardaApp, String)> {
+        let mut app = headless_app()?;
+        let channel = channel_uuid(&app, 0);
+        let deck = app
+            .add_deck(
+                &channel,
+                &crate::solid_color::SolidColor::config_for([1.0, 0.5, 0.0, 1.0]),
+            )
+            .expect("deck");
+        app.settle_deck_loads();
+        Some((app, deck))
+    }
+
+    fn add_invert(app: &mut super::super::VardaApp, deck: &str) -> String {
+        match app.execute_command(crate::engine::EngineCommand::AddEffect {
+            target: crate::engine::EffectTarget::Deck(deck.to_string()),
+            shader_name: "invert".into(),
+        }) {
+            crate::engine::CommandResult::OkWithId { uuid } => uuid,
+            other => panic!("effect not added: {other:?}"),
+        }
+    }
+
+    fn effect_status(
+        app: &super::super::VardaApp,
+        uuid: &str,
+    ) -> Option<crate::engine::value::effect::EffectStatus> {
+        crate::app::snapshot::build_mixer_snapshot(app)
+            .channels
+            .iter()
+            .flat_map(|c| c.decks.iter())
+            .flat_map(|d| d.effects.iter())
+            .find(|e| e.uuid == uuid)
+            .map(|e| e.status.clone())
+    }
+
+    fn frame(app: &mut super::super::VardaApp) {
+        app.begin_frame();
+        app.render_frame();
+    }
+
+    /// Render frames until the effect is no longer building.
+    fn until_built(app: &mut super::super::VardaApp, uuid: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while effect_status(app, uuid) == Some(crate::engine::value::effect::EffectStatus::Building)
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the build never finished"
+            );
+            frame(app);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// The deck's center pixel.
+    fn deck_center(app: &super::super::VardaApp, deck: &str) -> [f32; 4] {
+        let (ch, dk) = app.mixer.find_deck_by_uuid(deck).expect("deck");
+        let texture = &app.mixer.channels()[ch].decks[dk].deck.texture;
+        let (w, h) = (texture.width(), texture.height());
+        crate::testing::read_rgba16f(app.gpu_context(), texture, w, h)[(h / 2 * w + w / 2) as usize]
+    }
+
+    fn close(a: [f32; 4], b: [f32; 4]) -> bool {
+        a.iter().zip(&b).take(3).all(|(x, y)| (x - y).abs() < 0.02)
+    }
+
+    /// The command returns with the effect in its chain, still building; it
+    /// draws once a later frame finds it ready.
+    #[test]
+    fn adding_an_effect_returns_before_it_is_built() {
+        use crate::engine::value::effect::EffectStatus;
+        let Some((mut app, deck)) = app_with_orange_deck() else {
+            return;
+        };
+        let effect = add_invert(&mut app, &deck);
+        assert_eq!(effect_status(&app, &effect), Some(EffectStatus::Building));
+        until_built(&mut app, &effect);
+        assert_eq!(effect_status(&app, &effect), Some(EffectStatus::Ready));
+    }
+
+    /// While it builds the effect passes the picture through; once ready it
+    /// applies.
+    #[test]
+    fn a_building_effect_passes_the_picture_through() {
+        let Some((mut app, deck)) = app_with_orange_deck() else {
+            return;
+        };
+        frame(&mut app);
+        let plain = deck_center(&app, &deck);
+        let effect = add_invert(&mut app, &deck);
+        frame(&mut app);
+        assert!(
+            close(deck_center(&app, &deck), plain),
+            "unchanged while building"
+        );
+        until_built(&mut app, &effect);
+        frame(&mut app);
+        assert!(
+            !close(deck_center(&app, &deck), plain),
+            "inverted once ready"
+        );
+    }
+
+    /// A toggle made while the effect builds holds once it is ready.
+    #[test]
+    fn changes_made_while_building_hold_once_ready() {
+        let Some((mut app, deck)) = app_with_orange_deck() else {
+            return;
+        };
+        frame(&mut app);
+        let plain = deck_center(&app, &deck);
+        let effect = add_invert(&mut app, &deck);
+        let toggled = app.execute_command(crate::engine::EngineCommand::ToggleEffect {
+            effect_uuid: effect.clone(),
+        });
+        assert!(matches!(toggled, crate::engine::CommandResult::Ok));
+        until_built(&mut app, &effect);
+        frame(&mut app);
+        assert!(close(deck_center(&app, &deck), plain), "still disabled");
+    }
+
+    /// Removing an effect while it builds drops its result quietly.
+    #[test]
+    fn removing_a_building_effect_drops_its_build() {
+        let Some((mut app, deck)) = app_with_orange_deck() else {
+            return;
+        };
+        let effect = add_invert(&mut app, &deck);
+        let removed = app.execute_command(crate::engine::EngineCommand::RemoveEffect {
+            effect_uuid: effect.clone(),
+        });
+        assert!(matches!(removed, crate::engine::CommandResult::Ok));
+        for _ in 0..20 {
+            frame(&mut app);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(effect_status(&app, &effect), None);
+    }
+
+    /// Undoing an effect's removal brings it back building, then ready.
+    #[test]
+    fn undoing_a_removal_rebuilds_the_effect_off_the_render_thread() {
+        use crate::engine::value::effect::EffectStatus;
+        let Some((mut app, deck)) = app_with_orange_deck() else {
+            return;
+        };
+        let effect = add_invert(&mut app, &deck);
+        until_built(&mut app, &effect);
+        let before = app.history_snapshot();
+        app.push_history(before);
+        let _ = app.execute_command(crate::engine::EngineCommand::RemoveEffect {
+            effect_uuid: effect.clone(),
+        });
+        let current = app.history_snapshot();
+        assert!(app.history_undo(current));
+        assert_eq!(effect_status(&app, &effect), Some(EffectStatus::Building));
+        until_built(&mut app, &effect);
+        assert_eq!(effect_status(&app, &effect), Some(EffectStatus::Ready));
+    }
+
+    fn source_pending(app: &super::super::VardaApp, deck: &str) -> bool {
+        crate::app::snapshot::build_mixer_snapshot(app)
+            .channels
+            .iter()
+            .flat_map(|c| c.decks.iter())
+            .find(|d| d.uuid == deck)
+            .is_some_and(|d| d.source_pending)
+    }
+
+    fn deck_name(app: &super::super::VardaApp, deck: &str) -> String {
+        let (ch, dk) = app.mixer.find_deck_by_uuid(deck).expect("deck");
+        app.mixer.channels()[ch].decks[dk]
+            .deck
+            .source_name()
+            .to_string()
+    }
+
+    fn swap_source(app: &mut super::super::VardaApp, deck: &str, name: &str) {
+        let r = app.execute_command(crate::engine::EngineCommand::ReplaceDeckSource {
+            deck_uuid: deck.to_string(),
+            source: shader(name),
+        });
+        assert!(matches!(r, crate::engine::CommandResult::Ok), "{r:?}");
+    }
+
+    fn until_swapped(app: &mut super::super::VardaApp, deck: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while source_pending(app, deck) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the swap never finished"
+            );
+            frame(app);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// The deck keeps drawing its old source until the new one is built.
+    #[test]
+    fn a_source_swap_keeps_the_old_source_until_the_new_one_is_ready() {
+        let Some((mut app, deck)) = app_with_orange_deck() else {
+            return;
+        };
+        frame(&mut app);
+        let orange = deck_center(&app, &deck);
+        let before = deck_name(&app, &deck);
+        swap_source(&mut app, &deck, "bars");
+        assert!(source_pending(&app, &deck));
+        frame(&mut app);
+        assert_eq!(deck_name(&app, &deck), before);
+        assert!(
+            close(deck_center(&app, &deck), orange),
+            "the old source still draws"
+        );
+        until_swapped(&mut app, &deck);
+        assert_ne!(deck_name(&app, &deck), before);
+    }
+
+    /// A second swap before the first finishes wins.
+    #[test]
+    fn the_last_of_two_quick_swaps_wins() {
+        let Some((mut app, deck)) = app_with_orange_deck() else {
+            return;
+        };
+        swap_source(&mut app, &deck, "bars");
+        swap_source(&mut app, &deck, "plasma");
+        until_swapped(&mut app, &deck);
+        for _ in 0..20 {
+            frame(&mut app);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            deck_name(&app, &deck).to_lowercase().contains("plasma"),
+            "{}",
+            deck_name(&app, &deck)
+        );
+    }
+
+    fn active_transition(app: &super::super::VardaApp) -> Option<String> {
+        app.mixer.active_transition().map(|t| t.name.clone())
+    }
+
+    fn pick_transition(app: &mut super::super::VardaApp, name: &str) {
+        let r = app.execute_command(crate::engine::EngineCommand::SetTransition {
+            shader_name: Some(name.to_string()),
+        });
+        assert!(matches!(r, crate::engine::CommandResult::Ok), "{r:?}");
+    }
+
+    fn until_transition(app: &mut super::super::VardaApp, name: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while active_transition(app).as_deref() != Some(name) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{name} never became active"
+            );
+            frame(app);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// The previous transition stays in use until the new one is built.
+    #[test]
+    fn a_transition_pick_keeps_the_previous_one_until_ready() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        pick_transition(&mut app, "transition_dissolve");
+        until_transition(&mut app, "transition_dissolve");
+        pick_transition(&mut app, "transition_iris");
+        assert_eq!(
+            active_transition(&app).as_deref(),
+            Some("transition_dissolve")
+        );
+        until_transition(&mut app, "transition_iris");
+    }
+
+    /// Starting the engine builds every transition in the background.
+    #[test]
+    fn transitions_are_warmed_at_startup() {
+        let Some(app) = headless_app() else {
+            return;
+        };
+        let sources: Vec<String> = app
+            .sources
+            .registry
+            .transitions()
+            .iter()
+            .map(|s| s.fragment_source.clone())
+            .collect();
+        assert_ne!(sources.len(), 0);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !sources
+            .iter()
+            .all(|s| crate::isf::compiler::fragment_is_cached(s))
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "transitions were not warmed"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 }

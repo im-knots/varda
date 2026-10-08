@@ -4,8 +4,9 @@
 use super::modulation as vm;
 use super::staging::VideoStagingBuffers;
 use super::{
-    DeckTransportSync, HapTextureFormat, LoopMode, PlaybackSnapshot, TransportSyncMode,
-    VideoChaseBroadcast, VideoCommand, VideoDecodeHandle, VideoPlayer, hap::HapPlayer,
+    DeckTransportSync, DirectUpload, HapTextureFormat, LoopMode, PlaybackSnapshot,
+    TransportSyncMode, VideoChaseBroadcast, VideoCommand, VideoDecodeHandle, VideoPlayer,
+    hap::HapPlayer,
 };
 use crate::renderer::{GpuContext, HapConvertPipeline};
 use crate::source::{
@@ -196,12 +197,9 @@ impl DeckSourceProvider for VideoProvider {
     reason = "one per video deck, built once and never moved in bulk"
 )]
 enum Upload {
-    /// ffmpeg CPU decode to RGBA, then a blit.
-    Rgba {
-        view: wgpu::TextureView,
-        texture: wgpu::Texture,
-        staging: VideoStagingBuffers,
-    },
+    /// ffmpeg CPU decode to RGBA, written into the texture by the decode
+    /// thread, then a blit.
+    Rgba { view: wgpu::TextureView },
     /// HAP: compressed `BCn` blocks uploaded as-is and decoded on the GPU.
     Hap {
         texture: wgpu::Texture,
@@ -350,14 +348,12 @@ impl Video {
                 h,
                 wgpu::TextureFormat::Rgba8UnormSrgb,
             );
-            let staging = VideoStagingBuffers::new(&gpu.device, w * 4, h, "Video");
             (
-                VideoDecodeHandle::spawn_video(player),
-                Upload::Rgba {
-                    view,
-                    texture,
-                    staging,
-                },
+                VideoDecodeHandle::spawn_video(
+                    player,
+                    DirectUpload::new(gpu.queue.clone(), texture),
+                ),
+                Upload::Rgba { view },
                 (w, h),
             )
         };
@@ -584,18 +580,19 @@ impl DeckSourceInstance for Video {
         }
     }
 
-    /// Uploads the newest decoded frame through the double-buffered staging pair.
+    /// Arms the decode thread's next write for an ffmpeg deck, or uploads the
+    /// newest HAP frame through the double-buffered staging pair.
     fn upload(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        if matches!(self.upload, Upload::Rgba { .. }) {
+            self.handle.arm_upload();
+            return;
+        }
         let Some(frame) = self.handle.take_frame() else {
             return;
         };
         let (w, h) = (self.handle.width, self.handle.height);
         match &mut self.upload {
-            Upload::Rgba {
-                texture, staging, ..
-            } => {
-                staging.upload(&frame.color_data, texture, w, h, encoder);
-            }
+            Upload::Rgba { .. } => {}
             Upload::Hap {
                 texture,
                 alpha_texture,
@@ -619,7 +616,7 @@ impl DeckSourceInstance for Video {
 
     fn after_submit(&mut self) {
         match &mut self.upload {
-            Upload::Rgba { staging, .. } => staging.request_remap(),
+            Upload::Rgba { .. } => {}
             Upload::Hap {
                 staging,
                 alpha_staging,
@@ -806,6 +803,44 @@ impl DeckSourceInstance for Video {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A video deck in the running engine shows the clip: the decode thread's
+    /// writes reach the deck's texture.
+    #[test]
+    fn a_video_deck_shows_its_clip() {
+        let Some(clip) = crate::testing::generated_clip(320, 240, 2, "2M") else {
+            eprintln!("skipping: no ffmpeg CLI");
+            return;
+        };
+        let Some(mut app) = crate::testing::headless_app() else {
+            return;
+        };
+        let channel = app.mixer_ref().channels()[0].uuid().to_string();
+        let config = SourceConfig::new("Video").with("path", clip.to_string_lossy().as_ref());
+        let deck = app.add_deck(&channel, &config).expect("video deck");
+        app.settle_deck_loads();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let spread = loop {
+            app.begin_frame();
+            app.render_frame();
+            let (ch, dk) = app.mixer_ref().find_deck_by_uuid(&deck).expect("deck");
+            let texture = &app.mixer_ref().channels()[ch].decks[dk].deck.texture;
+            let pixels = crate::testing::read_rgba16f(
+                app.gpu_context(),
+                texture,
+                texture.width(),
+                texture.height(),
+            );
+            let lumas: Vec<f32> = pixels.iter().map(|p| p[0] + p[1] + p[2]).collect();
+            let max = lumas.iter().copied().fold(0.0, f32::max);
+            let min = lumas.iter().copied().fold(f32::MAX, f32::min);
+            if max - min > 0.5 || std::time::Instant::now() > deadline {
+                break max - min;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        assert!(spread > 0.5, "the deck shows a picture, spread {spread}");
+    }
 
     #[test]
     fn speed_and_position_round_trip_through_their_scales() {

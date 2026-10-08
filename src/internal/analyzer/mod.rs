@@ -1,6 +1,7 @@
 //! Analyzers: frame analysis for modulation and shader preprocessing.
 
 pub(crate) mod brightness;
+mod capture;
 #[cfg(feature = "face-detection")]
 pub(crate) mod face_detect;
 pub(crate) mod fractal_flight;
@@ -162,9 +163,9 @@ impl AnalyzerRegistry {
 
 struct AnalyzerInstance {
     refcount: usize,
-    /// Whether this analyzer reads the deck's pixels. Stored here because the
-    /// analyzer moves onto its worker thread.
-    needs_frames: bool,
+    /// Long side of the frame this analyzer reads, or `None` if it reads no
+    /// pixels. Stored here because the analyzer moves onto its worker thread.
+    frame_size: Option<u32>,
     thread: Option<JoinHandle<()>>,
     latest: Arc<ArcSwap<AnalyzerSnapshot>>,
     stop: Arc<AtomicBool>,
@@ -181,17 +182,15 @@ const STOP_GRACE: Duration = Duration::from_secs(2);
 /// Running analyzer instances for one deck.
 pub(crate) struct DeckAnalyzers {
     instances: HashMap<String, AnalyzerInstance>,
-    /// Created on the first `capture_frame` call.
-    readback: Option<crate::renderer::ReadbackBuffer>,
-    readback_size: (u32, u32),
+    /// Created on the first `capture_frame` call that needs pixels.
+    capture: Option<capture::FrameCapture>,
 }
 
 impl DeckAnalyzers {
     pub(crate) fn new() -> Self {
         Self {
             instances: HashMap::new(),
-            readback: None,
-            readback_size: (0, 0),
+            capture: None,
         }
     }
 
@@ -213,7 +212,7 @@ impl DeckAnalyzers {
         // The schema needs no init(), so the default snapshot can be built
         // before the worker runs.
         let schema = analyzer.output_schema();
-        let needs_frames = analyzer.needs_frame_input();
+        let frame_size = analyzer.frame_size();
         let initial = AnalyzerSnapshot::from_defaults(&schema);
         let latest = Arc::new(ArcSwap::from_pointee(initial));
         let stop = Arc::new(AtomicBool::new(false));
@@ -250,7 +249,7 @@ impl DeckAnalyzers {
             analyzer_type.to_owned(),
             AnalyzerInstance {
                 refcount: 1,
-                needs_frames,
+                frame_size,
                 thread: Some(thread),
                 latest,
                 stop,
@@ -294,24 +293,6 @@ impl DeckAnalyzers {
             .map(|(k, inst)| (k.clone(), inst.latest.load()))
     }
 
-    /// Sends a frame to every running analyzer. Non-blocking; drops if full.
-    pub(crate) fn send_frame(
-        &self,
-        input: &AnalyzerInput,
-        states: &HashMap<String, AnalyzerStateSnapshot>,
-    ) {
-        for (name, inst) in &self.instances {
-            let mut payload = input.clone();
-            payload.state = states.get(name).cloned().unwrap_or_default();
-            match inst.frame_tx.try_send(payload) {
-                Ok(()) | Err(TrySendError::Full(_)) => {}
-                Err(TrySendError::Disconnected(_)) => {
-                    log::warn!("Analyzer '{name}' channel disconnected");
-                }
-            }
-        }
-    }
-
     /// Removes instances whose worker has exited (e.g. `init()` failed because
     /// ONNX Runtime is missing). Otherwise the render loop keeps doing a GPU
     /// readback per frame and logging "channel disconnected". Costs one
@@ -334,9 +315,10 @@ impl DeckAnalyzers {
         }
     }
 
-    /// Copies the deck texture for analysis and delivers the previous frame's
-    /// data to the analyzers. Call from the render loop after effects. Returns
-    /// the readback command buffer, or `None` if no analyzer needs frames.
+    /// Reduces the deck texture for analysis and delivers an earlier frame's
+    /// pixels to the analyzers. Call from the render loop after effects.
+    /// Returns the capture's command buffer, or `None` if no analyzer can take
+    /// a frame.
     pub(crate) fn capture_frame(
         &mut self,
         device: &wgpu::Device,
@@ -347,99 +329,83 @@ impl DeckAnalyzers {
         if self.instances.is_empty() {
             return None;
         }
+        let source_size = (source_texture.width(), source_texture.height());
 
-        // Skip the readback when no analyzer reads pixels: it stalls the
-        // pipeline, and its RGBA8 assumption fails validation on a float deck.
-        // Analyzers still get source dimensions, since geometry-only analyzers
-        // check camera packets against the render aspect.
-        if !self.instances.values().any(|i| i.needs_frames) {
-            let placeholder = AnalyzerInput {
-                frame: Vec::new(),
-                width: source_texture.width(),
-                height: source_texture.height(),
-                timestamp: std::time::Instant::now(),
-                state: AnalyzerStateSnapshot::default(),
-            };
-            self.send_frame(&placeholder, states);
-            return None;
-        }
-
-        let tex_width = source_texture.width();
-        let tex_height = source_texture.height();
-
-        // Read back in the texture's own format; a mismatched row size makes
-        // wgpu reject the encoder and the deck gets quarantined.
-        let Some(readback_format) = readback_format_for(source_texture.format()) else {
-            log::warn!(
-                "no analyzer readback for texture format {:?}; frame-consuming \
-                 analyzers on this deck will not receive pixels",
-                source_texture.format()
-            );
+        // Analyzers that read no pixels still get the deck's size, since
+        // geometry-only analyzers check camera packets against the render aspect.
+        let Some(long_side) = self.instances.values().filter_map(|i| i.frame_size).max() else {
+            self.deliver(&Self::placeholder(source_size), states);
             return None;
         };
-
-        // Recreate the readback buffer if size or format changed.
-        if self.readback.is_none()
-            || self.readback_size != (tex_width, tex_height)
-            || self
-                .readback
-                .as_ref()
-                .map(crate::renderer::ReadbackBuffer::format)
-                != Some(readback_format)
+        let size = capture::capture_size(source_size, long_side);
+        if !self
+            .capture
+            .as_ref()
+            .is_some_and(|c| c.fits(source_size, size))
         {
-            self.readback = Some(crate::renderer::ReadbackBuffer::new(
-                device,
-                tex_width,
-                tex_height,
-                readback_format,
-            ));
-            self.readback_size = (tex_width, tex_height);
+            self.capture = Some(capture::FrameCapture::new(device, source_size, size));
         }
+        let capture = self.capture.as_mut()?;
 
-        // Read the previous frame's data before touching the readback state.
-        let prev_frame = self.readback.as_mut().and_then(|rb| rb.try_read(device));
-
-        if let Some(rgba_data) = prev_frame {
+        if let Some(frame) = capture.try_read(device) {
             let input = AnalyzerInput {
-                // Analyzers always get RGBA8, whatever the deck format.
-                frame: frame_to_rgba8(&rgba_data),
-                width: self.readback_size.0,
-                height: self.readback_size.1,
+                frame: Arc::new(frame.into_bytes()),
+                width: size.0,
+                height: size.1,
                 timestamp: std::time::Instant::now(),
                 state: AnalyzerStateSnapshot::default(),
             };
-            for (name, inst) in &self.instances {
-                // A frameless analyzer on the same deck is still ticked, but
-                // gets no pixels.
-                let payload = if inst.needs_frames {
-                    input.clone()
-                } else {
-                    AnalyzerInput {
-                        frame: Vec::new(),
-                        width: input.width,
-                        height: input.height,
-                        timestamp: input.timestamp,
-                        state: states.get(name).cloned().unwrap_or_default(),
-                    }
-                };
-                let mut payload = payload;
-                payload.state = states.get(name).cloned().unwrap_or_default();
-                match inst.frame_tx.try_send(payload) {
-                    Ok(()) | Err(TrySendError::Full(_)) => {}
-                    Err(TrySendError::Disconnected(_)) => {
-                        log::warn!("Analyzer '{name}' channel disconnected");
-                    }
+            self.deliver(&input, states);
+        }
+
+        let room = self
+            .instances
+            .values()
+            .any(|i| i.frame_size.is_some() && !i.frame_tx.is_full());
+        if !room {
+            return None;
+        }
+        let capture = self.capture.as_mut()?;
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Analyzer capture"),
+        });
+        capture.encode(device, &mut encoder, source_texture);
+        Some(encoder.finish())
+    }
+
+    /// An input with the deck's size and no pixels.
+    fn placeholder((width, height): (u32, u32)) -> AnalyzerInput {
+        AnalyzerInput {
+            frame: Arc::new(Vec::new()),
+            width,
+            height,
+            timestamp: std::time::Instant::now(),
+            state: AnalyzerStateSnapshot::default(),
+        }
+    }
+
+    /// Sends `input` to every analyzer that reads pixels, and a placeholder of
+    /// its size to the others. Each gets its own bound state. Non-blocking; a
+    /// full channel drops the frame.
+    fn deliver(&self, input: &AnalyzerInput, states: &HashMap<String, AnalyzerStateSnapshot>) {
+        let frameless = AnalyzerInput {
+            frame: Arc::new(Vec::new()),
+            ..input.clone()
+        };
+        for (name, inst) in &self.instances {
+            let mut payload = if inst.frame_size.is_some() {
+                input.clone()
+            } else {
+                frameless.clone()
+            };
+            payload.state = states.get(name).cloned().unwrap_or_default();
+            match inst.frame_tx.try_send(payload) {
+                Ok(()) | Err(TrySendError::Full(_)) => {}
+                Err(TrySendError::Disconnected(_)) => {
+                    log::warn!("Analyzer '{name}' channel disconnected");
                 }
             }
         }
-
-        // Queue this frame's copy, read next frame.
-        let readback = self.readback.as_mut().unwrap();
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Analyzer readback"),
-        });
-        readback.begin_readback(&mut encoder, source_texture);
-        Some(encoder.finish())
     }
 
     /// Whether any analyzer instance is running.
@@ -528,96 +494,6 @@ fn stop_instance(mut inst: AnalyzerInstance, type_name: &str, suffix: &str) {
 
 // ── Default Registry ────────────────────────────────────────────────────────
 
-/// Readback format matching a deck texture, if analyzers can read it.
-fn readback_format_for(format: wgpu::TextureFormat) -> Option<crate::renderer::ReadbackFormat> {
-    use crate::renderer::ReadbackFormat as R;
-    use wgpu::TextureFormat as F;
-    Some(match format {
-        F::Rgba8Unorm | F::Rgba8UnormSrgb => R::Rgba8,
-        F::Bgra8Unorm | F::Bgra8UnormSrgb => R::Bgra8,
-        F::Rgb10a2Unorm => R::Rgb10A2,
-        F::Rgba16Float => R::Rgba16Float,
-        F::Rgba16Unorm => R::Rgba16Unorm,
-        _ => return None,
-    })
-}
-
-/// One linear-light channel as an eight-bit sRGB sample. Analyzers expect
-/// display-encoded values; linear input would darken brightness and face
-/// results.
-fn linear_to_srgb8(value: f32) -> u8 {
-    let v = value.clamp(0.0, 1.0);
-    let encoded = if v <= 0.003_130_8 {
-        v * 12.92
-    } else {
-        1.055 * v.powf(1.0 / 2.4) - 0.055
-    };
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    {
-        (encoded * 255.0).round() as u8
-    }
-}
-
-/// Converts a readback frame to the RGBA8 analyzers expect.
-fn frame_to_rgba8(frame: &crate::renderer::ReadbackFrame) -> Vec<u8> {
-    use crate::renderer::ReadbackFormat as R;
-    let bytes = frame.bytes();
-    match frame.format() {
-        R::Rgba8 => bytes.to_vec(),
-        R::Bgra8 => {
-            let mut out = bytes.to_vec();
-            for pixel in out.as_chunks_mut::<4>().0 {
-                pixel.swap(0, 2);
-            }
-            out
-        }
-        R::Rgba16Float => {
-            let mut out = Vec::with_capacity(bytes.len() / 2);
-            for pixel in bytes.as_chunks::<8>().0 {
-                for channel in 0..4 {
-                    let raw = u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]);
-                    let value = f32::from(half::f16::from_bits(raw));
-                    // Alpha is linear; only color channels are encoded.
-                    out.push(if channel == 3 {
-                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                        {
-                            (value.clamp(0.0, 1.0) * 255.0).round() as u8
-                        }
-                    } else {
-                        linear_to_srgb8(value)
-                    });
-                }
-            }
-            out
-        }
-        R::Rgba16Unorm => {
-            let mut out = Vec::with_capacity(bytes.len() / 2);
-            for pixel in bytes.as_chunks::<8>().0 {
-                for channel in 0..4 {
-                    let raw = u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]);
-                    out.push((raw >> 8) as u8);
-                }
-            }
-            out
-        }
-        R::Rgb10A2 => {
-            let mut out = Vec::with_capacity(bytes.len());
-            for pixel in bytes.as_chunks::<4>().0 {
-                let word = u32::from_le_bytes([pixel[0], pixel[1], pixel[2], pixel[3]]);
-                out.push(((word & 0x3ff) >> 2) as u8);
-                out.push((((word >> 10) & 0x3ff) >> 2) as u8);
-                out.push((((word >> 20) & 0x3ff) >> 2) as u8);
-                let alpha = ((word >> 30) & 0x3) as u8;
-                out.push(alpha * 85);
-            }
-            out
-        }
-        // The format gate refuses video layouts before a buffer is built, and
-        // `Rgba32Float` is the content light meter's readback, not a deck's.
-        R::Uyvy | R::P216 | R::Rgba32Float => Vec::new(),
-    }
-}
-
 /// Default registry with every built-in analyzer.
 pub(crate) fn default_registry() -> AnalyzerRegistry {
     #[allow(unused_mut)]
@@ -643,16 +519,16 @@ mod tests {
     use std::time::Instant;
 
     /// A frame-consuming analyzer on a color-path deck must encode a legal
-    /// copy. Submitting the encoder is the assertion, since that is where
+    /// capture. Submitting the encoder is the assertion, since that is where
     /// validation runs.
     #[test]
-    fn colour_path_deck_readback_encodes_a_legal_copy() {
+    fn color_path_deck_capture_encodes_a_legal_pass() {
         let Some(context) = crate::testing::headless_gpu() else {
             eprintln!("no GPU adapter; skipping");
             return;
         };
         let texture = context.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("colour path deck"),
+            label: Some("color path deck"),
             size: wgpu::Extent3d {
                 width: 64,
                 height: 36,
@@ -662,7 +538,7 @@ mod tests {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: crate::renderer::context::COLOR_PATH_FORMAT,
-            usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
 
@@ -673,7 +549,7 @@ mod tests {
 
         let command = deck
             .capture_frame(&context.device, &texture, &HashMap::new())
-            .expect("a frame-consuming analyzer encodes a readback");
+            .expect("a frame-consuming analyzer encodes a capture");
         context.queue.submit(std::iter::once(command));
         let _ = context.device.poll(wgpu::PollType::Wait {
             submission_index: None,
@@ -681,17 +557,250 @@ mod tests {
         });
     }
 
-    /// Whatever the deck's format, analyzers receive eight-bit RGBA.
-    #[test]
-    fn half_float_frames_convert_to_eight_bit_rgba() {
-        assert_eq!(
-            readback_format_for(crate::renderer::context::COLOR_PATH_FORMAT),
-            Some(crate::renderer::ReadbackFormat::Rgba16Float)
+    /// Records every input it gets. With a gate, each `analyze` waits for a
+    /// message on it, so its channel fills.
+    struct Recorder {
+        size: Option<u32>,
+        inputs: Sender<AnalyzerInput>,
+        gate: Option<Receiver<()>>,
+    }
+
+    impl Analyzer for Recorder {
+        fn analyzer_type(&self) -> &'static str {
+            "recorder"
+        }
+
+        fn output_schema(&self) -> AnalyzerSchema {
+            AnalyzerSchema {
+                scalars: Vec::new(),
+                textures: Vec::new(),
+            }
+        }
+
+        fn init(&mut self, _options: &serde_json::Value) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn frame_size(&self) -> Option<u32> {
+            self.size
+        }
+
+        fn analyze(&mut self, input: &AnalyzerInput) -> anyhow::Result<AnalyzerSnapshot> {
+            if let Some(gate) = &self.gate {
+                let _ = gate.recv();
+            }
+            let _ = self.inputs.send(input.clone());
+            Ok(AnalyzerSnapshot::from_defaults(&self.output_schema()))
+        }
+    }
+
+    /// A registry of recorders, one per `(name, size)`, all sending to `inputs`.
+    fn recorders(
+        sizes: &[(&'static str, Option<u32>)],
+        inputs: &Sender<AnalyzerInput>,
+        gate: Option<&Receiver<()>>,
+    ) -> AnalyzerRegistry {
+        sizes
+            .iter()
+            .fold(AnalyzerRegistry::new(), |registry, &(name, size)| {
+                let inputs = inputs.clone();
+                let gate = gate.cloned();
+                registry.register(name, move || {
+                    Box::new(Recorder {
+                        size,
+                        inputs: inputs.clone(),
+                        gate: gate.clone(),
+                    }) as Box<dyn Analyzer>
+                })
+            })
+    }
+
+    /// A color-path deck texture of linear RGBA pixels, row-major.
+    fn deck_texture(
+        context: &crate::renderer::context::GpuContext,
+        (width, height): (u32, u32),
+        pixel: impl Fn(u32, u32) -> [f32; 4],
+    ) -> wgpu::Texture {
+        let texture = context.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("analyzer test deck"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: crate::renderer::context::COLOR_PATH_FORMAT,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let bytes: Vec<u8> = (0..height)
+            .flat_map(|y| (0..width).map(move |x| (x, y)))
+            .flat_map(|(x, y)| pixel(x, y))
+            .flat_map(|v| half::f16::from_f32(v).to_bits().to_le_bytes())
+            .collect();
+        context.queue.write_texture(
+            texture.as_image_copy(),
+            &bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 8),
+                rows_per_image: Some(height),
+            },
+            texture.size(),
         );
-        // Output is display-encoded: linear mid-gray encodes well above mid-gray.
-        assert_eq!(linear_to_srgb8(0.0), 0);
-        assert_eq!(linear_to_srgb8(1.0), 255);
-        assert!(linear_to_srgb8(0.5) > 180, "linear 0.5 encodes bright");
+        texture
+    }
+
+    /// Capture and drain the GPU until `count` inputs arrive, or panic.
+    fn capture_inputs(
+        context: &crate::renderer::context::GpuContext,
+        deck: &mut DeckAnalyzers,
+        texture: &wgpu::Texture,
+        inputs: &Receiver<AnalyzerInput>,
+        count: usize,
+    ) -> Vec<AnalyzerInput> {
+        let mut received = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while received.len() < count {
+            assert!(
+                Instant::now() < deadline,
+                "only {} inputs arrived",
+                received.len()
+            );
+            if let Some(command) = deck.capture_frame(&context.device, texture, &HashMap::new()) {
+                context.queue.submit(std::iter::once(command));
+            }
+            let _ = context.device.poll(wgpu::PollType::wait_indefinitely());
+            received.extend(inputs.try_iter().filter(|i| !i.frame.is_empty()));
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        received
+    }
+
+    /// Linear light arrives display-encoded, scaled to the analyzer's long side.
+    #[test]
+    fn a_capture_arrives_display_encoded_at_the_analyzers_size() {
+        let Some(context) = crate::testing::headless_gpu() else {
+            return;
+        };
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let registry = recorders(&[("recorder", Some(16))], &tx, None);
+        let mut deck = DeckAnalyzers::new();
+        deck.request("recorder", &registry, &serde_json::Value::Null)
+            .expect("recorder starts");
+        let texture = deck_texture(&context, (64, 36), |_, _| [0.5, 0.5, 0.5, 1.0]);
+
+        let input = capture_inputs(&context, &mut deck, &texture, &rx, 1).remove(0);
+        assert_eq!((input.width, input.height), (16, 9));
+        assert_eq!(input.frame.len(), 16 * 9 * 4);
+        // Linear 0.5 is sRGB 0.735; alpha stays linear.
+        for pixel in input.frame.as_chunks::<4>().0 {
+            for &channel in &pixel[..3] {
+                assert!((187..=189).contains(&channel), "{pixel:?}");
+            }
+            assert_eq!(pixel[3], 255);
+        }
+    }
+
+    /// Each output pixel averages its whole footprint, so detail between
+    /// sample points still counts.
+    #[test]
+    fn a_reduced_capture_averages_its_footprint() {
+        let Some(context) = crate::testing::headless_gpu() else {
+            return;
+        };
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let registry = recorders(&[("recorder", Some(8))], &tx, None);
+        let mut deck = DeckAnalyzers::new();
+        deck.request("recorder", &registry, &serde_json::Value::Null)
+            .expect("recorder starts");
+        // White in the first two columns of every eight: a quarter of the light.
+        let texture = deck_texture(&context, (64, 64), |x, _| {
+            let v = if x % 8 < 2 { 1.0 } else { 0.0 };
+            [v, v, v, 1.0]
+        });
+
+        let input = capture_inputs(&context, &mut deck, &texture, &rx, 1).remove(0);
+        assert_eq!((input.width, input.height), (8, 8));
+        // Linear 0.25 is sRGB 0.537.
+        for pixel in input.frame.as_chunks::<4>().0 {
+            assert!((133..=141).contains(&pixel[0]), "{pixel:?}");
+        }
+    }
+
+    /// A deck smaller than every analyzer's long side is read at its own size.
+    #[test]
+    fn a_capture_never_upscales() {
+        let Some(context) = crate::testing::headless_gpu() else {
+            return;
+        };
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let registry = recorders(&[("recorder", Some(1920))], &tx, None);
+        let mut deck = DeckAnalyzers::new();
+        deck.request("recorder", &registry, &serde_json::Value::Null)
+            .expect("recorder starts");
+        let texture = deck_texture(&context, (64, 36), |_, _| [1.0, 0.0, 0.0, 1.0]);
+
+        let input = capture_inputs(&context, &mut deck, &texture, &rx, 1).remove(0);
+        assert_eq!((input.width, input.height), (64, 36));
+        assert_eq!(&input.frame[..4], &[255, 0, 0, 255]);
+    }
+
+    /// Analyzers on one deck share one frame at the largest size any asks for.
+    #[test]
+    fn analyzers_on_a_deck_share_one_frame() {
+        let Some(context) = crate::testing::headless_gpu() else {
+            return;
+        };
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let registry = recorders(&[("small", Some(8)), ("large", Some(32))], &tx, None);
+        let mut deck = DeckAnalyzers::new();
+        for name in ["small", "large"] {
+            deck.request(name, &registry, &serde_json::Value::Null)
+                .expect("recorder starts");
+        }
+        let texture = deck_texture(&context, (64, 32), |_, _| [0.0, 1.0, 0.0, 1.0]);
+
+        let inputs = capture_inputs(&context, &mut deck, &texture, &rx, 2);
+        assert_eq!((inputs[0].width, inputs[0].height), (32, 16));
+        assert!(Arc::ptr_eq(&inputs[0].frame, &inputs[1].frame));
+    }
+
+    /// When no analyzer can take a frame, the deck encodes no capture.
+    #[test]
+    fn a_full_channel_skips_the_capture() {
+        let Some(context) = crate::testing::headless_gpu() else {
+            return;
+        };
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let (open, gate) = crossbeam_channel::unbounded();
+        let registry = recorders(&[("recorder", Some(16))], &tx, Some(&gate));
+        let mut deck = DeckAnalyzers::new();
+        deck.request("recorder", &registry, &serde_json::Value::Null)
+            .expect("recorder starts");
+        let texture = deck_texture(&context, (64, 36), |_, _| [0.2, 0.2, 0.2, 1.0]);
+
+        // The worker holds one frame in `analyze` and the channel holds two more.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            assert!(Instant::now() < deadline, "the channel never filled");
+            let command = deck.capture_frame(&context.device, &texture, &HashMap::new());
+            let Some(command) = command else { break };
+            context.queue.submit(std::iter::once(command));
+            let _ = context.device.poll(wgpu::PollType::wait_indefinitely());
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            deck.capture_frame(&context.device, &texture, &HashMap::new())
+                .is_none(),
+            "still full"
+        );
+        drop(open);
+        deck.shutdown();
     }
 
     #[test]
@@ -743,13 +852,13 @@ mod tests {
             .expect("should create");
 
         let input = AnalyzerInput {
-            frame: vec![255u8; 4 * 4 * 4],
+            frame: Arc::new(vec![255u8; 4 * 4 * 4]),
             width: 4,
             height: 4,
             timestamp: Instant::now(),
             state: AnalyzerStateSnapshot::default(),
         };
-        deck.send_frame(&input, &HashMap::new());
+        deck.deliver(&input, &HashMap::new());
         std::thread::sleep(Duration::from_millis(200));
 
         let snapshot = deck

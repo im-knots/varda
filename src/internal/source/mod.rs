@@ -256,6 +256,18 @@ impl<'a> SourceControl<'a> {
     }
 }
 
+/// Most threads one source's decoder uses, so several decks do not each ask
+/// for every core.
+const MAX_DECODE_THREADS: usize = 8;
+
+/// Threads a deck source's decoder runs on: one per core, up to
+/// [`MAX_DECODE_THREADS`].
+pub(crate) fn decode_threads() -> usize {
+    std::thread::available_parallelism()
+        .map_or(1, std::num::NonZero::get)
+        .min(MAX_DECODE_THREADS)
+}
+
 /// A normalized base value with resolved modulation applied: an absolute
 /// source replaces the base, additive sources add to it.
 pub fn apply_modulation(base: f32, resolved: &ResolvedModulation) -> f32 {
@@ -297,6 +309,12 @@ pub trait DeckSourceProvider: 'static {
     /// What the library offers for creating decks of this type.
     fn library(&self, _query: &SourceQuery) -> LibrarySection {
         LibrarySection::default()
+    }
+
+    /// The header the library shows this type under with its neighbors.
+    /// Types sharing a group are registered next to each other.
+    fn library_group(&self) -> Option<crate::engine::value::provider::LibraryGroup> {
+        None
     }
 
     /// Run a library action: `rescan`, or one a [`LibraryNotice`] offered.

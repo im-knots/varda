@@ -7,7 +7,7 @@
 use super::super::{LibraryDrag, UIActions, UIData};
 use crate::engine::EngineCommand;
 use crate::engine::value::provider::{
-    ControlKind, LibraryCreate, LibraryEntry, LibraryNotice, ProviderTypeSnapshot,
+    ControlKind, LibraryCreate, LibraryEntry, LibraryGroup, LibraryNotice, ProviderTypeSnapshot,
 };
 use crate::engine::value::source::SourceConfig;
 
@@ -309,6 +309,83 @@ fn source_section(
     ui.add_space(4.0);
 }
 
+/// One top-level item in the library panel.
+#[derive(Debug)]
+enum LibraryItem<'a> {
+    Source(&'a ProviderTypeSnapshot),
+    Effects,
+    /// Neighboring types that share a group, under one header.
+    Group(&'a LibraryGroup, Vec<&'a ProviderTypeSnapshot>),
+}
+
+/// The panel's top level: the first listed type, which registration makes the
+/// generators, then effects, then every other listed type in order. Neighbors
+/// with the same group share one header.
+fn library_layout(sources: &[ProviderTypeSnapshot]) -> Vec<LibraryItem<'_>> {
+    let mut items = Vec::new();
+    for (i, ty) in sources.iter().filter(|t| t.listed).enumerate() {
+        match (&ty.library_group, items.last_mut()) {
+            (Some(group), Some(LibraryItem::Group(current, members))) if *current == group => {
+                members.push(ty);
+            }
+            (Some(group), _) => items.push(LibraryItem::Group(group, vec![ty])),
+            (None, _) => items.push(LibraryItem::Source(ty)),
+        }
+        if i == 0 {
+            items.push(LibraryItem::Effects);
+        }
+    }
+    if items.is_empty() {
+        items.push(LibraryItem::Effects);
+    }
+    items
+}
+
+/// The effects section: every filter shader, alphabetically.
+fn effects_section(ui: &mut egui::Ui, data: &UIData) {
+    let fx_header = egui::RichText::new(format!("🔮 Effects ({})", data.filters.len())).strong();
+    egui::CollapsingHeader::new(fx_header)
+        .id_salt("lib_effects")
+        .default_open(false)
+        .show(ui, |ui| {
+            for (name, filter_idx) in &data.filters {
+                let item_id = egui::Id::new(("lib_fx", *filter_idx));
+                ui.dnd_drag_source(item_id, LibraryDrag::Effect(*filter_idx), |ui| {
+                    ui.label(egui::RichText::new(format!("  ◇ {name}")).size(12.0));
+                });
+                // Store the effect filter index for the deferred drop handler.
+                if ui.ctx().is_being_dragged(item_id) {
+                    ui.ctx().memory_mut(|mem| {
+                        mem.data
+                            .insert_temp(egui::Id::new("__lib_dnd_fx_idx"), *filter_idx);
+                    });
+                }
+            }
+        });
+    ui.add_space(4.0);
+}
+
+/// A group's header, holding each member type's section.
+fn group_section(
+    ui: &mut egui::Ui,
+    group: &LibraryGroup,
+    members: &[&ProviderTypeSnapshot],
+    data: &UIData,
+    actions: &mut UIActions,
+) {
+    let total: usize = members.iter().map(|t| t.library.entries.len()).sum();
+    let header = egui::RichText::new(format!("{} {} ({total})", group.icon, group.label)).strong();
+    egui::CollapsingHeader::new(header)
+        .id_salt(("lib_group", &group.label))
+        .default_open(false)
+        .show(ui, |ui| {
+            for ty in members {
+                source_section(ui, ty, data, actions);
+            }
+        });
+    ui.add_space(4.0);
+}
+
 pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     ui.horizontal(|ui| {
         ui.heading("📚 Library");
@@ -331,33 +408,16 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
             mouse_wheel: true,
         })
         .show(ui, |ui| {
-            // === DECK SOURCES ===
-            for ty in data.sources.iter().filter(|t| t.listed) {
-                source_section(ui, ty, data, actions);
-            }
-
-            // === EFFECTS ===
-            let fx_header =
-                egui::RichText::new(format!("🔮 Effects ({})", data.filters.len())).strong();
-            egui::CollapsingHeader::new(fx_header)
-                .id_salt("lib_effects")
-                .default_open(false)
-                .show(ui, |ui| {
-                    for (name, filter_idx) in &data.filters {
-                        let item_id = egui::Id::new(("lib_fx", *filter_idx));
-                        ui.dnd_drag_source(item_id, LibraryDrag::Effect(*filter_idx), |ui| {
-                            ui.label(egui::RichText::new(format!("  ◇ {name}")).size(12.0));
-                        });
-                        // Store the effect filter index for the deferred drop handler.
-                        if ui.ctx().is_being_dragged(item_id) {
-                            ui.ctx().memory_mut(|mem| {
-                                mem.data
-                                    .insert_temp(egui::Id::new("__lib_dnd_fx_idx"), *filter_idx);
-                            });
-                        }
+            // === SOURCES AND EFFECTS ===
+            for item in library_layout(&data.sources) {
+                match item {
+                    LibraryItem::Source(ty) => source_section(ui, ty, data, actions),
+                    LibraryItem::Effects => effects_section(ui, data),
+                    LibraryItem::Group(group, members) => {
+                        group_section(ui, group, &members, data, actions);
                     }
-                });
-            ui.add_space(4.0);
+                }
+            }
 
             // === DECK PRESETS ===
             if !data.deck_presets.is_empty() {
@@ -438,6 +498,65 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::value::provider::LibrarySection;
+
+    fn source_type(id: &str, group: Option<LibraryGroup>) -> ProviderTypeSnapshot {
+        ProviderTypeSnapshot {
+            type_id: id.into(),
+            label: id.into(),
+            icon: String::new(),
+            available: true,
+            unavailable_reason: None,
+            listed: true,
+            params: vec![],
+            library: LibrarySection::default(),
+            library_group: group,
+        }
+    }
+
+    /// The first type (generators, by registration), then effects, then the
+    /// rest in order, with grouped types under one header where their group
+    /// starts. Unlisted types are left out.
+    #[test]
+    fn generators_and_effects_come_first_and_streams_share_a_header() {
+        let streams = Some(LibraryGroup::streams());
+        let sources = vec![
+            source_type("Shader", None),
+            source_type("Image", None),
+            source_type("Ndi", streams.clone()),
+            source_type("Srt", streams.clone()),
+            source_type("Html", None),
+            source_type("Hidden", None),
+        ];
+        let mut hidden = sources.clone();
+        hidden[5].listed = false;
+        let layout: Vec<String> = library_layout(&hidden)
+            .iter()
+            .map(|item| match item {
+                LibraryItem::Source(ty) => ty.type_id.clone(),
+                LibraryItem::Effects => "Effects".into(),
+                LibraryItem::Group(group, members) => format!(
+                    "{}[{}]",
+                    group.label,
+                    members
+                        .iter()
+                        .map(|m| m.type_id.as_str())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                ),
+            })
+            .collect();
+        assert_eq!(
+            layout,
+            [
+                "Shader",
+                "Effects",
+                "Image",
+                "Stream Sources[Ndi,Srt]",
+                "Html"
+            ]
+        );
+    }
 
     #[test]
     fn render_library_panel_smoke() {

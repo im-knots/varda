@@ -229,6 +229,25 @@ impl Mixer {
         )
     }
 
+    /// Take every finished effect and transition build.
+    fn poll_builds(&mut self, context: &GpuContext) {
+        self.poll_transition_build(context);
+        for channel in &mut self.channels {
+            for slot in &mut channel.decks {
+                slot.poll_transition_build(context);
+                for effect in &mut slot.deck.effects {
+                    effect.poll_build();
+                }
+            }
+            for effect in &mut channel.effects {
+                effect.poll_build();
+            }
+        }
+        for effect in &mut self.master_effects {
+            effect.poll_build();
+        }
+    }
+
     /// Render all channels, composite them via the crossfader, then apply master effects.
     /// `target_fps` sets the adaptive deck skip budget. `preview_channels` render even when
     /// culled by opacity, so their off-air previews update without reaching the compositor.
@@ -261,6 +280,9 @@ impl Mixer {
         let now = std::time::Instant::now();
         let dt = (now - self.last_render_time).as_secs_f32();
         self.last_render_time = now;
+
+        // Effects and transitions whose shader finished building are used from this frame on.
+        self.poll_builds(context);
 
         // Tick auto-crossfade
         if let Some(auto) = &mut self.auto_crossfade {
@@ -1001,7 +1023,7 @@ impl Mixer {
         let mut read_from_composite = true;
 
         for effect in &mut self.master_effects {
-            if !effect.enabled {
+            if !effect.is_active() {
                 continue;
             }
 
@@ -1175,6 +1197,12 @@ impl Mixer {
 
     /// The graded program for `key`, or the linear program when that key needs
     /// no grading of its own.
+    /// Whether a graded program is prepared for `key`.
+    #[cfg(test)]
+    pub(crate) fn has_graded_program(&self, key: ProgramKey) -> bool {
+        self.program_cache.contains_key(&key)
+    }
+
     pub fn program_view(&self, key: ProgramKey) -> &wgpu::TextureView {
         self.program_cache
             .get(&key)

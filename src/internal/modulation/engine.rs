@@ -23,8 +23,9 @@ use std::collections::HashMap;
 pub struct ModulationEngine {
     /// Available modulation sources (with stable UUIDs)
     pub sources: Vec<ModulationSourceEntry>,
-    /// Map from parameter name to list of modulations
-    pub assignments: HashMap<String, Vec<ParamModulation>>,
+    /// Map from parameter name to list of modulations. Private so every change
+    /// invalidates the evaluation order and the mod-on-mod index.
+    assignments: HashMap<String, Vec<ParamModulation>>,
     /// UUID → index cache for O(1) lookups during tick
     #[serde(skip)]
     uuid_to_idx: HashMap<String, usize>,
@@ -40,14 +41,26 @@ pub struct ModulationEngine {
     /// Whether `cached_order` needs recomputation.
     #[serde(skip)]
     order_dirty: bool,
-    /// Per-source flag: whether any mod-on-mod assignment targets this source.
+    /// Per source, the mod-on-mod inputs on each of its parameters. Rebuilt
+    /// with `cached_order`; empty for a source nothing modulates.
     #[serde(skip)]
-    has_mod_on_mod: Vec<bool>,
+    mod_inputs: Vec<Vec<ModInput>>,
+    /// Whether any source has mod-on-mod inputs, so a rig without any skips
+    /// the per-source check.
+    #[serde(skip)]
+    any_mod_inputs: bool,
     /// Parameters a performer has taken back from the arrangement.
     ///
     /// Session state, never persisted, so a reopened file always plays the arrangement.
     #[serde(skip)]
     overrides: HashMap<String, ParamOverride>,
+}
+
+/// The modulators on one parameter of a source: `(source index, amount)` pairs.
+#[derive(Debug, Clone)]
+struct ModInput {
+    param: String,
+    from: Vec<(usize, f32)>,
 }
 
 /// One parameter's suspension of arrangement control.
@@ -111,7 +124,6 @@ impl ModulationEngine {
         self.sources.push(entry);
         self.prev_values.push(0.0);
         self.current_values.push(0.0);
-        self.has_mod_on_mod.push(false);
         self.uuid_to_idx
             .insert(uuid.clone(), self.sources.len() - 1);
         self.invalidate_order();
@@ -132,7 +144,6 @@ impl ModulationEngine {
         self.sources.push(entry);
         self.prev_values.push(0.0);
         self.current_values.push(0.0);
-        self.has_mod_on_mod.push(false);
         self.uuid_to_idx
             .insert(uuid.clone(), self.sources.len() - 1);
         self.invalidate_order();
@@ -148,9 +159,6 @@ impl ModulationEngine {
             }
             if idx < self.current_values.len() {
                 self.current_values.remove(idx);
-            }
-            if idx < self.has_mod_on_mod.len() {
-                self.has_mod_on_mod.remove(idx);
             }
             // Remove assignments referencing this source (no reindexing needed)
             for mods in self.assignments.values_mut() {
@@ -280,6 +288,22 @@ impl ModulationEngine {
         rekeyed
     }
 
+    /// Move every assignment to the key `rekey` gives its current one,
+    /// merging assignments that land on the same key. Returns how many keys
+    /// changed.
+    pub fn rekey_assignments(&mut self, mut rekey: impl FnMut(&str) -> String) -> usize {
+        let mut changed = 0;
+        for (key, mods) in std::mem::take(&mut self.assignments) {
+            let new_key = rekey(&key);
+            if new_key != key {
+                changed += 1;
+            }
+            self.assignments.entry(new_key).or_default().extend(mods);
+        }
+        self.invalidate_order();
+        changed
+    }
+
     pub fn assign_mod_on_mod(
         &mut self,
         target_uuid: &str,
@@ -400,33 +424,22 @@ impl ModulationEngine {
         self.sources.iter().any(|e| e.uuid == uuid)
     }
 
-    fn get_mod_source_offset(&self, source_uuid: &str, param_name: &str) -> f32 {
-        // Look up "mod/{uuid}/{param}" keys without allocating a String.
-        let prefix = "mod/";
-        for (key, mods) in &self.assignments {
-            if key.starts_with(prefix)
-                && key[prefix.len()..].starts_with(source_uuid)
-                && key.len() > prefix.len() + source_uuid.len()
-                && key.as_bytes()[prefix.len() + source_uuid.len()] == b'/'
-                && &key[prefix.len() + source_uuid.len() + 1..] == param_name
-            {
-                let mut total = 0.0;
-                for m in mods {
-                    let Some(&idx) = self.uuid_to_idx.get(&m.source_id) else {
-                        continue;
-                    };
-                    if idx < self.current_values.len() {
-                        total += self.current_values[idx] * m.amount;
-                    }
-                }
-                return total;
-            }
-        }
-        0.0
+    /// The mod-on-mod offset on `param_name` of the source at `idx`: each
+    /// modulator's current value times its amount.
+    fn get_mod_source_offset(&self, idx: usize, param_name: &str) -> f32 {
+        self.mod_inputs[idx]
+            .iter()
+            .find(|input| input.param == param_name)
+            .map_or(0.0, |input| {
+                input
+                    .from
+                    .iter()
+                    .map(|&(source, amount)| self.current_values[source] * amount)
+                    .sum()
+            })
     }
 
     fn apply_mod_on_mod(&self, idx: usize, source: &ModulationSource) -> ModulationSource {
-        let uuid = &self.sources[idx].uuid;
         let mut modified = source.clone();
         match &mut modified {
             ModulationSource::LFO {
@@ -435,18 +448,17 @@ impl ModulationEngine {
                 amplitude,
                 ..
             } => {
-                *frequency =
-                    (*frequency + self.get_mod_source_offset(uuid, "frequency")).max(0.001);
-                *phase = (*phase + self.get_mod_source_offset(uuid, "phase")).clamp(0.0, 1.0);
+                *frequency = (*frequency + self.get_mod_source_offset(idx, "frequency")).max(0.001);
+                *phase = (*phase + self.get_mod_source_offset(idx, "phase")).clamp(0.0, 1.0);
                 *amplitude =
-                    (*amplitude + self.get_mod_source_offset(uuid, "amplitude")).clamp(0.0, 1.0);
+                    (*amplitude + self.get_mod_source_offset(idx, "amplitude")).clamp(0.0, 1.0);
             }
             ModulationSource::AudioBand {
                 gain, smoothing, ..
             } => {
-                *gain = (*gain + self.get_mod_source_offset(uuid, "gain")).max(0.0);
+                *gain = (*gain + self.get_mod_source_offset(idx, "gain")).max(0.0);
                 *smoothing =
-                    (*smoothing + self.get_mod_source_offset(uuid, "smoothing")).clamp(0.0, 0.99);
+                    (*smoothing + self.get_mod_source_offset(idx, "smoothing")).clamp(0.0, 0.99);
             }
             ModulationSource::ADSR {
                 attack,
@@ -455,17 +467,17 @@ impl ModulationEngine {
                 release,
                 ..
             } => {
-                *attack = (*attack + self.get_mod_source_offset(uuid, "attack")).max(0.001);
-                *decay = (*decay + self.get_mod_source_offset(uuid, "decay")).max(0.001);
-                *sustain = (*sustain + self.get_mod_source_offset(uuid, "sustain")).clamp(0.0, 1.0);
-                *release = (*release + self.get_mod_source_offset(uuid, "release")).max(0.001);
+                *attack = (*attack + self.get_mod_source_offset(idx, "attack")).max(0.001);
+                *decay = (*decay + self.get_mod_source_offset(idx, "decay")).max(0.001);
+                *sustain = (*sustain + self.get_mod_source_offset(idx, "sustain")).clamp(0.0, 1.0);
+                *release = (*release + self.get_mod_source_offset(idx, "release")).max(0.001);
             }
             ModulationSource::StepSequencer { rate, .. } => {
-                *rate = (*rate + self.get_mod_source_offset(uuid, "rate")).max(0.01);
+                *rate = (*rate + self.get_mod_source_offset(idx, "rate")).max(0.01);
             }
             ModulationSource::Analyzer { smoothing, .. } => {
                 *smoothing =
-                    (*smoothing + self.get_mod_source_offset(uuid, "smoothing")).clamp(0.0, 0.99);
+                    (*smoothing + self.get_mod_source_offset(idx, "smoothing")).clamp(0.0, 0.99);
             }
             // Envelopes stay out of the mod-on-mod dependency scan, since an arrangement can hold
             // hundreds of them.
@@ -479,8 +491,9 @@ impl ModulationEngine {
         const MAX_MOD_DEPTH: usize = 4;
         let n = self.sources.len();
 
-        self.has_mod_on_mod.clear();
-        self.has_mod_on_mod.resize(n, false);
+        self.mod_inputs.clear();
+        self.mod_inputs.resize(n, Vec::new());
+        self.any_mod_inputs = false;
 
         self.cached_order.clear();
         if n == 0 {
@@ -492,20 +505,26 @@ impl ModulationEngine {
         for (key, mods) in &self.assignments {
             if let Some(target_uuid) = Self::parse_mod_target(key)
                 && let Some(&target_idx) = self.uuid_to_idx.get(target_uuid)
+                && target_idx < n
             {
-                if target_idx < n {
-                    self.has_mod_on_mod[target_idx] = true;
-                }
+                let mut input = ModInput {
+                    param: key["mod/".len() + target_uuid.len() + 1..].to_string(),
+                    from: Vec::with_capacity(mods.len()),
+                };
                 for m in mods {
-                    if let Some(&src_idx) = self.uuid_to_idx.get(&m.source_id)
-                        && src_idx != target_idx
-                    {
+                    let Some(&src_idx) = self.uuid_to_idx.get(&m.source_id) else {
+                        continue;
+                    };
+                    input.from.push((src_idx, m.amount));
+                    if src_idx != target_idx {
                         deps[target_idx].push(src_idx);
                     }
                 }
+                self.mod_inputs[target_idx].push(input);
             }
         }
 
+        self.any_mod_inputs = self.mod_inputs.iter().any(|inputs| !inputs.is_empty());
         self.cached_order.reserve(n);
         let mut evaluated = vec![false; n];
         for _pass in 0..MAX_MOD_DEPTH {
@@ -614,7 +633,7 @@ impl ModulationEngine {
             let (time, dt) = (tc.time, tc.dt);
 
             // Only clone + apply mod-on-mod if this source actually has mod-on-mod assignments
-            let value = if i < self.has_mod_on_mod.len() && self.has_mod_on_mod[i] {
+            let value = if self.any_mod_inputs && !self.mod_inputs[i].is_empty() {
                 let mut effective = self.apply_mod_on_mod(i, &self.sources[i].source);
                 let v = effective.calculate(time, dt, audio, analyzers, self.prev_values[i]);
 
@@ -872,5 +891,157 @@ impl ModulationEngine {
         &self,
     ) -> impl Iterator<Item = (&String, &Vec<super::ParamModulation>)> {
         self.assignments.iter()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::modulation::{AnalyzerValues, AudioValues};
+
+    fn update(engine: &mut ModulationEngine, time: f32) {
+        engine.update_free_running(time, &AudioValues::default(), &AnalyzerValues::default());
+    }
+
+    /// The offset mod-on-mod applies to `param` of `target` this frame.
+    fn offset(engine: &mut ModulationEngine, target: &str, param: &str) -> f32 {
+        update(engine, 0.37);
+        let idx = engine.uuid_to_idx[target];
+        engine.get_mod_source_offset(idx, param)
+    }
+
+    fn value(engine: &ModulationEngine, uuid: &str) -> f32 {
+        engine.current_value_for(uuid)
+    }
+
+    fn key(target: &str, param: &str) -> String {
+        crate::engine::value::param::ParamAddress::modulator_param(target, param).to_string()
+    }
+
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-6
+    }
+
+    /// Each parameter sums its own modulators, scaled by their amounts.
+    #[test]
+    fn offsets_sum_each_parameters_modulators() {
+        let mut engine = ModulationEngine::new();
+        let target = engine.add_source(ModulationSource::sine_lfo(1.0));
+        let a = engine.add_source(ModulationSource::sine_lfo(0.3));
+        let b = engine.add_source(ModulationSource::sine_lfo(0.7));
+        let c = engine.add_source(ModulationSource::sine_lfo(1.3));
+        engine.assign_mod_on_mod(&target, "frequency", &a, 0.5);
+        engine.assign_mod_on_mod(&target, "frequency", &b, 0.25);
+        engine.assign_mod_on_mod(&target, "amplitude", &c, 0.1);
+
+        let frequency = offset(&mut engine, &target, "frequency");
+        let expected = 0.5 * value(&engine, &a) + 0.25 * value(&engine, &b);
+        assert!(close(frequency, expected), "{frequency} vs {expected}");
+        let amplitude = offset(&mut engine, &target, "amplitude");
+        assert!(close(amplitude, 0.1 * value(&engine, &c)));
+        assert_eq!(offset(&mut engine, &target, "phase"), 0.0);
+    }
+
+    /// In a cycle every offset is still its modulators' values times amounts.
+    #[test]
+    fn a_cycle_still_sums_its_modulators() {
+        let mut engine = ModulationEngine::new();
+        let a = engine.add_source(ModulationSource::sine_lfo(0.4));
+        let b = engine.add_source(ModulationSource::sine_lfo(0.9));
+        engine.assign_mod_on_mod(&a, "frequency", &b, 0.5);
+        engine.assign_mod_on_mod(&b, "frequency", &a, 0.5);
+        let on_a = offset(&mut engine, &a, "frequency");
+        assert!(close(on_a, 0.5 * value(&engine, &b)));
+        let on_b = offset(&mut engine, &b, "frequency");
+        assert!(close(on_b, 0.5 * value(&engine, &a)));
+    }
+
+    /// Every way the assignments change shows up in the next update.
+    #[test]
+    fn each_assignment_change_reaches_the_next_update() {
+        let mut engine = ModulationEngine::new();
+        let spare = engine.add_source(ModulationSource::sine_lfo(0.2));
+        let target = engine.add_source(ModulationSource::sine_lfo(1.0));
+        let a = engine.add_source(ModulationSource::sine_lfo(0.3));
+        let b = engine.add_source(ModulationSource::sine_lfo(0.7));
+        let frequency = key(&target, "frequency");
+
+        engine.assign_mod_on_mod(&target, "frequency", &a, 0.5);
+        let got = offset(&mut engine, &target, "frequency");
+        assert!(close(got, 0.5 * value(&engine, &a)), "assign");
+
+        engine.assign_mod_on_mod(&target, "frequency", &b, 0.25);
+        let got = offset(&mut engine, &target, "frequency");
+        let both = 0.5 * value(&engine, &a) + 0.25 * value(&engine, &b);
+        assert!(close(got, both), "second assign");
+
+        engine.clear_assignment_source(&frequency, &a);
+        let got = offset(&mut engine, &target, "frequency");
+        assert!(close(got, 0.25 * value(&engine, &b)), "clear one source");
+
+        engine.clear_mod_on_mod(&target, "frequency");
+        assert_eq!(offset(&mut engine, &target, "frequency"), 0.0, "clear");
+
+        engine.assign_mod_on_mod(&target, "frequency", &a, 0.5);
+        engine.clear_assignments(&frequency);
+        assert_eq!(offset(&mut engine, &target, "frequency"), 0.0, "clear key");
+
+        engine.assign_mod_on_mod(&target, "frequency", &a, 0.5);
+        engine.remove_assignments_with_prefix(&format!("mod/{target}/"));
+        assert_eq!(offset(&mut engine, &target, "frequency"), 0.0, "prefix");
+
+        // Removing an earlier source shifts every index after it.
+        engine.assign_mod_on_mod(&target, "frequency", &b, 0.25);
+        engine.remove_source(&spare);
+        let got = offset(&mut engine, &target, "frequency");
+        assert!(close(got, 0.25 * value(&engine, &b)), "shifted indices");
+
+        engine.remove_source(&b);
+        assert_eq!(
+            offset(&mut engine, &target, "frequency"),
+            0.0,
+            "modulator removed"
+        );
+
+        engine.assign_mod_on_mod(&a, "frequency", &target, 0.5);
+        engine.remove_source(&target);
+        assert_eq!(offset(&mut engine, &a, "frequency"), 0.0, "target removed");
+    }
+
+    /// A saved engine indexes its mod-on-mod on load.
+    #[test]
+    fn a_loaded_engine_indexes_its_mod_on_mod() {
+        let mut engine = ModulationEngine::new();
+        let target = engine.add_source(ModulationSource::sine_lfo(1.0));
+        let a = engine.add_source(ModulationSource::sine_lfo(0.3));
+        engine.assign_mod_on_mod(&target, "frequency", &a, 0.5);
+        let json = serde_json::to_string(&engine).expect("serializes");
+        let mut loaded: ModulationEngine = serde_json::from_str(&json).expect("loads");
+        let got = offset(&mut loaded, &target, "frequency");
+        assert!(close(got, 0.5 * value(&loaded, &a)));
+    }
+
+    /// Re-keying moves assignments onto mod-on-mod keys, and drops legacy ones
+    /// whose target has no components.
+    #[test]
+    fn rekeying_reaches_the_next_update() {
+        let mut engine = ModulationEngine::new();
+        let target = engine.add_source(ModulationSource::sine_lfo(1.0));
+        let a = engine.add_source(ModulationSource::sine_lfo(0.3));
+        update(&mut engine, 0.1);
+        engine.assign(&format!("old/{target}/frequency"), &a, 0.5);
+        assert_eq!(offset(&mut engine, &target, "frequency"), 0.0);
+        engine.rekey_assignments(|k| k.replacen("old/", "mod/", 1));
+        let got = offset(&mut engine, &target, "frequency");
+        assert!(close(got, 0.5 * value(&engine, &a)), "rekey");
+
+        engine.clear_mod_on_mod(&target, "frequency");
+        engine.assign_saved(&key(&target, "frequency"), &a, 0.5, Some(0));
+        engine.rekey_legacy_components(|_| None);
+        assert_eq!(
+            offset(&mut engine, &target, "frequency"),
+            0.0,
+            "legacy dropped"
+        );
     }
 }

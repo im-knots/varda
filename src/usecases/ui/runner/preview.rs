@@ -5,8 +5,8 @@
 use super::UIRunner;
 
 /// Which preview a `PreviewEncoder` target belongs to.
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub(super) enum PreviewSlot {
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum PreviewSlot {
     Deck(String),
     Channel(usize),
     Main,
@@ -14,7 +14,7 @@ pub(super) enum PreviewSlot {
 }
 
 impl PreviewSlot {
-    pub(super) fn key(&self) -> String {
+    pub(crate) fn key(&self) -> String {
         match self {
             PreviewSlot::Deck(uuid) => format!("deck:{uuid}"),
             PreviewSlot::Channel(idx) => format!("ch:{idx}"),
@@ -22,6 +22,45 @@ impl PreviewSlot {
             PreviewSlot::Output(idx) => format!("out:{idx}"),
         }
     }
+}
+
+/// Texture IDs of the shapes visible inside their clip rects this frame.
+///
+/// A preview in a collapsed panel or a view not shown has no shape, and one
+/// scrolled out of its scroll area falls outside its clip.
+pub(crate) fn textures_drawn(
+    shapes: &[egui::epaint::ClippedShape],
+) -> std::collections::HashSet<egui::TextureId> {
+    fn collect(
+        shape: &egui::epaint::Shape,
+        clip: egui::Rect,
+        drawn: &mut std::collections::HashSet<egui::TextureId>,
+    ) {
+        if let egui::epaint::Shape::Vec(shapes) = shape {
+            for shape in shapes {
+                collect(shape, clip, drawn);
+            }
+            return;
+        }
+        let id = shape.texture_id();
+        if id != egui::TextureId::default() && shape.visual_bounding_rect().intersects(clip) {
+            drawn.insert(id);
+        }
+    }
+    let mut drawn = std::collections::HashSet::new();
+    for clipped in shapes {
+        collect(&clipped.shape, clipped.clip_rect, &mut drawn);
+    }
+    drawn
+}
+
+/// Whether `slot`'s registered texture was drawn this frame.
+pub(crate) fn is_drawn(
+    slot: &PreviewSlot,
+    texture_id: impl Fn(&PreviewSlot) -> Option<egui::TextureId>,
+    drawn: &std::collections::HashSet<egui::TextureId>,
+) -> bool {
+    texture_id(slot).is_some_and(|id| drawn.contains(&id))
 }
 
 /// Gamma-encodes linear engine textures so egui previews match the output.
@@ -38,7 +77,7 @@ impl PreviewSlot {
 ///
 /// Targets are cached per key, recreated only when the source size changes,
 /// and capped to `MAX_DIM` on the long edge.
-pub(super) struct PreviewEncoder {
+pub(crate) struct PreviewEncoder {
     pipeline: crate::renderer::BlitPipeline,
     targets: std::collections::HashMap<String, (wgpu::Texture, wgpu::TextureView)>,
 }
@@ -47,7 +86,7 @@ impl PreviewEncoder {
     /// Long-edge cap for preview targets.
     const MAX_DIM: u32 = 960;
 
-    fn new(device: &wgpu::Device) -> anyhow::Result<Self> {
+    pub(crate) fn new(device: &wgpu::Device) -> anyhow::Result<Self> {
         Ok(Self {
             // Non-sRGB target; see the type-level comment.
             pipeline: crate::renderer::BlitPipeline::new(device, wgpu::TextureFormat::Rgba8Unorm)?,
@@ -71,7 +110,7 @@ impl PreviewEncoder {
     /// Create or resize the target for `key`. Returns true when it was
     /// (re)created, in which case the caller must re-register it with egui: a
     /// `TextureId` is bound to one texture.
-    fn ensure_target(
+    pub(crate) fn ensure_target(
         &mut self,
         context: &crate::renderer::GpuContext,
         key: &str,
@@ -117,7 +156,7 @@ impl PreviewEncoder {
     ///
     /// One submit for all previews avoids a dozen submits per frame on weak GPUs.
     /// All previews share the same blit params, written once up front.
-    fn encode_all(
+    pub(crate) fn encode_all(
         &self,
         context: &crate::renderer::GpuContext,
         sources: &[(PreviewSlot, &wgpu::TextureView, u32, u32)],
@@ -366,17 +405,30 @@ impl UIRunner {
         encoder.retain_keys(&live);
     }
 
-    /// Gamma-encode every preview for this frame.
+    /// Gamma-encode the previews this frame's UI drew. Others keep their last
+    /// pixels until they are drawn again.
     ///
     /// Runs after the mixer render and output windows draw, before egui paints.
     /// See the frame sequence in `render_frame`.
-    pub(super) fn encode_previews(&mut self) {
+    pub(super) fn encode_previews(&mut self, drawn: &std::collections::HashSet<egui::TextureId>) {
         let Some(varda) = &self.varda else { return };
         let Some(encoder) = &self.preview_encoder else {
             return;
         };
         let context = varda.gpu_context();
-        encoder.encode_all(context, &Self::preview_sources(varda));
+        let mut sources = Self::preview_sources(varda);
+        sources.retain(|(slot, ..)| is_drawn(slot, |s| self.preview_texture_id(s), drawn));
+        encoder.encode_all(context, &sources);
+    }
+
+    /// The egui texture registered for `slot`, if any.
+    fn preview_texture_id(&self, slot: &PreviewSlot) -> Option<egui::TextureId> {
+        match slot {
+            PreviewSlot::Deck(uuid) => self.deck_preview_textures.get(uuid).copied(),
+            PreviewSlot::Channel(idx) => self.channel_preview_textures.get(idx).copied(),
+            PreviewSlot::Main => self.main_output_texture,
+            PreviewSlot::Output(idx) => self.output_preview_textures.get(idx).copied(),
+        }
     }
 
     /// Per-frame egui texture sync: keeps targets and registrations in step.
@@ -389,6 +441,79 @@ impl UIRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui::epaint::{ClippedShape, RectShape, Shape};
+    use egui::{Color32, Rect, TextureId, pos2, vec2};
+
+    fn image(id: u64, at: Rect) -> Shape {
+        let mut rect = RectShape::filled(at, 0.0, Color32::WHITE);
+        rect = rect.with_texture(
+            TextureId::User(id),
+            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+        );
+        Shape::Rect(rect)
+    }
+
+    fn clipped(clip: Rect, shape: Shape) -> ClippedShape {
+        ClippedShape {
+            clip_rect: clip,
+            shape,
+        }
+    }
+
+    /// Only previews visible inside their clip count; scrolled-away ones and
+    /// untextured shapes do not.
+    #[test]
+    fn drawn_textures_are_the_visible_textured_shapes() {
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let panel = Rect::from_min_size(pos2(0.0, 0.0), vec2(200.0, 200.0));
+        let shapes = [
+            clipped(
+                screen,
+                image(1, Rect::from_min_size(pos2(10.0, 10.0), vec2(96.0, 54.0))),
+            ),
+            clipped(
+                panel,
+                image(2, Rect::from_min_size(pos2(10.0, 400.0), vec2(96.0, 54.0))),
+            ),
+            clipped(
+                screen,
+                Shape::Vec(vec![
+                    Shape::Noop,
+                    image(3, Rect::from_min_size(pos2(300.0, 10.0), vec2(96.0, 54.0))),
+                ]),
+            ),
+            clipped(screen, Shape::rect_filled(screen, 0.0, Color32::BLACK)),
+        ];
+        let drawn = textures_drawn(&shapes);
+        assert_eq!(
+            drawn,
+            [TextureId::User(1), TextureId::User(3)]
+                .into_iter()
+                .collect()
+        );
+    }
+
+    /// A slot is encoded only when its registered texture was drawn.
+    #[test]
+    fn only_drawn_slots_are_encoded() {
+        let slots = [
+            PreviewSlot::Deck("a".to_string()),
+            PreviewSlot::Deck("b".to_string()),
+            PreviewSlot::Channel(0),
+            PreviewSlot::Main,
+        ];
+        let id = |slot: &PreviewSlot| match slot {
+            PreviewSlot::Deck(uuid) if uuid == "a" => Some(TextureId::User(1)),
+            PreviewSlot::Deck(_) => Some(TextureId::User(2)),
+            PreviewSlot::Channel(_) => None,
+            _ => Some(TextureId::User(4)),
+        };
+        let drawn = [TextureId::User(2), TextureId::User(4)]
+            .into_iter()
+            .collect();
+        let encoded: Vec<&PreviewSlot> = slots.iter().filter(|s| is_drawn(s, id, &drawn)).collect();
+        assert_eq!(encoded, [&slots[1], &slots[3]]);
+    }
 
     /// Targets are cached by this key, so a collision would show one preview's
     /// pixels in another's panel.

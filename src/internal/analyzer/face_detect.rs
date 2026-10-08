@@ -18,6 +18,9 @@ use super::traits::{
 const MODEL_SIZE: u32 = 128;
 /// Face landmarks mesh model input resolution.
 const MESH_MODEL_SIZE: u32 = 256;
+/// Long side of the frame read. The mesh crops the face from this frame, so a
+/// 1080p deck is read at its own size and its landmarks match full resolution.
+const FRAME_SIZE: u32 = 1920;
 /// Landmarks produced by the face mesh model.
 const NUM_MESH_LANDMARKS: usize = 478;
 /// Default confidence threshold for face detection.
@@ -818,6 +821,10 @@ impl Analyzer for FaceDetectAnalyzer {
         }
     }
 
+    fn frame_size(&self) -> Option<u32> {
+        Some(FRAME_SIZE)
+    }
+
     fn init(&mut self, options: &serde_json::Value) -> anyhow::Result<()> {
         if let Some(conf) = options
             .get("confidence")
@@ -1236,7 +1243,7 @@ mod tests {
     fn preprocess_produces_correct_shape() {
         let mut analyzer = FaceDetectAnalyzer::new();
         let input = AnalyzerInput {
-            frame: vec![128u8; 64 * 64 * 4],
+            frame: std::sync::Arc::new(vec![128u8; 64 * 64 * 4]),
             width: 64,
             height: 64,
             timestamp: Instant::now(),
@@ -1349,7 +1356,7 @@ mod tests {
     fn preprocess_face_crop_correct_shape() {
         let mut analyzer = FaceDetectAnalyzer::new();
         let input = AnalyzerInput {
-            frame: vec![128u8; 64 * 64 * 4],
+            frame: std::sync::Arc::new(vec![128u8; 64 * 64 * 4]),
             width: 64,
             height: 64,
             timestamp: Instant::now(),

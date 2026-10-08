@@ -1330,6 +1330,13 @@ mod tests {
         assert!((r_mod - 2.0 * g_mod).abs() < 1e-6, "r={r_mod}, g={g_mod}");
     }
 
+    /// Add `mods` to `key` as a preset or clipboard restore does.
+    fn restore(engine: &mut ModulationEngine, key: &str, mods: Vec<ParamModulation>) {
+        for m in mods {
+            engine.assign_saved(key, &m.source_id, m.amount, m.legacy_component);
+        }
+    }
+
     fn legacy(source_id: &str, component: Option<usize>) -> ParamModulation {
         ParamModulation {
             source_id: source_id.to_string(),
@@ -1344,18 +1351,20 @@ mod tests {
         let mut engine = ModulationEngine::new();
         let uuid = engine.add_source(ModulationSource::sine_lfo(1.0));
         engine.update_free_running(0.25, &empty_audio(), &empty_analyzers());
-        engine
-            .assignments
-            .insert("tint".into(), vec![legacy(&uuid, Some(0))]);
+        restore(&mut engine, "tint", vec![legacy(&uuid, Some(0))]);
         assert_eq!(engine.get_modulation("tint"), 0.0);
 
         let rekeyed = engine.rekey_legacy_components(|key| {
             (key == "tint").then_some(crate::engine::value::param::ComponentKind::Color)
         });
         assert_eq!(rekeyed, 1);
-        assert!(!engine.assignments.contains_key("tint"));
+        assert!(!engine.has_modulation("tint"));
         assert!(engine.get_modulation("tint/r") > 0.0);
-        assert!(engine.assignments["tint/r"][0].legacy_component.is_none());
+        assert!(
+            engine.assignments_for("tint/r")[0]
+                .legacy_component
+                .is_none()
+        );
     }
 
     #[test]
@@ -1363,28 +1372,25 @@ mod tests {
         use crate::engine::value::param::ComponentKind;
         let mut engine = ModulationEngine::new();
         let uuid = engine.add_source(ModulationSource::sine_lfo(1.0));
-        engine.assignments.insert(
-            "offset".into(),
+        restore(
+            &mut engine,
+            "offset",
             vec![legacy(&uuid, Some(1)), legacy(&uuid, None)],
         );
-        engine
-            .assignments
-            .insert("gone".into(), vec![legacy(&uuid, Some(2))]);
-        engine
-            .assignments
-            .insert("tint".into(), vec![legacy(&uuid, Some(7))]);
+        restore(&mut engine, "gone", vec![legacy(&uuid, Some(2))]);
+        restore(&mut engine, "tint", vec![legacy(&uuid, Some(7))]);
         engine.rekey_legacy_components(|key| match key {
             "offset" => Some(ComponentKind::Point),
             "tint" => Some(ComponentKind::Color),
             _ => None,
         });
         // The scalar assignment stays on the base key.
-        assert_eq!(engine.assignments["offset"].len(), 1);
-        assert_eq!(engine.assignments["offset/y"].len(), 1);
+        assert_eq!(engine.assignments_for("offset").len(), 1);
+        assert_eq!(engine.assignments_for("offset/y").len(), 1);
         // Unknown target and out-of-range index are dropped.
-        assert!(!engine.assignments.contains_key("gone"));
-        assert!(!engine.assignments.contains_key("tint"));
-        assert_eq!(engine.assignments.len(), 2);
+        assert!(!engine.has_modulation("gone"));
+        assert!(!engine.has_modulation("tint"));
+        assert_eq!(engine.assignments_iter().count(), 2);
     }
 
     // ── AudioBandPreset tests ────────────────────────────────────────

@@ -7,6 +7,8 @@ use super::traits::{Analyzer, AnalyzerInput, AnalyzerSchema, AnalyzerSnapshot, S
 
 /// Samples every N-th pixel.
 const DEFAULT_SAMPLE_STRIDE: usize = 4;
+/// Long side of the frame read. Mean and spread of luma need few pixels.
+const FRAME_SIZE: u32 = 256;
 
 /// Luminance weights (Rec.709).
 const LUM_R: f32 = 0.2126;
@@ -71,6 +73,10 @@ impl Analyzer for BrightnessAnalyzer {
             ],
             textures: Vec::new(),
         }
+    }
+
+    fn frame_size(&self) -> Option<u32> {
+        Some(FRAME_SIZE)
     }
 
     fn init(&mut self, options: &serde_json::Value) -> anyhow::Result<()> {
@@ -162,7 +168,7 @@ mod tests {
 
     fn make_input(width: u32, height: u32, r: u8, g: u8, b: u8) -> AnalyzerInput {
         AnalyzerInput {
-            frame: make_frame(width, height, r, g, b, 255),
+            frame: std::sync::Arc::new(make_frame(width, height, r, g, b, 255)),
             width,
             height,
             timestamp: Instant::now(),

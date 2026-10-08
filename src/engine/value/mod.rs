@@ -6,6 +6,7 @@
 pub mod detect;
 pub mod dome;
 pub mod editor;
+pub mod effect;
 pub mod entity;
 pub mod keymap;
 pub mod midi;

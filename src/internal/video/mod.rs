@@ -176,6 +176,14 @@ impl PlaybackState {
         self.modulation.speed.unwrap_or(self.speed)
     }
 
+    /// Owe exactly one frame on the next advance, whatever the wall clock did,
+    /// so tests and benches step frame by frame.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub(crate) fn owe_one_frame(&mut self) {
+        self.frame_accumulator = 1.0 / self.frame_rate;
+        self.last_advance = std::time::Instant::now();
+    }
+
     /// Advances the position by wall-clock time. Returns how many frames to
     /// decode and whether to seek.
     pub fn advance_frame(&mut self) -> AdvanceResult {
@@ -589,6 +597,46 @@ pub struct DecodeInboxes {
     pub modulation: modulation::PlaybackModulationInbox,
 }
 
+/// Lets an ffmpeg decode thread write frames straight into the deck's texture,
+/// so the render thread copies nothing.
+///
+/// A queued write lands before the commands of the next submit, so the deck
+/// samples a whole old frame or a whole new one. The render thread arms one
+/// write per frame for decks that want frames; a deck put to sleep is never
+/// armed and keeps its last frame. At most two writes are ever queued.
+pub struct DirectUpload {
+    queue: wgpu::Queue,
+    texture: wgpu::Texture,
+    armed: Arc<AtomicBool>,
+}
+
+impl DirectUpload {
+    pub fn new(queue: wgpu::Queue, texture: wgpu::Texture) -> Self {
+        Self {
+            queue,
+            texture,
+            armed: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Write `frame` if the render thread has armed a write since the last one.
+    fn write(&self, frame: FrameView<'_>) {
+        if !self.armed.swap(false, Ordering::AcqRel) {
+            return;
+        }
+        self.queue.write_texture(
+            self.texture.as_image_copy(),
+            frame.data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: u32::try_from(frame.stride).ok(),
+                rows_per_image: u32::try_from(frame.rows).ok(),
+            },
+            self.texture.size(),
+        );
+    }
+}
+
 /// Main-thread handle to a video decode thread.
 pub struct VideoDecodeHandle {
     cmd_tx: mpsc::Sender<VideoCommand>,
@@ -611,6 +659,8 @@ pub struct VideoDecodeHandle {
     /// Last sync config set from the main thread (for save and UI).
     transport_sync: Mutex<DeckTransportSync>,
     thread: Option<std::thread::JoinHandle<()>>,
+    /// Set when the decode thread writes frames into the texture itself.
+    armed: Option<Arc<AtomicBool>>,
     pub width: u32,
     pub height: u32,
     /// Dual-plane HAP source (for alpha detection in the render pass).
@@ -618,12 +668,13 @@ pub struct VideoDecodeHandle {
 }
 
 impl VideoDecodeHandle {
-    /// Spawns a decode thread for an ffmpeg `VideoPlayer`.
+    /// Spawns a decode thread for an ffmpeg `VideoPlayer`, which writes its
+    /// frames into the deck's texture through `upload`.
     ///
     /// # Panics
     ///
     /// Panics if the OS refuses to spawn the thread.
-    pub fn spawn_video(player: VideoPlayer) -> Self {
+    pub fn spawn_video(player: VideoPlayer, upload: DirectUpload) -> Self {
         let width = player.width();
         let height = player.height();
         let fps = player.frame_rate();
@@ -638,17 +689,16 @@ impl VideoDecodeHandle {
         let output_fps = Arc::new(AtomicU32::new(0));
         let inboxes = Arc::new(DecodeInboxes::default());
 
-        let fd = frame_data.clone();
         let ss = snapshot.clone();
         let sf = stop_flag.clone();
-        let fp = frame_pool.clone();
         let ofps = output_fps.clone();
         let ch = inboxes.clone();
+        let armed = Some(Arc::clone(&upload.armed));
 
         let thread = std::thread::Builder::new()
             .name("video-decode".into())
             .spawn(move || {
-                video_decode_thread(player, &cmd_rx, &fd, &ss, &sf, &fp, fps, &ofps, &ch);
+                video_decode_thread(player, &cmd_rx, &upload, &ss, &sf, fps, &ofps, &ch);
             })
             .expect("failed to spawn video decode thread");
 
@@ -663,6 +713,7 @@ impl VideoDecodeHandle {
             inboxes,
             transport_sync: Mutex::new(DeckTransportSync::default()),
             thread: Some(thread),
+            armed,
             width,
             height,
             is_dual_plane: false,
@@ -715,9 +766,18 @@ impl VideoDecodeHandle {
             inboxes,
             transport_sync: Mutex::new(DeckTransportSync::default()),
             thread: Some(thread),
+            armed: None,
             width,
             height,
             is_dual_plane,
+        }
+    }
+
+    /// Arm one direct write: the decode thread writes its next frame into the
+    /// texture. Call once per frame for a deck that wants frames.
+    pub fn arm_upload(&self) {
+        if let Some(armed) = &self.armed {
+            armed.store(true, Ordering::Release);
         }
     }
 
@@ -911,10 +971,9 @@ fn wait_for_next_frame(
 fn video_decode_thread(
     mut player: VideoPlayer,
     cmd_rx: &mpsc::Receiver<VideoCommand>,
-    frame_data: &Mutex<Option<DecodedFrame>>,
+    upload: &DirectUpload,
     snapshot: &Mutex<PlaybackSnapshot>,
     stop_flag: &AtomicBool,
-    frame_pool: &Mutex<Vec<Vec<u8>>>,
     fps: f64,
     output_fps: &AtomicU32,
     inboxes: &DecodeInboxes,
@@ -954,33 +1013,13 @@ fn video_decode_thread(
             .set_chase_transport(inboxes.chase.take(woke));
         player.playback.set_modulation(inboxes.modulation.take());
 
-        match player.next_frame() {
-            Ok(Some(data)) => {
-                let mut buf = pool_take(frame_pool);
-                buf.clear();
-                buf.extend_from_slice(data);
-                let frame = DecodedFrame {
-                    color_data: buf,
-                    alpha_data: None,
-                    color_format: None,
-                    alpha_format: None,
-                };
-                if let Ok(mut slot) = frame_data.lock() {
-                    // Recycle a frame the renderer never took (it fell behind) instead of
-                    // dropping its buffer.
-                    if let Some(old) = slot.take() {
-                        pool_return(frame_pool, old.color_data);
-                        if let Some(alpha) = old.alpha_data {
-                            pool_return(frame_pool, alpha);
-                        }
-                    }
-                    *slot = Some(frame);
-                }
+        let decoded = player.next_frame().map(|frame| {
+            if let Some(frame) = frame {
+                upload.write(frame);
             }
-            Ok(None) => {}
-            Err(e) => {
-                log::warn!("Video decode error: {e}");
-            }
+        });
+        if let Err(e) = decoded {
+            log::warn!("Video decode error: {e}");
         }
 
         if let Ok(mut ss) = snapshot.lock() {
@@ -1184,8 +1223,6 @@ pub struct VideoPlayer {
     height: u32,
     /// Loop mode, speed, in/out points and position.
     pub playback: PlaybackState,
-    /// Current RGBA frame.
-    frame_data: Vec<u8>,
     /// Ping-pong reverse cache, filled going forward and read backward.
     frame_cache: Vec<Vec<u8>>,
     /// Read index into `frame_cache` during reverse playback.
@@ -1201,6 +1238,8 @@ pub struct VideoPlayer {
     frame_byte_size: usize,
     /// Reused decoder output frame.
     decoded: Video,
+    /// What the decoder is being fed. Reset by a seek.
+    input: DecoderInput,
     /// Reused RGBA scaler output frame.
     rgb_frame: Video,
 }
@@ -1208,14 +1247,84 @@ pub struct VideoPlayer {
 // SAFETY: the player exclusively owns its ffmpeg allocations and is never used concurrently.
 unsafe impl Send for VideoPlayer {}
 
+/// A converted RGBA frame: `rows` rows of `row_bytes` each, `stride` bytes
+/// apart.
+#[derive(Debug, Clone, Copy)]
+pub struct FrameView<'a> {
+    pub data: &'a [u8],
+    pub stride: usize,
+    pub row_bytes: usize,
+    pub rows: usize,
+}
+
+impl<'a> FrameView<'a> {
+    /// A frame whose rows are already back to back.
+    fn packed(data: &'a [u8], row_bytes: usize, rows: usize) -> Self {
+        Self {
+            data,
+            stride: row_bytes,
+            row_bytes,
+            rows,
+        }
+    }
+
+    /// Append the frame to `out` with its rows back to back.
+    pub fn copy_packed_into(&self, out: &mut Vec<u8>) {
+        let size = self.row_bytes * self.rows;
+        if self.stride == self.row_bytes {
+            out.extend_from_slice(&self.data[..size]);
+            return;
+        }
+        out.reserve(size);
+        for row in self.data.chunks(self.stride).take(self.rows) {
+            out.extend_from_slice(&row[..self.row_bytes]);
+        }
+    }
+}
+
+/// What a clip's decoder is being fed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DecoderInput {
+    Packets,
+    /// End of stream was sent and the decoder is giving up the frames it held.
+    Draining,
+}
+
+/// How many threads a clip's decoder uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DecodeThreads {
+    #[cfg(test)]
+    One,
+    /// As many as a deck source may use; see [`crate::source::decode_threads`].
+    Auto,
+}
+
+/// The thread count for `threads`.
+fn decode_thread_count(threads: DecodeThreads) -> usize {
+    match threads {
+        #[cfg(test)]
+        DecodeThreads::One => 1,
+        DecodeThreads::Auto => crate::source::decode_threads(),
+    }
+}
+
 impl VideoPlayer {
-    /// Opens a video file.
+    /// Opens a video file, decoding on one thread per core.
     ///
     /// # Errors
     ///
     /// Returns an error if FFmpeg cannot be initialized, the file cannot be
     /// opened, it has no video stream, or a decoder or scaler cannot be created.
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
+        Self::with_threads(path, DecodeThreads::Auto)
+    }
+
+    /// Opens a video file, decoding on `threads`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::new`].
+    pub(crate) fn with_threads<P: AsRef<Path>>(path: P, threads: DecodeThreads) -> Result<Self> {
         ffmpeg::init().context("Failed to initialize FFmpeg")?;
         let ictx = input(&path).context("Failed to open video file")?;
         let video_stream = ictx
@@ -1223,8 +1332,17 @@ impl VideoPlayer {
             .best(Type::Video)
             .context("No video stream found")?;
         let video_stream_index = video_stream.index();
-        let context_decoder =
+        let mut context_decoder =
             ffmpeg::codec::context::Context::from_parameters(video_stream.parameters())?;
+        // libavcodec allows frame and slice threading by default but runs one
+        // thread. `set_threading` would also overwrite the threading type with
+        // a single kind, so only the count is set.
+        // SAFETY: the context is valid and not yet opened, which is when
+        // libavcodec reads `thread_count`.
+        unsafe {
+            (*context_decoder.as_mut_ptr()).thread_count =
+                i32::try_from(decode_thread_count(threads)).unwrap_or(1);
+        }
         let decoder = context_decoder.decoder().video()?;
         let width = decoder.width();
         let height = decoder.height();
@@ -1245,7 +1363,6 @@ impl VideoPlayer {
             Flags::BILINEAR,
         )?;
         let frame_byte_size = (width * height * 4) as usize;
-        let frame_data = vec![0u8; frame_byte_size];
         let max_cached_frames = MAX_CACHE_BYTES / frame_byte_size.max(1);
         log::info!(
             "Loaded video: {width}x{height} @ {fps:.2} fps, duration: {duration:.2}s (ping-pong cache: {max_cached_frames} frames)"
@@ -1258,7 +1375,6 @@ impl VideoPlayer {
             width,
             height,
             playback: PlaybackState::new(duration, fps),
-            frame_data,
             frame_cache: Vec::new(),
             cache_read_idx: 0,
             caching_enabled: true,
@@ -1266,6 +1382,7 @@ impl VideoPlayer {
             cache_overflow_warned: false,
             frame_byte_size,
             decoded: Video::empty(),
+            input: DecoderInput::Packets,
             rgb_frame: Video::empty(),
         })
     }
@@ -1276,7 +1393,7 @@ impl VideoPlayer {
     /// # Errors
     ///
     /// Returns an error if seeking, demuxing, decoding or color conversion fails.
-    pub fn next_frame(&mut self) -> Result<Option<&[u8]>> {
+    pub fn next_frame(&mut self) -> Result<Option<FrameView<'_>>> {
         // Suspension freezes position too, so a hidden clip does not drift on
         // wall-clock time. Pause does not stop here: a modulator on the playhead
         // can move a paused clip.
@@ -1296,9 +1413,10 @@ impl VideoPlayer {
         if !was_reverse && self.playback.reverse {
             // Forward to reverse at the out-point: serve from the cache.
             if self.frame_cache.is_empty() {
-                // No cache (overflow or very short clip). Hold the boundary frame;
-                // advance_frame walks back to in_point and flips forward below.
-                return Ok(Some(&self.frame_data));
+                // No cache (overflow or very short clip). Hold the boundary frame,
+                // which the texture already shows; advance_frame walks back to
+                // in_point and flips forward below.
+                return Ok(None);
             }
             self.cache_read_idx = self.frame_cache.len() - 1;
         } else if was_reverse && !self.playback.reverse {
@@ -1317,9 +1435,11 @@ impl VideoPlayer {
             let skip = result.frames_to_decode.max(1) as usize;
             if self.cache_read_idx >= skip {
                 self.cache_read_idx -= skip;
-                self.frame_data
-                    .copy_from_slice(&self.frame_cache[self.cache_read_idx]);
-                return Ok(Some(&self.frame_data));
+                return Ok(Some(FrameView::packed(
+                    &self.frame_cache[self.cache_read_idx],
+                    self.width as usize * 4,
+                    self.height as usize,
+                )));
             }
             // Cache ran out before in_point: start a new forward pass from in_point.
             self.playback.reverse = false;
@@ -1345,19 +1465,12 @@ impl VideoPlayer {
                 // Convert only the last frame; intermediate ones are skipped at speed > 1.
                 if decoded_count >= target_frames {
                     self.scaler.run(&self.decoded, &mut self.rgb_frame)?;
-                    let data = self.rgb_frame.data(0);
-                    let stride = self.rgb_frame.stride(0);
-                    for y in 0..self.height as usize {
-                        let src_offset = y * stride;
-                        let dst_offset = y * (self.width as usize * 4);
-                        let row_bytes = self.width as usize * 4;
-                        self.frame_data[dst_offset..dst_offset + row_bytes]
-                            .copy_from_slice(&data[src_offset..src_offset + row_bytes]);
-                    }
                     // Cache for ping-pong reverse.
                     if self.caching_enabled && self.playback.loop_mode == LoopMode::PingPong {
                         if self.frame_cache.len() * self.frame_byte_size < MAX_CACHE_BYTES {
-                            self.frame_cache.push(self.frame_data.clone());
+                            let mut cached = Vec::with_capacity(self.frame_byte_size);
+                            self.converted().copy_packed_into(&mut cached);
+                            self.frame_cache.push(cached);
                         } else {
                             self.caching_enabled = false;
                             self.cache_overflowed = true;
@@ -1371,23 +1484,15 @@ impl VideoPlayer {
                             }
                         }
                     }
-                    return Ok(Some(&self.frame_data));
+                    return Ok(Some(self.converted()));
                 }
                 // Intermediate frame at speed > 1: still cache it for ping-pong.
                 if self.caching_enabled && self.playback.loop_mode == LoopMode::PingPong {
                     self.scaler.run(&self.decoded, &mut self.rgb_frame)?;
-                    let data = self.rgb_frame.data(0);
-                    let stride = self.rgb_frame.stride(0);
-                    let mut cache_buf = vec![0u8; self.frame_byte_size];
-                    for y in 0..self.height as usize {
-                        let src_offset = y * stride;
-                        let dst_offset = y * (self.width as usize * 4);
-                        let row_bytes = self.width as usize * 4;
-                        cache_buf[dst_offset..dst_offset + row_bytes]
-                            .copy_from_slice(&data[src_offset..src_offset + row_bytes]);
-                    }
                     if self.frame_cache.len() * self.frame_byte_size < MAX_CACHE_BYTES {
-                        self.frame_cache.push(cache_buf);
+                        let mut cached = Vec::with_capacity(self.frame_byte_size);
+                        self.converted().copy_packed_into(&mut cached);
+                        self.frame_cache.push(cached);
                     }
                 }
                 continue;
@@ -1396,10 +1501,16 @@ impl VideoPlayer {
                 if stream.index() == self.video_stream_index {
                     self.decoder.send_packet(&packet)?;
                 }
+            } else if self.input == DecoderInput::Packets {
+                // The decoder still holds frames: reordered ones, and one per
+                // thread with frame threading. Take them before looping.
+                self.decoder.send_eof()?;
+                self.input = DecoderInput::Draining;
             } else {
                 // End of stream.
+                // Holds keep the frame the texture already shows.
                 if self.playback.chasing {
-                    return Ok(Some(&self.frame_data));
+                    return Ok(None);
                 }
                 match self.playback.loop_mode {
                     LoopMode::Loop => {
@@ -1416,17 +1527,27 @@ impl VideoPlayer {
                         // in_point, then flips forward.
                         self.playback.position =
                             self.playback.effective_out() - (1.0 / self.playback.frame_rate);
-                        return Ok(Some(&self.frame_data));
+                        return Ok(None);
                     }
                     LoopMode::OneShot => {
                         self.playback.playing = false;
                         return Ok(None);
                     }
                     LoopMode::HoldLast => {
-                        return Ok(Some(&self.frame_data));
+                        return Ok(None);
                     }
                 }
             }
+        }
+    }
+
+    /// The scaler's output: the frame last decoded.
+    fn converted(&self) -> FrameView<'_> {
+        FrameView {
+            data: self.rgb_frame.data(0),
+            stride: self.rgb_frame.stride(0),
+            row_bytes: self.width as usize * 4,
+            rows: self.height as usize,
         }
     }
 
@@ -1435,6 +1556,7 @@ impl VideoPlayer {
         let timestamp = (time_secs * f64::from(ffmpeg::ffi::AV_TIME_BASE)) as i64;
         self.ictx.seek(timestamp, ..timestamp)?;
         self.decoder.flush();
+        self.input = DecoderInput::Packets;
         self.playback.position = time_secs;
         Ok(())
     }
@@ -1596,6 +1718,187 @@ mod tests {
         assert!(
             next_frame_at > std::time::Instant::now(),
             "the schedule must restart in the future, not replay a backlog"
+        );
+    }
+
+    /// Hashes of the next `count` frames `player` serves, one owed frame per
+    /// tick.
+    fn frames(player: &mut VideoPlayer, count: usize) -> Vec<u64> {
+        use std::hash::{Hash, Hasher};
+        let mut frames = Vec::new();
+        for _ in 0..count * 4 {
+            if frames.len() == count {
+                break;
+            }
+            player.playback.owe_one_frame();
+            if let Some(frame) = player.next_frame().expect("decodes") {
+                let mut packed = Vec::new();
+                frame.copy_packed_into(&mut packed);
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                packed.hash(&mut hasher);
+                frames.push(hasher.finish());
+            }
+        }
+        assert_eq!(frames.len(), count, "a frame per tick");
+        frames
+    }
+
+    /// Threading changes how fast frames come, not what they are.
+    #[test]
+    fn threaded_decode_matches_single_threaded() {
+        let Some(clip) = crate::testing::generated_clip(320, 240, 2, "2M") else {
+            eprintln!("skipping: no ffmpeg CLI");
+            return;
+        };
+        let mut single = VideoPlayer::with_threads(&clip, DecodeThreads::One).expect("opens");
+        let mut threaded = VideoPlayer::with_threads(&clip, DecodeThreads::Auto).expect("opens");
+        assert_eq!(frames(&mut single, 40), frames(&mut threaded, 40));
+    }
+
+    /// Played across the loop point, every frame appears once, in order,
+    /// before the first repeats: none is left inside the decoder.
+    #[test]
+    fn every_frame_plays_before_the_loop_repeats() {
+        const FRAMES: usize = 60;
+        let Some(clip) = crate::testing::generated_clip(320, 240, 2, "2M") else {
+            eprintln!("skipping: no ffmpeg CLI");
+            return;
+        };
+        for threads in [DecodeThreads::One, DecodeThreads::Auto] {
+            let mut player = VideoPlayer::with_threads(&clip, threads).expect("opens");
+            player.playback.loop_mode = LoopMode::Loop;
+            let served = frames(&mut player, FRAMES + 2);
+            let distinct: std::collections::HashSet<&u64> = served[..FRAMES].iter().collect();
+            assert_eq!(distinct.len(), FRAMES, "{threads:?}: each frame once");
+            assert_eq!(
+                served[FRAMES..],
+                served[..2],
+                "{threads:?}: the loop restarts at the first frame"
+            );
+        }
+    }
+
+    /// Ping-pong plays the clip forward, then serves the frames it cached in
+    /// reverse order.
+    #[test]
+    fn ping_pong_serves_the_cached_frames_backwards() {
+        const FRAMES: usize = 60;
+        let Some(clip) = crate::testing::generated_clip(320, 240, 2, "2M") else {
+            eprintln!("skipping: no ffmpeg CLI");
+            return;
+        };
+        let mut player = VideoPlayer::new(&clip).expect("opens");
+        player.playback.loop_mode = LoopMode::PingPong;
+        let served = frames(&mut player, FRAMES + 10);
+        let (forward, back) = served.split_at(FRAMES);
+        let turn = forward
+            .iter()
+            .position(|f| *f == back[0])
+            .expect("the reverse pass starts on a forward frame");
+        let expected: Vec<u64> = forward[turn + 1 - back.len()..=turn]
+            .iter()
+            .rev()
+            .copied()
+            .collect();
+        assert_eq!(back, expected);
+    }
+
+    /// Hash of a texture's packed RGBA8 contents.
+    fn texture_hash(gpu: &crate::renderer::context::GpuContext, texture: &wgpu::Texture) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let (width, height) = (texture.width(), texture.height());
+        let row = width * 4;
+        let padded =
+            row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("video test readback"),
+            size: u64::from(padded * height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        encoder.copy_texture_to_buffer(
+            texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded),
+                    rows_per_image: Some(height),
+                },
+            },
+            texture.size(),
+        );
+        gpu.queue.submit(std::iter::once(encoder.finish()));
+        buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+        let mapped = buffer.slice(..).get_mapped_range().expect("mapped");
+        let mut packed = Vec::with_capacity((row * height) as usize);
+        for line in mapped.chunks(padded as usize) {
+            packed.extend_from_slice(&line[..row as usize]);
+        }
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        packed.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// The decode thread writes frames into the deck's texture itself, but only
+    /// while the render thread has armed it.
+    #[test]
+    fn the_decode_thread_writes_armed_frames_into_the_texture() {
+        let Some(gpu) = crate::testing::headless_gpu() else {
+            return;
+        };
+        // An odd width, so the scaler's row stride is not the packed row size.
+        let Some(clip) = crate::testing::generated_clip(330, 240, 2, "2M") else {
+            eprintln!("skipping: no ffmpeg CLI");
+            return;
+        };
+        let clip_frames: std::collections::HashSet<u64> =
+            frames(&mut VideoPlayer::new(&clip).expect("opens"), 60)
+                .into_iter()
+                .collect();
+        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("video test frame"),
+            size: wgpu::Extent3d {
+                width: 330,
+                height: 240,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let untouched = texture_hash(&gpu, &texture);
+        let handle = VideoDecodeHandle::spawn_video(
+            VideoPlayer::new(&clip).expect("opens"),
+            DirectUpload::new(gpu.queue.clone(), texture.clone()),
+        );
+
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(
+            texture_hash(&gpu, &texture),
+            untouched,
+            "nothing written unarmed"
+        );
+
+        handle.arm_upload();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let written = loop {
+            let hash = texture_hash(&gpu, &texture);
+            if hash != untouched || std::time::Instant::now() > deadline {
+                break hash;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        assert!(
+            clip_frames.contains(&written),
+            "the texture holds a frame of the clip"
         );
     }
 

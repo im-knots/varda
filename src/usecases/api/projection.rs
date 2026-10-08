@@ -173,6 +173,7 @@ pub(crate) mod tests {
                         gpu_render_cost_us: 0.0,
                         fps: 60.0,
                         source_asleep: false,
+                        source_pending: false,
                         running_analyzers: vec![],
                     }],
                     effects: vec![],
@@ -301,6 +302,7 @@ pub(crate) mod tests {
             sinks: std::sync::Arc::default(),
             sources: std::sync::Arc::new(vec![
                 crate::engine::value::provider::ProviderTypeSnapshot {
+                    library_group: None,
                     type_id: "Ndi".into(),
                     label: "NDI".into(),
                     icon: String::new(),

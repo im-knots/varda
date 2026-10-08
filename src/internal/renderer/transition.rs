@@ -7,6 +7,39 @@ use super::ISFUniforms;
 use anyhow::Result;
 use wgpu::util::DeviceExt;
 
+/// A transition's pipeline building off the render thread.
+pub struct PendingTransition {
+    pub shader: crate::isf::ISFShader,
+    build: std::sync::mpsc::Receiver<Result<TransitionPipeline>>,
+}
+
+impl PendingTransition {
+    /// Start compiling `shader` and building its pipeline for the compositing format.
+    pub fn spawn(context: &super::GpuContext, shader: crate::isf::ISFShader) -> Self {
+        let device = context.device.clone();
+        let format = context.compositing_format;
+        let source = shader.fragment_source.clone();
+        let name = shader.name();
+        let build = super::builds::spawn(move || {
+            let spirv = crate::isf::compile_glsl_to_spirv(&source, &name)
+                .map_err(|e| e.context("Failed to compile transition shader"))?;
+            TransitionPipeline::new(&device, &spirv, format)
+        });
+        Self { shader, build }
+    }
+
+    /// The pipeline once its build finished, or `None` while it builds.
+    pub fn poll(&self) -> Option<Result<TransitionPipeline>> {
+        match self.build.try_recv() {
+            Ok(result) => Some(result),
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                Some(Err(anyhow::anyhow!("the transition build stopped")))
+            }
+        }
+    }
+}
+
 pub struct TransitionPipeline {
     pub pipeline: wgpu::RenderPipeline,
     pub bind_group_layout: wgpu::BindGroupLayout,

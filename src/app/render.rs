@@ -5,6 +5,35 @@ use crate::mixer::Mixer;
 use crate::renderer::context::{CalibrationMode, OutputSource, SurfaceRenderInfo};
 use crate::surface::ContentMapping;
 
+/// What a live output draws this frame.
+enum Shown<'a> {
+    /// The projector calibration card, full frame, bypassing surfaces and warp.
+    Card,
+    /// The output's program.
+    Program,
+    /// Surfaces bottom first. With `cards`, calibration cards replace their sources.
+    Surfaces {
+        surfaces: Vec<ShownSurface<'a>>,
+        cards: bool,
+    },
+}
+
+/// One surface an output shows.
+struct ShownSurface<'a> {
+    surface: &'a crate::surface::Surface,
+    /// Which calibration card it shows while calibrating surfaces.
+    card: usize,
+    overlap_zones: crate::renderer::edge_blend::SurfaceOverlapZones,
+}
+
+/// What live outputs read this frame, prepared before they draw.
+struct OutputDemand {
+    programs: Vec<crate::mixer::ProgramKey>,
+    /// Sorted channel positions per sub-mix.
+    sub_mixes: Vec<Vec<usize>>,
+    channels: Vec<usize>,
+}
+
 /// What a picked file becomes.
 #[derive(Debug, Clone)]
 pub enum FileDialogTarget {
@@ -389,45 +418,20 @@ impl VardaApp {
     pub fn render_outputs(&mut self) {
         let context = &self.render.context;
 
-        // Sub-mixes for Channels(...) sources.
-        {
-            let mut seen: std::collections::HashSet<Vec<usize>> = std::collections::HashSet::new();
-            let mut sub_mix_sources: Vec<Vec<usize>> = Vec::new();
-            for surface in &self.output.surface_manager.surfaces {
-                if let OutputSource::Channels(uuids) = &surface.source {
-                    let positions = self.mixer.channel_positions(uuids);
-                    if seen.insert(positions.clone()) {
-                        sub_mix_sources.push(positions);
-                    }
-                }
-            }
-            self.mixer.prepare_sub_mixes(&sub_mix_sources, context);
-        }
-
-        // Tonemapped copies for Channel(idx) sources.
-        {
-            let mut channel_indices: Vec<usize> = Vec::new();
-            let mut seen = std::collections::HashSet::new();
-            for surface in &self.output.surface_manager.surfaces {
-                if let OutputSource::Channel(uuid) = &surface.source
-                    && let Some(idx) = self.mixer.find_channel_by_uuid(uuid)
-                    && seen.insert(idx)
-                {
-                    channel_indices.push(idx);
-                }
-            }
-            if !channel_indices.is_empty() {
-                self.mixer
-                    .prepare_channel_tonemaps(&channel_indices, &self.render.context);
-            }
-        }
-
-        // One graded master program per distinct output transform, shared by
-        // the outputs that use it.
-        {
-            let keys = Self::program_keys_for_outputs(&self.output.outputs, &self.mixer);
-            self.mixer.prepare_programs(&keys, &self.render.context);
-        }
+        // Prepare only what live outputs read this frame.
+        let demand = Self::output_demand(
+            &self.output.outputs,
+            &self.output.surface_manager,
+            !self.output.calibration_textures.is_empty(),
+            &self.mixer,
+            crate::output::Output::is_live,
+        );
+        self.mixer.prepare_sub_mixes(&demand.sub_mixes, context);
+        self.mixer
+            .prepare_channel_tonemaps(&demand.channels, &self.render.context);
+        // One graded program per distinct output transform, shared by the outputs that use it.
+        self.mixer
+            .prepare_programs(&demand.programs, &self.render.context);
 
         let render_aspect = self.render.width as f32 / self.render.height.max(1) as f32;
         let mixer = &self.mixer;
@@ -459,34 +463,27 @@ impl VardaApp {
                 fit_aspect: Some(render_aspect),
             };
             let calibration = &self.output.calibration_textures;
-            let surfaces = &self.output.surface_manager;
             let infos: Vec<SurfaceRenderInfo<'_>>;
-            let shown = if output.calibration_mode == CalibrationMode::Projector
-                && !calibration.is_empty()
-            {
-                // Full-frame test card, bypassing surfaces and warp, for projector alignment.
-                crate::output::Content::Picture {
+            let shown = match Self::shown(
+                output,
+                &self.output.surface_manager,
+                !calibration.is_empty(),
+            ) {
+                Shown::Card => crate::output::Content::Picture {
                     view: &calibration[0].1,
                     fit_aspect: None,
+                },
+                Shown::Program => program(),
+                Shown::Surfaces { surfaces, cards } => {
+                    infos = Self::surface_infos(
+                        surfaces,
+                        cards.then_some(calibration.as_slice()),
+                        mixer,
+                        domemaster_view,
+                        program_key,
+                    );
+                    crate::output::Content::Surfaces(&infos)
                 }
-            } else if surfaces.surfaces.is_empty() {
-                // No stage geometry, so use the master's shape.
-                program()
-            } else if output.surface_assignments.is_empty()
-                && output.effective_unassigned()
-                    == crate::engine::value::render::Unassigned::Program
-            {
-                program()
-            } else {
-                infos = Self::surface_infos(
-                    output,
-                    surfaces,
-                    calibration,
-                    mixer,
-                    domemaster_view,
-                    program_key,
-                );
-                crate::output::Content::Surfaces(&infos)
             };
             match output.render(context, &mut self.sources.services, shown, fps) {
                 crate::output::RenderedFrame::Stop(reason) => {
@@ -522,47 +519,125 @@ impl VardaApp {
         }
     }
 
-    /// The surfaces `output` shows, bottom first: its enabled assignments, or
-    /// every surface when it has none. Calibration swaps content for a test card.
-    fn surface_infos<'a>(
+    /// What a live `output` draws this frame. `has_cards` is whether
+    /// calibration cards are loaded.
+    fn shown<'a>(
         output: &crate::output::Output,
         surface_manager: &'a crate::surface::SurfaceManager,
-        calibration_textures: &'a [(wgpu::Texture, wgpu::TextureView)],
-        mixer: &'a Mixer,
-        domemaster_view: Option<&'a wgpu::TextureView>,
-        program_key: crate::mixer::ProgramKey,
-    ) -> Vec<SurfaceRenderInfo<'a>> {
-        let calibrating = output.calibration_mode == CalibrationMode::Surfaces
-            && !calibration_textures.is_empty();
+        has_cards: bool,
+    ) -> Shown<'a> {
+        if output.calibration_mode == CalibrationMode::Projector && has_cards {
+            return Shown::Card;
+        }
+        // With no stage geometry, the master's shape.
+        if surface_manager.surfaces.is_empty()
+            || (output.surface_assignments.is_empty()
+                && output.effective_unassigned()
+                    == crate::engine::value::render::Unassigned::Program)
+        {
+            return Shown::Program;
+        }
+        // Its enabled assignments, or every surface when it has none.
         let all = output.surface_assignments.is_empty();
-        surface_manager
+        let surfaces = surface_manager
             .surfaces
             .iter()
             .enumerate()
             .filter_map(|(si, surface)| {
-                let (card, overlap_zones) = if all {
-                    (
-                        si,
-                        crate::renderer::edge_blend::SurfaceOverlapZones::default(),
-                    )
-                } else {
-                    let (ai, assignment) = output
-                        .surface_assignments
-                        .iter()
-                        .enumerate()
-                        .find(|(_, a)| a.enabled && a.surface_uuid == surface.uuid)?;
-                    (ai, assignment.overlap_zones.clone())
-                };
+                if all {
+                    return Some(ShownSurface {
+                        surface,
+                        card: si,
+                        overlap_zones: crate::renderer::edge_blend::SurfaceOverlapZones::default(),
+                    });
+                }
+                let (ai, assignment) = output
+                    .surface_assignments
+                    .iter()
+                    .enumerate()
+                    .find(|(_, a)| a.enabled && a.surface_uuid == surface.uuid)?;
+                Some(ShownSurface {
+                    surface,
+                    card: ai,
+                    overlap_zones: assignment.overlap_zones.clone(),
+                })
+            })
+            .collect();
+        Shown::Surfaces {
+            surfaces,
+            cards: output.calibration_mode == CalibrationMode::Surfaces && has_cards,
+        }
+    }
+
+    /// What the outputs `live` accepts read this frame: the show-wide program
+    /// always, since previews and the domemaster read it, plus each live
+    /// output's program and the sub-mixes and channels its surfaces show.
+    fn output_demand(
+        outputs: &[crate::output::Output],
+        surface_manager: &crate::surface::SurfaceManager,
+        has_cards: bool,
+        mixer: &Mixer,
+        live: impl Fn(&crate::output::Output) -> bool,
+    ) -> OutputDemand {
+        let mut demand = OutputDemand {
+            programs: vec![Self::master_program_key(mixer)],
+            sub_mixes: Vec::new(),
+            channels: Vec::new(),
+        };
+        for output in outputs.iter().filter(|o| live(o)) {
+            let key = Self::program_key_for(output, mixer);
+            if !demand.programs.contains(&key) {
+                demand.programs.push(key);
+            }
+            let Shown::Surfaces {
+                surfaces,
+                cards: false,
+            } = Self::shown(output, surface_manager, has_cards)
+            else {
+                continue;
+            };
+            for shown in surfaces {
+                match &shown.surface.source {
+                    OutputSource::Channels(uuids) => {
+                        let positions = mixer.channel_positions(uuids);
+                        if !demand.sub_mixes.contains(&positions) {
+                            demand.sub_mixes.push(positions);
+                        }
+                    }
+                    OutputSource::Channel(uuid) => {
+                        if let Some(idx) = mixer.find_channel_by_uuid(uuid)
+                            && !demand.channels.contains(&idx)
+                        {
+                            demand.channels.push(idx);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        demand
+    }
+
+    /// Render info for `surfaces`, bottom first. With `cards`, calibration
+    /// cards replace the surfaces' sources.
+    fn surface_infos<'a>(
+        surfaces: Vec<ShownSurface<'a>>,
+        cards: Option<&'a [(wgpu::Texture, wgpu::TextureView)]>,
+        mixer: &'a Mixer,
+        domemaster_view: Option<&'a wgpu::TextureView>,
+        program_key: crate::mixer::ProgramKey,
+    ) -> Vec<SurfaceRenderInfo<'a>> {
+        surfaces
+            .into_iter()
+            .filter_map(|shown| {
+                let surface = shown.surface;
                 let bb = surface.bounding_box();
-                let content_view = if calibrating {
-                    &calibration_textures[card % calibration_textures.len()].1
-                } else {
-                    Self::resolve_source(mixer, &surface.source, domemaster_view, program_key)?
-                };
-                let (uv_scale, uv_offset) = if calibrating {
-                    ([1.0, 1.0], [0.0, 0.0])
-                } else {
-                    Self::compute_uv(surface.content_mapping, &bb)
+                let (content_view, (uv_scale, uv_offset)) = match cards {
+                    Some(cards) => (&cards[shown.card % cards.len()].1, ([1.0, 1.0], [0.0, 0.0])),
+                    None => (
+                        Self::resolve_source(mixer, &surface.source, domemaster_view, program_key)?,
+                        Self::compute_uv(surface.content_mapping, &bb),
+                    ),
                 };
                 Some(SurfaceRenderInfo {
                     uuid: &surface.uuid,
@@ -573,7 +648,7 @@ impl VardaApp {
                     uv_scale,
                     uv_offset,
                     warp_mode: surface.effective_warp(),
-                    overlap_zones,
+                    overlap_zones: shown.overlap_zones,
                     hole_uv_contours: surface.hole_uv_contours(),
                 })
             })
@@ -599,21 +674,6 @@ impl VardaApp {
     /// Key for the show-wide look, used by UI previews and the domemaster.
     fn master_program_key(mixer: &Mixer) -> crate::mixer::ProgramKey {
         crate::mixer::ProgramKey::sdr(mixer.tonemap_mode())
-    }
-
-    /// Every distinct program the active outputs need, plus the show-wide one.
-    fn program_keys_for_outputs(
-        outputs: &[crate::output::Output],
-        mixer: &Mixer,
-    ) -> Vec<crate::mixer::ProgramKey> {
-        let mut keys = vec![Self::master_program_key(mixer)];
-        for output in outputs {
-            let key = Self::program_key_for(output, mixer);
-            if !keys.contains(&key) {
-                keys.push(key);
-            }
-        }
-        keys
     }
 
     fn resolve_source<'a>(
@@ -682,7 +742,118 @@ impl VardaApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::value::render::TonemapMode;
+    use crate::engine::{CommandResult, EngineCommand};
     use crate::surface::{BoundingBox, ContentMapping};
+
+    /// A stopped recording with its own tonemap, showing one surface whose
+    /// source is a sub-mix of both channels. Returns the output's uuid and
+    /// the sub-mix's channel positions.
+    fn stopped_output_on_a_sub_mix(app: &mut VardaApp) -> (String, Vec<usize>) {
+        let path = std::path::Path::new(&crate::testing::temp_workspace()).join("unused.mp4");
+        let sink = crate::engine::value::provider::ProviderConfig::new("recording")
+            .with("path", path.to_string_lossy().as_ref());
+        let CommandResult::OkWithId { uuid: output } = app.cmd_create_output(sink) else {
+            panic!("output not created");
+        };
+        let channels: Vec<String> = app
+            .mixer
+            .channels()
+            .iter()
+            .map(|c| c.uuid().to_string())
+            .collect();
+        assert_eq!(channels.len(), 2);
+        let positions = app.mixer.channel_positions(&channels);
+        app.execute_command(EngineCommand::AddSurface {
+            name: "Sub-mix".to_string(),
+            source: OutputSource::Channels(channels),
+        });
+        let surface = app.output.surface_manager.surfaces[0].uuid.clone();
+        app.execute_command(EngineCommand::AssignSurfaceToOutput {
+            output_uuid: output.clone(),
+            surface_uuid: surface,
+        });
+        app.execute_command(EngineCommand::SetOutputTonemap {
+            output_uuid: output.clone(),
+            tonemap: Some(TonemapMode::Reinhard),
+        });
+        (output, positions)
+    }
+
+    fn demand(app: &VardaApp, live: bool) -> OutputDemand {
+        VardaApp::output_demand(
+            &app.output.outputs,
+            &app.output.surface_manager,
+            true,
+            &app.mixer,
+            |_| live,
+        )
+    }
+
+    /// A stopped output's sub-mix and graded program are never prepared.
+    #[test]
+    fn a_stopped_output_prepares_nothing() {
+        let Some(mut app) = crate::testing::headless_app() else {
+            return;
+        };
+        let (_, positions) = stopped_output_on_a_sub_mix(&mut app);
+        for _ in 0..3 {
+            app.begin_frame();
+            app.render_frame();
+        }
+        assert!(!app.output.outputs[0].is_live());
+        assert!(app.mixer.get_sub_mix_view(&positions).is_none());
+        assert!(
+            !app.mixer
+                .has_graded_program(crate::mixer::ProgramKey::for_output(
+                    TonemapMode::Reinhard,
+                    None
+                ))
+        );
+        // The show-wide program is still prepared for previews.
+        assert!(
+            app.mixer
+                .has_graded_program(VardaApp::master_program_key(&app.mixer))
+        );
+    }
+
+    /// A live output asks for its program and the sub-mix its surface shows.
+    #[test]
+    fn a_live_output_demands_what_it_shows() {
+        let Some(mut app) = crate::testing::headless_app() else {
+            return;
+        };
+        let (_, positions) = stopped_output_on_a_sub_mix(&mut app);
+        let stopped = demand(&app, false);
+        assert_eq!(stopped.programs, [VardaApp::master_program_key(&app.mixer)]);
+        assert_eq!(stopped.sub_mixes.len(), 0);
+
+        let live = demand(&app, true);
+        assert!(
+            live.programs
+                .contains(&crate::mixer::ProgramKey::for_output(
+                    TonemapMode::Reinhard,
+                    None
+                ))
+        );
+        assert_eq!(live.sub_mixes, [positions]);
+    }
+
+    /// Calibration shows cards, so a calibrating output asks for no sources.
+    #[test]
+    fn a_calibrating_output_demands_no_sources() {
+        let Some(mut app) = crate::testing::headless_app() else {
+            return;
+        };
+        let (output, _) = stopped_output_on_a_sub_mix(&mut app);
+        for mode in [CalibrationMode::Projector, CalibrationMode::Surfaces] {
+            app.execute_command(EngineCommand::SetCalibrationMode {
+                output_uuid: output.clone(),
+                mode,
+            });
+            assert_eq!(demand(&app, true).sub_mixes.len(), 0, "{mode:?}");
+        }
+    }
 
     #[test]
     fn compute_uv_fill() {

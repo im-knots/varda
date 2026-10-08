@@ -310,10 +310,10 @@ fn build_rows(data: &UIData) -> Vec<Row<'_>> {
 fn effect_sources(effects: &[super::super::EffectInfo]) -> Vec<(String, Option<String>)> {
     effects
         .iter()
-        .map(|(uuid, name, _, _)| {
+        .map(|fx| {
             (
-                crate::engine::value::param::effect_prefix(uuid),
-                Some(name.clone()),
+                crate::engine::value::param::effect_prefix(&fx.uuid),
+                Some(fx.name.clone()),
             )
         })
         .collect()
@@ -2081,6 +2081,7 @@ mod tests {
         let provider = crate::video::provider::VideoProvider;
         std::sync::Arc::make_mut(&mut data.sources).push(
             crate::engine::value::provider::ProviderTypeSnapshot {
+                library_group: None,
                 type_id: provider.id().into(),
                 label: provider.label().into(),
                 icon: provider.icon().into(),
@@ -2542,7 +2543,7 @@ mod tests {
     #[test]
     fn a_master_effect_curve_lands_on_the_master_row() {
         let mut data = fixture_with_arrangement();
-        let fx = data.master_effect_info[0].0.clone();
+        let fx = data.master_effect_info[0].uuid.clone();
         push_envelope(
             &mut data,
             "env-master",
@@ -2570,7 +2571,7 @@ mod tests {
     #[test]
     fn a_channel_effect_curve_lands_under_its_group() {
         let mut data = fixture_with_arrangement();
-        let fx = data.channels[0].effects[0].0.clone();
+        let fx = data.channels[0].effects[0].uuid.clone();
         push_envelope(&mut data, "env-channel", &format!("effect/{fx}/param/mix"));
 
         let owners: Vec<usize> = build_rows(&data)
@@ -2615,7 +2616,7 @@ mod tests {
     #[test]
     fn a_deck_effect_curve_is_named_for_its_effect() {
         let mut data = fixture_with_arrangement();
-        let fx = data.channels[0].decks[0].effects[0].0.clone();
+        let fx = data.channels[0].decks[0].effects[0].uuid.clone();
         push_envelope(&mut data, "env-fx", &format!("effect/{fx}/param/amount"));
 
         let labels: Vec<String> = build_rows(&data)

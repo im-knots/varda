@@ -418,7 +418,7 @@ impl Deck {
             .effects
             .iter()
             .enumerate()
-            .filter(|(_, e)| e.enabled)
+            .filter(|(_, e)| e.is_active())
             .map(|(i, _)| i)
             .collect();
 

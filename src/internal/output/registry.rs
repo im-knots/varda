@@ -123,6 +123,7 @@ impl SinkRegistry {
                     listed: provider.listed(query),
                     params: provider.params().to_vec(),
                     library: provider.library(query),
+                    library_group: None,
                 }
             })
             .collect()

@@ -240,8 +240,9 @@ impl AnalyzerStateSnapshot {
 /// Input frame for an analyzer.
 #[derive(Debug, Clone)]
 pub(crate) struct AnalyzerInput {
-    /// RGBA pixels, downscaled from the deck's frame.
-    pub frame: Vec<u8>,
+    /// Display-encoded RGBA8 pixels, reduced from the deck's frame and shared
+    /// by every analyzer on the deck. Empty for analyzers that read no pixels.
+    pub frame: Arc<Vec<u8>>,
     /// Pixels.
     pub width: u32,
     /// Pixels.
@@ -269,19 +270,18 @@ pub(crate) trait Analyzer: Send + 'static {
     /// block or user config.
     fn init(&mut self, options: &serde_json::Value) -> anyhow::Result<()>;
 
-    /// Whether this analyzer reads the deck's pixels.
+    /// Long side in pixels of the frame this analyzer reads, or `None` if it
+    /// reads no pixels.
     ///
-    /// If `true`, the deck reads its frame back from the GPU every frame. If
-    /// `false`, there is no readback (it stalls the pipeline, and the
-    /// linear-light deck format fails validation as RGBA8); `analyze` still
-    /// runs, with a placeholder input to ignore.
-    fn needs_frame_input(&self) -> bool {
-        true
-    }
+    /// The deck reduces its frame on the GPU to the largest size its analyzers
+    /// ask for, never above its own. With `None`, `analyze` still runs, with a
+    /// placeholder input that has the deck's size and no pixels.
+    fn frame_size(&self) -> Option<u32>;
 
     /// Analyzes one frame, on the analyzer's thread. When
-    /// [`Self::needs_frame_input`] is `false`, `input` is a placeholder and its
-    /// pixels must not be read.
+    /// [`Self::frame_size`] is `None`, `input` is a placeholder and its pixels
+    /// must not be read. Read the size from `input`; it may be smaller than
+    /// asked for.
     fn analyze(&mut self, input: &AnalyzerInput) -> anyhow::Result<AnalyzerSnapshot>;
 
     /// Called when the analyzer stops. Default does nothing.

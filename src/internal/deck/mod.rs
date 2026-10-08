@@ -2,14 +2,12 @@ mod effect;
 mod render;
 mod source;
 
-use crate::generator::PassSet;
 pub use crate::generator::get_current_date;
 pub use crate::source::{PreprocessorSlot, ScalingMode, preprocessor_texture_format};
 pub(crate) use render::analyzer_registry;
 
 use crate::isf::ISFShader;
 use crate::params::ShaderParams;
-use crate::renderer::UnifiedPipeline;
 use crate::source::DeckSourceInstance;
 use std::time::Instant;
 
@@ -110,13 +108,11 @@ pub struct Effect {
     /// `format!`.
     param_prefix: String,
     pub shader: ISFShader,
-    pub pipeline: UnifiedPipeline,
+    /// The compiled shader and its GPU resources, built off the render thread.
+    program: effect::ProgramState,
     pub enabled: bool,
     pub params: ShaderParams,
-    pub passes: PassSet,
     pub target_format: wgpu::TextureFormat,
-    /// GPU textures loaded from ISF IMPORTED images (sorted by name for deterministic binding)
-    pub imported_textures: Vec<(String, wgpu::Texture, wgpu::TextureView)>,
     /// Preprocessor textures from PREPROCESSORS declarations (placeholder until analyzer provides data)
     pub preprocessor_textures: Vec<PreprocessorSlot>,
     /// Phase accumulators for smooth speed transitions

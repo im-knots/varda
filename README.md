@@ -1,4 +1,6 @@
 # Varda VJ
+[![GitHub Total Downloads](https://img.shields.io/github/downloads/im-knots/varda/total.svg)](https://github.com/im-knots/varda/releases) 
+![GitHub commits since latest release](https://img.shields.io/github/commits-since/im-knots/varda/latest)
 
 An open source VJ and visual performance tool with broadcast style routing. Built for VJs, installation artists, and anyone who wants to throw pixels at things.
 

@@ -443,6 +443,8 @@ pub struct DeckSnapshot {
     /// True while the arrangement has put this deck's source to sleep because
     /// nothing will show it soon. A sleeping video holds its frame.
     pub source_asleep: bool,
+    /// A source swap is building; the deck draws its current source until it is ready.
+    pub source_pending: bool,
     pub running_analyzers: Vec<RunningAnalyzerSnapshot>,
 }
 
@@ -466,6 +468,8 @@ pub struct EffectSnapshot {
     pub uuid: String,
     pub name: String,
     pub enabled: bool,
+    /// Whether the effect's shader is built; a building effect passes the picture through.
+    pub status: crate::engine::value::effect::EffectStatus,
     pub params: ShaderParamsSnapshot,
 }
 
@@ -1177,6 +1181,7 @@ mod tests {
             gpu_render_cost_us: 0.0,
             fps: 59.5,
             source_asleep: false,
+            source_pending: false,
             running_analyzers: vec![],
         };
         assert!(d.mute);

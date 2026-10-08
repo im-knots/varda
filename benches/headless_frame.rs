@@ -8,6 +8,10 @@
 ///                     the whole program (macOS only).
 ///   `syphon_output_surface` — the same output with one surface assigned, so
 ///                     the output composes surfaces before delivering.
+///   `inactive_outputs` — the default scene plus two stopped Syphon outputs:
+///                     one with its own tonemap, one showing a surface whose
+///                     source is a sub-mix of both channels. Timed with the GPU
+///                     drained, since what they cost is GPU work (macOS only).
 ///   `heavy_modulation` — the same scene with 128 LFOs, each modulating the
 ///                     next one's frequency and all driving the channel's
 ///                     opacity.
@@ -144,6 +148,90 @@ fn output_app(surface: bool) -> Option<VardaApp> {
     Some(app)
 }
 
+/// The default scene plus two stopped outputs whose preparation nothing shows.
+#[cfg(target_os = "macos")]
+fn inactive_outputs_app() -> Option<VardaApp> {
+    use varda::engine::value::render::{OutputSource, TonemapMode};
+    let mut app = output_app(false)?;
+    let sender = app.command_sender();
+    let _ = sender.send((
+        EngineCommand::CreateOutput {
+            sink: varda::engine::value::provider::ProviderConfig::new("syphon_server")
+                .with("server_name", "Varda Bench 2"),
+        },
+        None,
+    ));
+    frame(&mut app);
+    let state = app.build_engine_state();
+    let channels: Vec<String> = state
+        .mixer
+        .channels
+        .iter()
+        .map(|c| c.uuid.clone())
+        .collect();
+    let outputs: Vec<String> = state
+        .outputs
+        .windows
+        .iter()
+        .map(|o| o.uuid.clone())
+        .collect();
+    let _ = sender.send((
+        EngineCommand::AddSurface {
+            name: "Sub-mix".to_string(),
+            source: OutputSource::Channels(channels),
+        },
+        None,
+    ));
+    frame(&mut app);
+    let surface = app
+        .build_engine_state()
+        .outputs
+        .surfaces
+        .first()?
+        .uuid
+        .clone();
+    let _ = sender.send((
+        EngineCommand::SetOutputTonemap {
+            output_uuid: outputs[0].clone(),
+            tonemap: Some(TonemapMode::Reinhard),
+        },
+        None,
+    ));
+    let _ = sender.send((
+        EngineCommand::AssignSurfaceToOutput {
+            output_uuid: outputs.get(1)?.clone(),
+            surface_uuid: surface,
+        },
+        None,
+    ));
+    for output in outputs {
+        let _ = sender.send((
+            EngineCommand::StopOutput {
+                output_uuid: output,
+            },
+            None,
+        ));
+    }
+    frame(&mut app);
+    let state = app.build_engine_state().outputs;
+    assert_eq!(state.windows.len(), 2);
+    assert!(
+        state.windows.iter().all(|o| !o.is_active),
+        "both outputs stopped"
+    );
+    Some(app)
+}
+
+/// One frame with the GPU drained.
+#[cfg(target_os = "macos")]
+fn drained_frame(app: &mut VardaApp) {
+    frame(app);
+    let _ = app
+        .gpu_context()
+        .device
+        .poll(wgpu::PollType::wait_indefinitely());
+}
+
 fn frame(app: &mut VardaApp) {
     app.begin_frame();
     app.render_frame();
@@ -165,6 +253,12 @@ fn bench_headless_frame(c: &mut Criterion) {
                 b.iter(|| frame(std::hint::black_box(&mut app)));
             });
         }
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(mut app) = inactive_outputs_app() {
+        g.bench_function("inactive_outputs", |b| {
+            b.iter(|| drained_frame(std::hint::black_box(&mut app)));
+        });
     }
     if let Some(mut heavy) = heavy_modulation_app() {
         g.bench_function("heavy_modulation", |b| {

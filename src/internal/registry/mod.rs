@@ -354,26 +354,26 @@ impl ShaderRegistry {
         self.shaders.keys().cloned().collect()
     }
 
+    /// Generators, alphabetically.
     pub fn generators(&self) -> Vec<&ISFShader> {
-        self.shaders
-            .values()
-            .filter(|s| s.metadata.is_generator())
-            .collect()
+        self.sorted(|s| s.metadata.is_generator())
     }
 
-    /// Filters, excluding transitions.
+    /// Filters, excluding transitions, alphabetically.
     pub fn filters(&self) -> Vec<&ISFShader> {
-        self.shaders
-            .values()
-            .filter(|s| s.metadata.is_filter() && !s.metadata.is_transition())
-            .collect()
+        self.sorted(|s| s.metadata.is_filter() && !s.metadata.is_transition())
     }
 
+    /// Transitions, alphabetically.
     pub fn transitions(&self) -> Vec<&ISFShader> {
-        self.shaders
-            .values()
-            .filter(|s| s.metadata.is_transition())
-            .collect()
+        self.sorted(|s| s.metadata.is_transition())
+    }
+
+    /// The shaders `keep` accepts, by name ignoring case.
+    fn sorted(&self, keep: impl Fn(&ISFShader) -> bool) -> Vec<&ISFShader> {
+        let mut shaders: Vec<&ISFShader> = self.shaders.values().filter(|s| keep(s)).collect();
+        shaders.sort_by_cached_key(|s| s.name().to_lowercase());
+        shaders
     }
 
     pub fn count(&self) -> usize {
@@ -461,6 +461,30 @@ pub fn get_default_library_paths() -> Vec<PathBuf> {
 mod tests {
     use super::*;
     use std::fs;
+
+    /// Generators, filters and transitions come back alphabetically, ignoring
+    /// case, whatever order the files were read in.
+    #[test]
+    fn shader_lists_are_alphabetical() {
+        let mut registry = ShaderRegistry::new();
+        registry.add_library_path("shaders").expect("shaders");
+        registry.scan().expect("scan");
+        let names = |list: Vec<&ISFShader>| {
+            list.iter()
+                .map(|s| s.name().to_lowercase())
+                .collect::<Vec<_>>()
+        };
+        for (kind, list) in [
+            ("generators", names(registry.generators())),
+            ("filters", names(registry.filters())),
+            ("transitions", names(registry.transitions())),
+        ] {
+            let mut sorted = list.clone();
+            sorted.sort();
+            assert_ne!(list.len(), 0, "{kind}");
+            assert_eq!(list, sorted, "{kind}");
+        }
+    }
 
     /// The packaged layout resolves to the bundled shaders.
     #[test]

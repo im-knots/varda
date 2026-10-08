@@ -20,7 +20,7 @@ use winit::{
 mod camera_detect;
 mod detect;
 mod event_loop;
-mod preview;
+pub(crate) mod preview;
 
 pub(crate) use event_loop::WindowHost;
 
@@ -672,8 +672,9 @@ impl UIRunner {
 
         // 9b. Gamma-encode previews after the mixer (8) and output windows (9),
         // since window previews read their intermediate texture, and before egui
-        // paints (10), so thumbnails show this frame.
-        self.encode_previews();
+        // paints (10), so thumbnails show this frame. Only the ones this frame's
+        // UI drew are encoded.
+        self.encode_previews(&preview::textures_drawn(&full_output.shapes));
 
         // 10. UI surface last: blit, egui overlay and present are latency-tolerant.
         let t_submit = std::time::Instant::now();
