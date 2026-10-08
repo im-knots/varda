@@ -1,5 +1,6 @@
 name: clippy
 
+# Also runs on main to save the caches pull requests restore. See test.yml.
 on:
   pull_request:
     branches: [main]
@@ -12,6 +13,23 @@ on:
       - 'Cargo.lock'
       - 'build.rs'
       - '.github/workflows/clippy.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'benches/**'
+      - 'examples/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'build.rs'
+      - '.github/workflows/clippy.yml'
+
+# A new push to a pull request supersedes the run in flight. Runs on main always
+# finish, because they are what saves the caches every pull request restores.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -60,6 +78,11 @@ jobs:
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
+        with:
+          # Pull requests restore main's cache and never save their own. A pull
+          # request's cache is visible only to that pull request, and saving one
+          # per branch overflows the 10 GB repository limit and evicts main's.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Run clippy (pedantic)
         run: cargo clippy --all-targets -- -D warnings
@@ -85,6 +108,11 @@ jobs:
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
+        with:
+          # Pull requests restore main's cache and never save their own. A pull
+          # request's cache is visible only to that pull request, and saving one
+          # per branch overflows the 10 GB repository limit and evicts main's.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # Homebrew's arm64 prefix is not on the default linker search path, and
       # `--all-targets` links test/bench binaries. See AGENTS.md.
@@ -130,6 +158,11 @@ jobs:
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
+        with:
+          # Pull requests restore main's cache and never save their own. A pull
+          # request's cache is visible only to that pull request, and saving one
+          # per branch overflows the 10 GB repository limit and evicts main's.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Run clippy (pedantic)
         run: cargo clippy --all-targets --no-default-features --features face-detection,html,screen-capture -- -D warnings

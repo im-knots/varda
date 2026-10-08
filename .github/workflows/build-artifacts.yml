@@ -254,18 +254,20 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
 
-      - name: Install vcpkg FFmpeg
-        shell: pwsh
-        run: |
-          vcpkg install ffmpeg:x64-windows
-          echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
-
+      # Restore before installing. With the order reversed, vcpkg built FFmpeg from
+      # source on every run (about 25 minutes) and the cache was never read.
       - name: Cache vcpkg packages
         uses: actions/cache@v4
         with:
           path: C:\vcpkg\installed
           key: vcpkg-windows-x64-${{ hashFiles('.github/workflows/release.yml') }}
           restore-keys: vcpkg-windows-x64-
+
+      - name: Install vcpkg FFmpeg
+        shell: pwsh
+        run: |
+          vcpkg install ffmpeg:x64-windows
+          echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
 
       - name: Install LLVM (for shaderc)
         run: choco install llvm -y

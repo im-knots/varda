@@ -1,5 +1,7 @@
 name: test
 
+# Also runs on main: GitHub scopes a pull request's caches to that pull request, so
+# without a run here every new branch starts from a cold cache.
 on:
   pull_request:
     branches: [main]
@@ -12,6 +14,23 @@ on:
       - 'Cargo.lock'
       - 'build.rs'
       - '.github/workflows/test.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'shaders/**'
+      - 'kittest.toml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'build.rs'
+      - '.github/workflows/test.yml'
+
+# A new push to a pull request supersedes the run in flight. Runs on main always
+# finish, because they are what saves the caches every pull request restores.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -90,6 +109,11 @@ jobs:
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
+        with:
+          # Pull requests restore main's cache and never save their own. A pull
+          # request's cache is visible only to that pull request, and saving one
+          # per branch overflows the 10 GB repository limit and evicts main's.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Run test suite
         run: cargo test --workspace
@@ -97,7 +121,7 @@ jobs:
   test-windows:
     name: test (windows)
     runs-on: windows-latest
-    timeout-minutes: 90
+    timeout-minutes: 100
     env:
       # The runner has 16 GB and a small paging file. The first attempt died in
       # rustc, not the linker, mmapping dependency rlibs:
@@ -158,6 +182,17 @@ jobs:
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
+        with:
+          # Pull requests restore main's cache and never save their own. See above.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Save even when a later step fails, so a red suite still leaves the
+          # build cached for the next run.
+          cache-on-failure: true
+
+      # Built in its own step so a failing or timed-out suite below cannot cost
+      # the cache its build.
+      - name: Build test suite
+        run: cargo test --no-default-features --features face-detection,screen-capture --no-run
 
       # Its own step so the report reaches the log even when the suite below
       # fails, and so a Spout regression is named rather than buried among two
@@ -189,7 +224,12 @@ jobs:
       #
       # Serial execution was never a fix, only a way to make the log readable, and
       # it cost roughly four minutes a run on a 2586 test suite.
+      #
+      # Times out below the job limit on purpose. A step timeout is a failure, which
+      # still runs the cache save. A job timeout is a cancellation, which does not,
+      # and that left this job without any cache at all.
       - name: Run test suite
+        timeout-minutes: 85
         env:
           VARDA_REQUIRE_GPU: 1
         run: cargo test --no-default-features --features face-detection,screen-capture
