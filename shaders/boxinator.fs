@@ -1,6 +1,6 @@
 /*{
     "DESCRIPTION": "Boxinator - grid of cells that churn simplex noise over the input",
-    "CREDIT": "by mojovideotech, simplex noise by Ian McEwan, Ashima Arts",
+    "CREDIT": "inspired by mojovideotech, simplex noise by Ian McEwan, Ashima Arts",
     "ISFVSN": "2",
     "CATEGORIES": ["Filter", "Stylize"],
     "INPUTS": [
