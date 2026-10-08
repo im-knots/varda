@@ -26,6 +26,7 @@ Varda sorts shaders by type automatically:
 | `checkerboard.fs` | Checkerboard pattern generator |
 | `clouds.fs` | Raymarched volumetric cloud layer flythrough with sun glow and rim-lit shadowing |
 | `crystal_cave.fs` | Fly through a 3D cave filled with growing crystal formations |
+| `cube_subdivision.fs` | Raymarched cube recursively split into cuboid cells with holes and raised faces, over a polar tiled floor whose rings ripple with each turn, with depth of field and bloom |
 | `cymatics.fs` | Chladni plate and Faraday wave vibration pattern generator |
 | `dark_matter.fs` | Cosmic web filament network (neuro noise) |
 | `digital_brain.fs` | Glowing voronoi-noise plasma with drifting camera and pulsing "moving electrons" octaves |
@@ -80,6 +81,7 @@ Varda sorts shaders by type automatically:
 | `big_brother.fs` | Surveillance overlay: face detection with dossier info boxes |
 | `block_distort.fs` | Scrambles image in blocky chunks |
 | `blur.fs` | Gaussian blur |
+| `boxinator.fs` | Grid of cells that churn simplex noise over the input |
 | `brightness_contrast.fs` | Brightness and contrast adjustment |
 | `channel_mixer.fs` | Reroute and mix RGB channels |
 | `chroma_flow.fs` | Warps the previous frame through a drifting camera and grades the result into flat color groups, so the groups slither and morph like a Deforum animation. Dark ground acts as a boundary the flow moves around. An adjustable hardness sets how easily the flow crosses it. A circular mask can hold part of the frame still while the rest flows |
