@@ -23,7 +23,7 @@ fn shader_paths() -> Vec<std::path::PathBuf> {
     let mut paths: Vec<_> = std::fs::read_dir(&dir)
         .expect("shaders dir")
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("fs"))
+        .filter(|p| matches!(p.extension().and_then(|e| e.to_str()), Some("fs" | "comp")))
         .collect();
     paths.sort();
     paths
@@ -80,7 +80,7 @@ fn every_generator_survives_a_rendered_frame() {
         let Ok(shader) = ISFShader::from_file(path.to_str().unwrap()) else {
             continue;
         };
-        if !shader.metadata.is_generator() || shader.metadata.is_compute() {
+        if !shader.metadata.is_generator() {
             continue;
         }
         let name = shader.name();

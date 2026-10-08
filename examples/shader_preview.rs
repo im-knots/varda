@@ -1,5 +1,5 @@
 //! Render a generator shader headless and write a PNG, for checking a shader
-//! while authoring it.
+//! while authoring it. With `--input`, the shader is an effect instead.
 //!
 //! The frame comes off the mixer composite, so the PNG has been through the same
 //! linear-light compositing and tonemap a live show uses. Time steps on a fixed
@@ -12,6 +12,11 @@
 //!
 //! Options:
 //!
+//! - `--input PATH`: preview an effect. PATH is a generator shader or an
+//!   image, rendered as the deck the effect runs on. `--set` and the sweeps
+//!   then address the effect's parameters.
+//! - `--before PATH`: with `--input`, run this effect ahead of the previewed
+//!   one, at its defaults. Repeat to chain several.
 //! - `--size WxH`, `--frame N`, `--set name=value` (clamped to the declared
 //!   `MIN`/`MAX`, with a warning). A color takes four values: `--set
 //!   fog_color=0.1,0.2,0.3,1`.
@@ -45,7 +50,7 @@ use std::fmt::Write as _;
 use anyhow::{Context, Result, bail};
 use varda::{
     audio::AudioData,
-    deck::Deck,
+    deck::{Deck, Effect},
     isf::ISFShader,
     mixer::{FrameInputs, Mixer},
     modulation::{AnalyzerValues, AudioValues},
@@ -87,6 +92,8 @@ fn sweep_value(sweep: &Sweep, index: u32, count: u32) -> f32 {
 
 struct Options {
     shader: String,
+    input: Option<String>,
+    before: Vec<String>,
     output: String,
     width: u32,
     height: u32,
@@ -126,6 +133,8 @@ fn parse_args() -> Result<Options> {
     let mut opts = Options {
         shader,
         output,
+        input: None,
+        before: Vec::new(),
         width: 960,
         height: 540,
         warmup: 0,
@@ -158,6 +167,8 @@ fn parse_args() -> Result<Options> {
             "--fps" => opts.fps = next::<u32>(&mut args, "--fps")?.max(1),
             "--time" => opts.time = next(&mut args, "--time")?,
             "--probe" => opts.probe = true,
+            "--input" => opts.input = Some(next(&mut args, "--input")?),
+            "--before" => opts.before.push(next(&mut args, "--before")?),
             "--pair" => opts.pair = true,
             "--print-state" => opts.print_state = true,
             "--state" => {
@@ -332,6 +343,8 @@ fn frame_difference(first: &image::RgbImage, second: &image::RgbImage, factor: u
 /// What one shot renders and captures.
 struct Shot<'a> {
     shader_path: &'a str,
+    input: Option<&'a str>,
+    before: &'a [String],
     overrides: &'a [(String, f32)],
     colors: &'a [(String, [f32; 4])],
     width: u32,
@@ -385,19 +398,48 @@ fn render_frame(
     Ok(())
 }
 
+/// The deck an effect preview runs on: a generator shader, or a still image.
+fn input_deck(context: &GpuContext, path: &str, width: u32, height: u32) -> Result<Deck> {
+    let is_shader = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e == "fs" || e == "comp");
+    if is_shader {
+        return Deck::from_shader(context, ISFShader::from_file(path)?, width, height);
+    }
+    let image = varda::still::Image::open(context, path, width, height)
+        .with_context(|| format!("failed to open input image {path}"))?;
+    Ok(Deck::from_source(context, Box::new(image), width, height))
+}
+
 /// Render one shot. A fresh deck and mixer per call, because phase
 /// accumulators integrate: a flight only reaches frame N by flying there.
 fn render_shot(context: &GpuContext, shot: &Shot<'_>) -> Result<Captured> {
     let shader = ISFShader::from_file(shot.shader_path)?;
-    let mut deck = Deck::from_shader(context, shader, shot.width, shot.height)?;
+    let mut deck = match shot.input {
+        Some(input) => {
+            let mut deck = input_deck(context, input, shot.width, shot.height)?;
+            for path in shot.before {
+                deck.add_effect(Effect::new(context, ISFShader::from_file(path)?)?);
+            }
+            deck.add_effect(Effect::new(context, shader)?);
+            deck
+        }
+        None if !shot.before.is_empty() => bail!("--before needs --input"),
+        None => Deck::from_shader(context, shader, shot.width, shot.height)?,
+    };
+    let params = match deck.effects.last_mut() {
+        Some(effect) => &mut effect.params,
+        None => &mut deck.generator_params,
+    };
     for (name, value) in shot.overrides {
-        apply_override(&mut deck.generator_params, name, *value)?;
+        apply_override(params, name, *value)?;
     }
     for (name, color) in shot.colors {
-        if !deck.generator_params.definitions.contains_key(name) {
+        if !params.definitions.contains_key(name) {
             bail!("shader has no parameter `{name}`");
         }
-        deck.generator_params.set_color(name, *color);
+        params.set_color(name, *color);
     }
     // Without this, preprocessor textures stay unbound and read as zero, and the
     // frame looks plausible and is wrong.
@@ -499,6 +541,8 @@ fn single_shot(context: &GpuContext, opts: &Options) -> Result<()> {
         context,
         &Shot {
             shader_path: &opts.shader,
+            input: opts.input.as_deref(),
+            before: &opts.before,
             overrides: &opts.overrides,
             colors: &opts.colors,
             width: opts.width,
@@ -567,6 +611,8 @@ fn contact_sheet(context: &GpuContext, opts: &Options) -> Result<()> {
                 context,
                 &Shot {
                     shader_path: &opts.shader,
+                    input: opts.input.as_deref(),
+                    before: &opts.before,
                     overrides: &overrides,
                     colors: &opts.colors,
                     width: cell_w,

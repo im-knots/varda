@@ -1,14 +1,22 @@
 /*{
-    "DESCRIPTION": "Freeze - holds/freezes the current frame (simulated via static noise overlay)",
+    "DESCRIPTION": "Freeze - holds a frame, or re-grabs it at a set rate for a stutter",
     "CREDIT": "Varda VJ",
     "ISFVSN": "2.0",
     "CATEGORIES": ["Filter", "Stylize"],
     "INPUTS": [
         {"NAME": "inputImage", "TYPE": "image"},
         {"NAME": "freeze_on", "LABEL": "Freeze", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 1.0},
-        {"NAME": "freeze_mix", "LABEL": "Freeze Mix", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 1.0},
-        {"NAME": "static_amount", "LABEL": "Static/Noise", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 0.5},
-        {"NAME": "hold_color", "TYPE": "color", "DEFAULT": [0.5, 0.5, 0.5, 1.0], "LABEL": "Hold Color"}
+        {"NAME": "freeze_mix", "LABEL": "Mix", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 1.0},
+        {"NAME": "grab", "LABEL": "Grab Frame", "TYPE": "event"},
+        {"NAME": "stutter", "LABEL": "Stutter", "TYPE": "bool", "DEFAULT": false},
+        {"NAME": "stutter_rate", "LABEL": "Stutter Rate", "TYPE": "float", "DEFAULT": 4.0, "MIN": 0.0, "MAX": 16.0}
+    ],
+    "PHASE_INPUTS": [
+        {"PARAM": "stutter_rate", "INDEX": 0, "SCALE": 1.0}
+    ],
+    "PASSES": [
+        {"TARGET": "state", "PERSISTENT": true, "FORMAT": "rgba32float", "WIDTH": "1", "HEIGHT": "1"},
+        {"TARGET": "held", "PERSISTENT": true}
     ]
 }*/
 
@@ -31,44 +39,47 @@ layout(set = 0, binding = 0) uniform ISFUniforms {
     float audio_beat_phase;
     vec4 DATE;
     float PHASE_TIME_0;
-    float PHASE_TIME_1;
-    float PHASE_TIME_2;
-    float PHASE_TIME_3;
 };
 
 layout(set = 0, binding = 1) uniform sampler texSampler;
 layout(set = 0, binding = 2) uniform texture2D inputImage;
+layout(set = 0, binding = 3) uniform texture2D state;
+layout(set = 0, binding = 4) uniform texture2D held;
 
-layout(set = 0, binding = 3) uniform UserParams {
+layout(set = 0, binding = 5) uniform UserParams {
     float freeze_on;
     float freeze_mix;
-    float static_amount;
-    vec4 hold_color;
+    uint grab;
+    uint stutter;
+    float stutter_rate;
 };
 
-float hash(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-}
-
+// state texel: x = freeze_on last frame, y = stutter step last frame,
+// z = grab this frame, w = 1 once written.
 void main() {
-    float audioSum = audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase;
-    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w + PHASE_TIME_0 + PHASE_TIME_1 + PHASE_TIME_2 + PHASE_TIME_3;
-    if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
+    bool frozen = freeze_on > 0.5;
+
+    if (PASSINDEX == 0) {
+        vec4 last = texelFetch(sampler2D(state, texSampler), ivec2(0), 0);
+        float step = floor(PHASE_TIME_0);
+        bool grabNow = last.w < 0.5
+            || (frozen && last.x < 0.5)
+            || grab == 1u
+            || (stutter == 1u && step != last.y);
+        fragColor = vec4(float(frozen), step, float(grabNow), 1.0);
+        return;
+    }
+
+    if (PASSINDEX == 1) {
+        bool grabNow = texelFetch(sampler2D(state, texSampler), ivec2(0), 0).z > 0.5;
+        fragColor = grabNow
+            ? texture(sampler2D(inputImage, texSampler), uv)
+            : texture(sampler2D(held, texSampler), uv);
+        return;
+    }
 
     vec4 src = texture(sampler2D(inputImage, texSampler), uv);
-
-    if (freeze_on > 0.5) {
-        // When frozen: show hold color mixed with source, plus optional static
-        vec3 frozen = mix(src.rgb, hold_color.rgb, freeze_mix);
-
-        if (static_amount > 0.001) {
-            float n = hash(uv * RENDERSIZE + vec2(float(FRAMEINDEX)));
-            frozen = mix(frozen, vec3(n), static_amount);
-        }
-
-        fragColor = vec4(frozen, src.a);
-    } else {
-        // Pass through
-        fragColor = src;
-    }
+    vec4 hold = texture(sampler2D(held, texSampler), uv);
+    float k = freeze_mix * float(frozen || stutter == 1u);
+    fragColor = vec4(max(mix(src.rgb, hold.rgb, k), 0.0), clamp(mix(src.a, hold.a, k), 0.0, 1.0));
 }
