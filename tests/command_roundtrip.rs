@@ -501,6 +501,38 @@ fn toggle_param_flips_crossfader() {
 }
 
 #[test]
+fn toggle_param_invalid_path_errors_without_side_effects() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let before = app.build_engine_state().mixer;
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::ToggleParam {
+            path: "no/such/path".into(),
+        },
+    );
+    assert!(matches!(
+        r,
+        CommandResult::Err {
+            code: ErrorCode::NotFound,
+            ..
+        }
+    ));
+    // A modulator param exists but cannot be toggled.
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::ToggleParam {
+            path: "mod/abc/frequency".into(),
+        },
+    );
+    assert!(matches!(r, CommandResult::Err { .. }));
+    let after = app.build_engine_state().mixer;
+    assert_eq!(after.crossfader, before.crossfader);
+    assert_eq!(after.channels.len(), before.channels.len());
+}
+
+#[test]
 fn load_deck_preset_unknown_name_errors() {
     let Some(mut app) = headless_app() else {
         return;

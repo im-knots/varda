@@ -9,6 +9,11 @@
 //! crossfader-at-0.5, a true linear midpoint.
 //!
 //! Skips without a GPU adapter.
+//!
+//! Not built on Windows. Rendering does not depend on the platform, and on the
+//! CI runner's software rasterizer (WARP) this file takes over an hour. Linux
+//! and macOS run it.
+#![cfg(not(target_os = "windows"))]
 
 use varda::{
     BlendMode,

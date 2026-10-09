@@ -323,10 +323,16 @@ impl VardaApp {
                 if let Some(cmd) = self.surface_toggle(&path) {
                     return self.execute_command(cmd);
                 }
-                if let Err(e) = crate::param_router::toggle_param_by_path(&mut self.mixer, &path) {
-                    log::debug!("ToggleParam {path}: {e}");
+                match crate::param_router::toggle_param_by_path(&mut self.mixer, &path) {
+                    Ok(()) => CommandResult::Ok,
+                    Err(e) => {
+                        log::debug!("ToggleParam {path}: {e}");
+                        CommandResult::Err {
+                            code: param_route_error_code(&e),
+                            message: e.to_string(),
+                        }
+                    }
                 }
-                CommandResult::Ok
             }
 
             // ── Audio ────────────────────────────────────────
