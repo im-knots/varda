@@ -28,6 +28,10 @@ use preview::PreviewEncoder;
 
 use detect::{DetectRequest, DetectResponse, spawn_detect_thread};
 
+/// How long quitting waits for running shader builds before exiting anyway, so
+/// a stuck build cannot hang quitting.
+const SHADER_BUILD_EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
 pub struct UIRunner {
     // Session config: CLI flags and workspace defaults.
     config: AppConfig,
@@ -170,10 +174,14 @@ impl UIRunner {
         });
 
         let event_loop = EventLoop::new()?;
-        event_loop
+        let result = event_loop
             .run_app(&mut self)
-            .map_err(|e| anyhow::anyhow!("Event loop error: {e:?}"))?;
-        Ok(())
+            .map_err(|e| anyhow::anyhow!("Event loop error: {e:?}"));
+        // A shader compile still running when the process exits crashes it.
+        if !crate::renderer::builds::shutdown(SHADER_BUILD_EXIT_WAIT) {
+            log::warn!("Exiting with shader builds still running after {SHADER_BUILD_EXIT_WAIT:?}");
+        }
+        result
     }
 }
 
