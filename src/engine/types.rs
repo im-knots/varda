@@ -339,6 +339,8 @@ pub struct DeckLoadSnapshot {
     /// Shader name or media file name.
     pub name: String,
     pub status: DeckLoadStatus,
+    /// Milliseconds since the load started. A failed load keeps how long it ran.
+    pub elapsed_ms: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, utoipa::ToSchema)]

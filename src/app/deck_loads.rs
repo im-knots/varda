@@ -21,6 +21,7 @@ struct Load {
     uuid: String,
     channel_uuid: String,
     name: String,
+    started: Instant,
 }
 
 struct Finished {
@@ -32,6 +33,12 @@ struct Failure {
     load: Load,
     message: String,
     at: Instant,
+}
+
+impl Load {
+    fn elapsed_ms(&self, until: Instant) -> u64 {
+        u64::try_from(until.saturating_duration_since(self.started).as_millis()).unwrap_or(u64::MAX)
+    }
 }
 
 /// Tracks background deck loads from request to attach.
@@ -89,9 +96,13 @@ impl DeckLoader {
             uuid: uuid.clone(),
             channel_uuid: channel_uuid.to_string(),
             name,
+            started: Instant::now(),
         };
         match spawned {
-            Ok(_) => self.in_flight.push(load),
+            Ok(_) => {
+                log::info!("Loading deck '{}'", load.name);
+                self.in_flight.push(load);
+            }
             Err(e) => self.record_failure(load, format!("could not start a loader thread: {e}")),
         }
         uuid
@@ -109,11 +120,16 @@ impl DeckLoader {
     }
 
     fn record_failure(&mut self, load: Load, message: String) {
-        self.failed.push(Failure {
-            load,
-            message,
-            at: Instant::now(),
-        });
+        self.record_failure_at(load, message, Instant::now());
+    }
+
+    fn record_failure_at(&mut self, load: Load, message: String, at: Instant) {
+        log::warn!(
+            "Deck '{}' failed to load after {} ms: {message}",
+            load.name,
+            load.elapsed_ms(at)
+        );
+        self.failed.push(Failure { load, message, at });
     }
 
     fn prune_failures(&mut self, now: Instant) {
@@ -123,11 +139,16 @@ impl DeckLoader {
 
     /// Loads in flight, then recent failures.
     pub(crate) fn snapshot(&self) -> Vec<DeckLoadSnapshot> {
+        self.snapshot_at(Instant::now())
+    }
+
+    fn snapshot_at(&self, now: Instant) -> Vec<DeckLoadSnapshot> {
         let loading = self.in_flight.iter().map(|l| DeckLoadSnapshot {
             uuid: l.uuid.clone(),
             channel_uuid: l.channel_uuid.clone(),
             name: l.name.clone(),
             status: DeckLoadStatus::Loading,
+            elapsed_ms: l.elapsed_ms(now),
         });
         let failed = self.failed.iter().map(|f| DeckLoadSnapshot {
             uuid: f.load.uuid.clone(),
@@ -136,6 +157,7 @@ impl DeckLoader {
             status: DeckLoadStatus::Failed {
                 message: f.message.clone(),
             },
+            elapsed_ms: f.load.elapsed_ms(f.at),
         });
         loading.chain(failed).collect()
     }
@@ -170,6 +192,11 @@ impl VardaApp {
         for (load, deck) in self.sources.deck_loader.take_finished() {
             match self.attach_loaded_deck(&load, deck) {
                 Ok(ch_idx) => {
+                    log::info!(
+                        "Loaded deck '{}' in {} ms",
+                        load.name,
+                        load.elapsed_ms(Instant::now())
+                    );
                     self.session.notifications.info(format!(
                         "➕ {} → Ch {}",
                         load.name,
@@ -443,6 +470,37 @@ mod tests {
             app.build_engine_state().deck_loads.as_slice(),
             [l] if matches!(l.status, DeckLoadStatus::Failed { .. })
         ));
+    }
+
+    fn load(name: &str, started: std::time::Instant) -> super::Load {
+        super::Load {
+            uuid: format!("{name}-uuid"),
+            channel_uuid: "ch".into(),
+            name: name.into(),
+            started,
+        }
+    }
+
+    #[test]
+    fn a_load_reports_how_long_it_has_run() {
+        let mut loader = super::DeckLoader::new();
+        let started = std::time::Instant::now();
+        loader.in_flight.push(load("fractal_explorer", started));
+
+        let loads = loader.snapshot_at(started + std::time::Duration::from_secs(135));
+        assert_eq!(loads[0].elapsed_ms, 135_000);
+        assert_eq!(loads[0].status, DeckLoadStatus::Loading);
+    }
+
+    #[test]
+    fn a_failed_load_keeps_how_long_it_ran() {
+        let mut loader = super::DeckLoader::new();
+        let started = std::time::Instant::now();
+        let failed_at = started + std::time::Duration::from_secs(7);
+        loader.record_failure_at(load("broken", started), "no".into(), failed_at);
+
+        let loads = loader.snapshot_at(failed_at + std::time::Duration::from_secs(30));
+        assert_eq!(loads[0].elapsed_ms, 7_000, "frozen at the failure");
     }
 
     #[test]

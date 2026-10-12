@@ -177,6 +177,9 @@ impl Shader {
         let imported_textures =
             load_imported_textures(&shader.metadata, shader.file_path.as_deref(), gpu);
         let preprocessor_slots = create_preprocessor_slots(gpu, &shader.metadata);
+        // The driver compiles the pipeline here. A large shader can take minutes.
+        log::info!("{}: building GPU pipeline", shader.name());
+        let started = std::time::Instant::now();
         let pipeline = UnifiedPipeline::new(
             &gpu.device,
             &spirv,
@@ -189,6 +192,11 @@ impl Shader {
             &specialization_defaults(shader),
         )
         .context("Failed to create shader pipeline")?;
+        log::info!(
+            "{}: built GPU pipeline in {} ms",
+            shader.name(),
+            started.elapsed().as_millis()
+        );
         let passes = PassSet::new(gpu, passes, width, height, default_format, "Pass Buffer");
         Ok(Program::Fragment {
             pipeline,

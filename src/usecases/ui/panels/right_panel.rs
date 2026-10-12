@@ -1,6 +1,6 @@
 //! Right side panel.
 
-use super::super::{UIActions, UIData};
+use super::super::{LoadingDeck, UIActions, UIData};
 use super::dnd::publish_master_surface_fx;
 use super::midi::render_midi_section;
 use super::modulation::render_modulation_section;
@@ -173,15 +173,11 @@ fn render_right_panel_body(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAct
                 render_output_section(ui, data, actions);
             });
 
-        if data.pending_deck_loads > 0 {
+        if !data.loading_decks.is_empty() {
             ui.add_space(8.0);
             ui.separator();
             ui.add_space(4.0);
-            let label = if data.pending_deck_loads == 1 {
-                "Loading 1 deck…".to_string()
-            } else {
-                format!("Loading {} decks…", data.pending_deck_loads)
-            };
+            let label = loading_label(&data.loading_decks);
             ui.horizontal(|ui| {
                 ui.spinner();
                 ui.label(
@@ -195,6 +191,31 @@ fn render_right_panel_body(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAct
     });
 }
 
+/// A load running at least this long is named in the loading indicator, with
+/// its time.
+const SLOW_DECK_LOAD: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// The loading indicator's text: a count, plus the slowest load and its time
+/// once it passes [`SLOW_DECK_LOAD`].
+fn loading_label(loads: &[LoadingDeck]) -> String {
+    let slowest = loads
+        .iter()
+        .max_by_key(|l| l.elapsed)
+        .filter(|l| l.elapsed >= SLOW_DECK_LOAD);
+    let secs = |l: &LoadingDeck| l.elapsed.as_secs();
+    match (loads.len(), slowest) {
+        (1, Some(l)) => format!("Loading {}… {}:{:02}", l.name, secs(l) / 60, secs(l) % 60),
+        (1, None) => "Loading 1 deck…".to_string(),
+        (n, Some(l)) => format!(
+            "Loading {n} decks… {} {}:{:02}",
+            l.name,
+            secs(l) / 60,
+            secs(l) % 60
+        ),
+        (n, None) => format!("Loading {n} decks…"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,5 +227,53 @@ mod tests {
         let _harness = egui_kittest::Harness::new_ui(|ui| {
             render_right_panel(ui, &data, &mut actions);
         });
+    }
+
+    fn loading(name: &str, secs: u64) -> LoadingDeck {
+        LoadingDeck {
+            name: name.into(),
+            elapsed: std::time::Duration::from_secs(secs),
+        }
+    }
+
+    #[test]
+    fn a_quick_load_shows_only_a_count() {
+        assert_eq!(loading_label(&[loading("plasma", 1)]), "Loading 1 deck…");
+        assert_eq!(
+            loading_label(&[loading("plasma", 1), loading("tunnel", 2)]),
+            "Loading 2 decks…"
+        );
+    }
+
+    #[test]
+    fn a_slow_load_is_named_with_its_time() {
+        assert_eq!(
+            loading_label(&[loading("fractal_explorer", 135)]),
+            "Loading fractal_explorer… 2:15"
+        );
+    }
+
+    #[test]
+    fn several_loads_name_the_slowest() {
+        assert_eq!(
+            loading_label(&[
+                loading("plasma", 1),
+                loading("fractal_explorer", 75),
+                loading("tunnel", 9),
+            ]),
+            "Loading 3 decks… fractal_explorer 1:15"
+        );
+    }
+
+    #[test]
+    fn a_slow_load_renders() {
+        use egui_kittest::kittest::Queryable;
+        let mut data = UIData::test_fixture();
+        data.loading_decks = vec![loading("fractal_explorer", 135)];
+        let mut actions = UIActions::new();
+        let harness = egui_kittest::Harness::new_ui(|ui| {
+            render_right_panel(ui, &data, &mut actions);
+        });
+        harness.get_by_label("Loading fractal_explorer… 2:15");
     }
 }

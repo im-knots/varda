@@ -546,11 +546,15 @@ pub(crate) fn build_ui_data(
         // UIRunner fills these after build; history and pending loads live on the runner.
         can_undo: false,
         can_redo: false,
-        pending_deck_loads: engine
+        loading_decks: engine
             .deck_loads
             .iter()
             .filter(|l| l.status == crate::engine::types::DeckLoadStatus::Loading)
-            .count(),
+            .map(|l| super::LoadingDeck {
+                name: l.name.clone(),
+                elapsed: std::time::Duration::from_millis(l.elapsed_ms),
+            })
+            .collect(),
         deck_presets: engine.presets.deck.clone(),
         channel_presets: engine.presets.channel.clone(),
     }

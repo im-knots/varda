@@ -498,8 +498,8 @@ pub struct UIData {
     pub can_undo: bool,
     /// Whether redo is available.
     pub can_redo: bool,
-    /// Number of decks loading in background threads.
-    pub pending_deck_loads: usize,
+    /// Decks loading in background threads.
+    pub loading_decks: Vec<LoadingDeck>,
     /// Deck preset names from `PresetLibrary`.
     pub deck_presets: Vec<String>,
     /// Channel preset names from `PresetLibrary`.
@@ -755,4 +755,11 @@ pub struct SurfaceUI {
     pub holes: Vec<SurfacePath>,
     /// Flattened hole contours (canvas coords) for overlay rendering.
     pub hole_contours: Vec<Vec<[f32; 2]>>,
+}
+
+/// A deck still loading, for the loading indicator.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoadingDeck {
+    pub name: String,
+    pub elapsed: std::time::Duration,
 }

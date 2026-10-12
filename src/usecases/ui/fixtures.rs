@@ -445,7 +445,7 @@ impl UIData {
             target_fps: 60,
             can_undo: false,
             can_redo: false,
-            pending_deck_loads: 0,
+            loading_decks: vec![],
             deck_presets: vec![],
             channel_presets: vec![],
         }
