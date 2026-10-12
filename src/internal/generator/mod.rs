@@ -182,6 +182,7 @@ impl Shader {
         let started = std::time::Instant::now();
         let pipeline = UnifiedPipeline::new(
             &gpu.device,
+            gpu.pipeline_cache.as_ref(),
             &spirv,
             gpu.compositing_format,
             false,
@@ -219,6 +220,7 @@ impl Shader {
         }
         let pipeline = ComputePipeline::new(
             &gpu.device,
+            gpu.pipeline_cache.as_ref(),
             &spirv,
             width,
             height,

@@ -172,6 +172,9 @@ pub struct GpuContext {
     pub errors: super::gpu_guard::GpuErrorGuard,
     /// Counts command buffer commits; read once per frame.
     pub submits: super::submit_stats::SubmitCounter,
+    /// Compiled pipelines saved between runs, once [`Self::open_pipeline_cache`]
+    /// has run on an adapter that supports it.
+    pub pipeline_cache: Option<super::pipeline_cache::PipelineCacheFile>,
 }
 
 /// Window surface, swapchain config, and size. Used by the UI, not the engine.
@@ -383,6 +386,7 @@ impl GpuContext {
             timestamp_supported,
             errors,
             submits: super::submit_stats::SubmitCounter::new(),
+            pipeline_cache: None,
         };
         let win_surface = WindowSurface {
             surface,
@@ -399,6 +403,9 @@ impl GpuContext {
     /// request and whether timestamp queries are usable for GPU timing.
     fn select_optional_features(adapter: &wgpu::Adapter) -> (wgpu::Features, bool) {
         let mut required_features = wgpu::Features::empty();
+        if adapter.features().contains(wgpu::Features::PIPELINE_CACHE) {
+            required_features |= wgpu::Features::PIPELINE_CACHE;
+        }
         if adapter
             .features()
             .contains(wgpu::Features::TEXTURE_COMPRESSION_BC)
@@ -534,7 +541,18 @@ impl GpuContext {
             timestamp_supported,
             errors,
             submits: super::submit_stats::SubmitCounter::new(),
+            pipeline_cache: None,
         })
+    }
+
+    /// Load the pipeline cache saved in `dir`, so shaders built before compile
+    /// from it. Does nothing on adapters without `Features::PIPELINE_CACHE`.
+    pub fn open_pipeline_cache(&mut self, dir: &std::path::Path) {
+        self.pipeline_cache = super::pipeline_cache::PipelineCacheFile::open(
+            &self.device,
+            &self.adapter.get_info(),
+            dir,
+        );
     }
 
     /// Submit command buffers, counting the commit.

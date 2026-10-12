@@ -17,13 +17,14 @@ impl PendingTransition {
     /// Start compiling `shader` and building its pipeline for the compositing format.
     pub fn spawn(context: &super::GpuContext, shader: crate::isf::ISFShader) -> Self {
         let device = context.device.clone();
+        let cache = context.pipeline_cache.clone();
         let format = context.compositing_format;
         let source = shader.fragment_source.clone();
         let name = shader.name();
         let build = super::builds::spawn(move || {
             let spirv = crate::isf::compile_glsl_to_spirv(&source, &name)
                 .map_err(|e| e.context("Failed to compile transition shader"))?;
-            TransitionPipeline::new(&device, &spirv, format)
+            TransitionPipeline::new(&device, cache.as_ref(), &spirv, format)
         });
         Self { shader, build }
     }
@@ -57,6 +58,7 @@ impl TransitionPipeline {
     /// cannot be transpiled to WGSL.
     pub fn new(
         device: &wgpu::Device,
+        cache: Option<&super::pipeline_cache::PipelineCacheFile>,
         spirv: &[u32],
         target_format: wgpu::TextureFormat,
     ) -> Result<Self> {
@@ -170,6 +172,7 @@ impl TransitionPipeline {
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/fullscreen.wgsl").into()),
         });
 
+        let started = std::time::Instant::now();
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Transition Render Pipeline"),
             layout: Some(&pipeline_layout),
@@ -197,8 +200,11 @@ impl TransitionPipeline {
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
-            cache: None,
+            cache: cache.map(super::pipeline_cache::PipelineCacheFile::cache),
         });
+        if let Some(cache) = cache {
+            cache.save_after(started.elapsed());
+        }
 
         Ok(Self {
             pipeline,

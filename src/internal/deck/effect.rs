@@ -39,6 +39,7 @@ fn build_program(
         load_imported_textures(&shader.metadata, shader.file_path.as_deref(), context);
     let pipeline = UnifiedPipeline::new(
         &context.device,
+        context.pipeline_cache.as_ref(),
         &spirv,
         target_format,
         true, // has_input_image, since it's a filter

@@ -181,6 +181,13 @@ impl UIRunner {
         if !crate::renderer::builds::shutdown(SHADER_BUILD_EXIT_WAIT) {
             log::warn!("Exiting with shader builds still running after {SHADER_BUILD_EXIT_WAIT:?}");
         }
+        if let Some(cache) = self
+            .varda
+            .as_ref()
+            .and_then(|varda| varda.gpu_context().pipeline_cache.as_ref())
+        {
+            cache.save();
+        }
         result
     }
 }
@@ -204,11 +211,15 @@ impl UIRunner {
     /// `resumed()` when headless, or from `about_to_wait()` when windowed.
     fn finish_init(
         &mut self,
-        gpu: GpuContext,
+        mut gpu: GpuContext,
         win_surface: Option<WindowSurface>,
         startup_t0: std::time::Instant,
         event_loop: &ActiveEventLoop,
     ) {
+        // Before anything builds a pipeline, so every build can use it.
+        if let Some(dir) = crate::renderer::pipeline_cache::default_dir() {
+            gpu.open_pipeline_cache(&dir);
+        }
         // egui and blit pipeline, windowed only.
         if let (Some(window_static), Some(ws)) = (self.window, &win_surface) {
             self.cached_screen_size = window_static.inner_size();

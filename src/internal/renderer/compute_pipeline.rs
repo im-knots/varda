@@ -52,6 +52,7 @@ impl ComputePipeline {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         device: &wgpu::Device,
+        cache: Option<&super::pipeline_cache::PipelineCacheFile>,
         spirv: &[u32],
         width: u32,
         height: u32,
@@ -153,14 +154,18 @@ impl ComputePipeline {
             immediate_size: 0,
         });
 
+        let started = std::time::Instant::now();
         let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Compute Pipeline"),
             layout: Some(&pipeline_layout),
             module: &shader_module,
             entry_point: Some("main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
+            cache: cache.map(super::pipeline_cache::PipelineCacheFile::cache),
         });
+        if let Some(cache) = cache {
+            cache.save_after(started.elapsed());
+        }
 
         let output_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Compute Output Texture"),

@@ -658,6 +658,7 @@ fn every_bundled_shader_builds_a_pipeline() {
             match varda::isf::compile_glsl_to_spirv(&shader.fragment_source, &name) {
                 Ok(spirv) => varda::renderer::TransitionPipeline::new(
                     &ctx.device,
+                    None,
                     &spirv,
                     ctx.compositing_format,
                 )
@@ -2409,6 +2410,7 @@ fn a_shader_binding_more_textures_than_the_device_allows_fails_by_name() {
     let too_many = vec![true; limit + 1];
     let err = varda::renderer::UnifiedPipeline::new(
         &ctx.device,
+        None,
         &spirv,
         ctx.compositing_format,
         false,

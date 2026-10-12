@@ -128,6 +128,7 @@ struct Recipe {
     pipeline_layout: wgpu::PipelineLayout,
     passes: PassPlan,
     output_format: wgpu::TextureFormat,
+    cache: Option<super::pipeline_cache::PipelineCacheFile>,
 }
 
 /// A variant being built on a worker thread.
@@ -149,6 +150,7 @@ impl UnifiedPipeline {
     /// - `preprocessor_filterable`: one entry per preprocessor texture binding;
     ///   false for `texelFetch`-only float data (`FORMAT: "rgba32float"`)
     /// - `surface_format`: always `COLOR_PATH_FORMAT`
+    /// - `cache`: compiled pipelines saved between runs; later variants use it too
     /// - `constants`: the specialization constants to build with, by
     ///   `constant_id`, the `SPECIALIZE` inputs' defaults; their pipelines stay
     ///   cached for the pipeline's life. See [`Self::specialize`]
@@ -163,6 +165,7 @@ impl UnifiedPipeline {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         device: &wgpu::Device,
+        cache: Option<&super::pipeline_cache::PipelineCacheFile>,
         spirv: &[u32],
         surface_format: wgpu::TextureFormat,
         has_input_image: bool,
@@ -378,6 +381,7 @@ impl UnifiedPipeline {
             pipeline_layout,
             passes: passes.clone(),
             output_format: surface_format,
+            cache: cache.cloned(),
         };
         Ok(Self {
             variant: Variant {
@@ -721,6 +725,7 @@ impl UnifiedPipeline {
 impl Recipe {
     /// Every pipeline the passes need, for one set of input constants.
     fn build(&self, device: &wgpu::Device, constants: &[f64]) -> Pipelines {
+        let started = std::time::Instant::now();
         let output = (self.passes.output_index, vec![self.output_format]);
         let mut pipelines: Pipelines = Vec::new();
         for (index, formats) in self.passes.targeted.iter().chain(std::iter::once(&output)) {
@@ -740,8 +745,14 @@ impl Recipe {
                 formats,
                 &values,
                 "ISF Unified Render Pipeline",
+                self.cache
+                    .as_ref()
+                    .map(super::pipeline_cache::PipelineCacheFile::cache),
             );
             pipelines.push((key, formats.clone(), pipeline));
+        }
+        if let Some(cache) = &self.cache {
+            cache.save_after(started.elapsed());
         }
         pipelines
     }
@@ -797,6 +808,7 @@ fn create_pipeline(
     formats: &[wgpu::TextureFormat],
     constants: &[f64],
     label: &str,
+    cache: Option<&wgpu::PipelineCache>,
 ) -> wgpu::RenderPipeline {
     // wgpu names a numbered override by its id in decimal.
     let names: Vec<String> = (0..constants.len()).map(|id| id.to_string()).collect();
@@ -857,7 +869,7 @@ fn create_pipeline(
             alpha_to_coverage_enabled: false,
         },
         multiview_mask: None,
-        cache: None,
+        cache,
     })
 }
 
@@ -882,6 +894,7 @@ void main() {
         .expect("compiles");
         UnifiedPipeline::new(
             &gpu.device,
+            gpu.pipeline_cache.as_ref(),
             &spirv,
             gpu.compositing_format,
             false,
