@@ -1565,6 +1565,12 @@ impl VardaApp {
                     .set_preference(crate::clock::ClockPreference::ForceManual { bpm });
                 CommandResult::Ok
             }
+            EngineCommand::SetAudioTempoRange { min, max } => {
+                self.audio
+                    .manager
+                    .set_tempo_range(crate::audio::TempoRange::new(min, max));
+                CommandResult::Ok
+            }
 
             // ── Parameters ─────────────────────────────────────────
             EngineCommand::SetGeneratorParam {

@@ -185,7 +185,7 @@ Varda takes BPM and beat phase from several sources and picks one by priority:
 |----------|--------|-----|
 | 1 (highest) | **MIDI Clock** | 24 PPQ timing ticks (0xF8) from any connected device. BPM is computed from tick intervals and EMA-smoothed (α=0.3). Start (0xFA) resets beat phase; Stop (0xFC) triggers fallback. |
 | 2 | **OSC Clock** | `/varda/clock/bpm` and `/varda/clock/beat` messages from network controllers |
-| 3 | **Audio Detection** | Spectral flux onset detection from FFT analysis. 16-interval BPM history with outlier rejection. Range: 30–300 BPM. |
+| 3 | **Audio Detection** | Kick-band (30–150 Hz) onset detection; BPM from the autocorrelation of the last 8 s, folded into the audio tempo range (default 70–240 BPM). See [Modulation](06-modulation.md#beat-detection). |
 | Forced only | **Manual** | A BPM you set. Beat phase is computed from elapsed wall-clock time. Auto never picks Manual. |
 
 **Stale timeout**: if the active source sends no data for 2 seconds, Varda falls back to the next source by priority.
@@ -201,6 +201,8 @@ The default is **Auto** (priority order). You can force a source:
 - **Force Manual**: fixed BPM, no external input
 
 Click the **BPM display** in the top bar to open the clock preference popover. It lists every detected MIDI clock device with its current BPM.
+
+The **Audio detection** section of the popover sets the **range**: the tempo range detected tempos are halved or doubled into. It applies in every mode except Manual, since Auto, MIDI and OSC all fall back to audio when their clock goes stale, so it is greyed out only in Manual. The default, 70–240 BPM, covers most music. Narrow it if detection lands on the double or half of your tempo, for example 120–240 for psytrance, darkpsy, or hitech, or 60–120 for half-time dub. The max is always at least twice the min, so every tempo has an octave in the range; the limits are 40–320 BPM.
 
 ### What Uses the Clock
 

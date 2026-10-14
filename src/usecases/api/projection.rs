@@ -294,6 +294,7 @@ pub(crate) mod tests {
                 preference_label: "Auto".into(),
                 preference_force_device_id: None,
                 manual_bpm: None,
+                audio_tempo_range: crate::audio::TempoRange::default(),
                 beat_followers: 0,
             },
             fps: 60.0,

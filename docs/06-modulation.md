@@ -318,13 +318,15 @@ Varda runs a 2048-point FFT on the audio input at 48 kHz, producing 1024 magnitu
 
 ### Beat Detection
 
-Beats are detected with **spectral flux onset detection**:
+Beats are detected from the kick, with **spectral flux onset detection** over 30–150 Hz:
 
-1. Compute the transient energy increase across all frequency bins each frame
-2. Compare it against an adaptive threshold (median of recent flux values)
-3. Reject double-triggers within 200ms
+1. Compute the energy increase in the kick band each frame, relative to the band's recent level, so input gain doesn't matter. Input below -60 dBFS counts as silence.
+2. Compare it against an adaptive threshold (median of recent flux values).
+3. Reject double-triggers within 50 ms.
 
-BPM is estimated from the last 16 beat intervals. Outliers (>15% deviation from the median) are discarded, and the result is smoothed with an EMA.
+**BPM** comes from the autocorrelation of the last 8 s of onset strength, re-estimated every 0.5 s. The result is halved or doubled into the **audio tempo range** (default 70–240 BPM), which you can change in the clock popover (see [Control Surfaces](07-control-surfaces.md#clock-preference)). A different tempo, such as a double, replaces the current one only after 3 agreeing estimates. BPM clears after 2 s of silence or without onsets.
+
+**Beat phase** follows a beat grid at that tempo. Each beat, the strongest onset within half a beat of the predicted beat nudges the grid toward itself, so the grid locks to the kick rather than to bass notes between kicks. If the strongest onset is off the grid for 4 beats in a row, the grid snaps to it.
 
 ### ISF Audio Uniforms
 

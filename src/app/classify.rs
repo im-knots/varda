@@ -83,6 +83,7 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
             // Clock preference / manual BPM (live sync config).
             | C::SetClockPreference { .. }
             | C::SetManualBpm { .. }
+            | C::SetAudioTempoRange { .. }
             // Timecode source is live rig config, like the clock.
             | C::SetTimecodePreference { .. }
             | C::SetLtcInput { .. }
@@ -543,6 +544,7 @@ impl VardaApp {
         // Clock
         | C::SetClockPreference { .. }
         | C::SetManualBpm { .. }
+        | C::SetAudioTempoRange { .. }
         // Parameters
         | C::ResetGeneratorParamsToDefaults { .. }
         | C::RandomizeGeneratorParams { .. }

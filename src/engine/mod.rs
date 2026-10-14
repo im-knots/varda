@@ -1048,6 +1048,11 @@ pub enum EngineCommand {
     SetManualBpm {
         bpm: f32,
     },
+    /// Range (BPM) audio-detected tempos are folded into by octaves.
+    SetAudioTempoRange {
+        min: f32,
+        max: f32,
+    },
 
     // ── Parameters ───────────────────────────────────────────────
     SetGeneratorParam {

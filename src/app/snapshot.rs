@@ -496,6 +496,7 @@ pub(crate) fn build_clock_snapshot(app: &VardaApp) -> ClockSnapshot {
         preference_label,
         preference_force_device_id,
         manual_bpm: app.input.clock_manager.manual_bpm(),
+        audio_tempo_range: app.audio.manager.tempo_range(),
         beat_followers: app
             .mixer
             .modulation()

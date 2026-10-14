@@ -477,6 +477,8 @@ pub struct UIData {
     pub clock_preference_force_device_id: Option<crate::midi::DeviceId>,
     /// Manual BPM when the preference is `ForceManual`.
     pub clock_manual_bpm: Option<f32>,
+    /// Range audio-detected tempos are folded into.
+    pub clock_audio_tempo_range: crate::audio::TempoRange,
     /// Number of modulation sources locked to the beat; sets the tempo readout's
     /// emphasis.
     pub clock_beat_followers: usize,

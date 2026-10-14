@@ -2,16 +2,15 @@
 ///
 /// Two functions run inside the cpal audio callback (~every 5ms at 48kHz/256):
 ///   `onset_threshold`  — median over spectral flux history (8 values)
-///   `bpm_estimation`   — median + outlier rejection over beat intervals (4-16 values)
-///
-/// Both clone and fully sort their input to compute a median.
+///   `bpm_estimation`   — autocorrelation comb over the onset envelope (run
+///                        every 0.5 s on the analysis thread, not per hop)
 ///
 ///   `audio_callback`     — the capture callback's work for one 256-frame
 ///                          stereo buffer from the device.
 ///   `audio_hop_analysis` — one 256-sample hop of FFT, flux, onset and BPM
 ///                          analysis.
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use varda::audio::{compute_onset_threshold, estimate_bpm};
+use varda::audio::{TempoRange, compute_onset_threshold, estimate_bpm};
 use varda::testing::{AudioCaptureBench, HopAnalysisBench};
 
 /// Realistic spectral flux values (positive, varying magnitude)
@@ -21,10 +20,13 @@ fn make_flux_history(n: usize) -> Vec<f32> {
         .collect()
 }
 
-/// Realistic beat intervals centered around 120 BPM (0.5s) with slight jitter
-fn make_beat_intervals(n: usize) -> Vec<f32> {
-    (0..n)
-        .map(|i| 0.5 + 0.02 * (i as f32 * 1.3).sin())
+/// Hops per second at 48 kHz.
+const HOP_RATE: f32 = 48_000.0 / 256.0;
+
+/// `secs` of onset envelope with a pulse every beat at 120 BPM.
+fn make_envelope(secs: f32) -> Vec<f32> {
+    (0..(secs * HOP_RATE) as usize)
+        .map(|i| if i % 94 < 2 { 1.0 } else { 0.02 })
         .collect()
 }
 
@@ -46,13 +48,13 @@ fn bench_bpm_estimation(c: &mut Criterion) {
     let mut g = c.benchmark_group("bpm_estimation");
     g.sample_size(1000);
 
-    // BPM_HISTORY_SIZE = 16, but test a range
-    for n in [4, 8, 16] {
-        let intervals = make_beat_intervals(n);
+    // 4 s before the first estimate, 8 s once the window is full.
+    for secs in [4, 8] {
+        let envelope = make_envelope(secs as f32);
         g.bench_with_input(
-            BenchmarkId::new("clone_sort", n),
-            &intervals,
-            |b, intervals| b.iter(|| estimate_bpm(intervals)),
+            BenchmarkId::new("acf_comb", secs),
+            &envelope,
+            |b, envelope| b.iter(|| estimate_bpm(envelope, HOP_RATE, TempoRange::default())),
         );
     }
     g.finish();

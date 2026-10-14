@@ -670,6 +670,8 @@ pub(super) fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &m
         }
     });
 
+    render_audio_detection(ui, data, actions, is_manual);
+
     // Current status line.
     ui.separator();
     let status = match data.clock_source.as_str() {
@@ -693,6 +695,54 @@ pub(super) fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &m
         _ => "Currently: No clock".to_string(),
     };
     ui.label(egui::RichText::new(status).weak().small());
+}
+
+/// Audio tempo detection settings. Every clock mode except Manual can fall
+/// back to audio, so the section is disabled rather than hidden in Manual.
+fn render_audio_detection(
+    ui: &mut egui::Ui,
+    data: &UIData,
+    actions: &mut UIActions,
+    is_manual: bool,
+) {
+    ui.separator();
+    ui.label(egui::RichText::new("Audio detection").strong());
+
+    // Detected tempos are folded by octaves into this range. Max stays at
+    // least twice min, so the engine widens a narrower range.
+    let range = data.clock_audio_tempo_range;
+    let (mut min, mut max) = (range.min, range.max);
+    let (lo, hi) = crate::audio::TempoRange::LIMITS;
+    let section = ui.add_enabled_ui(!is_manual, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Range")
+                .on_hover_text("Detected tempos are halved or doubled into this range");
+            let min_drag = ui.add(
+                egui::DragValue::new(&mut min)
+                    .range(lo..=hi / 2.0)
+                    .speed(1.0)
+                    .max_decimals(0),
+            );
+            ui.label("–");
+            let max_drag = ui.add(
+                egui::DragValue::new(&mut max)
+                    .range(2.0 * min..=hi)
+                    .speed(1.0)
+                    .max_decimals(0)
+                    .suffix(" BPM"),
+            );
+            if min_drag.changed() || max_drag.changed() {
+                actions
+                    .commands
+                    .push(EngineCommand::SetAudioTempoRange { min, max });
+            }
+        });
+    });
+    if is_manual {
+        section
+            .response
+            .on_disabled_hover_text("Manual mode doesn't use the detected tempo");
+    }
 }
 
 /// A named render resolution offered in the popover: label, width, height.
@@ -905,6 +955,35 @@ mod tests {
                 }
                 other => panic!("expected one record arm, got {other:?}"),
             }
+        }
+    }
+
+    /// Audio detection shows in every clock mode, since all but Manual can
+    /// fall back to audio, and is disabled only in Manual.
+    #[test]
+    fn audio_detection_is_disabled_only_in_manual() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+
+        for (preference, disabled) in [
+            ("Auto", false),
+            ("ForceMidi", false),
+            ("ForceOsc", false),
+            ("ForceAudio", false),
+            ("ForceManual", true),
+        ] {
+            let mut data = UIData::test_fixture();
+            data.clock_preference = preference.to_string();
+            let mut actions = UIActions::new();
+            let mut harness =
+                egui_kittest::Harness::new_ui(|ui| render_clock_popover(ui, &data, &mut actions));
+            harness.run();
+
+            harness.get_by_label("Audio detection");
+            assert_eq!(
+                harness.get_by_label("Range").accesskit_node().is_disabled(),
+                disabled,
+                "{preference}"
+            );
         }
     }
 

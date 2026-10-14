@@ -591,6 +591,9 @@ impl AudioCaptureBench {
                 48_000.0,
                 sender,
                 std::sync::Arc::default(),
+                std::sync::Arc::new(std::sync::atomic::AtomicU64::new(
+                    crate::audio::TempoRange::default().to_bits(),
+                )),
             )
             .expect("spawn analysis"),
             buffer,

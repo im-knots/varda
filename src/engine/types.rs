@@ -224,6 +224,8 @@ pub struct ClockSnapshot {
     pub preference_force_device_id: Option<crate::engine::value::midi::DeviceId>,
     /// Manual BPM value (if preference is `ForceManual`).
     pub manual_bpm: Option<f32>,
+    /// Range audio-detected tempos are folded into.
+    pub audio_tempo_range: crate::audio::TempoRange,
     /// How many modulation sources are locked to the beat.
     pub beat_followers: usize,
 }
@@ -956,6 +958,7 @@ mod tests {
                 preference_label: "Auto".into(),
                 preference_force_device_id: None,
                 manual_bpm: None,
+                audio_tempo_range: crate::audio::TempoRange::default(),
                 beat_followers: 0,
             },
             fps: 60.0,
@@ -1046,6 +1049,7 @@ mod tests {
                 preference_label: "Auto".into(),
                 preference_force_device_id: None,
                 manual_bpm: None,
+                audio_tempo_range: crate::audio::TempoRange::default(),
                 beat_followers: 0,
             },
             fps: 59.9,

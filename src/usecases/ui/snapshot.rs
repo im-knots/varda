@@ -536,6 +536,7 @@ pub(crate) fn build_ui_data(
         clock_preference: engine.clock.preference_label.clone(),
         clock_preference_force_device_id: engine.clock.preference_force_device_id,
         clock_manual_bpm: engine.clock.manual_bpm,
+        clock_audio_tempo_range: engine.clock.audio_tempo_range,
         clock_beat_followers: engine.clock.beat_followers,
         transport: engine.transport.clone(),
         timecode: engine.timecode.clone(),

@@ -436,6 +436,7 @@ impl UIData {
             clock_preference: "Auto".to_string(),
             clock_preference_force_device_id: None,
             clock_manual_bpm: None,
+            clock_audio_tempo_range: crate::audio::TempoRange::default(),
             clock_beat_followers: 0,
             transport: crate::engine::types::TransportSnapshot::default(),
             timecode: crate::engine::types::TimecodeSnapshot::default(),
