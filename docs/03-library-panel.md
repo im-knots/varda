@@ -28,6 +28,19 @@ Each kind of source has its own section.
 
 > Each section header shows a live count of its items (e.g. "Generators (40)").
 
+## Search
+
+The **🔍 Search library** field at the top of the panel filters every section as you type.
+
+- Each section lists only its matching entries, and its header count shows the number of matches.
+- Sections with matches open; sections without any are hidden. If nothing matches, the panel shows **No matches**.
+- Matching ignores case and finds the text anywhere in an entry's name, its second line (such as a stream URL or mode), or its sub-heading (such as **Displays** or **Windows**). Effects and presets match on their name.
+- Rescan buttons, notices and **+ Add** / **📁 Load to** controls are hidden while you search.
+- Results drag and double-click as usual.
+- Click **✕** beside the field, or press **Escape** in it, to clear the search. Sections return to the open or closed state they had before.
+
+The search is not saved when you quit.
+
 ## Drag-and-Drop
 
 To create a deck, **drag an item onto a channel**:

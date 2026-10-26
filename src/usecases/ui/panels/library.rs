@@ -15,6 +15,113 @@ use crate::engine::value::source::SourceConfig;
 /// deferred drop handler in `panels/dnd.rs`.
 pub(crate) const SOURCE_DND_KEY: &str = "__lib_dnd_source";
 
+/// egui memory key holding the search field's text.
+const SEARCH_QUERY_KEY: &str = "lib_search_query";
+
+/// The library search query, applied to every section.
+///
+/// An empty query is inactive and matches everything.
+struct LibrarySearch {
+    /// Trimmed, lowercased query.
+    needle: String,
+}
+
+impl LibrarySearch {
+    fn new(query: &str) -> Self {
+        Self {
+            needle: query.trim().to_lowercase(),
+        }
+    }
+
+    fn is_active(&self) -> bool {
+        !self.needle.is_empty()
+    }
+
+    /// Case-insensitive substring match.
+    fn matches(&self, text: &str) -> bool {
+        if !self.is_active() {
+            return true;
+        }
+        if self.needle.is_ascii() {
+            // UTF-8 continuation bytes never equal an ASCII byte, so a byte
+            // scan is exact for an ASCII needle.
+            text.as_bytes()
+                .windows(self.needle.len())
+                .any(|w| w.eq_ignore_ascii_case(self.needle.as_bytes()))
+        } else {
+            text.to_lowercase().contains(&self.needle)
+        }
+    }
+
+    /// A source entry matches on its label, detail line or group heading.
+    fn matches_entry(&self, entry: &LibraryEntry) -> bool {
+        self.matches(&entry.label)
+            || entry.detail.as_deref().is_some_and(|d| self.matches(d))
+            || entry.group.as_deref().is_some_and(|g| self.matches(g))
+    }
+
+    fn match_count(&self, ty: &ProviderTypeSnapshot) -> usize {
+        ty.library
+            .entries
+            .iter()
+            .filter(|e| self.matches_entry(e))
+            .count()
+    }
+
+    /// A section header. While searching, headers open by default under a
+    /// separate id, so the user's own open state returns when the query is
+    /// cleared.
+    fn header(
+        &self,
+        text: egui::RichText,
+        salt: impl std::hash::Hash + std::fmt::Debug,
+    ) -> egui::CollapsingHeader {
+        let header = egui::CollapsingHeader::new(text);
+        if self.is_active() {
+            header.id_salt((salt, "search")).default_open(true)
+        } else {
+            header.id_salt(salt).default_open(false)
+        }
+    }
+}
+
+/// Whether any section has a result for an active search.
+fn has_any_match(data: &UIData, search: &LibrarySearch) -> bool {
+    data.sources
+        .iter()
+        .filter(|t| t.listed)
+        .any(|t| search.match_count(t) > 0)
+        || data.filters.iter().any(|(name, _)| search.matches(name))
+        || data.deck_presets.iter().any(|n| search.matches(n))
+        || data.channel_presets.iter().any(|n| search.matches(n))
+}
+
+/// The search field with its clear button. Returns the query.
+fn search_bar(ui: &mut egui::Ui) -> String {
+    let id = egui::Id::new(SEARCH_QUERY_KEY);
+    let mut query: String = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if !query.is_empty() && ui.small_button("✕").on_hover_text("Clear search").clicked() {
+                query.clear();
+            }
+            // A fixed id keeps focus when the clear button appears in front
+            // of the field and shifts automatic ids.
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut query)
+                    .id(egui::Id::new("lib_search_field"))
+                    .hint_text("🔍 Search library")
+                    .desired_width(f32::INFINITY),
+            );
+            if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                query.clear();
+            }
+        });
+    });
+    ui.data_mut(|d| d.insert_temp(id, query.clone()));
+    query
+}
+
 /// One draggable library row.
 ///
 /// The remove button sits on the right and the label truncates to the
@@ -235,59 +342,87 @@ fn create(
     }
 }
 
-/// One source type's collapsible section.
-fn source_section(
+/// A section's tools above its entries: availability, Rescan, notices and
+/// the create form. Returns `false` when the type is unavailable.
+fn section_tools(
     ui: &mut egui::Ui,
     ty: &ProviderTypeSnapshot,
     data: &UIData,
     actions: &mut UIActions,
-) {
+) -> bool {
     let section = &ty.library;
-    let header = if section.entries.is_empty() && section.create.is_some() {
-        format!("{} {}", ty.icon, ty.label)
-    } else {
-        format!("{} {} ({})", ty.icon, ty.label, section.entries.len())
-    };
-    egui::CollapsingHeader::new(egui::RichText::new(header).strong())
-        .id_salt(("lib_source_section", &ty.type_id))
-        .default_open(false)
-        .show(ui, |ui| {
-            if !ty.available {
-                let reason = ty.unavailable_reason.as_deref().unwrap_or("Unavailable");
-                ui.label(egui::RichText::new(reason).small().weak());
-                return;
-            }
-            if section.rescan || section.note.is_some() {
-                ui.horizontal(|ui| {
-                    if section.rescan && ui.small_button("🔄 Rescan").clicked() {
-                        actions.commands.push(EngineCommand::SourceLibraryAction {
-                            source_type: ty.type_id.clone(),
-                            action: "rescan".into(),
-                        });
-                    }
-                    if let Some(note) = &section.note {
-                        ui.label(egui::RichText::new(note).small().weak());
-                    }
+    if !ty.available {
+        let reason = ty.unavailable_reason.as_deref().unwrap_or("Unavailable");
+        ui.label(egui::RichText::new(reason).small().weak());
+        return false;
+    }
+    if section.rescan || section.note.is_some() {
+        ui.horizontal(|ui| {
+            if section.rescan && ui.small_button("🔄 Rescan").clicked() {
+                actions.commands.push(EngineCommand::SourceLibraryAction {
+                    source_type: ty.type_id.clone(),
+                    action: "rescan".into(),
                 });
             }
-            for n in &section.notices {
-                notice(ui, &ty.type_id, n, actions);
+            if let Some(note) = &section.note {
+                ui.label(egui::RichText::new(note).small().weak());
             }
-            if let Some(how) = &section.create {
-                create(ui, &ty.type_id, how, data, actions);
-            }
-            if section.entries.is_empty() && section.create.is_none() {
-                let hint = if section.rescan {
-                    "Nothing found — press Rescan"
-                } else {
-                    "Nothing to show"
-                };
-                ui.label(egui::RichText::new(hint).small().weak());
+        });
+    }
+    for n in &section.notices {
+        notice(ui, &ty.type_id, n, actions);
+    }
+    if let Some(how) = &section.create {
+        create(ui, &ty.type_id, how, data, actions);
+    }
+    if section.entries.is_empty() && section.create.is_none() {
+        let hint = if section.rescan {
+            "Nothing found — press Rescan"
+        } else {
+            "Nothing to show"
+        };
+        ui.label(egui::RichText::new(hint).small().weak());
+    }
+    true
+}
+
+/// One source type's collapsible section. While searching it lists only the
+/// matching entries and is skipped when none match.
+fn source_section(
+    ui: &mut egui::Ui,
+    ty: &ProviderTypeSnapshot,
+    search: &LibrarySearch,
+    data: &UIData,
+    actions: &mut UIActions,
+) {
+    let section = &ty.library;
+    let entries: Vec<(usize, &LibraryEntry)> = section
+        .entries
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| search.matches_entry(e))
+        .collect();
+    if search.is_active() && entries.is_empty() {
+        return;
+    }
+    let header = if !search.is_active() && entries.is_empty() && section.create.is_some() {
+        format!("{} {}", ty.icon, ty.label)
+    } else {
+        format!("{} {} ({})", ty.icon, ty.label, entries.len())
+    };
+    search
+        .header(
+            egui::RichText::new(header).strong(),
+            ("lib_source_section", &ty.type_id),
+        )
+        .show(ui, |ui| {
+            if !search.is_active() && !section_tools(ui, ty, data, actions) {
+                return;
             }
             // Ungrouped entries first, then each group under its heading, in
             // the order the provider listed them.
             let mut groups: Vec<Option<&str>> = Vec::new();
-            for entry in &section.entries {
+            for (_, entry) in &entries {
                 let group = entry.group.as_deref();
                 if !groups.contains(&group) {
                     groups.push(group);
@@ -299,9 +434,9 @@ fn source_section(
                     ui.add_space(2.0);
                     ui.label(egui::RichText::new(heading).small().weak());
                 }
-                for (idx, entry) in section.entries.iter().enumerate() {
+                for (idx, entry) in &entries {
                     if entry.group.as_deref() == group {
-                        entry_row(ui, &ty.type_id, idx, entry, data, actions);
+                        entry_row(ui, &ty.type_id, *idx, entry, data, actions);
                     }
                 }
             }
@@ -342,48 +477,144 @@ fn library_layout(sources: &[ProviderTypeSnapshot]) -> Vec<LibraryItem<'_>> {
 }
 
 /// The effects section: every filter shader, alphabetically.
-fn effects_section(ui: &mut egui::Ui, data: &UIData) {
-    let fx_header = egui::RichText::new(format!("🔮 Effects ({})", data.filters.len())).strong();
-    egui::CollapsingHeader::new(fx_header)
-        .id_salt("lib_effects")
-        .default_open(false)
-        .show(ui, |ui| {
-            for (name, filter_idx) in &data.filters {
-                let item_id = egui::Id::new(("lib_fx", *filter_idx));
-                ui.dnd_drag_source(item_id, LibraryDrag::Effect(*filter_idx), |ui| {
-                    ui.label(egui::RichText::new(format!("  ◇ {name}")).size(12.0));
+fn effects_section(ui: &mut egui::Ui, search: &LibrarySearch, data: &UIData) {
+    let filters: Vec<&(String, usize)> = data
+        .filters
+        .iter()
+        .filter(|(name, _)| search.matches(name))
+        .collect();
+    if search.is_active() && filters.is_empty() {
+        return;
+    }
+    let fx_header = egui::RichText::new(format!("🔮 Effects ({})", filters.len())).strong();
+    search.header(fx_header, "lib_effects").show(ui, |ui| {
+        for (name, filter_idx) in filters {
+            let item_id = egui::Id::new(("lib_fx", *filter_idx));
+            ui.dnd_drag_source(item_id, LibraryDrag::Effect(*filter_idx), |ui| {
+                ui.label(egui::RichText::new(format!("  ◇ {name}")).size(12.0));
+            });
+            // Store the effect filter index for the deferred drop handler.
+            if ui.ctx().is_being_dragged(item_id) {
+                ui.ctx().memory_mut(|mem| {
+                    mem.data
+                        .insert_temp(egui::Id::new("__lib_dnd_fx_idx"), *filter_idx);
                 });
-                // Store the effect filter index for the deferred drop handler.
-                if ui.ctx().is_being_dragged(item_id) {
-                    ui.ctx().memory_mut(|mem| {
-                        mem.data
-                            .insert_temp(egui::Id::new("__lib_dnd_fx_idx"), *filter_idx);
-                    });
-                }
+            }
+        }
+    });
+    ui.add_space(4.0);
+}
+
+/// A group's header, holding each member type's section. Skipped while
+/// searching when no member matches.
+fn group_section(
+    ui: &mut egui::Ui,
+    group: &LibraryGroup,
+    members: &[&ProviderTypeSnapshot],
+    search: &LibrarySearch,
+    data: &UIData,
+    actions: &mut UIActions,
+) {
+    let total: usize = members.iter().map(|t| search.match_count(t)).sum();
+    if search.is_active() && total == 0 {
+        return;
+    }
+    let header = egui::RichText::new(format!("{} {} ({total})", group.icon, group.label)).strong();
+    search
+        .header(header, ("lib_group", &group.label))
+        .show(ui, |ui| {
+            for ty in members {
+                source_section(ui, ty, search, data, actions);
             }
         });
     ui.add_space(4.0);
 }
 
-/// A group's header, holding each member type's section.
-fn group_section(
+/// Saved deck presets matching the search.
+fn deck_presets_section(
     ui: &mut egui::Ui,
-    group: &LibraryGroup,
-    members: &[&ProviderTypeSnapshot],
+    search: &LibrarySearch,
     data: &UIData,
     actions: &mut UIActions,
 ) {
-    let total: usize = members.iter().map(|t| t.library.entries.len()).sum();
-    let header = egui::RichText::new(format!("{} {} ({total})", group.icon, group.label)).strong();
-    egui::CollapsingHeader::new(header)
-        .id_salt(("lib_group", &group.label))
-        .default_open(false)
-        .show(ui, |ui| {
-            for ty in members {
-                source_section(ui, ty, data, actions);
+    let presets: Vec<(usize, &String)> = data
+        .deck_presets
+        .iter()
+        .enumerate()
+        .filter(|(_, name)| search.matches(name))
+        .collect();
+    if presets.is_empty() {
+        return;
+    }
+    let header = egui::RichText::new(format!("💾 Deck Presets ({})", presets.len())).strong();
+    search.header(header, "lib_deck_presets").show(ui, |ui| {
+        for (idx, name) in presets {
+            let item_id = egui::Id::new(("lib_deck_preset", idx));
+            let resp = ui
+                .dnd_drag_source(item_id, LibraryDrag::DeckPreset(idx), |ui| {
+                    ui.label(egui::RichText::new(format!("  ◈ {name}")).size(12.0));
+                })
+                .response;
+            if ui.ctx().is_being_dragged(item_id) {
+                ui.ctx().memory_mut(|mem| {
+                    mem.data
+                        .insert_temp(egui::Id::new("__lib_dnd_deck_preset_idx"), idx);
+                });
             }
-        });
+            if resp.double_clicked()
+                && let Some(ch) = data.channels.first()
+            {
+                actions.commands.push(EngineCommand::LoadDeckPreset {
+                    channel_uuid: ch.uuid.clone(),
+                    preset_name: name.clone(),
+                });
+            }
+            resp.on_hover_text("Drag to a channel to load this deck preset");
+        }
+    });
     ui.add_space(4.0);
+}
+
+/// Saved channel presets matching the search.
+fn channel_presets_section(
+    ui: &mut egui::Ui,
+    search: &LibrarySearch,
+    data: &UIData,
+    actions: &mut UIActions,
+) {
+    let presets: Vec<(usize, &String)> = data
+        .channel_presets
+        .iter()
+        .enumerate()
+        .filter(|(_, name)| search.matches(name))
+        .collect();
+    if presets.is_empty() {
+        return;
+    }
+    let header = egui::RichText::new(format!("💾 Channel Presets ({})", presets.len())).strong();
+    search.header(header, "lib_ch_presets").show(ui, |ui| {
+        for (idx, name) in presets {
+            let item_id = egui::Id::new(("lib_ch_preset", idx));
+            let resp = ui
+                .dnd_drag_source(item_id, LibraryDrag::ChannelPreset(idx), |ui| {
+                    ui.label(egui::RichText::new(format!("  ◈ {name}")).size(12.0));
+                })
+                .response;
+            if ui.ctx().is_being_dragged(item_id) {
+                ui.ctx().memory_mut(|mem| {
+                    mem.data
+                        .insert_temp(egui::Id::new("__lib_dnd_ch_preset_idx"), idx);
+                });
+            }
+            if resp.double_clicked() {
+                actions.commands.push(EngineCommand::LoadChannelPreset {
+                    target_channel_uuid: None,
+                    preset_name: name.clone(),
+                });
+            }
+            resp.on_hover_text("Double-click to add this channel to the mixer");
+        }
+    });
 }
 
 pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
@@ -399,6 +630,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
             }
         });
     });
+    let search = LibrarySearch::new(&search_bar(ui));
     ui.separator();
 
     egui::ScrollArea::vertical()
@@ -408,90 +640,21 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
             mouse_wheel: true,
         })
         .show(ui, |ui| {
-            // === SOURCES AND EFFECTS ===
+            if search.is_active() && !has_any_match(data, &search) {
+                ui.label(egui::RichText::new("No matches").weak());
+                return;
+            }
             for item in library_layout(&data.sources) {
                 match item {
-                    LibraryItem::Source(ty) => source_section(ui, ty, data, actions),
-                    LibraryItem::Effects => effects_section(ui, data),
+                    LibraryItem::Source(ty) => source_section(ui, ty, &search, data, actions),
+                    LibraryItem::Effects => effects_section(ui, &search, data),
                     LibraryItem::Group(group, members) => {
-                        group_section(ui, group, &members, data, actions);
+                        group_section(ui, group, &members, &search, data, actions);
                     }
                 }
             }
-
-            // === DECK PRESETS ===
-            if !data.deck_presets.is_empty() {
-                let deck_preset_header =
-                    egui::RichText::new(format!("💾 Deck Presets ({})", data.deck_presets.len()))
-                        .strong();
-                egui::CollapsingHeader::new(deck_preset_header)
-                    .id_salt("lib_deck_presets")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        for (idx, name) in data.deck_presets.iter().enumerate() {
-                            let item_id = egui::Id::new(("lib_deck_preset", idx));
-                            let resp = ui
-                                .dnd_drag_source(item_id, LibraryDrag::DeckPreset(idx), |ui| {
-                                    ui.label(egui::RichText::new(format!("  ◈ {name}")).size(12.0));
-                                })
-                                .response;
-                            if ui.ctx().is_being_dragged(item_id) {
-                                ui.ctx().memory_mut(|mem| {
-                                    mem.data.insert_temp(
-                                        egui::Id::new("__lib_dnd_deck_preset_idx"),
-                                        idx,
-                                    );
-                                });
-                            }
-                            if resp.double_clicked()
-                                && let Some(ch) = data.channels.first()
-                            {
-                                actions.commands.push(EngineCommand::LoadDeckPreset {
-                                    channel_uuid: ch.uuid.clone(),
-                                    preset_name: name.clone(),
-                                });
-                            }
-                            resp.on_hover_text("Drag to a channel to load this deck preset");
-                        }
-                    });
-
-                ui.add_space(4.0);
-            }
-
-            // === CHANNEL PRESETS ===
-            if !data.channel_presets.is_empty() {
-                let ch_preset_header = egui::RichText::new(format!(
-                    "💾 Channel Presets ({})",
-                    data.channel_presets.len()
-                ))
-                .strong();
-                egui::CollapsingHeader::new(ch_preset_header)
-                    .id_salt("lib_ch_presets")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        for (idx, name) in data.channel_presets.iter().enumerate() {
-                            let item_id = egui::Id::new(("lib_ch_preset", idx));
-                            let resp = ui
-                                .dnd_drag_source(item_id, LibraryDrag::ChannelPreset(idx), |ui| {
-                                    ui.label(egui::RichText::new(format!("  ◈ {name}")).size(12.0));
-                                })
-                                .response;
-                            if ui.ctx().is_being_dragged(item_id) {
-                                ui.ctx().memory_mut(|mem| {
-                                    mem.data
-                                        .insert_temp(egui::Id::new("__lib_dnd_ch_preset_idx"), idx);
-                                });
-                            }
-                            if resp.double_clicked() {
-                                actions.commands.push(EngineCommand::LoadChannelPreset {
-                                    target_channel_uuid: None,
-                                    preset_name: name.clone(),
-                                });
-                            }
-                            resp.on_hover_text("Double-click to add this channel to the mixer");
-                        }
-                    });
-            }
+            deck_presets_section(ui, &search, data, actions);
+            channel_presets_section(ui, &search, data, actions);
         });
 }
 
@@ -499,6 +662,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
 mod tests {
     use super::*;
     use crate::engine::value::provider::LibrarySection;
+    use egui_kittest::kittest::Queryable;
 
     fn source_type(id: &str, group: Option<LibraryGroup>) -> ProviderTypeSnapshot {
         ProviderTypeSnapshot {
@@ -556,6 +720,138 @@ mod tests {
                 "Html"
             ]
         );
+    }
+
+    #[test]
+    fn search_matches_case_insensitive_substrings() {
+        let search = LibrarySearch::new("  PLas ");
+        assert!(search.is_active());
+        assert!(search.matches("plasma_wave"));
+        assert!(search.matches("Neon Plasma"));
+        assert!(!search.matches("tunnel"));
+        assert!(!search.matches("pla"));
+        assert!(LibrarySearch::new("ÉCRAN").matches("mon écran"));
+        assert!(LibrarySearch::new("ab").matches("ü ab"));
+    }
+
+    #[test]
+    fn empty_search_matches_everything() {
+        let search = LibrarySearch::new("   ");
+        assert!(!search.is_active());
+        assert!(search.matches(""));
+        assert!(search.matches("anything"));
+    }
+
+    #[test]
+    fn entries_match_on_label_detail_or_group() {
+        let config = SourceConfig::new("Srt");
+        let mut entry = LibraryEntry::new("Main stage", config);
+        entry.detail = Some("srt://10.0.0.5:9000".into());
+        entry.group = Some("Displays".into());
+        assert!(LibrarySearch::new("stage").matches_entry(&entry));
+        assert!(LibrarySearch::new("10.0.0").matches_entry(&entry));
+        assert!(LibrarySearch::new("display").matches_entry(&entry));
+        assert!(!LibrarySearch::new("windows").matches_entry(&entry));
+    }
+
+    fn search_fixture() -> UIData {
+        let mut data = UIData::test_fixture();
+        data.deck_presets = vec!["bass drop".into(), "intro".into()];
+        data.channel_presets = vec!["ambient".into()];
+        data
+    }
+
+    fn search_harness(data: UIData) -> egui_kittest::Harness<'static> {
+        let mut actions = UIActions::new();
+        egui_kittest::Harness::new_ui(move |ui| {
+            render_library_panel(ui, &data, &mut actions);
+        })
+    }
+
+    fn type_query(harness: &mut egui_kittest::Harness<'static>, query: &str) {
+        harness
+            .get_by_role(egui::accesskit::Role::TextInput)
+            .focus();
+        harness.run();
+        harness
+            .get_by_role(egui::accesskit::Role::TextInput)
+            .type_text(query);
+        harness.run();
+    }
+
+    /// Typing narrows each section to its matches, opens it, and hides the
+    /// sections without one.
+    #[test]
+    fn search_shows_only_matching_entries_per_section() {
+        let mut harness = search_harness(search_fixture());
+        harness.run();
+        assert!(
+            harness
+                .query_by_label_contains("test_generator_a")
+                .is_none()
+        );
+
+        type_query(&mut harness, "generator_b");
+        assert!(
+            harness
+                .query_by_label_contains("test_generator_b")
+                .is_some()
+        );
+        assert!(
+            harness
+                .query_by_label_contains("test_generator_a")
+                .is_none()
+        );
+        assert!(harness.query_by_label_contains("(1)").is_some());
+        assert!(harness.query_by_label_contains("Effects").is_none());
+        assert!(harness.query_by_label_contains("Deck Presets").is_none());
+    }
+
+    #[test]
+    fn search_covers_effects_and_presets() {
+        let mut harness = search_harness(search_fixture());
+        type_query(&mut harness, "effect");
+        assert!(harness.query_by_label_contains("test_effect").is_some());
+        assert!(harness.query_by_label_contains("ch_effect").is_some());
+        assert!(harness.query_by_label_contains("test_generator").is_none());
+
+        let mut harness = search_harness(search_fixture());
+        type_query(&mut harness, "drop");
+        assert!(harness.query_by_label_contains("bass drop").is_some());
+        assert!(harness.query_by_label_contains("intro").is_none());
+        assert!(harness.query_by_label_contains("Channel Presets").is_none());
+    }
+
+    #[test]
+    fn search_without_results_says_so() {
+        let mut harness = search_harness(search_fixture());
+        type_query(&mut harness, "zzz");
+        assert!(harness.query_by_label("No matches").is_some());
+    }
+
+    /// Clearing the query restores the collapsed layout the user had.
+    #[test]
+    fn clearing_search_restores_closed_sections() {
+        let mut harness = search_harness(search_fixture());
+        type_query(&mut harness, "generator_b");
+        harness.get_by_label("✕").click();
+        harness.run();
+        assert!(harness.query_by_label("No matches").is_none());
+        assert!(
+            harness
+                .query_by_label_contains("test_generator_b")
+                .is_none()
+        );
+        assert!(harness.query_by_label_contains("Effects").is_some());
+    }
+
+    #[test]
+    fn escape_clears_search() {
+        let mut harness = search_harness(search_fixture());
+        type_query(&mut harness, "zzz");
+        harness.key_press(egui::Key::Escape);
+        harness.run();
+        assert!(harness.query_by_label("No matches").is_none());
     }
 
     #[test]
