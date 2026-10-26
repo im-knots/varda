@@ -37,6 +37,7 @@ This manual covers everything you need to get started.
 
 - **3. [Library Panel](03-library-panel.md)** (content browser)
   - [Sections](03-library-panel.md#sections) (generators, effects, images, video, cameras, screen capture, taps, streams, HTML, presets)
+  - [Search](03-library-panel.md#search) (filter every section as you type)
   - [Drag-and-Drop](03-library-panel.md#drag-and-drop) (drop onto a channel to create a deck)
   - [Stream Sources](03-library-panel.md#stream-sources) (NDI/SRT/HLS/DASH/RTMP grouping, status indicators)
   - [HTML Sources](03-library-panel.md#html-sources) (add web page URLs, drag-to-channel)
