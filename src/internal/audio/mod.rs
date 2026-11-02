@@ -386,6 +386,64 @@ pub fn estimate_bpm(envelope: &[f32], hop_rate: f32, range: TempoRange) -> Optio
     Some(range.fold(candidate(best) + offset * STEP_BPM))
 }
 
+/// Whether output devices can be captured via loopback: always on Windows
+/// (WASAPI), on macOS 14.6+ (a cpal process tap behind an aggregate device).
+#[cfg(target_os = "macos")]
+fn loopback_supported() -> bool {
+    use objc2_foundation::{NSOperatingSystemVersion, NSProcessInfo};
+    NSProcessInfo::processInfo().isOperatingSystemAtLeastVersion(NSOperatingSystemVersion {
+        majorVersion: 14,
+        minorVersion: 6,
+        patchVersion: 0,
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn loopback_supported() -> bool {
+    cfg!(target_os = "windows")
+}
+
+/// Display name for an output device captured via loopback. Keeps it distinct
+/// from an input of the same name and tells the user it records playback.
+fn loopback_name(name: &str) -> String {
+    format!("Loopback: {name}")
+}
+
+/// A device that can be captured: an input, or an output recorded via loopback.
+struct CaptureDevice {
+    device: cpal::Device,
+    loopback: bool,
+}
+
+/// Enumerates capture devices in [`AudioSourceId`] order: inputs first, so
+/// their ids don't shift, then output devices for loopback where supported.
+/// Outputs that also take input are skipped, since cpal would capture their
+/// input side rather than playback.
+fn capture_devices(host: &cpal::Host) -> Result<Vec<CaptureDevice>> {
+    let mut devices: Vec<CaptureDevice> = host
+        .input_devices()
+        .context("Failed to enumerate audio input devices")?
+        .map(|device| CaptureDevice {
+            device,
+            loopback: false,
+        })
+        .collect();
+    if loopback_supported() {
+        match host.output_devices() {
+            Ok(outputs) => {
+                for device in outputs.filter(|d| !d.supports_input()) {
+                    devices.push(CaptureDevice {
+                        device,
+                        loopback: true,
+                    });
+                }
+            }
+            Err(e) => log::warn!("Failed to enumerate audio output devices: {e}"),
+        }
+    }
+    Ok(devices)
+}
+
 /// An open audio source and its capture stream.
 struct ActiveAudioSource {
     _stream: cpal::Stream,
@@ -409,7 +467,8 @@ struct ActiveAudioSource {
 /// subscriber (`pcm_subs` on each source), or a manual pin (`manual_pins`, via
 /// [`open_source`](Self::open_source)). A device with no holder is closed.
 pub struct AudioManager {
-    /// Detected input devices, refreshed on scan.
+    /// Detected capture devices (inputs, then loopback outputs), refreshed on
+    /// scan.
     devices: Vec<AudioDeviceInfo>,
     active: HashMap<AudioSourceId, ActiveAudioSource>,
     /// Default input id (OS default matched by name, else first), cached at
@@ -460,21 +519,25 @@ impl AudioManager {
         devices.first().map(|d| d.id)
     }
 
-    /// Scans input devices and caches the default.
+    /// Scans capture devices and caches the default.
     pub fn scan_devices(&mut self) {
         let host = cpal::default_host();
-        self.devices = host
-            .input_devices()
+        self.devices = capture_devices(&host)
             .map(|devs| {
-                devs.enumerate()
+                devs.iter()
+                    .enumerate()
                     .map(|(i, d)| {
-                        let name = d.description().map_or_else(
+                        let name = d.device.description().map_or_else(
                             |_| format!("Audio Input {i}"),
                             |desc| desc.name().to_string(),
                         );
                         AudioDeviceInfo {
                             id: i as AudioSourceId,
-                            name,
+                            name: if d.loopback {
+                                loopback_name(&name)
+                            } else {
+                                name
+                            },
                         }
                     })
                     .collect()
@@ -487,7 +550,7 @@ impl AudioManager {
             .default_input_device()
             .and_then(|d| d.description().ok().map(|desc| desc.name().to_string()));
         self.default_source_id = Self::pick_default_input(default_name.as_deref(), &self.devices);
-        log::info!("Audio scan: found {} input device(s)", self.devices.len());
+        log::info!("Audio scan: found {} capture device(s)", self.devices.len());
         for dev in &self.devices {
             log::info!("  Audio {}: {}", dev.id, dev.name);
         }
@@ -520,9 +583,10 @@ impl AudioManager {
     ///
     /// # Errors
     ///
-    /// Returns an error if input devices can't be enumerated, no device exists
-    /// at `id`, the device has no default input config, its sample format isn't
-    /// `f32`/`i16`/`u16`, or the cpal stream fails to build or start.
+    /// Returns an error if devices can't be enumerated, no device exists at
+    /// `id`, the device has no default input (or, for loopback, output)
+    /// config, its sample format isn't `f32`/`i16`/`u16`, or the cpal stream
+    /// fails to build or start.
     pub fn open_source(&mut self, id: AudioSourceId) -> Result<()> {
         self.manual_pins.insert(id);
         self.ensure_open(id)
@@ -536,22 +600,29 @@ impl AudioManager {
         }
 
         let host = cpal::default_host();
-        let device = host
-            .input_devices()
-            .context("Failed to enumerate audio devices")?
+        let CaptureDevice { device, loopback } = capture_devices(&host)?
+            .into_iter()
             .nth(id as usize)
             .context("Audio device not found")?;
 
         let dev_name = device
             .description()
             .map_or_else(|_| format!("Audio {id}"), |desc| desc.name().to_string());
-        log::info!("Opening audio source {id}: {dev_name}");
+        log::info!("Opening audio source {id}: {dev_name} (loopback: {loopback})");
 
-        let config = device
-            .default_input_config()
-            .context("Failed to get default audio input config")?;
+        // Loopback records an output device's mix, so it uses the output config;
+        // cpal's input stream on that device does the capture.
+        let config = if loopback {
+            device
+                .default_output_config()
+                .context("Failed to get default audio output config for loopback")?
+        } else {
+            device
+                .default_input_config()
+                .context("Failed to get default audio input config")?
+        };
         let sample_rate = config.sample_rate() as f32;
-        let sample_rate_hz = config.sample_rate() as u32;
+        let sample_rate_hz = config.sample_rate();
         let channels = config.channels();
         log::info!("Audio config for '{dev_name}': {config:?}");
 
@@ -1378,6 +1449,21 @@ mod tests {
             id,
             name: name.to_string(),
         }
+    }
+
+    #[test]
+    fn pick_default_input_ignores_loopback_of_same_name() {
+        // The OS default input matches the input, not a loopback output that
+        // shares its device name.
+        let devices = vec![
+            dev(0, "Headset"),
+            dev(1, "Microphone"),
+            dev(2, &loopback_name("Microphone")),
+        ];
+        assert_eq!(
+            AudioManager::pick_default_input(Some("Microphone"), &devices),
+            Some(1)
+        );
     }
 
     #[test]

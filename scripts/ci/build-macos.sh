@@ -268,6 +268,7 @@ cat > Varda.app/Contents/Info.plist << PLIST_EOF
   <key>NSHighResolutionCapable</key><true/>
   <key>NSCameraUsageDescription</key><string>Varda uses the camera for live video input</string>
   <key>NSMicrophoneUsageDescription</key><string>Varda uses the microphone for audio-reactive visuals</string>
+  <key>NSAudioCaptureUsageDescription</key><string>Varda records system audio from output devices for audio-reactive visuals</string>
 </dict>
 </plist>
 PLIST_EOF
