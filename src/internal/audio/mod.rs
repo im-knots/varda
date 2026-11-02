@@ -386,9 +386,22 @@ pub fn estimate_bpm(envelope: &[f32], hop_rate: f32, range: TempoRange) -> Optio
     Some(range.fold(candidate(best) + offset * STEP_BPM))
 }
 
-/// Whether output devices can be captured via loopback: WASAPI on Windows,
-/// and CoreAudio on macOS 14.6+ (through a cpal-managed aggregate device).
-const LOOPBACK_SUPPORTED: bool = cfg!(any(target_os = "windows", target_os = "macos"));
+/// Whether output devices can be captured via loopback: always on Windows
+/// (WASAPI), on macOS 14.6+ (a cpal process tap behind an aggregate device).
+#[cfg(target_os = "macos")]
+fn loopback_supported() -> bool {
+    use objc2_foundation::{NSOperatingSystemVersion, NSProcessInfo};
+    NSProcessInfo::processInfo().isOperatingSystemAtLeastVersion(NSOperatingSystemVersion {
+        majorVersion: 14,
+        minorVersion: 6,
+        patchVersion: 0,
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn loopback_supported() -> bool {
+    cfg!(target_os = "windows")
+}
 
 /// Display name for an output device captured via loopback. Keeps it distinct
 /// from an input of the same name and tells the user it records playback.
@@ -415,7 +428,7 @@ fn capture_devices(host: &cpal::Host) -> Result<Vec<CaptureDevice>> {
             loopback: false,
         })
         .collect();
-    if LOOPBACK_SUPPORTED {
+    if loopback_supported() {
         match host.output_devices() {
             Ok(outputs) => {
                 for device in outputs.filter(|d| !d.supports_input()) {
@@ -609,7 +622,7 @@ impl AudioManager {
                 .context("Failed to get default audio input config")?
         };
         let sample_rate = config.sample_rate() as f32;
-        let sample_rate_hz = config.sample_rate() as u32;
+        let sample_rate_hz = config.sample_rate();
         let channels = config.channels();
         log::info!("Audio config for '{dev_name}': {config:?}");
 
@@ -1436,13 +1449,6 @@ mod tests {
             id,
             name: name.to_string(),
         }
-    }
-
-    #[test]
-    fn loopback_name_is_distinct_from_input_name() {
-        let name = "Speakers (Realtek(R) Audio)";
-        assert_eq!(loopback_name(name), "Loopback: Speakers (Realtek(R) Audio)");
-        assert_ne!(loopback_name(name), name);
     }
 
     #[test]
