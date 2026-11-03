@@ -147,9 +147,37 @@ pub fn read_rgba16f(
     width: u32,
     height: u32,
 ) -> Vec<[f32; 4]> {
-    let bytes_per_pixel = 8u32;
-    let padded = (width * bytes_per_pixel).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
-        * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    read_texels(gpu, texture, width, height, 8)
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|px| {
+            std::array::from_fn(|i| half::f16::from_le_bytes([px[i * 2], px[i * 2 + 1]]).to_f32())
+        })
+        .collect()
+}
+
+/// Read a four-byte-per-texel texture (`Rgba8*`, `Bgra8*`) back as its raw
+/// bytes, row-major with no row padding. Blocks on the GPU.
+///
+/// # Panics
+///
+/// Panics if the readback cannot be mapped.
+pub fn read_rgba8(gpu: &crate::renderer::context::GpuContext, texture: &wgpu::Texture) -> Vec<u8> {
+    read_texels(gpu, texture, texture.width(), texture.height(), 4)
+}
+
+/// A texture's bytes, row-major with the copy's row padding removed.
+fn read_texels(
+    gpu: &crate::renderer::context::GpuContext,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+    bytes_per_pixel: u32,
+) -> Vec<u8> {
+    let row = width * bytes_per_pixel;
+    let padded =
+        row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("test readback"),
         size: u64::from(padded * height),
@@ -160,12 +188,7 @@ pub fn read_rgba16f(
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
+        texture.as_image_copy(),
         wgpu::TexelCopyBufferInfo {
             buffer: &buffer,
             layout: wgpu::TexelCopyBufferLayout {
@@ -192,22 +215,16 @@ pub fn read_rgba16f(
         })
         .ok();
     rx.recv().expect("map channel").expect("map ok");
-    let mut out = Vec::with_capacity((width * height) as usize);
-    {
+    let out = {
         let data = buffer
             .slice(..)
             .get_mapped_range()
             .expect("mapped readback");
-        for row in 0..height {
-            let base = (row * padded) as usize;
-            for col in 0..width {
-                let px = base + (col * bytes_per_pixel) as usize;
-                out.push(std::array::from_fn(|i| {
-                    half::f16::from_le_bytes([data[px + i * 2], data[px + i * 2 + 1]]).to_f32()
-                }));
-            }
-        }
-    }
+        data.chunks(padded as usize)
+            .take(height as usize)
+            .flat_map(|r| r[..row as usize].iter().copied())
+            .collect()
+    };
     buffer.unmap();
     out
 }

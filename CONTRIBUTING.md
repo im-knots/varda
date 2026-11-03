@@ -95,7 +95,7 @@ The library panel, the deck controls, the deck API routes, save and restore, und
 Every output (window, display, recording, stream, NDI sender, Syphon or Spout server) is a sink provider from `crate::output`. A new one is a module next to its backend plus one line in `output_sinks` in `src/app/sources.rs`.
 
 - `OutputSinkProvider`, once per type: `id`, `label`, `icon`, `params`, `default_config`, `availability`, an optional `library` (the display type lists monitors), and `create`.
-- `OutputSinkInstance`, once per output: `config`, `frame_path` (`Present` for a window, `Gpu` for a shared texture, `Converted` for NDI, `Readback` for ffmpeg), `configure` to resolve a presentation request, and the per-frame hooks for its path (`acquire`/`present`, `encode`, `publish`, `deliver`). Recordings and streams also implement `startable`, `start` and `stop`.
+- `OutputSinkInstance`, once per output: `config`, `frame_path` (`Present` for a window, `Gpu` for a shared texture, `Converted` for NDI, `Readback` for ffmpeg), `configure` to resolve a presentation request, and the per-frame hooks for its path (`show`, `encode`, `publish`, `deliver`). Recordings and streams also implement `startable`, `start` and `stop`.
 
 `Output` in `internal/output/compose.rs` composes surfaces, edge blend and rotation, so a sink only gets the finished texture. A sink that needs a window asks through `window_request` and gets it in `attach_window`. The id is the `type` tag in `stage.json` (snake_case, never renamed). Settings are `ControlSpec`s, addressable at `output/<uuid>/<name>`. `tests/deck_source_guard.rs` checks sink ids like source ids.
 

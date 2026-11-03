@@ -174,11 +174,11 @@ pub struct GpuContext {
     pub submits: super::submit_stats::SubmitCounter,
 }
 
-/// Window surface, swapchain config, and size. Used by the UI, not the engine.
+/// The UI window's surface and its configuration, handed from GPU startup to
+/// the UI runner's presenter.
 pub struct WindowSurface {
     pub surface: wgpu::Surface<'static>,
     pub surface_config: wgpu::SurfaceConfiguration,
-    pub size: winit::dpi::PhysicalSize<u32>,
 }
 
 /// Which backends to ask wgpu for.
@@ -387,7 +387,6 @@ impl GpuContext {
         let win_surface = WindowSurface {
             surface,
             surface_config,
-            size,
         };
 
         Ok((gpu, win_surface))
@@ -619,17 +618,6 @@ fn encoder_timestamps_are_trustworthy(adapter: &wgpu::Adapter) -> bool {
     let info = adapter.get_info();
     !(info.backend == wgpu::Backend::Metal
         && (info.vendor == APPLE_VENDOR || info.name.starts_with("Apple")))
-}
-
-impl WindowSurface {
-    pub fn resize(&mut self, device: &wgpu::Device, new_size: winit::dpi::PhysicalSize<u32>) {
-        if new_size.width > 0 && new_size.height > 0 {
-            self.size = new_size;
-            self.surface_config.width = new_size.width;
-            self.surface_config.height = new_size.height;
-            self.surface.configure(device, &self.surface_config);
-        }
-    }
 }
 
 /// Info for rendering one surface into an output window.

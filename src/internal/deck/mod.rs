@@ -31,6 +31,17 @@ fn plausible_wall_interval(dt: f32) -> Option<f32> {
     (dt > 0.0 && dt < MAX_WALL_INTERVAL_SECS).then_some(dt)
 }
 
+/// The render interval averaged with α = 0.1; the first sample seeds it.
+/// Averaging intervals rather than `1 / dt` keeps an uneven rate from reading
+/// high.
+fn smoothed_interval(previous: f32, dt: f32) -> f32 {
+    if previous > 0.0 {
+        0.1 * dt + 0.9 * previous
+    } else {
+        dt
+    }
+}
+
 /// A shader deck's depth-sensor preprocessor as saved under the source config's
 /// `depth_prepro` key.
 ///
@@ -177,8 +188,8 @@ pub struct Deck {
     /// declared a `depth_sensor` PREPROCESSOR and the device was acquired.
     pub depth_prepro: Option<DepthPreprocessState>,
 
-    /// Smoothed FPS derived from actual render pipeline timing (EMA of `1/time_delta`)
-    fps_smoothed: f32,
+    /// Seconds between renders, smoothed. [`Self::fps`] is its reciprocal.
+    render_interval: f32,
 
     /// Phase accumulators for smooth speed transitions (generator shader)
     phase_accumulators: [f32; 4],
@@ -459,9 +470,13 @@ impl Deck {
         self.pacing = pacing;
     }
 
-    /// Get the smoothed FPS derived from actual render pipeline timing
+    /// Renders per second, smoothed, from the wall time between renders.
     pub fn fps(&self) -> f32 {
-        self.fps_smoothed
+        if self.render_interval > 0.0 {
+            1.0 / self.render_interval
+        } else {
+            0.0
+        }
     }
 }
 
@@ -481,6 +496,22 @@ fn generator_params_for(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Renders 10 and 30 ms apart are 50 a second. Smoothing `1 / dt` would
+    /// read about 67.
+    #[test]
+    fn an_uneven_render_interval_smooths_to_its_true_rate() {
+        let mut interval = 0.0;
+        for dt in [0.010, 0.030].into_iter().cycle().take(400) {
+            interval = smoothed_interval(interval, dt);
+        }
+        assert!((1.0 / interval - 50.0).abs() < 2.0, "{}", 1.0 / interval);
+    }
+
+    #[test]
+    fn the_first_render_interval_seeds_the_average() {
+        assert!((smoothed_interval(0.0, 0.020) - 0.020).abs() < f32::EPSILON);
+    }
 
     #[test]
     fn the_analyzer_registry_includes_the_depth_preprocessor() {

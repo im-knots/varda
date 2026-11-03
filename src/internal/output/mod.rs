@@ -38,8 +38,8 @@ pub type SinkConfig = ProviderConfig;
 /// readbacks and never reads back a frame a sink publishes from the GPU.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FramePath {
-    /// The sink hands the output a surface texture to draw into and presents
-    /// it: an OS window.
+    /// The sink shows the finished texture in an OS window, from a thread of
+    /// its own.
     Present,
     /// The sink takes the finished texture on the GPU: Syphon, Spout.
     Gpu,
@@ -293,15 +293,9 @@ pub trait OutputSinkInstance: 'static {
         false
     }
 
-    /// A surface texture to draw into, for [`FramePath::Present`].
-    fn acquire(&mut self, _gpu: &GpuContext) -> Option<wgpu::SurfaceTexture> {
-        None
-    }
-
-    /// Show a frame drawn into [`Self::acquire`]'s texture.
-    fn present(&mut self, _gpu: &GpuContext, frame: wgpu::SurfaceTexture) {
-        drop(frame);
-    }
+    /// Show the finished texture, for [`FramePath::Present`]. Called after
+    /// the frame's commands are submitted. Must not wait for the display.
+    fn show(&mut self, _frame: &wgpu::TextureView) {}
 
     /// Record GPU work on the finished texture before submission, for
     /// [`FramePath::Converted`].

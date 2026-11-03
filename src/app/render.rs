@@ -149,18 +149,10 @@ impl VardaApp {
             log::debug!(
                 "[PERF] frame | submits={} fps={:.1}",
                 self.frame_stats.last_frame_submits,
-                self.frame_stats.fps_smoothed,
+                self.frame_stats.frame_rate.fps(),
             );
         }
-        if dt > 0.0 {
-            let instant_fps = 1.0 / dt;
-            self.frame_stats.fps_history.push_back(instant_fps);
-            if self.frame_stats.fps_history.len() > 60 {
-                self.frame_stats.fps_history.pop_front();
-            }
-            self.frame_stats.fps_smoothed = self.frame_stats.fps_history.iter().sum::<f32>()
-                / self.frame_stats.fps_history.len() as f32;
-        }
+        self.frame_stats.frame_rate.record(dt);
         self.frame_stats.system_monitor.update();
     }
 
@@ -893,38 +885,5 @@ mod tests {
         // Full canvas behaves like fill.
         assert_eq!(scale, [1.0, 1.0]);
         assert_eq!(offset, [0.0, 0.0]);
-    }
-
-    #[test]
-    fn fps_smoothing_converges() {
-        let Some(mut app) = crate::testing::headless_app() else {
-            return;
-        };
-        app.frame_stats.fps_history.clear();
-        for _ in 0..60 {
-            app.frame_stats.fps_history.push_back(60.0);
-        }
-        app.frame_stats.fps_smoothed = app.frame_stats.fps_history.iter().sum::<f32>()
-            / app.frame_stats.fps_history.len() as f32;
-        assert!((app.frame_stats.fps_smoothed - 60.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn fps_smoothing_window_cap() {
-        let Some(mut app) = crate::testing::headless_app() else {
-            return;
-        };
-        app.frame_stats.fps_history.clear();
-        for _ in 0..100 {
-            app.frame_stats.fps_history.push_back(30.0);
-            if app.frame_stats.fps_history.len() > 60 {
-                app.frame_stats.fps_history.pop_front();
-            }
-        }
-        assert_eq!(
-            app.frame_stats.fps_history.len(),
-            60,
-            "Window should cap at 60 entries"
-        );
     }
 }

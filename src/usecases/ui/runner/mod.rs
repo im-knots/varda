@@ -1,7 +1,7 @@
 //! `UIRunner`: the windowed delivery layer for the Varda engine.
 //!
-//! Owns the window, egui state, blit pipeline, texture registrations,
-//! `WindowSurface`, and the engine (`VardaApp`), which it drives each frame.
+//! Owns the window, egui state, blit pipeline, texture registrations, the UI
+//! window's presenter, and the engine (`VardaApp`), which it drives each frame.
 //! Headless runs (HTTP API, CLI) don't use it.
 
 use crate::app::render::FileDialogResult;
@@ -20,6 +20,7 @@ use winit::{
 mod camera_detect;
 mod detect;
 mod event_loop;
+mod present;
 pub(crate) mod preview;
 
 pub(crate) use event_loop::WindowHost;
@@ -32,13 +33,18 @@ use detect::{DetectRequest, DetectResponse, spawn_detect_thread};
 /// a stuck build cannot hang quitting.
 const SHADER_BUILD_EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// Frames the GPU may hold before the frame loop waits for the oldest.
+const MAX_FRAMES_IN_FLIGHT: usize = 2;
+
 pub struct UIRunner {
     // Session config: CLI flags and workspace defaults.
     config: AppConfig,
 
     // Window and egui state.
     window: Option<&'static Window>,
-    window_surface: Option<WindowSurface>,
+    ui_window: Option<present::UiWindow>,
+    /// The last submission of each frame still on the GPU, oldest first.
+    in_flight: std::collections::VecDeque<wgpu::SubmissionIndex>,
     blit_pipeline: Option<BlitPipeline>,
     egui_ctx: egui::Context,
     egui_state: Option<egui_winit::State>,
@@ -118,7 +124,8 @@ impl UIRunner {
         Self {
             config,
             window: None,
-            window_surface: None,
+            ui_window: None,
+            in_flight: std::collections::VecDeque::new(),
             blit_pipeline: None,
             egui_ctx: egui::Context::default(),
             egui_state: None,
@@ -247,7 +254,14 @@ impl UIRunner {
             }
         }
         if let Some(ws) = win_surface {
-            self.window_surface = Some(ws);
+            match present::UiWindow::new(&gpu, ws) {
+                Ok(window) => self.ui_window = Some(window),
+                Err(e) => {
+                    log::error!("Failed to start the UI window's presenter: {e:#}");
+                    event_loop.exit();
+                    return;
+                }
+            }
         }
 
         log::info!("[STARTUP] Creating engine (audio, MIDI, shaders, mixer)...");
@@ -652,17 +666,23 @@ impl UIRunner {
 
         let egui_us = t_egui.elapsed().as_micros();
 
-        // 7. Drain the previous frame's GPU work before submitting new work, so the
-        // queue doesn't build up and block get_current_texture()/present().
+        // 7. Bound the GPU queue: with MAX_FRAMES_IN_FLIGHT frames submitted, wait
+        // for the oldest to finish. Otherwise only fire completed callbacks.
         let t_poll = std::time::Instant::now();
         {
             let Some(varda) = self.varda.as_ref() else {
                 return;
             };
-            let _ = varda.gpu_context().device.poll(wgpu::PollType::Wait {
-                submission_index: None,
+            let oldest = if self.in_flight.len() >= MAX_FRAMES_IN_FLIGHT {
+                self.in_flight.pop_front()
+            } else {
+                None
+            };
+            let poll = oldest.map_or(wgpu::PollType::Poll, |index| wgpu::PollType::Wait {
+                submission_index: Some(index),
                 timeout: Some(std::time::Duration::from_millis(100)),
             });
+            let _ = varda.gpu_context().device.poll(poll);
         }
         let poll_us = t_poll.elapsed().as_micros();
 
@@ -717,7 +737,8 @@ impl UIRunner {
         }
     }
 
-    /// Blit the mixer output to screen, overlay egui, and present.
+    /// Blit the mixer output into the UI frame, overlay egui, submit, and hand
+    /// the frame to the presenter.
     fn submit_frame(
         &mut self,
         window: &Window,
@@ -727,114 +748,77 @@ impl UIRunner {
     ) {
         let Some(varda) = &self.varda else { return };
         let context = varda.gpu_context();
-        let Some(win_surface) = &self.window_surface else {
+        let Some(ui_window) = &self.ui_window else {
             return;
         };
-
-        let paint_jobs = self.egui_ctx.tessellate(shapes, pixels_per_point);
-
-        // Apply texture updates even when the surface is unavailable (e.g. Occluded
-        // at startup), so the egui renderer stays in sync.
         let Some(egui_renderer) = &mut self.egui_renderer else {
             return;
         };
+
+        // Texture updates apply even while nothing is drawn, so the egui
+        // renderer stays in sync.
         for (id, deltas) in &textures_delta.set {
             for delta in deltas {
                 egui_renderer.update_texture(&context.device, &context.queue, *id, delta);
             }
         }
-
-        let _ = context.device.poll(wgpu::PollType::Poll);
-        let output = match win_surface.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(o) => o,
-            wgpu::CurrentSurfaceTexture::Suboptimal(o) => {
-                log::warn!("UI surface suboptimal, will reconfigure");
-                o
-            }
-            wgpu::CurrentSurfaceTexture::Outdated => {
-                log::warn!("UI surface outdated, reconfiguring");
-                win_surface
-                    .surface
-                    .configure(&context.device, &win_surface.surface_config);
-                match win_surface.surface.get_current_texture() {
-                    wgpu::CurrentSurfaceTexture::Success(o)
-                    | wgpu::CurrentSurfaceTexture::Suboptimal(o) => o,
-                    other => {
-                        log::error!("Failed to get surface texture after reconfigure: {other:?}");
-                        return;
-                    }
-                }
-            }
-            other => {
-                log::debug!("UI surface unavailable: {other:?}");
-                return;
-            }
-        };
-        let view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
-        let mut encoder = context
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Screen Encoder"),
-            });
-
-        let bind_group = if let Some(blit) = &self.blit_pipeline {
-            let mixer = varda.mixer_ref();
-            Some(blit.create_bind_group(&context.device, mixer.composite_view()))
+        // The frame's last submission, which bounds the GPU queue. A hidden
+        // window draws nothing, so an empty submit marks the frame instead.
+        let index = if ui_window.occluded {
+            context.queue.submit(std::iter::empty())
         } else {
-            None
-        };
-
-        let screen_desc = egui_wgpu::ScreenDescriptor {
-            size_in_pixels: [win_surface.size.width, win_surface.size.height],
-            pixels_per_point: window.scale_factor() as f32,
-        };
-
-        egui_renderer.update_buffers(
-            &context.device,
-            &context.queue,
-            &mut encoder,
-            &paint_jobs,
-            &screen_desc,
-        );
-
-        {
-            let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Main Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.0,
-                            g: 0.0,
-                            b: 0.0,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
+            let paint_jobs = self.egui_ctx.tessellate(shapes, pixels_per_point);
+            let mut encoder =
+                context
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Screen Encoder"),
+                    });
+            let bind_group = self.blit_pipeline.as_ref().map(|blit| {
+                blit.create_bind_group(&context.device, varda.mixer_ref().composite_view())
             });
-            if let (Some(bg), Some(blit)) = (&bind_group, &self.blit_pipeline) {
-                blit.render(&mut rp, bg);
+            let screen_desc = egui_wgpu::ScreenDescriptor {
+                size_in_pixels: ui_window.size(),
+                pixels_per_point: window.scale_factor() as f32,
+            };
+            egui_renderer.update_buffers(
+                &context.device,
+                &context.queue,
+                &mut encoder,
+                &paint_jobs,
+                &screen_desc,
+            );
+            {
+                let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Main Render Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: ui_window.view(),
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                if let (Some(bg), Some(blit)) = (&bind_group, &self.blit_pipeline) {
+                    blit.render(&mut rp, bg);
+                }
+                let mut rp_static = rp.forget_lifetime();
+                egui_renderer.render(&mut rp_static, &paint_jobs, &screen_desc);
             }
-            let mut rp_static = rp.forget_lifetime();
-            egui_renderer.render(&mut rp_static, &paint_jobs, &screen_desc);
-        }
-
+            let index = context.submit(std::iter::once(encoder.finish()));
+            ui_window.publish();
+            index
+        };
+        self.in_flight.push_back(index);
         for id in &textures_delta.free {
             egui_renderer.free_texture(id);
         }
-
-        context.submit(std::iter::once(encoder.finish()));
-        context.queue.present(output);
     }
 }
 
