@@ -172,6 +172,8 @@ pub struct GpuContext {
     pub errors: super::gpu_guard::GpuErrorGuard,
     /// Counts command buffer commits; read once per frame.
     pub submits: super::submit_stats::SubmitCounter,
+    /// Every submit after startup goes through here. See its module.
+    pub submit_gate: super::submit_gate::SubmitGate,
 }
 
 /// The UI window's surface and its configuration, handed from GPU startup to
@@ -383,6 +385,7 @@ impl GpuContext {
             timestamp_supported,
             errors,
             submits: super::submit_stats::SubmitCounter::new(),
+            submit_gate: super::submit_gate::SubmitGate::new(),
         };
         let win_surface = WindowSurface {
             surface,
@@ -533,6 +536,7 @@ impl GpuContext {
             timestamp_supported,
             errors,
             submits: super::submit_stats::SubmitCounter::new(),
+            submit_gate: super::submit_gate::SubmitGate::new(),
         })
     }
 
@@ -545,7 +549,7 @@ impl GpuContext {
         I: IntoIterator<Item = wgpu::CommandBuffer>,
     {
         self.submits.record();
-        self.queue.submit(command_buffers)
+        self.submit_gate.submit(&self.queue, command_buffers)
     }
 
     pub fn create_render_texture(&self, width: u32, height: u32) -> wgpu::Texture {

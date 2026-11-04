@@ -58,7 +58,9 @@ impl InteractiveWindow {
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
-        surface.configure(&context.device, &surface_config);
+        context
+            .submit_gate
+            .configure(&surface, &context.device, &surface_config);
         let blit_pipeline = BlitPipeline::new(&context.device, surface_config.format)?;
         Ok(Self {
             window,
@@ -148,8 +150,9 @@ impl InteractiveWindow {
             wgpu::CurrentSurfaceTexture::Success(f)
             | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
             wgpu::CurrentSurfaceTexture::Outdated => {
-                self.surface
-                    .configure(&context.device, &self.surface_config);
+                context
+                    .submit_gate
+                    .configure(&self.surface, &context.device, &self.surface_config);
                 return;
             }
             other => {

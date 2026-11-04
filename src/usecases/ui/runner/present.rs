@@ -24,14 +24,7 @@ impl UiWindow {
             surface,
             surface_config: config,
         } = surface;
-        let target = SurfaceTarget::new(
-            gpu.device.clone(),
-            gpu.queue.clone(),
-            surface,
-            config.clone(),
-            None,
-            "UI window",
-        )?;
+        let target = SurfaceTarget::new(gpu, surface, config.clone(), None, "UI window")?;
         let presenter = Presenter::spawn("present-ui", target)?;
         let view = frame_view(&gpu.device, &config);
         Ok(Self {
