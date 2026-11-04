@@ -9,21 +9,12 @@ use crate::engine::types::{
     EffectSnapshot, ModulationSourceSnapshot, SequenceStepKindSnapshot, ShaderParamsSnapshot,
 };
 
-/// The egui textures the runner has registered for previews.
-pub(crate) struct PreviewTextures<'a> {
-    pub deck: &'a std::collections::HashMap<String, egui::TextureId>,
-    pub channel: &'a std::collections::HashMap<usize, egui::TextureId>,
-    pub output: &'a std::collections::HashMap<usize, egui::TextureId>,
-    pub main_output: Option<egui::TextureId>,
-}
-
 /// Build the GUI view model from this frame's engine snapshot, the UI layout,
 /// and the registered preview textures. Borrows `engine` so the runner can
 /// publish the same snapshot to the API afterwards.
 pub(crate) fn build_ui_data(
     engine: &crate::engine::EngineState,
     layout: &crate::usecases::ui::UILayoutState,
-    textures: &PreviewTextures<'_>,
     available_luts: std::sync::Arc<[String]>,
 ) -> crate::usecases::ui::UIData {
     use crate::usecases::ui::{
@@ -414,10 +405,6 @@ pub(crate) fn build_ui_data(
         modulation_assignments,
         macros: engine.macros.clone(),
         audio,
-        deck_preview_textures: textures.deck.clone(),
-        channel_preview_textures: textures.channel.clone(),
-        output_preview_textures: textures.output.clone(),
-        main_output_texture: textures.main_output,
         notifications,
         crossfader: engine.mixer.crossfader,
         auto_crossfade_active: engine.mixer.auto_crossfade_active,

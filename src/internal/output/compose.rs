@@ -316,14 +316,6 @@ impl Output {
             .then_some(&self.resources.composed.view)
     }
 
-    /// Size of [`Self::preview_view`].
-    pub fn preview_size(&self) -> (u32, u32) {
-        (
-            self.resources.composed.texture.width(),
-            self.resources.composed.texture.height(),
-        )
-    }
-
     /// Resolve `request` against the sink and rebuild for the result.
     ///
     /// # Errors

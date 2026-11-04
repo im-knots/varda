@@ -1,5 +1,7 @@
 //! Unified output management and warp calibration.
 
+use crate::renderer::preview::PreviewCorners;
+use crate::usecases::ui::runner::preview::{self, PreviewSlot};
 use std::fmt::Write as _;
 
 use super::super::{UIActions, UIData};
@@ -109,21 +111,21 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
                             ui.data_mut(|d| d.insert_temp(preview_id, !show_preview));
                         }
                         if show_preview {
-                            if let Some(&tex_id) = data.output_preview_textures.get(&idx) {
-                                let width = ui.available_width().min(320.0);
-                                // The output's own texture size, not the render resolution: a
-                                // windowed output previews its window, which can differ in shape.
-                                let size = super::utils::preview_size(
-                                    egui::vec2(width, width),
-                                    output.preview_width,
-                                    output.preview_height,
-                                );
-                                ui.image(egui::load::SizedTexture::new(tex_id, size));
-                            } else {
-                                ui.label(
-                                    egui::RichText::new("No preview available").small().weak(),
-                                );
-                            }
+                            let width = ui.available_width().min(320.0);
+                            // The output's own texture size, not the render resolution: a
+                            // windowed output previews its window, which can differ in shape.
+                            let size = super::utils::preview_size(
+                                egui::vec2(width, width),
+                                output.preview_width,
+                                output.preview_height,
+                            );
+                            preview::image(
+                                ui,
+                                size,
+                                PreviewSlot::Output(idx),
+                                PreviewCorners::Square,
+                                egui::Sense::hover(),
+                            );
                         }
                     }
 

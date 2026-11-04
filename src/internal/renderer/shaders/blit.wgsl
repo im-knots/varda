@@ -8,8 +8,8 @@ struct BlitParams {
     uv_offset: vec2<f32>,
     // 1 = source is premultiplied-alpha (scale rgb+a by opacity); 0 = straight (scale alpha only).
     premultiplied: u32,
-    // 1 = apply the sRGB transfer on output, for non-sRGB targets read as
-    // gamma-encoded (egui previews). 0 for sRGB targets, which encode in hardware.
+    // 1 = apply the sRGB transfer on output, for non-sRGB targets.
+    // 0 for sRGB targets, which encode in hardware.
     srgb_encode: u32,
     // Number of destination code intervals (255 or 1023).
     quantization_levels: f32,

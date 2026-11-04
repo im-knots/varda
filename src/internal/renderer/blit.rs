@@ -23,7 +23,7 @@ struct BlitParams {
     /// 1 = premultiplied source (opacity scales rgb and a); 0 = straight
     /// (opacity scales alpha only).
     premultiplied: u32,
-    /// 1 = apply the sRGB transfer on output. See `BlitPipeline::set_srgb_encode`.
+    /// 1 = apply the sRGB transfer on output, for targets that do not encode.
     srgb_encode: u32,
     /// Number of integer code intervals at the destination (255 or 1023).
     quantization_levels: f32,
@@ -306,31 +306,6 @@ impl BlitPipeline {
                 uv_offset,
                 premultiplied: 0,
                 srgb_encode: 0,
-                quantization_levels: 0.0,
-                dither_enabled: 0,
-                transfer: 0,
-                peak_nits: 0.0,
-                _padding: [0; 2],
-            }]),
-        );
-    }
-
-    /// Encode linear to sRGB on output.
-    ///
-    /// For egui previews, which expect gamma-encoded textures; linear ones show
-    /// too dark. The target must be plain `Rgba8Unorm`, not `*UnormSrgb`, or
-    /// the hardware decode cancels the encode.
-    pub fn set_srgb_encode(&self, queue: &wgpu::Queue, encode: bool) {
-        queue.write_buffer(
-            &self.params_buffer,
-            0,
-            bytemuck::cast_slice(&[BlitParams {
-                opacity: 1.0,
-                rotation: 0,
-                uv_scale: [1.0, 1.0],
-                uv_offset: [0.0, 0.0],
-                premultiplied: 0,
-                srgb_encode: u32::from(encode),
                 quantization_levels: 0.0,
                 dither_enabled: 0,
                 transfer: 0,

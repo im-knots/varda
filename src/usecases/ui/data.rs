@@ -316,14 +316,6 @@ pub struct UIData {
     /// User-defined macro controls (one control → many parameter targets).
     pub macros: Vec<crate::macros::Macro>,
     pub audio: AudioUIData,
-    /// Deck preview textures keyed by deck UUID, which survives reordering and
-    /// removal.
-    pub deck_preview_textures: std::collections::HashMap<String, egui::TextureId>,
-    /// Channel preview textures keyed by `ch_idx`.
-    pub channel_preview_textures: std::collections::HashMap<usize, egui::TextureId>,
-    /// Output preview textures keyed by output index.
-    pub output_preview_textures: std::collections::HashMap<usize, egui::TextureId>,
-    pub main_output_texture: Option<egui::TextureId>,
     pub notifications: Vec<NotificationUI>,
     /// Crossfader position (0.0 = A, 1.0 = B).
     pub crossfader: f32,

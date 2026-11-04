@@ -268,7 +268,7 @@ name = "video_decode"
 harness = false
 
 [[bench]]
-name = "preview_encode"
+name = "preview_paint"
 harness = false
 
 [[bench]]

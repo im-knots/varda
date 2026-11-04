@@ -8,6 +8,8 @@ use super::monitoring::render_monitoring_section;
 use super::outputs::render_output_section;
 use super::stage::render_surface_editor;
 use super::tonemap::{render_tonemap_section, tonemap_name};
+use crate::renderer::preview::PreviewCorners;
+use crate::usecases::ui::runner::preview::{self, PreviewSlot};
 
 fn effect_drag_active(ctx: &egui::Context) -> bool {
     use super::super::LibraryDrag;
@@ -64,49 +66,24 @@ fn render_right_panel_body(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAct
             data.render_height,
         );
 
-        if let Some(texture_id) = data.main_output_texture {
-            let img_response = ui.add(
-                egui::Image::new(egui::load::SizedTexture::new(texture_id, preview_size))
-                    .corner_radius(4.0)
-                    .sense(egui::Sense::click()),
+        let img_response = preview::image(
+            ui,
+            preview_size,
+            PreviewSlot::Main,
+            PreviewCorners::Rounded,
+            egui::Sense::click(),
+        );
+        publish_master_surface_fx(ui.ctx(), img_response.rect);
+        if effect_drag_active(ui.ctx()) && ui.rect_contains_pointer(img_response.rect) {
+            ui.painter().rect_stroke(
+                img_response.rect,
+                4.0,
+                egui::Stroke::new(2.0_f32, fx_accent()),
+                egui::StrokeKind::Outside,
             );
-            publish_master_surface_fx(ui.ctx(), img_response.rect);
-            if effect_drag_active(ui.ctx()) && ui.rect_contains_pointer(img_response.rect) {
-                ui.painter().rect_stroke(
-                    img_response.rect,
-                    4.0,
-                    egui::Stroke::new(2.0_f32, fx_accent()),
-                    egui::StrokeKind::Outside,
-                );
-            }
-            if img_response.clicked() {
-                actions.session.select_master = true;
-            }
-        } else {
-            ui.allocate_ui(preview_size, |ui| {
-                let (rect, response) = ui.allocate_exact_size(preview_size, egui::Sense::click());
-                publish_master_surface_fx(ui.ctx(), rect);
-                ui.painter()
-                    .rect_filled(rect, 4.0, egui::Color32::from_rgb(20, 20, 30));
-                if effect_drag_active(ui.ctx()) && ui.rect_contains_pointer(rect) {
-                    ui.painter().rect_stroke(
-                        rect,
-                        4.0,
-                        egui::Stroke::new(2.0_f32, fx_accent()),
-                        egui::StrokeKind::Outside,
-                    );
-                }
-                ui.painter().text(
-                    rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    "No Output",
-                    egui::FontId::proportional(14.0),
-                    egui::Color32::GRAY,
-                );
-                if response.clicked() {
-                    actions.session.select_master = true;
-                }
-            });
+        }
+        if img_response.clicked() {
+            actions.session.select_master = true;
         }
 
         let hint_resp = ui.add(

@@ -11,6 +11,8 @@ use crate::BlendMode;
 use crate::engine::EngineCommand;
 use crate::engine::value::param::{DeckTarget, ParamAddress};
 use crate::mixer::CrossfadeEasing;
+use crate::renderer::preview::PreviewCorners;
+use crate::usecases::ui::runner::preview::{self, PreviewSlot};
 
 fn effect_drag_active(ctx: &egui::Context) -> bool {
     egui::DragAndDrop::payload::<LibraryDrag>(ctx)
@@ -1121,24 +1123,12 @@ pub(super) fn render_deck_thumbnail(
             egui::vec2(slider_width, preview_height),
         );
 
-        if let Some(&texture_id) = data.deck_preview_textures.get(&deck.uuid) {
-            ui.painter().image(
-                texture_id,
-                preview_rect,
-                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                egui::Color32::WHITE,
-            );
-        } else {
-            ui.painter()
-                .rect_filled(preview_rect, 3.0, egui::Color32::from_rgb(30, 30, 40));
-            ui.painter().text(
-                preview_rect.center(),
-                egui::Align2::CENTER_CENTER,
-                "No Preview",
-                egui::FontId::proportional(9.0),
-                egui::Color32::GRAY,
-            );
-        }
+        preview::paint(
+            ui,
+            preview_rect,
+            PreviewSlot::Deck(deck.uuid.clone()),
+            PreviewCorners::Square,
+        );
 
         // Arrangement state overlay: whether the performer or the arrangement
         // controls this deck right now, as on the timeline.

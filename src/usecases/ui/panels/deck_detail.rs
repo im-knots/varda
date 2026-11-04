@@ -16,6 +16,8 @@ use crate::engine::value::provider::{
 };
 use crate::modulation::DEFAULT_ASSIGNMENT_AMOUNT;
 use crate::params::ParamValue;
+use crate::renderer::preview::PreviewCorners;
+use crate::usecases::ui::runner::preview::{self, PreviewSlot};
 
 /// The `〰` dropdown for one of a deck source's modulatable controls.
 ///
@@ -1239,10 +1241,13 @@ pub(super) fn render_selected_deck_detail(
     egui::ScrollArea::horizontal().id_salt("selected_deck_hscroll").show(ui, |ui| {
         ui.horizontal_top(|ui| {
             // Column 0: deck preview, scaled to the bottom bar height.
-            if let Some(tex_id) = data.deck_preview_textures.get(&deck.uuid) {
+            {
                 // Height comes from the bottom bar; the visible panel width caps it so an
                 // ultra-wide project can't make the column wider than the bar.
-                let available_height = ui.available_height() - 12.0; // margin
+                // The frame's margin and the name label fit under the preview, or the bar grows
+                // to hold them each frame.
+                let name_height = ui.text_style_height(&egui::TextStyle::Small) + ui.spacing().item_spacing.y;
+                let available_height = ui.available_height() - 12.0 - name_height;
                 let preview = super::utils::preview_size(
                     egui::vec2(ui.available_width(), available_height.max(60.0)),
                     data.render_width,
@@ -1258,7 +1263,7 @@ pub(super) fn render_selected_deck_detail(
                         ui.set_min_width(preview_width + 12.0);
                         ui.set_max_width(preview_width + 12.0);
                         ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                            ui.image(egui::load::SizedTexture::new(*tex_id, egui::vec2(preview_width, preview_height)));
+                            preview::image(ui, egui::vec2(preview_width, preview_height), PreviewSlot::Deck(deck.uuid.clone()), PreviewCorners::Square, egui::Sense::hover());
                             ui.label(egui::RichText::new(&deck.name).small().color(accent));
                         });
                     });

@@ -25,8 +25,6 @@ pub(crate) mod preview;
 
 pub(crate) use event_loop::WindowHost;
 
-use preview::PreviewEncoder;
-
 use detect::{DetectRequest, DetectResponse, spawn_detect_thread};
 
 /// How long quitting waits for running shader builds before exiting anyway, so
@@ -49,11 +47,6 @@ pub struct UIRunner {
     egui_ctx: egui::Context,
     egui_state: Option<egui_winit::State>,
     egui_renderer: Option<egui_wgpu::Renderer>,
-    preview_encoder: Option<PreviewEncoder>,
-    deck_preview_textures: std::collections::HashMap<String, egui::TextureId>,
-    channel_preview_textures: std::collections::HashMap<usize, egui::TextureId>,
-    output_preview_textures: std::collections::HashMap<usize, egui::TextureId>,
-    main_output_texture: Option<egui::TextureId>,
     lut_catalog: crate::usecases::ui::LutCatalog,
     dome_preview_renderer: Option<crate::renderer::dome_preview::DomePreviewRenderer>,
     dome_preview_texture: Option<egui::TextureId>,
@@ -130,11 +123,6 @@ impl UIRunner {
             egui_ctx: egui::Context::default(),
             egui_state: None,
             egui_renderer: None,
-            preview_encoder: None,
-            deck_preview_textures: std::collections::HashMap::new(),
-            channel_preview_textures: std::collections::HashMap::new(),
-            output_preview_textures: std::collections::HashMap::new(),
-            main_output_texture: None,
             lut_catalog: crate::usecases::ui::LutCatalog::default(),
             dome_preview_renderer: None,
             dome_preview_texture: None,
@@ -230,11 +218,18 @@ impl UIRunner {
                 None,
                 Some(2 * 1024),
             ));
-            self.egui_renderer = Some(egui_wgpu::Renderer::new(
+            let mut egui_renderer = egui_wgpu::Renderer::new(
                 &gpu.device,
                 ws.surface_config.format,
                 egui_wgpu::RendererOptions::default(),
-            ));
+            );
+            match preview::PreviewResources::new(&gpu.device, ws.surface_config.format) {
+                Ok(previews) => {
+                    egui_renderer.callback_resources.insert(previews);
+                }
+                Err(e) => log::error!("Failed to create preview pipeline: {e}"),
+            }
+            self.egui_renderer = Some(egui_renderer);
 
             // Application icon on egui's viewport (dock/taskbar icon).
             {
@@ -299,9 +294,8 @@ impl UIRunner {
 
         self.varda = Some(varda);
 
-        // Register preview textures with egui (windowed only).
         if !self.config.headless {
-            self.register_preview_textures();
+            self.register_dome_preview();
         }
         log::info!(
             "[STARTUP] Initialization complete ({:.0?})",
@@ -386,9 +380,6 @@ impl UIRunner {
             varda.begin_frame();
         }
 
-        // 2. Sync egui texture registrations.
-        self.refresh_textures();
-
         let Some(window) = self.window else { return };
 
         // 3. Create pending output windows and refresh monitors.
@@ -437,12 +428,6 @@ impl UIRunner {
         let mut ui_data = crate::usecases::ui::build_ui_data(
             &engine,
             &self.layout,
-            &crate::usecases::ui::PreviewTextures {
-                deck: &self.deck_preview_textures,
-                channel: &self.channel_preview_textures,
-                output: &self.output_preview_textures,
-                main_output: self.main_output_texture,
-            },
             self.lut_catalog
                 .files(&varda_ref.luts_dir(), std::time::Instant::now()),
         );
@@ -529,7 +514,7 @@ impl UIRunner {
             input.take()
         };
         let mut ui_actions = ui::UIActions::new();
-        let full_output = self.egui_ctx.run_ui(raw_input, |ui| {
+        let mut full_output = self.egui_ctx.run_ui(raw_input, |ui| {
             ui_actions = ui::panels::render_ui(ui, &ui_data);
         });
         {
@@ -698,11 +683,9 @@ impl UIRunner {
         let mixer_us = times.mixer.as_micros();
         let outputs_us = times.outputs.as_micros();
 
-        // 9b. Gamma-encode previews after the mixer (8) and output windows (9),
-        // since window previews read their intermediate texture, and before egui
-        // paints (10), so thumbnails show this frame. Only the ones this frame's
-        // UI drew are encoded.
-        self.encode_previews(&preview::textures_drawn(&full_output.shapes));
+        // 9b. Point previews at this frame's textures: after the mixer (8) and
+        // output windows (9), before egui paints them (10).
+        self.sync_previews();
 
         // 10. UI surface last: blit, egui overlay and present are latency-tolerant.
         let t_submit = std::time::Instant::now();
@@ -712,6 +695,7 @@ impl UIRunner {
             full_output.pixels_per_point,
             &full_output.textures_delta,
         );
+        full_output.textures_delta.clear();
         let submit_us = t_submit.elapsed().as_micros();
 
         let target_fps = self
