@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Verify every load command in a macOS .app resolves to the OS or to the bundle.
+# Verify every dylib reference in a macOS .app resolves to the OS or to the bundle.
 # Usage: ./scripts/ci/check-macos-bundle.sh <path-to-Varda.app>
 #
 # Launching the app cannot prove this on a machine with Homebrew: an absolute Homebrew
 # path resolves there and fails only for users. GitHub's macOS runners have Homebrew, so
-# this reads the load commands of every slice of every image.
+# this reads the load commands of every slice of every image. otool -L also prints a
+# dylib's own install name, so those are held to the same rule.
 set -euo pipefail
 
 APP="${1:?Usage: check-macos-bundle.sh <path-to-Varda.app>}"
@@ -20,19 +21,19 @@ check_slice() {
       /usr/lib/*|/System/*) ;;
       @rpath/*|@loader_path/*|@executable_path/*)
         if [ ! -f "$FRAMEWORKS/$(basename "$dep")" ]; then
-          echo "FAIL: $(basename "$image") [$arch] loads $dep, which is not in Frameworks"
+          echo "FAIL: $(basename "$image") [$arch] references $dep, which is not in Frameworks"
           failed=1
         fi
         ;;
       *)
-        echo "FAIL: $(basename "$image") [$arch] loads $dep, which is outside the bundle"
+        echo "FAIL: $(basename "$image") [$arch] references $dep, which is outside the bundle"
         failed=1
         ;;
     esac
   done
 }
 
-echo "==> Checking load commands"
+echo "==> Checking dylib references"
 for image in "$APP/Contents/MacOS/varda" "$FRAMEWORKS"/*.dylib; do
   [ -f "$image" ] || continue
   for arch in $(lipo -archs "$image"); do
@@ -44,4 +45,4 @@ done
 if [ "$failed" -ne 0 ]; then
   exit 1
 fi
-echo "  ok: $checked slices load only the OS and the bundle"
+echo "  ok: $checked slices reference only the OS and the bundle"
