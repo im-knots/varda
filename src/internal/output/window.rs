@@ -15,6 +15,7 @@ use crate::engine::value::render::{
     PresentationDepth, PresentationRequest, ResolvedPresentation, Unassigned,
 };
 use crate::renderer::context::{GpuContext, select_surface_presentation};
+use crate::renderer::presenter::{Presenter, SurfaceTarget};
 use crate::source::ControlError;
 use anyhow::{Context, Result};
 use std::sync::{Arc, LazyLock};
@@ -147,12 +148,14 @@ impl OutputSinkProvider for DisplayProvider {
     }
 }
 
-/// The OS window and its swap chain, once the event loop has created them.
+/// The OS window and the thread presenting to it, once the event loop has
+/// created the window. The presenter owns the surface.
 struct Bound {
     window: Arc<Window>,
-    surface: wgpu::Surface<'static>,
+    /// The surface configuration the presenter was last given.
     surface_config: wgpu::SurfaceConfiguration,
     capabilities: wgpu::SurfaceCapabilities,
+    presenter: Presenter<SurfaceTarget>,
 }
 
 /// A window or display output's sink.
@@ -196,12 +199,6 @@ impl WindowSink {
                 ));
             }
             (_, fullscreen) => bound.window.set_fullscreen(fullscreen),
-        }
-    }
-
-    fn reconfigure(&mut self, gpu: &GpuContext) {
-        if let Some(bound) = &self.bound {
-            bound.surface.configure(&gpu.device, &bound.surface_config);
         }
     }
 }
@@ -274,7 +271,7 @@ impl OutputSinkInstance for WindowSink {
 
     fn configure(
         &mut self,
-        gpu: &GpuContext,
+        _gpu: &GpuContext,
         _query: &SinkQuery,
         request: PresentationRequest,
     ) -> Result<Presentation> {
@@ -300,7 +297,7 @@ impl OutputSinkInstance for WindowSink {
         {
             bound.surface_config.format = selection.format;
             bound.surface_config.color_space = selection.color_space;
-            bound.surface.configure(&gpu.device, &bound.surface_config);
+            bound.presenter.configure(bound.surface_config.clone());
         }
         Ok(Presentation {
             resolved: selection.resolved,
@@ -325,39 +322,9 @@ impl OutputSinkInstance for WindowSink {
         }
     }
 
-    fn acquire(&mut self, gpu: &GpuContext) -> Option<wgpu::SurfaceTexture> {
-        let label = self.label();
-        let bound = self.bound.as_ref()?;
-        match bound.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(frame) => Some(frame),
-            wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
-                log::warn!("Output '{label}': surface suboptimal, will reconfigure");
-                Some(frame)
-            }
-            wgpu::CurrentSurfaceTexture::Outdated => {
-                log::warn!("Output '{label}': surface outdated, reconfiguring");
-                self.reconfigure(gpu);
-                match self.bound.as_ref()?.surface.get_current_texture() {
-                    wgpu::CurrentSurfaceTexture::Success(frame)
-                    | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => Some(frame),
-                    other => {
-                        log::error!(
-                            "Output '{label}': no surface texture after reconfiguring: {other:?}"
-                        );
-                        None
-                    }
-                }
-            }
-            other => {
-                log::debug!("Output '{label}': surface unavailable: {other:?}");
-                None
-            }
-        }
-    }
-
-    fn present(&mut self, gpu: &GpuContext, frame: wgpu::SurfaceTexture) {
-        gpu.queue.present(frame);
+    fn show(&mut self, frame: &wgpu::TextureView) {
         if let Some(bound) = &self.bound {
+            bound.presenter.publish(frame.clone());
             bound.window.request_redraw();
         }
     }
@@ -415,8 +382,7 @@ impl OutputSinkInstance for WindowSink {
             .context("Failed to create output surface")?;
         let capabilities = surface.get_capabilities(&gpu.adapter);
         let selection = select_surface_presentation(PresentationRequest::default(), &capabilities)?;
-        // Immediate for the lowest latency to projectors, so an output window
-        // never throttles the main loop through vsync contention.
+        // Immediate for the lowest latency to projectors.
         let present_mode = if capabilities
             .present_modes
             .contains(&wgpu::PresentMode::Immediate)
@@ -436,7 +402,17 @@ impl OutputSinkInstance for WindowSink {
             view_formats: vec![],
             desired_maximum_frame_latency: 3,
         };
-        surface.configure(&gpu.device, &surface_config);
+        let label = format!("Output '{}'", self.label());
+        let target = SurfaceTarget::new(
+            gpu.device.clone(),
+            gpu.queue.clone(),
+            surface,
+            surface_config.clone(),
+            Some(Arc::clone(&window)),
+            &label,
+        )?;
+        let presenter =
+            Presenter::spawn("present-output", target).context("Failed to start presenting")?;
         // macOS ignores the position hint and configuring can move the window,
         // so the saved position is applied last.
         if let Some([x, y]) = self.config.position {
@@ -444,9 +420,9 @@ impl OutputSinkInstance for WindowSink {
         }
         self.bound = Some(Bound {
             window,
-            surface,
             surface_config,
             capabilities,
+            presenter,
         });
         self.place(services.get::<crate::output::window::Monitors>());
         Ok(())
@@ -460,14 +436,14 @@ impl OutputSinkInstance for WindowSink {
         self.bound.as_ref().map(|b| b.window.id())
     }
 
-    fn window_resized(&mut self, gpu: &GpuContext, width: u32, height: u32) {
+    fn window_resized(&mut self, _gpu: &GpuContext, width: u32, height: u32) {
         if width == 0 || height == 0 {
             return;
         }
         if let Some(bound) = &mut self.bound {
             bound.surface_config.width = width;
             bound.surface_config.height = height;
-            bound.surface.configure(&gpu.device, &bound.surface_config);
+            bound.presenter.configure(bound.surface_config.clone());
         }
     }
 
@@ -483,16 +459,6 @@ impl OutputSinkInstance for WindowSink {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
-    }
-}
-
-impl Drop for WindowSink {
-    /// Drop the surface before the window it draws into.
-    fn drop(&mut self) {
-        if let Some(bound) = self.bound.take() {
-            drop(bound.surface);
-            drop(bound.window);
-        }
     }
 }
 

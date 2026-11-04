@@ -167,8 +167,13 @@ impl ApplicationHandler for UIRunner {
                 WindowEvent::Resized(new_size) => {
                     self.cached_screen_size = new_size;
                     let device = &varda.gpu_context().device;
-                    if let Some(ws) = &mut self.window_surface {
-                        ws.resize(device, new_size);
+                    if let Some(ui_window) = &mut self.ui_window {
+                        ui_window.resize(device, new_size);
+                    }
+                }
+                WindowEvent::Occluded(occluded) => {
+                    if let Some(ui_window) = &mut self.ui_window {
+                        ui_window.occluded = occluded;
                     }
                 }
                 WindowEvent::ScaleFactorChanged { scale_factor, .. } => {

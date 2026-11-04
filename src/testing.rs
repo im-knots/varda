@@ -147,9 +147,37 @@ pub fn read_rgba16f(
     width: u32,
     height: u32,
 ) -> Vec<[f32; 4]> {
-    let bytes_per_pixel = 8u32;
-    let padded = (width * bytes_per_pixel).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
-        * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    read_texels(gpu, texture, width, height, 8)
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|px| {
+            std::array::from_fn(|i| half::f16::from_le_bytes([px[i * 2], px[i * 2 + 1]]).to_f32())
+        })
+        .collect()
+}
+
+/// Read a four-byte-per-texel texture (`Rgba8*`, `Bgra8*`) back as its raw
+/// bytes, row-major with no row padding. Blocks on the GPU.
+///
+/// # Panics
+///
+/// Panics if the readback cannot be mapped.
+pub fn read_rgba8(gpu: &crate::renderer::context::GpuContext, texture: &wgpu::Texture) -> Vec<u8> {
+    read_texels(gpu, texture, texture.width(), texture.height(), 4)
+}
+
+/// A texture's bytes, row-major with the copy's row padding removed.
+fn read_texels(
+    gpu: &crate::renderer::context::GpuContext,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+    bytes_per_pixel: u32,
+) -> Vec<u8> {
+    let row = width * bytes_per_pixel;
+    let padded =
+        row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("test readback"),
         size: u64::from(padded * height),
@@ -160,12 +188,7 @@ pub fn read_rgba16f(
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
+        texture.as_image_copy(),
         wgpu::TexelCopyBufferInfo {
             buffer: &buffer,
             layout: wgpu::TexelCopyBufferLayout {
@@ -192,22 +215,16 @@ pub fn read_rgba16f(
         })
         .ok();
     rx.recv().expect("map channel").expect("map ok");
-    let mut out = Vec::with_capacity((width * height) as usize);
-    {
+    let out = {
         let data = buffer
             .slice(..)
             .get_mapped_range()
             .expect("mapped readback");
-        for row in 0..height {
-            let base = (row * padded) as usize;
-            for col in 0..width {
-                let px = base + (col * bytes_per_pixel) as usize;
-                out.push(std::array::from_fn(|i| {
-                    half::f16::from_le_bytes([data[px + i * 2], data[px + i * 2 + 1]]).to_f32()
-                }));
-            }
-        }
-    }
+        data.chunks(padded as usize)
+            .take(height as usize)
+            .flat_map(|r| r[..row as usize].iter().copied())
+            .collect()
+    };
     buffer.unmap();
     out
 }
@@ -641,21 +658,12 @@ impl Default for HopAnalysisBench {
 }
 
 /// Build the GUI's view of `app` as the windowed runner does each frame, with
-/// default layout and no preview textures. Returns the output count so the
+/// default layout. Returns the output count so the
 /// work is observable.
 pub fn gui_view(app: &crate::app::VardaApp) -> usize {
     let engine = app.build_engine_state();
     let layout = crate::usecases::ui::UILayoutState::default();
-    let deck = std::collections::HashMap::new();
-    let channel = std::collections::HashMap::new();
-    let output = std::collections::HashMap::new();
-    let textures = crate::usecases::ui::PreviewTextures {
-        deck: &deck,
-        channel: &channel,
-        output: &output,
-        main_output: None,
-    };
-    crate::usecases::ui::build_ui_data(&engine, &layout, &textures, std::sync::Arc::from([]))
+    crate::usecases::ui::build_ui_data(&engine, &layout, std::sync::Arc::from([]))
         .outputs
         .len()
 }
@@ -791,64 +799,163 @@ impl AnalyzerCaptureBench {
     }
 }
 
-/// UI preview encoding for `count` 1080p deck previews.
-pub struct PreviewEncodeBench {
+/// UI size of the preview bench, in points, at 2 pixels per point.
+const PREVIEW_UI_SIZE: egui::Vec2 = egui::vec2(1440.0, 900.0);
+/// A thumbnail in the preview bench, in points.
+const PREVIEW_THUMBNAIL: egui::Vec2 = egui::vec2(160.0, 90.0);
+
+/// A real egui frame showing some of `count` 1080p deck previews.
+pub struct PreviewPaintBench {
     context: crate::renderer::context::GpuContext,
-    encoder: crate::usecases::ui::runner::preview::PreviewEncoder,
+    egui_ctx: egui::Context,
+    renderer: egui_wgpu::Renderer,
+    target: wgpu::TextureView,
     sources: Vec<(String, wgpu::TextureView)>,
 }
 
-impl PreviewEncodeBench {
-    /// `count` color-path deck textures, each with a preview target.
+impl PreviewPaintBench {
+    /// `count` color-path deck textures and an egui renderer for a sRGB target.
     ///
     /// # Panics
     ///
     /// Panics if the preview pipeline cannot be built.
     pub fn new(context: crate::renderer::context::GpuContext, count: usize) -> Self {
-        let mut encoder =
-            crate::usecases::ui::runner::preview::PreviewEncoder::new(&context.device)
-                .expect("the preview pipeline builds");
+        use crate::usecases::ui::runner::preview::PreviewResources;
+        let format = wgpu::TextureFormat::Bgra8UnormSrgb;
+        let mut renderer = egui_wgpu::Renderer::new(
+            &context.device,
+            format,
+            egui_wgpu::RendererOptions::default(),
+        );
+        renderer.callback_resources.insert(
+            PreviewResources::new(&context.device, format).expect("the preview pipeline builds"),
+        );
+        let target = context
+            .device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("Preview Bench Target"),
+                size: wgpu::Extent3d {
+                    width: (PREVIEW_UI_SIZE.x * 2.0) as u32,
+                    height: (PREVIEW_UI_SIZE.y * 2.0) as u32,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default());
         let sources = (0..count)
             .map(|i| {
                 let texture = context.create_compositing_texture(1920, 1080);
                 let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-                let uuid = format!("{i:08x}");
-                let key =
-                    crate::usecases::ui::runner::preview::PreviewSlot::Deck(uuid.clone()).key();
-                encoder.ensure_target(&context, &key, 1920, 1080);
-                (uuid, view)
+                (format!("{i:08x}"), view)
             })
             .collect();
         Self {
             context,
-            encoder,
+            egui_ctx: egui::Context::default(),
+            renderer,
+            target,
             sources,
         }
     }
 
-    /// One frame's preview encoding with the first `drawn` previews on screen,
-    /// drained.
+    /// One UI frame with the first `drawn` previews on screen, submitted.
     pub fn frame(&mut self, drawn: usize) {
-        use crate::usecases::ui::runner::preview::{PreviewSlot, is_drawn};
-        let ids: std::collections::HashMap<PreviewSlot, egui::TextureId> = self
-            .sources
-            .iter()
-            .enumerate()
-            .map(|(i, (uuid, _))| {
-                (
-                    PreviewSlot::Deck(uuid.clone()),
-                    egui::TextureId::User(i as u64),
-                )
-            })
-            .collect();
-        let on_screen = (0..drawn as u64).map(egui::TextureId::User).collect();
-        let sources: Vec<_> = self
-            .sources
-            .iter()
-            .map(|(uuid, view)| (PreviewSlot::Deck(uuid.clone()), view, 1920, 1080))
-            .filter(|(slot, ..)| is_drawn(slot, |s| ids.get(s).copied(), &on_screen))
-            .collect();
-        self.encoder.encode_all(&self.context, &sources);
+        use crate::renderer::preview::PreviewCorners;
+        use crate::usecases::ui::runner::preview::{self, PreviewResources, PreviewSlot};
+        let mut input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, PREVIEW_UI_SIZE)),
+            ..Default::default()
+        };
+        if let Some(viewport) = input.viewports.get_mut(&egui::ViewportId::ROOT) {
+            viewport.native_pixels_per_point = Some(2.0);
+        }
+        let sources = &self.sources;
+        let mut output = self.egui_ctx.run_ui(input, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for (uuid, _) in &sources[..drawn] {
+                    let (rect, _) = ui.allocate_exact_size(PREVIEW_THUMBNAIL, egui::Sense::hover());
+                    preview::paint(
+                        ui,
+                        rect,
+                        PreviewSlot::Deck(uuid.clone()),
+                        PreviewCorners::Square,
+                    );
+                }
+            });
+        });
+        for (id, deltas) in &output.textures_delta.set {
+            for delta in deltas {
+                self.renderer
+                    .update_texture(&self.context.device, &self.context.queue, *id, delta);
+            }
+        }
+        output.textures_delta.clear();
+
+        if let Some(previews) = self
+            .renderer
+            .callback_resources
+            .get_mut::<PreviewResources>()
+        {
+            previews.sync(
+                &self.context.device,
+                self.sources
+                    .iter()
+                    .map(|(uuid, view)| (PreviewSlot::Deck(uuid.clone()), view)),
+            );
+        }
+
+        let screen = egui_wgpu::ScreenDescriptor {
+            size_in_pixels: [
+                (PREVIEW_UI_SIZE.x * 2.0) as u32,
+                (PREVIEW_UI_SIZE.y * 2.0) as u32,
+            ],
+            pixels_per_point: output.pixels_per_point,
+        };
+        let jobs = self
+            .egui_ctx
+            .tessellate(output.shapes, output.pixels_per_point);
+        let mut encoder = self
+            .context
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        let mut commands = self.renderer.update_buffers(
+            &self.context.device,
+            &self.context.queue,
+            &mut encoder,
+            &jobs,
+            &screen,
+        );
+        {
+            let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Preview Bench Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.target,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            self.renderer
+                .render(&mut pass.forget_lifetime(), &jobs, &screen);
+        }
+        commands.push(encoder.finish());
+        self.context.submit(commands);
+    }
+
+    /// Let the GPU finish what has been submitted.
+    pub fn wait(&self) {
         let _ = self
             .context
             .device

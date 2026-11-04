@@ -873,7 +873,7 @@ pub(crate) fn build_engine_state(app: &VardaApp) -> EngineState {
         transport: build_transport_snapshot(app),
         timecode: build_timecode_snapshot(app),
         arrangement: build_arrangement_snapshot(app),
-        fps: app.frame_stats.fps_smoothed,
+        fps: app.frame_stats.frame_rate.fps(),
         frame_count: app.frame_stats.frame_count,
         target_fps: app.render.target_fps,
         analyzers: build_analyzer_types(app),

@@ -1,6 +1,5 @@
 //! Deck and channel preset load and save commands. No egui coupling: the GUI
-//! registers previews from `CommandOutcome::DecksCreated` or its per-frame
-//! `refresh_textures` pass.
+//! picks up new decks in its per-frame `sync_previews` pass.
 
 use super::super::VardaApp;
 use crate::engine::{CommandResult, ErrorCode};

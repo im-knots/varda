@@ -71,7 +71,7 @@ impl Deck {
             frame_count: 0,
             last_frame_time: Instant::now(),
             depth_prepro: None,
-            fps_smoothed: 0.0,
+            render_interval: 0.0,
             phase_accumulators: [0.0; 4],
             generator_phase_inputs,
             analyzers: crate::analyzer::DeckAnalyzers::new(),

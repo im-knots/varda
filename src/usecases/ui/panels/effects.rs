@@ -9,6 +9,8 @@ use crate::engine::EngineCommand;
 use crate::engine::value::effect::EffectStatus;
 use crate::modulation::DEFAULT_ASSIGNMENT_AMOUNT;
 use crate::params::ParamValue;
+use crate::renderer::preview::PreviewCorners;
+use crate::usecases::ui::runner::preview::{self, PreviewSlot};
 
 /// Copy, duplicate, paste, and remove, on any effect card in any chain.
 ///
@@ -315,8 +317,11 @@ pub(super) fn render_channel_effect_detail(
         .show(ui, |ui| {
             ui.horizontal_top(|ui| {
                 // Channel composite preview, the first column before the effect cards.
-                if let Some(&tex_id) = data.channel_preview_textures.get(&ch_idx) {
-                    let available_height = ui.available_height() - 12.0;
+                {
+                    // The frame's margin and the name label fit under the preview, or the bar grows
+                    // to hold them each frame.
+                    let name_height = ui.text_style_height(&egui::TextStyle::Small) + ui.spacing().item_spacing.y;
+                    let available_height = ui.available_height() - 12.0 - name_height;
                     let preview = super::utils::preview_size(
                         egui::vec2(ui.available_width(), available_height.max(60.0)),
                         data.render_width,
@@ -332,10 +337,13 @@ pub(super) fn render_channel_effect_detail(
                             ui.set_min_width(preview_width + 12.0);
                             ui.set_max_width(preview_width + 12.0);
                             ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                                ui.image(egui::load::SizedTexture::new(
-                                    tex_id,
+                                preview::image(
+                                    ui,
                                     egui::vec2(preview_width, preview_height),
-                                ));
+                                    PreviewSlot::Channel(ch_idx),
+                                    PreviewCorners::Square,
+                                    egui::Sense::hover(),
+                                );
                                 ui.label(egui::RichText::new(&ch.name).small().color(accent));
                             });
                         });

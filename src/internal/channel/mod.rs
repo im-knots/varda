@@ -5,9 +5,8 @@ use crate::deck::{Deck, Effect, FramePacing};
 use crate::isf::ISFShader;
 use crate::modulation::ModulationEngine;
 use crate::params::ShaderParams;
-use crate::renderer::{
-    BlitPipeline, CompositeBlitPipeline, GpuContext, ISFUniforms, TransitionPipeline,
-};
+use crate::renderer::layers::{BlendLayer, LayerFoldPipeline, LayerKind, LayerStack};
+use crate::renderer::{GpuContext, ISFUniforms, TransitionPipeline};
 use anyhow::Result;
 
 /// Blend modes for compositing decks and channels
@@ -44,7 +43,7 @@ pub enum BlendMode {
 
 impl BlendMode {
     /// Shader uniform index for this blend mode.
-    /// Must match the constants in composite.wgsl.
+    /// Must match the modes in `layer_fold.wgsl`.
     pub fn to_index(&self) -> u32 {
         match self {
             BlendMode::Normal => 0,
@@ -503,11 +502,8 @@ pub struct Channel {
     /// Frame counter for uniforms
     frame_count: u32,
 
-    /// Shader-based composite pipeline for blending decks (all blend modes via uniform)
-    composite_pipeline: CompositeBlitPipeline,
-
-    /// Simple blit pipeline for first-deck copy (Normal mode, no blend needed)
-    blit_pipeline: BlitPipeline,
+    /// Blends decks into `composite_texture`.
+    fold_pipeline: LayerFoldPipeline,
 
     /// Smoothed render time for this channel in milliseconds (EMA over recent frames)
     pub render_time_ms: f32,
@@ -540,13 +536,7 @@ impl Channel {
         let effect_ping_view =
             effect_ping_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let composite_pipeline =
-            CompositeBlitPipeline::new(&context.device, context.compositing_format)?;
-        let blit_pipeline = BlitPipeline::with_blend(
-            &context.device,
-            context.compositing_format,
-            wgpu::BlendState::ALPHA_BLENDING,
-        )?;
+        let fold_pipeline = LayerFoldPipeline::new(&context.device, context.compositing_format)?;
 
         Ok(Self {
             uuid: crate::ids::generate_short_uuid(),
@@ -561,8 +551,7 @@ impl Channel {
             effect_ping_view,
             tap_prev: None,
             frame_count: 0,
-            composite_pipeline,
-            blit_pipeline,
+            fold_pipeline,
             render_time_ms: 0.0,
             active_deck_count: 0,
         })
@@ -865,83 +854,84 @@ impl Channel {
         let ordered: Vec<&DeckCompositeInfo> =
             non_transitioning.into_iter().chain(transitioning).collect();
 
-        // Composite all decks. Per-draw params go into a persistent ring buffer (one slot per deck)
-        // so all command buffers batch into one queue.submit(). Each Metal command buffer commit is
+        // Composite all decks. Layers between transition shaders fold into as few passes as they
+        // fit, and every pass batches into one queue.submit(). Each Metal command buffer commit is
         // expensive on Intel integrated GPUs.
         let t_composite = std::time::Instant::now();
         let width = self.composite_texture.width();
         let height = self.composite_texture.height();
         let mut composite_cmds: Vec<wgpu::CommandBuffer> = Vec::new();
-        // One params slot per compositing deck. Sized up front, not per draw:
-        // growing mid-loop would strand bind groups on the previous buffer.
-        self.blit_pipeline
-            .ensure_ring_slots(&context.device, ordered.len());
-        self.composite_pipeline
-            .ensure_ring_slots(&context.device, ordered.len());
-        let pipelines = crate::renderer::layers::LayerPipelines {
-            blit: &self.blit_pipeline,
-            composite: &self.composite_pipeline,
-        };
-        let mut stack = crate::renderer::layers::LayerStack::new(
+
+        // A transitioning deck with a shader and something below it to reveal draws in its own
+        // pass. Its params are set here, before the stack borrows the deck textures.
+        let mut kinds: Vec<LayerKind> = Vec::with_capacity(ordered.len());
+        for (position, info) in ordered.iter().enumerate() {
+            let slot = &mut self.decks[info.deck_idx];
+            let transition = info
+                .transition_progress
+                .filter(|_| position > 0)
+                .zip(slot.transition_effect.as_mut());
+            let Some((progress, effect)) = transition else {
+                kinds.push(LayerKind::Blended);
+                continue;
+            };
+            effect.params.set(
+                "progress",
+                crate::params::ParamValue::Float(progress as f32),
+            );
+            effect.params.build_buffer_data();
+            if let Some(buf) = effect.params.buffer() {
+                context.queue.write_buffer(buf, 0, effect.params.scratch());
+            }
+            kinds.push(LayerKind::OwnPass);
+        }
+
+        let mut stack = LayerStack::new(
+            &self.fold_pipeline,
+            &context.device,
             (&self.composite_texture, &self.composite_view),
             (&self.effect_ping_texture, &self.effect_ping_view),
-            ordered.len(),
+            kinds.iter().copied(),
             wgpu::Color::TRANSPARENT,
         );
-
-        for info in &ordered {
-            let slot = &mut self.decks[info.deck_idx];
-            let mut opacity = info.opacity;
-
-            if let Some(progress) = info.transition_progress {
-                if let Some(effect) = slot.transition_effect.as_mut()
-                    && let Some((below, target)) = stack.pass_over()
-                {
-                    // Transition shader: start = the outgoing deck, end = the
-                    // composite below it, which it reveals.
-                    let uniforms = ISFUniforms {
-                        time,
-                        time_delta: dt,
-                        frame_index: self.frame_count,
-                        pass_index: 0,
-                        render_size: [width as f32, height as f32],
-                        phase_times: [0.0; 4],
-                        ..Default::default()
-                    };
-                    effect.params.set(
-                        "progress",
-                        crate::params::ParamValue::Float(progress as f32),
-                    );
-                    effect.params.build_buffer_data();
-                    if let Some(buf) = effect.params.buffer() {
-                        context.queue.write_buffer(buf, 0, effect.params.scratch());
-                    }
-                    composite_cmds.push(effect.pipeline.render_to_cmd(
-                        context,
-                        &slot.deck.texture_view,
-                        below,
-                        target,
-                        &uniforms,
-                        effect.params.buffer(),
-                    ));
-                    continue;
-                }
-                // No shader, or nothing below to transition to: fade out.
-                opacity *= 1.0 - progress as f32;
+        let mut run: Vec<BlendLayer<'_>> = Vec::with_capacity(ordered.len());
+        for (info, kind) in ordered.iter().zip(&kinds) {
+            let slot = &self.decks[info.deck_idx];
+            if let (LayerKind::OwnPass, Some(effect)) = (kind, &slot.transition_effect) {
+                stack.blend(context, &run, &mut composite_cmds);
+                run.clear();
+                let (below, target) = stack.pass_over();
+                // Transition shader: start = the outgoing deck, end = the
+                // composite below it, which it reveals.
+                let uniforms = ISFUniforms {
+                    time,
+                    time_delta: dt,
+                    frame_index: self.frame_count,
+                    pass_index: 0,
+                    render_size: [width as f32, height as f32],
+                    phase_times: [0.0; 4],
+                    ..Default::default()
+                };
+                composite_cmds.push(effect.pipeline.render_to_cmd(
+                    context,
+                    &slot.deck.texture_view,
+                    below,
+                    target,
+                    &uniforms,
+                    effect.params.buffer(),
+                ));
+                continue;
             }
-
-            stack.blend(
-                context,
-                &pipelines,
-                &crate::renderer::layers::BlendLayer {
-                    view: &slot.deck.texture_view,
-                    opacity,
-                    blend_mode: info.blend_mode.to_index(),
-                    premultiplied: false,
-                },
-                &mut composite_cmds,
-            );
+            // No shader, or nothing below to transition to: fade out.
+            let fade = info.transition_progress.map_or(1.0, |p| 1.0 - p as f32);
+            run.push(BlendLayer {
+                view: &slot.deck.texture_view,
+                opacity: info.opacity * fade,
+                blend_mode: info.blend_mode.to_index(),
+                premultiplied: false,
+            });
         }
+        stack.blend(context, &run, &mut composite_cmds);
         let composite_encode_us = t_composite.elapsed().as_micros();
 
         // Batch submit all channel composite commands at once

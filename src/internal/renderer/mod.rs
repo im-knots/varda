@@ -16,6 +16,8 @@ pub mod lut;
 pub mod measure;
 pub mod pass_uniforms;
 pub mod pipeline;
+pub mod presenter;
+pub mod preview;
 pub mod readback;
 pub mod slicer;
 pub mod submit_stats;

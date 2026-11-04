@@ -6,6 +6,7 @@ mod classify;
 mod commands;
 mod deck_loads;
 mod engine_impl;
+mod frame_rate;
 pub(crate) mod history;
 mod inputs;
 /// Interactive mode for HTML decks (feature `html`).
@@ -209,8 +210,7 @@ pub(crate) struct Outputs {
 /// Frame timing and system monitoring.
 pub(crate) struct FrameStats {
     pub last_frame_instant: std::time::Instant,
-    pub fps_history: std::collections::VecDeque<f32>,
-    pub fps_smoothed: f32,
+    pub frame_rate: frame_rate::FrameRate,
     pub frame_count: u64,
     pub system_monitor: crate::sysmon::SystemMonitor,
     /// Command buffer commits in the previous frame, sampled in
@@ -572,8 +572,7 @@ impl VardaApp {
             interactive: interactive::InteractiveHtmlState::default(),
             frame_stats: FrameStats {
                 last_frame_instant: std::time::Instant::now(),
-                fps_history: std::collections::VecDeque::with_capacity(60),
-                fps_smoothed: 0.0,
+                frame_rate: frame_rate::FrameRate::default(),
                 frame_count: 0,
                 system_monitor: crate::sysmon::SystemMonitor::new(),
                 last_frame_submits: 0,

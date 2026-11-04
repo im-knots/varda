@@ -24,6 +24,7 @@
 //!                               ring's shape.
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use varda::renderer::layers::{BlendLayer, FOLD_WIDTH, LayerFoldPipeline};
 use varda::renderer::{
     blit::{PolygonBlitPipeline, PolygonDrawDesc},
     context::GpuContext,
@@ -278,12 +279,18 @@ fn bench_bind_group(c: &mut Criterion) {
     let layer_view = layer.create_view(&wgpu::TextureViewDescriptor::default());
     let below = ctx.create_render_texture(W, H);
     let below_view = below.create_view(&wgpu::TextureViewDescriptor::default());
-    let composite =
-        varda::renderer::blit::CompositeBlitPipeline::new(&ctx.device, ctx.compositing_format)
-            .expect("pipeline");
+    let fold = LayerFoldPipeline::new(&ctx.device, ctx.compositing_format).expect("pipeline");
+    let layers: Vec<BlendLayer<'_>> = (0..FOLD_WIDTH)
+        .map(|_| BlendLayer {
+            view: &layer_view,
+            opacity: 1.0,
+            blend_mode: 0,
+            premultiplied: false,
+        })
+        .collect();
     let mut group = c.benchmark_group("bind_group_create");
-    group.bench_function("composite_ring", |b| {
-        b.iter(|| composite.create_ring_bind_group(&ctx.device, &layer_view, &below_view, 0));
+    group.bench_function("layer_fold", |b| {
+        b.iter(|| fold.create_bind_group(&ctx.device, &layers, Some(&below_view), 0));
     });
     group.finish();
 }

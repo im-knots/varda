@@ -232,6 +232,10 @@ name = "compositing"
 harness = false
 
 [[bench]]
+name = "frame_overhead"
+harness = false
+
+[[bench]]
 name = "shader_params"
 harness = false
 
@@ -264,7 +268,7 @@ name = "video_decode"
 harness = false
 
 [[bench]]
-name = "preview_encode"
+name = "preview_paint"
 harness = false
 
 [[bench]]

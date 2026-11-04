@@ -398,9 +398,9 @@ impl Deck {
             Some(wall_dt) if self.pacing.live => wall_dt,
             _ => time_delta,
         };
-        if let Some(wall_dt) = wall_dt {
-            let instant_fps = 1.0 / wall_dt;
-            self.fps_smoothed = 0.1 * instant_fps + 0.9 * self.fps_smoothed;
+        // The first render's interval runs from the deck's creation, not a render.
+        if let Some(wall_dt) = wall_dt.filter(|_| self.frame_count > 1) {
+            self.render_interval = super::smoothed_interval(self.render_interval, wall_dt);
         }
 
         // Accumulate generator phase times using the fixed dt

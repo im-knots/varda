@@ -78,8 +78,8 @@ struct Resources {
     blend_source: Target,
     /// The composed picture, before the final pass. The UI preview reads it.
     composed: Target,
-    /// The delivered picture, for every sink but a window.
-    delivered: Option<Target>,
+    /// The finished picture: a window shows it, every other sink sends it.
+    delivered: Target,
     readback: Option<ReadbackBuffer>,
     polygon: PolygonBlitPipeline,
     edge_blend: EdgeBlendPipeline,
@@ -196,15 +196,13 @@ impl Output {
         let intermediate_usage =
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
         let path = sink.frame_path();
-        let delivered = (path != FramePath::Present).then(|| {
-            Target::new(
-                device,
-                size,
-                target_format,
-                intermediate_usage | wgpu::TextureUsages::COPY_SRC,
-                "Output Delivered",
-            )
-        });
+        let delivered = Target::new(
+            device,
+            size,
+            target_format,
+            intermediate_usage | wgpu::TextureUsages::COPY_SRC,
+            "Output Delivered",
+        );
         let readback = (path == FramePath::Readback).then(|| {
             ReadbackBuffer::new_with_contract(
                 device,
@@ -318,14 +316,6 @@ impl Output {
             .then_some(&self.resources.composed.view)
     }
 
-    /// Size of [`Self::preview_view`].
-    pub fn preview_size(&self) -> (u32, u32) {
-        (
-            self.resources.composed.texture.width(),
-            self.resources.composed.texture.height(),
-        )
-    }
-
     /// Resolve `request` against the sink and rebuild for the result.
     ///
     /// # Errors
@@ -403,19 +393,6 @@ impl Output {
             return RenderedFrame::Skipped;
         }
         let path = self.sink.frame_path();
-        let surface = if path == FramePath::Present {
-            match self.sink.acquire(gpu) {
-                Some(surface) => Some(surface),
-                None => return RenderedFrame::Skipped,
-            }
-        } else {
-            None
-        };
-        let surface_view = surface.as_ref().map(|s| {
-            s.texture
-                .create_view(&wgpu::TextureViewDescriptor::default())
-        });
-
         let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -424,11 +401,7 @@ impl Output {
         let use_edge_blend =
             self.edge_blend_mode == EdgeBlendMode::Manual && self.edge_blend.any_enabled();
         let res = &self.resources;
-        let target_view = match (&surface_view, &res.delivered) {
-            (Some(view), _) => view,
-            (None, Some(delivered)) => &delivered.view,
-            (None, None) => return RenderedFrame::Skipped,
-        };
+        let target_view = &res.delivered.view;
 
         // A whole-output picture on a non-window sink with nothing to blend is
         // one pass straight into the delivered texture.
@@ -518,9 +491,9 @@ impl Output {
             res.finish.render(&mut pass, &bind_group);
         }
 
-        if let Some(surface) = surface {
+        if path == FramePath::Present {
             gpu.submit(std::iter::once(encoder.finish()));
-            self.sink.present(gpu, surface);
+            self.sink.show(target_view);
             return RenderedFrame::Done;
         }
         self.deliver(gpu, services, encoder, fps)
@@ -535,9 +508,7 @@ impl Output {
         fps: u32,
     ) -> RenderedFrame {
         let path = self.sink.frame_path();
-        let Some(delivered) = self.resources.delivered.as_ref() else {
-            return RenderedFrame::Skipped;
-        };
+        let delivered = &self.resources.delivered;
         let (width, height) = self.size;
         let request = self.presentation_request;
 
@@ -757,24 +728,53 @@ mod tests {
         }
     }
 
+    /// A window-type sink that keeps every frame it is shown.
+    struct Shown(Rc<RefCell<Vec<wgpu::TextureView>>>);
+
+    impl OutputSinkInstance for Shown {
+        fn sink_type(&self) -> &'static str {
+            "shown"
+        }
+        fn label(&self) -> String {
+            "shown".into()
+        }
+        fn config(&self) -> SinkConfig {
+            SinkConfig::new("shown")
+        }
+        fn frame_path(&self) -> FramePath {
+            FramePath::Present
+        }
+        fn startable(&self) -> bool {
+            false
+        }
+        fn configure(
+            &mut self,
+            _gpu: &GpuContext,
+            _query: &SinkQuery,
+            request: PresentationRequest,
+        ) -> Result<Presentation> {
+            Ok(Presentation {
+                resolved: crate::delivery::presentation::resolve_eight_bit_sdr(request, "test"),
+                modes: Vec::<ModeAvailability>::new(),
+            })
+        }
+        fn show(&mut self, frame: &wgpu::TextureView) {
+            self.0.borrow_mut().push(frame.clone());
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
     const SIZE: u32 = 4;
 
     /// A 4×4 picture with a different color in each quadrant, so any rotation
     /// or flip moves colors.
     fn quadrants(gpu: &GpuContext) -> Target {
-        let colors = [
-            [255, 0, 0, 255],
-            [0, 255, 0, 255],
-            [0, 0, 255, 255],
-            [255, 255, 0, 255],
-        ];
-        let mut bytes = Vec::with_capacity((SIZE * SIZE * 4) as usize);
-        for y in 0..SIZE {
-            for x in 0..SIZE {
-                let quadrant = usize::from(y >= SIZE / 2) * 2 + usize::from(x >= SIZE / 2);
-                bytes.extend_from_slice(&colors[quadrant]);
-            }
-        }
+        let bytes = quadrant_bytes();
         let target = Target::new(
             &gpu.device,
             (SIZE, SIZE),
@@ -802,6 +802,24 @@ mod tests {
             },
         );
         target
+    }
+
+    /// The RGBA8 bytes of the quadrants picture.
+    fn quadrant_bytes() -> Vec<u8> {
+        let colors = [
+            [255, 0, 0, 255],
+            [0, 255, 0, 255],
+            [0, 0, 255, 255],
+            [255, 255, 0, 255],
+        ];
+        let mut bytes = Vec::with_capacity((SIZE * SIZE * 4) as usize);
+        for y in 0..SIZE {
+            for x in 0..SIZE {
+                let quadrant = usize::from(y >= SIZE / 2) * 2 + usize::from(x >= SIZE / 2);
+                bytes.extend_from_slice(&colors[quadrant]);
+            }
+        }
+        bytes
     }
 
     /// The pixels the output delivers for `content`, read back.
@@ -888,6 +906,47 @@ mod tests {
                 "surfaces compose a preview"
             );
             assert_eq!(routed, direct, "{rotation:?}");
+        }
+    }
+
+    /// A window output hands its sink the finished frame, once per render and
+    /// with the frame's commands already submitted.
+    #[test]
+    fn a_window_output_shows_its_finished_frame() {
+        let Some(gpu) = crate::testing::headless_gpu() else {
+            return;
+        };
+        let picture = quadrants(&gpu);
+        let shown = Rc::new(RefCell::new(Vec::new()));
+        let mut output = Output::new(
+            &gpu,
+            &Services::new(),
+            "o1".into(),
+            "Window".into(),
+            Box::new(Shown(Rc::clone(&shown))),
+            (SIZE, SIZE),
+        )
+        .expect("output");
+        assert!(output.is_live());
+
+        let frame = output.render(
+            &gpu,
+            &mut Services::new(),
+            Content::Picture {
+                view: &picture.view,
+                fit_aspect: Some(1.0),
+            },
+            60,
+        );
+
+        assert_eq!(frame, RenderedFrame::Done);
+        assert_eq!(*shown.borrow(), [output.resources.delivered.view.clone()]);
+        // Read without another render: the picture is there only if render
+        // submitted before showing. Dither moves a channel by at most one code.
+        let source = quadrant_bytes();
+        let delivered = crate::testing::read_rgba8(&gpu, &output.resources.delivered.texture);
+        for (got, want) in delivered.iter().zip(&source) {
+            assert!(got.abs_diff(*want) <= 1, "{delivered:?} against {source:?}");
         }
     }
 
