@@ -1,6 +1,7 @@
 //! Mixer render pipeline: compositing, master effects, sub-mixes.
 
 use super::{AutoCrossfade, CrossfadeEasing, Mixer, ProgramKey};
+use crate::renderer::layers::{BlendLayer, LayerKind, LayerStack};
 use crate::renderer::tonemap::TonemapMode;
 use crate::renderer::{GpuContext, ISFUniforms};
 use anyhow::Result;
@@ -797,54 +798,37 @@ impl Mixer {
 
         // Fallback: opacity-based crossfade.
         //
-        // In 2-channel mode the first channel is blitted with ALPHA_BLENDING onto a transparent
-        // target. The hardware blend already applies SrcAlpha, so scaling alpha by opacity in the
-        // shader too would weight it by opacity². The first channel is therefore blitted at full
-        // opacity and the crossfader drives only the second channel's opacity; the composite
-        // shader's `mix(dst, src, src_a)` then gives (1-cf)·A + cf·B.
+        // In 2-channel mode the first channel is drawn at full opacity and the crossfader drives only
+        // the second channel's opacity; the fold's `mix(dst, src, src_a)` then gives
+        // (1-cf)·A + cf·B.
         //
-        // The clear is TRANSPARENT so the program carries channel alpha to alpha-capable outputs.
-        // The clear RGB is zero either way, so opaque content matches the over-black result; the
-        // program is premultiplied alpha.
+        // The base is TRANSPARENT so the program carries channel alpha to alpha-capable outputs. Its
+        // RGB is zero either way, so opaque content matches the over-black result; the program is
+        // premultiplied alpha.
         let opacities = self.compositing_opacities();
 
-        let visible: Vec<(&wgpu::TextureView, f32, u32)> = self
+        // Channel composites are premultiplied alpha.
+        let layers: Vec<BlendLayer<'_>> = self
             .channels
             .iter()
             .zip(opacities.iter())
             .filter(|&(_, &opacity)| opacity > 0.0)
-            .map(|(channel, &opacity)| {
-                (
-                    &channel.composite_view,
-                    opacity,
-                    channel.blend_mode.to_index(),
-                )
+            .map(|(channel, &opacity)| BlendLayer {
+                view: &channel.composite_view,
+                opacity,
+                blend_mode: channel.blend_mode.to_index(),
+                premultiplied: true,
             })
             .collect();
-        let pipelines = crate::renderer::layers::LayerPipelines {
-            blit: &self.blit_pipeline,
-            composite: &self.composite_pipeline,
-        };
-        let mut stack = crate::renderer::layers::LayerStack::new(
+        LayerStack::new(
+            &self.fold_pipeline,
+            &context.device,
             (&self.composite_texture, &self.composite_view),
             (&self.effect_ping_texture, &self.effect_ping_view),
-            visible.len(),
+            std::iter::repeat_n(LayerKind::Blended, layers.len()),
             wgpu::Color::TRANSPARENT,
-        );
-        for (view, opacity, blend_mode) in visible {
-            // Channel composites are premultiplied-alpha (see blit_pipeline blend).
-            stack.blend(
-                context,
-                &pipelines,
-                &crate::renderer::layers::BlendLayer {
-                    view,
-                    opacity,
-                    blend_mode,
-                    premultiplied: true,
-                },
-                &mut cmd_buffers,
-            );
-        }
+        )
+        .blend(context, &layers, &mut cmd_buffers);
 
         cmd_buffers
     }
@@ -901,47 +885,31 @@ impl Mixer {
 
         let opacities = self.compositing_opacities();
 
-        let visible: Vec<(&wgpu::TextureView, f32, u32)> = indices
+        let layers: Vec<BlendLayer<'_>> = indices
             .iter()
             .filter_map(|&ch_idx| {
                 let channel = self.channels.get(ch_idx)?;
                 let opacity = opacities.get(ch_idx).copied().unwrap_or(0.0);
-                (opacity > 0.0).then(|| {
-                    (
-                        &channel.composite_view,
-                        opacity,
-                        channel.blend_mode.to_index(),
-                    )
+                (opacity > 0.0).then(|| BlendLayer {
+                    view: &channel.composite_view,
+                    opacity,
+                    blend_mode: channel.blend_mode.to_index(),
+                    premultiplied: true,
                 })
             })
             .collect();
         let mut cmd_buffers: Vec<wgpu::CommandBuffer> = Vec::new();
-        let pipelines = crate::renderer::layers::LayerPipelines {
-            blit: &self.blit_pipeline,
-            composite: &self.composite_pipeline,
-        };
-        let mut stack = crate::renderer::layers::LayerStack::new(
+        LayerStack::new(
+            &self.fold_pipeline,
+            &context.device,
             (sub_tex, sub_view),
             (&self.effect_ping_texture, &self.effect_ping_view),
-            visible.len(),
+            std::iter::repeat_n(LayerKind::Blended, layers.len()),
             wgpu::Color::BLACK,
-        );
-        let empty = visible.is_empty();
-        for (view, opacity, blend_mode) in visible {
-            stack.blend(
-                context,
-                &pipelines,
-                &crate::renderer::layers::BlendLayer {
-                    view,
-                    opacity,
-                    blend_mode,
-                    premultiplied: true,
-                },
-                &mut cmd_buffers,
-            );
-        }
+        )
+        .blend(context, &layers, &mut cmd_buffers);
 
-        if empty {
+        if layers.is_empty() {
             let mut encoder =
                 context
                     .device

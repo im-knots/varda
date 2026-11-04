@@ -1,5 +1,5 @@
 use super::edge_blend::SurfaceOverlapZones;
-/// Blit pipelines: texture copy, shader compositing, and polygon surfaces.
+/// Blit pipelines: texture copy and polygon surfaces.
 use crate::surface::mask::{DEFAULT_MASK_RES, bake_hole_mask};
 use anyhow::Result;
 use std::cell::{Cell, RefCell};
@@ -43,9 +43,8 @@ pub struct BlitPipeline {
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     params_buffer: wgpu::Buffer,
-    /// Per-draw params, grown by [`Self::ensure_ring_slots`].
-    ring_buffer: RefCell<wgpu::Buffer>,
-    ring_slots: Cell<usize>,
+    /// Per-draw params, [`MAX_DRAW_SLOTS`] slots.
+    ring_buffer: wgpu::Buffer,
     /// Byte stride between slots, aligned to the device minimum.
     ring_stride: u64,
 }
@@ -228,8 +227,7 @@ impl BlitPipeline {
             bind_group_layout,
             sampler,
             params_buffer,
-            ring_buffer: RefCell::new(ring_buffer),
-            ring_slots: Cell::new(MAX_DRAW_SLOTS as usize),
+            ring_buffer,
             ring_stride,
         })
     }
@@ -421,22 +419,6 @@ impl BlitPipeline {
         self.render(render_pass, bind_group);
     }
 
-    /// Grow the params ring buffer to at least `needed` slots. Call once before
-    /// a batch: growing mid-batch invalidates earlier bind groups.
-    pub fn ensure_ring_slots(&self, device: &wgpu::Device, needed: usize) {
-        if needed <= self.ring_slots.get() {
-            return;
-        }
-        let new_slots = needed.next_power_of_two().max(MAX_DRAW_SLOTS as usize);
-        *self.ring_buffer.borrow_mut() = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Blit Params Ring Buffer"),
-            size: new_slots as u64 * self.ring_stride,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        self.ring_slots.set(new_slots);
-    }
-
     /// Write blit params into a slot of the pre-allocated ring buffer.
     /// Call once per draw before `create_bind_group_for_slot`.
     pub fn write_params_slot(
@@ -449,7 +431,7 @@ impl BlitPipeline {
         premultiplied: bool,
     ) {
         queue.write_buffer(
-            &self.ring_buffer.borrow(),
+            &self.ring_buffer,
             slot as u64 * self.ring_stride,
             bytemuck::cast_slice(&[BlitParams {
                 opacity,
@@ -481,7 +463,6 @@ impl BlitPipeline {
     ) -> wgpu::BindGroup {
         let param_size = std::mem::size_of::<BlitParams>() as u64;
         let offset = slot as u64 * self.ring_stride;
-        let ring = self.ring_buffer.borrow();
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Blit Bind Group (ring)"),
             layout: &self.bind_group_layout,
@@ -497,366 +478,7 @@ impl BlitPipeline {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &ring,
-                        offset,
-                        size: Some(NonZeroU64::new(param_size).unwrap()),
-                    }),
-                },
-            ],
-        })
-    }
-
-    /// Render using a ring buffer slot's bind group.
-    /// The bind group must have been created with `create_ring_bind_group`.
-    pub fn render_at_slot<'a>(
-        &'a self,
-        render_pass: &mut wgpu::RenderPass<'a>,
-        bind_group: &'a wgpu::BindGroup,
-    ) {
-        render_pass.set_pipeline(&self.pipeline);
-        render_pass.set_bind_group(0, bind_group, &[]);
-        render_pass.draw(0..3, 0..1);
-    }
-}
-
-// === Composite blend pipeline ===
-
-/// Composite blend parameters, 32 bytes. Matches `CompositeParams` in composite.wgsl.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct CompositeParams {
-    opacity: f32,
-    blend_mode: u32,
-    uv_scale: [f32; 2],
-    uv_offset: [f32; 2],
-    /// 1 = premultiplied source, un-premultiplied before the blend math; 0 = straight.
-    premultiplied: u32,
-    _pad: f32,
-}
-
-/// Shader compositing: reads source and destination and blends per pixel. The
-/// blend mode is a uniform integer.
-pub struct CompositeBlitPipeline {
-    pipeline: wgpu::RenderPipeline,
-    bind_group_layout: wgpu::BindGroupLayout,
-    sampler: wgpu::Sampler,
-    params_buffer: wgpu::Buffer,
-    /// Per-draw params, grown by [`Self::ensure_ring_slots`].
-    ring_buffer: RefCell<wgpu::Buffer>,
-    ring_slots: Cell<usize>,
-    /// Byte stride between slots, aligned to the device minimum.
-    ring_stride: u64,
-}
-
-impl CompositeBlitPipeline {
-    /// Create a composite blend pipeline.
-    ///
-    /// # Errors
-    ///
-    /// Never returns `Err`; validation failures surface on the device's error
-    /// scope. The `Result` matches the other pipeline constructors.
-    pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Result<Self> {
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Composite Bind Group Layout"),
-            entries: &[
-                // Sampler
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                // Source texture (layer being composited)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                // Destination texture (composite-so-far snapshot)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                // Params uniform buffer
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(
-                            std::mem::size_of::<CompositeParams>() as u64
-                        ),
-                    },
-                    count: None,
-                },
-            ],
-        });
-
-        let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Composite Params Buffer"),
-            contents: bytemuck::cast_slice(&[CompositeParams {
-                opacity: 1.0,
-                blend_mode: 0,
-                uv_scale: [1.0, 1.0],
-                uv_offset: [0.0, 0.0],
-                premultiplied: 0,
-                _pad: 0.0,
-            }]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Composite Pipeline Layout"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
-            immediate_size: 0,
-        });
-
-        let vertex_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Composite Vertex Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/fullscreen.wgsl").into()),
-        });
-
-        let fragment_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Composite Fragment Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/composite.wgsl").into()),
-        });
-
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Composite Blend Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &vertex_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &fragment_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: target_format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                unclipped_depth: false,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState {
-                count: 1,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview_mask: None,
-            cache: None,
-        });
-
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Composite Sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            ..Default::default()
-        });
-
-        // Pre-allocate ring buffer for batched per-draw params.
-        let align = u64::from(device.limits().min_uniform_buffer_offset_alignment);
-        let param_size = std::mem::size_of::<CompositeParams>() as u64;
-        let ring_stride = param_size.div_ceil(align) * align;
-        let ring_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Composite Params Ring Buffer"),
-            size: MAX_DRAW_SLOTS * ring_stride,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        Ok(Self {
-            pipeline,
-            bind_group_layout,
-            sampler,
-            params_buffer,
-            ring_buffer: RefCell::new(ring_buffer),
-            ring_slots: Cell::new(MAX_DRAW_SLOTS as usize),
-            ring_stride,
-        })
-    }
-
-    /// Update blend parameters.
-    pub fn set_params(
-        &self,
-        queue: &wgpu::Queue,
-        opacity: f32,
-        blend_mode: u32,
-        uv_scale: [f32; 2],
-        uv_offset: [f32; 2],
-    ) {
-        queue.write_buffer(
-            &self.params_buffer,
-            0,
-            bytemuck::cast_slice(&[CompositeParams {
-                opacity,
-                blend_mode,
-                uv_scale,
-                uv_offset,
-                premultiplied: 0,
-                _pad: 0.0,
-            }]),
-        );
-    }
-
-    /// Create a bind group for compositing source onto destination.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `size_of::<CompositeParams>()` is zero, which cannot happen.
-    pub fn create_bind_group(
-        &self,
-        device: &wgpu::Device,
-        source_view: &wgpu::TextureView,
-        dest_view: &wgpu::TextureView,
-    ) -> wgpu::BindGroup {
-        let param_size = std::mem::size_of::<CompositeParams>() as u64;
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Composite Bind Group"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(source_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(dest_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &self.params_buffer,
-                        offset: 0,
-                        size: Some(NonZeroU64::new(param_size).unwrap()),
-                    }),
-                },
-            ],
-        })
-    }
-
-    /// Draw a fullscreen quad with the composite shader.
-    pub fn render<'a>(
-        &'a self,
-        render_pass: &mut wgpu::RenderPass<'a>,
-        bind_group: &'a wgpu::BindGroup,
-    ) {
-        render_pass.set_pipeline(&self.pipeline);
-        render_pass.set_bind_group(0, bind_group, &[]);
-        render_pass.draw(0..3, 0..1);
-    }
-
-    /// Grow the params ring buffer to at least `needed` slots. Call once before
-    /// a batch: growing mid-batch invalidates earlier bind groups.
-    pub fn ensure_ring_slots(&self, device: &wgpu::Device, needed: usize) {
-        if needed <= self.ring_slots.get() {
-            return;
-        }
-        let new_slots = needed.next_power_of_two().max(MAX_DRAW_SLOTS as usize);
-        *self.ring_buffer.borrow_mut() = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Composite Params Ring Buffer"),
-            size: new_slots as u64 * self.ring_stride,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        self.ring_slots.set(new_slots);
-    }
-
-    /// Write composite params into a slot of the pre-allocated ring buffer.
-    /// Call once per draw before `create_bind_group_for_slot`.
-    #[allow(clippy::too_many_arguments)]
-    pub fn write_params_slot(
-        &self,
-        queue: &wgpu::Queue,
-        slot: usize,
-        opacity: f32,
-        blend_mode: u32,
-        uv_scale: [f32; 2],
-        uv_offset: [f32; 2],
-        premultiplied: bool,
-    ) {
-        queue.write_buffer(
-            &self.ring_buffer.borrow(),
-            slot as u64 * self.ring_stride,
-            bytemuck::cast_slice(&[CompositeParams {
-                opacity,
-                blend_mode,
-                uv_scale,
-                uv_offset,
-                premultiplied: u32::from(premultiplied),
-                _pad: 0.0,
-            }]),
-        );
-    }
-
-    /// Create a bind group for a specific ring buffer slot.
-    /// The slot offset is baked in; no dynamic offset.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `size_of::<CompositeParams>()` is zero, which cannot happen.
-    pub fn create_ring_bind_group(
-        &self,
-        device: &wgpu::Device,
-        source_view: &wgpu::TextureView,
-        dest_view: &wgpu::TextureView,
-        slot: usize,
-    ) -> wgpu::BindGroup {
-        let param_size = std::mem::size_of::<CompositeParams>() as u64;
-        let offset = slot as u64 * self.ring_stride;
-        let ring = self.ring_buffer.borrow();
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Composite Bind Group (ring)"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(source_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(dest_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &ring,
+                        buffer: &self.ring_buffer,
                         offset,
                         size: Some(NonZeroU64::new(param_size).unwrap()),
                     }),

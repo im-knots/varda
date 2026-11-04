@@ -16,9 +16,10 @@ use crate::channel::Channel;
 use crate::deck::Effect;
 use crate::macros::MacroBank;
 use crate::modulation::ModulationEngine;
+use crate::renderer::layers::LayerFoldPipeline;
 use crate::renderer::lut::{LoadedLut, LutPipeline};
 pub use crate::renderer::tonemap::TonemapMode;
-use crate::renderer::{BlitPipeline, CompositeBlitPipeline, GpuContext, TonemapPipeline};
+use crate::renderer::{GpuContext, TonemapPipeline};
 use anyhow::Result;
 pub use arrangement_edit::ArrangementError;
 pub use resolve::EffectChain;
@@ -205,11 +206,8 @@ pub struct Mixer {
     /// falls back to CPU-measured render cost × `gpu_load_ratio`.
     gpu_utilization: f32,
 
-    /// Shader-based composite pipeline for blending channels (all blend modes via uniform)
-    composite_pipeline: CompositeBlitPipeline,
-
-    /// Simple blit pipeline for first-channel copy
-    blit_pipeline: BlitPipeline,
+    /// Blends channels into `composite_texture` and the sub-mixes.
+    fold_pipeline: LayerFoldPipeline,
 
     /// Tonemap pipeline (bypass/ACES) applied after master effects
     tonemap_pipeline: TonemapPipeline,
@@ -295,16 +293,7 @@ impl Mixer {
         let effect_ping_view =
             effect_ping_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let composite_pipeline =
-            CompositeBlitPipeline::new(&context.device, context.compositing_format)?;
-        // Channel composites are premultiplied alpha, so blending them uses
-        // PREMULTIPLIED_ALPHA_BLENDING (src factor One). ALPHA_BLENDING would apply coverage again
-        // and darken partial-opacity channels.
-        let blit_pipeline = BlitPipeline::with_blend(
-            &context.device,
-            context.compositing_format,
-            wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
-        )?;
+        let fold_pipeline = LayerFoldPipeline::new(&context.device, context.compositing_format)?;
         let tonemap_pipeline = TonemapPipeline::new(&context.device, context.compositing_format)?;
         let lut_pipeline = LutPipeline::new(&context.device, context.compositing_format)?;
 
@@ -334,8 +323,7 @@ impl Mixer {
             frame_count: 0,
             gpu_load_ratio: 1.0,
             gpu_utilization: 0.0,
-            composite_pipeline,
-            blit_pipeline,
+            fold_pipeline,
             tonemap_pipeline,
             tonemap_mode: TonemapMode::default(),
             lut_pipeline,

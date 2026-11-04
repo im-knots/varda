@@ -1,27 +1,52 @@
-// Composite blend shader: blends the source layer over the composite so far
-// using the blend_mode uniform. CompositeParams is 32 bytes (8 x f32).
+// Layer fold: blends up to FOLD_WIDTH layers in one pass, bottom to top, in
+// registers. FoldParams is 160 bytes and matches the struct in layers.rs.
 
-struct CompositeParams {
+const FOLD_WIDTH: u32 = 8u;
+
+struct FoldLayer {
     opacity: f32,
     blend_mode: u32,
-    uv_scale: vec2<f32>,
-    uv_offset: vec2<f32>,
-    // 1 = source is premultiplied-alpha (un-premultiply before blend math); 0 = straight.
+    // 1 = premultiplied alpha; 0 = straight.
     premultiplied: u32,
-    _pad: f32,
+    _pad: u32,
+}
+
+struct FoldParams {
+    // What the first layer is drawn over when nothing is below.
+    base: vec4<f32>,
+    layer_count: u32,
+    // 1 = start from below_texture; 0 = start from base.
+    has_below: u32,
+    _pad: vec2<u32>,
+    layers: array<FoldLayer, FOLD_WIDTH>,
 }
 
 @group(0) @binding(0)
 var texture_sampler: sampler;
 
 @group(0) @binding(1)
-var source_texture: texture_2d<f32>;
-
+var layer_0: texture_2d<f32>;
 @group(0) @binding(2)
-var dest_texture: texture_2d<f32>;
-
+var layer_1: texture_2d<f32>;
 @group(0) @binding(3)
-var<uniform> params: CompositeParams;
+var layer_2: texture_2d<f32>;
+@group(0) @binding(4)
+var layer_3: texture_2d<f32>;
+@group(0) @binding(5)
+var layer_4: texture_2d<f32>;
+@group(0) @binding(6)
+var layer_5: texture_2d<f32>;
+@group(0) @binding(7)
+var layer_6: texture_2d<f32>;
+@group(0) @binding(8)
+var layer_7: texture_2d<f32>;
+
+// The composite so far, when an earlier pass drew it.
+@group(0) @binding(9)
+var below_texture: texture_2d<f32>;
+
+@group(0) @binding(10)
+var<uniform> params: FoldParams;
 
 const EPSILON: f32 = 0.001;
 
@@ -49,28 +74,39 @@ fn srgb_decode(v: vec3<f32>) -> vec3<f32> {
     return select(-e, e, v >= vec3<f32>(0.0));
 }
 
-@fragment
-fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
-    // Sample source with UV transform (scaling modes).
-    let source_uv = uv * params.uv_scale + params.uv_offset;
-
-    var src: vec4<f32>;
-    if (source_uv.x < 0.0 || source_uv.x > 1.0 || source_uv.y < 0.0 || source_uv.y > 1.0) {
-        src = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    } else {
-        src = textureSample(source_texture, texture_sampler, source_uv);
+fn sample_layer(index: u32, uv: vec2<f32>) -> vec4<f32> {
+    switch (index) {
+        case 0u: { return textureSampleLevel(layer_0, texture_sampler, uv, 0.0); }
+        case 1u: { return textureSampleLevel(layer_1, texture_sampler, uv, 0.0); }
+        case 2u: { return textureSampleLevel(layer_2, texture_sampler, uv, 0.0); }
+        case 3u: { return textureSampleLevel(layer_3, texture_sampler, uv, 0.0); }
+        case 4u: { return textureSampleLevel(layer_4, texture_sampler, uv, 0.0); }
+        case 5u: { return textureSampleLevel(layer_5, texture_sampler, uv, 0.0); }
+        case 6u: { return textureSampleLevel(layer_6, texture_sampler, uv, 0.0); }
+        default: { return textureSampleLevel(layer_7, texture_sampler, uv, 0.0); }
     }
+}
 
+// The first layer over the base. It ignores its blend mode. A premultiplied
+// layer keeps its color at every alpha, so it is not un-premultiplied here.
+fn over_base(layer: FoldLayer, src: vec4<f32>) -> vec4<f32> {
+    let a = src.a * layer.opacity;
+    var rgb = src.rgb * a;
+    if (layer.premultiplied == 1u) {
+        rgb = src.rgb * layer.opacity;
+    }
+    return vec4<f32>(rgb + params.base.rgb * (1.0 - a), a + params.base.a * (1.0 - a));
+}
+
+fn blend_layer(layer: FoldLayer, sampled: vec4<f32>, dst: vec4<f32>) -> vec4<f32> {
     // The blend math and OVER below need straight alpha, so un-premultiply
     // premultiplied sources (channel composites). a ≈ 0 early-outs below.
-    if (params.premultiplied == 1u && src.a > EPSILON) {
+    var src = sampled;
+    if (layer.premultiplied == 1u && src.a > EPSILON) {
         src = vec4<f32>(src.rgb / src.a, src.a);
     }
 
-    // Destination at raw UV (no transform).
-    let dst = textureSample(dest_texture, texture_sampler, uv);
-
-    let src_a = src.a * params.opacity;
+    let src_a = src.a * layer.opacity;
 
     // A fully transparent source contributes nothing.
     if (src_a <= 0.0) {
@@ -78,7 +114,7 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
     }
 
     var blended: vec3<f32>;
-    let mode = params.blend_mode;
+    let mode = layer.blend_mode;
 
     // Pivot modes (Overlay=5, Soft Light=6, Hard Light=7) use gamma-encoded
     // operands. Encoding follows the un-premultiply: a non-linear curve must
@@ -168,4 +204,20 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
     let result_a = src_a + dst.a * (1.0 - src_a);
 
     return vec4<f32>(result_rgb, result_a);
+}
+
+@fragment
+fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
+    var composite: vec4<f32>;
+    var next = 0u;
+    if (params.has_below == 1u) {
+        composite = textureSampleLevel(below_texture, texture_sampler, uv, 0.0);
+    } else {
+        composite = over_base(params.layers[0], sample_layer(0u, uv));
+        next = 1u;
+    }
+    for (var index = next; index < params.layer_count; index++) {
+        composite = blend_layer(params.layers[index], sample_layer(index, uv), composite);
+    }
+    return composite;
 }

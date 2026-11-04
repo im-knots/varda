@@ -232,6 +232,10 @@ name = "compositing"
 harness = false
 
 [[bench]]
+name = "frame_overhead"
+harness = false
+
+[[bench]]
 name = "shader_params"
 harness = false
 

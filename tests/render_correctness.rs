@@ -237,7 +237,7 @@ fn opacity_is_linear_over_black() {
     assert_hi(brightness_at(1.0), "opacity1");
 }
 
-/// The subsequent-channel composite path (composite.wgsl, premultiplied
+/// The subsequent-channel composite path (`layer_fold.wgsl`, premultiplied
 /// source) also avoids double-darkening: at crossfader=1 a half-opacity white
 /// deck in B composites to ~0.5, not 0.25.
 #[test]
