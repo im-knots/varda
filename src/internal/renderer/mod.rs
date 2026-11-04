@@ -20,6 +20,7 @@ pub mod presenter;
 pub mod preview;
 pub mod readback;
 pub mod slicer;
+pub mod submit_gate;
 pub mod submit_stats;
 pub mod tonemap;
 pub mod transition;

@@ -749,7 +749,9 @@ impl UIRunner {
         // The frame's last submission, which bounds the GPU queue. A hidden
         // window draws nothing, so an empty submit marks the frame instead.
         let index = if ui_window.occluded {
-            context.queue.submit(std::iter::empty())
+            context
+                .submit_gate
+                .submit(&context.queue, std::iter::empty())
         } else {
             let paint_jobs = self.egui_ctx.tessellate(shapes, pixels_per_point);
             let mut encoder =

@@ -13,6 +13,8 @@
 //! drawable: wgpu-core 30 locks only the surface being acquired.
 
 use super::blit::BlitPipeline;
+use super::context::GpuContext;
+use super::submit_gate::SubmitGate;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
 /// What a presenter thread drives: one window's surface, or a fake in tests.
@@ -123,6 +125,7 @@ fn run<T: PresentTarget>(shared: &Shared<T>, mut target: T) {
 pub struct SurfaceTarget {
     device: wgpu::Device,
     queue: wgpu::Queue,
+    gate: SubmitGate,
     config: wgpu::SurfaceConfiguration,
     blit: BlitPipeline,
     label: String,
@@ -140,18 +143,18 @@ impl SurfaceTarget {
     ///
     /// Fails when the blit pipeline cannot be built.
     pub fn new(
-        device: wgpu::Device,
-        queue: wgpu::Queue,
+        gpu: &GpuContext,
         surface: wgpu::Surface<'static>,
         config: wgpu::SurfaceConfiguration,
         window: Option<Arc<winit::window::Window>>,
         label: &str,
     ) -> anyhow::Result<Self> {
-        surface.configure(&device, &config);
-        let blit = BlitPipeline::new(&device, config.format)?;
+        gpu.submit_gate.configure(&surface, &gpu.device, &config);
+        let blit = BlitPipeline::new(&gpu.device, config.format)?;
         Ok(Self {
-            device,
-            queue,
+            device: gpu.device.clone(),
+            queue: gpu.queue.clone(),
+            gate: gpu.submit_gate.clone(),
             config,
             blit,
             label: label.to_owned(),
@@ -165,7 +168,8 @@ impl SurfaceTarget {
             wgpu::CurrentSurfaceTexture::Success(texture)
             | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => Some(texture),
             wgpu::CurrentSurfaceTexture::Outdated => {
-                self.surface.configure(&self.device, &self.config);
+                self.gate
+                    .configure(&self.surface, &self.device, &self.config);
                 match self.surface.get_current_texture() {
                     wgpu::CurrentSurfaceTexture::Success(texture)
                     | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => Some(texture),
@@ -205,7 +209,8 @@ impl PresentTarget for SurfaceTarget {
             }
         }
         self.config = config;
-        self.surface.configure(&self.device, &self.config);
+        self.gate
+            .configure(&self.surface, &self.device, &self.config);
     }
 
     fn present(&mut self, frame: &wgpu::TextureView) {
@@ -221,7 +226,8 @@ impl PresentTarget for SurfaceTarget {
                 label: Some("Present Encoder"),
             });
         blit_frame(&self.device, &mut encoder, &self.blit, frame, &view);
-        self.queue.submit(std::iter::once(encoder.finish()));
+        self.gate
+            .submit(&self.queue, std::iter::once(encoder.finish()));
         self.queue.present(drawable);
     }
 }

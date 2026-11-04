@@ -404,8 +404,7 @@ impl OutputSinkInstance for WindowSink {
         };
         let label = format!("Output '{}'", self.label());
         let target = SurfaceTarget::new(
-            gpu.device.clone(),
-            gpu.queue.clone(),
+            gpu,
             surface,
             surface_config.clone(),
             Some(Arc::clone(&window)),
