@@ -1,4 +1,4 @@
-# Varda Flatpak manifest. See spec/release-strategy.md sections 5 and 14.
+# Varda Flatpak manifest.
 #
 # The artifact for a VJ installing Varda on their own machine: its dependencies are
 # patched centrally by Flathub through org.freedesktop.Platform, which is the one property

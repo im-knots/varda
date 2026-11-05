@@ -36,11 +36,10 @@ jobs:
       - name: Install system dependencies
         run: |
           # libfreenect-dev lives in the `universe` component — enable it so the
-          # default-on `depth` feature's -lfreenect resolves (see
-          # spec/depth-sensors.md).
+          # default-on `depth` feature's -lfreenect resolves.
           # libpipewire-0.3-dev backs the default-on `screen-capture` feature:
           # libspa-sys resolves libpipewire-0.3 through pkg-config at build time,
-          # so its absence fails the build outright. See spec/screen-capture.md.
+          # so its absence fails the build outright.
           sudo add-apt-repository -y universe
           sudo apt-get update
           sudo apt-get install -y \
@@ -163,7 +162,7 @@ jobs:
       # fails, and so a Spout regression is named rather than buried among two
       # thousand other tests. The runner's adapter is Microsoft Basic Render
       # Driver (WARP) and the whole D3D11On12 bridge works on it, which is why
-      # this now asserts rather than reports. See spec/spout-output.md.
+      # this now asserts rather than reports.
       - name: Spout capability
         run: cargo test --no-default-features --features face-detection,screen-capture --lib spout::capability -- --nocapture
 
@@ -185,7 +184,7 @@ jobs:
       # STATUS_ACCESS_VIOLATION inside midir 0.11's winmm backend, which Varda
       # does not control, so `scan_devices` now holds a process wide lock. Camera,
       # screen capture, audio and GPU construction were all cleared by the same
-      # reproducer. See spec/roadmap.md and .github/workflows/windows-heap-bisect.yml.
+      # reproducer.
       #
       # Serial execution was never a fix, only a way to make the log readable, and
       # it cost roughly four minutes a run on a 2586 test suite.

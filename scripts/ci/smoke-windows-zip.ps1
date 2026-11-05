@@ -3,7 +3,7 @@
 #
 # Runs on a CLEAN runner, not the one that built it. That is the whole point: the build
 # runner has vcpkg, the NDI Runtime and LLVM installed, so a DLL we forgot to bundle
-# resolves there and nowhere else. See spec/release-strategy.md section 12.
+# resolves there and nowhere else.
 param(
     [Parameter(Mandatory = $true)][string]$Zip
 )

@@ -10,11 +10,10 @@
 #           dist/varda-<version>-1.<target>.x86_64.rpm (RPM family)
 #           dist/PKGBUILD                              (Arch: a source recipe, not a binary)
 #
-# Why native packages rather than one portable tarball: spec/release-strategy.md section
-# 5. The short version is that the package manager computes the dependency closure
-# (dpkg-shlibdeps, rpm find-requires), installs it, and security-patches it. Varda
-# bundling those libraries meant shipping a frozen copy that no distribution could
-# update, and getting the closure wrong shipped issue #134.
+# Why native packages rather than one portable tarball: the package manager computes
+# the dependency closure (dpkg-shlibdeps, rpm find-requires), installs it, and
+# security-patches it. Varda bundling those libraries meant shipping a frozen copy that
+# no distribution could update, and getting the closure wrong shipped issue #134.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -66,7 +65,7 @@ case "$DISTRO_ID" in
   fedora)   FORMAT=rpm;   TARGET_ID="fc${DISTRO_VER%%.*}" ;;
   opensuse*|sles) FORMAT=rpm; TARGET_ID="opensuse${DISTRO_VER%%.*}" ;;
   arch|cachyos|manjaro|endeavouros) FORMAT=arch; TARGET_ID="arch" ;;
-  *) echo "::error::unsupported distribution '$DISTRO_ID' (see spec/release-strategy.md section 5)"; exit 1 ;;
+  *) echo "::error::unsupported distribution '$DISTRO_ID'"; exit 1 ;;
 esac
 
 echo "==> ${DISTRO_PRETTY:-$DISTRO_ID $DISTRO_VER}"

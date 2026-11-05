@@ -3,7 +3,7 @@ name: Release artifact smoke
 # Installs every published release artifact on a clean machine of its own platform,
 # weekly.
 #
-# Separate from the release gate on purpose (spec/release-strategy.md section 12). A
+# Separate from the release gate on purpose. A
 # release gate catches regressions we introduce. It cannot catch the ground moving under
 # an artifact that already shipped, which is what happened in issue #134: Arch changed
 # libxml2's SONAME months after v0.6.0 was built, and the first we heard was a bug report.

@@ -6,8 +6,6 @@
 # natively on its own hardware, but building and running are still different claims: this
 # is what proves the lipo merge produced a binary that actually launches on both
 # architectures, with every bundled dylib resolving.
-#
-# See spec/release-strategy.md section 12.
 set -euo pipefail
 
 DMG="${1:?Usage: smoke-macos-dmg.sh <path-to-dmg>}"

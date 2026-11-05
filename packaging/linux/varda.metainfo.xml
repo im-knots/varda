@@ -2,7 +2,6 @@
 <!--
   AppStream metadata. Required by Flathub, and validated by linuxdeploy-plugin-appimage
   when present, so one file serves both Linux artifacts.
-  See spec/release-strategy.md section 13.
 -->
 <component type="desktop-application">
   <id>io.github.im_knots.varda</id>
