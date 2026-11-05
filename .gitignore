@@ -1,12 +1,6 @@
 /target
-.augment/
-intent/
-spec/
-vision/
-research/
 .varda/
-.devin/
-.devinignore
+dev-docs/
 AGENTS.md
 .DS_Store
 

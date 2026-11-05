@@ -4,7 +4,7 @@
 #
 # Runs INSIDE a clean distribution container. Unlike the package smoke there is no install
 # step, which is the point: the claim under test is that this file runs on a machine nobody
-# prepared. See spec/release-strategy.md section 12.
+# prepared.
 #
 # Every row of the matrix carries real information for this artifact, because an AppImage
 # links the host's glibc, GL, X11 and audio stack. That is not true of the Flatpak, whose

@@ -2,7 +2,7 @@
 # Install a Varda Linux package on this distribution and verify it runs.
 # Usage: ./scripts/ci/smoke-linux-package.sh <path-to-package>
 #
-# Runs INSIDE a clean distribution container (spec/release-strategy.md section 12).
+# Runs INSIDE a clean distribution container.
 #
 # Installing through the distribution's own package manager is the point. It is what
 # proves the declared dependencies are correct and complete: if dpkg-shlibdeps or rpm's

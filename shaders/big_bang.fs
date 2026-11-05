@@ -134,7 +134,7 @@ void main() {
     // ∫ star_speed·(0.5 + 0.1·particle_count) dt, split over two accumulators
     // because that integral is linear. Written as one multiply it scaled a
     // growing phase by a live parameter, so moving the Stars fader teleported
-    // the star animation — see spec/phase-accumulators.md.
+    // the star animation.
     float starClock = 0.5 * PHASE_TIME_1 + PHASE_TIME_2;
 
     if (PASSINDEX == 0) {

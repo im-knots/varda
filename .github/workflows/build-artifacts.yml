@@ -69,7 +69,7 @@ jobs:
     runs-on: ubuntu-latest
     # Every distribution here is a genuinely different test: an AppImage links the host's
     # glibc, GL, X11 and audio stack. Contrast the Flatpak, whose runtime is identical
-    # everywhere. See spec/release-strategy.md section 12.
+    # everywhere.
     strategy:
       fail-fast: false
       matrix:
@@ -112,7 +112,7 @@ jobs:
     runs-on: ubuntu-latest
     # One row per packaging family, not all six. The Flatpak runtime is identical on every
     # host by construction, so additional rows re-test the host's own flatpak installation
-    # rather than our artifact. See spec/release-strategy.md section 12.
+    # rather than our artifact.
     strategy:
       fail-fast: false
       matrix:

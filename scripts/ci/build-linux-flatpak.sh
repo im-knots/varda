@@ -5,7 +5,6 @@
 # Produces: dist/Varda-<version>-x86_64.flatpak  (a single-file bundle)
 #
 # The artifact for an installed Varda whose dependencies Flathub patches centrally.
-# See spec/release-strategy.md sections 5 and 14.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

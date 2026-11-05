@@ -6,7 +6,6 @@
 # all six: the Flatpak runtime is identical on every host by construction, so extra rows
 # re-test the host's own flatpak installation rather than our artifact. Contrast the
 # AppImage, where every distribution is a genuinely different test.
-# See spec/release-strategy.md section 12.
 set -euo pipefail
 
 PKG="${1:?Usage: smoke-linux-flatpak.sh <path-to-.flatpak>}"

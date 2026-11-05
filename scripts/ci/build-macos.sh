@@ -55,7 +55,7 @@ if [ "$SKIP_DEPS" = false ]; then
   brew install cmake pkg-config create-dmg
   # libfreenect (Kinect v1) backs the `depth` feature, which both slices now carry:
   # the x86_64 slice is built natively on a macos-15-intel runner, where Homebrew
-  # provides an x86_64 libfreenect. See spec/depth-sensors.md.
+  # provides an x86_64 libfreenect.
   brew install libfreenect
 fi
 
@@ -63,9 +63,8 @@ fi
 #
 # Two features are off on x86_64, each for its own reason:
 #   face-detection - ONNX Runtime has no x86_64 macOS dylib.
-#                    See spec/plugin-architecture.md (decision 5).
 #   html           - Servo's start_render blocks indefinitely on x86_64 and never
-#                    returns a frame. See spec/html-source.md ("Platform Support").
+#                    returns a frame.
 #                    That was observed under Rosetta, which was the only way to run
 #                    the slice before the macos-15-intel runner existed. It stays off
 #                    until someone retests it on native Intel hardware.
@@ -196,7 +195,7 @@ else
 fi
 
 # ONNX Runtime is statically linked into the arm64 binary via ort's
-# `download-binaries` feature — no dylib to bundle. See spec/plugin-architecture.md.
+# `download-binaries` feature — no dylib to bundle.
 
 # Bundle licenses
 cp LICENSE Varda.app/Contents/Resources/licenses/ 2>/dev/null || echo "MIT License" > Varda.app/Contents/Resources/licenses/LICENSE

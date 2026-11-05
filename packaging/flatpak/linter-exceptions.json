@@ -1,7 +1,7 @@
 {
   "_comment": [
     "Checks flatpak-builder-lint reports that Varda knowingly accepts, passed with",
-    "--user-exceptions. See spec/release-strategy.md section 14.",
+    "--user-exceptions.",
     "",
     "flatpak-builder-lint enforces Flathub's SUBMISSION POLICY, not Flatpak correctness.",
     "Varda self-distributes a .flatpak bundle and is not submitted to Flathub, so a",

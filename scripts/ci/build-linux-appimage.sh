@@ -5,8 +5,7 @@
 # Produces: dist/Varda-<version>-x86_64.AppImage
 #
 # One executable file, no installation, no root: the artifact for arriving at a venue and
-# running Varda on a machine nobody prepared. See spec/release-strategy.md sections 5
-# and 13.
+# running Varda on a machine nobody prepared.
 #
 # The portable tarball this replaces failed because its dependency closure was written by
 # hand and was incomplete (issue #134). linuxdeploy computes the closure from DT_NEEDED
@@ -94,8 +93,7 @@ fetch "https://github.com/AppImage/appimagetool/releases/download/continuous/app
 
 # The statically linked runtime. Pinned explicitly rather than relying on whatever the
 # plugin embeds by default: this artifact's whole value is running on a machine nobody
-# prepared, and libfuse2 is not installed by default on Ubuntu 22.04 or later. See
-# spec/release-strategy.md section 13, FUSE.
+# prepared, and libfuse2 is not installed by default on Ubuntu 22.04 or later.
 echo "==> Fetching static AppImage runtime"
 fetch "https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64" \
       "$TOOLS/runtime-x86_64"
