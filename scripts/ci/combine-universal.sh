@@ -77,6 +77,8 @@ for rename in ${RENAMED[@]+"${RENAMED[@]}"}; do
   from="${rename%%=*}"
   to="${rename##*=}"
   echo "    repoint: @rpath/$from -> @rpath/$to"
+  # -change leaves a dylib's own install name, which still has the old name in the x86_64 slice.
+  install_name_tool -id "@rpath/$to" "Varda.app/Contents/Frameworks/$to"
   install_name_tool -change "@rpath/$from" "@rpath/$to" Varda.app/Contents/MacOS/varda 2>/dev/null || true
   for fw in Varda.app/Contents/Frameworks/*.dylib; do
     install_name_tool -change "@rpath/$from" "@rpath/$to" "$fw" 2>/dev/null || true
@@ -93,12 +95,12 @@ for x86_dylib in "$X86_APP/Contents/Frameworks/"*.dylib; do
   basename=$(basename "$x86_dylib")
   # Skip anything already merged under the arm64 filename above; copying it here would
   # put a thin x86_64 duplicate of a library the bundle already carries universally.
-  skip=false
+  merged_as=""
   for rename in ${RENAMED[@]+"${RENAMED[@]}"}; do
-    [ "${rename%%=*}" = "$basename" ] && skip=true
+    [ "${rename%%=*}" = "$basename" ] && merged_as="${rename##*=}"
   done
-  if [ "$skip" = true ]; then
-    echo "    skip x86-only duplicate: $basename (merged as ${rename##*=})"
+  if [ -n "$merged_as" ]; then
+    echo "    skip x86-only duplicate: $basename (merged as $merged_as)"
     continue
   fi
   if [ ! -f "Varda.app/Contents/Frameworks/$basename" ]; then

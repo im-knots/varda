@@ -94,6 +94,11 @@ link_env_for() {
   fi
 }
 
+# freetype-sys links the Homebrew dylib when pkg-config finds it and compiles its vendored
+# copy otherwise. Only the arm64 slice has Servo, so a dylib would exist in one slice and
+# could not be merged into a universal bundle.
+export FREETYPE2_NO_PKG_CONFIG=1
+
 # --- Build architectures ---
 if [ "$SKIP_BUILD" = false ]; then
   echo "==> Building $NATIVE_TARGET..."
@@ -134,103 +139,51 @@ cp assets/icon.png Varda.app/Contents/Resources/varda.png
 # Bundle shaders
 cp -r shaders/* Varda.app/Contents/Resources/shaders/
 
-# Bundle FFmpeg dylibs and fix load paths using @rpath (Apple-recommended approach).
-# See: https://developer.apple.com/forums/thread/736728
-#
-# Strategy:
-#   1. Copy each dylib into Contents/Frameworks/
-#   2. Set each dylib's install name (id) to @rpath/<basename>
-#   3. Rewrite the main binary's load commands from absolute paths to @rpath/<basename>
-#   4. Add LC_RPATH = @executable_path/../Frameworks to the main binary
-#   5. Fix inter-library references (e.g. libavcodec → libavutil) the same way
-#
-# This works regardless of where libs were built (Homebrew, /tmp cross-compile, etc.)
-# because we use otool -L to discover the actual baked-in paths.
+# Bundle every non-system dylib the binary loads, directly or transitively, and rewrite
+# each reference to @rpath/<basename> (Apple's recommended layout, see
+# https://developer.apple.com/forums/thread/736728). otool is the source of truth, so
+# this covers any library the linker recorded, wherever it came from.
 
 HOMEBREW_LIB="${LIB_DIR:-$(brew --prefix)/lib}"
 BINARY="Varda.app/Contents/MacOS/varda"
 FRAMEWORKS="Varda.app/Contents/Frameworks"
 
-# Step 1: Discover which dylibs the binary actually needs via otool, copy them in.
-# This is authoritative — we copy exactly the filenames the linker recorded,
-# not whatever find happens to return.
-BUNDLED_LIBS=()
-for lib in libavcodec libavformat libavutil libswscale libswresample libavdevice libavfilter libsrt libfreenect; do
-  old_path=$(otool -L "$BINARY" | grep "$lib" | awk '{print $1}' | head -1 || true)
-  [ -z "$old_path" ] && continue
-  case "$old_path" in @*) continue ;; esac  # already relative — skip
-
-  libname=$(basename "$old_path")
-  # Resolve the source file (may be a symlink chain)
-  src="$HOMEBREW_LIB/$libname"
-  if [ ! -e "$src" ]; then
-    # Fallback: search for any matching file
-    src=$(find "$HOMEBREW_LIB" -maxdepth 1 -name "${lib}*.dylib" | head -1)
+# The file behind a load command. Prints nothing if it cannot be found.
+lib_source() {
+  local dep="$1" name
+  name="$(basename "$dep")"
+  if [ -e "$HOMEBREW_LIB/$name" ]; then
+    echo "$HOMEBREW_LIB/$name"
+  elif [ -e "$dep" ]; then
+    echo "$dep"
   fi
-  if [ -n "$src" ] && [ -e "$src" ]; then
-    cp -L "$src" "$FRAMEWORKS/$libname"   # -L follows symlinks, copies actual file
-    BUNDLED_LIBS+=("$libname")
-  fi
-done
+}
 
-# Step 2: Set each dylib's install name (id) to @rpath/<basename>
-for libname in "${BUNDLED_LIBS[@]}"; do
-  install_name_tool -id "@rpath/$libname" "$FRAMEWORKS/$libname"
-done
-
-# Step 3: Rewrite the main binary's load commands from absolute paths to @rpath/<basename>
-for libname in "${BUNDLED_LIBS[@]}"; do
-  lib_prefix=$(echo "$libname" | sed 's/\.[0-9].*//')
-  otool -L "$BINARY" | { grep "$lib_prefix" || true; } | awk '{print $1}' | while read -r old_path; do
-    case "$old_path" in @*) continue ;; esac
-    install_name_tool -change "$old_path" "@rpath/$libname" "$BINARY"
+bundle_deps() {
+  local image="$1" dep name src
+  for dep in $(otool -L "$image" | tail -n +2 | awk '{print $1}'); do
+    # Intel Homebrew is under /usr/local, so this must stay narrower than /usr/*.
+    case "$dep" in /usr/lib/*|/System/*) continue ;; esac
+    name="$(basename "$dep")"
+    if [ ! -f "$FRAMEWORKS/$name" ]; then
+      src="$(lib_source "$dep")"
+      if [ -z "$src" ]; then
+        echo "::error::$(basename "$image") needs $dep, which was not found"
+        exit 1
+      fi
+      cp -L "$src" "$FRAMEWORKS/$name"
+      install_name_tool -id "@rpath/$name" "$FRAMEWORKS/$name"
+      bundle_deps "$FRAMEWORKS/$name"
+    fi
+    case "$dep" in
+      @rpath/*) ;;
+      *) install_name_tool -change "$dep" "@rpath/$name" "$image" ;;
+    esac
   done
-done
+}
 
-# Step 4: Add LC_RPATH so dyld resolves @rpath to Contents/Frameworks/
+bundle_deps "$BINARY"
 install_name_tool -add_rpath "@executable_path/../Frameworks" "$BINARY" 2>/dev/null || true
-
-# Step 5: Fix inter-library references and bundle transitive deps.
-# Run multiple passes: first bundle any missing transitive deps, then rewrite
-# all non-system absolute paths to @rpath. Two passes handles typical depth.
-for _pass in 1 2 3; do
-  for fw_dylib in "$FRAMEWORKS"/*.dylib; do
-    deps=$(otool -L "$fw_dylib" | tail -n +2 | awk '{print $1}')
-    for dep_path in $deps; do
-      # Skip macOS system libraries only. This must NOT be /usr/* : Intel Homebrew
-      # installs under /usr/local/Cellar, so the broader pattern silently skipped every
-      # transitive dependency on the x86_64 build, leaving its references pointing at
-      # absolute Cellar paths and its Frameworks/ empty of them. Invisible on arm64,
-      # where Homebrew is /opt/homebrew.
-      case "$dep_path" in /usr/lib/*|/System/*) continue ;; esac
-      dep_name=$(basename "$dep_path")
-      # Already bundled? Just rewrite the reference if needed
-      if [ -f "$FRAMEWORKS/$dep_name" ]; then
-        case "$dep_path" in @*) continue ;; esac  # already @rpath — nothing to do
-        install_name_tool -change "$dep_path" "@rpath/$dep_name" "$fw_dylib"
-        continue
-      fi
-      # Not bundled — try to find and copy it
-      if [ "${dep_path#@rpath/}" != "$dep_path" ]; then
-        # @rpath reference but not bundled — search LIB_DIR/HOMEBREW_LIB
-        src_path=""
-        [ -f "$HOMEBREW_LIB/$dep_name" ] && src_path="$HOMEBREW_LIB/$dep_name"
-      else
-        # Absolute path — use it directly, fallback to LIB_DIR
-        src_path="$dep_path"
-        [ ! -f "$src_path" ] && [ -f "$HOMEBREW_LIB/$dep_name" ] && src_path="$HOMEBREW_LIB/$dep_name"
-      fi
-      if [ -n "$src_path" ] && [ -f "$src_path" ]; then
-        cp -L "$src_path" "$FRAMEWORKS/$dep_name"
-        install_name_tool -id "@rpath/$dep_name" "$FRAMEWORKS/$dep_name"
-        BUNDLED_LIBS+=("$dep_name")
-        case "$dep_path" in @*) ;; *)
-          install_name_tool -change "$dep_path" "@rpath/$dep_name" "$fw_dylib"
-        ;; esac
-      fi
-    done
-  done
-done
 
 # Bundle NDI SDK (runtime-loaded via libloading, universal binary from cask)
 NDI_LIB="/Library/NDI SDK for Apple/lib/macOS/libndi.dylib"
@@ -276,6 +229,8 @@ PLIST_EOF
 # --- Code sign ---
 echo "==> Ad-hoc code signing..."
 codesign --force --deep --sign - Varda.app
+
+"$SCRIPT_DIR/check-macos-bundle.sh" Varda.app
 
 # --- Create DMG ---
 echo "==> Creating DMG..."

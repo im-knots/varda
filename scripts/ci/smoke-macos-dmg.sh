@@ -11,6 +11,7 @@
 set -euo pipefail
 
 DMG="${1:?Usage: smoke-macos-dmg.sh <path-to-dmg>}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORK="$(mktemp -d)"
 MOUNT="$WORK/mnt"
 
@@ -72,7 +73,13 @@ else
   echo "  ok: all bundled dylibs carry both slices"
 fi
 
-# --- 2. Shaders shipped where the binary looks for them ---
+# --- 2. Nothing loads from outside the bundle ---
+# Section 4's launch cannot catch this: these runners have Homebrew.
+if ! "$SCRIPT_DIR/check-macos-bundle.sh" "$APP"; then
+  failed=1
+fi
+
+# --- 3. Shaders shipped where the binary looks for them ---
 # Contents/MacOS/varda resolves ../Resources/shaders (BUNDLED_SHADERS_RELATIVE in
 # src/internal/registry/mod.rs). Drift here means an app that starts with an empty
 # shader library, which nothing else in this script would notice.
@@ -85,7 +92,7 @@ else
   echo "  ok: $count shaders bundled"
 fi
 
-# --- 3. It actually launches on this architecture ---
+# --- 4. It actually launches on this architecture ---
 # --version is handled by clap and returns before any GPU, window or audio
 # initialization, so this needs no display and no GPU. It does exercise the full dyld
 # load of every bundled dylib, which is the failure this is looking for.
