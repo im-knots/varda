@@ -17,13 +17,13 @@
         {"NAME": "seed", "TYPE": "float", "GROUP": "Form", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 1000.0, "LABEL": "Universe"},
         {"NAME": "slab", "TYPE": "float", "GROUP": "Form", "DEFAULT": 16.0, "MIN": 2.0, "MAX": 40.0, "LABEL": "Slab Depth"},
         {"NAME": "sparks", "TYPE": "float", "GROUP": "Form", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 3.0, "LABEL": "Sparks"},
+        {"NAME": "point_detail", "TYPE": "float", "GROUP": "Form", "DEFAULT": 0.4, "MIN": 0.0, "MAX": 1.0, "LABEL": "Point Detail"},
         {"NAME": "view_width", "TYPE": "float", "GROUP": "Camera", "DEFAULT": 96.0, "MIN": 12.0, "MAX": 108.0, "LABEL": "View Width"},
         {"NAME": "yaw", "TYPE": "float", "GROUP": "Camera", "DEFAULT": 0.5, "MIN": -3.2, "MAX": 3.2, "LABEL": "Yaw"},
         {"NAME": "pitch", "TYPE": "float", "GROUP": "Camera", "DEFAULT": 0.6, "MIN": -1.5, "MAX": 1.5, "LABEL": "Pitch"},
         {"NAME": "palette", "TYPE": "long", "GROUP": "Palette", "DEFAULT": 0, "VALUES": [0, 1, 2, 3], "LABELS": ["Cosmos", "Ember", "Ice", "Mono"], "LABEL": "Palette"},
         {"NAME": "heat", "TYPE": "float", "GROUP": "Palette", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 3.0, "LABEL": "Motion Color"},
-        {"NAME": "glow", "TYPE": "float", "GROUP": "Palette", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 3.0, "LABEL": "Glow"},
-        {"NAME": "point_detail", "TYPE": "float", "GROUP": "Detail", "DEFAULT": 0.4, "MIN": 0.0, "MAX": 1.0, "LABEL": "Point Detail"}
+        {"NAME": "glow", "TYPE": "float", "GROUP": "Palette", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 3.0, "LABEL": "Glow"}
     ],
     "PHASE_INPUTS": [
         {"PARAM": "speed", "INDEX": 0, "SCALE": 1.0},
@@ -57,8 +57,8 @@ layout(set = 0, binding = 0) uniform ISFUniforms {
 
 layout(set = 0, binding = 1) uniform UserParams {
     float speed; float exposure; float drift; float orbit;
-    float seed; float slab; float sparks; float view_width; float yaw; float pitch;
-    int palette; float heat; float glow; float point_detail;
+    float seed; float slab; float sparks; float point_detail; float view_width; float yaw; float pitch;
+    int palette; float heat; float glow;
 };
 
 layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D outputImage;
