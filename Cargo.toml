@@ -308,6 +308,10 @@ name = "fractal_explorer"
 harness = false
 
 [[bench]]
+name = "aurora"
+harness = false
+
+[[bench]]
 name = "ndi_convert"
 harness = false
 
