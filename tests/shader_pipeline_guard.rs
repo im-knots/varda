@@ -112,3 +112,28 @@ fn every_generator_survives_a_rendered_frame() {
     }
     assert!(rendered > 30, "only rendered {rendered} generators");
 }
+
+/// A deck keeps rendering when the stage grows, compute decks included. A compute
+/// deck's output image must follow the deck's size, or the copy into the deck's
+/// texture fails and the deck is quarantined.
+#[test]
+fn compute_deck_renders_after_growing() {
+    let Some(gpu) = headless_gpu() else {
+        return;
+    };
+    let audio = varda::audio::AudioData::default();
+    let modulation = varda::modulation::ModulationEngine::new();
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders/compute_gradient.comp");
+    let shader = ISFShader::from_file(path.to_str().unwrap()).expect("parse");
+    let mut deck = varda::deck::Deck::from_shader(&gpu, shader, W, H).expect("deck");
+
+    let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    deck.resize(&gpu, W * 2, H * 2);
+    let mut cmds = Vec::new();
+    deck.render(&gpu, &audio, &modulation, 0, &mut cmds)
+        .expect("render after resize");
+    gpu.queue.submit(cmds);
+    let error = pollster::block_on(scope.pop());
+    assert!(error.is_none(), "resized compute deck failed: {error:?}");
+}

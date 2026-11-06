@@ -152,7 +152,7 @@ void main() {
             vec2 vel = prev.zw;
 
             // Seed positions on first frame or uninitialized nodes
-            if (FRAMEINDEX == 0u || (pos == vec2(0.0) && vel == vec2(0.0))) {
+            if (pos == vec2(0.0) && vel == vec2(0.0)) {
                 pos = (hash2(vec2(fi, 100.0)) - 0.5) * 4.0;
                 vel = (hash2(vec2(fi, 200.0)) - 0.5) * 0.1;
             }
@@ -263,7 +263,7 @@ void main() {
             vec4 prevCam = readState(MAX_NODES);
             float dt = min(TIMEDELTA, 0.05);
             float rate = 1.0 - exp(-2.0 * dt);
-            if (FRAMEINDEX == 0u || prevCam == vec4(0.0)) {
+            if (prevCam == vec4(0.0)) {
                 fragColor = vec4(cc, cr, 0.0);
             } else {
                 fragColor = vec4(mix(prevCam.xy, cc, rate), mix(prevCam.z, cr, rate), 0.0);

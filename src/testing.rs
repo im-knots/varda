@@ -240,6 +240,115 @@ pub fn srgb8(value: f32) -> f64 {
     encoded * 255.0
 }
 
+/// A shader from the repo running through the real mixer, one frame at a time, so
+/// a test can read frames as it goes and change inputs part way through.
+pub struct ShaderRun {
+    mixer: crate::mixer::Mixer,
+    size: (u32, u32),
+    time: f32,
+}
+
+impl ShaderRun {
+    /// Build the shader at `size` with `params` set.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the shader fails to build, or has no input named in `params`.
+    pub fn new(
+        ctx: &crate::renderer::context::GpuContext,
+        shader: &str,
+        size: (u32, u32),
+        params: &[(&str, f64)],
+    ) -> Self {
+        let (width, height) = size;
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(shader);
+        let shader =
+            crate::isf::ISFShader::from_file(path.to_str().expect("path")).expect("shader");
+        let mut deck = crate::deck::Deck::from_shader(ctx, shader, width, height).expect("deck");
+        for (name, value) in params {
+            set_param(&mut deck.generator_params, name, *value).expect("input");
+        }
+        let mut mixer = crate::mixer::Mixer::new(ctx, width, height).expect("mixer");
+        mixer.channel_mut(0).expect("channel").add_deck(deck);
+        for channel in mixer.channels_mut() {
+            for slot in &mut channel.decks {
+                slot.render_fps = crate::channel::DeckRenderFps::Fixed(0);
+            }
+        }
+        Self {
+            mixer,
+            size,
+            time: 0.0,
+        }
+    }
+
+    /// Change an input on the running deck.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the shader has no input `name`.
+    pub fn set(&mut self, name: &str, value: f64) {
+        for channel in self.mixer.channels_mut() {
+            for slot in &mut channel.decks {
+                set_param(&mut slot.deck.generator_params, name, value).expect("input");
+            }
+        }
+    }
+
+    /// Render `frames` frames at 60 fps.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a frame fails to render.
+    pub fn advance(&mut self, ctx: &crate::renderer::context::GpuContext, frames: u32) {
+        let audio = crate::audio::AudioData::default();
+        let audio_values = crate::modulation::AudioValues {
+            sources: std::collections::HashMap::default(),
+        };
+        let analyzer_values = crate::modulation::AnalyzerValues::default();
+        for _ in 0..frames {
+            let inputs = crate::mixer::FrameInputs {
+                audio_data: &audio,
+                audio_values: &audio_values,
+                analyzer_values: &analyzer_values,
+                beat_time: None,
+                transport: None,
+                free_run_time: Some(self.time),
+                write_param: crate::param_router::write_macro_target,
+            };
+            self.mixer.render(ctx, &inputs, 60, &[]).expect("render");
+            let _ = ctx.device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
+            self.time += 1.0 / 60.0;
+        }
+    }
+
+    /// The last composite as linear RGBA.
+    pub fn frame(&self, ctx: &crate::renderer::context::GpuContext) -> Vec<[f32; 4]> {
+        let (width, height) = self.size;
+        read_rgba16f(ctx, self.mixer.composite_texture(), width, height)
+    }
+}
+
+/// Render a shader from the repo through the real mixer at `size` for `frames`
+/// frames with `params` set, and return the last composite as linear RGBA.
+///
+/// # Panics
+///
+/// Panics if the shader fails to build or render, or has no input named in `params`.
+pub fn render_shader(
+    ctx: &crate::renderer::context::GpuContext,
+    shader: &str,
+    size: (u32, u32),
+    params: &[(&str, f64)],
+    frames: u32,
+) -> Vec<[f32; 4]> {
+    let mut run = ShaderRun::new(ctx, shader, size, params);
+    run.advance(ctx, frames);
+    run.frame(ctx)
+}
 /// Set a numeric shader input through the setter that matches its declared
 /// type: `long` truncates, `bool` is true above 0.5, and an `event` fires above 0.5.
 ///

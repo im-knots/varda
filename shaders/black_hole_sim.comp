@@ -51,8 +51,8 @@
             "NAME": "grid",
             "TYPE": "storage",
             "STRUCT": "GridCell",
-            "COUNT": 32640,
-            "STRIDE": 260,
+            "COUNT": 129600,
+            "STRIDE": 516,
             "PERSISTENT": false
         }
     ]
@@ -89,8 +89,10 @@ layout(std430, set = 0, binding = 3) buffer ParticleBuffer {
     vec4 particle_data[];
 };
 
-// Screen-space spatial binning grid (cleared each frame).
-const uint CELL_SIZE    = 8u;
+// Screen-space spatial binning grid (cleared each frame). COUNT and STRIDE in the
+// header must match GRID_CELLS and CELL_STRIDE: a short buffer drops the cells past
+// its end without any error.
+const uint GRID_CELLS   = 129600u;  // A 4K frame in 8 px cells
 const uint MAX_PER_CELL = 32u;
 const uint CELL_STRIDE  = 129u;  // 1 + 32*4
 
@@ -105,9 +107,23 @@ const uint  NUM_PARTICLES = 65536u;
 #define ISCO (3.0 * RS)
 
 // ── Screen-space grid helpers ────────────────────────────────────────
-uint gridCols() { return (uint(RENDERSIZE.x) + CELL_SIZE - 1u) / CELL_SIZE; }
-uint gridRows() { return (uint(RENDERSIZE.y) + CELL_SIZE - 1u) / CELL_SIZE; }
-uint gridIndex(uint cx, uint cy) { return cy * gridCols() + cx; }
+uint cell_size;
+uint grid_cols;
+uint grid_rows;
+
+// Cells stay 8 px up to 4K and double past it, so the grid always fits its buffer.
+void fitGrid() {
+    uint width = uint(RENDERSIZE.x);
+    uint height = uint(RENDERSIZE.y);
+    cell_size = 4u;
+    do {
+        cell_size *= 2u;
+        grid_cols = (width + cell_size - 1u) / cell_size;
+        grid_rows = (height + cell_size - 1u) / cell_size;
+    } while (grid_cols * grid_rows > GRID_CELLS);
+}
+
+uint gridIndex(uint cx, uint cy) { return cy * grid_cols + cx; }
 
 // ── Hash ─────────────────────────────────────────────────────────────
 float hash(uint n) {
@@ -288,7 +304,7 @@ void pass_simulate_and_bin() {
     float prev_slb = particle_data[2u * sentinel + 1u].w;
     bool params_changed = (abs(prev_eq - equator_bias) > 0.001 ||
                            abs(prev_slb - streak_length_bias) > 0.001);
-    bool needs_init = (FRAMEINDEX == 0u || reset > 0.5 || params_changed);
+    bool needs_init = (reset > 0.5 || params_changed);
     // Thread 0 writes sentinel with current values
     if (idx == 0u) {
         particle_data[2u * sentinel].w = equator_bias;
@@ -329,8 +345,8 @@ void pass_simulate_and_bin() {
         if (sp.x < 0.0 || sp.y < 0.0 ||
             sp.x >= RENDERSIZE.x || sp.y >= RENDERSIZE.y) return;
 
-        uint cx = uint(sp.x) / CELL_SIZE;
-        uint cy = uint(sp.y) / CELL_SIZE;
+        uint cx = uint(sp.x) / cell_size;
+        uint cy = uint(sp.y) / cell_size;
         uint cell_base = gridIndex(cx, cy) * CELL_STRIDE;
         uint slot = atomicAdd(grid_data[cell_base], 1u);
         if (slot >= MAX_PER_CELL) return;
@@ -399,10 +415,10 @@ void pass_simulate_and_bin() {
                 float min_y = min(sp_prev.y, sp1.y) - 1.0;
                 float max_y = max(sp_prev.y, sp1.y) + 1.0;
                 // Clamp to screen
-                int cx0 = max(int(min_x) / int(CELL_SIZE), 0);
-                int cy0 = max(int(min_y) / int(CELL_SIZE), 0);
-                int cx1 = min(int(max_x) / int(CELL_SIZE), int(gridCols()) - 1);
-                int cy1 = min(int(max_y) / int(CELL_SIZE), int(gridRows()) - 1);
+                int cx0 = max(int(min_x) / int(cell_size), 0);
+                int cy0 = max(int(min_y) / int(cell_size), 0);
+                int cx1 = min(int(max_x) / int(cell_size), int(grid_cols) - 1);
+                int cy1 = min(int(max_y) / int(cell_size), int(grid_rows) - 1);
 
                 vec2 sp_mid = (sp_prev + sp1) * 0.5;
 
@@ -568,10 +584,10 @@ void pass_render() {
     getCameraMatrices(cam_pos, cam_rot);
 
     // ── Screen-space streak rendering ──────────────────────────────────
-    uint cx = px / CELL_SIZE;
-    uint cy = py / CELL_SIZE;
-    uint cols = gridCols();
-    uint rows = gridRows();
+    uint cx = px / cell_size;
+    uint cy = py / cell_size;
+    uint cols = grid_cols;
+    uint rows = grid_rows;
     vec2 pixel_center = vec2(float(px) + 0.5, float(py) + 0.5);
 
     vec3 particle_accum = vec3(0.0);
@@ -774,6 +790,7 @@ void pass_render() {
 
 // ── Main ─────────────────────────────────────────────────────────────
 void main() {
+    fitGrid();
     if (PASSINDEX == 0) {
         pass_simulate_and_bin();
     } else {

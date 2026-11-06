@@ -28,7 +28,6 @@ Varda sorts shaders by type automatically:
 | `crystal_cave.fs` | Fly through a 3D cave filled with growing crystal formations |
 | `cube_subdivision.fs` | Raymarched cube recursively split into cuboid cells with holes and raised faces, over a polar tiled floor whose rings ripple with each turn, with depth of field and bloom |
 | `cymatics.fs` | Chladni plate and Faraday wave vibration pattern generator |
-| `dark_matter.fs` | Cosmic web filament network (neuro noise) |
 | `digital_brain.fs` | Glowing voronoi-noise plasma with drifting camera and pulsing "moving electrons" octaves |
 | `dull_skull.fs` | Raymarched skull with an animated jaw that sways, turns and drifts in front of a backdrop, with glowing eyes, fresnel rim light and fog. Controls include Mouth Open, Jaw Chatter, Head Turn and Sway Range |
 | `eyes.fs` | Tiled grid of procedural cartoon eyes: autonomous blink, drifting gaze, IQ cosine-palette irises |
@@ -176,7 +175,7 @@ Varda sorts shaders by type automatically:
 |--------|-------------|
 | `black_hole_sim.comp` | N-body black hole with 65,536 persistent shell particles, Schwarzschild lensing, accretion disk, Hawking glow |
 | `compute_gradient.comp` | Simple animated gradient (compute shader) |
-| `cosmic_web.comp` | Dark matter cosmic web via the Zel'dovich approximation: analytic Fourier mode synthesis from a CDM power spectrum, cloud-in-cell density deposit, growth-factor collapse |
+| `dark_matter.comp` | Gravity simulation that forms the cosmic web from a smooth early universe |
 
 > The catalog grows over time. For the current list, see your workspace `shaders/` directory.
 

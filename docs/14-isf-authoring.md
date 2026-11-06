@@ -190,7 +190,7 @@ Varda injects these uniforms automatically at `set = 0, binding = 0`:
 layout(set = 0, binding = 0) uniform ISFUniforms {
     float TIME;              // Elapsed seconds since shader start
     float TIMEDELTA;         // Frame delta in seconds
-    uint FRAMEINDEX;         // Frame counter
+    uint FRAMEINDEX;         // Frame counter, 1 on the first frame
     int PASSINDEX;           // Current render pass index
     vec2 RENDERSIZE;         // Output resolution [width, height]
     float audio_level;       // Overall RMS level (0.0–1.0)
@@ -684,9 +684,9 @@ for the inline version.
 
 ### Persistent pass substeps and pass-buffer sampling
 
-**`PERSISTENT` passes in generators run four times per frame** (in effects, once). Varda substeps persistent passes for numerical stability: 4 iterations at `TIMEDELTA / 4`, with `FRAMEINDEX` advancing once per substep. Time-based simulations integrate correctly (4 × dt/4 == dt). Anything that steps once per invocation regardless of time (cellular automata, fixed-step reaction-diffusion, `FRAMEINDEX`-gated logic) advances **four generations per frame**.
+**`PERSISTENT` passes in generators run four times per frame** (in effects, once). Varda substeps persistent passes for numerical stability: 4 iterations at `TIMEDELTA / 4`, with `FRAMEINDEX` advancing once per substep, so a substepped pass sees 4 on its first frame. Time-based simulations integrate correctly (4 × dt/4 == dt). Anything that steps once per invocation regardless of time (cellular automata, fixed-step reaction-diffusion, `FRAMEINDEX`-gated logic) advances **four generations per frame**.
 
-Drive state changes from `TIMEDELTA`, or rate-limit against `FRAMEINDEX` explicitly, as `game_of_life.fs` does. A persistent multi-pass shader also costs roughly 4× its apparent GPU budget, which matters when you stack decks.
+Drive state changes from `TIMEDELTA`, or rate-limit against `FRAMEINDEX` explicitly, as `game_of_life.fs` does. Don't use `FRAMEINDEX` to detect the first frame: it never reads 0, and its first value depends on the pass. Persistent state starts zero-filled, so write a nonzero marker with it and seed wherever the marker is missing, as `game_of_life.fs` does with alpha. A persistent multi-pass shader also costs roughly 4× its apparent GPU budget, which matters when you stack decks.
 
 **`texSampler` filters linearly.** `rgba16float` pass buffers, imported images and `inputImage`
 are all sampled with bilinear filtering. For an exact texel, use `texelFetch`, or sample at texel
@@ -947,7 +947,7 @@ Storage buffers (SSBOs) give compute shaders **writable memory that persists acr
 | `STRIDE` | Bytes per element |
 | `PERSISTENT` | `true` keeps contents across frames; `false` is zeroed before pass 0 every frame |
 
-**Sizing.** The engine allocates exactly `COUNT × STRIDE` bytes and zero-fills it once at creation. It does not inspect your GLSL struct; `STRUCT` and `STRIDE` only size the allocation. In GLSL, declare a struct array or, like the bundled simulations, a flat `vec4[]`, and make the total match. The example above reserves `65536 × 32 = 2 MiB`: two `vec4`s (32 bytes) per particle.
+**Sizing.** The engine allocates exactly `COUNT × STRIDE` bytes and zero-fills it once at creation. It does not inspect your GLSL struct; `STRUCT` and `STRIDE` only size the allocation. In GLSL, declare a struct array or, like the bundled simulations, a flat `vec4[]`, and make the total match. A buffer that is too short gives no error: anything past its end reads as nothing and the writes are lost. The example above reserves `65536 × 32 = 2 MiB`: two `vec4`s (32 bytes) per particle.
 
 **GLSL declaration.** Always use `std430` layout, at the next binding after the output image:
 
@@ -960,7 +960,7 @@ layout(std430, set = 0, binding = 3) buffer ParticleBuffer {
 
 `std430` is tightly packed, but a `vec3` still takes 16 bytes. Pack data as `vec4` to keep `STRIDE` predictable.
 
-**Lifecycle.** A `PERSISTENT: true` buffer keeps state from frame to frame. Use it for particle positions, Game-of-Life grids, or feedback. A `PERSISTENT: false` buffer is cleared to zero before pass 0 each frame. Use it for per-frame scratch space such as a spatial binning grid.
+**Lifecycle.** A `PERSISTENT: true` buffer keeps state from frame to frame and starts zero-filled, so a zero can mark state that hasn't been seeded yet. Use it for particle positions, Game-of-Life grids, or feedback. A `PERSISTENT: false` buffer is cleared to zero before pass 0 each frame. Use it for per-frame scratch space such as a spatial binning grid.
 
 ### Worked Example 2: Buffer-Backed Simulation
 
@@ -988,9 +988,9 @@ void main() {
     uint idx = gl_GlobalInvocationID.y * row_width + gl_GlobalInvocationID.x;
     if (idx >= NUM_PARTICLES) return;                    // mandatory guard
 
-    // Initialize on the first frame, otherwise integrate.
-    if (FRAMEINDEX == 0u) {
-        particle_data[2u * idx]      = vec4(/* spawn position */ vec3(0.0), 0.0);
+    // Seed once. The buffer starts zero-filled, so .w marks a seeded particle.
+    if (particle_data[2u * idx].w == 0.0) {
+        particle_data[2u * idx]      = vec4(/* spawn position */ vec3(0.0), 1.0);
         particle_data[2u * idx + 1u] = vec4(/* initial velocity */ vec3(0.0), 0.0);
         return;
     }
@@ -1001,12 +1001,12 @@ void main() {
     vel += vec3(0.0, -gravity, 0.0) * TIMEDELTA;          // step the sim
     pos += vel * TIMEDELTA;
 
-    particle_data[2u * idx]      = vec4(pos, 0.0);         // write back (persists)
+    particle_data[2u * idx]      = vec4(pos, 1.0);         // write back (persists)
     particle_data[2u * idx + 1u] = vec4(vel, 0.0);
 }
 ```
 
-The required lines are the `idx` computation and the `if (idx >= NUM_PARTICLES) return;` guard. The rest is your simulation. To turn particle state into pixels, add a second pass that reads this buffer and writes `outputImage` (next section).
+The required lines are the `idx` computation and the `if (idx >= NUM_PARTICLES) return;` guard. The rest is your simulation. Each invocation owns its particle, so the marker has no race. A single shared marker needs a second pass: read it in one pass and write it in the next, or some invocations see it set before they have seeded. To turn particle state into pixels, add a second pass that reads this buffer and writes `outputImage` (next section).
 
 ### Multi-Pass Compute
 
@@ -1022,7 +1022,7 @@ void main() {
 }
 ```
 
-`black_hole_sim.comp` uses this split: pass 0 advances 65536 persistent particles and bins them into a non-persistent screen grid; pass 1 reads both and ray-traces the final image.
+`black_hole_sim.comp` uses this split: pass 0 advances 65536 persistent particles and bins them into a non-persistent screen grid; pass 1 reads both and ray-traces the final image. Its grid buffer holds 8 px cells for a 4K frame, and the cells double past 4K so the grid still fits.
 
 ### Limitations
 
@@ -1032,12 +1032,13 @@ void main() {
 
 ### See Also
 
-Two reference compute shaders ship with Varda:
+Three reference compute shaders ship with Varda:
 
-- `shaders/black_hole_sim.comp`: a **stateful N-body** simulation. It uses a `PERSISTENT: true` particle buffer integrated with leapfrog each frame, a non-persistent scratch grid for atomic spatial binning, a two-pass simulate/render split, `PHASE_INPUTS`, and audio reactivity. It uses every feature in this section.
-- `shaders/cosmic_web.comp`: a **stateless, analytic** simulation of a dark-matter cosmic web based on the *Zel'dovich approximation*. Pass 0 builds a Gaussian displacement field as plane-wave modes drawn from a CDM (BBKS) power spectrum. Pass 1 displaces a grid of Lagrangian particles (`x = q + D·Ψ(q)`) and deposits them into a fixed-resolution density buffer with cloud-in-cell. Pass 2 tone-maps that field into a void→filament→node colormap. Positions are recomputed each frame from a fixed seed with no persistent state, so it can be scrubbed, and the growth factor `D` animates the collapse of structure.
+- `shaders/compute_gradient.comp`: a **stateless** per-pixel generator, the smallest working example.
+- `shaders/black_hole_sim.comp`: a **stateful N-body** simulation. It uses a `PERSISTENT: true` particle buffer integrated with leapfrog each frame, a non-persistent scratch grid for atomic spatial binning, a two-pass simulate/render split, `PHASE_INPUTS`, and audio reactivity.
+- `shaders/dark_matter.comp`: a **particle-mesh gravity** simulation, and the example to read for larger work. A 128-cubed FFT Poisson solve advances two million particles over a fixed ladder of steps. It spreads that work across frames with a persistent control buffer, so a rate change can never destabilize it. The control pass stores how many items each work pass may process, so a budget change between frames can't skip or repeat work. The display clock never outruns the simulation, so the picture never stalls. It chunks work by invocation count, so it simulates every particle at any output size. It also shows `u32` atomic deposit, an internal image cap and a simple image pyramid built from a storage buffer.
 
-Read `black_hole_sim.comp` for persistence and binning. Read `cosmic_web.comp` for the multi-pass "generate → deposit → render" split and for keeping a sim deterministic and safe to scrub.
+Read `black_hole_sim.comp` for binning. Read `dark_matter.comp` for time-slicing, chunking, and running a simulation at a fixed frame budget.
 
 ## Analyzer Preprocessors
 

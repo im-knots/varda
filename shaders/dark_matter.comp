@@ -1,0 +1,694 @@
+/*{
+    "DESCRIPTION": "Dark Matter - real gravity on two million particles: a periodic particle-mesh simulation of the cosmic web, from a smooth early universe to filaments, walls and voids, drawn as a mass sheet through a drifting slab",
+    "CREDIT": "Varda VJ",
+    "ISFVSN": "2.0",
+    "CATEGORIES": ["Generator", "Generative", "Simulation"],
+    "TYPE": "compute",
+    "COMPUTE": {
+        "WORKGROUP_SIZE": [16, 16, 1],
+        "DISPATCH": "resolution",
+        "NUM_PASSES": 8
+    },
+    "INPUTS": [
+        {"NAME": "speed", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 12.0, "LABEL": "Formation Speed"},
+        {"NAME": "exposure", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.2, "MAX": 4.0, "LABEL": "Exposure"},
+        {"NAME": "drift", "TYPE": "float", "GROUP": "Motion", "DEFAULT": 0.35, "MIN": -6.0, "MAX": 6.0, "LABEL": "Drift Through Box"},
+        {"NAME": "orbit", "TYPE": "float", "GROUP": "Motion", "DEFAULT": 0.012, "MIN": -0.2, "MAX": 0.2, "LABEL": "Orbit"},
+        {"NAME": "seed", "TYPE": "float", "GROUP": "Form", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 1000.0, "LABEL": "Universe"},
+        {"NAME": "slab", "TYPE": "float", "GROUP": "Form", "DEFAULT": 16.0, "MIN": 2.0, "MAX": 40.0, "LABEL": "Slab Depth"},
+        {"NAME": "sparks", "TYPE": "float", "GROUP": "Form", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 3.0, "LABEL": "Sparks"},
+        {"NAME": "view_width", "TYPE": "float", "GROUP": "Camera", "DEFAULT": 96.0, "MIN": 12.0, "MAX": 108.0, "LABEL": "View Width"},
+        {"NAME": "yaw", "TYPE": "float", "GROUP": "Camera", "DEFAULT": 0.5, "MIN": -3.2, "MAX": 3.2, "LABEL": "Yaw"},
+        {"NAME": "pitch", "TYPE": "float", "GROUP": "Camera", "DEFAULT": 0.6, "MIN": -1.5, "MAX": 1.5, "LABEL": "Pitch"},
+        {"NAME": "palette", "TYPE": "long", "GROUP": "Palette", "DEFAULT": 0, "VALUES": [0, 1, 2, 3], "LABELS": ["Cosmos", "Ember", "Ice", "Mono"], "LABEL": "Palette"},
+        {"NAME": "heat", "TYPE": "float", "GROUP": "Palette", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 3.0, "LABEL": "Motion Color"},
+        {"NAME": "glow", "TYPE": "float", "GROUP": "Palette", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 3.0, "LABEL": "Glow"},
+        {"NAME": "point_detail", "TYPE": "float", "GROUP": "Detail", "DEFAULT": 0.4, "MIN": 0.0, "MAX": 1.0, "LABEL": "Point Detail"}
+    ],
+    "PHASE_INPUTS": [
+        {"PARAM": "speed", "INDEX": 0, "SCALE": 1.0},
+        {"PARAM": "drift", "INDEX": 1, "SCALE": 1.0},
+        {"PARAM": "orbit", "INDEX": 2, "SCALE": 1.0}
+    ],
+    "BUFFERS": [
+        {"NAME": "control", "TYPE": "storage", "STRUCT": "Control", "COUNT": 1, "STRIDE": 1072, "PERSISTENT": true},
+        {"NAME": "state",   "TYPE": "storage", "STRUCT": "Particle", "COUNT": 2097152, "STRIDE": 32, "PERSISTENT": true},
+        {"NAME": "ring",    "TYPE": "storage", "STRUCT": "Rung", "COUNT": 6291456, "STRIDE": 16, "PERSISTENT": true},
+        {"NAME": "mass",    "TYPE": "storage", "STRUCT": "Cell", "COUNT": 2097152, "STRIDE": 4, "PERSISTENT": true},
+        {"NAME": "grid",    "TYPE": "storage", "STRUCT": "Cell", "COUNT": 2097152, "STRIDE": 8, "PERSISTENT": true},
+        {"NAME": "force",   "TYPE": "storage", "STRUCT": "Cell", "COUNT": 2097152, "STRIDE": 16, "PERSISTENT": true},
+        {"NAME": "screen",  "TYPE": "storage", "STRUCT": "Pixel", "COUNT": 8847360, "STRIDE": 4, "PERSISTENT": false},
+        {"NAME": "motion",  "TYPE": "storage", "STRUCT": "Pixel", "COUNT": 8294400, "STRIDE": 4, "PERSISTENT": false}
+    ]
+}*/
+
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform ISFUniforms {
+    float TIME; float TIMEDELTA; uint FRAMEINDEX; int PASSINDEX;
+    vec2 RENDERSIZE;
+    float audio_level; float audio_bass; float audio_mid; float audio_treble;
+    float audio_bpm; float audio_beat_phase;
+    vec4 DATE;
+    float PHASE_TIME_0; float PHASE_TIME_1; float PHASE_TIME_2; float PHASE_TIME_3;
+};
+
+layout(set = 0, binding = 1) uniform UserParams {
+    float speed; float exposure; float drift; float orbit;
+    float seed; float slab; float sparks; float view_width; float yaw; float pitch;
+    int palette; float heat; float glow; float point_detail;
+};
+
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D outputImage;
+
+layout(std430, set = 0, binding = 3) buffer ControlBuffer {
+    uint ready;      // Zero until the twiddles are written. Buffers start zeroed.
+    uint stage;      // Which job the simulation is on.
+    uint cursor;     // How far through that job it is.
+    int rung;        // Rung being computed, or -1 while building a universe.
+    int done;        // Last finished rung, or -1 before the first.
+    float shown;     // Rung on screen, fractional.
+    float clock0;    // Formation clock at the start of this universe.
+    float built;     // Seed of the universe in the buffers.
+    float veil;      // Brightness across a change of universe.
+    uint granted;    // Items the simulation may work through in the next pass.
+    float pad1;
+    float pad2;
+    vec2 twiddle[128];
+};
+// Particle i: state[2i] displacement from the lattice in cells, state[2i+1] velocity dx/dD.
+layout(std430, set = 0, binding = 4) buffer StateBuffer { vec4 state[]; };
+// Three rungs of displacement, so two stay stable while the next is computed.
+layout(std430, set = 0, binding = 5) buffer RingBuffer { vec4 ring[]; };
+layout(std430, set = 0, binding = 6) buffer MassBuffer { uint mass[]; };
+layout(std430, set = 0, binding = 7) buffer GridBuffer { vec2 grid[]; };
+layout(std430, set = 0, binding = 8) buffer ForceBuffer { vec4 force[]; };
+// Mass on screen: the frame, then a quarter-size level, then a sixteenth-size level.
+layout(std430, set = 0, binding = 9) buffer ScreenBuffer { uint screen[]; };
+// Mass weighted by local velocity spread, which colors the hottest structure.
+layout(std430, set = 0, binding = 10) buffer MotionBuffer { uint motion[]; };
+
+const float TAU = 6.28318530718;
+const int N = 128;
+const uint CELLS = 2097152u;
+const uint LINES = 16384u;
+const int RUNGS = 32;
+const float BOX = 50.0;              // Mpc/h
+// A 50 Mpc/h box loses its largest modes, so its clock stops near z = 0.6, where
+// the missing power has not yet mattered.
+const float FINAL_GROWTH = 0.75;
+const float MASS_UNIT = 2048.0;      // Deposit scale for 2^21 particles in 32 bits.
+const uint MAX_PIXELS = 8294400u;
+const float FILM_SECONDS = 96.0;     // One formation at speed 1.
+const float CELL_MASS = 65536.0;      // Weight of a Lagrangian cell on screen.
+
+const uint S_NOISE = 0u;
+const uint S_FX = 1u, S_FY = 2u, S_FZ = 3u, S_GREEN = 4u, S_IZ = 5u, S_IY = 6u, S_IX = 7u, S_GRAD = 8u;
+const uint S_SEED = 9u, S_CLEAR = 10u, S_DEPOSIT = 11u, S_LOAD = 12u, S_STEP = 13u, S_IDLE = 14u;
+
+uint total(uint s) {
+    if (s >= S_FX && s <= S_FZ) return LINES;
+    if (s >= S_IZ && s <= S_IX) return LINES;
+    return CELLS;
+}
+
+// Share of the normal per-pass budget to spend. A faster film needs more work per
+// frame, and with the picture dark the drawing time is free for the simulation.
+float work() {
+    return min(max(1.0, speed * 0.55) * (veil <= 0.0 ? 3.0 : 1.0), 12.0);
+}
+
+uint budget(uint s) {
+    bool lines = (s >= S_FX && s <= S_FZ) || (s >= S_IZ && s <= S_IX);
+    return uint((lines ? 1500.0 : 180000.0) * work());
+}
+
+// Frames the simulation takes over one rung. The film never runs faster, so it
+// never catches the simulation and stops.
+float framesPerRung() {
+    float cells = ceil(float(CELLS) / float(budget(S_CLEAR)));
+    float lines = ceil(float(LINES) / float(budget(S_FX)));
+    return 3.0 + 3.0 * cells + 3.0 * lines;
+}
+
+uint hashU(uint n) {
+    n ^= n >> 16u; n *= 0x7feb352du; n ^= n >> 15u; n *= 0x846ca68bu; n ^= n >> 16u;
+    return n;
+}
+float hashF(uint n) { return float(hashU(n) >> 8u) / 16777216.0; }
+
+uint cell(int x, int y, int z) {
+    return uint((x & (N - 1)) + N * (y & (N - 1)) + N * N * (z & (N - 1)));
+}
+ivec3 coords(uint i) { return ivec3(int(i) & (N - 1), (int(i) >> 7) & (N - 1), int(i) >> 14); }
+
+float rungD(float n) { return FINAL_GROWTH * n / float(RUNGS); }
+
+// ── Control ──────────────────────────────────────────────────────────────
+
+void control() {
+    if (ready == 0u) {
+        for (int i = 0; i < N; i++) {
+            float a = -TAU * float(i) / float(N);
+            twiddle[i] = vec2(cos(a), sin(a));
+        }
+        built = floor(seed);
+        stage = S_NOISE;
+        cursor = 0u;
+        rung = -1;
+        done = -1;
+        granted = budget(S_NOISE);
+        ready = 1u;
+        return;
+    }
+
+    // The picture stays dark until a rung is ready to move into.
+    if (PASSINDEX == 0) {
+        bool rebuilding = rung < 0 || done < 1;
+        veil = clamp(veil + (rebuilding ? -0.08 : 0.04), 0.0, 1.0);
+        float film = float(RUNGS) * pow(max(PHASE_TIME_0 - clock0, 0.0) / FILM_SECONDS, 0.75);
+        shown = min(min(film, shown + 1.0 / framesPerRung()), float(max(done, 0)));
+    }
+
+    // A new universe fades out, rebuilds, then forms from the start.
+    if (floor(seed) != built) {
+        built = floor(seed);
+        stage = S_NOISE;
+        cursor = 0u;
+        granted = budget(S_NOISE);
+        rung = -1;
+        return;
+    }
+
+    if (stage == S_IDLE) {
+        // Rungs r and r + 1 are on screen, so the third ring slot is free for r + 2
+        // and no further. A slow clock simply leaves the simulation waiting.
+        if (done < RUNGS && done <= int(floor(shown)) + 1) {
+            rung = done;
+            stage = S_CLEAR;
+            cursor = 0u;
+            granted = budget(S_CLEAR);
+        }
+        return;
+    }
+    if (stage == S_SEED && veil > 0.0) {
+        granted = 0u;
+        return;
+    }
+    cursor += granted;
+    if (cursor < total(stage)) {
+        granted = budget(stage);
+        return;
+    }
+    cursor = 0u;
+    if (stage == S_GRAD) {
+        stage = rung < 0 ? S_SEED : S_STEP;
+    } else if (stage == S_SEED) {
+        done = 0;
+        rung = 0;
+        shown = 0.0;
+        stage = S_IDLE;
+    } else if (stage == S_STEP) {
+        done = rung + 1;
+        if (done == 1) {
+            clock0 = PHASE_TIME_0;
+        }
+        stage = S_IDLE;
+    } else if (stage == S_LOAD) {
+        stage = S_FX;
+    } else {
+        stage += 1u;
+    }
+    granted = stage == S_IDLE ? 0u : budget(stage);
+}
+
+// ── Grid and particle work ───────────────────────────────────────────────
+
+void noiseCell(uint i) {
+    uint s = uint(seed) * 7919u + 1u;
+    float u1 = max(hashF(i * 2u + s * 3u), 1e-6);
+    float u2 = hashF(i * 2u + 1u + s * 5u);
+    grid[i] = vec2(sqrt(-2.0 * log(u1)) * cos(TAU * u2), 0.0);
+}
+
+void fftLine(uint l, int axis, bool inverse) {
+    vec2 x[128];
+    vec2 y[128];
+    int stepA = axis == 0 ? 1 : (axis == 1 ? N : N * N);
+    int a = int(l) & (N - 1);
+    int b = int(l) >> 7;
+    int base = axis == 0 ? (a * N + b * N * N) : (axis == 1 ? (a + b * N * N) : (a + b * N));
+    for (int i = 0; i < N; i++) {
+        x[i] = grid[base + i * stepA];
+    }
+    float sign_ = inverse ? -1.0 : 1.0;
+    int n = N;
+    int s = 1;
+    bool inX = true;
+    while (n > 1) {
+        int m = n / 2;
+        for (int p = 0; p < m; p++) {
+            vec2 w = twiddle[p * s];
+            w.y *= sign_;
+            for (int q = 0; q < s; q++) {
+                vec2 c0 = inX ? x[q + s * p] : y[q + s * p];
+                vec2 c1 = inX ? x[q + s * (p + m)] : y[q + s * (p + m)];
+                vec2 sum = c0 + c1;
+                vec2 dif = c0 - c1;
+                vec2 rot = vec2(dif.x * w.x - dif.y * w.y, dif.x * w.y + dif.y * w.x);
+                if (inX) {
+                    y[q + s * 2 * p] = sum;
+                    y[q + s * (2 * p + 1)] = rot;
+                } else {
+                    x[q + s * 2 * p] = sum;
+                    x[q + s * (2 * p + 1)] = rot;
+                }
+            }
+        }
+        n = m;
+        s *= 2;
+        inX = !inX;
+    }
+    float scale = inverse ? 1.0 / float(N) : 1.0;
+    for (int i = 0; i < N; i++) {
+        grid[base + i * stepA] = (inX ? x[i] : y[i]) * scale;
+    }
+}
+
+// Eisenstein and Hu no-wiggle power, in (Mpc/h)^3, Planck 2018, sigma_8 = 0.8102.
+float power(float k) {
+    const float Om = 0.3111, Ob = 0.049, h = 0.6766;
+    float alpha = 0.7616;
+    float gamma = Om * h * (alpha + (1.0 - alpha) / (1.0 + pow(0.43 * k * 149.9 * h, 4.0)));
+    float q = k * 1.0178 / gamma;
+    float L = log(2.0 * 2.71828 + 1.8 * q);
+    float C = 14.2 + 731.0 / (1.0 + 62.5 * q);
+    float T = L / (L + C * q * q);
+    return 2960008.7 * pow(k, 0.9665) * T * T;
+}
+
+void greenCell(uint i) {
+    ivec3 c = coords(i);
+    ivec3 w = ivec3(c.x <= N / 2 ? c.x : c.x - N, c.y <= N / 2 ? c.y : c.y - N, c.z <= N / 2 ? c.z : c.z - N);
+    vec3 k = TAU * vec3(w) / float(N);    // per cell
+    float k2 = dot(k, k);
+    if (k2 == 0.0) {
+        grid[i] = vec2(0.0);
+        return;
+    }
+    float g = -1.0 / k2;
+    if (rung < 0) {
+        float kPhys = sqrt(k2) * float(N) / BOX;
+        float cellVolume = pow(BOX / float(N), 3.0);
+        g *= sqrt(power(kPhys) / cellVolume);
+    } else {
+        // Undo the cloud-in-cell window.
+        vec3 h = 0.5 * k + vec3(1e-6);
+        vec3 sinc = sin(h) / h;
+        float win = sinc.x * sinc.y * sinc.z;
+        g /= win * win * rungD(float(rung) + 0.5);
+    }
+    grid[i] *= g;
+}
+
+void gradCell(uint i) {
+    ivec3 c = coords(i);
+    vec3 f;
+    for (int a = 0; a < 3; a++) {
+        ivec3 d = ivec3(0);
+        d[a] = 1;
+        ivec3 p1 = c + d, m1 = c - d, p2 = c + 2 * d, m2 = c - 2 * d;
+        float v = 8.0 * (grid[cell(p1.x, p1.y, p1.z)].x - grid[cell(m1.x, m1.y, m1.z)].x)
+                - (grid[cell(p2.x, p2.y, p2.z)].x - grid[cell(m2.x, m2.y, m2.z)].x);
+        f[a] = -v / 12.0;
+    }
+    force[i] = vec4(f, 0.0);
+}
+
+// Displacement at the middle of the step, where the force is evaluated.
+vec3 midPoint(uint i) {
+    return state[2u * i].xyz + state[2u * i + 1u].xyz * 0.5 * rungD(1.0);
+}
+
+void depositParticle(uint i) {
+    vec3 p = vec3(coords(i)) + midPoint(i);
+    vec3 fl = floor(p);
+    vec3 f = p - fl;
+    ivec3 c = ivec3(fl);
+    for (int a = 0; a < 2; a++) {
+        for (int b = 0; b < 2; b++) {
+            for (int d = 0; d < 2; d++) {
+                float wt = (a == 0 ? 1.0 - f.x : f.x) * (b == 0 ? 1.0 - f.y : f.y) * (d == 0 ? 1.0 - f.z : f.z);
+                atomicAdd(mass[cell(c.x + a, c.y + b, c.z + d)], uint(wt * MASS_UNIT));
+            }
+        }
+    }
+}
+
+vec3 gatherForce(vec3 p) {
+    vec3 fl = floor(p);
+    vec3 f = p - fl;
+    ivec3 c = ivec3(fl);
+    vec3 sum = vec3(0.0);
+    for (int a = 0; a < 2; a++) {
+        for (int b = 0; b < 2; b++) {
+            for (int d = 0; d < 2; d++) {
+                float wt = (a == 0 ? 1.0 - f.x : f.x) * (b == 0 ? 1.0 - f.y : f.y) * (d == 0 ? 1.0 - f.z : f.z);
+                sum += wt * force[cell(c.x + a, c.y + b, c.z + d)].xyz;
+            }
+        }
+    }
+    return sum;
+}
+
+void seedParticle(uint i) {
+    vec3 psi = force[i].xyz;
+    state[2u * i] = vec4(0.0);
+    state[2u * i + 1u] = vec4(psi, 0.0);
+    ring[3u * i] = vec4(0.0);
+    ring[3u * i + 1u] = vec4(0.0);
+    ring[3u * i + 2u] = vec4(0.0);
+}
+
+// Drift, kick, drift in growth D. The kick solves dw/dD = 3/(2D) (F - w) exactly
+// for constant F, so Zel'dovich motion, where F = w, passes through unchanged.
+void stepParticle(uint i) {
+    float d0 = rungD(float(rung));
+    float d1 = rungD(float(rung + 1));
+    float dD = d1 - d0;
+    vec3 x = state[2u * i].xyz;
+    vec3 w = state[2u * i + 1u].xyz;
+    vec3 mid = x + w * 0.5 * dD;
+    vec3 f = gatherForce(vec3(coords(i)) + mid);
+    float keep = pow(d0 / d1, 1.5);
+    vec3 next = f + (w - f) * keep;
+    vec3 x1 = mid + next * 0.5 * dD;
+    state[2u * i] = vec4(x1, 0.0);
+    state[2u * i + 1u] = vec4(next, 0.0);
+    ring[3u * i + uint((rung + 1) % 3)] = vec4(x1, 0.0);
+}
+
+void simWork() {
+    if (ready == 0u || granted == 0u) {
+        return;
+    }
+    uint row = gl_NumWorkGroups.x * 16u;
+    uint invocations = row * gl_NumWorkGroups.y * 16u;
+    uint inv = gl_GlobalInvocationID.y * row + gl_GlobalInvocationID.x;
+    uint chunk = (granted + invocations - 1u) / invocations;
+    uint limit = min(cursor + granted, total(stage));
+    for (uint j = 0u; j < chunk; j++) {
+        uint item = cursor + inv * chunk + j;
+        if (item >= limit) {
+            return;
+        }
+        if (stage == S_NOISE) { noiseCell(item); }
+        else if (stage == S_FX) { fftLine(item, 0, false); }
+        else if (stage == S_FY) { fftLine(item, 1, false); }
+        else if (stage == S_FZ) { fftLine(item, 2, false); }
+        else if (stage == S_GREEN) { greenCell(item); }
+        else if (stage == S_IZ) { fftLine(item, 2, true); }
+        else if (stage == S_IY) { fftLine(item, 1, true); }
+        else if (stage == S_IX) { fftLine(item, 0, true); }
+        else if (stage == S_GRAD) { gradCell(item); }
+        else if (stage == S_SEED) { seedParticle(item); }
+        else if (stage == S_CLEAR) { mass[item] = 0u; }
+        else if (stage == S_DEPOSIT) { depositParticle(item); }
+        else if (stage == S_LOAD) { grid[item] = vec2(float(mass[item]) / MASS_UNIT - 1.0, 0.0); }
+        else if (stage == S_STEP) { stepParticle(item); }
+    }
+}
+
+// ── Sheet through a slab ─────────────────────────────────────────────────
+
+mat3 camera() {
+    float turn = yaw + PHASE_TIME_2;
+    float cy = cos(turn), sy = sin(turn), cp = cos(pitch), sp = sin(pitch);
+    vec3 forward = vec3(sy * cp, sp, cy * cp);
+    vec3 right = normalize(cross(vec3(0.0, 1.0, 0.0), forward));
+    vec3 up = cross(forward, right);
+    return mat3(right, up, forward);
+}
+
+// Internal image size: the frame, up to the size the buffers hold.
+ivec2 innerSize() {
+    float area = RENDERSIZE.x * RENDERSIZE.y;
+    float fit = min(1.0, sqrt(float(MAX_PIXELS) / area));
+    return ivec2(RENDERSIZE * fit);
+}
+
+// Lay a point across the four pixels it covers. A point snapped to one pixel hops
+// as the view moves, and the frame twinkles.
+void splat(vec2 s, ivec2 size, float mass, float hot) {
+    vec2 q = s - 0.5;
+    vec2 low = floor(q);
+    vec2 f = q - low;
+    ivec2 base = ivec2(low);
+    for (int y = 0; y < 2; y++) {
+        for (int x = 0; x < 2; x++) {
+            ivec2 at = base + ivec2(x, y);
+            if (at.x < 0 || at.y < 0 || at.x >= size.x || at.y >= size.y) {
+                continue;
+            }
+            uint pixel = uint(at.y) * uint(size.x) + uint(at.x);
+            uint mark = uint((x == 0 ? 1.0 - f.x : f.x) * (y == 0 ? 1.0 - f.y : f.y) * mass);
+            atomicAdd(screen[pixel], mark);
+            uint heatMark = uint(float(mark) * hot);
+            if (heatMark > 0u) {
+                atomicAdd(motion[pixel], heatMark);
+            }
+        }
+    }
+}
+
+void sheetWork() {
+    if (ready == 0u || veil <= 0.0) {
+        return;
+    }
+    uint row = gl_NumWorkGroups.x * 16u;
+    uint invocations = row * gl_NumWorkGroups.y * 16u;
+    uint inv = gl_GlobalInvocationID.y * row + gl_GlobalInvocationID.x;
+    uint chunk = (CELLS + invocations - 1u) / invocations;
+    int r = min(int(floor(shown)), RUNGS - 1);
+    float f = shown - float(r);
+    uint slotA = uint(r % 3);
+    uint slotB = uint((r + 1) % 3);
+    if (r >= done) {
+        slotB = slotA;
+    }
+    mat3 cam = camera();
+    vec3 centre = vec3(float(N) * 0.5) + cam[2] * PHASE_TIME_1;
+    ivec2 size = innerSize();
+    float scale = float(max(size.x, size.y)) / view_width;
+    vec2 middle = 0.5 * vec2(size);
+    float fade = slab * 0.5;
+    float sparkGrowth = sparks * smoothstep(0.12, 0.55, shown / float(RUNGS));
+    // Pixels between points at 1080p. Larger frames keep the same number of points,
+    // and much below 3 pixels the limit on points per cell takes over.
+    float spacing = mix(8.0, 3.0, point_detail) * max(float(size.y) / 1080.0, 1.0);
+    for (uint j = 0u; j < chunk; j++) {
+        uint i = inv * chunk + j;
+        if (i >= CELLS) {
+            return;
+        }
+        ivec3 c = coords(i);
+        vec4 a0 = ring[3u * i + slotA];
+        vec3 first = mix(a0.xyz, ring[3u * i + slotB].xyz, f);
+        vec3 p0 = vec3(c) + first - centre;
+        p0 -= float(N) * floor(p0 / float(N) + 0.5);
+        if (abs(dot(p0, cam[2])) > fade + 8.0) {
+            continue;
+        }
+
+        // The cell's eight corners are the sheet. Corners that moved apart in
+        // different directions mark matter that has fallen in and crossed.
+        vec3 corners[8];
+        vec3 flow[8];
+        vec3 meanFlow = vec3(0.0);
+        for (int k = 0; k < 8; k++) {
+            ivec3 o = ivec3(k & 1, (k >> 1) & 1, k >> 2);
+            uint at = cell(c.x + o.x, c.y + o.y, c.z + o.z);
+            vec3 pa = ring[3u * at + slotA].xyz;
+            vec3 pb = ring[3u * at + slotB].xyz;
+            corners[k] = vec3(o) + mix(pa, pb, f);
+            flow[k] = pb - pa;
+            meanFlow += flow[k];
+        }
+        meanFlow *= 0.125;
+        float spread = 0.0;
+        for (int k = 0; k < 8; k++) {
+            vec3 d = flow[k] - meanFlow;
+            spread += dot(d, d);
+        }
+        spread = min(sqrt(spread) * float(RUNGS) * 0.12, 1.0);
+
+        vec3 origin = p0 - corners[0];
+
+        // Collapsed cells also mark a clump: one fixed point of the sheet takes a
+        // share of the cell's mass by a steep power law, as halo masses fall off.
+        vec3 ex = corners[1] - corners[0];
+        vec3 ey = corners[2] - corners[0];
+        vec3 ez = corners[4] - corners[0];
+        vec2 spanX = vec2(dot(ex, cam[0]), dot(ex, cam[1]));
+        vec2 spanY = vec2(dot(ey, cam[0]), dot(ey, cam[1]));
+        vec2 spanZ = vec2(dot(ez, cam[0]), dot(ez, cam[1]));
+        float area = abs(spanX.x * spanY.y - spanX.y * spanY.x)
+                   + abs(spanY.x * spanZ.y - spanY.y * spanZ.x)
+                   + abs(spanZ.x * spanX.y - spanZ.y * spanX.x);
+        // Every cell holds equal mass. A cell gets points by its size on screen, so
+        // a stretched void cell stays smooth and a folded one stays sharp.
+        float points = clamp(area * scale * scale / (spacing * spacing), 1.0, 96.0);
+        int count = int(ceil(points));
+        float crushed = 1.0 - smoothstep(0.35, 1.6, area);
+        if (crushed > 0.0 && sparkGrowth > 0.0) {
+            uint spot = hashU(i * 11u + 5u);
+            vec3 t = vec3(hashF(spot), hashF(spot + 1u), hashF(spot + 2u));
+            vec3 a = mix(mix(corners[0], corners[1], t.x), mix(corners[2], corners[3], t.x), t.y);
+            vec3 b = mix(mix(corners[4], corners[5], t.x), mix(corners[6], corners[7], t.x), t.y);
+            vec3 p = mix(a, b, t.z) + origin;
+            float edge = 1.0 - smoothstep(slab * 0.35, fade, abs(dot(p, cam[2])));
+            vec2 s = vec2(dot(p, cam[0]), dot(p, cam[1])) * scale + middle;
+            if (edge > 0.0) {
+                float luck = max(hashF(spot + 3u), 0.002);
+                float share = min(0.06 / (luck * luck), 80.0);
+                splat(s, size, edge * crushed * sparkGrowth * share * CELL_MASS, 0.0);
+            }
+        }
+        // The last point fades in as a cell stretches, so the count never pops.
+        float weight = CELL_MASS / points;
+        float lastShare = points - float(count - 1);
+        vec3 start = vec3(hashF(i * 3u), hashF(i * 3u + 1u), hashF(i * 3u + 2u));
+        for (int m = 0; m < count; m++) {
+            vec3 t = fract(start + float(m) * vec3(0.8191725, 0.6710436, 0.5497005));
+            vec3 a = mix(mix(corners[0], corners[1], t.x), mix(corners[2], corners[3], t.x), t.y);
+            vec3 b = mix(mix(corners[4], corners[5], t.x), mix(corners[6], corners[7], t.x), t.y);
+            vec3 p = mix(a, b, t.z) + origin;
+            float edge = 1.0 - smoothstep(slab * 0.35, fade, abs(dot(p, cam[2])));
+            if (edge <= 0.0) {
+                continue;
+            }
+            vec2 s = vec2(dot(p, cam[0]), dot(p, cam[1])) * scale + middle;
+            splat(s, size, edge * weight * (m == count - 1 ? lastShare : 1.0), spread);
+        }
+    }
+}
+
+// ── Output ───────────────────────────────────────────────────────────────
+
+// Mass per pixel of an even universe seen through the slab.
+float meanDensity(ivec2 size) {
+    float perPixel = view_width / float(max(size.x, size.y));
+    return CELL_MASS * slab * 0.8 * perPixel * perPixel;
+}
+
+// Each coarser level averages four-by-four blocks of the one before.
+void buildLevel(uint from, uint to, ivec2 fromSize) {
+    ivec2 at = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = fromSize / 4;
+    if (at.x >= size.x || at.y >= size.y) {
+        return;
+    }
+    // A spark is one bright pixel, and it would print as a square in a coarse level.
+    uint cap = uint(meanDensity(innerSize()) * 12.0);
+    uint sum = 0u;
+    for (int y = 0; y < 4; y++) {
+        for (int x = 0; x < 4; x++) {
+            sum += min(screen[from + uint((at.y * 4 + y) * fromSize.x + at.x * 4 + x)], cap);
+        }
+    }
+    screen[to + uint(at.y * size.x + at.x)] = sum / 16u;
+}
+
+float levelAt(uint base, ivec2 size, vec2 p) {
+    vec2 q = clamp(p - 0.5, vec2(0.0), vec2(max(size - 2, ivec2(0))));
+    ivec2 c = ivec2(q);
+    vec2 f = q - vec2(c);
+    uint i = base + uint(c.y * size.x + c.x);
+    float a = mix(float(screen[i]), float(screen[i + 1u]), f.x);
+    float b = mix(float(screen[i + uint(size.x)]), float(screen[i + uint(size.x) + 1u]), f.x);
+    return mix(a, b, f.y);
+}
+
+// Stops from the void floor to the hottest core, in linear light. Lightness rises
+// along each ramp and color falls away toward the top, as in the reference films.
+const vec3 RAMPS[24] = vec3[24](
+    vec3(0.005, 0.003, 0.014), vec3(0.032, 0.015, 0.085), vec3(0.180, 0.050, 0.190), vec3(0.640, 0.200, 0.150), vec3(1.050, 0.800, 0.380), vec3(1.500, 1.500, 1.160),
+    vec3(0.009, 0.004, 0.005), vec3(0.046, 0.012, 0.014), vec3(0.230, 0.055, 0.026), vec3(0.980, 0.460, 0.100), vec3(1.150, 0.960, 0.480), vec3(1.600, 1.560, 1.260),
+    vec3(0.003, 0.006, 0.014), vec3(0.008, 0.030, 0.070), vec3(0.030, 0.120, 0.210), vec3(0.340, 0.660, 0.800), vec3(0.820, 1.000, 1.080), vec3(1.500, 1.620, 1.680),
+    vec3(0.006, 0.006, 0.007), vec3(0.030, 0.030, 0.032), vec3(0.120, 0.120, 0.125), vec3(0.620, 0.620, 0.630), vec3(1.050, 1.050, 1.050), vec3(1.600, 1.600, 1.600)
+);
+
+vec3 rampColor(float t) {
+    float x = clamp(t, 0.0, 1.0) * 5.0;
+    int i = min(int(x), 4);
+    return mix(RAMPS[palette * 6 + i], RAMPS[palette * 6 + i + 1], x - float(i));
+}
+
+void resolve() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (pixel.x >= int(RENDERSIZE.x) || pixel.y >= int(RENDERSIZE.y)) {
+        return;
+    }
+    ivec2 size = innerSize();
+    ivec2 quarter = size / 4;
+    ivec2 sixteenth = quarter / 4;
+    uint baseA = MAX_PIXELS;
+    uint baseB = baseA + uint(quarter.x * quarter.y);
+    vec2 at = (vec2(pixel) + 0.5) * vec2(size) / RENDERSIZE;
+    ivec2 p = ivec2(at);
+
+    float fine = 0.0;
+    float hot = 0.0;
+    for (int y = -1; y <= 1; y++) {
+        for (int x = -1; x <= 1; x++) {
+            ivec2 q = clamp(p + ivec2(x, y), ivec2(0), size - 1);
+            float w = (x == 0 ? 2.0 : 1.0) * (y == 0 ? 2.0 : 1.0);
+            uint i = uint(q.y * size.x + q.x);
+            fine += w * float(screen[i]);
+            hot += w * float(motion[i]);
+        }
+    }
+    fine /= 16.0;
+    float near = levelAt(baseA, quarter, at / 4.0);
+    float far = levelAt(baseB, sixteenth, at / 16.0);
+
+    float mean = meanDensity(size);
+    // Filter width falls as density rises: thin folds stay sharp and voids go smooth.
+    float dense = smoothstep(0.3, 2.0, near / mean);
+    float mid = smoothstep(0.15, 0.9, far / mean);
+    float density = mix(mix(far, near, mid), fine, dense);
+    density += 0.05 * glow * near + 0.05 * glow * far;
+    float rho = density / mean * exposure;
+    rho *= rho / (rho + 0.15);    // Voids go to black, as they do in the films.
+
+    // Log density across about three and a half decades.
+    float t = clamp((log(rho + 1e-3) / 2.302585 + 1.25) / 4.1, 0.0, 1.0);
+    float spread = hot / max(fine * 16.0, 1.0);
+    vec3 col = rampColor(t + 0.16 * heat * spread * smoothstep(0.35, 0.7, t));
+
+    // Structure fades up out of the dark early universe.
+    float growth = shown / float(RUNGS);
+    col *= veil * smoothstep(0.0, 0.1, growth) * (0.8 + 0.2 * smoothstep(0.1, 0.4, growth));
+    imageStore(outputImage, pixel, vec4(max(col, 0.0), 1.0));
+}
+
+void main() {
+    if (PASSINDEX == 0 || PASSINDEX == 2) {
+        if (gl_GlobalInvocationID.x == 0u && gl_GlobalInvocationID.y == 0u) {
+            control();
+        }
+    } else if (PASSINDEX == 1 || PASSINDEX == 3) {
+        simWork();
+    } else if (PASSINDEX == 4) {
+        sheetWork();
+    } else if (PASSINDEX == 5) {
+        buildLevel(0u, MAX_PIXELS, innerSize());
+    } else if (PASSINDEX == 6) {
+        ivec2 quarter = innerSize() / 4;
+        buildLevel(MAX_PIXELS, MAX_PIXELS + uint(quarter.x * quarter.y), quarter);
+    } else {
+        resolve();
+    }
+}

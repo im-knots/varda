@@ -312,6 +312,10 @@ name = "aurora"
 harness = false
 
 [[bench]]
+name = "dark_matter"
+harness = false
+
+[[bench]]
 name = "ndi_convert"
 harness = false
 

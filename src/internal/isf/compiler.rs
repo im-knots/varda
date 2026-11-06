@@ -440,11 +440,11 @@ void main() {
     }
 
     #[test]
-    fn test_compile_cosmic_web_full_pipeline() {
+    fn test_compile_dark_matter_full_pipeline() {
         let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let shader_path = manifest_dir.join("shaders/cosmic_web.comp");
+        let shader_path = manifest_dir.join("shaders/dark_matter.comp");
         let Ok(source) = std::fs::read_to_string(&shader_path) else {
-            println!("Skipping: cosmic_web.comp not found");
+            println!("Skipping: dark_matter.comp not found");
             return;
         };
 
@@ -455,16 +455,19 @@ void main() {
         assert!(meta.is_compute(), "should be a compute shader");
         assert_eq!(
             meta.buffers.len(),
-            2,
-            "should have 2 storage buffers (modes + density)"
+            8,
+            "uses the full storage buffer allowance"
         );
         let compute = meta.compute.as_ref().expect("compute config");
-        assert_eq!(compute.num_passes, 3, "Zel'dovich sim is a 3-pass compute");
+        assert_eq!(
+            compute.num_passes, 8,
+            "two sim passes, then sheet, levels and resolve"
+        );
 
         let glsl = source[json_end + 3..].trim();
 
         // shaderc GLSL → SPIR-V
-        let spirv = compile_glsl_compute_to_spirv(glsl, "cosmic_web.comp");
+        let spirv = compile_glsl_compute_to_spirv(glsl, "dark_matter.comp");
         if let Err(ref e) = spirv {
             panic!("shaderc compilation failed: {e}");
         }
@@ -491,7 +494,7 @@ void main() {
 
         assert!(!wgsl.is_empty(), "WGSL output should not be empty");
         println!(
-            "cosmic_web.comp: SPIR-V {} words → WGSL {} chars",
+            "dark_matter.comp: SPIR-V {} words → WGSL {} chars",
             spirv_data.len(),
             wgsl.len()
         );
