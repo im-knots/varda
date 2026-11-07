@@ -113,10 +113,11 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
     }
 
     // === BOTTOM PANEL ===
-    egui::Panel::bottom("bottom_panel")
+    bottom_bar::open_for_first_selection(ui.ctx(), data);
+    egui::Panel::bottom(bottom_bar::PANEL_ID)
         .min_size(80.0)
         .max_size(400.0)
-        .default_size(180.0)
+        .default_size(bottom_bar::DEFAULT_HEIGHT)
         .resizable(true)
         .show_separator_line(true)
         .show(ui, |ui| {

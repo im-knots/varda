@@ -183,7 +183,7 @@ This table covers local files. Varda also takes live and network inputs such as 
 - **Library** (left, toggle with **L**): the content browser for shaders, video, images, cameras, screen capture targets, taps, NDI, SRT, HLS/DASH sources and presets. See [Library Panel](03-library-panel.md).
 - **Center:** the channel and deck grid, with the mixer crossfader. Switch to **Stage Editor** to draw surfaces.
 - **Right:** the main output preview at the top, then collapsible sections: **🎨 Tonemap** (curve and 3D LUT), **〰 Modulation**, **🎹 MIDI**, **🗺 Stage Layout** and **📺 Outputs**. Live performance metrics (frame rate, GPU, CPU, RAM) are at the bottom.
-- **Bottom** (resizable): shows the selected deck's parameters, effect chains or sequence editor, depending on what is selected.
+- **Bottom** (resizable): shows the selected deck's parameters, effect chains or sequence editor, depending on what is selected. It opens taller the first time you select something, and after that keeps the height you set.
 
 Drag any panel divider to resize. You can collapse the left and right panels. When the right panel is collapsed, the performance metrics stay visible, stacked in the narrow strip that remains.
 
