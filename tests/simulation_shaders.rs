@@ -58,6 +58,9 @@ fn black_hole_grid_buffer_holds_a_4k_frame() {
     assert!(grid.count >= 480 * 270, "4K needs 480 by 270 cells");
 }
 
+/// A healthy frame reads above 0.005 on the CPU drivers and 0.007 on Metal. A grid
+/// too short for the frame reads about 0.0001, and a frame whose dots lost their
+/// slots to arcs reads 0.002 on a CPU driver, where workgroups run nearly in order.
 #[test]
 fn black_hole_particles_reach_the_bottom_of_a_1080p_frame() {
     let Some(ctx) = varda::testing::headless_gpu() else {
@@ -65,7 +68,7 @@ fn black_hole_particles_reach_the_bottom_of_a_1080p_frame() {
     };
     let frame = black_hole_at_1080p(&ctx);
     let bottom = row_mean(&frame, 1920, 900, 1080);
-    assert!(bottom > 0.005, "the bottom sixth is dark: {bottom}");
+    assert!(bottom > 0.003, "the bottom sixth is dark: {bottom}");
 }
 
 /// Zeroed biases match the zero-filled sentinel, so nothing asks for a reset. The

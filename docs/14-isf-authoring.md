@@ -1022,7 +1022,7 @@ void main() {
 }
 ```
 
-`black_hole_sim.comp` uses this split: pass 0 advances 65536 persistent particles and bins them into a non-persistent screen grid; pass 1 reads both and ray-traces the final image. Its grid buffer holds 8 px cells for a 4K frame, and the cells double past 4K so the grid still fits.
+`black_hole_sim.comp` uses this split: pass 0 advances 65536 persistent particles and bins them into a non-persistent screen grid; pass 1 reads both and ray-traces the final image. GPUs run workgroups in different orders, so when a grid cell can overflow, the elements that survive differ by GPU. Give each kind of element its own slots and counter, as this shader does for arcs and dots, or the picture changes between machines. Its grid buffer holds 8 px cells for a 4K frame, and the cells double past 4K so the grid still fits.
 
 ### Limitations
 

@@ -52,7 +52,7 @@
             "TYPE": "storage",
             "STRUCT": "GridCell",
             "COUNT": 129600,
-            "STRIDE": 516,
+            "STRIDE": 520,
             "PERSISTENT": false
         }
     ]
@@ -93,8 +93,12 @@ layout(std430, set = 0, binding = 3) buffer ParticleBuffer {
 // header must match GRID_CELLS and CELL_STRIDE: a short buffer drops the cells past
 // its end without any error.
 const uint GRID_CELLS   = 129600u;  // A 4K frame in 8 px cells
-const uint MAX_PER_CELL = 32u;
-const uint CELL_STRIDE  = 129u;  // 1 + 32*4
+// Arcs outnumber a cell's slots many times over, and the first to bin win. Dots
+// get slots of their own, or whichever kind the GPU happens to run first fills the
+// cell and the picture changes from one GPU to the next.
+const uint ARC_SLOTS    = 24u;
+const uint DOT_SLOTS    = 8u;
+const uint CELL_STRIDE  = 130u;  // arc count, dot count, 32 slots of 4 words
 
 layout(std430, set = 0, binding = 4) buffer GridBuffer {
     uint grid_data[];
@@ -124,6 +128,8 @@ void fitGrid() {
 }
 
 uint gridIndex(uint cx, uint cy) { return cy * grid_cols + cx; }
+uint arcSlot(uint cell_base, uint slot) { return cell_base + 2u + slot * 4u; }
+uint dotSlot(uint cell_base, uint slot) { return arcSlot(cell_base, ARC_SLOTS + slot); }
 
 // ── Hash ─────────────────────────────────────────────────────────────
 float hash(uint n) {
@@ -348,8 +354,8 @@ void pass_simulate_and_bin() {
         uint cx = uint(sp.x) / cell_size;
         uint cy = uint(sp.y) / cell_size;
         uint cell_base = gridIndex(cx, cy) * CELL_STRIDE;
-        uint slot = atomicAdd(grid_data[cell_base], 1u);
-        if (slot >= MAX_PER_CELL) return;
+        uint slot = atomicAdd(grid_data[cell_base + 1u], 1u);
+        if (slot >= DOT_SLOTS) return;
 
         // Dots are dimmer than arcs — they are background scatter
         float dot_lum = final_lum * 0.4;
@@ -357,11 +363,9 @@ void pass_simulate_and_bin() {
                           | ((uint(clamp(dot_lum, 0.0, 1.0) * 255.0) & 0xFFu) << 8u)
                           | ((uint(clamp(dot_lum, 0.0, 1.0) * 255.0) & 0xFFu) << 16u)
                           | ((uint(clamp(dot_lum * 0.3, 0.0, 1.0) * 255.0) & 0xFFu) << 24u);
-        uint eb = cell_base + 1u + slot * 4u;
+        uint eb = dotSlot(cell_base, slot);
         grid_data[eb]      = packHalf2x16(sp);
         grid_data[eb + 1u] = packed_color;
-        grid_data[eb + 2u] = packHalf2x16(vec2(1.0, 0.0));
-        grid_data[eb + 3u] = floatBitsToUint(0.5);  // half-pixel = dot
     } else {
         // ── Arc particle: subdivide orbit into segments ──────────────
         // Use Rodrigues rotation to trace the curved orbital path.
@@ -426,8 +430,8 @@ void pass_simulate_and_bin() {
                     for (int gx = cx0; gx <= cx1; gx++) {
                         uint cell_base = gridIndex(uint(gx), uint(gy)) * CELL_STRIDE;
                         uint slot = atomicAdd(grid_data[cell_base], 1u);
-                        if (slot < MAX_PER_CELL) {
-                            uint eb = cell_base + 1u + slot * 4u;
+                        if (slot < ARC_SLOTS) {
+                            uint eb = arcSlot(cell_base, slot);
                             grid_data[eb]      = packHalf2x16(sp_mid);
                             grid_data[eb + 1u] = seg_color;
                             grid_data[eb + 2u] = packHalf2x16(sdir);
@@ -574,6 +578,10 @@ float raySphere(vec3 ro, vec3 rd, float radius) {
     return -b - sqrt(disc);
 }
 
+vec3 packedColor(uint pc) {
+    return vec3(float(pc & 0xFFu), float((pc >> 8u) & 0xFFu), float((pc >> 16u) & 0xFFu)) / 255.0;
+}
+
 void pass_render() {
     uint px = gl_GlobalInvocationID.x;
     uint py = gl_GlobalInvocationID.y;
@@ -592,71 +600,43 @@ void pass_render() {
 
     vec3 particle_accum = vec3(0.0);
     int glow_radius = int(glow_size);
-    // Search only the current cell — segments are binned into every
-    // cell they cross, so no neighbor search needed for arcs.
-    // Only search neighbors for glow on dots.
-    {
-        uint cell_base = gridIndex(cx, cy) * CELL_STRIDE;
-        uint count = min(grid_data[cell_base], MAX_PER_CELL);
-        for (uint s = 0u; s < count; s++) {
-            uint entry_base = cell_base + 1u + s * 4u;
-            vec2 sp    = unpackHalf2x16(grid_data[entry_base]);
-            uint pc    = grid_data[entry_base + 1u];
-            vec2 sdir  = unpackHalf2x16(grid_data[entry_base + 2u]);
-            float shalf = uintBitsToFloat(grid_data[entry_base + 3u]);
+    float sigma = max(glow_size * 0.5, 0.5);
+    float glow_falloff = 2.0 * sigma * sigma;
+    uint own_cell = gridIndex(cx, cy) * CELL_STRIDE;
 
-            vec3 col = vec3(float(pc & 0xFFu),
-                            float((pc >> 8u) & 0xFFu),
-                            float((pc >> 16u) & 0xFFu)) / 255.0;
-
-            vec2 delta = pixel_center - sp;
-            float along = clamp(dot(delta, sdir), -shalf, shalf);
-            vec2 closest = sp + sdir * along - pixel_center;
-            float d2 = dot(closest, closest);
-
-            if (shalf <= 1.0) {
-                // Dot: sharp core + glow
-                if (d2 < 1.5) {
-                    particle_accum += col;
-                } else if (glow_radius > 0) {
-                    float sigma = max(glow_size * 0.5, 0.5);
-                    particle_accum += col * exp(-d2 / (2.0 * sigma * sigma)) * 0.3;
-                }
-            } else {
-                // Arc segment: hair-thin line, 0.7px core
-                if (d2 < 0.49) {
-                    float alpha = 1.0 - d2 / 0.49;
-                    particle_accum += col * alpha;
-                }
-            }
-        }
+    // Arcs are binned into every cell they cross, so no neighbor search.
+    uint arcs = min(grid_data[own_cell], ARC_SLOTS);
+    for (uint s = 0u; s < arcs; s++) {
+        uint eb = arcSlot(own_cell, s);
+        vec2 sp     = unpackHalf2x16(grid_data[eb]);
+        vec2 sdir   = unpackHalf2x16(grid_data[eb + 2u]);
+        float shalf = uintBitsToFloat(grid_data[eb + 3u]);
+        float along = clamp(dot(pixel_center - sp, sdir), -shalf, shalf);
+        vec2 closest = sp + sdir * along - pixel_center;
+        float d2 = dot(closest, closest);
+        // Hair-thin line, 0.7 px core
+        if (d2 < 0.49) particle_accum += packedColor(grid_data[eb + 1u]) * (1.0 - d2 / 0.49);
     }
 
-    // Neighbor search for dot glow only (small radius)
-    if (glow_radius > 0) {
-        for (int dy = -1; dy <= 1; dy++) {
-            for (int dx = -1; dx <= 1; dx++) {
-                if (dx == 0 && dy == 0) continue;
-                int ncx = int(cx) + dx;
-                int ncy = int(cy) + dy;
-                if (ncx < 0 || ncy < 0 || ncx >= int(cols) || ncy >= int(rows)) continue;
+    // Dots: sharp core in their own cell, glow reaching into neighboring cells.
+    int reach = glow_radius > 0 ? 1 : 0;
+    for (int dy = -reach; dy <= reach; dy++) {
+        for (int dx = -reach; dx <= reach; dx++) {
+            int ncx = int(cx) + dx;
+            int ncy = int(cy) + dy;
+            if (ncx < 0 || ncy < 0 || ncx >= int(cols) || ncy >= int(rows)) continue;
 
-                uint nb = gridIndex(uint(ncx), uint(ncy)) * CELL_STRIDE;
-                uint count = min(grid_data[nb], MAX_PER_CELL);
-                for (uint s = 0u; s < count; s++) {
-                    uint eb = nb + 1u + s * 4u;
-                    float shalf = uintBitsToFloat(grid_data[eb + 3u]);
-                    if (shalf > 1.0) continue;  // skip arcs in neighbor search
-
-                    vec2 sp = unpackHalf2x16(grid_data[eb]);
-                    uint pc = grid_data[eb + 1u];
-                    vec3 col = vec3(float(pc & 0xFFu),
-                                    float((pc >> 8u) & 0xFFu),
-                                    float((pc >> 16u) & 0xFFu)) / 255.0;
-
-                    float d2 = dot(pixel_center - sp, pixel_center - sp);
-                    float sigma = max(glow_size * 0.5, 0.5);
-                    particle_accum += col * exp(-d2 / (2.0 * sigma * sigma)) * 0.3;
+            uint base = gridIndex(uint(ncx), uint(ncy)) * CELL_STRIDE;
+            uint dots = min(grid_data[base + 1u], DOT_SLOTS);
+            for (uint s = 0u; s < dots; s++) {
+                uint eb = dotSlot(base, s);
+                vec2 to_dot = pixel_center - unpackHalf2x16(grid_data[eb]);
+                float d2 = dot(to_dot, to_dot);
+                vec3 col = packedColor(grid_data[eb + 1u]);
+                if (dx == 0 && dy == 0 && d2 < 1.5) {
+                    particle_accum += col;
+                } else if (glow_radius > 0) {
+                    particle_accum += col * exp(-d2 / glow_falloff) * 0.3;
                 }
             }
         }
