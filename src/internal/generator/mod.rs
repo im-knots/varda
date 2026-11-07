@@ -448,8 +448,9 @@ impl DeckSourceInstance for Shader {
 
     /// Pass buffers follow the deck's size. `HISTORY` targets start over.
     fn resize(&mut self, gpu: &GpuContext, width: u32, height: u32) {
-        if let Program::Fragment { passes, .. } = &mut self.program {
-            passes.resize(gpu, width, height);
+        match &mut self.program {
+            Program::Fragment { passes, .. } => passes.resize(gpu, width, height),
+            Program::Compute { pipeline } => pipeline.resize(&gpu.device, width, height),
         }
     }
 

@@ -25,6 +25,31 @@ pub enum DispatchMode {
     },
 }
 
+fn create_output(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Compute Output Texture"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: super::context::COLOR_PATH_FORMAT,
+        usage: wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
+}
+
 /// Compute pipeline for GLSL compute shaders compiled to SPIR-V.
 pub struct ComputePipeline {
     pub compute_pipeline: wgpu::ComputePipeline,
@@ -162,23 +187,7 @@ impl ComputePipeline {
             cache: None,
         });
 
-        let output_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Compute Output Texture"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: super::context::COLOR_PATH_FORMAT,
-            usage: wgpu::TextureUsages::STORAGE_BINDING
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let (output_texture, output_view) = create_output(device, width, height);
 
         let default_user_params = [0u8; 256];
         let default_user_params_buffer =
@@ -221,6 +230,14 @@ impl ComputePipeline {
             dispatch_mode,
             num_passes,
         })
+    }
+
+    /// Replace the output image for a new deck size. Storage buffers keep their
+    /// contents, so a simulation carries on through a resize.
+    pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        let (texture, view) = create_output(device, width, height);
+        self.output_texture = texture;
+        self.output_view = view;
     }
 
     /// Create a bind group for one compute pass, reading the uniforms in `slot`.

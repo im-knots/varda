@@ -149,8 +149,9 @@ void main() {
         p.x *= RENDERSIZE.x / RENDERSIZE.y;
         float r = length(p);
 
-        // Initialize: near-uniform gas with density perturbations
-        if (FRAMEINDEX < 2u) {
+        // Initialize: near-uniform gas with density perturbations. A persistent
+        // pass starts cleared, and temperature never returns to zero once written.
+        if (texture(sampler2D(fluidBuffer, texSampler), uv).a == 0.0) {
             float n = fbm(p * 3.0 + vec2(1.7, 9.2));
             float n2 = noise(p * 6.0 + vec2(8.3, 2.8));
             // Density perturbations seed gravitational instability
@@ -297,7 +298,7 @@ void main() {
         // Clamp
         massAcc = clamp(massAcc, 0.0, 3.0);
         vel = clamp(vel, vec2(-2.0), vec2(2.0));
-        temp = clamp(temp, 0.0, 5.0);
+        temp = clamp(temp, 0.001, 5.0);
 
         fragColor = vec4(vel, massAcc, temp);
 

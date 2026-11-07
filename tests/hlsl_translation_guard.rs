@@ -17,7 +17,7 @@ fn every_shipped_shader_translates_to_hlsl() {
     let mut paths: Vec<_> = std::fs::read_dir(&dir)
         .expect("shaders dir")
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("fs"))
+        .filter(|p| matches!(p.extension().and_then(|e| e.to_str()), Some("fs" | "comp")))
         .collect();
     paths.sort();
     assert!(paths.len() > 100, "only found {} shaders", paths.len());
@@ -31,7 +31,12 @@ fn every_shipped_shader_translates_to_hlsl() {
             .to_string();
         let shader = varda::isf::ISFShader::from_file(path)
             .unwrap_or_else(|e| panic!("{name}: parse failed: {e:#}"));
-        let spirv = varda::isf::compile_glsl_to_spirv(&shader.fragment_source, &shader.name())
+        let compile = if shader.metadata.is_compute() {
+            varda::isf::compile_glsl_compute_to_spirv
+        } else {
+            varda::isf::compile_glsl_to_spirv
+        };
+        let spirv = compile(&shader.fragment_source, &shader.name())
             .unwrap_or_else(|e| panic!("{name}: glsl to spirv failed: {e:#}"));
 
         let module = naga::front::spv::parse_u8_slice(
