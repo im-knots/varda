@@ -8,6 +8,47 @@ use super::deck_detail::render_selected_deck_detail;
 use super::effects::{render_channel_effect_detail, render_master_effect_detail};
 use crate::engine::EngineCommand;
 
+/// The bar's panel id.
+pub(super) const PANEL_ID: &str = "bottom_panel";
+
+/// The bar's height until something is selected.
+pub(super) const DEFAULT_HEIGHT: f32 = 180.0;
+
+/// Fits a deck's preview, source controls, and effect cards with nothing clipped.
+const DETAIL_HEIGHT: f32 = 260.0;
+
+/// Opens the bar to [`DETAIL_HEIGHT`] the first time a selection fills it this
+/// session. Runs once, before the panel lays out. A taller bar stays as it is, and
+/// the user's height is never touched after that.
+pub(super) fn open_for_first_selection(ctx: &egui::Context, data: &UIData) {
+    let filled_id = egui::Id::new("bottom_bar_filled");
+    let filled: Option<bool> = ctx.data(|d| d.get_temp(filled_id));
+    if filled == Some(true) {
+        return;
+    }
+
+    let shows_selection = !data.stage_editor_open
+        && (data.selected_deck.is_some()
+            || data.selected_master
+            || data.selected_channel.is_some()
+            || data.selected_sequence.is_some()
+            || data.selected_macro.is_some());
+    ctx.data_mut(|d| d.insert_temp(filled_id, shows_selection));
+
+    if filled == Some(false) && shows_selection {
+        let panel_id = egui::Id::new(PANEL_ID);
+        let Some(mut state) = egui::PanelState::load(ctx, panel_id) else {
+            return;
+        };
+        if state.outer_rect.height() <= DEFAULT_HEIGHT {
+            state
+                .outer_rect
+                .set_top(state.outer_rect.bottom() - DETAIL_HEIGHT);
+            ctx.data_mut(|d| d.insert_persisted(panel_id, state));
+        }
+    }
+}
+
 pub(super) fn render_bottom_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     if data.midi_learn_active {
         egui::Frame::default()
@@ -67,6 +108,8 @@ mod tests {
     use super::super::stage::stage_selection_id;
     use super::*;
     use crate::engine::EngineCommand;
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     /// A fixture with one surface, selected in the stage editor's shared
     /// selection memory, so `render_bottom_panel` routes to the warp editor.
@@ -350,6 +393,112 @@ mod tests {
         let _harness = egui_kittest::Harness::new_ui(|ui| {
             render_bottom_panel(ui, &data, &mut actions);
         });
+    }
+
+    fn bar_height(ctx: &egui::Context) -> f32 {
+        egui::PanelState::load(ctx, egui::Id::new(PANEL_ID))
+            .expect("the bottom bar has rendered")
+            .outer_rect
+            .height()
+    }
+
+    /// Stands in for the user dragging the bar to `height`.
+    fn resize_bar(ctx: &egui::Context, height: f32) {
+        let id = egui::Id::new(PANEL_ID);
+        let mut outer_rect = egui::PanelState::load(ctx, id).unwrap().outer_rect;
+        outer_rect.set_top(outer_rect.bottom() - height);
+        ctx.data_mut(|d| d.insert_persisted(id, egui::PanelState { outer_rect }));
+    }
+
+    fn data_with_nothing_selected() -> UIData {
+        let mut data = UIData::test_fixture();
+        data.selected_deck = None;
+        data
+    }
+
+    /// The whole UI over data a test can change between frames, as selecting
+    /// something in the mixer does.
+    fn live_ui(data: UIData) -> (Rc<RefCell<UIData>>, egui_kittest::Harness<'static>) {
+        let data = Rc::new(RefCell::new(data));
+        let rendered = Rc::clone(&data);
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1280.0, 720.0))
+            .build_ui(move |ui| {
+                let _ = super::super::render_ui(ui, &rendered.borrow());
+            });
+        harness.run();
+        (data, harness)
+    }
+
+    #[test]
+    fn the_first_selection_opens_the_bar_to_fit_its_controls() {
+        let (data, mut harness) = live_ui(data_with_nothing_selected());
+        assert_eq!(bar_height(&harness.ctx), DEFAULT_HEIGHT);
+
+        data.borrow_mut().selected_deck = Some((0, 0));
+        harness.run();
+
+        assert_eq!(bar_height(&harness.ctx), DETAIL_HEIGHT);
+    }
+
+    #[test]
+    fn any_first_selection_opens_the_bar() {
+        let select: [fn(&mut UIData); 2] = [
+            |d| d.selected_master = true,
+            |d| d.selected_channel = Some(0),
+        ];
+        for select in select {
+            let (data, mut harness) = live_ui(data_with_nothing_selected());
+            select(&mut data.borrow_mut());
+            harness.run();
+            assert_eq!(bar_height(&harness.ctx), DETAIL_HEIGHT);
+        }
+    }
+
+    #[test]
+    fn the_first_selection_keeps_a_height_the_user_made_taller() {
+        let (data, mut harness) = live_ui(data_with_nothing_selected());
+        resize_bar(&harness.ctx, 340.0);
+        harness.run();
+
+        data.borrow_mut().selected_deck = Some((0, 0));
+        harness.run();
+
+        assert_eq!(bar_height(&harness.ctx), 340.0);
+    }
+
+    #[test]
+    fn later_selections_keep_the_height_the_user_chose() {
+        let (data, mut harness) = live_ui(data_with_nothing_selected());
+        data.borrow_mut().selected_deck = Some((0, 0));
+        harness.run();
+
+        resize_bar(&harness.ctx, DEFAULT_HEIGHT);
+        harness.run();
+        data.borrow_mut().selected_deck = None;
+        harness.run();
+        data.borrow_mut().selected_deck = Some((0, 1));
+        harness.run();
+
+        assert_eq!(bar_height(&harness.ctx), DEFAULT_HEIGHT);
+    }
+
+    #[test]
+    fn a_session_opening_with_a_selection_keeps_the_default_height() {
+        let (_data, harness) = live_ui(UIData::test_fixture());
+        assert_eq!(bar_height(&harness.ctx), DEFAULT_HEIGHT);
+    }
+
+    #[test]
+    fn the_stage_editor_does_not_open_the_bar() {
+        let mut empty = data_with_nothing_selected();
+        empty.stage_editor_open = true;
+        let (data, mut harness) = live_ui(empty);
+
+        data.borrow_mut().selected_deck = Some((0, 0));
+        harness.run();
+
+        assert_eq!(bar_height(&harness.ctx), DEFAULT_HEIGHT);
     }
 
     #[test]
