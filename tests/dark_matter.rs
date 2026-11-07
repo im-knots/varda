@@ -1,6 +1,11 @@
 //! `shaders/dark_matter.comp` builds a universe and collapses it into a web, at any
 //! output size. These run the real shader for a short formation on a headless GPU,
 //! so a broken solver shows as a flat frame. Skipped without a GPU adapter.
+//!
+//! Not built on Windows. Rendering does not depend on the platform, and on the CI
+//! runner's software rasterizer (WARP) this file takes up to 47 minutes. Linux and
+//! macOS run it, and `shader_pipeline_guard` still renders this shader on Windows.
+#![cfg(not(target_os = "windows"))]
 
 use varda::{renderer::context::GpuContext, testing::ShaderRun};
 
