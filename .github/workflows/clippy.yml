@@ -104,8 +104,12 @@ jobs:
         with:
           components: clippy
 
-      - name: Cache vcpkg packages
-        uses: actions/cache@v4
+      # Saved by hand right after the install. `actions/cache` saves in a post step
+      # that is skipped when the job fails or is cancelled, and the install it would
+      # have spared the next run takes 26 minutes.
+      - name: Restore vcpkg packages
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
         with:
           path: C:\vcpkg\installed
           key: vcpkg-windows-x64-${{ hashFiles('.github/workflows/release.yml') }}
@@ -117,6 +121,13 @@ jobs:
         run: |
           vcpkg install ffmpeg:x64-windows
           echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
+
+      - name: Save vcpkg packages
+        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: C:\vcpkg\installed
+          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
 
       - name: Install LLVM (for shaderc)
         run: choco install llvm -y
